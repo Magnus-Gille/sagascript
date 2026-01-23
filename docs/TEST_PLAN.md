@@ -180,7 +180,7 @@ swift test --filter Performance 2>&1 | tee docs/BENCHMARKS.md
 - [ ] Settings accessible from menu
 
 ### Dictation (Push-to-talk)
-- [ ] Hold Option+Space starts recording
+- [ ] Hold Control+Shift+Space starts recording
 - [ ] Menu bar icon changes to recording state
 - [ ] Optional: HUD overlay appears
 - [ ] Release key stops recording
