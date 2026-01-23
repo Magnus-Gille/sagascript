@@ -287,6 +287,20 @@ final class AppController: ObservableObject {
                 print("")
 
                 lastTranscription = text
+
+                // Auto-paste if enabled
+                if self.settingsManager.autoPaste {
+                    do {
+                        try await self.pasteService.paste(text: text)
+                        print("[Paste] Text pasted automatically")
+                    } catch DictationError.accessibilityPermissionDenied {
+                        print("[Paste] Accessibility permission denied - text copied to clipboard only")
+                        self.lastError = .accessibilityPermissionDenied
+                    } catch {
+                        print("[Paste] Failed to paste: \(error.localizedDescription)")
+                    }
+                }
+
                 state = .idle
 
                 logDictationComplete(

@@ -7,6 +7,7 @@ import AppKit
 struct FlowDictateApp: App {
     @StateObject private var appController = AppController.shared
     @StateObject private var settingsManager = SettingsManager.shared
+    @Environment(\.openSettings) private var openSettings
 
     var body: some Scene {
         // Main window shown on launch
@@ -17,6 +18,14 @@ struct FlowDictateApp: App {
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...") {
+                    openSettings()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+        }
 
         // Menu bar app
         MenuBarExtra {

@@ -138,12 +138,17 @@ private struct QuickSettingsSection: View {
 // MARK: - Actions Section
 
 private struct ActionsSection: View {
+    @Environment(\.openSettings) private var openSettings
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            SettingsLink {
+            Button(action: {
+                openSettings()
+            }) {
                 Label("Settings...", systemImage: "gear")
             }
             .buttonStyle(.plain)
+            .keyboardShortcut(",", modifiers: .command)
 
             Divider()
 

@@ -14,6 +14,7 @@ final class SettingsManager: ObservableObject {
     @AppStorage("whisperModel") var whisperModel: WhisperModel = .base
     @AppStorage("hotkeyMode") var hotkeyMode: HotkeyMode = .pushToTalk
     @AppStorage("showOverlay") var showOverlay: Bool = true
+    @AppStorage("autoPaste") var autoPaste: Bool = true
 
     // Hotkey settings (stored as separate components)
     // Default: Control+Shift+Space (avoids conflicts with common shortcuts)
@@ -115,6 +116,7 @@ final class SettingsManager: ObservableObject {
         whisperModel = .base
         hotkeyMode = .pushToTalk
         showOverlay = true
+        autoPaste = true
         hotkeyKeyCode = kVK_Space
         hotkeyModifiers = Int(controlKey) | Int(shiftKey)
     }

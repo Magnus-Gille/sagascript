@@ -282,6 +282,23 @@ Record assumptions and design decisions here, with rationale and dates.
 
 ---
 
+## 2026-01-23 — Enable auto-paste by default
+
+- **Decision:** Change `autoPaste` default from `false` to `true`
+- **Previous behavior:** Transcription copied to clipboard only; user must manually paste
+- **New behavior:** Transcription is automatically pasted into active window via Cmd+V
+- **Rationale:**
+  - Users expect dictated text to appear where they're typing
+  - Manual copy-paste defeats the purpose of hands-free dictation
+  - Matches behavior of Wispr Flow and similar tools
+  - Option still available in Settings for users who prefer clipboard-only
+- **Consequences:**
+  - Existing users with stored preferences are unaffected (their `autoPaste=false` persists)
+  - New installs get the expected "dictate and paste" workflow
+  - Existing users can delete preference: `defaults delete com.flowdictate autoPaste`
+
+---
+
 ## 2026-01-23 — WhisperKit Performance Optimization
 
 - **Decision:** Optimize WhisperKit configuration for lowest latency

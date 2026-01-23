@@ -16,6 +16,7 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertEqual(settingsManager.backend, .local)
         XCTAssertEqual(settingsManager.hotkeyMode, .pushToTalk)
         XCTAssertTrue(settingsManager.showOverlay)
+        XCTAssertTrue(settingsManager.autoPaste)
     }
 
     func testLanguageChange() {
@@ -50,12 +51,21 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertFalse(settingsManager.showOverlay)
     }
 
+    func testAutoPasteChange() {
+        // When
+        settingsManager.autoPaste = false
+
+        // Then
+        XCTAssertFalse(settingsManager.autoPaste)
+    }
+
     func testResetToDefaults() {
         // Given
         settingsManager.language = .swedish
         settingsManager.backend = .remote
         settingsManager.hotkeyMode = .toggle
         settingsManager.showOverlay = false
+        settingsManager.autoPaste = false
 
         // When
         settingsManager.resetToDefaults()
@@ -65,6 +75,7 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertEqual(settingsManager.backend, .local)
         XCTAssertEqual(settingsManager.hotkeyMode, .pushToTalk)
         XCTAssertTrue(settingsManager.showOverlay)
+        XCTAssertTrue(settingsManager.autoPaste)
     }
 
     func testHotkeyDescription() {

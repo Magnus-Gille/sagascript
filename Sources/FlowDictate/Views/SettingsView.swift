@@ -67,6 +67,9 @@ private struct GeneralSettingsTab: View {
 
                 // Overlay toggle
                 Toggle("Show recording overlay", isOn: $settingsManager.showOverlay)
+
+                // Auto-paste toggle
+                Toggle("Auto-paste transcription", isOn: $settingsManager.autoPaste)
             } header: {
                 Text("Hotkey & Display")
             }
