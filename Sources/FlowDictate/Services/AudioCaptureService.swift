@@ -14,6 +14,10 @@ final class AudioCaptureService {
         static let commonFormat: AVAudioCommonFormat = .pcmFormatFloat32
     }
 
+    /// Maximum buffer size: 15 minutes of audio at 16kHz (~1.8MB)
+    /// Prevents unbounded memory growth during long recordings
+    private static let maxBufferSize = Int(16000 * 60 * 15) // 15 minutes
+
     // MARK: - Private State
 
     private let audioEngine = AVAudioEngine()
@@ -23,11 +27,14 @@ final class AudioCaptureService {
     private let logger = Logger(subsystem: "com.flowdictate", category: "AudioCapture")
     private let loggingService = LoggingService.shared
 
+    /// Retained audio from last capture for retry on transcription failure
+    private(set) var lastCapturedAudio: [Float]?
+
     // MARK: - Public Methods
 
     /// Start capturing audio from the microphone
     /// - Throws: Error if microphone permission is denied or audio engine fails to start
-    func startCapture() throws {
+    func startCapture() async throws {
         print("[Audio] Checking microphone permission...")
 
         // Check microphone permission
@@ -38,14 +45,8 @@ final class AudioCaptureService {
         case .notDetermined:
             print("[Audio] Requesting microphone permission...")
             loggingService.info(.Audio, LogEvent.Audio.permissionRequested, data: [:])
-            // Request permission synchronously (blocking)
-            let semaphore = DispatchSemaphore(value: 0)
-            var granted = false
-            AVCaptureDevice.requestAccess(for: .audio) { result in
-                granted = result
-                semaphore.signal()
-            }
-            semaphore.wait()
+            // Request permission asynchronously (non-blocking)
+            let granted = await AVCaptureDevice.requestAccess(for: .audio)
             guard granted else {
                 print("[Audio] ✗ Microphone permission denied by user")
                 loggingService.error(.Audio, LogEvent.Audio.permissionDenied, data: [
@@ -122,6 +123,7 @@ final class AudioCaptureService {
     }
 
     /// Stop capturing audio and return the captured samples
+    /// Audio is retained in `lastCapturedAudio` for retry on transcription failure
     /// - Returns: Array of audio samples as Float32 at 16kHz mono
     func stopCapture() -> [Float] {
         print("[Audio] Stopping audio engine...")
@@ -133,6 +135,9 @@ final class AudioCaptureService {
         audioBuffer.removeAll()
         bufferLock.unlock()
 
+        // Retain audio for potential retry on transcription failure
+        lastCapturedAudio = samples
+
         let durationSeconds = Double(samples.count) / AudioFormat.sampleRate
         print("[Audio] ✓ Captured \(samples.count) samples (\(String(format: "%.2f", durationSeconds)) seconds)")
         logger.info("Audio capture stopped, captured \(samples.count) samples")
@@ -143,6 +148,11 @@ final class AudioCaptureService {
         ])
 
         return samples
+    }
+
+    /// Clear the retained audio after successful transcription
+    func clearLastCapturedAudio() {
+        lastCapturedAudio = nil
     }
 
     // MARK: - Private Methods
@@ -227,6 +237,23 @@ final class AudioCaptureService {
 
         bufferLock.lock()
         let previousCount = audioBuffer.count
+
+        // Check buffer size limit before appending
+        if previousCount + samples.count > Self.maxBufferSize {
+            let minutesRecorded = Double(previousCount) / AudioFormat.sampleRate / 60.0
+            logger.warning("Audio buffer limit reached (\(String(format: "%.1f", minutesRecorded)) minutes). Ignoring new samples.")
+            if previousCount < Self.maxBufferSize {
+                // Log warning only once when we first hit the limit
+                loggingService.warning(.Audio, "audio.buffer_limit_reached", data: [
+                    "bufferSize": AnyCodable(previousCount),
+                    "maxSize": AnyCodable(Self.maxBufferSize),
+                    "minutesRecorded": AnyCodable(String(format: "%.1f", minutesRecorded))
+                ])
+            }
+            bufferLock.unlock()
+            return
+        }
+
         audioBuffer.append(contentsOf: samples)
         bufferLock.unlock()
 

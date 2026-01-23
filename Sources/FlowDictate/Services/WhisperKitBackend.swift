@@ -20,6 +20,12 @@ actor WhisperKitBackend: TranscriptionBackendProtocol {
     private let logger = Logger(subsystem: "com.flowdictate", category: "WhisperKit")
     private let loggingService = LoggingService.shared
 
+    /// Optimal worker count based on available CPU cores
+    /// Scales dynamically: min 2, max 16, typically half of available cores
+    private static var optimalWorkerCount: Int {
+        min(16, max(2, ProcessInfo.processInfo.activeProcessorCount / 2))
+    }
+
     // MARK: - TranscriptionBackendProtocol
 
     var isReady: Bool {
@@ -219,7 +225,7 @@ actor WhisperKitBackend: TranscriptionBackendProtocol {
                 logProbThreshold: nil,               // Disable log probability check
                 firstTokenLogProbThreshold: nil,     // Disable first token check
                 noSpeechThreshold: nil,              // Disable silence detection threshold
-                concurrentWorkerCount: 16            // Max parallel workers
+                concurrentWorkerCount: Self.optimalWorkerCount // Dynamic worker scaling
             )
             options.language = language.whisperCode
 

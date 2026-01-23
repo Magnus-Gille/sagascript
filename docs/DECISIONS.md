@@ -366,3 +366,56 @@ Record assumptions and design decisions here, with rationale and dates.
   - [KB-Whisper Collection](https://huggingface.co/collections/KBLab/kb-whisper-67af9eafb24da903b63cc4aa)
   - [KB-Whisper Blog Post](https://kb-labb.github.io/posts/2025-03-07-welcome-KB-Whisper/)
   - [WhisperKit GitHub](https://github.com/argmaxinc/WhisperKit)
+
+---
+
+## 2026-01-23 — Expert Review Security & Stability Fixes
+
+- **Decision:** Address security and stability issues identified by senior code reviewers
+- **Issues addressed:**
+
+### HIGH PRIORITY (Security & Data Integrity)
+
+1. **Transcript stdout printing** (AppController.swift:328-335)
+   - Issue: Transcripts printed via `print()` could persist in macOS Diagnostics
+   - Fix: Gated behind `#if DEBUG` - only prints in debug builds
+
+2. **Blocking mic permission** (AudioCaptureService.swift:42-48)
+   - Issue: `semaphore.wait()` blocked main thread, risking UI freeze and watchdog
+   - Fix: Converted to async using `await AVCaptureDevice.requestAccess(for:)`
+
+3. **Clipboard overwrite** (PasteService.swift:26-33)
+   - Issue: `clearContents()` permanently destroyed previous clipboard
+   - Fix: Save all clipboard types before paste, restore after 100ms delay
+
+4. **Data loss on transcription failure** (AppController/AudioCaptureService)
+   - Issue: Audio buffer cleared immediately, lost on failure
+   - Fix: Audio retained in `lastCapturedAudio`, cleared only after success
+
+5. **OpenAI backend vulnerabilities** (OpenAIBackend.swift)
+   - Issues: Shared URLSession (caching), no timeouts, no size limits
+   - Fixes: Ephemeral session, 60s timeout, 25MB check before upload
+
+### MEDIUM PRIORITY (Performance & Safety)
+
+6. **WAV encoding O(n) loop** (OpenAIBackend.swift:161-165)
+   - Issue: Per-sample `append()` had high constant factor
+   - Fix: Single `withUnsafeBufferPointer` copy
+
+7. **Hardcoded 16 workers** (WhisperKitBackend.swift:222)
+   - Issue: Over-subscribes on lower-core Macs (M1 Air = 8 cores)
+   - Fix: Dynamic scaling: `min(16, max(2, ProcessInfo.activeProcessorCount / 2))`
+
+8. **Unbounded audio buffer** (AudioCaptureService.swift:20-22)
+   - Issue: 8-hour recording = 1.8GB RAM
+   - Fix: 15-minute cap (14.4MB), warning logged when reached
+
+9. **World-readable log files** (LoggingService.swift)
+   - Issue: Default permissions allowed other users to read
+   - Fix: 0o600 for files, 0o700 for directory
+
+- **Rationale:** Expert review identified real security vulnerabilities and stability risks
+- **Consequences:**
+  - Clipboard restore adds ~100ms delay after paste
+  - Buffer cap limits max recording to 15 minutes
+  - Transcript viewing requires debug build or checking logs
