@@ -9,6 +9,7 @@ struct SettingsView: View {
         TabView {
             GeneralSettingsTab()
                 .environmentObject(settingsManager)
+                .environmentObject(appController)
                 .tabItem {
                     Label("General", systemImage: "gear")
                 }
@@ -33,6 +34,7 @@ struct SettingsView: View {
 
 private struct GeneralSettingsTab: View {
     @EnvironmentObject var settingsManager: SettingsManager
+    @EnvironmentObject var appController: AppController
 
     var body: some View {
         Form {
@@ -51,17 +53,17 @@ private struct GeneralSettingsTab: View {
                 }
                 .pickerStyle(.radioGroup)
 
-                // Current hotkey display
-                HStack {
-                    Text("Current Hotkey:")
-                    Spacer()
-                    Text(settingsManager.hotkeyDescription)
-                        .font(.system(.body, design: .monospaced))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.secondary.opacity(0.2))
-                        .cornerRadius(4)
-                }
+                // Hotkey recorder
+                HotkeyRecorderView(
+                    keyCode: $settingsManager.hotkeyKeyCode,
+                    modifiers: $settingsManager.hotkeyModifiers,
+                    onHotkeyChanged: {
+                        appController.updateHotkey(
+                            keyCode: UInt32(settingsManager.hotkeyKeyCode),
+                            modifiers: UInt32(settingsManager.hotkeyModifiers)
+                        )
+                    }
+                )
 
                 // Overlay toggle
                 Toggle("Show recording overlay", isOn: $settingsManager.showOverlay)
