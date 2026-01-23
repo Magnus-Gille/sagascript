@@ -80,6 +80,11 @@ private struct GeneralSettingsTab: View {
 private struct TranscriptionSettingsTab: View {
     @EnvironmentObject var settingsManager: SettingsManager
 
+    /// Whether the current model/language combination has a compatibility issue
+    private var hasModelLanguageConflict: Bool {
+        settingsManager.whisperModel.isEnglishOnly && settingsManager.language != .english && settingsManager.language != .auto
+    }
+
     var body: some View {
         Form {
             Section {
@@ -105,6 +110,40 @@ private struct TranscriptionSettingsTab: View {
                 .pickerStyle(.radioGroup)
             } header: {
                 Text("Transcription")
+            }
+
+            // Model selection (only for local backend)
+            if settingsManager.backend == .local {
+                Section {
+                    Picker("Model:", selection: $settingsManager.whisperModel) {
+                        ForEach(WhisperModel.allCases) { model in
+                            VStack(alignment: .leading) {
+                                Text(model.displayName)
+                                Text(model.description)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .tag(model)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+
+                    // Warning for English-only model with non-English language
+                    if hasModelLanguageConflict {
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text("Selected model only supports English. Switch to '\(settingsManager.whisperModel == .tinyEn ? "Tiny" : "Base") (Multilingual)' for \(settingsManager.language.displayName).")
+                                .font(.caption)
+                        }
+                    }
+                } header: {
+                    Text("WhisperKit Model")
+                } footer: {
+                    Text("Smaller models are faster but less accurate. English-only models perform better for English.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
 
             if settingsManager.backend == .remote {
