@@ -3,7 +3,7 @@
 This file is the agent's running "project board".
 
 ## Current State
-**COMPLETE** — All Definition of Done criteria met + performance optimization + Swedish language support (2026-01-23)
+**COMPLETE** — All Definition of Done criteria met + performance optimization + Swedish language support + expert review fixes (2026-01-23)
 
 ## Summary
 
@@ -20,6 +20,28 @@ FlowDictate is a complete macOS dictation app with:
 9. **Secure API key storage** in macOS Keychain
 10. **Structured logging** with JSONL file output for debugging + **RTF metrics**
 11. **Swedish-optimized transcription** via KB-Whisper models (4x better WER)
+
+## Expert Review Fixes (2026-01-23)
+
+Addressed security and stability issues identified by senior reviewers:
+
+### Security Fixes
+- **Transcript logging gated** - `#if DEBUG` guards prevent transcripts from appearing in release build console logs
+- **Log file permissions** - Logs now created with 0o600 (owner-only read/write), directory with 0o700
+- **OpenAI backend hardening** - Ephemeral URLSession (no caching), 60s request timeout, 25MB file size check
+
+### Stability Fixes
+- **Async mic permission** - Permission dialog no longer blocks main thread (uses `await AVCaptureDevice.requestAccess`)
+- **Audio buffer size cap** - 15-minute maximum prevents unbounded memory growth
+- **Data loss prevention** - Audio retained in `lastCapturedAudio` for retry on transcription failure
+
+### User Experience Fixes
+- **Clipboard save/restore** - Previous clipboard contents restored after paste (~100ms delay)
+- **Retry transcription** - `retryLastTranscription()` method allows re-processing failed audio
+
+### Performance Fixes
+- **WAV encoding optimized** - Uses `withUnsafeBufferPointer` for O(1) memory copy instead of per-sample loop
+- **WhisperKit worker scaling** - Dynamic worker count based on CPU cores (min 2, max 16, typically cores/2)
 
 ## Swedish Language Support (2026-01-23)
 

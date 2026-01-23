@@ -241,27 +241,31 @@ final class AppController: ObservableObject {
         ])
 
         print("[Recording] 🎤 Starting audio capture...")
-        do {
-            try audioCaptureService.startCapture()
-            state = .recording
-            recordingStartTime = Date()
-            lastError = nil
-            showOverlay()
 
-            loggingService.info(.App, LogEvent.Session.stateChanged, data: [
-                "from": AnyCodable("idle"),
-                "to": AnyCodable("recording")
-            ])
+        // Call async startCapture in a Task to avoid blocking the main thread
+        Task { @MainActor in
+            do {
+                try await audioCaptureService.startCapture()
+                state = .recording
+                recordingStartTime = Date()
+                lastError = nil
+                showOverlay()
 
-            print("[Recording] ✓ Audio capture started - SPEAK NOW!")
-        } catch {
-            print("[Recording] ✗ Failed to start: \(error.localizedDescription)")
-            loggingService.error(.Audio, LogEvent.Audio.permissionDenied, data: [
-                "error": AnyCodable(error.localizedDescription)
-            ])
-            state = .error("Failed to start recording: \(error.localizedDescription)")
-            lastError = .microphonePermissionDenied
-            loggingService.endDictationSession()
+                loggingService.info(.App, LogEvent.Session.stateChanged, data: [
+                    "from": AnyCodable("idle"),
+                    "to": AnyCodable("recording")
+                ])
+
+                print("[Recording] ✓ Audio capture started - SPEAK NOW!")
+            } catch {
+                print("[Recording] ✗ Failed to start: \(error.localizedDescription)")
+                loggingService.error(.Audio, LogEvent.Audio.permissionDenied, data: [
+                    "error": AnyCodable(error.localizedDescription)
+                ])
+                state = .error("Failed to start recording: \(error.localizedDescription)")
+                lastError = .microphonePermissionDenied
+                loggingService.endDictationSession()
+            }
         }
     }
 
@@ -323,7 +327,8 @@ final class AppController: ObservableObject {
                 let elapsed = CFAbsoluteTimeGetCurrent() - startTime
                 let transcriptionDurationMs = Int(elapsed * 1000)
 
-                print("[Transcription] ✓ Completed in \(String(format: "%.2f", elapsed))s")
+                print("[Transcription] ✓ Completed in \(String(format: "%.2f", elapsed))s (\(text.count) characters)")
+                #if DEBUG
                 print("")
                 print("╔════════════════════════════════════════════════════════════╗")
                 print("║  TRANSCRIPTION RESULT:                                     ║")
@@ -333,8 +338,12 @@ final class AppController: ObservableObject {
                 print("")
                 print("════════════════════════════════════════════════════════════════")
                 print("")
+                #endif
 
                 lastTranscription = text
+
+                // Clear retained audio after successful transcription
+                audioCaptureService.clearLastCapturedAudio()
 
                 // Auto-paste if enabled
                 if self.settingsManager.autoPaste {
@@ -421,6 +430,90 @@ final class AppController: ObservableObject {
         _ = audioCaptureService.stopCapture()
         hideOverlay()
         state = .idle
+    }
+
+    /// Retry transcription with the last captured audio (if available)
+    /// Use this after a transcription failure to avoid re-recording
+    func retryLastTranscription() {
+        guard state == .idle else {
+            print("[Retry] Cannot retry - state is \(state), not idle")
+            return
+        }
+
+        guard let audioData = audioCaptureService.lastCapturedAudio, !audioData.isEmpty else {
+            print("[Retry] No audio available for retry")
+            lastError = .noAudioCaptured
+            return
+        }
+
+        print("[Retry] Retrying transcription with \(audioData.count) samples...")
+
+        // Start a new dictation session for logging
+        let dictationId = loggingService.startDictationSession()
+        loggingService.info(.App, LogEvent.Session.dictationStarted, data: [
+            "dictationSessionId": AnyCodable(dictationId),
+            "isRetry": AnyCodable(true)
+        ])
+
+        state = .transcribing
+        transcriptionStartTime = Date()
+        currentAudioSamples = audioData.count
+
+        Task {
+            do {
+                try await ensureCorrectModelLoaded()
+
+                let startTime = CFAbsoluteTimeGetCurrent()
+                let text = try await transcriptionService.transcribe(
+                    audio: audioData,
+                    language: settingsManager.language,
+                    backend: settingsManager.backend
+                )
+                let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                let transcriptionDurationMs = Int(elapsed * 1000)
+
+                print("[Retry] ✓ Completed in \(String(format: "%.2f", elapsed))s (\(text.count) characters)")
+
+                lastTranscription = text
+                audioCaptureService.clearLastCapturedAudio()
+
+                if self.settingsManager.autoPaste {
+                    do {
+                        try await self.pasteService.paste(text: text)
+                        print("[Paste] Text pasted automatically")
+                    } catch DictationError.accessibilityPermissionDenied {
+                        print("[Paste] Accessibility permission denied - text copied to clipboard only")
+                        self.lastError = .accessibilityPermissionDenied
+                    } catch {
+                        print("[Paste] Failed to paste: \(error.localizedDescription)")
+                    }
+                }
+
+                state = .idle
+
+                loggingService.info(.App, LogEvent.Session.dictationComplete, data: [
+                    "transcriptionDurationMs": AnyCodable(transcriptionDurationMs),
+                    "audioSamples": AnyCodable(currentAudioSamples),
+                    "resultCharacters": AnyCodable(text.count),
+                    "success": AnyCodable(true),
+                    "isRetry": AnyCodable(true)
+                ])
+                loggingService.endDictationSession()
+
+            } catch let error as DictationError {
+                print("[Retry] ✗ Error: \(error.localizedDescription)")
+                state = .error(error.localizedDescription)
+                lastError = error
+                state = .idle
+                loggingService.endDictationSession()
+            } catch {
+                print("[Retry] ✗ Error: \(error.localizedDescription)")
+                state = .error(error.localizedDescription)
+                lastError = .transcriptionFailed(error.localizedDescription)
+                state = .idle
+                loggingService.endDictationSession()
+            }
+        }
     }
 
     // MARK: - Overlay Management

@@ -9,11 +9,25 @@ final class OpenAIBackend: TranscriptionBackendProtocol {
     private let apiURL = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
     private let model = "whisper-1" // Can also use gpt-4o-transcribe when available
 
+    // MARK: - Constants
+
+    /// Maximum audio file size for OpenAI API (25MB)
+    private let maxAudioSizeBytes = 25 * 1024 * 1024
+
     // MARK: - Private State
 
     private let keychainService: KeychainService
     private let logger = Logger(subsystem: "com.flowdictate", category: "OpenAI")
     private let loggingService = LoggingService.shared
+
+    /// Ephemeral URL session with no caching for security
+    private lazy var urlSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.urlCache = nil
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 120
+        return URLSession(configuration: config)
+    }()
 
     // MARK: - Initialization
 
@@ -52,6 +66,13 @@ final class OpenAIBackend: TranscriptionBackendProtocol {
         // Convert Float samples to WAV data
         let wavData = createWAVData(from: audio)
 
+        // Check file size limit (OpenAI's 25MB limit)
+        guard wavData.count <= maxAudioSizeBytes else {
+            let sizeMB = Double(wavData.count) / (1024 * 1024)
+            logger.error("Audio file too large: \(sizeMB, format: .fixed(precision: 1))MB (max 25MB)")
+            throw DictationError.transcriptionFailed("Audio file too large (\(String(format: "%.1f", sizeMB))MB). Maximum is 25MB.")
+        }
+
         // Create multipart form data request
         let boundary = UUID().uuidString
         var request = URLRequest(url: apiURL)
@@ -85,9 +106,9 @@ final class OpenAIBackend: TranscriptionBackendProtocol {
 
         request.httpBody = body
 
-        // Send request
+        // Send request using ephemeral session (no caching)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await urlSession.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw DictationError.networkError("Invalid response")
@@ -158,10 +179,11 @@ final class OpenAIBackend: TranscriptionBackendProtocol {
         header.append("data".data(using: .ascii)!)
         header.append(withUnsafeBytes(of: dataSize.littleEndian) { Data($0) })
 
-        // Audio data
-        var audioData = Data(capacity: int16Samples.count * 2)
-        for sample in int16Samples {
-            withUnsafeBytes(of: sample.littleEndian) { audioData.append(contentsOf: $0) }
+        // Audio data - write entire array in one shot for performance
+        // Convert to little-endian and copy as contiguous memory block
+        let littleEndianSamples = int16Samples.map { $0.littleEndian }
+        let audioData = littleEndianSamples.withUnsafeBufferPointer { buffer in
+            Data(bytes: buffer.baseAddress!, count: buffer.count * MemoryLayout<Int16>.size)
         }
 
         return header + audioData

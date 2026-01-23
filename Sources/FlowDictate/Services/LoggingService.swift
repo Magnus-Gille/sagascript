@@ -102,7 +102,12 @@ final class LoggingService {
     private func setupLogDirectory() {
         let logDir = getLogDirectory()
         do {
-            try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+            // Create directory with owner-only permissions (0o700)
+            try FileManager.default.createDirectory(
+                at: logDir,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
             currentFilePath = logDir.appendingPathComponent("flowdictate.log")
             openLogFile()
         } catch {
@@ -118,9 +123,13 @@ final class LoggingService {
     private func openLogFile() {
         guard let path = currentFilePath else { return }
 
-        // Create file if it doesn't exist
+        // Create file if it doesn't exist with owner-only permissions (0o600)
         if !FileManager.default.fileExists(atPath: path.path) {
-            FileManager.default.createFile(atPath: path.path, contents: nil)
+            FileManager.default.createFile(
+                atPath: path.path,
+                contents: nil,
+                attributes: [.posixPermissions: 0o600]
+            )
         }
 
         do {
@@ -198,8 +207,8 @@ final class LoggingService {
             let firstRotated = logDir.appendingPathComponent("flowdictate.1.log")
             try? fm.moveItem(at: path, to: firstRotated)
 
-            // Create new file
-            fm.createFile(atPath: path.path, contents: nil)
+            // Create new file with owner-only permissions (0o600)
+            fm.createFile(atPath: path.path, contents: nil, attributes: [.posixPermissions: 0o600])
             openLogFile()
 
         } catch {
