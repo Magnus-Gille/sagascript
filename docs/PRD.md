@@ -32,7 +32,7 @@ FlowDictate is a macOS menu bar application that provides low-latency, privacy-f
 **So that** I can compose messages/documents faster than typing
 
 **Acceptance criteria:**
-- Global hotkey (default: Option+Space) activates dictation from any app
+- Global hotkey (default: Control+Shift+Space) activates dictation from any app
 - Audio capture begins within 100ms of hotkey press
 - Releasing hotkey (or second press for toggle mode) stops recording
 - Transcription completes within 2 seconds for typical utterances
@@ -104,10 +104,10 @@ FlowDictate is a macOS menu bar application that provides low-latency, privacy-f
 ### Flow 2: Dictation (Push-to-talk mode)
 
 ```
-1. User holds Option+Space
+1. User holds Control+Shift+Space
 2. Menu bar icon turns red; optional HUD appears
 3. User speaks
-4. User releases Option+Space
+4. User releases Control+Shift+Space
 5. Audio is transcribed locally (or remotely if enabled)
 6. Transcribed text is pasted into active app
 7. Icon returns to idle; HUD dismisses
@@ -116,10 +116,10 @@ FlowDictate is a macOS menu bar application that provides low-latency, privacy-f
 ### Flow 3: Dictation (Toggle mode)
 
 ```
-1. User presses Option+Space (first press)
+1. User presses Control+Shift+Space (first press)
 2. Recording starts; visual indicators activate
 3. User speaks freely
-4. User presses Option+Space again (second press)
+4. User presses Control+Shift+Space again (second press)
 5. Recording stops; transcription begins
 6. Text is pasted; indicators deactivate
 ```
