@@ -56,7 +56,6 @@ Note: First load with prewarm takes ~4-6s, subsequent loads faster.
 ## Potential Next Steps
 
 Ideas for future work (not committed to):
-- [ ] Auto-paste transcribed text to active app (opt-in)
 - [ ] Text formatting/cleanup via LLM (like Wispr Flow)
 - [ ] Streaming transcription for real-time feedback
 - [ ] Multiple language quick-switch
@@ -67,7 +66,7 @@ Ideas for future work (not committed to):
 
 - GitHub: https://github.com/Magnus-Gille/flowdictate
 - CI: GitHub Actions (macOS 14, build + test)
-- Dependencies: WhisperKit, HotKey (via SPM)
+- Dependencies: WhisperKit, SwiftWhisper, HotKey (via SPM)
 
 ## Files Created
 
