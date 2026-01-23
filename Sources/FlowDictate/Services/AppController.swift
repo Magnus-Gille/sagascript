@@ -115,7 +115,7 @@ final class AppController: ObservableObject {
                 let hotkeyDesc = settingsManager.hotkeyDescription
                 print("")
                 print("╔════════════════════════════════════════════════════════════╗")
-                print("║       FlowDictate Ready! Press \(hotkeyDesc.padding(toLength: 24, withPad: " ", startingAt: 0))  ║")
+                print("║       FlowDictate Ready! Press \(hotkeyDesc.padding(toLength: 29, withPad: " ", startingAt: 0))║")
                 print("╚════════════════════════════════════════════════════════════╝")
                 print("")
 
