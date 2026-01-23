@@ -68,7 +68,9 @@ final class SettingsManagerTests: XCTestCase {
     }
 
     func testHotkeyDescription() {
-        // Default is Option+Space
+        // Default is Control+Shift+Space
         XCTAssertTrue(settingsManager.hotkeyDescription.contains("Space"))
+        XCTAssertTrue(settingsManager.hotkeyDescription.contains("⌃"))  // Control
+        XCTAssertTrue(settingsManager.hotkeyDescription.contains("⇧"))  // Shift
     }
 }

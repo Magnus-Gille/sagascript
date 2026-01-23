@@ -9,7 +9,16 @@ struct FlowDictateApp: App {
     @StateObject private var settingsManager = SettingsManager.shared
 
     var body: some Scene {
-        // Menu bar app with no dock icon
+        // Main window shown on launch
+        Window("FlowDictate", id: "main") {
+            MainWindowView()
+                .environmentObject(appController)
+                .environmentObject(settingsManager)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+
+        // Menu bar app
         MenuBarExtra {
             MenuBarView()
                 .environmentObject(appController)
