@@ -35,6 +35,11 @@ final class AppController: ObservableObject {
     private var currentAudioSamples: Int = 0
     private let minimumRecordingDuration: TimeInterval = 0.3 // 300ms minimum
 
+    // MARK: - Model Tracking
+
+    /// Currently loaded model - used to detect when model needs to be reloaded
+    private var currentLoadedModel: WhisperModel?
+
     // MARK: - Computed Properties
 
     var isRecording: Bool { state.isRecording }
@@ -104,14 +109,20 @@ final class AppController: ObservableObject {
     }
 
     private func warmUpModel() {
-        let model = settingsManager.whisperModel
+        // Use effectiveModel which considers auto-selection based on language
+        let model = settingsManager.effectiveModel
+        let autoSelected = settingsManager.autoSelectModel
         print("[AppController] Starting model warm-up with \(model.displayName)...")
+        if autoSelected {
+            print("[AppController] (Auto-selected for \(settingsManager.language.displayName))")
+        }
         print("[AppController] The model needs to be downloaded on first launch.")
         print("")
 
         Task {
             do {
                 try await transcriptionService.warmUp(model: model)
+                currentLoadedModel = model
                 isModelReady = true
                 let hotkeyDesc = settingsManager.hotkeyDescription
                 print("")
@@ -122,13 +133,46 @@ final class AppController: ObservableObject {
 
                 loggingService.info(.App, LogEvent.App.ready, data: [
                     "hotkeyDescription": AnyCodable(hotkeyDesc),
-                    "model": AnyCodable(model.rawValue)
+                    "model": AnyCodable(model.rawValue),
+                    "autoSelected": AnyCodable(autoSelected),
+                    "language": AnyCodable(settingsManager.language.rawValue)
                 ])
             } catch {
                 print("[AppController] ✗ Failed to warm up model: \(error)")
                 print("[AppController] You can still try dictating - it will attempt to load on demand.")
             }
         }
+    }
+
+    /// Ensure the correct model is loaded for current settings
+    /// Called before each transcription to handle language/model changes
+    private func ensureCorrectModelLoaded() async throws {
+        let requiredModel = settingsManager.effectiveModel
+
+        // If the required model is already loaded, nothing to do
+        if currentLoadedModel == requiredModel {
+            return
+        }
+
+        print("[AppController] Model change detected: \(currentLoadedModel?.displayName ?? "none") → \(requiredModel.displayName)")
+        print("[AppController] Reloading model for \(settingsManager.language.displayName)...")
+
+        // Update overlay to show model is loading
+        await MainActor.run {
+            updateOverlayForModelLoading()
+        }
+
+        isModelReady = false
+        try await transcriptionService.warmUp(model: requiredModel)
+        currentLoadedModel = requiredModel
+        isModelReady = true
+
+        // Update overlay to show model is ready
+        await MainActor.run {
+            updateOverlayModelReady()
+        }
+
+        print("[AppController] ✓ Model switched to \(requiredModel.displayName)")
     }
 
     // MARK: - Hotkey Handlers
@@ -263,9 +307,13 @@ final class AppController: ObservableObject {
         print("[Transcription] 🔄 Starting transcription...")
         print("[Transcription] Backend: \(settingsManager.backend.displayName)")
         print("[Transcription] Language: \(settingsManager.language.displayName)")
+        print("[Transcription] Model: \(settingsManager.effectiveModel.displayName)")
 
         Task {
             do {
+                // Ensure the correct model is loaded for current language settings
+                try await ensureCorrectModelLoaded()
+
                 let startTime = CFAbsoluteTimeGetCurrent()
                 let text = try await transcriptionService.transcribe(
                     audio: audioData,
@@ -383,7 +431,20 @@ final class AppController: ObservableObject {
         if overlayWindow == nil {
             overlayWindow = RecordingOverlayWindow()
         }
-        overlayWindow?.show()
+
+        // Check if model needs to be switched (different from currently loaded)
+        let needsModelSwitch = currentLoadedModel != settingsManager.effectiveModel
+
+        // Show with appropriate state
+        overlayWindow?.show(modelReady: isModelReady && !needsModelSwitch)
+    }
+
+    private func updateOverlayForModelLoading() {
+        overlayWindow?.showLoadingModel()
+    }
+
+    private func updateOverlayModelReady() {
+        overlayWindow?.updateState(modelReady: true)
     }
 
     private func hideOverlay() {
