@@ -36,10 +36,18 @@ The master prompt is in `PROMPT.md`. Follow it.
   - audio buffering/segmentation
   - paste/AX permission flow
 
-## Local commands (agent should add as implemented)
-- `make test` (or `swift test`)
-- `make lint` (if added)
-- `make build` (or `xcodebuild ...`)
+## Local commands
+- `swift build` — Build the app
+- `swift test` — Run 29 unit tests
+- `.build/debug/FlowDictate` — Run the app
+- `tail -f ~/Library/Logs/FlowDictate/flowdictate.log` — Watch logs
+
+## Current status (2026-01-23)
+App is **feature-complete** with performance optimizations:
+- WhisperKit with prewarming, greedy decoding, optimized compute options
+- User-selectable models (tinyEn, tiny, baseEn, base)
+- RTF logging for performance monitoring
+See `docs/STATUS.md` for full details.
 
 ## Subagents
 Project-specific subagents may be defined in `.claude/agents/`.

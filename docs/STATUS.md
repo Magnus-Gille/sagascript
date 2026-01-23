@@ -27,10 +27,21 @@ Applied WhisperKit performance optimizations:
 - **Full compute options** - GPU for mel, ANE for encoder/decoder, CPU for prefill
 - **Greedy decoding** - Deterministic, no sampling overhead
 - **Quality thresholds disabled** - Skip compression/logprob checks for speed
-- **User-selectable models** - tinyEn (default, fastest), tiny, baseEn, base
-- **RTF logging** - Real-Time Factor tracked in logs for monitoring
+- **User-selectable models** - tinyEn, tiny, baseEn, base (default: base for cache compatibility)
+- **RTF logging** - Real-Time Factor tracked in logs for performance monitoring
 
-Expected improvement: 5s audio from 7-10s → 0.3-0.5s transcription
+Expected improvement: Faster transcription due to optimized decoding options.
+Note: First load with prewarm takes ~4-6s, subsequent loads faster.
+
+## Potential Next Steps
+
+Ideas for future work (not committed to):
+- [ ] Auto-paste transcribed text to active app (opt-in)
+- [ ] Text formatting/cleanup via LLM (like Wispr Flow)
+- [ ] Streaming transcription for real-time feedback
+- [ ] Multiple language quick-switch
+- [ ] Custom vocabulary/context prompts
+- [ ] App notarization for distribution
 
 ## Repository
 
