@@ -18,18 +18,27 @@ protocol TranscriptionBackendProtocol {
 }
 
 /// Service that manages transcription backends
+/// Routes to appropriate backend based on model type:
+/// - Standard models (tiny, base, etc.) → WhisperKit (CoreML/ANE)
+/// - KB-Whisper Swedish models → whisper.cpp (GGML)
+/// - Remote → OpenAI API
 final class TranscriptionService {
     // MARK: - Private State
 
     private let whisperKitBackend: WhisperKitBackend
+    private let whisperCppBackend: WhisperCppBackend
     private let openAIBackend: OpenAIBackend
     private let logger = Logger(subsystem: "com.flowdictate", category: "Transcription")
     private let loggingService = LoggingService.shared
+
+    /// Currently loaded model (for routing transcription calls)
+    private var currentModel: WhisperModel?
 
     // MARK: - Initialization
 
     init() {
         self.whisperKitBackend = WhisperKitBackend()
+        self.whisperCppBackend = WhisperCppBackend()
         self.openAIBackend = OpenAIBackend()
     }
 
@@ -48,26 +57,40 @@ final class TranscriptionService {
     ) async throws -> String {
         let startTime = CFAbsoluteTimeGetCurrent()
 
+        // Determine actual backend based on model type for local transcription
+        let actualBackend: String
+        if backend == .local, let model = currentModel {
+            actualBackend = model.isSwedishOptimized ? "whisper.cpp" : "WhisperKit"
+        } else {
+            actualBackend = backend.rawValue
+        }
+
         loggingService.info(.Transcription, LogEvent.Transcription.started, data: [
-            "backend": AnyCodable(backend.rawValue),
+            "backend": AnyCodable(actualBackend),
             "language": AnyCodable(language.rawValue),
-            "audioSamples": AnyCodable(audio.count)
+            "audioSamples": AnyCodable(audio.count),
+            "model": AnyCodable(currentModel?.rawValue ?? "unknown")
         ])
 
         do {
             let result: String
             switch backend {
             case .local:
-                result = try await whisperKitBackend.transcribe(audio: audio, language: language)
+                // Route to appropriate local backend based on model type
+                if let model = currentModel, model.isSwedishOptimized {
+                    result = try await whisperCppBackend.transcribe(audio: audio, language: language)
+                } else {
+                    result = try await whisperKitBackend.transcribe(audio: audio, language: language)
+                }
             case .remote:
                 result = try await openAIBackend.transcribe(audio: audio, language: language)
             }
 
             let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-            logger.info("Transcription completed in \(elapsed, format: .fixed(precision: 2))s using \(backend.rawValue)")
+            logger.info("Transcription completed in \(elapsed, format: .fixed(precision: 2))s using \(actualBackend)")
 
             loggingService.info(.Transcription, LogEvent.Transcription.completed, data: [
-                "backend": AnyCodable(backend.rawValue),
+                "backend": AnyCodable(actualBackend),
                 "durationMs": AnyCodable(Int(elapsed * 1000)),
                 "resultLength": AnyCodable(result.count)
             ])
@@ -76,7 +99,7 @@ final class TranscriptionService {
         } catch {
             let elapsed = CFAbsoluteTimeGetCurrent() - startTime
             loggingService.error(.Transcription, LogEvent.Transcription.failed, data: [
-                "backend": AnyCodable(backend.rawValue),
+                "backend": AnyCodable(actualBackend),
                 "durationMs": AnyCodable(Int(elapsed * 1000)),
                 "error": AnyCodable(error.localizedDescription)
             ])
@@ -85,13 +108,27 @@ final class TranscriptionService {
     }
 
     /// Warm up the local transcription backend with the specified model
+    /// Routes to WhisperKit for standard models, whisper.cpp for KB-Whisper
     /// - Parameter model: The WhisperModel to load
     func warmUp(model: WhisperModel = .base) async throws {
-        try await whisperKitBackend.warmUp(model: model)
+        currentModel = model
+
+        if model.isSwedishOptimized {
+            // Use whisper.cpp for KB-Whisper Swedish models
+            try await whisperCppBackend.warmUp(model: model)
+        } else {
+            // Use WhisperKit for standard models
+            try await whisperKitBackend.warmUp(model: model)
+        }
     }
 
-    /// Check if the local backend is ready
+    /// Check if the local backend is ready (checks the appropriate backend for current model)
     var isLocalReady: Bool {
-        get async { await whisperKitBackend.isReady }
+        get async {
+            if let model = currentModel, model.isSwedishOptimized {
+                return await whisperCppBackend.isReady
+            }
+            return await whisperKitBackend.isReady
+        }
     }
 }

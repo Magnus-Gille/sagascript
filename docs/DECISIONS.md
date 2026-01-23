@@ -322,3 +322,47 @@ Record assumptions and design decisions here, with rationale and dates.
   - Slightly less accuracy with tiny models vs base
   - Quality thresholds disabled may accept some bad transcriptions
   - Model load slightly longer due to prewarming (but worth it for inference speed)
+
+---
+
+## 2026-01-23 — KB-Whisper Models for Swedish Transcription
+
+- **Decision:** Add support for KB-Whisper models fine-tuned specifically for Swedish
+- **Problem:** OpenAI's base Whisper model has 39.6% WER (Word Error Rate) on Swedish - essentially unusable for dictation
+- **Solution:** Integrate KB-Whisper models from Kungliga Biblioteket (Swedish National Library)
+- **KB-Whisper benefits:**
+  | Model | Parameters | Swedish WER | vs OpenAI Base |
+  |-------|-----------|-------------|----------------|
+  | kb-whisper-tiny | 57.7M | 13.2% | ~3x better |
+  | kb-whisper-base | 99.1M | 9.1% | **4x better** |
+  | kb-whisper-small | 0.3B | 7.3% | 5x better |
+- **Implementation:**
+  1. Added `kbWhisperTiny`, `kbWhisperBase`, `kbWhisperSmall` to WhisperModel enum
+  2. Added SwiftWhisper (whisper.cpp) as second transcription backend for Swedish models
+  3. TranscriptionService routes to appropriate backend based on model type
+  4. ModelDownloadService downloads GGML models from HuggingFace on first use
+  5. Auto-model selection: when `autoSelectModel=true`, automatically uses kb-whisper-base for Swedish
+  6. UI shows recommendation for Swedish users with standard models
+- **Architecture:**
+  - Standard models (tiny, base, etc.) → WhisperKit (CoreML/Neural Engine)
+  - KB-Whisper Swedish models → whisper.cpp via SwiftWhisper (GGML)
+  - Remote → OpenAI API
+- **Model storage:**
+  - Standard models: Downloaded by WhisperKit to its cache
+  - KB-Whisper models: `~/Library/Application Support/FlowDictate/Models/` (auto-downloaded)
+- **Alternatives considered:**
+  - Option 1: Convert KB-Whisper to CoreML (complex - whisperkittools not on PyPI, conversion non-trivial)
+  - Option 3: Larger OpenAI multilingual models (still much worse than KB-Whisper on Swedish)
+- **Rationale:**
+  - KB-Whisper GGML models are pre-built and ready to download from HuggingFace
+  - whisper.cpp is mature and well-tested
+  - Auto-download provides seamless UX - no manual setup required
+  - KB-whisper-base achieves 9.1% WER vs 39.6% for standard Whisper
+- **Consequences:**
+  - Two transcription backends to maintain (WhisperKit + whisper.cpp)
+  - First Swedish transcription triggers ~60MB download
+  - whisper.cpp may not leverage Neural Engine as well as WhisperKit (CPU-based)
+- **Sources:**
+  - [KB-Whisper Collection](https://huggingface.co/collections/KBLab/kb-whisper-67af9eafb24da903b63cc4aa)
+  - [KB-Whisper Blog Post](https://kb-labb.github.io/posts/2025-03-07-welcome-KB-Whisper/)
+  - [WhisperKit GitHub](https://github.com/argmaxinc/WhisperKit)

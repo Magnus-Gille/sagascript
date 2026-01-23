@@ -28,6 +28,10 @@ actor WhisperKitBackend: TranscriptionBackendProtocol {
 
     /// Warm up the model with the specified model variant
     /// - Parameter model: The WhisperModel to load (defaults to base for compatibility)
+    ///
+    /// Model loading strategy:
+    /// - Standard models: Downloaded from argmaxinc/whisperkit-coreml (WhisperKit default)
+    /// - KB-Whisper models: Loaded from local path ~/Library/Application Support/FlowDictate/Models/
     func warmUp(model: WhisperModel = .base) async throws {
         // If same model is already loaded, skip
         if let currentModel = currentModel, currentModel == model, whisperKit != nil {
@@ -44,23 +48,61 @@ actor WhisperKitBackend: TranscriptionBackendProtocol {
         isLoading = true
         defer { isLoading = false }
 
-        print("")
-        print("┌────────────────────────────────────────────────────────────┐")
-        print("│           Loading WhisperKit Model (\(model.rawValue.padding(toLength: 8, withPad: " ", startingAt: 0)))               │")
-        print("└────────────────────────────────────────────────────────────┘")
-        print("")
-        print("[WhisperKit] Loading model '\(model.rawValue)'...")
-        print("[WhisperKit] - If not cached: downloading from Hugging Face (slow)")
+        // Check if KB-Whisper model is available locally
+        if model.requiresLocalPath {
+            guard model.isLocallyAvailable, let localPath = model.localModelPath else {
+                let modelsDir = WhisperModel.localModelsDirectory.path
+                print("")
+                print("┌────────────────────────────────────────────────────────────┐")
+                print("│  KB-Whisper Model Not Found                                │")
+                print("└────────────────────────────────────────────────────────────┘")
+                print("")
+                print("[WhisperKit] ✗ Swedish model '\(model.modelName)' not found.")
+                print("[WhisperKit] Expected location: \(modelsDir)/\(model.modelName)/")
+                print("")
+                print("[WhisperKit] To install KB-Whisper models:")
+                print("  1. Convert model: pip install whisperkittools")
+                print("  2. Run: whisperkit-generate-model --model-version KBLab/\(model.rawValue) --output-dir \"\(modelsDir)\"")
+                print("")
+
+                loggingService.error(.Transcription, LogEvent.Transcription.modelFailed, data: [
+                    "model": AnyCodable(model.rawValue),
+                    "error": AnyCodable("Model not found at \(modelsDir)/\(model.modelName)")
+                ])
+
+                throw DictationError.modelNotLoaded
+            }
+
+            print("")
+            print("┌────────────────────────────────────────────────────────────┐")
+            print("│  Loading KB-Whisper Model (Swedish-optimized)              │")
+            print("└────────────────────────────────────────────────────────────┘")
+            print("")
+            print("[WhisperKit] Loading from: \(localPath.path)")
+        } else {
+            print("")
+            print("┌────────────────────────────────────────────────────────────┐")
+            print("│           Loading WhisperKit Model (\(model.rawValue.padding(toLength: 16, withPad: " ", startingAt: 0)))       │")
+            print("└────────────────────────────────────────────────────────────┘")
+            print("")
+            print("[WhisperKit] Loading standard model '\(model.rawValue)'...")
+            print("[WhisperKit] - If not cached: downloading from Hugging Face (slow)")
+        }
+
         print("[WhisperKit] - Prewarming: compiling for Neural Engine (one-time)")
         print("")
 
-        logger.info("Loading WhisperKit model: \(model.rawValue)")
+        let sourceInfo = model.requiresLocalPath ? "local" : "HuggingFace"
+        logger.info("Loading WhisperKit model: \(model.rawValue) from \(sourceInfo)")
         let startTime = CFAbsoluteTimeGetCurrent()
 
         loggingService.info(.Transcription, LogEvent.Transcription.modelLoading, data: [
             "model": AnyCodable(model.rawValue),
+            "modelName": AnyCodable(model.modelName),
+            "source": AnyCodable(sourceInfo),
             "backend": AnyCodable("local"),
-            "parameterCount": AnyCodable(model.parameterCount)
+            "parameterCount": AnyCodable(model.parameterCount),
+            "isSwedishOptimized": AnyCodable(model.isSwedishOptimized)
         ])
 
         // Create a timer to show progress while loading
@@ -87,11 +129,22 @@ actor WhisperKitBackend: TranscriptionBackendProtocol {
                 prefillCompute: .cpuOnly
             )
 
-            whisperKit = try await WhisperKit(
-                model: model.rawValue,
-                computeOptions: computeOptions,
-                prewarm: true  // Critical: specializes CoreML models for ANE, improves inference speed
-            )
+            // Load model from local path (KB-Whisper) or default HuggingFace repo (standard)
+            if let localPath = model.localModelPath {
+                // KB-Whisper: load from local directory
+                whisperKit = try await WhisperKit(
+                    modelFolder: localPath.path,
+                    computeOptions: computeOptions,
+                    prewarm: true
+                )
+            } else {
+                // Standard models: download from WhisperKit's default repo
+                whisperKit = try await WhisperKit(
+                    model: model.modelName,
+                    computeOptions: computeOptions,
+                    prewarm: true
+                )
+            }
 
             currentModel = model
 
@@ -105,7 +158,8 @@ actor WhisperKitBackend: TranscriptionBackendProtocol {
             loggingService.info(.Transcription, LogEvent.Transcription.modelLoaded, data: [
                 "model": AnyCodable(model.rawValue),
                 "loadTimeMs": AnyCodable(Int(elapsed * 1000)),
-                "prewarmed": AnyCodable(true)
+                "prewarmed": AnyCodable(true),
+                "isSwedishOptimized": AnyCodable(model.isSwedishOptimized)
             ])
         } catch {
             progressTask.cancel()

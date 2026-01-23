@@ -85,7 +85,24 @@ private struct TranscriptionSettingsTab: View {
 
     /// Whether the current model/language combination has a compatibility issue
     private var hasModelLanguageConflict: Bool {
-        settingsManager.whisperModel.isEnglishOnly && settingsManager.language != .english && settingsManager.language != .auto
+        // English-only model with non-English language
+        if settingsManager.whisperModel.isEnglishOnly && settingsManager.language == .swedish {
+            return true
+        }
+        return false
+    }
+
+    /// Whether to show Swedish model recommendation
+    private var shouldRecommendSwedishModel: Bool {
+        settingsManager.language == .swedish &&
+        !settingsManager.whisperModel.isSwedishOptimized &&
+        !settingsManager.autoSelectModel
+    }
+
+    /// Models to show based on current settings
+    private var availableModels: [WhisperModel] {
+        // Show all models, but group them logically
+        WhisperModel.allCases
     }
 
     var body: some View {
@@ -118,34 +135,92 @@ private struct TranscriptionSettingsTab: View {
             // Model selection (only for local backend)
             if settingsManager.backend == .local {
                 Section {
-                    Picker("Model:", selection: $settingsManager.whisperModel) {
-                        ForEach(WhisperModel.allCases) { model in
-                            VStack(alignment: .leading) {
-                                Text(model.displayName)
-                                Text(model.description)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .tag(model)
+                    // Auto-select model toggle
+                    Toggle("Auto-select best model for language", isOn: $settingsManager.autoSelectModel)
+
+                    if settingsManager.autoSelectModel {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Using: \(settingsManager.effectiveModel.displayName)")
+                                .font(.caption)
                         }
                     }
-                    .pickerStyle(.radioGroup)
 
-                    // Warning for English-only model with non-English language
-                    if hasModelLanguageConflict {
+                    // Manual model picker (only when auto-select is off)
+                    if !settingsManager.autoSelectModel {
+                        Picker("Model:", selection: $settingsManager.whisperModel) {
+                            // Standard models section
+                            Section(header: Text("Standard Models")) {
+                                ForEach(WhisperModel.standardModels) { model in
+                                    VStack(alignment: .leading) {
+                                        Text(model.displayName)
+                                        Text(model.description)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .tag(model)
+                                }
+                            }
+
+                            // Swedish-optimized models section
+                            Section(header: Text("Swedish-Optimized (KB-Whisper)")) {
+                                ForEach(WhisperModel.swedishModels) { model in
+                                    VStack(alignment: .leading) {
+                                        HStack {
+                                            Text(model.displayName)
+                                            if settingsManager.language == .swedish {
+                                                Text("Recommended")
+                                                    .font(.caption2)
+                                                    .padding(.horizontal, 4)
+                                                    .padding(.vertical, 1)
+                                                    .background(Color.blue.opacity(0.2))
+                                                    .cornerRadius(4)
+                                            }
+                                        }
+                                        Text(model.description)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .tag(model)
+                                }
+                            }
+                        }
+                        .pickerStyle(.radioGroup)
+                    }
+
+                    // Warning for English-only model with Swedish language
+                    if hasModelLanguageConflict && !settingsManager.autoSelectModel {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.orange)
-                            Text("Selected model only supports English. Switch to '\(settingsManager.whisperModel == .tinyEn ? "Tiny" : "Base") (Multilingual)' for \(settingsManager.language.displayName).")
+                                .foregroundColor(.red)
+                            Text("This model only supports English. Swedish transcription will not work.")
                                 .font(.caption)
+                        }
+                    }
+
+                    // Recommendation for Swedish language with standard model
+                    if shouldRecommendSwedishModel {
+                        HStack {
+                            Image(systemName: "lightbulb.fill")
+                                .foregroundColor(.yellow)
+                            VStack(alignment: .leading) {
+                                Text("For better Swedish transcription, try KB-Whisper Base.")
+                                    .font(.caption)
+                                Text("KB-Whisper models have 4x lower error rate on Swedish.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                     }
                 } header: {
                     Text("WhisperKit Model")
                 } footer: {
-                    Text("Smaller models are faster but less accurate. English-only models perform better for English.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Standard models work for all languages. KB-Whisper models are fine-tuned on 50,000+ hours of Swedish speech for significantly better Swedish transcription.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 

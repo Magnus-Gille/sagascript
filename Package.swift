@@ -15,8 +15,10 @@ let package = Package(
         )
     ],
     dependencies: [
-        // WhisperKit for local transcription
+        // WhisperKit for local transcription (standard models)
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
+        // SwiftWhisper for whisper.cpp backend (KB-Whisper Swedish models)
+        .package(url: "https://github.com/exPHAT/SwiftWhisper.git", branch: "master"),
         // HotKey for global keyboard shortcuts
         .package(url: "https://github.com/soffes/HotKey.git", from: "0.2.0"),
     ],
@@ -25,6 +27,7 @@ let package = Package(
             name: "FlowDictate",
             dependencies: [
                 .product(name: "WhisperKit", package: "WhisperKit"),
+                .product(name: "SwiftWhisper", package: "SwiftWhisper"),
                 .product(name: "HotKey", package: "HotKey"),
             ],
             path: "Sources/FlowDictate",

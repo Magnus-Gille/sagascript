@@ -3,7 +3,7 @@
 This file is the agent's running "project board".
 
 ## Current State
-**COMPLETE** — All Definition of Done criteria met + performance optimization (2026-01-23)
+**COMPLETE** — All Definition of Done criteria met + performance optimization + Swedish language support (2026-01-23)
 
 ## Summary
 
@@ -19,6 +19,26 @@ FlowDictate is a complete macOS dictation app with:
 8. **Settings UI** with language, backend, hotkey, and **model selection**
 9. **Secure API key storage** in macOS Keychain
 10. **Structured logging** with JSONL file output for debugging + **RTF metrics**
+11. **Swedish-optimized transcription** via KB-Whisper models (4x better WER)
+
+## Swedish Language Support (2026-01-23)
+
+Added KB-Whisper models for significantly improved Swedish transcription:
+- **KB-Whisper models** - Fine-tuned on 50,000+ hours of Swedish speech data
+- **whisper.cpp backend** - SwiftWhisper used for KB-Whisper GGML models
+- **Auto-download** - Models downloaded automatically from HuggingFace on first use
+- **Auto-model selection** - Automatically uses kb-whisper-base for Swedish language
+- **Model variants** - kb-whisper-tiny (13% WER), kb-whisper-base (9% WER), kb-whisper-small (7% WER)
+
+Swedish WER improvements vs OpenAI base Whisper:
+| Model | Swedish WER | Improvement | Size |
+|-------|-------------|-------------|------|
+| OpenAI base | 39.6% | baseline | - |
+| kb-whisper-tiny | 13.2% | 3x better | ~40MB |
+| kb-whisper-base | 9.1% | 4x better | ~60MB |
+| kb-whisper-small | 7.3% | 5x better | ~190MB |
+
+**No manual setup required** - select Swedish language and the model downloads automatically.
 
 ## Performance Optimization (2026-01-23)
 
@@ -27,7 +47,7 @@ Applied WhisperKit performance optimizations:
 - **Full compute options** - GPU for mel, ANE for encoder/decoder, CPU for prefill
 - **Greedy decoding** - Deterministic, no sampling overhead
 - **Quality thresholds disabled** - Skip compression/logprob checks for speed
-- **User-selectable models** - tinyEn, tiny, baseEn, base (default: base for cache compatibility)
+- **User-selectable models** - tinyEn, tiny, baseEn, base + KB-Whisper Swedish models
 - **RTF logging** - Real-Time Factor tracked in logs for performance monitoring
 
 Expected improvement: Faster transcription due to optimized decoding options.
