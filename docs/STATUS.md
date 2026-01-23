@@ -70,6 +70,10 @@ Ideas for future work (not committed to):
 - `docs/BENCHMARKS.md` — Performance benchmarks
 - `docs/GITHUB_SETUP.md` — GitHub setup guide
 
+### App Bundle
+- `AppBundle/Info.plist` — macOS app bundle configuration
+- `scripts/build-app.sh` — Build script for creating .app bundle
+
 ### CI/CD
 - `.github/workflows/ci.yml` — Build + test workflow
 - `.github/dependabot.yml` — Dependency updates
@@ -86,8 +90,10 @@ All items complete:
 ## How to Use
 
 1. Clone the repository
-2. Run `swift build` to build
-3. Run `swift test` to run tests
-4. Run `.build/debug/FlowDictate` to launch the app
+2. Run `swift test` to run tests
+3. Run `./scripts/build-app.sh` to build the app bundle
+4. Run `open .build/release/FlowDictate.app` to launch the app
 5. Grant Microphone and Accessibility permissions when prompted
 6. Press Control+Shift+Space to start dictating (configurable in Settings)
+
+**Note:** The app runs as a menu bar application (no Dock icon). Look for the waveform icon in the menu bar.

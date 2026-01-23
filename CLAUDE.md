@@ -37,9 +37,10 @@ The master prompt is in `PROMPT.md`. Follow it.
   - paste/AX permission flow
 
 ## Local commands
-- `swift build` — Build the app
+- `swift build` — Build the executable (for development)
 - `swift test` — Run 29 unit tests
-- `.build/debug/FlowDictate` — Run the app
+- `./scripts/build-app.sh` — Build the app bundle (release)
+- `open .build/release/FlowDictate.app` — Run the app
 - `tail -f ~/Library/Logs/FlowDictate/flowdictate.log` — Watch logs
 
 ## Current status (2026-01-23)
