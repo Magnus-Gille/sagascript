@@ -13,6 +13,7 @@ final class OpenAIBackend: TranscriptionBackendProtocol {
 
     private let keychainService: KeychainService
     private let logger = Logger(subsystem: "com.flowdictate", category: "OpenAI")
+    private let loggingService = LoggingService.shared
 
     // MARK: - Initialization
 

@@ -22,10 +22,18 @@ final class AppController: ObservableObject {
     private let transcriptionService: TranscriptionService
     private let pasteService: PasteService
     private let settingsManager: SettingsManager
+    private let loggingService: LoggingService
 
     // MARK: - Overlay Window
 
     private var overlayWindow: RecordingOverlayWindow?
+
+    // MARK: - Recording Timing
+
+    private var recordingStartTime: Date?
+    private var transcriptionStartTime: Date?
+    private var currentAudioSamples: Int = 0
+    private let minimumRecordingDuration: TimeInterval = 0.3 // 300ms minimum
 
     // MARK: - Computed Properties
 
@@ -36,6 +44,8 @@ final class AppController: ObservableObject {
     // MARK: - Initialization
 
     private init() {
+        self.loggingService = LoggingService.shared
+
         print("╔════════════════════════════════════════════════════════════╗")
         print("║              FlowDictate Starting Up...                    ║")
         print("╚════════════════════════════════════════════════════════════╝")
@@ -58,6 +68,10 @@ final class AppController: ObservableObject {
         print("[AppController] ✓ PasteService ready")
         print("")
 
+        loggingService.info(.App, LogEvent.App.started, data: [
+            "appSessionId": AnyCodable(loggingService.appSessionId)
+        ])
+
         setupHotkeyCallbacks()
         warmUpModel()
     }
@@ -77,11 +91,16 @@ final class AppController: ObservableObject {
             }
         }
 
-        // Register the hotkey
-        hotkeyService.register(
-            keyCode: UInt32(settingsManager.hotkeyKeyCode),
-            modifiers: UInt32(settingsManager.hotkeyModifiers)
-        )
+        // Delay hotkey registration slightly to avoid spurious triggers on startup
+        // This gives the app time to fully initialize before listening for input
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self = self else { return }
+            self.hotkeyService.register(
+                keyCode: UInt32(self.settingsManager.hotkeyKeyCode),
+                modifiers: UInt32(self.settingsManager.hotkeyModifiers)
+            )
+            print("[AppController] Hotkey registered: \(self.settingsManager.hotkeyDescription)")
+        }
     }
 
     private func warmUpModel() {
@@ -93,11 +112,16 @@ final class AppController: ObservableObject {
             do {
                 try await transcriptionService.warmUp()
                 isModelReady = true
+                let hotkeyDesc = settingsManager.hotkeyDescription
                 print("")
                 print("╔════════════════════════════════════════════════════════════╗")
-                print("║           FlowDictate Ready! Press Option+Space            ║")
+                print("║       FlowDictate Ready! Press \(hotkeyDesc.padding(toLength: 24, withPad: " ", startingAt: 0))  ║")
                 print("╚════════════════════════════════════════════════════════════╝")
                 print("")
+
+                loggingService.info(.App, LogEvent.App.ready, data: [
+                    "hotkeyDescription": AnyCodable(hotkeyDesc)
+                ])
             } catch {
                 print("[AppController] ✗ Failed to warm up model: \(error)")
                 print("[AppController] You can still try dictating - it will attempt to load on demand.")
@@ -134,6 +158,24 @@ final class AppController: ObservableObject {
             print("[Hotkey] Not recording, ignoring key up")
             return
         }
+
+        // Enforce minimum recording duration to allow audio buffers to arrive
+        if let startTime = recordingStartTime {
+            let elapsed = Date().timeIntervalSince(startTime)
+            if elapsed < minimumRecordingDuration {
+                let remaining = minimumRecordingDuration - elapsed
+                print("[Hotkey] Recording too short (\(String(format: "%.0f", elapsed * 1000))ms), waiting \(String(format: "%.0f", remaining * 1000))ms...")
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                    if self.state.isRecording {
+                        print("[Hotkey] Minimum duration reached, stopping...")
+                        self.stopRecordingAndTranscribe()
+                    }
+                }
+                return
+            }
+        }
+
         print("[Hotkey] Mode: Push-to-talk → Stopping recording...")
         stopRecordingAndTranscribe()
     }
@@ -146,17 +188,34 @@ final class AppController: ObservableObject {
             return
         }
 
+        // Start a new dictation session for logging correlation
+        let dictationId = loggingService.startDictationSession()
+        loggingService.info(.App, LogEvent.Session.dictationStarted, data: [
+            "dictationSessionId": AnyCodable(dictationId)
+        ])
+
         print("[Recording] 🎤 Starting audio capture...")
         do {
             try audioCaptureService.startCapture()
             state = .recording
+            recordingStartTime = Date()
             lastError = nil
             showOverlay()
+
+            loggingService.info(.App, LogEvent.Session.stateChanged, data: [
+                "from": AnyCodable("idle"),
+                "to": AnyCodable("recording")
+            ])
+
             print("[Recording] ✓ Audio capture started - SPEAK NOW!")
         } catch {
             print("[Recording] ✗ Failed to start: \(error.localizedDescription)")
+            loggingService.error(.Audio, LogEvent.Audio.permissionDenied, data: [
+                "error": AnyCodable(error.localizedDescription)
+            ])
             state = .error("Failed to start recording: \(error.localizedDescription)")
             lastError = .microphonePermissionDenied
+            loggingService.endDictationSession()
         }
     }
 
@@ -166,21 +225,38 @@ final class AppController: ObservableObject {
             return
         }
 
+        let recordingEndTime = Date()
+        let recordingDurationMs = Int((recordingEndTime.timeIntervalSince(recordingStartTime ?? recordingEndTime)) * 1000)
+
         print("[Recording] 🛑 Stopping audio capture...")
         let audioData = audioCaptureService.stopCapture()
         hideOverlay()
+        currentAudioSamples = audioData.count
 
         let durationSeconds = Double(audioData.count) / 16000.0
         print("[Recording] ✓ Captured \(audioData.count) samples (~\(String(format: "%.1f", durationSeconds))s of audio)")
 
+        loggingService.info(.App, LogEvent.Session.stateChanged, data: [
+            "from": AnyCodable("recording"),
+            "to": AnyCodable("transcribing")
+        ])
+
         guard !audioData.isEmpty else {
             print("[Recording] ✗ No audio captured!")
+            logDictationComplete(
+                recordingDurationMs: recordingDurationMs,
+                transcriptionDurationMs: 0,
+                audioSamples: 0,
+                resultCharacters: 0,
+                success: false
+            )
             state = .idle
             lastError = .noAudioCaptured
             return
         }
 
         state = .transcribing
+        transcriptionStartTime = Date()
         print("")
         print("[Transcription] 🔄 Starting transcription...")
         print("[Transcription] Backend: \(settingsManager.backend.displayName)")
@@ -195,32 +271,85 @@ final class AppController: ObservableObject {
                     backend: settingsManager.backend
                 )
                 let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                let transcriptionDurationMs = Int(elapsed * 1000)
 
                 print("[Transcription] ✓ Completed in \(String(format: "%.2f", elapsed))s")
-                print("[Transcription] Result: \"\(text)\"")
+                print("")
+                print("╔════════════════════════════════════════════════════════════╗")
+                print("║  TRANSCRIPTION RESULT:                                     ║")
+                print("╚════════════════════════════════════════════════════════════╝")
+                print("")
+                print("  \(text)")
+                print("")
+                print("════════════════════════════════════════════════════════════════")
                 print("")
 
                 lastTranscription = text
-
-                // Paste the transcribed text
-                print("[Paste] 📋 Pasting text to active application...")
-                try await pasteService.paste(text: text)
-                print("[Paste] ✓ Text pasted successfully!")
-                print("")
-
                 state = .idle
+
+                logDictationComplete(
+                    recordingDurationMs: recordingDurationMs,
+                    transcriptionDurationMs: transcriptionDurationMs,
+                    audioSamples: currentAudioSamples,
+                    resultCharacters: text.count,
+                    success: true
+                )
             } catch let error as DictationError {
                 print("[Transcription] ✗ Error: \(error.localizedDescription)")
+                let transcriptionDurationMs = Int((Date().timeIntervalSince(transcriptionStartTime ?? Date())) * 1000)
+                logDictationComplete(
+                    recordingDurationMs: recordingDurationMs,
+                    transcriptionDurationMs: transcriptionDurationMs,
+                    audioSamples: currentAudioSamples,
+                    resultCharacters: 0,
+                    success: false
+                )
                 state = .error(error.localizedDescription)
                 lastError = error
                 state = .idle
             } catch {
                 print("[Transcription] ✗ Error: \(error.localizedDescription)")
+                let transcriptionDurationMs = Int((Date().timeIntervalSince(transcriptionStartTime ?? Date())) * 1000)
+                logDictationComplete(
+                    recordingDurationMs: recordingDurationMs,
+                    transcriptionDurationMs: transcriptionDurationMs,
+                    audioSamples: currentAudioSamples,
+                    resultCharacters: 0,
+                    success: false
+                )
                 state = .error(error.localizedDescription)
                 lastError = .transcriptionFailed(error.localizedDescription)
                 state = .idle
             }
         }
+    }
+
+    private func logDictationComplete(
+        recordingDurationMs: Int,
+        transcriptionDurationMs: Int,
+        audioSamples: Int,
+        resultCharacters: Int,
+        success: Bool
+    ) {
+        let totalDurationMs = recordingDurationMs + transcriptionDurationMs
+
+        loggingService.info(.App, LogEvent.Session.dictationComplete, data: [
+            "totalDurationMs": AnyCodable(totalDurationMs),
+            "recordingDurationMs": AnyCodable(recordingDurationMs),
+            "transcriptionDurationMs": AnyCodable(transcriptionDurationMs),
+            "audioSamples": AnyCodable(audioSamples),
+            "backend": AnyCodable(settingsManager.backend.rawValue),
+            "language": AnyCodable(settingsManager.language.rawValue),
+            "resultCharacters": AnyCodable(resultCharacters),
+            "success": AnyCodable(success)
+        ])
+
+        loggingService.info(.App, LogEvent.Session.stateChanged, data: [
+            "from": AnyCodable("transcribing"),
+            "to": AnyCodable("idle")
+        ])
+
+        loggingService.endDictationSession()
     }
 
     func cancelRecording() {

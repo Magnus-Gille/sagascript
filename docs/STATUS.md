@@ -10,14 +10,15 @@ This file is the agent's running "project board".
 FlowDictate is a complete macOS dictation app with:
 
 1. **Menu bar application** using SwiftUI MenuBarExtra
-2. **Global hotkey** (Option+Space default) using HotKey package
+2. **Global hotkey** (Control+Shift+Space default, configurable) using HotKey package
 3. **Audio capture** via AVAudioEngine at 16kHz mono
 4. **Local transcription** using WhisperKit (Apple Silicon optimized)
 5. **Remote transcription** using OpenAI Whisper API
 6. **Visual indicator** with floating NSPanel overlay
 7. **Text paste** via clipboard + simulated Cmd+V
-8. **Settings UI** with language, backend, and hotkey configuration
+8. **Settings UI** with language, backend, and hotkey configuration (with recorder UI)
 9. **Secure API key storage** in macOS Keychain
+10. **Structured logging** with JSONL file output for debugging
 
 ## Repository
 
@@ -29,8 +30,8 @@ FlowDictate is a complete macOS dictation app with:
 
 ### Source Code
 - `Sources/FlowDictate/FlowDictateApp.swift` — App entry point
-- `Sources/FlowDictate/Models/` — Language, AppState, etc.
-- `Sources/FlowDictate/Services/` — All core services
+- `Sources/FlowDictate/Models/` — Language, AppState, AnyCodable, LogEvents
+- `Sources/FlowDictate/Services/` — All core services including LoggingService
 - `Sources/FlowDictate/Views/` — SwiftUI views
 
 ### Tests
@@ -66,4 +67,4 @@ All items complete:
 3. Run `swift test` to run tests
 4. Run `.build/debug/FlowDictate` to launch the app
 5. Grant Microphone and Accessibility permissions when prompted
-6. Press Option+Space to start dictating
+6. Press Control+Shift+Space to start dictating (configurable in Settings)

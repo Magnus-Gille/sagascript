@@ -10,6 +10,7 @@ actor WhisperKitBackend: TranscriptionBackendProtocol {
     private var whisperKit: WhisperKit?
     private var isLoading = false
     private let logger = Logger(subsystem: "com.flowdictate", category: "WhisperKit")
+    private let loggingService = LoggingService.shared
 
     // MARK: - TranscriptionBackendProtocol
 
@@ -40,6 +41,11 @@ actor WhisperKitBackend: TranscriptionBackendProtocol {
         logger.info("Loading WhisperKit model...")
         let startTime = CFAbsoluteTimeGetCurrent()
 
+        loggingService.info(.Transcription, LogEvent.Transcription.modelLoading, data: [
+            "model": AnyCodable("base"),
+            "backend": AnyCodable("local")
+        ])
+
         // Create a timer to show progress while loading
         let progressTask = Task {
             var dots = 0
@@ -69,10 +75,21 @@ actor WhisperKitBackend: TranscriptionBackendProtocol {
             print("")
             print("[WhisperKit] ✓ Model loaded successfully in \(String(format: "%.1f", elapsed))s")
             logger.info("WhisperKit model loaded in \(elapsed, format: .fixed(precision: 2))s")
+
+            loggingService.info(.Transcription, LogEvent.Transcription.modelLoaded, data: [
+                "model": AnyCodable("base"),
+                "loadTimeMs": AnyCodable(Int(elapsed * 1000))
+            ])
         } catch {
             progressTask.cancel()
             print("[WhisperKit] ✗ Failed to load model: \(error.localizedDescription)")
             logger.error("Failed to load WhisperKit model: \(error.localizedDescription)")
+
+            loggingService.error(.Transcription, LogEvent.Transcription.modelFailed, data: [
+                "model": AnyCodable("base"),
+                "error": AnyCodable(error.localizedDescription)
+            ])
+
             throw DictationError.modelNotLoaded
         }
     }

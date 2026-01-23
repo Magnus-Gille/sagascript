@@ -9,6 +9,7 @@ final class PasteService {
     // MARK: - Private State
 
     private let logger = Logger(subsystem: "com.flowdictate", category: "Paste")
+    private let loggingService = LoggingService.shared
 
     // MARK: - Public Methods
 
@@ -17,6 +18,10 @@ final class PasteService {
     /// - Throws: DictationError if paste fails
     func paste(text: String) async throws {
         guard !text.isEmpty else { return }
+
+        loggingService.info(.Paste, LogEvent.Paste.attempted, data: [
+            "characters": AnyCodable(text.count)
+        ])
 
         // Copy to clipboard
         let pasteboard = NSPasteboard.general
@@ -30,6 +35,10 @@ final class PasteService {
         if !trusted {
             logger.warning("Accessibility permission not granted. Text copied to clipboard only.")
 
+            loggingService.warning(.Paste, LogEvent.Paste.permissionDenied, data: [
+                "reason": AnyCodable("accessibility_not_trusted")
+            ])
+
             // Request permission (shows system dialog)
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
             AXIsProcessTrustedWithOptions(options)
@@ -38,9 +47,19 @@ final class PasteService {
         }
 
         // Simulate Cmd+V
-        try simulatePaste()
+        do {
+            try simulatePaste()
+            logger.info("Paste simulated successfully")
 
-        logger.info("Paste simulated successfully")
+            loggingService.info(.Paste, LogEvent.Paste.succeeded, data: [
+                "characters": AnyCodable(text.count)
+            ])
+        } catch {
+            loggingService.error(.Paste, LogEvent.Paste.failed, data: [
+                "error": AnyCodable(error.localizedDescription)
+            ])
+            throw error
+        }
     }
 
     // MARK: - Private Methods

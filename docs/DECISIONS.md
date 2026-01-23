@@ -22,20 +22,44 @@ Record assumptions and design decisions here, with rationale and dates.
 
 ---
 
-## 2026-01-23 — Use Option+Space as default hotkey
+## 2026-01-23 — Use Control+Shift+Space as default hotkey (updated)
 
-- **Decision:** Default hotkey is Option+Space (⌥ Space)
+- **Decision:** Default hotkey is Control+Shift+Space (⌃⇧Space)
+- **Previous default:** Option+Space (changed due to conflicts)
 - **Alternatives considered:**
+  - Option+Space (conflicts with user's other app)
   - Cmd+Shift+D (conflicts with some apps)
   - Double-tap Fn (not reliably capturable)
   - Ctrl+Space (conflicts with Spotlight on some configs)
 - **Rationale:**
-  - Option+Space is rarely used by other apps
+  - Control+Shift+Space is rarely used by other apps
+  - Avoids conflict with input method switches (Option+Space)
+  - Three-key combo ensures intentional activation
   - Easy to press with one hand
-  - Similar to common dictation shortcuts
 - **Consequences:**
-  - May conflict with some input methods
-  - User can change in settings
+  - Slightly more complex to press than two-key combos
+  - User can change in settings via hotkey recorder UI
+
+---
+
+## 2026-01-23 — Configurable hotkey via Settings UI
+
+- **Decision:** Allow users to configure the dictation hotkey in Settings
+- **Alternatives considered:**
+  - Config file only (poor UX)
+  - Fixed hotkey (inflexible)
+  - Terminal command to change (not user-friendly)
+- **Rationale:**
+  - Users have different workflows and conflicting shortcuts
+  - Visual feedback during recording makes it easy to use
+  - Pressing Escape cancels without saving
+- **Implementation:**
+  - HotkeyRecorderView captures key combinations via NSEvent monitor
+  - Requires at least one modifier (except for F-keys)
+  - Changes take effect immediately after recording
+- **Consequences:**
+  - More code for hotkey capture UI
+  - Must validate hotkeys don't conflict with system shortcuts
 
 ---
 
@@ -157,3 +181,101 @@ Record assumptions and design decisions here, with rationale and dates.
 - **Consequences:**
   - More code than simple SwiftUI
   - Must manage window level and activation
+
+---
+
+## 2026-01-23 — Show main window on launch for initial configuration
+
+- **Decision:** Display a visible main window on app launch alongside menu bar
+- **Alternatives considered:**
+  - Menu bar only (original implementation)
+  - Onboarding wizard
+  - Preferences window auto-open
+- **Rationale:**
+  - Users expect to see UI when launching an app
+  - Provides clear indication app is running
+  - Shows hotkey configuration and current status
+  - Makes transcription results visible without needing terminal
+- **Consequences:**
+  - Slight increase in UI code
+  - Window can be closed; menu bar remains active
+
+---
+
+## 2026-01-23 — Print transcription to console instead of auto-paste
+
+- **Decision:** Print transcription result to terminal/window instead of automatically pasting
+- **Alternatives considered:**
+  - Auto-paste to active app (original behavior)
+  - Copy to clipboard only
+  - Configurable output mode
+- **Rationale:**
+  - Auto-paste was surprising and could disrupt user workflow
+  - Terminal output is visible and predictable
+  - User can manually copy from main window if needed
+  - Better for testing and debugging
+- **Consequences:**
+  - Less "magic" convenience
+  - User sees transcription clearly before deciding what to do with it
+  - Can add opt-in auto-paste feature later if desired
+
+---
+
+## 2026-01-23 — Enforce minimum recording duration (300ms)
+
+- **Decision:** Require at least 300ms of recording time before stopping
+- **Alternatives considered:**
+  - No minimum (original behavior, caused 0-sample captures)
+  - Smaller minimum (100ms)
+  - Wait for first audio buffer before allowing stop
+- **Rationale:**
+  - Audio tap delivers buffers asynchronously (~64ms chunks)
+  - Very short press could release before first buffer arrives
+  - 300ms ensures at least several audio buffers captured
+  - Balances responsiveness with reliability
+- **Consequences:**
+  - Quick taps are extended to minimum duration
+  - Slight delay on very short recordings
+
+---
+
+## 2026-01-23 — Use smaller audio buffer size (1024 frames)
+
+- **Decision:** Change audio tap buffer from 4096 to 1024 frames
+- **Alternatives considered:**
+  - 4096 frames (~256ms at 16kHz) - original
+  - 512 frames (~32ms)
+  - 2048 frames (~128ms)
+- **Rationale:**
+  - Smaller buffers arrive faster (first buffer in ~64ms vs ~256ms)
+  - Combined with minimum recording duration, prevents 0-sample captures
+  - Lower latency for real-time visualization if added later
+- **Consequences:**
+  - More buffer processing overhead (minimal impact)
+  - Slightly more fragmented audio data
+
+---
+
+## 2026-01-23 — Use JSON Lines (JSONL) for structured logging
+
+- **Decision:** Implement file-based logging using JSONL format
+- **Alternatives considered:**
+  - Plain text logs (hard to parse programmatically)
+  - Binary log format (not human-readable)
+  - Database logging (overkill, requires SQLite)
+  - OSLog only (not easily accessible for AI analysis)
+- **Rationale:**
+  - JSONL is one JSON object per line, grep-friendly
+  - Trivially parseable by AI tools and scripts
+  - Human-readable with `cat` or `jq`
+  - Standard format used by many log aggregators
+- **Implementation:**
+  - Location: `~/Library/Logs/FlowDictate/` (standard macOS log location)
+  - Rotation: Size-based (5MB), keep 5 files (max 25MB total)
+  - Buffered writes with flush every 50 entries or 1 second
+  - Session tracking with UUID per app session and dictation session
+  - Dual output: JSONL to file + formatted console print
+- **Consequences:**
+  - Slight disk I/O overhead (mitigated by buffering)
+  - Logs persist across sessions for debugging
+  - Easy to correlate events across a dictation cycle
