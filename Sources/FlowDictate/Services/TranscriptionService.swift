@@ -24,6 +24,7 @@ final class TranscriptionService {
     private let whisperKitBackend: WhisperKitBackend
     private let openAIBackend: OpenAIBackend
     private let logger = Logger(subsystem: "com.flowdictate", category: "Transcription")
+    private let loggingService = LoggingService.shared
 
     // MARK: - Initialization
 
@@ -47,18 +48,40 @@ final class TranscriptionService {
     ) async throws -> String {
         let startTime = CFAbsoluteTimeGetCurrent()
 
-        let result: String
-        switch backend {
-        case .local:
-            result = try await whisperKitBackend.transcribe(audio: audio, language: language)
-        case .remote:
-            result = try await openAIBackend.transcribe(audio: audio, language: language)
+        loggingService.info(.Transcription, LogEvent.Transcription.started, data: [
+            "backend": AnyCodable(backend.rawValue),
+            "language": AnyCodable(language.rawValue),
+            "audioSamples": AnyCodable(audio.count)
+        ])
+
+        do {
+            let result: String
+            switch backend {
+            case .local:
+                result = try await whisperKitBackend.transcribe(audio: audio, language: language)
+            case .remote:
+                result = try await openAIBackend.transcribe(audio: audio, language: language)
+            }
+
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            logger.info("Transcription completed in \(elapsed, format: .fixed(precision: 2))s using \(backend.rawValue)")
+
+            loggingService.info(.Transcription, LogEvent.Transcription.completed, data: [
+                "backend": AnyCodable(backend.rawValue),
+                "durationMs": AnyCodable(Int(elapsed * 1000)),
+                "resultLength": AnyCodable(result.count)
+            ])
+
+            return result
+        } catch {
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            loggingService.error(.Transcription, LogEvent.Transcription.failed, data: [
+                "backend": AnyCodable(backend.rawValue),
+                "durationMs": AnyCodable(Int(elapsed * 1000)),
+                "error": AnyCodable(error.localizedDescription)
+            ])
+            throw error
         }
-
-        let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-        logger.info("Transcription completed in \(elapsed, format: .fixed(precision: 2))s using \(backend.rawValue)")
-
-        return result
     }
 
     /// Warm up the local transcription backend

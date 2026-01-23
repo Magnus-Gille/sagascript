@@ -14,6 +14,8 @@ final class HotkeyService {
     // MARK: - Private State
 
     private var hotKey: HotKey?
+    private var isRegistered: Bool = false
+    private let loggingService = LoggingService.shared
 
     // MARK: - Public Methods
 
@@ -22,6 +24,14 @@ final class HotkeyService {
     ///   - keyCode: Virtual key code (e.g., kVK_Space)
     ///   - modifiers: Modifier flags (e.g., optionKey)
     func register(keyCode: UInt32, modifiers: UInt32) {
+        // Unregister existing hotkey first to prevent double-registration
+        if isRegistered {
+            print("[HotkeyService] Unregistering previous hotkey before re-registration")
+            unregister()
+        }
+
+        print("[HotkeyService] Registering hotkey - keyCode: \(keyCode), modifiers: \(modifiers)")
+
         // Convert Carbon modifiers to HotKey modifiers
         var nsModifiers: NSEvent.ModifierFlags = []
 
@@ -40,23 +50,40 @@ final class HotkeyService {
 
         // Convert key code to Key enum
         guard let key = Key(carbonKeyCode: keyCode) else {
-            print("HotkeyService: Invalid key code \(keyCode)")
+            print("[HotkeyService] ✗ Invalid key code \(keyCode)")
             return
         }
 
         // Create the hotkey
         hotKey = HotKey(key: key, modifiers: nsModifiers, keyDownHandler: { [weak self] in
+            print("[HotkeyService] ⬇️  Hotkey DOWN event fired")
+            self?.loggingService.info(.Hotkey, LogEvent.Hotkey.keyDown, data: [:])
             self?.onKeyDown?()
         }, keyUpHandler: { [weak self] in
+            print("[HotkeyService] ⬆️  Hotkey UP event fired")
+            self?.loggingService.info(.Hotkey, LogEvent.Hotkey.keyUp, data: [:])
             self?.onKeyUp?()
         })
 
-        print("HotkeyService: Registered hotkey \(key) with modifiers \(nsModifiers)")
+        isRegistered = true
+        print("[HotkeyService] ✓ Registered hotkey: \(key) with modifiers \(nsModifiers)")
+
+        loggingService.info(.Hotkey, LogEvent.Hotkey.registered, data: [
+            "keyCode": AnyCodable(Int(keyCode)),
+            "modifiers": AnyCodable(Int(modifiers)),
+            "keyName": AnyCodable("\(key)")
+        ])
     }
 
     /// Unregister the current hotkey
     func unregister() {
+        guard isRegistered else {
+            print("[HotkeyService] No hotkey registered, skipping unregister")
+            return
+        }
         hotKey = nil
-        print("HotkeyService: Unregistered hotkey")
+        isRegistered = false
+        print("[HotkeyService] ✓ Unregistered hotkey")
+        loggingService.info(.Hotkey, LogEvent.Hotkey.unregistered, data: [:])
     }
 }

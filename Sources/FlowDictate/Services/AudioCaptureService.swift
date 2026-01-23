@@ -18,8 +18,10 @@ final class AudioCaptureService {
 
     private let audioEngine = AVAudioEngine()
     private var audioBuffer: [Float] = []
+    private var bufferCount = 0
     private let bufferLock = NSLock()
     private let logger = Logger(subsystem: "com.flowdictate", category: "AudioCapture")
+    private let loggingService = LoggingService.shared
 
     // MARK: - Public Methods
 
@@ -32,8 +34,10 @@ final class AudioCaptureService {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             print("[Audio] ✓ Microphone permission granted")
+            loggingService.info(.Audio, LogEvent.Audio.permissionGranted, data: [:])
         case .notDetermined:
             print("[Audio] Requesting microphone permission...")
+            loggingService.info(.Audio, LogEvent.Audio.permissionRequested, data: [:])
             // Request permission synchronously (blocking)
             let semaphore = DispatchSemaphore(value: 0)
             var granted = false
@@ -44,20 +48,31 @@ final class AudioCaptureService {
             semaphore.wait()
             guard granted else {
                 print("[Audio] ✗ Microphone permission denied by user")
+                loggingService.error(.Audio, LogEvent.Audio.permissionDenied, data: [
+                    "reason": AnyCodable("user_denied")
+                ])
                 throw DictationError.microphonePermissionDenied
             }
             print("[Audio] ✓ Microphone permission granted")
+            loggingService.info(.Audio, LogEvent.Audio.permissionGranted, data: [:])
         case .denied, .restricted:
             print("[Audio] ✗ Microphone permission denied - please enable in System Settings")
+            loggingService.error(.Audio, LogEvent.Audio.permissionDenied, data: [
+                "reason": AnyCodable("system_denied")
+            ])
             throw DictationError.microphonePermissionDenied
         @unknown default:
             print("[Audio] ✗ Unknown microphone permission status")
+            loggingService.error(.Audio, LogEvent.Audio.permissionDenied, data: [
+                "reason": AnyCodable("unknown_status")
+            ])
             throw DictationError.microphonePermissionDenied
         }
 
         // Clear previous buffer
         bufferLock.lock()
         audioBuffer.removeAll()
+        bufferCount = 0
         bufferLock.unlock()
 
         // Configure audio session
@@ -84,8 +99,8 @@ final class AudioCaptureService {
         }
 
         // Install tap on input node
-        // Buffer size of 4096 at 16kHz = ~256ms chunks
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+        // Buffer size of 1024 at 16kHz = ~64ms chunks (smaller for faster first buffer)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
             self?.processAudioBuffer(buffer, converter: converter, targetFormat: targetFormat)
         }
 
@@ -94,6 +109,11 @@ final class AudioCaptureService {
             try audioEngine.start()
             print("[Audio] ✓ Audio engine started - capturing audio")
             logger.info("Audio capture started")
+            loggingService.info(.Audio, LogEvent.Audio.captureStarted, data: [
+                "sampleRate": AnyCodable(Int(AudioFormat.sampleRate)),
+                "channels": AnyCodable(Int(AudioFormat.channels)),
+                "format": AnyCodable("float32")
+            ])
         } catch {
             print("[Audio] ✗ Failed to start audio engine: \(error.localizedDescription)")
             inputNode.removeTap(onBus: 0)
@@ -116,6 +136,12 @@ final class AudioCaptureService {
         let durationSeconds = Double(samples.count) / AudioFormat.sampleRate
         print("[Audio] ✓ Captured \(samples.count) samples (\(String(format: "%.2f", durationSeconds)) seconds)")
         logger.info("Audio capture stopped, captured \(samples.count) samples")
+
+        loggingService.info(.Audio, LogEvent.Audio.captureStopped, data: [
+            "samples": AnyCodable(samples.count),
+            "durationSeconds": AnyCodable(durationSeconds)
+        ])
+
         return samples
     }
 
@@ -126,6 +152,11 @@ final class AudioCaptureService {
         converter: AVAudioConverter?,
         targetFormat: AVAudioFormat
     ) {
+        bufferCount += 1
+        if bufferCount <= 3 || bufferCount % 10 == 0 {
+            print("[Audio] 📦 Buffer #\(bufferCount): \(buffer.frameLength) frames at \(buffer.format.sampleRate)Hz")
+        }
+
         // If formats match, directly copy
         if buffer.format.sampleRate == AudioFormat.sampleRate &&
            buffer.format.channelCount == AudioFormat.channels {
@@ -133,9 +164,9 @@ final class AudioCaptureService {
             return
         }
 
-        // Convert to target format
+        // Convert to target format using simple resampling
         guard let converter = converter else {
-            // No converter available, try direct copy
+            print("[Audio] ⚠️  No converter, using direct copy")
             appendSamples(from: buffer)
             return
         }
@@ -148,30 +179,59 @@ final class AudioCaptureService {
             pcmFormat: targetFormat,
             frameCapacity: outputFrameCapacity
         ) else {
+            print("[Audio] ✗ Failed to create converted buffer")
             return
         }
 
+        // Use simpler conversion approach
         var error: NSError?
+        var inputBufferUsed = false
         let status = converter.convert(to: convertedBuffer, error: &error) { inNumPackets, outStatus in
+            if inputBufferUsed {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            inputBufferUsed = true
             outStatus.pointee = .haveData
             return buffer
         }
 
+        if let error = error {
+            print("[Audio] ✗ Conversion error: \(error.localizedDescription)")
+            return
+        }
+
         if status == .haveData || status == .endOfStream {
             appendSamples(from: convertedBuffer)
+        } else if status == .error {
+            print("[Audio] ✗ Converter returned error status")
         }
     }
 
     private func appendSamples(from buffer: AVAudioPCMBuffer) {
-        guard let channelData = buffer.floatChannelData else { return }
+        guard let channelData = buffer.floatChannelData else {
+            print("[Audio] ✗ No channel data in buffer")
+            return
+        }
+
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else {
+            print("[Audio] ⚠️  Buffer has 0 frames")
+            return
+        }
 
         let samples = Array(UnsafeBufferPointer(
             start: channelData[0],
-            count: Int(buffer.frameLength)
+            count: frameCount
         ))
 
         bufferLock.lock()
+        let previousCount = audioBuffer.count
         audioBuffer.append(contentsOf: samples)
         bufferLock.unlock()
+
+        if previousCount == 0 {
+            print("[Audio] ✓ First samples captured (\(samples.count) samples)")
+        }
     }
 }
