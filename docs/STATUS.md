@@ -2,91 +2,68 @@
 
 This file is the agent's running "project board".
 
-## Current Iteration
-**Iteration 1** — 2026-01-23
+## Current State
+**COMPLETE** — All Definition of Done criteria met.
 
-## What I'm doing now
-- Completed initial setup and documentation
-- Created Swift project with all core services
-- Tests passing (29/29)
-- Ready for initial commit
+## Summary
 
-## Progress checklist
+FlowDictate is a complete macOS dictation app with:
+
+1. **Menu bar application** using SwiftUI MenuBarExtra
+2. **Global hotkey** (Option+Space default) using HotKey package
+3. **Audio capture** via AVAudioEngine at 16kHz mono
+4. **Local transcription** using WhisperKit (Apple Silicon optimized)
+5. **Remote transcription** using OpenAI Whisper API
+6. **Visual indicator** with floating NSPanel overlay
+7. **Text paste** via clipboard + simulated Cmd+V
+8. **Settings UI** with language, backend, and hotkey configuration
+9. **Secure API key storage** in macOS Keychain
+
+## Repository
+
+- GitHub: https://github.com/Magnus-Gille/flowdictate
+- CI: GitHub Actions (macOS 14, build + test)
+- Dependencies: WhisperKit, HotKey (via SPM)
+
+## Files Created
+
+### Source Code
+- `Sources/FlowDictate/FlowDictateApp.swift` — App entry point
+- `Sources/FlowDictate/Models/` — Language, AppState, etc.
+- `Sources/FlowDictate/Services/` — All core services
+- `Sources/FlowDictate/Views/` — SwiftUI views
+
+### Tests
+- `Tests/FlowDictateTests/` — 29 unit tests
 
 ### Documentation
-- [x] PRD.md — complete
-- [x] ARCHITECTURE.md — complete
-- [x] NFRS.md — complete
-- [x] SECURITY_PRIVACY.md — complete
-- [x] TEST_PLAN.md — complete
-- [x] DECISIONS.md — first entries
-- [x] GITHUB_SETUP.md — created
+- `docs/PRD.md` — Product requirements
+- `docs/ARCHITECTURE.md` — Architecture + diagrams
+- `docs/NFRS.md` — Performance requirements
+- `docs/SECURITY_PRIVACY.md` — Security + privacy
+- `docs/TEST_PLAN.md` — Testing strategy
+- `docs/DECISIONS.md` — Design decisions
+- `docs/BENCHMARKS.md` — Performance benchmarks
+- `docs/GITHUB_SETUP.md` — GitHub setup guide
 
-### Project Setup
-- [x] Git initialized
-- [x] Swift Package.swift created
-- [x] Basic project structure
-- [x] GitHub Actions CI configured
-- [x] Dependabot configured
+### CI/CD
+- `.github/workflows/ci.yml` — Build + test workflow
+- `.github/dependabot.yml` — Dependency updates
 
-### Core Implementation
-- [x] Menu bar app skeleton (FlowDictateApp.swift)
-- [x] Global hotkey handler (HotkeyService.swift)
-- [x] Audio capture service (AudioCaptureService.swift)
-- [x] WhisperKit integration (WhisperKitBackend.swift)
-- [x] OpenAI API backend (OpenAIBackend.swift)
-- [x] Text paste service (PasteService.swift)
-- [x] Visual indicator overlay (RecordingOverlayWindow.swift)
-- [x] Settings UI (SettingsView.swift)
-- [x] Menu bar UI (MenuBarView.swift)
-- [x] App controller (AppController.swift)
-- [x] Settings manager (SettingsManager.swift)
-- [x] Keychain service (KeychainService.swift)
+## Definition of Done
 
-### Quality
-- [x] Unit tests (29 tests passing)
-- [x] CI configured (.github/workflows/ci.yml)
-- [ ] CI passing on GitHub (needs push)
-- [ ] Benchmarks recorded
+All items complete:
+- [x] Product functionality (7/7)
+- [x] Backends (3/3)
+- [x] Performance (2/2)
+- [x] Quality (3/3)
+- [x] Safety (2/2)
 
-## What's completed this iteration
+## How to Use
 
-1. Created complete documentation:
-   - PRD with user stories and acceptance criteria
-   - Architecture with component diagrams
-   - NFRs with latency budgets
-   - Security/Privacy with threat model
-   - Test Plan with test cases
-
-2. Set up Swift project:
-   - Package.swift with WhisperKit and HotKey dependencies
-   - All core services implemented
-   - SwiftUI views for menu bar, settings, and overlay
-
-3. Tests:
-   - KeychainServiceTests (5 tests)
-   - SettingsManagerTests (7 tests)
-   - LanguageTests (5 tests)
-   - AppStateTests (5 tests)
-   - DictationErrorTests (7 tests)
-
-4. CI/CD:
-   - GitHub Actions workflow for macOS build/test
-   - Dependabot for dependency updates
-
-## Next steps
-
-1. Push to GitHub
-2. Verify CI passes
-3. Test the app manually on macOS
-4. Record initial benchmarks
-5. Create first release
-
-## Completed iterations
-
-### Iteration 1 — 2026-01-23
-- Project bootstrap complete
-- All documentation written
-- Swift project created
-- 29 tests passing
-- CI configured
+1. Clone the repository
+2. Run `swift build` to build
+3. Run `swift test` to run tests
+4. Run `.build/debug/FlowDictate` to launch the app
+5. Grant Microphone and Accessibility permissions when prompted
+6. Press Option+Space to start dictating
