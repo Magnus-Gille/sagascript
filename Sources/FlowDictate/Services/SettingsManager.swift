@@ -11,6 +11,7 @@ final class SettingsManager: ObservableObject {
 
     @AppStorage("language") var language: Language = .english
     @AppStorage("backend") var backend: TranscriptionBackend = .local
+    @AppStorage("whisperModel") var whisperModel: WhisperModel = .base
     @AppStorage("hotkeyMode") var hotkeyMode: HotkeyMode = .pushToTalk
     @AppStorage("showOverlay") var showOverlay: Bool = true
 
@@ -111,6 +112,7 @@ final class SettingsManager: ObservableObject {
     func resetToDefaults() {
         language = .english
         backend = .local
+        whisperModel = .base
         hotkeyMode = .pushToTalk
         showOverlay = true
         hotkeyKeyCode = kVK_Space

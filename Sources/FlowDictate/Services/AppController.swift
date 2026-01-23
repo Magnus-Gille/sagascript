@@ -104,13 +104,14 @@ final class AppController: ObservableObject {
     }
 
     private func warmUpModel() {
-        print("[AppController] Starting model warm-up (this may take a while on first run)...")
-        print("[AppController] The model needs to be downloaded (~50-150MB) on first launch.")
+        let model = settingsManager.whisperModel
+        print("[AppController] Starting model warm-up with \(model.displayName)...")
+        print("[AppController] The model needs to be downloaded on first launch.")
         print("")
 
         Task {
             do {
-                try await transcriptionService.warmUp()
+                try await transcriptionService.warmUp(model: model)
                 isModelReady = true
                 let hotkeyDesc = settingsManager.hotkeyDescription
                 print("")
@@ -120,7 +121,8 @@ final class AppController: ObservableObject {
                 print("")
 
                 loggingService.info(.App, LogEvent.App.ready, data: [
-                    "hotkeyDescription": AnyCodable(hotkeyDesc)
+                    "hotkeyDescription": AnyCodable(hotkeyDesc),
+                    "model": AnyCodable(model.rawValue)
                 ])
             } catch {
                 print("[AppController] ✗ Failed to warm up model: \(error)")

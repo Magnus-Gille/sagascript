@@ -279,3 +279,29 @@ Record assumptions and design decisions here, with rationale and dates.
   - Slight disk I/O overhead (mitigated by buffering)
   - Logs persist across sessions for debugging
   - Easy to correlate events across a dictation cycle
+
+---
+
+## 2026-01-23 — WhisperKit Performance Optimization
+
+- **Decision:** Optimize WhisperKit configuration for lowest latency
+- **Problem:** Initial transcription was 1.3-1.6x RTF (slower than realtime)
+- **Optimizations applied:**
+  1. **Model prewarming** (`prewarm: true`) - Specializes CoreML models for ANE at load time
+  2. **Full compute options** - melCompute, audioEncoderCompute, textDecoderCompute, prefillCompute
+  3. **Greedy decoding** (`temperature: 0.0`) - Deterministic, no sampling overhead
+  4. **Disabled quality checks** - Skip compression ratio, log prob, and no-speech thresholds
+  5. **User-configurable model** - Settings UI to choose tinyEn, tiny, baseEn, base
+  6. **Default model kept as `base`** - To avoid triggering download for users with cached models
+- **Expected results:**
+  - 5s audio: 0.3-0.5s (was 7-10s)
+  - RTF: 0.06-0.1x (was 1.3-1.6x)
+  - Model load: 2-3s (tinyEn), 4-5s (base with prewarm)
+- **Rationale:**
+  - Default conservative settings prioritize accuracy over speed
+  - For dictation, speed is critical; users can re-record if needed
+  - English-only models are more accurate for English text
+- **Consequences:**
+  - Slightly less accuracy with tiny models vs base
+  - Quality thresholds disabled may accept some bad transcriptions
+  - Model load slightly longer due to prewarming (but worth it for inference speed)

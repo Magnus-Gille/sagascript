@@ -84,9 +84,10 @@ final class TranscriptionService {
         }
     }
 
-    /// Warm up the local transcription backend
-    func warmUp() async throws {
-        try await whisperKitBackend.warmUp()
+    /// Warm up the local transcription backend with the specified model
+    /// - Parameter model: The WhisperModel to load
+    func warmUp(model: WhisperModel = .base) async throws {
+        try await whisperKitBackend.warmUp(model: model)
     }
 
     /// Check if the local backend is ready
