@@ -26,11 +26,14 @@ final class AudioCaptureService {
     /// Start capturing audio from the microphone
     /// - Throws: Error if microphone permission is denied or audio engine fails to start
     func startCapture() throws {
+        print("[Audio] Checking microphone permission...")
+
         // Check microphone permission
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
-            break
+            print("[Audio] ✓ Microphone permission granted")
         case .notDetermined:
+            print("[Audio] Requesting microphone permission...")
             // Request permission synchronously (blocking)
             let semaphore = DispatchSemaphore(value: 0)
             var granted = false
@@ -40,11 +43,15 @@ final class AudioCaptureService {
             }
             semaphore.wait()
             guard granted else {
+                print("[Audio] ✗ Microphone permission denied by user")
                 throw DictationError.microphonePermissionDenied
             }
+            print("[Audio] ✓ Microphone permission granted")
         case .denied, .restricted:
+            print("[Audio] ✗ Microphone permission denied - please enable in System Settings")
             throw DictationError.microphonePermissionDenied
         @unknown default:
+            print("[Audio] ✗ Unknown microphone permission status")
             throw DictationError.microphonePermissionDenied
         }
 
@@ -56,6 +63,7 @@ final class AudioCaptureService {
         // Configure audio session
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
+        print("[Audio] Input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount) channel(s)")
 
         // Create the format we need (16kHz mono)
         guard let targetFormat = AVAudioFormat(
@@ -64,11 +72,16 @@ final class AudioCaptureService {
             channels: AudioFormat.channels,
             interleaved: false
         ) else {
+            print("[Audio] ✗ Failed to create target audio format")
             throw DictationError.transcriptionFailed("Failed to create audio format")
         }
+        print("[Audio] Target format: \(targetFormat.sampleRate)Hz, \(targetFormat.channelCount) channel(s)")
 
         // Create a converter if needed
         let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        if converter != nil {
+            print("[Audio] ✓ Audio converter created for format conversion")
+        }
 
         // Install tap on input node
         // Buffer size of 4096 at 16kHz = ~256ms chunks
@@ -79,8 +92,10 @@ final class AudioCaptureService {
         // Start the audio engine
         do {
             try audioEngine.start()
+            print("[Audio] ✓ Audio engine started - capturing audio")
             logger.info("Audio capture started")
         } catch {
+            print("[Audio] ✗ Failed to start audio engine: \(error.localizedDescription)")
             inputNode.removeTap(onBus: 0)
             throw DictationError.transcriptionFailed("Failed to start audio engine: \(error.localizedDescription)")
         }
@@ -89,6 +104,7 @@ final class AudioCaptureService {
     /// Stop capturing audio and return the captured samples
     /// - Returns: Array of audio samples as Float32 at 16kHz mono
     func stopCapture() -> [Float] {
+        print("[Audio] Stopping audio engine...")
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
 
@@ -97,6 +113,8 @@ final class AudioCaptureService {
         audioBuffer.removeAll()
         bufferLock.unlock()
 
+        let durationSeconds = Double(samples.count) / AudioFormat.sampleRate
+        print("[Audio] ✓ Captured \(samples.count) samples (\(String(format: "%.2f", durationSeconds)) seconds)")
         logger.info("Audio capture stopped, captured \(samples.count) samples")
         return samples
     }
