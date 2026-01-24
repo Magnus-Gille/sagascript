@@ -138,14 +138,16 @@ private struct QuickSettingsSection: View {
 // MARK: - Actions Section
 
 private struct ActionsSection: View {
-    @Environment(\.openSettings) private var openSettings
+    @EnvironmentObject var appController: AppController
+    @EnvironmentObject var settingsManager: SettingsManager
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button(action: {
-                // Activate the app to bring the settings window to front
-                NSApplication.shared.activate(ignoringOtherApps: true)
-                openSettings()
+                SettingsWindowController.shared.show(
+                    appController: appController,
+                    settingsManager: settingsManager
+                )
             }) {
                 Label("Settings...", systemImage: "gear")
             }

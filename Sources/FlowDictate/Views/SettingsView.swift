@@ -79,8 +79,8 @@ private struct GeneralSettingsTab: View {
                     modifiers: $settingsManager.hotkeyModifiers,
                     onHotkeyChanged: {
                         appController.updateHotkey(
-                            keyCode: UInt32(settingsManager.hotkeyKeyCode),
-                            modifiers: UInt32(settingsManager.hotkeyModifiers)
+                            keyCode: settingsManager.hotkeyKeyCode,
+                            modifiers: settingsManager.hotkeyModifiers
                         )
                     }
                 )

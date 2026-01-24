@@ -101,8 +101,8 @@ final class AppController: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self = self else { return }
             self.hotkeyService.register(
-                keyCode: UInt32(self.settingsManager.hotkeyKeyCode),
-                modifiers: UInt32(self.settingsManager.hotkeyModifiers)
+                keyCode: self.settingsManager.hotkeyKeyCode,
+                modifiers: self.settingsManager.hotkeyModifiers
             )
             print("[AppController] Hotkey registered: \(self.settingsManager.hotkeyDescription)")
         }
@@ -224,6 +224,16 @@ final class AppController: ObservableObject {
 
         print("[Hotkey] Mode: Push-to-talk → Stopping recording...")
         stopRecordingAndTranscribe()
+    }
+
+    /// Temporarily disable the global hotkey (used while recording a new shortcut).
+    func suspendHotkey() {
+        hotkeyService.suspend()
+    }
+
+    /// Re-register the current hotkey after recording completes.
+    func resumeHotkey() {
+        hotkeyService.resume()
     }
 
     // MARK: - Recording Control
@@ -546,10 +556,10 @@ final class AppController: ObservableObject {
 
     // MARK: - Hotkey Management
 
-    func updateHotkey(keyCode: UInt32, modifiers: UInt32) {
+    func updateHotkey(keyCode: Int, modifiers: Int) {
         hotkeyService.unregister()
-        settingsManager.hotkeyKeyCode = Int(keyCode)
-        settingsManager.hotkeyModifiers = Int(modifiers)
+        settingsManager.hotkeyKeyCode = keyCode
+        settingsManager.hotkeyModifiers = modifiers
         hotkeyService.register(keyCode: keyCode, modifiers: modifiers)
     }
 }

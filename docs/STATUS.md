@@ -3,14 +3,14 @@
 This file is the agent's running "project board".
 
 ## Current State
-**COMPLETE** — All Definition of Done criteria met + performance optimization + Swedish language support + expert review fixes + launch at login (2026-01-24)
+**COMPLETE** — All Definition of Done criteria met + performance optimization + Swedish language support + expert review fixes + launch at login + UI cleanup + advanced hotkey support (2026-01-24)
 
 ## Summary
 
 FlowDictate is a complete macOS dictation app with:
 
-1. **Menu bar application** using SwiftUI MenuBarExtra
-2. **Global hotkey** (Control+Shift+Space default, configurable) using HotKey package
+1. **Menu bar only application** using SwiftUI MenuBarExtra (no dock icon, no main window)
+2. **Global hotkey** (Control+Shift+Space default, configurable) with advanced support for Fn and modifier-only triggers
 3. **Audio capture** via AVAudioEngine at 16kHz mono
 4. **Local transcription** using WhisperKit (Apple Silicon optimized, **performance optimized**)
 5. **Remote transcription** using OpenAI Whisper API
@@ -39,10 +39,49 @@ Addressed security and stability issues identified by senior reviewers:
 ### User Experience Fixes
 - **Clipboard save/restore** - Previous clipboard contents restored after paste (~100ms delay)
 - **Retry transcription** - `retryLastTranscription()` method allows re-processing failed audio
+- **Hotkey recorder fixed** (2026-01-24) - Settings hotkey recorder now captures key events using NSViewRepresentable with first responder
+- **Modifier-only hotkey crash fixed** (2026-01-24) - Removed UInt32 casts that caused crash when using ⌘ alone or other modifier-only hotkeys
 
 ### Performance Fixes
 - **WAV encoding optimized** - Uses `withUnsafeBufferPointer` for O(1) memory copy instead of per-sample loop
 - **WhisperKit worker scaling** - Dynamic worker count based on CPU cores (min 2, max 16, typically cores/2)
+
+## Advanced Hotkey Support (2026-01-24)
+
+Added comprehensive hotkey support beyond standard Carbon API limitations:
+
+### New Capabilities
+- **Normal shortcuts** - ⌘+Z, ⌥+Z, ⌃+Z, etc. (using Carbon/HotKey package)
+- **Fn key combinations** - Fn+Z, Fn+Space, etc. (using CGEventTap)
+- **Modifier-only triggers** - ⌘ alone, ⌥ alone, ⌃⌥ chord (using CGEventTap)
+
+### Implementation
+- **Shortcut model** (`Sources/FlowDictate/Hotkeys/Shortcut.swift`)
+  - Constants: `kModsFnBit` (custom Fn bit), `kKeyCodeModifiersOnly` (-1 sentinel)
+  - Conversion functions between NSEvent, CGEvent, and Carbon modifier formats
+  - Shortcut description rendering (e.g., "Fn+Z", "⌘⌥", "⌃⇧Space")
+
+- **CGEventTap backend** (`Sources/FlowDictate/Hotkeys/CGEventTapHotkeyService.swift`)
+  - Uses `.cgSessionEventTap` with `.listenOnly` option
+  - "Tap-only" semantics for modifier-only: triggers only when no non-modifier key pressed
+  - Handles `.tapDisabledByTimeout` / `.tapDisabledByUserInput` re-enabling
+  - Requires Input Monitoring permission (shows guidance alert if missing)
+
+- **Unified HotkeyService** (`Sources/FlowDictate/Services/HotkeyService.swift`)
+  - Automatically selects backend: Carbon for standard shortcuts, CGEventTap for Fn/modifier-only
+  - `suspend()`/`resume()` methods for safe hotkey recording
+
+- **Improved recorder** (`Sources/FlowDictate/Views/HotkeyRecorderView.swift`)
+  - Normal keys: Accept immediately on keyDown (not keyUp)
+  - Modifier-only: Accept when all modifiers released back to 0
+  - Prevents premature acceptance that would break combos like ⌘+Z
+
+### Permissions
+- Standard shortcuts (⌘+Z, etc.): No extra permissions needed
+- Fn or modifier-only: Requires Input Monitoring permission in System Settings
+
+### Tests
+- 67 unit tests covering shortcut model, conversion functions, and recorder behavior
 
 ## Swedish Language Support (2026-01-23)
 
@@ -76,6 +115,10 @@ Applied WhisperKit performance optimizations:
 Expected improvement: Faster transcription due to optimized decoding options.
 Note: First load with prewarm takes ~4-6s, subsequent loads faster.
 
+## Known Issues / Next Session
+
+- [ ] **Review modifier-only hotkey activation** (2026-01-24) - Activation scenarios for ⌘ alone / ⌥ alone feel "wonky". Need to review and tune the CGEventTap trigger logic in `CGEventTapHotkeyService.swift`. Possible issues: timing, false triggers, or missed triggers.
+
 ## Potential Next Steps
 
 Ideas for future work (not committed to):
@@ -98,9 +141,10 @@ Ideas for future work (not committed to):
 - `Sources/FlowDictate/Models/` — Language, AppState, AnyCodable, LogEvents
 - `Sources/FlowDictate/Services/` — All core services including LoggingService, LaunchAtLoginService
 - `Sources/FlowDictate/Views/` — SwiftUI views
+- `Sources/FlowDictate/Hotkeys/` — Shortcut model and CGEventTap backend for advanced hotkey support
 
 ### Tests
-- `Tests/FlowDictateTests/` — 29 unit tests
+- `Tests/FlowDictateTests/` — 67 unit tests
 
 ### Documentation
 - `docs/PRD.md` — Product requirements
