@@ -16,7 +16,6 @@ final class SettingsManager: ObservableObject {
     @AppStorage("showOverlay") var showOverlay: Bool = true
     @AppStorage("autoPaste") var autoPaste: Bool = true
     @AppStorage("autoSelectModel") var autoSelectModel: Bool = true  // Auto-select best model for language
-    @AppStorage("launchAtLogin") var launchAtLogin: Bool = false
 
     // Hotkey settings (stored as separate components)
     // Default: Control+Shift+Space (avoids conflicts with common shortcuts)
