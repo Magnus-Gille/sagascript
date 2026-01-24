@@ -27,5 +27,9 @@ if [ -d "Sources/FlowDictate/Resources" ]; then
     find "Sources/FlowDictate/Resources" -type f ! -name ".gitkeep" -exec cp {} "$APP_BUNDLE/Contents/Resources/" \;
 fi
 
-echo "✓ Built $APP_BUNDLE"
+# Ad-hoc code sign the app (required for Input Monitoring permission to work)
+echo "Signing app bundle..."
+codesign --force --deep --sign - "$APP_BUNDLE"
+
+echo "✓ Built and signed $APP_BUNDLE"
 echo "Run with: open $APP_BUNDLE"

@@ -369,6 +369,107 @@ Record assumptions and design decisions here, with rationale and dates.
 
 ---
 
+## 2026-01-24 — Remove main window, menu bar only (revised)
+
+- **Decision:** Remove the main window scene; app is now menu bar only
+- **Previous behavior:** App showed a main window on launch with status and transcription results
+- **New behavior:** App runs only in menu bar; no dock icon, no main window
+- **Rationale:**
+  - Main window caused dock icon to appear (even with LSUIElement=true)
+  - Redundant UI - MenuBarView already shows status, settings, and last transcription
+  - Wispr Flow-style apps are menu bar utilities, not windowed apps
+  - Window appearing on launch confused users about app purpose
+- **Changes:**
+  - Removed `Window("FlowDictate", id: "main")` scene from FlowDictateApp
+  - Deleted MainWindowView.swift (now unused)
+  - Settings still accessible via menu bar "Settings..." button
+- **Consequences:**
+  - No visible window on launch (expected for menu bar utilities)
+  - Dock icon no longer appears
+  - Users access all functionality via menu bar icon
+- **Note:** This reverses the 2026-01-23 decision to show a main window on launch
+
+---
+
+## 2026-01-24 — Use NSViewRepresentable for hotkey recording (revised)
+
+- **Decision:** Use NSViewRepresentable with first responder for hotkey capture in Settings
+- **Problem:** Hotkey recorder showed "Press a key..." but never captured any key events
+- **Root cause analysis:**
+  - SwiftUI Button doesn't become first responder - nothing to receive keyboard events
+  - Carbon's `GetApplicationEventTarget()` doesn't receive events routed to SwiftUI Settings windows in menu bar apps
+  - NSEvent monitors fail because Settings windows in LSUIElement apps don't properly integrate with AppKit's responder chain
+- **Alternatives considered:**
+  - NSEvent.addLocalMonitorForEvents (no first responder to route events through)
+  - NSEvent.addGlobalMonitorForEvents (only captures when app NOT active)
+  - Carbon InstallEventHandler + GetApplicationEventTarget (Settings windows don't route through app event target)
+  - SwiftUI .onKeyPress() (doesn't provide keyCode, needs focusable view)
+  - CGEventTap (requires Input Monitoring permission - extra user friction)
+- **Solution:** NSViewRepresentable wrapping a custom NSView that can become first responder
+- **Rationale:**
+  - NSView.keyDown() is called directly by AppKit when the view is first responder - no monitors needed
+  - We explicitly make the view first responder when recording starts
+  - This is similar to how [KeyboardShortcuts](https://github.com/sindresorhus/KeyboardShortcuts) uses NSSearchField
+  - Full event access: NSEvent provides keyCode and modifierFlags
+  - No extra permissions required (unlike CGEventTap)
+- **Implementation:**
+  - `KeyCaptureView`: NSView subclass with `acceptsFirstResponder=true`, overrides `keyDown()`
+  - `KeyCaptureField`: NSViewRepresentable wrapper that manages first responder
+  - When user clicks button, starts recording and makes KeyCaptureView first responder
+  - Key events received directly via keyDown(), no event monitors needed
+  - Removed CarbonKeyboardMonitor (~70 lines)
+  - Existing `processKeyEvent()` logic unchanged (all 19 tests still pass)
+- **Consequences:**
+  - Simpler code (~55 lines vs ~70 lines for Carbon)
+  - Reliable key capture by using AppKit's native first responder system
+  - No deprecated APIs
+
+---
+
+## 2026-01-24 — CGEventTap Backend for Advanced Hotkeys
+
+- **Decision:** Add CGEventTap-based hotkey backend for Fn and modifier-only shortcuts
+- **Problem:** Carbon RegisterEventHotKey cannot handle:
+  - Fn modifier (not represented in Carbon modifier flags)
+  - Modifier-only triggers like "⌘ alone" (modifiers don't generate keyDown events)
+- **Solution:** Dual-backend architecture with automatic selection
+- **Implementation:**
+  - **Shortcut model** (`Shortcut.swift`)
+    - `kKeyCodeModifiersOnly = -1` sentinel for modifier-only shortcuts
+    - `kModsFnBit = 1 << 16` custom bit for Fn (doesn't overlap Carbon bits)
+    - Conversion functions between NSEvent, CGEvent, and stored modifier formats
+  - **CGEventTapHotkeyService** (`CGEventTapHotkeyService.swift`)
+    - Uses `.cgSessionEventTap` with `.listenOnly` for minimal privilege
+    - "Tap-only" semantics: tracks `candidateActive` + `candidateCancelledByKey`
+    - Only triggers modifier-only when no non-modifier key pressed during press-release cycle
+    - Handles tap disabled by timeout/user input with re-enable
+  - **HotkeyService facade** (`HotkeyService.swift`)
+    - Selects backend based on `requiresCGEventTapBackend()`
+    - Carbon backend for standard shortcuts (no extra permissions)
+    - CGEventTap backend for Fn or modifier-only
+  - **Recorder algorithm** (`HotkeyRecorderView.swift`)
+    - Normal keys: Accept immediately on keyDown (not keyUp)
+    - Modifier-only: Accept when all modifiers released AND no other key pressed
+    - Prevents breaking combos like ⌘+Z
+- **Permissions:**
+  - Standard shortcuts: No extra permissions
+  - Fn/modifier-only: Input Monitoring (shows system prompt + guidance alert)
+  - Uses `CGPreflightListenEventAccess()` / `CGRequestListenEventAccess()`
+- **Rationale:**
+  - Apple DTS explicitly recommends CGEventTap for advanced hotkey scenarios
+  - Dual-backend avoids forcing Input Monitoring permission on all users
+  - "Tap-only" semantics prevent false triggers (user presses ⌘, then C → shouldn't trigger ⌘ alone)
+- **Alternatives considered:**
+  - CGEventTap only (forces Input Monitoring permission on everyone)
+  - Accessibility API (same permission burden, more complex)
+  - Double-tap detection (unreliable, timing-sensitive)
+- **Consequences:**
+  - Two backend implementations to maintain
+  - Fn/modifier-only users need Input Monitoring permission
+  - More comprehensive shortcut support (matches Wispr Flow capabilities)
+
+---
+
 ## 2026-01-23 — Expert Review Security & Stability Fixes
 
 - **Decision:** Address security and stability issues identified by senior code reviewers
@@ -419,3 +520,25 @@ Record assumptions and design decisions here, with rationale and dates.
   - Clipboard restore adds ~100ms delay after paste
   - Buffer cap limits max recording to 15 minutes
   - Transcript viewing requires debug build or checking logs
+
+---
+
+## 2026-01-24 — Fix Modifier-Only Hotkey Crash (UInt32 overflow)
+
+- **Decision:** Remove all UInt32 casts for hotkeyKeyCode, use Int throughout
+- **Problem:** App crashed when using modifier-only hotkeys like ⌘ alone
+- **Root cause:** `kKeyCodeModifiersOnly = -1` (sentinel value) was being converted to `UInt32(-1)`, causing:
+  > "Swift runtime failure: Negative value is not representable"
+- **Locations fixed:**
+  1. `AppController.swift:104` - Changed `UInt32(self.settingsManager.hotkeyKeyCode)` to Int
+  2. `AppController.swift:559` - Changed `updateHotkey(keyCode: UInt32, modifiers: UInt32)` signature to Int
+  3. `SettingsView.swift:82-83` - Removed UInt32 casts in `onHotkeyChanged` callback
+  4. `HotkeyRecorderView.swift:208` - Added defensive check: if keyCode is a modifier key, force `kKeyCodeModifiersOnly`
+- **Rationale:**
+  - HotkeyService already has `register(keyCode: Int, modifiers: Int)` overload
+  - Int can safely represent -1 sentinel; UInt32 cannot
+  - Defensive check in recorder prevents storing hardware modifier keyCodes (like 55 for ⌘)
+- **Consequences:**
+  - Modifier-only hotkeys now work without crash
+  - Type consistency: Int used throughout hotkey path
+  - Tested with ⌘ alone, normal shortcuts (⌘+Z), and F-keys
