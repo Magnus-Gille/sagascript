@@ -143,6 +143,8 @@ private struct ActionsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button(action: {
+                // Activate the app to bring the settings window to front
+                NSApplication.shared.activate(ignoringOtherApps: true)
                 openSettings()
             }) {
                 Label("Settings...", systemImage: "gear")
