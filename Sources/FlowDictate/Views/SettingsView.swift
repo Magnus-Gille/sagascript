@@ -35,9 +35,29 @@ struct SettingsView: View {
 private struct GeneralSettingsTab: View {
     @EnvironmentObject var settingsManager: SettingsManager
     @EnvironmentObject var appController: AppController
+    @StateObject private var launchAtLogin = LaunchAtLoginService.shared
 
     var body: some View {
         Form {
+            Section {
+                // Launch at login
+                Toggle("Launch at login", isOn: Binding(
+                    get: { launchAtLogin.isEnabled },
+                    set: { launchAtLogin.setEnabled($0) }
+                ))
+
+                if let error = launchAtLogin.error {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                        Text(error)
+                            .font(.caption)
+                    }
+                }
+            } header: {
+                Text("Startup")
+            }
+
             Section {
                 // Hotkey mode
                 Picker("Hotkey Mode:", selection: $settingsManager.hotkeyMode) {
