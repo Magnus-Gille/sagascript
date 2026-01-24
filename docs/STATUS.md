@@ -3,7 +3,7 @@
 This file is the agent's running "project board".
 
 ## Current State
-**COMPLETE** — All Definition of Done criteria met + performance optimization + Swedish language support + expert review fixes (2026-01-23)
+**COMPLETE** — All Definition of Done criteria met + performance optimization + Swedish language support + expert review fixes + launch at login (2026-01-24)
 
 ## Summary
 
@@ -20,6 +20,7 @@ FlowDictate is a complete macOS dictation app with:
 9. **Secure API key storage** in macOS Keychain
 10. **Structured logging** with JSONL file output for debugging + **RTF metrics**
 11. **Swedish-optimized transcription** via KB-Whisper models (4x better WER)
+12. **Launch at login** via SMAppService (macOS 13+)
 
 ## Expert Review Fixes (2026-01-23)
 
@@ -95,7 +96,7 @@ Ideas for future work (not committed to):
 ### Source Code
 - `Sources/FlowDictate/FlowDictateApp.swift` — App entry point
 - `Sources/FlowDictate/Models/` — Language, AppState, AnyCodable, LogEvents
-- `Sources/FlowDictate/Services/` — All core services including LoggingService
+- `Sources/FlowDictate/Services/` — All core services including LoggingService, LaunchAtLoginService
 - `Sources/FlowDictate/Views/` — SwiftUI views
 
 ### Tests
