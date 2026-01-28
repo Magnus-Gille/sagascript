@@ -115,17 +115,64 @@ Applied WhisperKit performance optimizations:
 Expected improvement: Faster transcription due to optimized decoding options.
 Note: First load with prewarm takes ~4-6s, subsequent loads faster.
 
+## Accuracy Improvement Initiative (2026-01-27)
+
+Multi-strategy effort to improve transcription accuracy. Uses per-strategy feature branches with TDD workflow.
+
+### Phase 1 — COMPLETE (3 branches, ready to merge)
+
+All 3 strategies implemented in parallel on separate feature branches. All tests pass. Not yet merged to main.
+
+| # | Strategy | Branch | Tests | Commit | Key Changes |
+|---|----------|--------|-------|--------|-------------|
+| 1 | Model upgrade | `feature/accuracy-1-model-upgrade` | 72 | `8a0cb2f` | Added `smallEn` (244M) and `largev3Turbo` (809M) to WhisperModel enum. English default changed from `baseEn` to `smallEn`. |
+| 2 | Custom vocabulary | `feature/accuracy-2-custom-vocabulary` | 80 | `051e7f2` | New `PromptBuilder` struct, `customVocabulary` + `promptConditioningEnabled` settings, `promptTokens` wired into DecodingOptions via WhisperKit tokenizer. |
+| 3 | VAD + audio processing | `feature/accuracy-3-vad` | 83 | `f002fc6` | New `AudioProcessor` (normalize, RMS energy, trim silence) using Accelerate/vDSP. Pre-processes audio before inference. `noSpeechThreshold` set to 0.6. |
+
+**Merge order note**: All 3 branches modify `WhisperKitBackend.swift`. Merge conflicts expected. Recommended order: #1, then #3, then #2 (or resolve manually).
+
+**Manual testing instructions**:
+1. **Strategy #1** — `git checkout feature/accuracy-1-model-upgrade && swift test` — verify 72 tests pass. Check Language.swift for `smallEn` and `largev3Turbo` cases.
+2. **Strategy #2** — `git checkout feature/accuracy-2-custom-vocabulary && swift test` — verify 80 tests pass. Set vocabulary via SettingsManager, transcribe, check prompt tokens applied.
+3. **Strategy #3** — `git checkout feature/accuracy-3-vad && swift test` — verify 83 tests pass. Check AudioProcessor normalizes and trims silence from audio before transcription.
+
+**Files per branch**:
+- Strategy #1: Modified `Language.swift`, `LanguageTests.swift`. Created `docs/plans/accuracy-1-model-upgrade.md`.
+- Strategy #2: Created `PromptBuilder.swift`, `PromptBuilderTests.swift`. Modified `SettingsManager.swift`, `SettingsManagerTests.swift`, `WhisperKitBackend.swift`. Created `docs/plans/accuracy-2-custom-vocabulary.md`.
+- Strategy #3: Created `AudioProcessor.swift`, `AudioProcessingTests.swift`. Modified `WhisperKitBackend.swift`. Created `docs/plans/accuracy-3-vad.md`.
+
+### Phase 2 — NOT STARTED (depends on Phase 1 merge)
+
+- [ ] Strategy #4: LLM post-processing — Confidence-guided correction of low-confidence words using local LLM (MLX Swift). Branch: `feature/accuracy-4-llm-correction`.
+- [ ] Strategy #6: Feedback loop — Learn from user corrections over time. Branch: `feature/accuracy-6-feedback-loop`.
+
+### Phase 3 — NOT STARTED (depends on Phase 2)
+
+- [ ] Strategy #5: LoRA voice fine-tuning — In-app voice enrollment + LoRA adapter training. Branch: `feature/accuracy-5-lora-finetuning`.
+
+### Phase 4 — DEFERRED
+
+- [ ] Strategy #7: Apple SpeechAnalyzer — Alternative backend using macOS 26+ SpeechAnalyzer framework. Branch: `feature/accuracy-7-speech-analyzer`.
+
+### Coordination
+
+- Instance coordination log: `docs/INSTANCE_LOG.md`
+- Per-strategy plan files: `docs/plans/accuracy-{1,2,3}-*.md` (on respective branches)
+- Master plan: saved in `.claude/plans/typed-tickling-gizmo.md`
+
 ## Known Issues / Next Session
 
-- [ ] **Review modifier-only hotkey activation** (2026-01-24) - Activation scenarios for ⌘ alone / ⌥ alone feel "wonky". Need to review and tune the CGEventTap trigger logic in `CGEventTapHotkeyService.swift`. Possible issues: timing, false triggers, or missed triggers.
+- [ ] **Merge Phase 1 branches** — All 3 accuracy feature branches need merging to main. Expect merge conflicts in WhisperKitBackend.swift.
+- [ ] **Add Settings UI for custom vocabulary** — Strategy #2 added the backend (SettingsManager properties, PromptBuilder) but no UI field in SettingsView for entering vocabulary terms.
+- [ ] **Review modifier-only hotkey activation** (2026-01-24) - Activation scenarios for ⌘ alone / ⌥ alone feel "wonky". Need to review and tune the CGEventTap trigger logic in `CGEventTapHotkeyService.swift`.
 
 ## Potential Next Steps
 
 Ideas for future work (not committed to):
+- [ ] Phase 2-4 accuracy strategies (see above)
 - [ ] Text formatting/cleanup via LLM (like Wispr Flow)
 - [ ] Streaming transcription for real-time feedback
 - [ ] Multiple language quick-switch
-- [ ] Custom vocabulary/context prompts
 - [ ] App notarization for distribution
 
 ## Repository
@@ -144,7 +191,7 @@ Ideas for future work (not committed to):
 - `Sources/FlowDictate/Hotkeys/` — Shortcut model and CGEventTap backend for advanced hotkey support
 
 ### Tests
-- `Tests/FlowDictateTests/` — 67 unit tests
+- `Tests/FlowDictateTests/` — 67 unit tests (main), 72/80/83 on accuracy feature branches
 
 ### Documentation
 - `docs/PRD.md` — Product requirements
