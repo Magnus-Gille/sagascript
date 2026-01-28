@@ -523,6 +523,73 @@ Record assumptions and design decisions here, with rationale and dates.
 
 ---
 
+## 2026-01-27 — Accuracy Strategy #1: Add small.en + large-v3-turbo Models
+
+- **Decision:** Add `smallEn` (244M) and `largev3Turbo` (809M) as selectable WhisperKit models; change English default from `baseEn` to `smallEn`
+- **Branch:** `feature/accuracy-1-model-upgrade` (commit `8a0cb2f`, 72 tests pass)
+- **Alternatives considered:**
+  - medium.en (622M) — slower than large-v3-turbo with worse accuracy
+  - large-v3 (1.55B) — too large/slow for dictation latency targets
+- **Rationale:**
+  - `small.en` cuts English WER from ~15% to ~10% with only +200-400ms latency
+  - `large-v3-turbo` (809M) has same encoder as large-v3 but only 4 decoder layers (same as tiny) — better accuracy AND faster than medium.en
+  - Both fit comfortably on M4 MacBook Air (32GB)
+- **HuggingFace identifiers:** `openai_whisper-small.en`, `openai_whisper-large-v3_turbo` (from argmaxinc/whisperkit-coreml)
+- **Consequences:**
+  - Larger model downloads (~460MB for small.en, ~600MB-1.6GB for large-v3-turbo)
+  - First-time model load slower due to prewarming
+  - Users who want lowest latency can still select tinyEn
+
+---
+
+## 2026-01-27 — Accuracy Strategy #2: Custom Vocabulary + Prompt Conditioning
+
+- **Decision:** Add user-definable custom vocabulary and previous-context prompt conditioning via WhisperKit's `promptTokens` API
+- **Branch:** `feature/accuracy-2-custom-vocabulary` (commit `051e7f2`, 80 tests pass)
+- **Key discovery:** WhisperKit v0.15.0 does NOT have `initialPrompt: String?` on DecodingOptions. Instead uses `promptTokens: [Int]?` requiring tokenizer encoding
+- **Implementation:**
+  - `PromptBuilder` (stateless struct) — formats vocabulary + previous context into prompt, truncates to 896 chars
+  - `SettingsManager` — added `customVocabulary: [String]` (JSON-encoded in UserDefaults) and `promptConditioningEnabled: Bool` (default true)
+  - `WhisperKitBackend` — encodes prompt via `whisperKit.tokenizer.encode(text:)`, filters special tokens, sets `options.promptTokens`. Stores last 200 chars of transcription as context for next segment
+- **Rationale:**
+  - Whisper's prompt conditioning significantly improves recognition of domain-specific terms
+  - Previous context helps maintain consistency across segments
+  - Token-based approach (vs string) is what WhisperKit actually supports
+- **Consequences:**
+  - No Settings UI for vocabulary yet (backend only) — needs UI field in SettingsView
+  - 896-char prompt limit prevents excessive token usage
+  - Prompt conditioning can be disabled in settings
+
+---
+
+## 2026-01-27 — Accuracy Strategy #3: VAD + Audio Normalization
+
+- **Decision:** Add audio preprocessing pipeline (normalization + silence trimming) before WhisperKit inference
+- **Branch:** `feature/accuracy-3-vad` (commit `f002fc6`, 83 tests pass)
+- **Implementation:**
+  - `AudioProcessor` enum with static methods using Apple Accelerate/vDSP:
+    - `normalize()` — scales peak to 1.0 using `vDSP_maxmgv` + `vDSP_vsmul`
+    - `rmsEnergy()` — computes RMS via `vDSP_measqv`
+    - `isSpeechPresent()` — RMS threshold check (default 0.01)
+    - `trimSilence()` — windowed scan from both ends, removes leading/trailing silence
+  - `WhisperKitBackend` — normalize → trim silence → skip if empty → transcribe
+  - `noSpeechThreshold` changed from `nil` to `0.6`
+- **Alternatives considered:**
+  - Silero VAD (ONNX model, more accurate but adds dependency + complexity)
+  - WebRTC VAD (C library, cross-platform but harder to integrate)
+  - No VAD (current state, wastes inference on silence)
+- **Rationale:**
+  - Energy-based VAD is simple, zero-dependency, and effective for trimming silence
+  - Accelerate/vDSP provides SIMD-optimized operations on Apple Silicon
+  - Normalizing audio ensures consistent input levels regardless of mic gain
+  - Trimming silence reduces inference time and prevents hallucinations on silent segments
+- **Consequences:**
+  - Adds ~1ms preprocessing overhead (negligible)
+  - May clip very quiet speech if threshold too high (default 0.01 is conservative)
+  - `noSpeechThreshold=0.6` may cause WhisperKit to return empty text for borderline audio
+
+---
+
 ## 2026-01-24 — Fix Modifier-Only Hotkey Crash (UInt32 overflow)
 
 - **Decision:** Remove all UInt32 casts for hotkeyKeyCode, use Int throughout
