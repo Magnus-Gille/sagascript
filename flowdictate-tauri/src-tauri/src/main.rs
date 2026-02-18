@@ -15,17 +15,23 @@ mod settings;
 mod transcription;
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager,
+    Emitter, Manager,
 };
-use tracing::info;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use app_controller::AppController;
+use commands::SharedController;
 use settings::Settings;
+
+/// Minimum recording duration before we allow stop (300ms)
+const MIN_RECORDING_MS: u64 = 300;
 
 fn main() {
     // Initialize tracing (console logging)
@@ -41,7 +47,27 @@ fn main() {
     let controller = Mutex::new(AppController::new(settings));
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, shortcut, event| {
+                    let ctrl: tauri::State<'_, SharedController> = app.state();
+
+                    match event.state {
+                        ShortcutState::Pressed => {
+                            info!("Hotkey pressed: {shortcut}");
+                            let mut c = ctrl.lock().unwrap();
+                            if let Err(e) = c.handle_hotkey_down() {
+                                error!("Hotkey down error: {e}");
+                            }
+                        }
+                        ShortcutState::Released => {
+                            info!("Hotkey released: {shortcut}");
+                            handle_hotkey_release(app, &ctrl);
+                        }
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -52,6 +78,13 @@ fn main() {
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
             platform::macos::set_activation_policy_accessory();
+
+            // Register global shortcut (Ctrl+Shift+Space)
+            let shortcut = "Control+Shift+Space";
+            match app.global_shortcut().register(shortcut) {
+                Ok(()) => info!("Hotkey registered: {shortcut}"),
+                Err(e) => error!("Failed to register hotkey: {e}"),
+            }
 
             // Build tray menu
             let quit = MenuItem::with_id(app, "quit", "Quit FlowDictate", true, None::<&str>)?;
@@ -120,4 +153,92 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running FlowDictate");
+}
+
+/// Handle hotkey release: check minimum duration, stop recording, transcribe
+fn handle_hotkey_release(
+    app: &tauri::AppHandle,
+    ctrl: &tauri::State<'_, SharedController>,
+) {
+    // Check if we should stop (push-to-talk mode + currently recording)
+    let (should_stop, elapsed) = {
+        let c = ctrl.lock().unwrap();
+        (c.should_stop_on_key_up(), c.recording_elapsed())
+    };
+
+    if !should_stop {
+        return;
+    }
+
+    // Enforce minimum recording duration
+    if elapsed < Duration::from_millis(MIN_RECORDING_MS) {
+        let remaining = Duration::from_millis(MIN_RECORDING_MS) - elapsed;
+        info!(
+            "Recording too short ({:.0}ms), waiting {:.0}ms...",
+            elapsed.as_millis(),
+            remaining.as_millis()
+        );
+        std::thread::sleep(remaining);
+    }
+
+    // Stop recording (single lock acquisition)
+    let audio = {
+        let mut c = ctrl.lock().unwrap();
+        if c.state().is_recording() {
+            c.stop_recording()
+        } else {
+            return;
+        }
+    };
+
+    if audio.is_empty() {
+        let mut c = ctrl.lock().unwrap();
+        c.on_transcription_error("No audio captured");
+        return;
+    }
+
+    // Transcribe asynchronously to avoid blocking the hotkey thread
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let ctrl: tauri::State<'_, SharedController> = app_handle.state();
+
+        // Extract what we need for transcription
+        let (backend, language, keyring) = {
+            let c = ctrl.lock().unwrap();
+            (c.backend(), c.language(), c.keyring().clone())
+        };
+
+        let result = match backend {
+            settings::TranscriptionBackendType::Remote => {
+                use transcription::backend::TranscriptionBackend;
+                let openai = transcription::OpenAIBackend::new(keyring);
+                openai.transcribe(&audio, language).await
+            }
+            settings::TranscriptionBackendType::Local => {
+                // whisper-rs will be added in Phase 3
+                Err(error::DictationError::ModelNotLoaded)
+            }
+        };
+
+        match result {
+            Ok(text) => {
+                info!("Transcription complete: {} chars", text.len());
+                let mut c = ctrl.lock().unwrap();
+                if let Err(e) = c.auto_paste(&text) {
+                    error!("Auto-paste failed: {e}");
+                }
+                c.on_transcription_success(&text);
+
+                let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
+                let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+            }
+            Err(e) => {
+                error!("Transcription failed: {e}");
+                let mut c = ctrl.lock().unwrap();
+                c.on_transcription_error(&e.to_string());
+                let _ = app_handle.emit(events::event::ERROR, e.to_string());
+                let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+            }
+        }
+    });
 }

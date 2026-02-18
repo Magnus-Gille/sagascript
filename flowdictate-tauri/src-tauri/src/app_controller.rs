@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tracing::{info, warn};
@@ -204,6 +204,13 @@ impl AppController {
             self.logging.end_dictation_session();
             info!("Recording cancelled");
         }
+    }
+
+    /// How long we've been recording
+    pub fn recording_elapsed(&self) -> Duration {
+        self.recording_start
+            .map(|s| s.elapsed())
+            .unwrap_or(Duration::ZERO)
     }
 
     pub fn set_model_ready(&mut self, ready: bool) {
