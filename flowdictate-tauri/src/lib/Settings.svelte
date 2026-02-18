@@ -6,16 +6,21 @@
     setBackend,
     setHotkeyMode,
     setAutoSelectModel,
+    setAutoPaste,
+    setShowOverlay,
     saveApiKey,
     hasApiKey,
     deleteApiKey,
+    getBuildInfo,
     type Settings,
+    type BuildInfo,
     type Language,
     type TranscriptionBackend,
     type HotkeyMode,
   } from "./api";
 
   let settings: Settings | null = $state(null);
+  let buildInfo: BuildInfo | null = $state(null);
   let activeTab: "general" | "transcription" | "advanced" = $state("general");
   let apiKeyInput = $state("");
   let hasKey = $state(false);
@@ -24,6 +29,7 @@
   onMount(async () => {
     settings = await getSettings();
     hasKey = await hasApiKey();
+    buildInfo = await getBuildInfo();
   });
 
   async function onLanguageChange(e: Event) {
@@ -47,6 +53,18 @@
   async function onAutoSelectToggle() {
     if (!settings) return;
     await setAutoSelectModel(!settings.auto_select_model);
+    settings = await getSettings();
+  }
+
+  async function onAutoPasteToggle() {
+    if (!settings) return;
+    await setAutoPaste(!settings.auto_paste);
+    settings = await getSettings();
+  }
+
+  async function onShowOverlayToggle() {
+    if (!settings) return;
+    await setShowOverlay(!settings.show_overlay);
     settings = await getSettings();
   }
 
@@ -125,6 +143,7 @@
           <div
             class="toggle"
             class:active={settings.auto_paste}
+            onclick={onAutoPasteToggle}
             role="switch"
             tabindex="0"
             aria-checked={settings.auto_paste}
@@ -183,6 +202,7 @@
           <div
             class="toggle"
             class:active={settings.show_overlay}
+            onclick={onShowOverlayToggle}
             role="switch"
             tabindex="0"
             aria-checked={settings.show_overlay}
@@ -191,7 +211,13 @@
 
         <div class="field">
           <label>Version</label>
-          <div class="version-text">FlowDictate 0.1.0 (Tauri)</div>
+          <div class="version-text">
+            {#if buildInfo}
+              FlowDictate {buildInfo.version} ({buildInfo.git_hash}) - Built {buildInfo.build_date}
+            {:else}
+              FlowDictate 0.1.0
+            {/if}
+          </div>
         </div>
       {/if}
     </div>

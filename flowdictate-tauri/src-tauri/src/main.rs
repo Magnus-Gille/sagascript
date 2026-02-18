@@ -153,6 +153,10 @@ fn main() {
             commands::cancel_recording,
             commands::is_model_downloaded,
             commands::get_model_info,
+            commands::download_model,
+            commands::set_auto_paste,
+            commands::set_show_overlay,
+            commands::get_build_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running FlowDictate");
