@@ -257,6 +257,80 @@ pub async fn get_model_info() -> Result<Vec<ModelInfo>, String> {
         .collect())
 }
 
+// -- Model download --
+
+#[tauri::command]
+pub async fn download_model(
+    app: tauri::AppHandle,
+    whisper_model: WhisperModel,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    let app_handle = app.clone();
+    model::download_model(whisper_model, move |downloaded, total| {
+        let progress = if total > 0 {
+            (downloaded as f64 / total as f64 * 100.0) as u32
+        } else {
+            0
+        };
+        let _ = app_handle.emit(
+            crate::events::event::MODEL_DOWNLOAD_PROGRESS,
+            serde_json::json!({
+                "model": format!("{:?}", whisper_model),
+                "downloaded": downloaded,
+                "total": total,
+                "progress": progress,
+            }),
+        );
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let _ = app.emit(crate::events::event::MODEL_READY, ());
+    Ok(())
+}
+
+// -- Settings toggles --
+
+#[tauri::command]
+pub async fn set_auto_paste(
+    controller: State<'_, SharedController>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut ctrl = controller.lock().unwrap();
+    ctrl.settings_mut().auto_paste = enabled;
+    info!("Auto-paste: {enabled}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_show_overlay(
+    controller: State<'_, SharedController>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut ctrl = controller.lock().unwrap();
+    ctrl.settings_mut().show_overlay = enabled;
+    info!("Show overlay: {enabled}");
+    Ok(())
+}
+
+// -- Build info --
+
+#[tauri::command]
+pub async fn get_build_info() -> Result<BuildInfo, String> {
+    Ok(BuildInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        git_hash: env!("GIT_HASH").to_string(),
+        build_date: env!("BUILD_DATE").to_string(),
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct BuildInfo {
+    version: String,
+    git_hash: String,
+    build_date: String,
+}
+
 #[derive(serde::Serialize)]
 pub struct ModelInfo {
     id: String,

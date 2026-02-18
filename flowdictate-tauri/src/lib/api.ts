@@ -25,6 +25,12 @@ export interface Settings {
   hotkey: string;
 }
 
+export interface BuildInfo {
+  version: string;
+  git_hash: string;
+  build_date: string;
+}
+
 export type AppState = "idle" | "recording" | "transcribing" | "error";
 
 export async function getState(): Promise<AppState> {
@@ -59,6 +65,14 @@ export async function setHotkeyMode(mode: HotkeyMode): Promise<void> {
   return invoke("set_hotkey_mode", { mode });
 }
 
+export async function setAutoPaste(enabled: boolean): Promise<void> {
+  return invoke("set_auto_paste", { enabled });
+}
+
+export async function setShowOverlay(enabled: boolean): Promise<void> {
+  return invoke("set_show_overlay", { enabled });
+}
+
 export async function saveApiKey(key: string): Promise<boolean> {
   return invoke("save_api_key", { key });
 }
@@ -77,4 +91,16 @@ export async function getModelInfo(): Promise<WhisperModel[]> {
 
 export async function isModelReady(): Promise<boolean> {
   return invoke("is_model_ready");
+}
+
+export async function isModelDownloaded(whisperModel: string): Promise<boolean> {
+  return invoke("is_model_downloaded", { whisperModel });
+}
+
+export async function downloadModel(whisperModel: string): Promise<void> {
+  return invoke("download_model", { whisperModel });
+}
+
+export async function getBuildInfo(): Promise<BuildInfo> {
+  return invoke("get_build_info");
 }
