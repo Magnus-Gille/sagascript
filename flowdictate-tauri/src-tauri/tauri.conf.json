@@ -34,9 +34,5 @@
       "minimumSystemVersion": "13.0"
     }
   },
-  "plugins": {
-    "global-shortcut": {
-      "shortcuts": []
-    }
-  }
+  "plugins": {}
 }

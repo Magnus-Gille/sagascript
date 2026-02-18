@@ -98,10 +98,12 @@ fn main() {
 
             let menu = Menu::with_items(app, &[&status, &settings_item, &quit])?;
 
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+
             let _tray = TrayIconBuilder::new()
                 .menu(&menu)
                 .tooltip("FlowDictate")
-                .icon(app.default_window_icon().cloned().unwrap())
+                .icon(tray_icon)
                 .icon_as_template(true)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "quit" => {
