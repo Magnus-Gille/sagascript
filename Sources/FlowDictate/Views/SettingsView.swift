@@ -27,6 +27,12 @@ struct SettingsView: View {
         }
         .frame(width: 450, height: 300)
         .padding()
+        .overlay(alignment: .bottomTrailing) {
+            Text(BuildInfo.displayString)
+                .font(.caption2)
+                .foregroundColor(Color(nsColor: .tertiaryLabelColor))
+                .padding(8)
+        }
     }
 }
 
