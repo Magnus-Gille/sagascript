@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::State;
 use tracing::{error, info};
@@ -7,11 +7,15 @@ use crate::app_controller::{AppController, AppState};
 use crate::settings::{
     HotkeyMode, Language, Settings, TranscriptionBackendType, WhisperModel,
 };
-use crate::transcription::{model, OpenAIBackend};
+use crate::transcription::{model, OpenAIBackend, WhisperBackend};
 
 /// Shared app state type — uses std::sync::Mutex (not tokio) because
 /// cpal::Stream is !Send and we need sync access from Tauri commands
 pub type SharedController = Mutex<AppController>;
+
+/// Shared whisper backend — separate from AppController to avoid holding
+/// the controller lock during blocking transcription
+pub type SharedWhisper = Arc<WhisperBackend>;
 
 // -- State queries --
 
@@ -152,16 +156,19 @@ pub async fn start_recording(controller: State<'_, SharedController>) -> Result<
 #[tauri::command]
 pub async fn stop_and_transcribe(
     controller: State<'_, SharedController>,
+    whisper: State<'_, SharedWhisper>,
 ) -> Result<String, String> {
     // Extract what we need with the lock held briefly
-    let (audio, backend, language, keyring) = {
+    let (audio, backend, language, keyring, effective_model) = {
         let mut ctrl = controller.lock().unwrap();
         let audio = ctrl.stop_recording();
         let backend = ctrl.backend();
         let language = ctrl.language();
         let keyring = ctrl.keyring().clone();
-        (audio, backend, language, keyring)
+        let effective_model = ctrl.settings().effective_model();
+        (audio, backend, language, keyring, effective_model)
     };
+    // Lock is dropped here
 
     if audio.is_empty() {
         let mut ctrl = controller.lock().unwrap();
@@ -169,7 +176,7 @@ pub async fn stop_and_transcribe(
         return Err("No audio captured".to_string());
     }
 
-    // Transcribe without holding the lock
+    // Transcribe without holding the controller lock
     let result = match backend {
         TranscriptionBackendType::Remote => {
             use crate::transcription::backend::TranscriptionBackend;
@@ -177,8 +184,19 @@ pub async fn stop_and_transcribe(
             openai.transcribe(&audio, language).await
         }
         TranscriptionBackendType::Local => {
-            // whisper-rs backend will be added in Phase 3
-            Err(crate::error::DictationError::ModelNotLoaded)
+            // Ensure model is loaded
+            whisper
+                .ensure_model(effective_model)
+                .map_err(|e| e.to_string())?;
+
+            // Run blocking transcription on a separate thread
+            let whisper = whisper.inner().clone();
+            let audio = audio.clone();
+            tokio::task::spawn_blocking(move || {
+                whisper.transcribe_sync(&audio, language)
+            })
+            .await
+            .map_err(|e| format!("Transcription task failed: {e}"))?
         }
     };
 

@@ -14,7 +14,7 @@ mod platform;
 mod settings;
 mod transcription;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{
@@ -27,8 +27,9 @@ use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 use app_controller::AppController;
-use commands::SharedController;
+use commands::{SharedController, SharedWhisper};
 use settings::Settings;
+use transcription::WhisperBackend;
 
 /// Minimum recording duration before we allow stop (300ms)
 const MIN_RECORDING_MS: u64 = 300;
@@ -45,6 +46,7 @@ fn main() {
 
     let settings = Settings::default();
     let controller = Mutex::new(AppController::new(settings));
+    let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
 
     tauri::Builder::default()
         .plugin(
@@ -74,6 +76,7 @@ fn main() {
         ))
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(controller)
+        .manage(whisper)
         .setup(|app| {
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
@@ -201,12 +204,19 @@ fn handle_hotkey_release(
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let ctrl: tauri::State<'_, SharedController> = app_handle.state();
+        let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 
-        // Extract what we need for transcription
-        let (backend, language, keyring) = {
+        // Extract what we need for transcription (lock briefly)
+        let (backend, language, keyring, effective_model) = {
             let c = ctrl.lock().unwrap();
-            (c.backend(), c.language(), c.keyring().clone())
+            (
+                c.backend(),
+                c.language(),
+                c.keyring().clone(),
+                c.settings().effective_model(),
+            )
         };
+        // Lock dropped
 
         let result = match backend {
             settings::TranscriptionBackendType::Remote => {
@@ -215,8 +225,24 @@ fn handle_hotkey_release(
                 openai.transcribe(&audio, language).await
             }
             settings::TranscriptionBackendType::Local => {
-                // whisper-rs will be added in Phase 3
-                Err(error::DictationError::ModelNotLoaded)
+                // Ensure model is loaded
+                if let Err(e) = whisper.ensure_model(effective_model) {
+                    Err(e)
+                } else {
+                    // Run blocking transcription on a separate thread
+                    let whisper = whisper.inner().clone();
+                    let audio = audio.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        whisper.transcribe_sync(&audio, language)
+                    })
+                    .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => Err(error::DictationError::TranscriptionFailed(
+                            format!("Task join error: {e}"),
+                        )),
+                    }
+                }
             }
         };
 
