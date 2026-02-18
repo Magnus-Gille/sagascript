@@ -4,6 +4,21 @@ Record assumptions and design decisions here, with rationale and dates.
 
 ---
 
+## 2026-02-18 — TCC Permission Reset Workaround for Dev Builds
+
+- **Problem:** After every rebuild, macOS TCC invalidates previously granted permissions (Microphone, Accessibility, Input Monitoring) because the ad-hoc code signature changes
+- **Workaround:** Reset TCC entries and re-grant:
+  ```
+  tccutil reset Microphone com.flowdictate.app
+  tccutil reset Accessibility com.flowdictate.app
+  ```
+  Then relaunch the app and grant permissions when prompted.
+  Alternatively: System Settings > Privacy & Security, toggle FlowDictate off/on for each permission.
+- **Root cause:** Ad-hoc signing (`codesign --sign -`) generates a new signature each build. macOS ties TCC grants to the signature, not the bundle identifier alone.
+- **Permanent fix:** Use a stable Developer ID certificate for signing. This would preserve permissions across rebuilds.
+
+---
+
 ## 2026-01-23 — Use WhisperKit as primary local transcription engine
 
 - **Decision:** Use WhisperKit (argmaxinc/WhisperKit) instead of whisper.cpp
