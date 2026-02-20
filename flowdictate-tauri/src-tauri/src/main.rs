@@ -209,9 +209,12 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building FlowDictate")
         .run(|_app_handle, event| match event {
-            // Prevent app from exiting when all windows are closed (tray-only app)
-            tauri::RunEvent::ExitRequested { api, .. } => {
-                api.prevent_exit();
+            // Prevent app from exiting when all windows are closed (tray-only app),
+            // but allow explicit exit requests (e.g. from tray "Quit" menu)
+            tauri::RunEvent::ExitRequested { api, code, .. } => {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
             }
             _ => {}
         });
