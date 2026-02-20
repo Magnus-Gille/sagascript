@@ -42,3 +42,57 @@ impl HotkeyService {
         info!("Hotkey set to: {shortcut}");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_has_no_shortcut() {
+        let svc = HotkeyService::new();
+        assert!(svc.current_shortcut().is_none());
+    }
+
+    #[test]
+    fn new_is_not_suspended() {
+        let svc = HotkeyService::new();
+        assert!(!svc.is_suspended());
+    }
+
+    #[test]
+    fn set_shortcut_stores_value() {
+        let mut svc = HotkeyService::new();
+        svc.set_shortcut("Control+Shift+Space");
+        assert_eq!(svc.current_shortcut(), Some("Control+Shift+Space"));
+    }
+
+    #[test]
+    fn set_shortcut_overwrites_previous() {
+        let mut svc = HotkeyService::new();
+        svc.set_shortcut("Control+Shift+Space");
+        svc.set_shortcut("Alt+D");
+        assert_eq!(svc.current_shortcut(), Some("Alt+D"));
+    }
+
+    #[test]
+    fn suspend_and_resume() {
+        let mut svc = HotkeyService::new();
+        assert!(!svc.is_suspended());
+
+        svc.suspend();
+        assert!(svc.is_suspended());
+
+        svc.resume();
+        assert!(!svc.is_suspended());
+    }
+
+    #[test]
+    fn suspend_is_idempotent() {
+        let mut svc = HotkeyService::new();
+        svc.suspend();
+        svc.suspend();
+        assert!(svc.is_suspended());
+        svc.resume();
+        assert!(!svc.is_suspended());
+    }
+}
