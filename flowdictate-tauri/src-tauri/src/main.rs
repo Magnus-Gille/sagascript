@@ -151,6 +151,22 @@ fn main() {
                 .build(app)?;
 
             info!("Tray icon created");
+
+            // Auto-open onboarding on first launch
+            {
+                use tauri_plugin_store::StoreExt;
+                let store = app.store("flowdictate-settings.json")
+                    .map_err(|e| format!("Failed to open store: {e}"))?;
+                let completed = store
+                    .get("hasCompletedOnboarding")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if !completed {
+                    info!("First launch detected, opening onboarding");
+                    open_settings_window(app.handle(), Some("onboarding"));
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -184,6 +200,11 @@ fn main() {
             commands::get_build_info,
             commands::transcribe_file,
             commands::get_supported_formats,
+            commands::check_accessibility_permission,
+            commands::request_accessibility_permission,
+            commands::check_microphone_permission,
+            commands::request_microphone_permission,
+            commands::get_platform,
         ])
         .build(tauri::generate_context!())
         .expect("error while building FlowDictate")
@@ -240,8 +261,9 @@ fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
 fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
     info!("Opening settings window (tab: {:?})", tab);
 
-    // Build a URL with optional tab query parameter
+    // Build a URL with optional query parameter
     let url = match tab {
+        Some("onboarding") => "index.html?onboarding=true".to_string(),
         Some(t) => format!("index.html?tab={t}"),
         None => "index.html".to_string(),
     };

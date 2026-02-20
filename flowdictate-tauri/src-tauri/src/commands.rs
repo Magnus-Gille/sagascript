@@ -4,10 +4,9 @@ use tauri::State;
 use tracing::{error, info};
 
 use crate::app_controller::{AppController, AppState};
-use crate::settings::{
-    HotkeyMode, Language, Settings, TranscriptionBackendType, WhisperModel,
-};
-use crate::transcription::{model, OpenAIBackend, WhisperBackend};
+use crate::audio::decoder;
+use crate::settings::{HotkeyMode, Language, Settings, WhisperModel};
+use crate::transcription::{model, WhisperBackend};
 
 /// Shared app state type — uses std::sync::Mutex (not tokio) because
 /// cpal::Stream is !Send and we need sync access from Tauri commands
@@ -53,6 +52,24 @@ pub async fn is_model_ready(controller: State<'_, SharedController>) -> Result<b
     Ok(ctrl.is_model_ready())
 }
 
+/// Returns the display name of the currently loaded (or effective) model
+#[tauri::command]
+pub async fn get_loaded_model(
+    controller: State<'_, SharedController>,
+    whisper: State<'_, SharedWhisper>,
+) -> Result<LoadedModelInfo, String> {
+    let ctrl = controller.lock().unwrap();
+    let effective = ctrl.settings().effective_model();
+    let loaded = whisper.loaded_model();
+    Ok(LoadedModelInfo {
+        effective_model: effective.display_name().to_string(),
+        effective_model_id: format!("{:?}", effective),
+        loaded_model: loaded.map(|m| m.display_name().to_string()),
+        is_loaded: loaded == Some(effective),
+        is_downloaded: model::is_model_downloaded(effective),
+    })
+}
+
 // -- Settings mutations --
 
 #[tauri::command]
@@ -74,17 +91,6 @@ pub async fn set_language(
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().language = language;
     info!("Language set to {:?}", language);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn set_backend(
-    controller: State<'_, SharedController>,
-    backend: TranscriptionBackendType,
-) -> Result<(), String> {
-    let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().backend = backend;
-    info!("Backend set to {:?}", backend);
     Ok(())
 }
 
@@ -122,29 +128,6 @@ pub async fn set_hotkey_mode(
     Ok(())
 }
 
-// -- API Key --
-
-#[tauri::command]
-pub async fn save_api_key(
-    controller: State<'_, SharedController>,
-    key: String,
-) -> Result<bool, String> {
-    let ctrl = controller.lock().unwrap();
-    Ok(ctrl.keyring().save_api_key(&key))
-}
-
-#[tauri::command]
-pub async fn has_api_key(controller: State<'_, SharedController>) -> Result<bool, String> {
-    let ctrl = controller.lock().unwrap();
-    Ok(ctrl.keyring().has_api_key())
-}
-
-#[tauri::command]
-pub async fn delete_api_key(controller: State<'_, SharedController>) -> Result<bool, String> {
-    let ctrl = controller.lock().unwrap();
-    Ok(ctrl.keyring().delete_api_key())
-}
-
 // -- Recording --
 
 #[tauri::command]
@@ -158,17 +141,13 @@ pub async fn stop_and_transcribe(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
 ) -> Result<String, String> {
-    // Extract what we need with the lock held briefly
-    let (audio, backend, language, keyring, effective_model) = {
+    let (audio, language, effective_model) = {
         let mut ctrl = controller.lock().unwrap();
         let audio = ctrl.stop_recording();
-        let backend = ctrl.backend();
         let language = ctrl.language();
-        let keyring = ctrl.keyring().clone();
         let effective_model = ctrl.settings().effective_model();
-        (audio, backend, language, keyring, effective_model)
+        (audio, language, effective_model)
     };
-    // Lock is dropped here
 
     if audio.is_empty() {
         let mut ctrl = controller.lock().unwrap();
@@ -176,29 +155,17 @@ pub async fn stop_and_transcribe(
         return Err("No audio captured".to_string());
     }
 
-    // Transcribe without holding the controller lock
-    let result = match backend {
-        TranscriptionBackendType::Remote => {
-            use crate::transcription::backend::TranscriptionBackend;
-            let openai = OpenAIBackend::new(keyring);
-            openai.transcribe(&audio, language).await
-        }
-        TranscriptionBackendType::Local => {
-            // Ensure model is loaded
-            whisper
-                .ensure_model(effective_model)
-                .map_err(|e| e.to_string())?;
+    // Ensure model is loaded
+    whisper
+        .ensure_model(effective_model)
+        .map_err(|e| e.to_string())?;
 
-            // Run blocking transcription on a separate thread
-            let whisper = whisper.inner().clone();
-            let audio = audio.clone();
-            tokio::task::spawn_blocking(move || {
-                whisper.transcribe_sync(&audio, language)
-            })
-            .await
-            .map_err(|e| format!("Transcription task failed: {e}"))?
-        }
-    };
+    // Run blocking transcription on a separate thread
+    let whisper = whisper.inner().clone();
+    let audio = audio.clone();
+    let result = tokio::task::spawn_blocking(move || whisper.transcribe_sync(&audio, language))
+        .await
+        .map_err(|e| format!("Transcription task failed: {e}"))?;
 
     match result {
         Ok(text) => {
@@ -232,18 +199,15 @@ pub async fn is_model_downloaded(whisper_model: WhisperModel) -> Result<bool, St
 }
 
 #[tauri::command]
-pub async fn get_model_info() -> Result<Vec<ModelInfo>, String> {
-    let all_models = [
-        WhisperModel::TinyEn,
-        WhisperModel::Tiny,
-        WhisperModel::BaseEn,
-        WhisperModel::Base,
-        WhisperModel::KbWhisperTiny,
-        WhisperModel::KbWhisperBase,
-        WhisperModel::KbWhisperSmall,
-    ];
+pub async fn get_model_info(
+    controller: State<'_, SharedController>,
+) -> Result<Vec<ModelInfo>, String> {
+    let ctrl = controller.lock().unwrap();
+    let language = ctrl.settings().language;
+    let effective = ctrl.settings().effective_model();
+    let models = WhisperModel::models_for_language(language);
 
-    Ok(all_models
+    Ok(models
         .iter()
         .map(|m| ModelInfo {
             id: format!("{:?}", m),
@@ -251,8 +215,7 @@ pub async fn get_model_info() -> Result<Vec<ModelInfo>, String> {
             description: m.description().to_string(),
             size_mb: m.size_mb(),
             downloaded: model::is_model_downloaded(*m),
-            english_only: m.is_english_only(),
-            swedish_optimized: m.is_swedish_optimized(),
+            active: *m == effective,
         })
         .collect())
 }
@@ -313,6 +276,91 @@ pub async fn set_show_overlay(
     Ok(())
 }
 
+// -- File transcription --
+
+#[tauri::command]
+pub async fn transcribe_file(
+    app: tauri::AppHandle,
+    controller: State<'_, SharedController>,
+    whisper: State<'_, SharedWhisper>,
+    file_path: String,
+) -> Result<String, String> {
+    use tauri::Emitter;
+
+    let path = std::path::PathBuf::from(&file_path);
+
+    // Decode audio file
+    let audio = tokio::task::spawn_blocking(move || decoder::decode_audio_file(&path))
+        .await
+        .map_err(|e| format!("Decode task failed: {e}"))?
+        .map_err(|e| e.to_string())?;
+
+    if audio.is_empty() {
+        return Err("No audio decoded from file".to_string());
+    }
+
+    // Get transcription settings
+    let (language, effective_model) = {
+        let ctrl = controller.lock().unwrap();
+        (ctrl.language(), ctrl.settings().effective_model())
+    };
+
+    // Show model loading status if needed
+    if whisper.needs_reload(effective_model) {
+        let _ = app.emit(crate::events::event::STATE_CHANGED, "loading_model");
+    }
+
+    // Ensure model is loaded
+    whisper
+        .ensure_model(effective_model)
+        .map_err(|e| e.to_string())?;
+
+    let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
+
+    // Run blocking transcription
+    let whisper = whisper.inner().clone();
+    let result = tokio::task::spawn_blocking(move || whisper.transcribe_sync(&audio, language))
+        .await
+        .map_err(|e| format!("Transcription task failed: {e}"))?;
+
+    let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+
+    match result {
+        Ok(text) => {
+            info!("File transcription complete: {} chars", text.len());
+
+            // Auto-paste if enabled
+            let should_paste = {
+                let c = controller.lock().unwrap();
+                c.settings().auto_paste
+            };
+
+            if should_paste {
+                let text_for_paste = text.clone();
+                if let Err(e) = app.run_on_main_thread(move || {
+                    let paste_svc = crate::paste::PasteService::new();
+                    if let Err(e) = paste_svc.paste(&text_for_paste) {
+                        error!("Auto-paste failed: {e}");
+                    }
+                }) {
+                    error!("Failed to dispatch paste to main thread: {e}");
+                }
+            }
+
+            Ok(text)
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn get_supported_formats() -> Result<Vec<String>, String> {
+    Ok(decoder::SUPPORTED_EXTENSIONS
+        .iter()
+        .map(|s| s.to_string())
+        .collect())
+}
+
 // -- Build info --
 
 #[tauri::command]
@@ -338,6 +386,97 @@ pub struct ModelInfo {
     description: String,
     size_mb: u32,
     downloaded: bool,
-    english_only: bool,
-    swedish_optimized: bool,
+    active: bool,
+}
+
+// -- Permission / platform queries (for onboarding) --
+
+#[tauri::command]
+pub async fn check_accessibility_permission() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(crate::platform::macos::is_accessibility_trusted())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+pub async fn request_accessibility_permission() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::platform::macos::request_accessibility_permission();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn check_microphone_permission() -> Result<bool, String> {
+    use cpal::traits::HostTrait;
+    Ok(cpal::default_host().default_input_device().is_some())
+}
+
+#[tauri::command]
+pub async fn request_microphone_permission() -> Result<bool, String> {
+    // Briefly open a cpal input stream to trigger macOS's native permission dialog,
+    // then check if the device became available.
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        let host = cpal::default_host();
+        if let Some(device) = host.default_input_device() {
+            let config = device
+                .default_input_config()
+                .map(|c: cpal::SupportedStreamConfig| c.config())
+                .unwrap_or(cpal::StreamConfig {
+                    channels: 1,
+                    sample_rate: cpal::SampleRate(16000),
+                    buffer_size: cpal::BufferSize::Default,
+                });
+            if let Ok(stream) = device.build_input_stream(
+                &config,
+                |_data: &[f32], _: &cpal::InputCallbackInfo| {},
+                |_err| {},
+                None,
+            ) {
+                let _ = stream.play();
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                drop(stream);
+            }
+        }
+        let available = host.default_input_device().is_some();
+        let _ = tx.send(available);
+    });
+    let result = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap_or(false);
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn get_platform() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok("macos".to_string())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Ok("windows".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok("unknown".to_string())
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct LoadedModelInfo {
+    effective_model: String,
+    effective_model_id: String,
+    loaded_model: Option<String>,
+    is_loaded: bool,
+    is_downloaded: bool,
 }
