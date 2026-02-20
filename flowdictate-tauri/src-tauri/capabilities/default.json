@@ -9,6 +9,11 @@
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
     "autostart:default",
-    "store:default"
+    "store:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "core:event:allow-listen",
+    "core:webview:allow-webview-position",
+    "core:window:default"
   ]
 }
