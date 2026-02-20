@@ -168,3 +168,108 @@ impl LoggingService {
         // (The caller will need to handle this - for simplicity we just create a new file)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_session_id_format() {
+        let svc = LoggingService::new();
+        assert!(
+            svc.app_session_id.starts_with("app-"),
+            "got: {}",
+            svc.app_session_id
+        );
+        // "app-" + 8 hex chars = 12 total
+        assert_eq!(svc.app_session_id.len(), 12);
+    }
+
+    #[test]
+    fn dictation_session_id_format() {
+        let svc = LoggingService::new();
+        let id = svc.start_dictation_session();
+        assert!(id.starts_with("dict-"), "got: {id}");
+        assert_eq!(id.len(), 13); // "dict-" + 8 hex chars
+    }
+
+    #[test]
+    fn start_and_end_dictation_session() {
+        let svc = LoggingService::new();
+
+        // No active session initially
+        assert!(svc.dictation_session_id.lock().unwrap().is_none());
+
+        // Start session
+        let id = svc.start_dictation_session();
+        assert_eq!(
+            svc.dictation_session_id.lock().unwrap().as_deref(),
+            Some(id.as_str())
+        );
+
+        // End session
+        svc.end_dictation_session();
+        assert!(svc.dictation_session_id.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn multiple_sessions_get_unique_ids() {
+        let svc = LoggingService::new();
+        let id1 = svc.start_dictation_session();
+        svc.end_dictation_session();
+        let id2 = svc.start_dictation_session();
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn log_entry_serialization() {
+        let entry = LogEntry {
+            ts: "2026-02-20T10:00:00.000Z".to_string(),
+            level: "info",
+            app_session: "app-abc12345".to_string(),
+            dictation_session: Some("dict-def67890".to_string()),
+            category: "App",
+            event: "test_event".to_string(),
+            data: serde_json::json!({"key": "value"}),
+        };
+
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["ts"], "2026-02-20T10:00:00.000Z");
+        assert_eq!(json["level"], "info");
+        assert_eq!(json["appSession"], "app-abc12345");
+        assert_eq!(json["dictationSession"], "dict-def67890");
+        assert_eq!(json["category"], "App");
+        assert_eq!(json["event"], "test_event");
+        assert_eq!(json["data"]["key"], "value");
+    }
+
+    #[test]
+    fn log_entry_skips_null_fields() {
+        let entry = LogEntry {
+            ts: "2026-02-20T10:00:00.000Z".to_string(),
+            level: "info",
+            app_session: "app-abc12345".to_string(),
+            dictation_session: None,
+            category: "App",
+            event: "test".to_string(),
+            data: serde_json::Value::Null,
+        };
+
+        let json_str = serde_json::to_string(&entry).unwrap();
+        assert!(!json_str.contains("dictationSession"));
+        assert!(!json_str.contains("\"data\""));
+    }
+
+    #[test]
+    fn log_does_not_panic() {
+        let svc = LoggingService::new();
+        // Should not panic even if file operations fail
+        svc.log("info", "Test", "test_event", serde_json::json!({}));
+    }
+
+    #[test]
+    fn constants() {
+        assert_eq!(MAX_FILE_SIZE, 5_000_000);
+        assert_eq!(MAX_FILES, 5);
+    }
+}

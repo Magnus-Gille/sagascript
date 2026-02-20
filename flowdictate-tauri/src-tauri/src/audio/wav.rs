@@ -73,4 +73,88 @@ mod tests {
         // Should not panic and produce valid output
         assert_eq!(wav.len(), 44 + 10);
     }
+
+    #[test]
+    fn test_empty_input() {
+        let wav = encode_wav(&[]);
+        // Just a header, no audio data
+        assert_eq!(wav.len(), 44);
+        assert_eq!(&wav[0..4], b"RIFF");
+        // data chunk size should be 0
+        let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+        assert_eq!(data_size, 0);
+    }
+
+    #[test]
+    fn test_single_sample() {
+        let wav = encode_wav(&[0.5]);
+        assert_eq!(wav.len(), 44 + 2); // 1 sample * 2 bytes
+    }
+
+    #[test]
+    fn test_format_fields() {
+        let wav = encode_wav(&[0.0; 100]);
+
+        // fmt chunk size = 16
+        let fmt_size = u32::from_le_bytes([wav[16], wav[17], wav[18], wav[19]]);
+        assert_eq!(fmt_size, 16);
+
+        // PCM format = 1
+        let format = u16::from_le_bytes([wav[20], wav[21]]);
+        assert_eq!(format, 1);
+
+        // Channels = 1
+        let channels = u16::from_le_bytes([wav[22], wav[23]]);
+        assert_eq!(channels, 1);
+
+        // Sample rate = 16000
+        let sample_rate = u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]);
+        assert_eq!(sample_rate, 16000);
+
+        // Byte rate = 16000 * 1 * 16/8 = 32000
+        let byte_rate = u32::from_le_bytes([wav[28], wav[29], wav[30], wav[31]]);
+        assert_eq!(byte_rate, 32000);
+
+        // Block align = 1 * 16/8 = 2
+        let block_align = u16::from_le_bytes([wav[32], wav[33]]);
+        assert_eq!(block_align, 2);
+
+        // Bits per sample = 16
+        let bits = u16::from_le_bytes([wav[34], wav[35]]);
+        assert_eq!(bits, 16);
+    }
+
+    #[test]
+    fn test_sample_encoding_values() {
+        // Encode known values and verify the i16 output
+        let wav = encode_wav(&[0.0, 1.0, -1.0]);
+
+        // Samples start at byte 44
+        let s0 = i16::from_le_bytes([wav[44], wav[45]]);
+        let s1 = i16::from_le_bytes([wav[46], wav[47]]);
+        let s2 = i16::from_le_bytes([wav[48], wav[49]]);
+
+        assert_eq!(s0, 0); // 0.0 → 0
+        assert_eq!(s1, i16::MAX); // 1.0 → 32767
+        assert_eq!(s2, -i16::MAX); // -1.0 → -32767
+    }
+
+    #[test]
+    fn test_clamped_values_match_extremes() {
+        // Values > 1.0 should clamp to i16::MAX
+        let wav = encode_wav(&[5.0, -5.0]);
+        let s0 = i16::from_le_bytes([wav[44], wav[45]]);
+        let s1 = i16::from_le_bytes([wav[46], wav[47]]);
+        assert_eq!(s0, i16::MAX);
+        assert_eq!(s1, -i16::MAX);
+    }
+
+    #[test]
+    fn test_riff_file_size_field() {
+        let samples = vec![0.0f32; 1000];
+        let wav = encode_wav(&samples);
+        let file_size = u32::from_le_bytes([wav[4], wav[5], wav[6], wav[7]]);
+        // RIFF file size = total - 8 (RIFF + size field)
+        assert_eq!(file_size as usize, wav.len() - 8);
+    }
 }

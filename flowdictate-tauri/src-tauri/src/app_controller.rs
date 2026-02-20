@@ -4,12 +4,11 @@ use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::audio::AudioCaptureService;
-use crate::credentials::KeyringService;
 use crate::error::DictationError;
 use crate::hotkey::HotkeyService;
 use crate::logging::LoggingService;
 use crate::paste::PasteService;
-use crate::settings::{HotkeyMode, Settings, TranscriptionBackendType};
+use crate::settings::{HotkeyMode, Settings};
 
 /// Application state machine
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -37,7 +36,6 @@ pub struct AppController {
     audio: AudioCaptureService,
     paste: PasteService,
     hotkey: HotkeyService,
-    keyring: KeyringService,
     logging: LoggingService,
     settings: Settings,
     recording_start: Option<Instant>,
@@ -63,7 +61,6 @@ impl AppController {
             audio: AudioCaptureService::new(),
             paste: PasteService::new(),
             hotkey: HotkeyService::new(),
-            keyring: KeyringService::new(),
             logging,
             settings,
             recording_start: None,
@@ -95,14 +92,6 @@ impl AppController {
 
     pub fn is_model_ready(&self) -> bool {
         self.model_ready
-    }
-
-    pub fn keyring(&self) -> &KeyringService {
-        &self.keyring
-    }
-
-    pub fn backend(&self) -> TranscriptionBackendType {
-        self.settings.backend
     }
 
     pub fn language(&self) -> crate::settings::Language {
@@ -220,5 +209,197 @@ impl AppController {
     /// Update settings
     pub fn update_settings(&mut self, settings: Settings) {
         self.settings = settings;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_controller() -> AppController {
+        AppController::new(Settings::default())
+    }
+
+    // -- AppState --
+
+    #[test]
+    fn app_state_is_recording() {
+        assert!(!AppState::Idle.is_recording());
+        assert!(AppState::Recording.is_recording());
+        assert!(!AppState::Transcribing.is_recording());
+        assert!(!AppState::Error.is_recording());
+    }
+
+    #[test]
+    fn app_state_is_busy() {
+        assert!(!AppState::Idle.is_busy());
+        assert!(AppState::Recording.is_busy());
+        assert!(AppState::Transcribing.is_busy());
+        assert!(!AppState::Error.is_busy());
+    }
+
+    #[test]
+    fn app_state_serializes() {
+        let json = serde_json::to_string(&AppState::Idle).unwrap();
+        assert_eq!(json, "\"idle\"");
+        assert_eq!(serde_json::to_string(&AppState::Recording).unwrap(), "\"recording\"");
+        assert_eq!(serde_json::to_string(&AppState::Transcribing).unwrap(), "\"transcribing\"");
+        assert_eq!(serde_json::to_string(&AppState::Error).unwrap(), "\"error\"");
+    }
+
+    // -- AppController initial state --
+
+    #[test]
+    fn initial_state_is_idle() {
+        let ctrl = default_controller();
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn initial_model_not_ready() {
+        let ctrl = default_controller();
+        assert!(!ctrl.is_model_ready());
+    }
+
+    #[test]
+    fn initial_no_transcription() {
+        let ctrl = default_controller();
+        assert!(ctrl.last_transcription().is_none());
+    }
+
+    #[test]
+    fn initial_no_error() {
+        let ctrl = default_controller();
+        assert!(ctrl.last_error().is_none());
+    }
+
+    #[test]
+    fn initial_language_from_settings() {
+        let mut settings = Settings::default();
+        settings.language = crate::settings::Language::Swedish;
+        let ctrl = AppController::new(settings);
+        assert_eq!(ctrl.language(), crate::settings::Language::Swedish);
+    }
+
+    // -- Settings --
+
+    #[test]
+    fn settings_getter() {
+        let ctrl = default_controller();
+        assert_eq!(ctrl.settings().language, crate::settings::Language::English);
+    }
+
+    #[test]
+    fn settings_mut_modifiable() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().language = crate::settings::Language::Norwegian;
+        assert_eq!(ctrl.settings().language, crate::settings::Language::Norwegian);
+    }
+
+    #[test]
+    fn update_settings_replaces() {
+        let mut ctrl = default_controller();
+        let mut new_settings = Settings::default();
+        new_settings.auto_paste = false;
+        new_settings.language = crate::settings::Language::Swedish;
+        ctrl.update_settings(new_settings);
+        assert!(!ctrl.settings().auto_paste);
+        assert_eq!(ctrl.settings().language, crate::settings::Language::Swedish);
+    }
+
+    // -- Model ready --
+
+    #[test]
+    fn set_model_ready() {
+        let mut ctrl = default_controller();
+        assert!(!ctrl.is_model_ready());
+        ctrl.set_model_ready(true);
+        assert!(ctrl.is_model_ready());
+        ctrl.set_model_ready(false);
+        assert!(!ctrl.is_model_ready());
+    }
+
+    // -- Transcription callbacks --
+
+    #[test]
+    fn on_transcription_success_stores_text() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.on_transcription_success("Hello world");
+        assert_eq!(ctrl.last_transcription(), Some("Hello world"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn on_transcription_error_stores_error() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.on_transcription_error("model crashed");
+        assert_eq!(ctrl.last_error(), Some("model crashed"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    // -- Recording elapsed --
+
+    #[test]
+    fn recording_elapsed_zero_when_not_recording() {
+        let ctrl = default_controller();
+        assert_eq!(ctrl.recording_elapsed(), Duration::ZERO);
+    }
+
+    // -- should_stop_on_key_up --
+
+    #[test]
+    fn should_stop_on_key_up_push_to_talk_recording() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        ctrl.state = AppState::Recording;
+        assert!(ctrl.should_stop_on_key_up());
+    }
+
+    #[test]
+    fn should_not_stop_on_key_up_push_to_talk_idle() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        ctrl.state = AppState::Idle;
+        assert!(!ctrl.should_stop_on_key_up());
+    }
+
+    #[test]
+    fn should_not_stop_on_key_up_toggle_mode() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        ctrl.state = AppState::Recording;
+        assert!(!ctrl.should_stop_on_key_up());
+    }
+
+    // -- auto_paste --
+
+    #[test]
+    fn auto_paste_disabled_is_noop() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().auto_paste = false;
+        // Should return Ok without attempting paste
+        assert!(ctrl.auto_paste("test").is_ok());
+    }
+
+    // -- cancel_recording --
+
+    #[test]
+    fn cancel_recording_when_not_recording_is_noop() {
+        let mut ctrl = default_controller();
+        ctrl.cancel_recording();
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    // -- start_recording when not idle --
+
+    #[test]
+    fn start_recording_when_transcribing_is_noop() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        let result = ctrl.start_recording();
+        assert!(result.is_ok());
+        assert_eq!(ctrl.state(), AppState::Transcribing); // unchanged
     }
 }
