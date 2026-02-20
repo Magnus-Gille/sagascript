@@ -187,9 +187,14 @@ pub async fn stop_and_transcribe(
 }
 
 #[tauri::command]
-pub async fn cancel_recording(controller: State<'_, SharedController>) -> Result<(), String> {
+pub async fn cancel_recording(
+    app: tauri::AppHandle,
+    controller: State<'_, SharedController>,
+) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
     ctrl.cancel_recording();
+    drop(ctrl);
+    crate::overlay::hide(&app);
     Ok(())
 }
 
