@@ -27,6 +27,7 @@
   let models: WhisperModel[] = $state([]);
   let activeTab: "general" | "model" | "advanced" | "transcribe" = $state("general");
   let downloading: string | null = $state(null);
+  let downloadingName: string = $state("");
   let downloadProgress: number = $state(0);
 
   // Transcribe tab state
@@ -49,11 +50,11 @@
       activeTab = tab;
     }
 
-    listen("model_download_progress", (event: any) => {
+    listen("model-download-progress", (event: any) => {
       downloadProgress = event.payload.progress;
     });
 
-    listen("model_ready", async () => {
+    listen("model-ready", async () => {
       downloading = null;
       downloadProgress = 0;
       models = await getModelInfo();
@@ -114,6 +115,7 @@
     try {
       if (!model.downloaded) {
         downloading = model.id;
+        downloadingName = model.display_name;
         downloadProgress = 0;
         await downloadModel(model.id);
         // model_ready event will refresh the list
@@ -242,8 +244,10 @@
                 <span class="model-card-name">{model.display_name}</span>
                 {#if model.active}
                   <span class="model-badge active-badge">Active</span>
-                {:else if !model.downloaded}
-                  <span class="model-badge download-badge">{model.size_mb} MB</span>
+                {:else if model.downloaded}
+                  <span class="model-badge ready-badge">Ready</span>
+                {:else}
+                  <span class="model-badge download-badge">Download · {model.size_mb} MB</span>
                 {/if}
               </div>
               <div class="model-card-desc">{model.description}</div>
@@ -321,6 +325,18 @@
     </div>
   {:else}
     <div class="loading">Loading settings...</div>
+  {/if}
+
+  {#if downloading}
+    <div class="download-status-bar">
+      <div class="download-status-info">
+        <span class="download-status-label">Downloading {downloadingName}...</span>
+        <span class="download-status-pct">{Math.round(downloadProgress)}%</span>
+      </div>
+      <div class="download-status-track">
+        <div class="download-status-fill" style="width: {downloadProgress}%"></div>
+      </div>
+    </div>
   {/if}
 </div>
 
@@ -455,6 +471,11 @@
     color: var(--accent);
   }
 
+  .ready-badge {
+    background: color-mix(in srgb, var(--success, #34c759) 15%, transparent);
+    color: var(--success, #34c759);
+  }
+
   .download-badge {
     background: var(--bg);
     color: var(--text-muted);
@@ -481,6 +502,49 @@
     color: var(--text-muted);
     line-height: 1.5;
     margin-top: 12px;
+  }
+
+  /* Download status bar (bottom of window, visible on all tabs) */
+
+  .download-status-bar {
+    padding: 10px 20px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+  }
+
+  .download-status-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+
+  .download-status-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .download-status-pct {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .download-status-track {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .download-status-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.2s;
   }
 
   .version-text {
