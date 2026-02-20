@@ -5,7 +5,7 @@ pub mod transcribe;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "flowdictate", version, about = "Low-latency dictation app")]
+#[command(name = "sagascript", version, about = "Low-latency dictation app")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,

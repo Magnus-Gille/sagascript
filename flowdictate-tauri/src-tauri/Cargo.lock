@@ -1206,44 +1206,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flowdictate"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "async-trait",
- "chrono",
- "clap",
- "cocoa",
- "core-foundation 0.10.1",
- "core-graphics 0.24.0",
- "cpal",
- "ctrlc",
- "dirs 6.0.0",
- "enigo",
- "futures-util",
- "keyring",
- "num_cpus",
- "objc",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "symphonia",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-store",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "uuid",
- "whisper-rs",
-]
-
-[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3801,6 +3763,44 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "sagascript"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "async-trait",
+ "chrono",
+ "clap",
+ "cocoa",
+ "core-foundation 0.10.1",
+ "core-graphics 0.24.0",
+ "cpal",
+ "ctrlc",
+ "dirs 6.0.0",
+ "enigo",
+ "futures-util",
+ "keyring",
+ "num_cpus",
+ "objc",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "symphonia",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-store",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "uuid",
+ "whisper-rs",
+]
 
 [[package]]
 name = "same-file"

@@ -1,4 +1,4 @@
-# FlowDictate — Claude Code Autopilot Starter (Ralph Loop)
+# Sagascript — Claude Code Autopilot Starter (Ralph Loop)
 
 This repository is a **starter bundle of instructions** (Markdown-first) for running **Claude Code** autonomously using the **Ralph (Ralph Wiggum) loop** to build a **Wispr Flow–style dictation app for macOS**:
 - **Push-to-talk** via a configurable global hotkey / button
@@ -29,7 +29,7 @@ In the Claude Code REPL:
 Copy/paste this single command:
 
 ```
-/ralph-loop:ralph-loop "Read PROMPT.md and execute it exactly. Re-read PROMPT.md at the start of every iteration. Do not ask the user questions. Make reasonable assumptions and document them." --max-iterations 80 --completion-promise "FLOWDICTATE_COMPLETE"
+/ralph-loop:ralph-loop "Read PROMPT.md and execute it exactly. Re-read PROMPT.md at the start of every iteration. Do not ask the user questions. Make reasonable assumptions and document them." --max-iterations 80 --completion-promise "SAGASCRIPT_COMPLETE"
 ```
 
 That’s it. Walk away.

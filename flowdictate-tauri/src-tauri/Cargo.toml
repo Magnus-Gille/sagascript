@@ -1,5 +1,5 @@
 [package]
-name = "flowdictate"
+name = "sagascript"
 version = "0.1.0"
 edition = "2021"
 description = "Low-latency macOS/Windows dictation app"

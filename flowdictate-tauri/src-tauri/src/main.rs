@@ -58,7 +58,7 @@ fn main() {
         )
         .init();
 
-    info!("FlowDictate starting...");
+    info!("Sagascript starting...");
 
     let settings = Settings::default();
     let controller = Mutex::new(AppController::new(settings));
@@ -112,13 +112,13 @@ fn main() {
             }
 
             // Build tray menu
-            let quit = MenuItem::with_id(app, "quit", "Quit FlowDictate", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit Sagascript", true, None::<&str>)?;
             let settings_item =
                 MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
             let transcribe_file_item =
                 MenuItem::with_id(app, "transcribe_file", "Transcribe File...", true, None::<&str>)?;
             let status =
-                MenuItem::with_id(app, "status", "FlowDictate - Idle", false, None::<&str>)?;
+                MenuItem::with_id(app, "status", "Sagascript - Idle", false, None::<&str>)?;
 
             // Store status item so we can update it after transcription
             {
@@ -132,7 +132,7 @@ fn main() {
 
             let _tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
-                .tooltip("FlowDictate")
+                .tooltip("Sagascript")
                 .icon(tray_icon)
                 .icon_as_template(true)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
@@ -152,10 +152,23 @@ fn main() {
 
             info!("Tray icon created");
 
+            // Migrate settings store from FlowDictate
+            {
+                let app_dir = app.path().app_data_dir().ok();
+                if let Some(dir) = app_dir {
+                    let legacy = dir.join("flowdictate-settings.json");
+                    let new_path = dir.join("sagascript-settings.json");
+                    if legacy.exists() && !new_path.exists() {
+                        info!("Migrating settings store from FlowDictate");
+                        let _ = std::fs::rename(&legacy, &new_path);
+                    }
+                }
+            }
+
             // Auto-open onboarding on first launch
             {
                 use tauri_plugin_store::StoreExt;
-                let store = app.store("flowdictate-settings.json")
+                let store = app.store("sagascript-settings.json")
                     .map_err(|e| format!("Failed to open store: {e}"))?;
                 let completed = store
                     .get("hasCompletedOnboarding")
@@ -207,7 +220,7 @@ fn main() {
             commands::get_platform,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building FlowDictate")
+        .expect("error while building Sagascript")
         .run(|_app_handle, event| match event {
             // Prevent app from exiting when all windows are closed (tray-only app),
             // but allow explicit exit requests (e.g. from tray "Quit" menu)
@@ -223,10 +236,10 @@ fn main() {
 /// Update the tray tooltip, title, and status menu item to reflect current state
 fn update_tray_status(app: &tauri::AppHandle, state: &str) {
     let (tooltip, title, menu_text) = match state {
-        "recording" => ("FlowDictate - Recording...", "Rec", "Recording..."),
-        "loading_model" => ("FlowDictate - Loading model...", "Loading...", "Loading model..."),
-        "transcribing" => ("FlowDictate - Transcribing...", "...", "Transcribing..."),
-        _ => ("FlowDictate", "", "Idle"),
+        "recording" => ("Sagascript - Recording...", "Rec", "Recording..."),
+        "loading_model" => ("Sagascript - Loading model...", "Loading...", "Loading model..."),
+        "transcribing" => ("Sagascript - Transcribing...", "...", "Transcribing..."),
+        _ => ("Sagascript", "", "Idle"),
     };
 
     if let Some(tray) = app.tray_by_id("main") {
@@ -234,7 +247,7 @@ fn update_tray_status(app: &tauri::AppHandle, state: &str) {
         let _ = tray.set_title(Some(title));
     }
 
-    set_status_menu_text(app, &format!("FlowDictate - {menu_text}"));
+    set_status_menu_text(app, &format!("Sagascript - {menu_text}"));
 }
 
 /// Update the tray status menu item and tooltip to show the last transcription
@@ -246,7 +259,7 @@ fn update_tray_last_result(app: &tauri::AppHandle, text: &str) {
     };
 
     if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_tooltip(Some(&format!("FlowDictate\nLast: {display}")));
+        let _ = tray.set_tooltip(Some(&format!("Sagascript\nLast: {display}")));
     }
 
     set_status_menu_text(app, &format!("\u{2713} {display}"));
@@ -284,7 +297,7 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
             "settings",
             tauri::WebviewUrl::App(url.into()),
         )
-        .title("FlowDictate Settings")
+        .title("Sagascript Settings")
         .inner_size(500.0, 550.0)
         .resizable(false)
         .center()

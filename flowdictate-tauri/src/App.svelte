@@ -17,7 +17,7 @@
     // Check store for completed flag
     try {
       const { load } = await import("@tauri-apps/plugin-store");
-      const store = await load("flowdictate-settings.json");
+      const store = await load("sagascript-settings.json");
       const completed = await store.get<boolean>("hasCompletedOnboarding");
       showOnboarding = !completed;
     } catch {

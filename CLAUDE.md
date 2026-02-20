@@ -1,7 +1,7 @@
-# FlowDictate (macOS dictation) — Claude Code Project Context
+# Sagascript (macOS dictation) — Claude Code Project Context
 
 ## What this repo is
-This repo is a **Claude Code autopilot project** to build a low-latency macOS dictation app (Wispr Flow–style) named **FlowDictate**.
+This repo is a **Claude Code autopilot project** to build a low-latency macOS dictation app (Wispr Flow–style) named **Sagascript**.
 
 The master prompt is in `PROMPT.md`. Follow it.
 
@@ -40,8 +40,8 @@ The master prompt is in `PROMPT.md`. Follow it.
 - `swift build` — Build the executable (for development)
 - `swift test` — Run unit tests (67 on main, more on feature branches)
 - `./scripts/build-app.sh` — Build the app bundle (release)
-- `open .build/release/FlowDictate.app` — Run the app
-- `tail -f ~/Library/Logs/FlowDictate/flowdictate.log` — Watch logs
+- `open .build/release/Sagascript.app` — Run the app
+- `tail -f ~/Library/Logs/Sagascript/sagascript.log` — Watch logs
 
 ## Current status (2026-01-28)
 App is **feature-complete**. Accuracy improvement work (Phase 1) is done on feature branches, not yet merged to main.

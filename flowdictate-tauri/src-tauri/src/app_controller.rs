@@ -48,7 +48,7 @@ impl AppController {
     pub fn new(settings: Settings) -> Self {
         let logging = LoggingService::new();
 
-        info!("FlowDictate starting up...");
+        info!("Sagascript starting up...");
         logging.log(
             "info",
             "App",

@@ -1,4 +1,4 @@
-# Non-functional Requirements (NFRs) — FlowDictate
+# Non-functional Requirements (NFRs) — Sagascript
 
 ## 1. Performance & Latency
 

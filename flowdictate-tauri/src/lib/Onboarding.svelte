@@ -97,7 +97,7 @@
     stopPoll();
     // Write hasCompletedOnboarding to store
     const { load } = await import("@tauri-apps/plugin-store");
-    const store = await load("flowdictate-settings.json");
+    const store = await load("sagascript-settings.json");
     await store.set("hasCompletedOnboarding", true);
     await store.save();
     oncomplete();
@@ -117,7 +117,7 @@
 
 <div class="onboarding">
   <div class="titlebar">
-    <span class="titlebar-text">FlowDictate</span>
+    <span class="titlebar-text">Sagascript</span>
   </div>
 
   <!-- Progress dots -->
@@ -147,7 +147,7 @@
             <circle cx="24" cy="24" r="14" stroke="var(--accent)" stroke-width="2" fill="none" />
           </svg>
         </div>
-        <h1>Welcome to FlowDictate</h1>
+        <h1>Welcome to Sagascript</h1>
         <p class="description">
           Turn speech into text — dictate anywhere with a hotkey, or transcribe
           audio files. All processing happens locally on your device.
@@ -180,7 +180,7 @@
         </div>
         <h1>Microphone Access</h1>
         <p class="description">
-          FlowDictate can record your voice for live dictation. All audio is
+          Sagascript can record your voice for live dictation. All audio is
           processed locally on your device — nothing leaves your Mac.
         </p>
 
@@ -226,7 +226,7 @@
         </div>
         <h1>Accessibility Permission</h1>
         <p class="description">
-          This lets FlowDictate paste transcribed text directly into any app
+          This lets Sagascript paste transcribed text directly into any app
           after you dictate. Without it, text goes to your clipboard and you
           paste manually.
         </p>
@@ -289,7 +289,7 @@
         <p class="subdescription">You can change any of this in Settings.</p>
 
         <div class="actions">
-          <button class="primary" on:click={finish}>Start Using FlowDictate</button>
+          <button class="primary" on:click={finish}>Start Using Sagascript</button>
         </div>
       </div>
     {/if}

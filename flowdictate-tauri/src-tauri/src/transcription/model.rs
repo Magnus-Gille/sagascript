@@ -8,7 +8,27 @@ use crate::settings::WhisperModel;
 /// Get the models directory for storing GGML files
 pub fn models_dir() -> PathBuf {
     let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("FlowDictate").join("Models")
+    let new_dir = base.join("Sagascript").join("Models");
+
+    // Migrate from legacy FlowDictate models directory
+    if !new_dir.exists() {
+        let legacy_dir = base.join("FlowDictate").join("Models");
+        if legacy_dir.exists() {
+            info!("Migrating models directory from FlowDictate to Sagascript");
+            // Create parent dir and rename
+            if let Some(parent) = new_dir.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if std::fs::rename(&legacy_dir, &new_dir).is_ok() {
+                info!("Models directory migrated successfully");
+                // Clean up empty legacy parent
+                let legacy_parent = base.join("FlowDictate");
+                let _ = std::fs::remove_dir(&legacy_parent); // only removes if empty
+            }
+        }
+    }
+
+    new_dir
 }
 
 /// Get the full path to a model's GGML file

@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: Performs threat modeling and privacy/security reviews for FlowDictate; ensures permissions and secrets are handled correctly.
+description: Performs threat modeling and privacy/security reviews for Sagascript; ensures permissions and secrets are handled correctly.
 ---
 
 You are the Security & Privacy reviewer.

@@ -1,4 +1,4 @@
-# MASTER PROMPT — FlowDictate Autonomous Build (Claude Code + Ralph Loop)
+# MASTER PROMPT — Sagascript Autonomous Build (Claude Code + Ralph Loop)
 
 You are running inside a **Ralph loop** (continuous iteration). Your job is to complete the entire project **without asking the user questions**.
 
@@ -9,7 +9,7 @@ You are running inside a **Ralph loop** (continuous iteration). Your job is to c
 3. **Be honest.** If something requires credentials (GitHub, API keys, Apple signing) and you don’t have them, implement a secure placeholder and document how to enable it later.
 4. **Performance matters.** Latency and responsiveness are top priorities.
 5. **Privacy matters.** Local-first transcription is the default. Remote transcription is opt-in.
-6. **Ralph loop completion promise:** You may output the exact phrase **FLOWDICTATE_COMPLETE** *only when everything in the “Definition of Done” section is true.*
+6. **Ralph loop completion promise:** You may output the exact phrase **SAGASCRIPT_COMPLETE** *only when everything in the “Definition of Done” section is true.*
 
 ---
 
@@ -155,7 +155,7 @@ Default stack (recommended):
 
 ## Definition of Done
 
-You may only output **FLOWDICTATE_COMPLETE** when all are true:
+You may only output **SAGASCRIPT_COMPLETE** when all are true:
 
 ### Product
 - [ ] Push-to-talk or toggle hotkey works globally.
@@ -180,4 +180,4 @@ You may only output **FLOWDICTATE_COMPLETE** when all are true:
 - [ ] Permissions are requested only when needed and documented.
 
 When complete, print:
-FLOWDICTATE_COMPLETE
+SAGASCRIPT_COMPLETE

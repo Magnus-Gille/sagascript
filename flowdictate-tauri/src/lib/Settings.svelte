@@ -169,7 +169,7 @@
 </script>
 
 <div class="settings-window">
-  <div class="titlebar">FlowDictate Settings</div>
+  <div class="titlebar">Sagascript Settings</div>
 
   <div class="tabs">
     <button class="tab" class:active={activeTab === "general"} onclick={() => (activeTab = "general")}>
@@ -311,9 +311,9 @@
           <label>Version</label>
           <div class="version-text">
             {#if buildInfo}
-              FlowDictate {buildInfo.version} ({buildInfo.git_hash}) - Built {buildInfo.build_date}
+              Sagascript {buildInfo.version} ({buildInfo.git_hash}) - Built {buildInfo.build_date}
             {:else}
-              FlowDictate 0.1.0
+              Sagascript 0.1.0
             {/if}
           </div>
         </div>
