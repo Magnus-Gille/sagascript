@@ -3,8 +3,8 @@
 
 mod app_controller;
 mod audio;
+mod cli;
 mod commands;
-mod credentials;
 mod error;
 mod events;
 mod hotkey;
@@ -34,8 +34,24 @@ use transcription::WhisperBackend;
 /// Minimum recording duration before we allow stop (300ms)
 const MIN_RECORDING_MS: u64 = 300;
 
+/// Shared tray status menu item for updating from anywhere
+type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
+
 fn main() {
-    // Initialize tracing (console logging)
+    // CLI mode: if a subcommand is given, run CLI and exit
+    if let Some(parsed) = cli::try_parse() {
+        // CLI mode uses warn-level logging to keep stdout clean
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
+            )
+            .with_writer(std::io::stderr)
+            .init();
+        cli::run(parsed);
+        return;
+    }
+
+    // GUI mode: initialize tracing (console logging)
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -61,6 +77,10 @@ fn main() {
                             if let Err(e) = c.handle_hotkey_down() {
                                 error!("Hotkey down error: {e}");
                             }
+                            if c.state().is_recording() {
+                                let _ = app.emit(events::event::STATE_CHANGED, "recording");
+                                update_tray_status(app, "recording");
+                            }
                         }
                         ShortcutState::Released => {
                             info!("Hotkey released: {shortcut}");
@@ -75,8 +95,10 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_store::Builder::default().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(controller)
         .manage(whisper)
+        .manage(Mutex::new(None::<MenuItem<tauri::Wry>>) as SharedStatusItem)
         .setup(|app| {
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
@@ -93,14 +115,22 @@ fn main() {
             let quit = MenuItem::with_id(app, "quit", "Quit FlowDictate", true, None::<&str>)?;
             let settings_item =
                 MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
+            let transcribe_file_item =
+                MenuItem::with_id(app, "transcribe_file", "Transcribe File...", true, None::<&str>)?;
             let status =
                 MenuItem::with_id(app, "status", "FlowDictate - Idle", false, None::<&str>)?;
 
-            let menu = Menu::with_items(app, &[&status, &settings_item, &quit])?;
+            // Store status item so we can update it after transcription
+            {
+                let status_state: tauri::State<'_, SharedStatusItem> = app.state();
+                *status_state.lock().unwrap() = Some(status.clone());
+            }
+
+            let menu = Menu::with_items(app, &[&status, &settings_item, &transcribe_file_item, &quit])?;
 
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
-            let _tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .tooltip("FlowDictate")
                 .icon(tray_icon)
@@ -111,22 +141,10 @@ fn main() {
                         app.exit(0);
                     }
                     "settings" => {
-                        info!("Opening settings window");
-                        if let Some(window) = app.get_webview_window("settings") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        } else {
-                            let _window = tauri::WebviewWindowBuilder::new(
-                                app,
-                                "settings",
-                                tauri::WebviewUrl::App("index.html".into()),
-                            )
-                            .title("FlowDictate Settings")
-                            .inner_size(500.0, 450.0)
-                            .resizable(false)
-                            .center()
-                            .build();
-                        }
+                        open_settings_window(app, None);
+                    }
+                    "transcribe_file" => {
+                        open_settings_window(app, Some("transcribe"));
                     }
                     _ => {}
                 })
@@ -135,21 +153,26 @@ fn main() {
             info!("Tray icon created");
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // Hide settings window instead of closing it (prevents app exit)
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+                info!("Window hidden (not closed)");
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::get_settings,
             commands::get_last_transcription,
             commands::get_last_error,
             commands::is_model_ready,
+            commands::get_loaded_model,
             commands::update_settings,
             commands::set_language,
-            commands::set_backend,
             commands::set_whisper_model,
             commands::set_auto_select_model,
             commands::set_hotkey_mode,
-            commands::save_api_key,
-            commands::has_api_key,
-            commands::delete_api_key,
             commands::start_recording,
             commands::stop_and_transcribe,
             commands::cancel_recording,
@@ -159,9 +182,89 @@ fn main() {
             commands::set_auto_paste,
             commands::set_show_overlay,
             commands::get_build_info,
+            commands::transcribe_file,
+            commands::get_supported_formats,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running FlowDictate");
+        .build(tauri::generate_context!())
+        .expect("error while building FlowDictate")
+        .run(|_app_handle, event| match event {
+            // Prevent app from exiting when all windows are closed (tray-only app)
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                api.prevent_exit();
+            }
+            _ => {}
+        });
+}
+
+/// Update the tray tooltip, title, and status menu item to reflect current state
+fn update_tray_status(app: &tauri::AppHandle, state: &str) {
+    let (tooltip, title, menu_text) = match state {
+        "recording" => ("FlowDictate - Recording...", "Rec", "Recording..."),
+        "loading_model" => ("FlowDictate - Loading model...", "Loading...", "Loading model..."),
+        "transcribing" => ("FlowDictate - Transcribing...", "...", "Transcribing..."),
+        _ => ("FlowDictate", "", "Idle"),
+    };
+
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(tooltip));
+        let _ = tray.set_title(Some(title));
+    }
+
+    set_status_menu_text(app, &format!("FlowDictate - {menu_text}"));
+}
+
+/// Update the tray status menu item and tooltip to show the last transcription
+fn update_tray_last_result(app: &tauri::AppHandle, text: &str) {
+    let display = if text.len() > 60 {
+        format!("{}...", &text[..57])
+    } else {
+        text.to_string()
+    };
+
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(&format!("FlowDictate\nLast: {display}")));
+    }
+
+    set_status_menu_text(app, &format!("\u{2713} {display}"));
+}
+
+/// Helper to update the status menu item text
+fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
+    let guard = app.state::<SharedStatusItem>().lock().unwrap().clone();
+    if let Some(item) = guard {
+        let _ = item.set_text(text);
+    }
+}
+
+/// Open or focus the settings window, optionally navigating to a specific tab
+fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
+    info!("Opening settings window (tab: {:?})", tab);
+
+    // Build a URL with optional tab query parameter
+    let url = match tab {
+        Some(t) => format!("index.html?tab={t}"),
+        None => "index.html".to_string(),
+    };
+
+    if let Some(window) = app.get_webview_window("settings") {
+        // If switching tab on existing window, emit an event
+        if let Some(t) = tab {
+            let _ = window.emit("navigate_tab", t);
+        }
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else {
+        let _window = tauri::WebviewWindowBuilder::new(
+            app,
+            "settings",
+            tauri::WebviewUrl::App(url.into()),
+        )
+        .title("FlowDictate Settings")
+        .inner_size(500.0, 550.0)
+        .resizable(false)
+        .center()
+        .build();
+    }
 }
 
 /// Handle hotkey release: check minimum duration, stop recording, transcribe
@@ -200,9 +303,15 @@ fn handle_hotkey_release(
         }
     };
 
+    // Update tray to show transcribing state
+    let _ = app.emit(events::event::STATE_CHANGED, "transcribing");
+    update_tray_status(app, "transcribing");
+
     if audio.is_empty() {
         let mut c = ctrl.lock().unwrap();
         c.on_transcription_error("No audio captured");
+        let _ = app.emit(events::event::STATE_CHANGED, "idle");
+        update_tray_status(app, "idle");
         return;
     }
 
@@ -213,56 +322,72 @@ fn handle_hotkey_release(
         let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 
         // Extract what we need for transcription (lock briefly)
-        let (backend, language, keyring, effective_model) = {
+        let (language, effective_model) = {
             let c = ctrl.lock().unwrap();
-            (
-                c.backend(),
-                c.language(),
-                c.keyring().clone(),
-                c.settings().effective_model(),
-            )
+            (c.language(), c.settings().effective_model())
         };
-        // Lock dropped
 
-        let result = match backend {
-            settings::TranscriptionBackendType::Remote => {
-                use transcription::backend::TranscriptionBackend;
-                let openai = transcription::OpenAIBackend::new(keyring);
-                openai.transcribe(&audio, language).await
-            }
-            settings::TranscriptionBackendType::Local => {
-                // Ensure model is loaded
-                if let Err(e) = whisper.ensure_model(effective_model) {
-                    Err(e)
-                } else {
-                    // Run blocking transcription on a separate thread
-                    let whisper = whisper.inner().clone();
-                    let audio = audio.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        whisper.transcribe_sync(&audio, language)
-                    })
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => Err(error::DictationError::TranscriptionFailed(
-                            format!("Task join error: {e}"),
-                        )),
-                    }
-                }
+        info!("Transcribing with model: {}", effective_model.display_name());
+
+        // Show model loading status in tray
+        if whisper.needs_reload(effective_model) {
+            let _ = app_handle.emit(events::event::STATE_CHANGED, "loading_model");
+            update_tray_status(&app_handle, "loading_model");
+        }
+
+        // Ensure model is loaded
+        let result = if let Err(e) = whisper.ensure_model(effective_model) {
+            Err(e)
+        } else {
+            // Run blocking transcription on a separate thread
+            let whisper = whisper.inner().clone();
+            let audio = audio.clone();
+            match tokio::task::spawn_blocking(move || {
+                whisper.transcribe_sync(&audio, language)
+            })
+            .await
+            {
+                Ok(r) => r,
+                Err(e) => Err(error::DictationError::TranscriptionFailed(
+                    format!("Task join error: {e}"),
+                )),
             }
         };
 
         match result {
             Ok(text) => {
                 info!("Transcription complete: {} chars", text.len());
-                let mut c = ctrl.lock().unwrap();
-                if let Err(e) = c.auto_paste(&text) {
-                    error!("Auto-paste failed: {e}");
+
+                // Check if auto-paste is enabled (lock briefly)
+                let should_paste = {
+                    let c = ctrl.lock().unwrap();
+                    c.settings().auto_paste
+                };
+
+                if should_paste {
+                    // Auto-paste MUST run on the main thread — enigo's macOS TIS APIs
+                    // crash (SIGABRT) if called from a tokio worker thread.
+                    let text_for_paste = text.clone();
+                    if let Err(e) = app_handle.run_on_main_thread(move || {
+                        info!("Running auto-paste on main thread...");
+                        let paste_svc = crate::paste::PasteService::new();
+                        match paste_svc.paste(&text_for_paste) {
+                            Ok(()) => info!("Auto-paste completed successfully"),
+                            Err(e) => error!("Auto-paste failed: {e}"),
+                        }
+                    }) {
+                        error!("Failed to dispatch paste to main thread: {e}");
+                    }
                 }
+
+                let mut c = ctrl.lock().unwrap();
                 c.on_transcription_success(&text);
 
                 let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                update_tray_status(&app_handle, "idle");
+                update_tray_last_result(&app_handle, &text);
+                info!("Transcription flow complete, app should remain running");
             }
             Err(e) => {
                 error!("Transcription failed: {e}");
@@ -270,6 +395,8 @@ fn handle_hotkey_release(
                 c.on_transcription_error(&e.to_string());
                 let _ = app_handle.emit(events::event::ERROR, e.to_string());
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                update_tray_status(&app_handle, "idle");
+                info!("Error flow complete, app should remain running");
             }
         }
     });
