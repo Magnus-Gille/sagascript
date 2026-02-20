@@ -1,8 +1,8 @@
-# Test Plan — FlowDictate
+# Test Plan — Sagascript
 
 ## 1. Overview
 
-This document outlines the testing strategy for FlowDictate, covering unit tests, integration tests, performance tests, and manual testing procedures.
+This document outlines the testing strategy for Sagascript, covering unit tests, integration tests, performance tests, and manual testing procedures.
 
 ## 2. Test Architecture
 
@@ -286,7 +286,7 @@ swift test --verbose
 ### Generate Coverage Report
 ```bash
 swift test --enable-code-coverage
-xcrun llvm-cov report .build/debug/FlowDictatePackageTests.xctest/Contents/MacOS/FlowDictatePackageTests -instr-profile .build/debug/codecov/default.profdata
+xcrun llvm-cov report .build/debug/SagascriptPackageTests.xctest/Contents/MacOS/SagascriptPackageTests -instr-profile .build/debug/codecov/default.profdata
 ```
 
 ## 10. Test Environment Requirements

@@ -37,7 +37,7 @@ impl LoggingService {
     pub fn new() -> Self {
         let app_session_id = format!("app-{}", &Uuid::new_v4().to_string()[..8]);
         let log_dir = Self::log_directory();
-        let log_path = log_dir.join("flowdictate.log");
+        let log_path = log_dir.join("sagascript.log");
 
         // Create log directory with restrictive permissions
         if let Err(e) = fs::create_dir_all(&log_dir) {
@@ -75,21 +75,21 @@ impl LoggingService {
         {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("Library/Logs/FlowDictate")
+                .join("Library/Logs/Sagascript")
         }
 
         #[cfg(target_os = "windows")]
         {
             dirs::data_local_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("FlowDictate/Logs")
+                .join("Sagascript/Logs")
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             dirs::data_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("FlowDictate/logs")
+                .join("Sagascript/logs")
         }
     }
 
@@ -150,18 +150,18 @@ impl LoggingService {
         let dir = Self::log_directory();
 
         // Delete oldest
-        let oldest = dir.join(format!("flowdictate.{MAX_FILES}.log"));
+        let oldest = dir.join(format!("sagascript.{MAX_FILES}.log"));
         let _ = fs::remove_file(oldest);
 
         // Rotate: N-1 -> N, ..., 1 -> 2
         for i in (1..MAX_FILES).rev() {
-            let from = dir.join(format!("flowdictate.{i}.log"));
-            let to = dir.join(format!("flowdictate.{}.log", i + 1));
+            let from = dir.join(format!("sagascript.{i}.log"));
+            let to = dir.join(format!("sagascript.{}.log", i + 1));
             let _ = fs::rename(from, to);
         }
 
         // Current -> .1
-        let rotated = dir.join("flowdictate.1.log");
+        let rotated = dir.join("sagascript.1.log");
         let _ = fs::rename(&self.log_path, rotated);
 
         // Reopen

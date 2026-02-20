@@ -1,8 +1,8 @@
-# PRD — FlowDictate
+# PRD — Sagascript
 
 ## 1. Overview
 
-FlowDictate is a macOS menu bar application that provides low-latency, privacy-first voice dictation. Inspired by Wispr Flow, it enables users to transcribe speech directly into any application using a global hotkey.
+Sagascript is a macOS menu bar application that provides low-latency, privacy-first voice dictation. Inspired by Wispr Flow, it enables users to transcribe speech directly into any application using a global hotkey.
 
 **Target Platform:** macOS (Apple Silicon — M1/M2/M3/M4)
 **Primary Languages:** English and Swedish
@@ -94,7 +94,7 @@ FlowDictate is a macOS menu bar application that provides low-latency, privacy-f
 ### Flow 1: First Launch
 
 ```
-1. User launches FlowDictate
+1. User launches Sagascript
 2. App requests Microphone permission (system dialog)
 3. App requests Accessibility permission (for paste simulation)
 4. App appears in menu bar with idle icon

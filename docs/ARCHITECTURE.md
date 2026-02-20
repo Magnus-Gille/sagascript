@@ -1,12 +1,12 @@
-# Architecture — FlowDictate
+# Architecture — Sagascript
 
 ## Overview
 
-FlowDictate is a macOS menu bar application built with Swift/SwiftUI. It follows a modular architecture with clear separation between audio capture, transcription backends, and text insertion.
+Sagascript is a macOS menu bar application built with Swift/SwiftUI. It follows a modular architecture with clear separation between audio capture, transcription backends, and text insertion.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         FlowDictate                              │
+│                         Sagascript                              │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
 │  │ Menu Bar UI │  │  Settings   │  │   Recording Overlay     │  │
@@ -50,7 +50,7 @@ FlowDictate is a macOS menu bar application built with Swift/SwiftUI. It follows
 
 ## Components
 
-### 1. FlowDictateApp (Entry Point)
+### 1. SagascriptApp (Entry Point)
 - SwiftUI `@main` app with `MenuBarExtra`
 - Initializes all services at launch
 - Manages app lifecycle
@@ -202,7 +202,7 @@ protocol TranscriptionBackend {
 ## Module Dependencies
 
 ```
-FlowDictateApp
+SagascriptApp
 ├── AppController
 │   ├── HotkeyService
 │   ├── AudioCaptureService

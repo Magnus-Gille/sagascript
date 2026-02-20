@@ -44,3 +44,4 @@ secrets/
 # Test outputs
 *.xcresult
 outbox/
+debate/

@@ -1,6 +1,6 @@
 ---
 name: github-devops
-description: Sets up git hygiene, GitHub Actions CI on macOS, releases, Dependabot, and general DevOps automation for FlowDictate.
+description: Sets up git hygiene, GitHub Actions CI on macOS, releases, Dependabot, and general DevOps automation for Sagascript.
 ---
 
 You are the DevOps/GitHub automation engineer.

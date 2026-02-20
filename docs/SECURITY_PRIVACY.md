@@ -1,4 +1,4 @@
-# Security & Privacy — FlowDictate
+# Security & Privacy — Sagascript
 
 ## 1. Threat Model
 
@@ -74,7 +74,7 @@
 
 ```
 ┌──────────────┐     TLS 1.3      ┌─────────────────┐
-│ FlowDictate  │ ───────────────▶ │ api.openai.com  │
+│ Sagascript  │ ───────────────▶ │ api.openai.com  │
 │              │                  │                 │
 │ Audio data   │                  │ Transcription   │
 │ (encrypted)  │ ◀─────────────── │ result          │
@@ -109,7 +109,7 @@
 // Keychain storage implementation
 let query: [String: Any] = [
     kSecClass as String: kSecClassGenericPassword,
-    kSecAttrService as String: "com.flowdictate.openai-api-key",
+    kSecAttrService as String: "com.sagascript.openai-api-key",
     kSecAttrAccount as String: "openai",
     kSecValueData as String: keyData,
     kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly

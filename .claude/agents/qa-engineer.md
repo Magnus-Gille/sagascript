@@ -1,6 +1,6 @@
 ---
 name: qa-engineer
-description: Creates detailed test plans and implements tests (unit/integration/perf) for FlowDictate.
+description: Creates detailed test plans and implements tests (unit/integration/perf) for Sagascript.
 ---
 
 You are the QA Engineer.

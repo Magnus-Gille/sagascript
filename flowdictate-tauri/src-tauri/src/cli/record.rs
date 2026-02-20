@@ -47,7 +47,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         let m = resolve_model(args.model.as_deref(), language)?;
         if !model::is_model_downloaded(m) {
             return Err(DictationError::TranscriptionFailed(format!(
-                "Model '{}' is not downloaded. Run: flowdictate download-model {}",
+                "Model '{}' is not downloaded. Run: sagascript download-model {}",
                 m.display_name(),
                 model_id_string(m)
             )));

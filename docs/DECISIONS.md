@@ -9,11 +9,11 @@ Record assumptions and design decisions here, with rationale and dates.
 - **Problem:** After every rebuild, macOS TCC invalidates previously granted permissions (Microphone, Accessibility, Input Monitoring) because the ad-hoc code signature changes
 - **Workaround:** Reset TCC entries and re-grant:
   ```
-  tccutil reset Microphone com.flowdictate.app
-  tccutil reset Accessibility com.flowdictate.app
+  tccutil reset Microphone com.sagascript.app
+  tccutil reset Accessibility com.sagascript.app
   ```
   Then relaunch the app and grant permissions when prompted.
-  Alternatively: System Settings > Privacy & Security, toggle FlowDictate off/on for each permission.
+  Alternatively: System Settings > Privacy & Security, toggle Sagascript off/on for each permission.
 - **Root cause:** Ad-hoc signing (`codesign --sign -`) generates a new signature each build. macOS ties TCC grants to the signature, not the bundle identifier alone.
 - **Permanent fix:** Use a stable Developer ID certificate for signing. This would preserve permissions across rebuilds.
 
@@ -285,7 +285,7 @@ Record assumptions and design decisions here, with rationale and dates.
   - Human-readable with `cat` or `jq`
   - Standard format used by many log aggregators
 - **Implementation:**
-  - Location: `~/Library/Logs/FlowDictate/` (standard macOS log location)
+  - Location: `~/Library/Logs/Sagascript/` (standard macOS log location)
   - Rotation: Size-based (5MB), keep 5 files (max 25MB total)
   - Buffered writes with flush every 50 entries or 1 second
   - Session tracking with UUID per app session and dictation session
@@ -310,7 +310,7 @@ Record assumptions and design decisions here, with rationale and dates.
 - **Consequences:**
   - Existing users with stored preferences are unaffected (their `autoPaste=false` persists)
   - New installs get the expected "dictate and paste" workflow
-  - Existing users can delete preference: `defaults delete com.flowdictate autoPaste`
+  - Existing users can delete preference: `defaults delete com.sagascript autoPaste`
 
 ---
 
@@ -364,7 +364,7 @@ Record assumptions and design decisions here, with rationale and dates.
   - Remote → OpenAI API
 - **Model storage:**
   - Standard models: Downloaded by WhisperKit to its cache
-  - KB-Whisper models: `~/Library/Application Support/FlowDictate/Models/` (auto-downloaded)
+  - KB-Whisper models: `~/Library/Application Support/Sagascript/Models/` (auto-downloaded)
 - **Alternatives considered:**
   - Option 1: Convert KB-Whisper to CoreML (complex - whisperkittools not on PyPI, conversion non-trivial)
   - Option 3: Larger OpenAI multilingual models (still much worse than KB-Whisper on Swedish)
@@ -395,7 +395,7 @@ Record assumptions and design decisions here, with rationale and dates.
   - Wispr Flow-style apps are menu bar utilities, not windowed apps
   - Window appearing on launch confused users about app purpose
 - **Changes:**
-  - Removed `Window("FlowDictate", id: "main")` scene from FlowDictateApp
+  - Removed `Window("Sagascript", id: "main")` scene from SagascriptApp
   - Deleted MainWindowView.swift (now unused)
   - Settings still accessible via menu bar "Settings..." button
 - **Consequences:**

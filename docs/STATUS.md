@@ -1,4 +1,4 @@
-# Status — FlowDictate
+# Status — Sagascript
 
 This file is the agent's running "project board".
 
@@ -7,7 +7,7 @@ This file is the agent's running "project board".
 
 ## Summary
 
-FlowDictate is a complete macOS dictation app with:
+Sagascript is a complete macOS dictation app with:
 
 1. **Menu bar only application** using SwiftUI MenuBarExtra (no dock icon, no main window)
 2. **Global hotkey** (Control+Shift+Space default, configurable) with advanced support for Fn and modifier-only triggers
@@ -56,22 +56,22 @@ Added comprehensive hotkey support beyond standard Carbon API limitations:
 - **Modifier-only triggers** - ⌘ alone, ⌥ alone, ⌃⌥ chord (using CGEventTap)
 
 ### Implementation
-- **Shortcut model** (`Sources/FlowDictate/Hotkeys/Shortcut.swift`)
+- **Shortcut model** (`Sources/Sagascript/Hotkeys/Shortcut.swift`)
   - Constants: `kModsFnBit` (custom Fn bit), `kKeyCodeModifiersOnly` (-1 sentinel)
   - Conversion functions between NSEvent, CGEvent, and Carbon modifier formats
   - Shortcut description rendering (e.g., "Fn+Z", "⌘⌥", "⌃⇧Space")
 
-- **CGEventTap backend** (`Sources/FlowDictate/Hotkeys/CGEventTapHotkeyService.swift`)
+- **CGEventTap backend** (`Sources/Sagascript/Hotkeys/CGEventTapHotkeyService.swift`)
   - Uses `.cgSessionEventTap` with `.listenOnly` option
   - "Tap-only" semantics for modifier-only: triggers only when no non-modifier key pressed
   - Handles `.tapDisabledByTimeout` / `.tapDisabledByUserInput` re-enabling
   - Requires Input Monitoring permission (shows guidance alert if missing)
 
-- **Unified HotkeyService** (`Sources/FlowDictate/Services/HotkeyService.swift`)
+- **Unified HotkeyService** (`Sources/Sagascript/Services/HotkeyService.swift`)
   - Automatically selects backend: Carbon for standard shortcuts, CGEventTap for Fn/modifier-only
   - `suspend()`/`resume()` methods for safe hotkey recording
 
-- **Improved recorder** (`Sources/FlowDictate/Views/HotkeyRecorderView.swift`)
+- **Improved recorder** (`Sources/Sagascript/Views/HotkeyRecorderView.swift`)
   - Normal keys: Accept immediately on keyDown (not keyUp)
   - Modifier-only: Accept when all modifiers released back to 0
   - Prevents premature acceptance that would break combos like ⌘+Z
@@ -177,21 +177,21 @@ Ideas for future work (not committed to):
 
 ## Repository
 
-- GitHub: https://github.com/Magnus-Gille/flowdictate
+- GitHub: https://github.com/Magnus-Gille/sagascript
 - CI: GitHub Actions (macOS 14, build + test)
 - Dependencies: WhisperKit, SwiftWhisper, HotKey (via SPM)
 
 ## Files Created
 
 ### Source Code
-- `Sources/FlowDictate/FlowDictateApp.swift` — App entry point
-- `Sources/FlowDictate/Models/` — Language, AppState, AnyCodable, LogEvents
-- `Sources/FlowDictate/Services/` — All core services including LoggingService, LaunchAtLoginService
-- `Sources/FlowDictate/Views/` — SwiftUI views
-- `Sources/FlowDictate/Hotkeys/` — Shortcut model and CGEventTap backend for advanced hotkey support
+- `Sources/Sagascript/SagascriptApp.swift` — App entry point
+- `Sources/Sagascript/Models/` — Language, AppState, AnyCodable, LogEvents
+- `Sources/Sagascript/Services/` — All core services including LoggingService, LaunchAtLoginService
+- `Sources/Sagascript/Views/` — SwiftUI views
+- `Sources/Sagascript/Hotkeys/` — Shortcut model and CGEventTap backend for advanced hotkey support
 
 ### Tests
-- `Tests/FlowDictateTests/` — 67 unit tests (main), 72/80/83 on accuracy feature branches
+- `Tests/SagascriptTests/` — 67 unit tests (main), 72/80/83 on accuracy feature branches
 
 ### Documentation
 - `docs/PRD.md` — Product requirements
@@ -225,7 +225,7 @@ All items complete:
 1. Clone the repository
 2. Run `swift test` to run tests
 3. Run `./scripts/build-app.sh` to build the app bundle
-4. Run `open .build/release/FlowDictate.app` to launch the app
+4. Run `open .build/release/Sagascript.app` to launch the app
 5. Grant Microphone and Accessibility permissions when prompted
 6. Press Control+Shift+Space to start dictating (configurable in Settings)
 

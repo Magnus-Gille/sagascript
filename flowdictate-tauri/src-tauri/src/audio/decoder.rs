@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn nonexistent_file_returns_error() {
-        let path = PathBuf::from("/tmp/definitely_does_not_exist_flowdictate_test.wav");
+        let path = PathBuf::from("/tmp/definitely_does_not_exist_sagascript_test.wav");
         let result = decode_audio_file(&path);
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -212,7 +212,7 @@ mod tests {
         let wav_bytes = crate::audio::wav::encode_wav(&original_samples);
 
         // Write to temp file
-        let tmp = std::env::temp_dir().join("flowdictate_test_decode.wav");
+        let tmp = std::env::temp_dir().join("sagascript_test_decode.wav");
         std::fs::write(&tmp, &wav_bytes).unwrap();
 
         let result = decode_audio_file(&tmp);

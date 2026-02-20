@@ -37,7 +37,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     // Check model is downloaded
     if !model::is_model_downloaded(model) {
         return Err(DictationError::TranscriptionFailed(format!(
-            "Model '{}' is not downloaded. Run: flowdictate download-model {}",
+            "Model '{}' is not downloaded. Run: sagascript download-model {}",
             model.display_name(),
             model_id_string(model)
         )));
@@ -116,7 +116,7 @@ pub fn parse_model(s: &str) -> Result<WhisperModel, DictationError> {
         "nb-whisper-base" => Ok(WhisperModel::NbWhisperBase),
         "nb-whisper-small" => Ok(WhisperModel::NbWhisperSmall),
         other => Err(DictationError::SettingsError(format!(
-            "Unknown model '{other}'. Run 'flowdictate list-models' to see available models."
+            "Unknown model '{other}'. Run 'sagascript list-models' to see available models."
         ))),
     }
 }
