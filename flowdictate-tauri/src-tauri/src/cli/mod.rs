@@ -1,3 +1,4 @@
+pub mod config;
 pub mod models;
 pub mod record;
 pub mod transcribe;
@@ -25,6 +26,9 @@ pub enum Command {
     /// Download a whisper model
     DownloadModel(models::DownloadModelArgs),
 
+    /// Manage settings (list, get, set, reset, path)
+    Config(config::ConfigArgs),
+
     /// List supported audio/video file formats
     Formats,
 }
@@ -48,6 +52,7 @@ pub fn run(cli: Cli) {
         Command::Record(args) => record::run(args),
         Command::ListModels(args) => models::list(args),
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
+        Command::Config(args) => config::run(args),
         Command::Formats => {
             formats();
             Ok(())
