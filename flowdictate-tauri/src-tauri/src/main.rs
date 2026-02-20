@@ -33,7 +33,6 @@ use tracing_subscriber::EnvFilter;
 
 use app_controller::AppController;
 use commands::{SharedController, SharedWhisper};
-use settings::Settings;
 use transcription::WhisperBackend;
 
 /// Minimum recording duration before we allow stop (300ms)
@@ -65,7 +64,8 @@ fn main() {
 
     info!("Sagascript starting...");
 
-    let settings = Settings::default();
+    let settings = settings::store::load();
+    info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
     let controller = Mutex::new(AppController::new(settings));
     let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
 
@@ -115,9 +115,17 @@ fn main() {
             #[cfg(target_os = "macos")]
             platform::macos::set_activation_policy_accessory();
 
-            // Register global shortcut (Ctrl+Shift+Space)
-            let shortcut = "Control+Shift+Space";
-            match app.global_shortcut().register(shortcut) {
+            // Read hotkey from already-loaded settings and register it
+            let shortcut = {
+                let ctrl: tauri::State<'_, SharedController> = app.state();
+                let c = ctrl.lock().unwrap();
+                let shortcut = c.settings().hotkey.clone();
+                drop(c);
+                shortcut
+            };
+
+            // Register global shortcut
+            match app.global_shortcut().register(shortcut.as_str()) {
                 Ok(()) => info!("Hotkey registered: {shortcut}"),
                 Err(e) => error!("Failed to register hotkey: {e}"),
             }
@@ -213,6 +221,7 @@ fn main() {
             commands::set_whisper_model,
             commands::set_auto_select_model,
             commands::set_hotkey_mode,
+            commands::set_hotkey,
             commands::start_recording,
             commands::stop_and_transcribe,
             commands::cancel_recording,

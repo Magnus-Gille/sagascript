@@ -72,6 +72,13 @@ pub async fn get_loaded_model(
     })
 }
 
+// -- Settings persistence helper --
+
+fn persist_settings(controller: &SharedController) -> Result<(), String> {
+    let settings = controller.lock().unwrap().settings().clone();
+    crate::settings::store::save(&settings)
+}
+
 // -- Settings mutations --
 
 #[tauri::command]
@@ -81,6 +88,8 @@ pub async fn update_settings(
 ) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
     ctrl.update_settings(settings);
+    drop(ctrl);
+    persist_settings(&controller)?;
     info!("Settings updated");
     Ok(())
 }
@@ -92,6 +101,8 @@ pub async fn set_language(
 ) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().language = language;
+    drop(ctrl);
+    persist_settings(&controller)?;
     info!("Language set to {:?}", language);
     Ok(())
 }
@@ -104,6 +115,8 @@ pub async fn set_whisper_model(
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().whisper_model = model;
     ctrl.settings_mut().auto_select_model = false;
+    drop(ctrl);
+    persist_settings(&controller)?;
     info!("Model set to {:?}", model);
     Ok(())
 }
@@ -115,6 +128,8 @@ pub async fn set_auto_select_model(
 ) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().auto_select_model = enabled;
+    drop(ctrl);
+    persist_settings(&controller)?;
     info!("Auto-select model: {enabled}");
     Ok(())
 }
@@ -126,7 +141,52 @@ pub async fn set_hotkey_mode(
 ) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().hotkey_mode = mode;
+    drop(ctrl);
+    persist_settings(&controller)?;
     info!("Hotkey mode set to {:?}", mode);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_hotkey(
+    app: tauri::AppHandle,
+    controller: State<'_, SharedController>,
+    shortcut: String,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let old_shortcut = {
+        let ctrl = controller.lock().unwrap();
+        ctrl.settings().hotkey.clone()
+    };
+
+    // Unregister old shortcut
+    if let Err(e) = app.global_shortcut().unregister(old_shortcut.as_str()) {
+        error!("Failed to unregister old hotkey '{}': {}", old_shortcut, e);
+        // Continue anyway — might already be unregistered
+    }
+
+    // Register new shortcut
+    if let Err(e) = app.global_shortcut().register(shortcut.as_str()) {
+        error!("Failed to register new hotkey '{}': {}", shortcut, e);
+        // Try to re-register the old one
+        if let Err(e2) = app.global_shortcut().register(old_shortcut.as_str()) {
+            error!("Failed to re-register old hotkey '{}': {}", old_shortcut, e2);
+        }
+        return Err(format!("Failed to register hotkey '{}': {}", shortcut, e));
+    }
+
+    // Update controller state
+    {
+        let mut ctrl = controller.lock().unwrap();
+        ctrl.settings_mut().hotkey = shortcut.clone();
+        ctrl.hotkey_service_mut().set_shortcut(&shortcut);
+    }
+
+    // Persist via shared store
+    persist_settings(&controller)?;
+
+    info!("Hotkey changed to: {shortcut}");
     Ok(())
 }
 
@@ -270,6 +330,8 @@ pub async fn set_auto_paste(
 ) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().auto_paste = enabled;
+    drop(ctrl);
+    persist_settings(&controller)?;
     info!("Auto-paste: {enabled}");
     Ok(())
 }
@@ -281,6 +343,8 @@ pub async fn set_show_overlay(
 ) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().show_overlay = enabled;
+    drop(ctrl);
+    persist_settings(&controller)?;
     info!("Show overlay: {enabled}");
     Ok(())
 }

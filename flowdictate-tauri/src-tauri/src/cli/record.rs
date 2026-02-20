@@ -9,13 +9,15 @@ use crate::error::DictationError;
 use crate::transcription::model;
 use crate::transcription::WhisperBackend;
 
-use super::transcribe::{copy_to_clipboard, model_id_string, parse_language, resolve_model};
+use crate::settings::WhisperModel;
+
+use super::transcribe::{copy_to_clipboard, model_id_string, parse_language, parse_model};
 
 #[derive(Args)]
 pub struct RecordArgs {
-    /// Language: en, sv, no, auto
-    #[arg(short, long, default_value = "auto")]
-    pub language: String,
+    /// Language: en, sv, no, auto (default: persisted setting)
+    #[arg(short, long)]
+    pub language: Option<String>,
 
     /// Model ID (e.g. base.en, nb-whisper-base). Default: auto-select for language
     #[arg(short, long)]
@@ -39,12 +41,25 @@ pub struct RecordArgs {
 }
 
 pub fn run(args: RecordArgs) -> Result<(), DictationError> {
-    let language = parse_language(&args.language)?;
+    let stored = crate::settings::store::load();
+    let language = match &args.language {
+        Some(l) => parse_language(l)?,
+        None => stored.language,
+    };
     let save_only = args.output.is_some();
 
     // Only validate model if we're going to transcribe
     let model = if !save_only {
-        let m = resolve_model(args.model.as_deref(), language)?;
+        let m = match &args.model {
+            Some(s) => parse_model(s)?,
+            None => {
+                if stored.auto_select_model {
+                    WhisperModel::recommended(language)
+                } else {
+                    stored.whisper_model
+                }
+            }
+        };
         if !model::is_model_downloaded(m) {
             return Err(DictationError::TranscriptionFailed(format!(
                 "Model '{}' is not downloaded. Run: sagascript download-model {}",
@@ -117,7 +132,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     if args.json {
         let json = serde_json::json!({
             "text": text,
-            "language": args.language,
+            "language": language,
             "model": model_id_string(model),
             "duration_seconds": duration,
         });

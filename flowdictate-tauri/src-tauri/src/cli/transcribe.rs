@@ -13,9 +13,9 @@ pub struct TranscribeArgs {
     /// Path to the audio/video file to transcribe
     pub file: PathBuf,
 
-    /// Language: en, sv, no, auto
-    #[arg(short, long, default_value = "auto")]
-    pub language: String,
+    /// Language: en, sv, no, auto (default: persisted setting)
+    #[arg(short, long)]
+    pub language: Option<String>,
 
     /// Model ID (e.g. base.en, nb-whisper-base). Default: auto-select for language
     #[arg(short, long)]
@@ -31,8 +31,21 @@ pub struct TranscribeArgs {
 }
 
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
-    let language = parse_language(&args.language)?;
-    let model = resolve_model(args.model.as_deref(), language)?;
+    let stored = crate::settings::store::load();
+    let language = match &args.language {
+        Some(l) => parse_language(l)?,
+        None => stored.language,
+    };
+    let model = match &args.model {
+        Some(m) => parse_model(m)?,
+        None => {
+            if stored.auto_select_model {
+                WhisperModel::recommended(language)
+            } else {
+                stored.whisper_model
+            }
+        }
+    };
 
     // Check model is downloaded
     if !model::is_model_downloaded(model) {
@@ -62,7 +75,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     if args.json {
         let json = serde_json::json!({
             "text": text,
-            "language": args.language,
+            "language": language,
             "model": model_id_string(model),
             "file": args.file.display().to_string(),
             "duration_seconds": duration,
