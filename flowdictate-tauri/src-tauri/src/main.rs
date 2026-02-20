@@ -184,6 +184,9 @@ fn main() {
                 }
             }
 
+            // Watch settings file for external changes (e.g. `sagascript config set`)
+            start_settings_watcher(app.handle().clone());
+
             // Auto-open onboarding on first launch
             {
                 use tauri_plugin_store::StoreExt;
@@ -459,6 +462,116 @@ fn handle_hotkey_release(
                 update_tray_status(&app_handle, "idle");
                 info!("Error flow complete, app should remain running");
             }
+        }
+    });
+}
+
+/// Watch the settings file for external changes and hot-reload into the running app.
+/// Handles hotkey re-registration and emits a settings-changed event to the frontend.
+fn start_settings_watcher(app: tauri::AppHandle) {
+    use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::sync::mpsc;
+
+    let settings_path = settings::store::settings_path();
+    let watch_dir = match settings_path.parent() {
+        Some(d) => d.to_path_buf(),
+        None => {
+            error!("Cannot determine settings directory for file watcher");
+            return;
+        }
+    };
+    let settings_filename = settings_path
+        .file_name()
+        .map(|f| f.to_os_string())
+        .unwrap_or_default();
+
+    std::thread::spawn(move || {
+        let (tx, rx) = mpsc::channel();
+
+        let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
+            Ok(w) => w,
+            Err(e) => {
+                error!("Failed to create settings file watcher: {e}");
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
+            error!("Failed to watch settings directory: {e}");
+            return;
+        }
+
+        info!("Settings file watcher started on {}", watch_dir.display());
+
+        for event in rx {
+            let event = match event {
+                Ok(e) => e,
+                Err(e) => {
+                    error!("File watcher error: {e}");
+                    continue;
+                }
+            };
+
+            // Only react to modify/create events on our settings file
+            let dominated = matches!(
+                event.kind,
+                EventKind::Modify(_) | EventKind::Create(_)
+            );
+            if !dominated {
+                continue;
+            }
+
+            let is_our_file = event.paths.iter().any(|p| {
+                p.file_name()
+                    .map(|f| f == settings_filename)
+                    .unwrap_or(false)
+            });
+            if !is_our_file {
+                continue;
+            }
+
+            // Small delay to let atomic rename complete
+            std::thread::sleep(Duration::from_millis(50));
+
+            let new_settings = settings::store::load();
+
+            let ctrl: tauri::State<'_, SharedController> = app.state();
+            let old_settings = {
+                let c = ctrl.lock().unwrap();
+                c.settings().clone()
+            };
+
+            // Hot-reload hotkey if changed
+            if new_settings.hotkey != old_settings.hotkey {
+                info!(
+                    "Settings watcher: hotkey changed '{}' -> '{}'",
+                    old_settings.hotkey, new_settings.hotkey
+                );
+
+                if let Err(e) = app.global_shortcut().unregister(old_settings.hotkey.as_str()) {
+                    error!("Failed to unregister old hotkey: {e}");
+                }
+
+                match app.global_shortcut().register(new_settings.hotkey.as_str()) {
+                    Ok(()) => info!("Hotkey re-registered: {}", new_settings.hotkey),
+                    Err(e) => {
+                        error!("Failed to register new hotkey '{}': {e}", new_settings.hotkey);
+                        // Re-register the old one as fallback
+                        let _ = app.global_shortcut().register(old_settings.hotkey.as_str());
+                    }
+                }
+            }
+
+            // Update controller with all new settings
+            {
+                let mut c = ctrl.lock().unwrap();
+                c.update_settings(new_settings);
+            }
+
+            // Notify frontend so UI reflects external changes
+            let _ = app.emit(events::event::STATE_CHANGED, "settings_reloaded");
+
+            info!("Settings hot-reloaded from disk");
         }
     });
 }
