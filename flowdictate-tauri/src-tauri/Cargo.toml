@@ -33,6 +33,10 @@ dirs = "6"
 async-trait = "0.1"
 futures-util = "0.3"
 num_cpus = "1"
+clap = { version = "4", features = ["derive"] }
+ctrlc = "3"
+tauri-plugin-dialog = "2"
+symphonia = { version = "0.5", features = ["aac", "alac", "flac", "mp3", "pcm", "vorbis", "isomp4", "mkv", "ogg"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.15", features = ["coreml", "metal"] }
