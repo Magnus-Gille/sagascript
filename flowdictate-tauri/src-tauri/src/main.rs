@@ -1,6 +1,10 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(target_os = "macos")]
+#[macro_use]
+extern crate objc;
+
 mod app_controller;
 mod audio;
 mod cli;
@@ -9,6 +13,7 @@ mod error;
 mod events;
 mod hotkey;
 mod logging;
+mod overlay;
 mod paste;
 mod platform;
 mod settings;
@@ -73,13 +78,19 @@ fn main() {
                     match event.state {
                         ShortcutState::Pressed => {
                             info!("Hotkey pressed: {shortcut}");
-                            let mut c = ctrl.lock().unwrap();
-                            if let Err(e) = c.handle_hotkey_down() {
-                                error!("Hotkey down error: {e}");
-                            }
-                            if c.state().is_recording() {
+                            let (is_recording, show_overlay) = {
+                                let mut c = ctrl.lock().unwrap();
+                                if let Err(e) = c.handle_hotkey_down() {
+                                    error!("Hotkey down error: {e}");
+                                }
+                                (c.state().is_recording(), c.settings().show_overlay)
+                            };
+                            if is_recording {
                                 let _ = app.emit(events::event::STATE_CHANGED, "recording");
                                 update_tray_status(app, "recording");
+                                if show_overlay {
+                                    overlay::show(app);
+                                }
                             }
                         }
                         ShortcutState::Released => {
@@ -340,6 +351,9 @@ fn handle_hotkey_release(
             return;
         }
     };
+
+    // Hide overlay now that recording has stopped
+    overlay::hide(app);
 
     // Update tray to show transcribing state
     let _ = app.emit(events::event::STATE_CHANGED, "transcribing");

@@ -2,12 +2,22 @@
   import { onMount } from "svelte";
   import Settings from "./lib/Settings.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
+  import Overlay from "./lib/Overlay.svelte";
 
   // null = loading, true = show onboarding, false = show settings
   let showOnboarding: boolean | null = null;
+  let showOverlay = false;
 
   onMount(async () => {
     const params = new URLSearchParams(window.location.search);
+
+    if (params.has("overlay")) {
+      document.body.style.margin = "0";
+      document.body.style.background = "transparent";
+      document.body.style.overflow = "hidden";
+      showOverlay = true;
+      return;
+    }
 
     if (params.has("onboarding")) {
       showOnboarding = true;
@@ -35,7 +45,9 @@
 </script>
 
 <main>
-  {#if showOnboarding === null}
+  {#if showOverlay}
+    <Overlay />
+  {:else if showOnboarding === null}
     <div class="loading">
       <div class="spinner"></div>
     </div>
