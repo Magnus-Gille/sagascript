@@ -6,9 +6,8 @@ use cpal::SampleFormat;
 use tracing::{error, info};
 
 use crate::error::DictationError;
+use super::resample::{mix_to_mono, resample_to_16khz, TARGET_SAMPLE_RATE};
 
-/// Required audio format for Whisper
-const TARGET_SAMPLE_RATE: u32 = 16_000;
 /// Maximum buffer: 15 minutes at 16kHz
 const MAX_BUFFER_SAMPLES: usize = 16_000 * 60 * 15;
 
@@ -208,28 +207,8 @@ fn process_samples(
     device_rate: u32,
     buffer: &Arc<Mutex<Vec<f32>>>,
 ) {
-    // Mix to mono if multi-channel
-    let mono: Vec<f32> = if channels > 1 {
-        data.chunks(channels as usize)
-            .map(|frame| frame.iter().sum::<f32>() / channels as f32)
-            .collect()
-    } else {
-        data.to_vec()
-    };
-
-    // Simple nearest-neighbor resampling if needed
-    let samples = if device_rate != TARGET_SAMPLE_RATE {
-        let ratio = TARGET_SAMPLE_RATE as f64 / device_rate as f64;
-        let out_len = (mono.len() as f64 * ratio) as usize;
-        (0..out_len)
-            .map(|i| {
-                let src_idx = ((i as f64 / ratio) as usize).min(mono.len().saturating_sub(1));
-                mono[src_idx]
-            })
-            .collect()
-    } else {
-        mono
-    };
+    let mono = mix_to_mono(data, channels as usize);
+    let samples = resample_to_16khz(mono, device_rate);
 
     // Append to buffer with size limit
     let mut buf = buffer.lock().unwrap();

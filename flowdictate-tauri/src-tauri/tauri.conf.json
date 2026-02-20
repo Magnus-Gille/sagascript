@@ -14,11 +14,7 @@
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
     },
-    "trayIcon": {
-      "iconPath": "icons/tray-icon.png",
-      "iconAsTemplate": true,
-      "tooltip": "FlowDictate"
-    }
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,

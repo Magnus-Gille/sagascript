@@ -38,7 +38,10 @@ impl WhisperBackend {
         let model_path = model::model_path(whisper_model);
 
         if !model_path.exists() {
-            return Err(DictationError::ModelNotLoaded);
+            return Err(DictationError::TranscriptionFailed(format!(
+                "Model '{}' not downloaded. Please download it from Settings first.",
+                whisper_model.display_name()
+            )));
         }
 
         info!(

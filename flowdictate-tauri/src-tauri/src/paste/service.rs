@@ -36,14 +36,22 @@ impl PasteService {
         // Check accessibility permission on macOS
         #[cfg(target_os = "macos")]
         {
-            if !crate::platform::macos::is_accessibility_trusted() {
-                warn!("Accessibility permission not granted, text copied to clipboard only");
+            info!("Checking accessibility permission...");
+            let trusted = crate::platform::macos::is_accessibility_trusted();
+            info!("Accessibility trusted: {trusted}");
+            if !trusted {
+                warn!("Accessibility permission not granted — prompting user.");
                 crate::platform::macos::request_accessibility_permission();
                 return Err(DictationError::AccessibilityPermissionDenied);
             }
         }
 
+        // Small delay to let the previously-focused app regain focus
+        info!("Waiting 50ms before paste simulation...");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
         // Simulate paste keystroke
+        info!("Simulating paste keystroke...");
         simulate_paste()?;
 
         // Schedule clipboard restore
