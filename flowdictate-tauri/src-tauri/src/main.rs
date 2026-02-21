@@ -315,14 +315,23 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
         let _ = window.show();
         let _ = window.set_focus();
     } else {
+        // Cap default height to 80% of screen so it fits on small displays (e.g. 768p laptops)
+        let default_height = if let Ok(Some(monitor)) = app.primary_monitor() {
+            let logical_h = monitor.size().height as f64 / monitor.scale_factor();
+            (logical_h * 0.8).min(660.0)
+        } else {
+            660.0
+        };
+
         let _window = tauri::WebviewWindowBuilder::new(
             app,
             "settings",
             tauri::WebviewUrl::App(url.into()),
         )
         .title("Sagascript")
-        .inner_size(500.0, 550.0)
-        .resizable(false)
+        .inner_size(500.0, default_height)
+        .min_inner_size(500.0, 400.0)
+        .resizable(true)
         .center()
         .build();
     }
