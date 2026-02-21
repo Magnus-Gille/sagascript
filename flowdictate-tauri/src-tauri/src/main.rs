@@ -133,7 +133,7 @@ fn main() {
             // Build tray menu
             let quit = MenuItem::with_id(app, "quit", "Quit Sagascript", true, None::<&str>)?;
             let settings_item =
-                MenuItem::with_id(app, "settings", "Settings...", true, None::<&str>)?;
+                MenuItem::with_id(app, "settings", "Open Sagascript...", true, None::<&str>)?;
             let transcribe_file_item =
                 MenuItem::with_id(app, "transcribe_file", "Transcribe File...", true, None::<&str>)?;
             let status =
@@ -296,9 +296,9 @@ fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
     }
 }
 
-/// Open or focus the settings window, optionally navigating to a specific tab
+/// Open or focus the main window, optionally navigating to a specific tab
 fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
-    info!("Opening settings window (tab: {:?})", tab);
+    info!("Opening main window (tab: {:?})", tab);
 
     // Build a URL with optional query parameter
     let url = match tab {
@@ -320,7 +320,7 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
             "settings",
             tauri::WebviewUrl::App(url.into()),
         )
-        .title("Sagascript Settings")
+        .title("Sagascript")
         .inner_size(500.0, 550.0)
         .resizable(false)
         .center()

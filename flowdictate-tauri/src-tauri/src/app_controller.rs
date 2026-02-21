@@ -82,6 +82,10 @@ impl AppController {
         &mut self.settings
     }
 
+    pub fn hotkey_service_mut(&mut self) -> &mut HotkeyService {
+        &mut self.hotkey
+    }
+
     pub fn last_transcription(&self) -> Option<&str> {
         self.last_transcription.as_deref()
     }

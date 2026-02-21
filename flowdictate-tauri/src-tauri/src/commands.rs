@@ -233,9 +233,10 @@ pub async fn stop_and_transcribe(
         Ok(text) => {
             let mut ctrl = controller.lock().unwrap();
             ctrl.on_transcription_success(&text);
-            if let Err(e) = ctrl.auto_paste(&text) {
-                error!("Auto-paste failed: {e}");
-            }
+            // NOTE: auto-paste is NOT done here — enigo's macOS TIS APIs crash
+            // if called from a tokio worker thread (SIGTRAP in dispatch_assert_queue).
+            // The hotkey path in main.rs handles paste via run_on_main_thread().
+            // This command returns the text to the frontend for display instead.
             Ok(text)
         }
         Err(e) => {
