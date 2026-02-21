@@ -12,25 +12,84 @@ pub struct ConfigArgs {
 #[derive(Subcommand)]
 pub enum ConfigAction {
     /// Show all settings with current and default values
+    #[command(long_about = "\
+Show all settings in a table with their current values and defaults.
+
+Valid keys: language, whisper_model, hotkey_mode, show_overlay, \
+auto_paste, auto_select_model, hotkey")]
     List,
+
     /// Get a single setting value
+    #[command(
+        long_about = "\
+Print the current value of a single setting to stdout.
+
+Valid keys: language, whisper_model, hotkey_mode, show_overlay, \
+auto_paste, auto_select_model, hotkey",
+        after_long_help = "\
+EXAMPLES:
+  sagascript config get language
+  sagascript config get hotkey"
+    )]
     Get {
-        /// Setting key (e.g. language, whisper_model, hotkey)
+        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey]
         key: String,
     },
+
     /// Set a setting value
+    #[command(
+        long_about = "\
+Update a setting. The new value takes effect immediately — the GUI \
+hot-reloads changes made via CLI.
+
+Valid values per key:
+  language           en, sv, no, auto
+  whisper_model      tiny.en, tiny, base.en, base, kb-whisper-tiny,
+                     kb-whisper-base, kb-whisper-small, nb-whisper-tiny,
+                     nb-whisper-base, nb-whisper-small
+  hotkey_mode        push, toggle
+  show_overlay       true, false
+  auto_paste         true, false
+  auto_select_model  true, false
+  hotkey             Modifier+Key (e.g. Control+Shift+Space, Option+Space)",
+        after_long_help = "\
+EXAMPLES:
+  sagascript config set language sv
+  sagascript config set whisper_model kb-whisper-base
+  sagascript config set hotkey 'Option+Space'
+  sagascript config set auto_paste false"
+    )]
     Set {
-        /// Setting key
+        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey]
         key: String,
-        /// New value
+        /// New value for the setting
         value: String,
     },
+
     /// Reset one or all settings to defaults
+    #[command(
+        long_about = "\
+Reset a single setting or all settings to their default values.
+
+If KEY is provided, only that setting is reset. \
+If KEY is omitted, ALL settings are reset.",
+        after_long_help = "\
+EXAMPLES:
+  # Reset just the language
+  sagascript config reset language
+
+  # Reset everything
+  sagascript config reset"
+    )]
     Reset {
         /// Setting key to reset (omit to reset all)
         key: Option<String>,
     },
+
     /// Print the settings file path
+    #[command(long_about = "\
+Print the absolute path to the settings JSON file. Useful for manual \
+editing or backup.")]
     Path,
 }
 

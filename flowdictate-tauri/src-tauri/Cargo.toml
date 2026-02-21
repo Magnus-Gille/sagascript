@@ -33,7 +33,9 @@ dirs = "6"
 async-trait = "0.1"
 futures-util = "0.3"
 num_cpus = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "string"] }
+clap_complete = "4"
+clap_mangen = "0.2"
 ctrlc = "3"
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
 tauri-plugin-dialog = "2"
