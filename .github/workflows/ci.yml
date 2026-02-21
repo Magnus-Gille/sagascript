@@ -39,6 +39,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Build frontend
+        run: npm run build
+
       - name: Cargo check
         working-directory: src-tauri
         run: cargo check
