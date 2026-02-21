@@ -1,32 +1,16 @@
 # macOS
 .DS_Store
-*.xcuserstate
 
-# Xcode
-xcuserdata/
-*.xcscmblueprint
-*.xccheckout
-DerivedData/
-*.xcworkspace
-!*.xcworkspace/contents.xcworkspacedata
-*.moved-aside
-*.pbxuser
-!default.pbxuser
-*.mode1v3
-!default.mode1v3
-*.mode2v3
-!default.mode2v3
-*.perspectivev3
-!default.perspectivev3
+# Rust
+target/
+*.rs.bk
 
-# Swift Package Manager
-.build/
-.swiftpm/
-Package.resolved
+# Node
+node_modules/
+dist/
 
 # Claude Code local state
 .claude/settings.local.json
-.claude/ralph-loop.local.md
 .claude/**/.local.*
 .claude/**/cache/**
 
@@ -38,10 +22,9 @@ secrets/
 *.mobileprovision
 
 # IDE
-*.idea/
+.idea/
 .vscode/
 
-# Test outputs
+# Test / benchmark outputs
 *.xcresult
-outbox/
-debate/
+benchmark/audio/
