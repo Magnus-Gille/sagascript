@@ -141,9 +141,18 @@ pub fn parse_model(s: &str) -> Result<WhisperModel, DictationError> {
         "kb-whisper-tiny" => Ok(WhisperModel::KbWhisperTiny),
         "kb-whisper-base" => Ok(WhisperModel::KbWhisperBase),
         "kb-whisper-small" => Ok(WhisperModel::KbWhisperSmall),
+        "kb-whisper-medium" => Ok(WhisperModel::KbWhisperMedium),
+        "kb-whisper-large" => Ok(WhisperModel::KbWhisperLarge),
         "nb-whisper-tiny" => Ok(WhisperModel::NbWhisperTiny),
         "nb-whisper-base" => Ok(WhisperModel::NbWhisperBase),
         "nb-whisper-small" => Ok(WhisperModel::NbWhisperSmall),
+        "nb-whisper-medium" => Ok(WhisperModel::NbWhisperMedium),
+        "nb-whisper-large" => Ok(WhisperModel::NbWhisperLarge),
+        "small.en" => Ok(WhisperModel::SmallEn),
+        "small" => Ok(WhisperModel::Small),
+        "medium.en" => Ok(WhisperModel::MediumEn),
+        "medium" => Ok(WhisperModel::Medium),
+        "large-v3-turbo" => Ok(WhisperModel::LargeV3Turbo),
         other => Err(DictationError::SettingsError(format!(
             "Unknown model '{other}'. Run 'sagascript list-models' to see available models."
         ))),
@@ -159,9 +168,18 @@ pub fn model_id_string(model: WhisperModel) -> &'static str {
         WhisperModel::KbWhisperTiny => "kb-whisper-tiny",
         WhisperModel::KbWhisperBase => "kb-whisper-base",
         WhisperModel::KbWhisperSmall => "kb-whisper-small",
+        WhisperModel::KbWhisperMedium => "kb-whisper-medium",
+        WhisperModel::KbWhisperLarge => "kb-whisper-large",
         WhisperModel::NbWhisperTiny => "nb-whisper-tiny",
         WhisperModel::NbWhisperBase => "nb-whisper-base",
         WhisperModel::NbWhisperSmall => "nb-whisper-small",
+        WhisperModel::NbWhisperMedium => "nb-whisper-medium",
+        WhisperModel::NbWhisperLarge => "nb-whisper-large",
+        WhisperModel::SmallEn => "small.en",
+        WhisperModel::Small => "small",
+        WhisperModel::MediumEn => "medium.en",
+        WhisperModel::Medium => "medium",
+        WhisperModel::LargeV3Turbo => "large-v3-turbo",
     }
 }
 
@@ -223,9 +241,18 @@ mod tests {
             ("kb-whisper-tiny", WhisperModel::KbWhisperTiny),
             ("kb-whisper-base", WhisperModel::KbWhisperBase),
             ("kb-whisper-small", WhisperModel::KbWhisperSmall),
+            ("kb-whisper-medium", WhisperModel::KbWhisperMedium),
+            ("kb-whisper-large", WhisperModel::KbWhisperLarge),
             ("nb-whisper-tiny", WhisperModel::NbWhisperTiny),
             ("nb-whisper-base", WhisperModel::NbWhisperBase),
             ("nb-whisper-small", WhisperModel::NbWhisperSmall),
+            ("nb-whisper-medium", WhisperModel::NbWhisperMedium),
+            ("nb-whisper-large", WhisperModel::NbWhisperLarge),
+            ("small.en", WhisperModel::SmallEn),
+            ("small", WhisperModel::Small),
+            ("medium.en", WhisperModel::MediumEn),
+            ("medium", WhisperModel::Medium),
+            ("large-v3-turbo", WhisperModel::LargeV3Turbo),
         ];
         for (id, expected) in cases {
             assert_eq!(parse_model(id).unwrap(), expected, "parse_model({id})");
@@ -262,6 +289,11 @@ mod tests {
             (WhisperModel::NbWhisperTiny, "nb-whisper-tiny"),
             (WhisperModel::NbWhisperBase, "nb-whisper-base"),
             (WhisperModel::NbWhisperSmall, "nb-whisper-small"),
+            (WhisperModel::SmallEn, "small.en"),
+            (WhisperModel::Small, "small"),
+            (WhisperModel::MediumEn, "medium.en"),
+            (WhisperModel::Medium, "medium"),
+            (WhisperModel::LargeV3Turbo, "large-v3-turbo"),
         ];
         for (model, expected) in models {
             assert_eq!(model_id_string(model), expected);
@@ -281,6 +313,11 @@ mod tests {
             WhisperModel::NbWhisperTiny,
             WhisperModel::NbWhisperBase,
             WhisperModel::NbWhisperSmall,
+            WhisperModel::SmallEn,
+            WhisperModel::Small,
+            WhisperModel::MediumEn,
+            WhisperModel::Medium,
+            WhisperModel::LargeV3Turbo,
         ];
         for model in all_models {
             let id = model_id_string(model);

@@ -59,12 +59,30 @@ pub enum WhisperModel {
     KbWhisperBase,
     #[serde(rename = "kb-whisper-small")]
     KbWhisperSmall,
+    #[serde(rename = "kb-whisper-medium")]
+    KbWhisperMedium,
+    #[serde(rename = "kb-whisper-large")]
+    KbWhisperLarge,
     #[serde(rename = "nb-whisper-tiny")]
     NbWhisperTiny,
     #[serde(rename = "nb-whisper-base")]
     NbWhisperBase,
     #[serde(rename = "nb-whisper-small")]
     NbWhisperSmall,
+    #[serde(rename = "nb-whisper-medium")]
+    NbWhisperMedium,
+    #[serde(rename = "nb-whisper-large")]
+    NbWhisperLarge,
+    #[serde(rename = "small.en")]
+    SmallEn,
+    #[serde(rename = "small")]
+    Small,
+    #[serde(rename = "medium.en")]
+    MediumEn,
+    #[serde(rename = "medium")]
+    Medium,
+    #[serde(rename = "large-v3-turbo")]
+    LargeV3Turbo,
 }
 
 impl WhisperModel {
@@ -77,9 +95,18 @@ impl WhisperModel {
             WhisperModel::KbWhisperTiny => "KB-Whisper Tiny",
             WhisperModel::KbWhisperBase => "KB-Whisper Base",
             WhisperModel::KbWhisperSmall => "KB-Whisper Small",
+            WhisperModel::KbWhisperMedium => "KB-Whisper Medium",
+            WhisperModel::KbWhisperLarge => "KB-Whisper Large",
             WhisperModel::NbWhisperTiny => "NB-Whisper Tiny",
             WhisperModel::NbWhisperBase => "NB-Whisper Base",
             WhisperModel::NbWhisperSmall => "NB-Whisper Small",
+            WhisperModel::NbWhisperMedium => "NB-Whisper Medium",
+            WhisperModel::NbWhisperLarge => "NB-Whisper Large",
+            WhisperModel::SmallEn => "Whisper Small (EN)",
+            WhisperModel::Small => "Whisper Small",
+            WhisperModel::MediumEn => "Whisper Medium (EN)",
+            WhisperModel::Medium => "Whisper Medium",
+            WhisperModel::LargeV3Turbo => "Whisper Large v3 Turbo",
         }
     }
 
@@ -91,21 +118,31 @@ impl WhisperModel {
             WhisperModel::Base => "OpenAI Whisper, multilingual. Balanced speed and accuracy",
             WhisperModel::KbWhisperTiny => "By KBLab. Swedish-optimized. Fastest, less accurate",
             WhisperModel::KbWhisperBase => "By KBLab. Swedish-optimized. Balanced speed and accuracy",
-            WhisperModel::KbWhisperSmall => "By KBLab. Swedish-optimized. Most accurate, slower",
+            WhisperModel::KbWhisperSmall => "By KBLab. Swedish-optimized. More accurate, slower",
+            WhisperModel::KbWhisperMedium => "By KBLab. Swedish-optimized. High accuracy, slow",
+            WhisperModel::KbWhisperLarge => "By KBLab. Swedish-optimized. Highest accuracy, slowest",
             WhisperModel::NbWhisperTiny => "By NbAiLab. Norwegian-optimized. Fastest, less accurate",
             WhisperModel::NbWhisperBase => "By NbAiLab. Norwegian-optimized. Balanced speed and accuracy",
-            WhisperModel::NbWhisperSmall => "By NbAiLab. Norwegian-optimized. Most accurate, slower",
+            WhisperModel::NbWhisperSmall => "By NbAiLab. Norwegian-optimized. More accurate, slower",
+            WhisperModel::NbWhisperMedium => "By NbAiLab. Norwegian-optimized. High accuracy, slow",
+            WhisperModel::NbWhisperLarge => "By NbAiLab. Norwegian-optimized. Highest accuracy, slowest",
+            WhisperModel::SmallEn => "OpenAI Whisper, English-only. More accurate, slower",
+            WhisperModel::Small => "OpenAI Whisper, multilingual. More accurate, slower",
+            WhisperModel::MediumEn => "OpenAI Whisper, English-only. High accuracy, slow",
+            WhisperModel::Medium => "OpenAI Whisper, multilingual. High accuracy, slow",
+            WhisperModel::LargeV3Turbo => "OpenAI Whisper, multilingual. Highest accuracy, slowest",
         }
     }
 
     pub fn is_english_only(&self) -> bool {
-        matches!(self, WhisperModel::TinyEn | WhisperModel::BaseEn)
+        matches!(self, WhisperModel::TinyEn | WhisperModel::BaseEn | WhisperModel::SmallEn | WhisperModel::MediumEn)
     }
 
     pub fn is_swedish_optimized(&self) -> bool {
         matches!(
             self,
             WhisperModel::KbWhisperTiny | WhisperModel::KbWhisperBase | WhisperModel::KbWhisperSmall
+                | WhisperModel::KbWhisperMedium | WhisperModel::KbWhisperLarge
         )
     }
 
@@ -113,6 +150,7 @@ impl WhisperModel {
         matches!(
             self,
             WhisperModel::NbWhisperTiny | WhisperModel::NbWhisperBase | WhisperModel::NbWhisperSmall
+                | WhisperModel::NbWhisperMedium | WhisperModel::NbWhisperLarge
         )
     }
 
@@ -126,9 +164,18 @@ impl WhisperModel {
             WhisperModel::KbWhisperTiny => "kb-whisper-tiny-q5_0.bin",
             WhisperModel::KbWhisperBase => "kb-whisper-base-q5_0.bin",
             WhisperModel::KbWhisperSmall => "kb-whisper-small-q5_0.bin",
+            WhisperModel::KbWhisperMedium => "kb-whisper-medium-q5_0.bin",
+            WhisperModel::KbWhisperLarge => "kb-whisper-large-q5_0.bin",
             WhisperModel::NbWhisperTiny => "nb-whisper-tiny-q5_0.bin",
             WhisperModel::NbWhisperBase => "nb-whisper-base-q5_0.bin",
             WhisperModel::NbWhisperSmall => "nb-whisper-small-q5_0.bin",
+            WhisperModel::NbWhisperMedium => "nb-whisper-medium-q5_0.bin",
+            WhisperModel::NbWhisperLarge => "nb-whisper-large-q5_0.bin",
+            WhisperModel::SmallEn => "ggml-small.en.bin",
+            WhisperModel::Small => "ggml-small.bin",
+            WhisperModel::MediumEn => "ggml-medium.en.bin",
+            WhisperModel::Medium => "ggml-medium.bin",
+            WhisperModel::LargeV3Turbo => "ggml-large-v3-turbo.bin",
         }
     }
 
@@ -142,9 +189,18 @@ impl WhisperModel {
             WhisperModel::KbWhisperTiny => "https://huggingface.co/KBLab/kb-whisper-tiny/resolve/main/ggml-model-q5_0.bin",
             WhisperModel::KbWhisperBase => "https://huggingface.co/KBLab/kb-whisper-base/resolve/main/ggml-model-q5_0.bin",
             WhisperModel::KbWhisperSmall => "https://huggingface.co/KBLab/kb-whisper-small/resolve/main/ggml-model-q5_0.bin",
+            WhisperModel::KbWhisperMedium => "https://huggingface.co/KBLab/kb-whisper-medium/resolve/main/ggml-model-q5_0.bin",
+            WhisperModel::KbWhisperLarge => "https://huggingface.co/KBLab/kb-whisper-large/resolve/main/ggml-model-q5_0.bin",
             WhisperModel::NbWhisperTiny => "https://huggingface.co/NbAiLab/nb-whisper-tiny/resolve/main/ggml-model-q5_0.bin",
             WhisperModel::NbWhisperBase => "https://huggingface.co/NbAiLab/nb-whisper-base/resolve/main/ggml-model-q5_0.bin",
             WhisperModel::NbWhisperSmall => "https://huggingface.co/NbAiLab/nb-whisper-small/resolve/main/ggml-model-q5_0.bin",
+            WhisperModel::NbWhisperMedium => "https://huggingface.co/NbAiLab/nb-whisper-medium/resolve/main/ggml-model-q5_0.bin",
+            WhisperModel::NbWhisperLarge => "https://huggingface.co/NbAiLab/nb-whisper-large/resolve/main/ggml-model-q5_0.bin",
+            WhisperModel::SmallEn => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+            WhisperModel::Small => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+            WhisperModel::MediumEn => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
+            WhisperModel::Medium => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+            WhisperModel::LargeV3Turbo => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
         }
     }
 
@@ -158,9 +214,18 @@ impl WhisperModel {
             WhisperModel::KbWhisperTiny => 40,
             WhisperModel::KbWhisperBase => 60,
             WhisperModel::KbWhisperSmall => 190,
+            WhisperModel::KbWhisperMedium => 514,
+            WhisperModel::KbWhisperLarge => 1031,
             WhisperModel::NbWhisperTiny => 30,
             WhisperModel::NbWhisperBase => 55,
             WhisperModel::NbWhisperSmall => 175,
+            WhisperModel::NbWhisperMedium => 514,
+            WhisperModel::NbWhisperLarge => 1031,
+            WhisperModel::SmallEn => 466,
+            WhisperModel::Small => 466,
+            WhisperModel::MediumEn => 1530,
+            WhisperModel::Medium => 1530,
+            WhisperModel::LargeV3Turbo => 1620,
         }
     }
 
@@ -177,18 +242,33 @@ impl WhisperModel {
     /// Models available for a given language
     pub fn models_for_language(language: Language) -> &'static [WhisperModel] {
         match language {
-            Language::English => &[WhisperModel::TinyEn, WhisperModel::BaseEn],
+            Language::English => &[
+                WhisperModel::TinyEn,
+                WhisperModel::BaseEn,
+                WhisperModel::SmallEn,
+                WhisperModel::MediumEn,
+            ],
             Language::Swedish => &[
                 WhisperModel::KbWhisperTiny,
                 WhisperModel::KbWhisperBase,
                 WhisperModel::KbWhisperSmall,
+                WhisperModel::KbWhisperMedium,
+                WhisperModel::KbWhisperLarge,
             ],
             Language::Norwegian => &[
                 WhisperModel::NbWhisperTiny,
                 WhisperModel::NbWhisperBase,
                 WhisperModel::NbWhisperSmall,
+                WhisperModel::NbWhisperMedium,
+                WhisperModel::NbWhisperLarge,
             ],
-            Language::Auto => &[WhisperModel::Tiny, WhisperModel::Base],
+            Language::Auto => &[
+                WhisperModel::Tiny,
+                WhisperModel::Base,
+                WhisperModel::Small,
+                WhisperModel::Medium,
+                WhisperModel::LargeV3Turbo,
+            ],
         }
     }
 }
@@ -326,8 +406,13 @@ mod tests {
     fn english_only_models() {
         assert!(WhisperModel::TinyEn.is_english_only());
         assert!(WhisperModel::BaseEn.is_english_only());
+        assert!(WhisperModel::SmallEn.is_english_only());
+        assert!(WhisperModel::MediumEn.is_english_only());
         assert!(!WhisperModel::Tiny.is_english_only());
         assert!(!WhisperModel::Base.is_english_only());
+        assert!(!WhisperModel::Small.is_english_only());
+        assert!(!WhisperModel::Medium.is_english_only());
+        assert!(!WhisperModel::LargeV3Turbo.is_english_only());
         assert!(!WhisperModel::KbWhisperTiny.is_english_only());
         assert!(!WhisperModel::NbWhisperBase.is_english_only());
     }
@@ -337,6 +422,8 @@ mod tests {
         assert!(WhisperModel::KbWhisperTiny.is_swedish_optimized());
         assert!(WhisperModel::KbWhisperBase.is_swedish_optimized());
         assert!(WhisperModel::KbWhisperSmall.is_swedish_optimized());
+        assert!(WhisperModel::KbWhisperMedium.is_swedish_optimized());
+        assert!(WhisperModel::KbWhisperLarge.is_swedish_optimized());
         assert!(!WhisperModel::TinyEn.is_swedish_optimized());
         assert!(!WhisperModel::NbWhisperTiny.is_swedish_optimized());
     }
@@ -346,6 +433,8 @@ mod tests {
         assert!(WhisperModel::NbWhisperTiny.is_norwegian_optimized());
         assert!(WhisperModel::NbWhisperBase.is_norwegian_optimized());
         assert!(WhisperModel::NbWhisperSmall.is_norwegian_optimized());
+        assert!(WhisperModel::NbWhisperMedium.is_norwegian_optimized());
+        assert!(WhisperModel::NbWhisperLarge.is_norwegian_optimized());
         assert!(!WhisperModel::TinyEn.is_norwegian_optimized());
         assert!(!WhisperModel::KbWhisperTiny.is_norwegian_optimized());
     }
@@ -360,9 +449,18 @@ mod tests {
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
+            WhisperModel::KbWhisperMedium,
+            WhisperModel::KbWhisperLarge,
             WhisperModel::NbWhisperTiny,
             WhisperModel::NbWhisperBase,
             WhisperModel::NbWhisperSmall,
+            WhisperModel::NbWhisperMedium,
+            WhisperModel::NbWhisperLarge,
+            WhisperModel::SmallEn,
+            WhisperModel::Small,
+            WhisperModel::MediumEn,
+            WhisperModel::Medium,
+            WhisperModel::LargeV3Turbo,
         ];
         for m in models {
             let filename = m.ggml_filename();
@@ -381,9 +479,18 @@ mod tests {
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
+            WhisperModel::KbWhisperMedium,
+            WhisperModel::KbWhisperLarge,
             WhisperModel::NbWhisperTiny,
             WhisperModel::NbWhisperBase,
             WhisperModel::NbWhisperSmall,
+            WhisperModel::NbWhisperMedium,
+            WhisperModel::NbWhisperLarge,
+            WhisperModel::SmallEn,
+            WhisperModel::Small,
+            WhisperModel::MediumEn,
+            WhisperModel::Medium,
+            WhisperModel::LargeV3Turbo,
         ];
         for m in models {
             let url = m.download_url();
@@ -402,9 +509,18 @@ mod tests {
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
+            WhisperModel::KbWhisperMedium,
+            WhisperModel::KbWhisperLarge,
             WhisperModel::NbWhisperTiny,
             WhisperModel::NbWhisperBase,
             WhisperModel::NbWhisperSmall,
+            WhisperModel::NbWhisperMedium,
+            WhisperModel::NbWhisperLarge,
+            WhisperModel::SmallEn,
+            WhisperModel::Small,
+            WhisperModel::MediumEn,
+            WhisperModel::Medium,
+            WhisperModel::LargeV3Turbo,
         ];
         for m in models {
             assert!(m.size_mb() > 0, "{:?} has 0 size", m);
@@ -422,24 +538,35 @@ mod tests {
     #[test]
     fn models_for_language_returns_correct_sets() {
         let en = WhisperModel::models_for_language(Language::English);
-        assert_eq!(en.len(), 2);
+        assert_eq!(en.len(), 4);
         assert!(en.contains(&WhisperModel::TinyEn));
         assert!(en.contains(&WhisperModel::BaseEn));
+        assert!(en.contains(&WhisperModel::SmallEn));
+        assert!(en.contains(&WhisperModel::MediumEn));
 
         let sv = WhisperModel::models_for_language(Language::Swedish);
-        assert_eq!(sv.len(), 3);
+        assert_eq!(sv.len(), 5);
         assert!(sv.contains(&WhisperModel::KbWhisperTiny));
         assert!(sv.contains(&WhisperModel::KbWhisperBase));
         assert!(sv.contains(&WhisperModel::KbWhisperSmall));
+        assert!(sv.contains(&WhisperModel::KbWhisperMedium));
+        assert!(sv.contains(&WhisperModel::KbWhisperLarge));
 
         let no = WhisperModel::models_for_language(Language::Norwegian);
-        assert_eq!(no.len(), 3);
+        assert_eq!(no.len(), 5);
         assert!(no.contains(&WhisperModel::NbWhisperTiny));
+        assert!(no.contains(&WhisperModel::NbWhisperBase));
+        assert!(no.contains(&WhisperModel::NbWhisperSmall));
+        assert!(no.contains(&WhisperModel::NbWhisperMedium));
+        assert!(no.contains(&WhisperModel::NbWhisperLarge));
 
         let auto = WhisperModel::models_for_language(Language::Auto);
-        assert_eq!(auto.len(), 2);
+        assert_eq!(auto.len(), 5);
         assert!(auto.contains(&WhisperModel::Tiny));
         assert!(auto.contains(&WhisperModel::Base));
+        assert!(auto.contains(&WhisperModel::Small));
+        assert!(auto.contains(&WhisperModel::Medium));
+        assert!(auto.contains(&WhisperModel::LargeV3Turbo));
     }
 
     #[test]
@@ -461,9 +588,18 @@ mod tests {
             (WhisperModel::KbWhisperTiny, "\"kb-whisper-tiny\""),
             (WhisperModel::KbWhisperBase, "\"kb-whisper-base\""),
             (WhisperModel::KbWhisperSmall, "\"kb-whisper-small\""),
+            (WhisperModel::KbWhisperMedium, "\"kb-whisper-medium\""),
+            (WhisperModel::KbWhisperLarge, "\"kb-whisper-large\""),
             (WhisperModel::NbWhisperTiny, "\"nb-whisper-tiny\""),
             (WhisperModel::NbWhisperBase, "\"nb-whisper-base\""),
             (WhisperModel::NbWhisperSmall, "\"nb-whisper-small\""),
+            (WhisperModel::NbWhisperMedium, "\"nb-whisper-medium\""),
+            (WhisperModel::NbWhisperLarge, "\"nb-whisper-large\""),
+            (WhisperModel::SmallEn, "\"small.en\""),
+            (WhisperModel::Small, "\"small\""),
+            (WhisperModel::MediumEn, "\"medium.en\""),
+            (WhisperModel::Medium, "\"medium\""),
+            (WhisperModel::LargeV3Turbo, "\"large-v3-turbo\""),
         ];
         for (model, expected) in pairs {
             let json = serde_json::to_string(&model).unwrap();
