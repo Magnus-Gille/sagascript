@@ -10,6 +10,8 @@ pub mod event {
     pub const MODEL_DOWNLOAD_PROGRESS: &str = "model-download-progress";
     /// Model ready
     pub const MODEL_READY: &str = "model-ready";
+    /// Transcription progress percentage (0–100)
+    pub const TRANSCRIPTION_PROGRESS: &str = "transcription-progress";
 }
 
 #[cfg(test)]
@@ -24,6 +26,7 @@ mod tests {
             ERROR,
             MODEL_DOWNLOAD_PROGRESS,
             MODEL_READY,
+            TRANSCRIPTION_PROGRESS,
         ];
         for name in events {
             assert!(!name.is_empty());
@@ -46,6 +49,7 @@ mod tests {
             ERROR,
             MODEL_DOWNLOAD_PROGRESS,
             MODEL_READY,
+            TRANSCRIPTION_PROGRESS,
         ];
         for (i, a) in events.iter().enumerate() {
             for (j, b) in events.iter().enumerate() {

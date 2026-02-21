@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use clap::Args;
+use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::audio::AudioCaptureService;
 use crate::audio::resample::TARGET_SAMPLE_RATE;
@@ -125,8 +126,22 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let backend = WhisperBackend::new();
     backend.load_model(model)?;
 
-    eprintln!("Transcribing...");
-    let text = backend.transcribe_sync(&audio, language)?;
+    let text = if duration > 10.0 {
+        let pb = ProgressBar::new(100);
+        pb.set_style(
+            ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%")
+                .unwrap(),
+        );
+        let pb_cb = pb.clone();
+        let text = backend.transcribe_sync_with_progress(&audio, language, move |pct| {
+            pb_cb.set_position(pct as u64);
+        })?;
+        pb.finish_and_clear();
+        text
+    } else {
+        eprintln!("Transcribing...");
+        backend.transcribe_sync(&audio, language)?
+    };
 
     // Output
     if args.json {
