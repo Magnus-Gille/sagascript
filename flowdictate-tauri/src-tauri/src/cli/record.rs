@@ -15,7 +15,7 @@ use super::transcribe::{copy_to_clipboard, model_id_string, parse_language, pars
 
 #[derive(Args)]
 pub struct RecordArgs {
-    /// Language for transcription [possible values: en, sv, no, auto]
+    /// Language for transcription [possible values: en, sv, no, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 

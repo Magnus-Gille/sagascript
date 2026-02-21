@@ -13,7 +13,7 @@ pub struct TranscribeArgs {
     /// Path to the audio/video file to transcribe
     pub file: PathBuf,
 
-    /// Language for transcription [possible values: en, sv, no, auto]
+    /// Language for transcription [possible values: en, sv, no, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 

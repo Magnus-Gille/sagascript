@@ -43,7 +43,7 @@ Update a setting. The new value takes effect immediately — the GUI \
 hot-reloads changes made via CLI.
 
 Valid values per key:
-  language           en, sv, no, auto
+  language           en, sv, no, auto (auto uses a generic model — less accurate)
   whisper_model      tiny.en, tiny, base.en, base, kb-whisper-tiny,
                      kb-whisper-base, kb-whisper-small, nb-whisper-tiny,
                      nb-whisper-base, nb-whisper-small
