@@ -482,4 +482,157 @@ mod tests {
         let err = validate_hotkey("Hyper+Space").unwrap_err();
         assert!(err.to_string().contains("unknown modifier"));
     }
+
+    // -- validate_key --
+
+    #[test]
+    fn validate_key_accepts_all_valid_keys() {
+        for key in VALID_KEYS {
+            assert!(validate_key(key).is_ok(), "should accept: {key}");
+        }
+    }
+
+    #[test]
+    fn validate_key_rejects_unknown() {
+        assert!(validate_key("nonexistent").is_err());
+        assert!(validate_key("").is_err());
+        assert!(validate_key("Language").is_err()); // case-sensitive
+    }
+
+    #[test]
+    fn validate_key_error_lists_valid_keys() {
+        let err = validate_key("bogus").unwrap_err();
+        let msg = err.to_string();
+        for key in VALID_KEYS {
+            assert!(msg.contains(key), "error should list valid key '{key}': {msg}");
+        }
+    }
+
+    // -- VALID_KEYS exhaustiveness --
+
+    #[test]
+    fn valid_keys_matches_settings_fields() {
+        // Ensure every VALID_KEY is handled in get_setting_value (not returning "unknown")
+        let settings = Settings::default();
+        for key in VALID_KEYS {
+            let value = get_setting_value(&settings, key);
+            assert_ne!(
+                value, "unknown",
+                "VALID_KEYS contains '{key}' but get_setting_value doesn't handle it"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_keys_count_matches_settings_struct() {
+        // Settings has 7 user-facing fields. If a new field is added to Settings
+        // but not to VALID_KEYS, this test will catch it.
+        let settings = Settings::default();
+        let json = serde_json::to_value(&settings).unwrap();
+        let field_count = json.as_object().unwrap().len();
+        assert_eq!(
+            VALID_KEYS.len(),
+            field_count,
+            "VALID_KEYS has {} entries but Settings has {} fields — did you forget to add a new setting?",
+            VALID_KEYS.len(),
+            field_count
+        );
+    }
+
+    // -- parse_enum_value --
+
+    #[test]
+    fn parse_enum_value_all_valid_languages() {
+        let valid = ["en", "sv", "no", "auto"];
+        for v in valid {
+            let result = parse_enum_value::<Language>(v, "language");
+            assert!(result.is_ok(), "should parse language '{v}'");
+        }
+    }
+
+    #[test]
+    fn parse_enum_value_invalid_language() {
+        let result = parse_enum_value::<Language>("de", "language");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_enum_value_all_valid_models() {
+        let valid = [
+            "tiny.en", "tiny", "base.en", "base",
+            "kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small",
+            "nb-whisper-tiny", "nb-whisper-base", "nb-whisper-small",
+        ];
+        for v in valid {
+            let result = parse_enum_value::<WhisperModel>(v, "whisper_model");
+            assert!(result.is_ok(), "should parse model '{v}'");
+        }
+    }
+
+    #[test]
+    fn parse_enum_value_invalid_model() {
+        let result = parse_enum_value::<WhisperModel>("large-v3", "whisper_model");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_enum_value_all_valid_hotkey_modes() {
+        let valid = ["push", "toggle"];
+        for v in valid {
+            let result = parse_enum_value::<HotkeyMode>(v, "hotkey_mode");
+            assert!(result.is_ok(), "should parse hotkey_mode '{v}'");
+        }
+    }
+
+    #[test]
+    fn parse_enum_value_invalid_hotkey_mode() {
+        let result = parse_enum_value::<HotkeyMode>("hold", "hotkey_mode");
+        assert!(result.is_err());
+    }
+
+    // -- parse_bool --
+
+    #[test]
+    fn parse_bool_valid() {
+        assert_eq!(parse_bool("true", "test").unwrap(), true);
+        assert_eq!(parse_bool("false", "test").unwrap(), false);
+    }
+
+    #[test]
+    fn parse_bool_rejects_invalid() {
+        assert!(parse_bool("yes", "test").is_err());
+        assert!(parse_bool("no", "test").is_err());
+        assert!(parse_bool("1", "test").is_err());
+        assert!(parse_bool("0", "test").is_err());
+        assert!(parse_bool("True", "test").is_err());
+        assert!(parse_bool("FALSE", "test").is_err());
+        assert!(parse_bool("", "test").is_err());
+    }
+
+    #[test]
+    fn parse_bool_error_message() {
+        let err = parse_bool("yes", "auto_paste").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("yes"), "error should mention input: {msg}");
+        assert!(msg.contains("auto_paste"), "error should mention key: {msg}");
+    }
+
+    // -- get_setting_value / format helpers --
+
+    #[test]
+    fn get_setting_value_returns_serialized_values() {
+        let settings = Settings::default();
+        assert_eq!(get_setting_value(&settings, "language"), "en");
+        assert_eq!(get_setting_value(&settings, "hotkey_mode"), "push");
+        assert_eq!(get_setting_value(&settings, "show_overlay"), "true");
+        assert_eq!(get_setting_value(&settings, "auto_paste"), "true");
+        assert_eq!(get_setting_value(&settings, "auto_select_model"), "true");
+        assert_eq!(get_setting_value(&settings, "hotkey"), "Control+Shift+Space");
+    }
+
+    #[test]
+    fn get_setting_value_unknown_key_returns_unknown() {
+        let settings = Settings::default();
+        assert_eq!(get_setting_value(&settings, "nonexistent"), "unknown");
+    }
 }

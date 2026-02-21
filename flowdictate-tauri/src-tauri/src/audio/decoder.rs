@@ -229,6 +229,28 @@ mod tests {
     }
 
     #[test]
+    fn supported_extensions_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for ext in SUPPORTED_EXTENSIONS {
+            assert!(!ext.is_empty(), "extension should not be empty");
+            assert!(
+                seen.insert(ext),
+                "duplicate extension in SUPPORTED_EXTENSIONS: {ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn supported_extensions_no_leading_dot() {
+        for ext in SUPPORTED_EXTENSIONS {
+            assert!(
+                !ext.starts_with('.'),
+                "extension should not have leading dot: {ext}"
+            );
+        }
+    }
+
+    #[test]
     fn case_insensitive_extension() {
         // The code lowercases the extension, so .WAV should work (file-not-found, not unsupported)
         let path = PathBuf::from("/tmp/definitely_does_not_exist.WAV");
