@@ -63,6 +63,7 @@
   // Transcribe tab state
   let supportedFormats: string[] = $state([]);
   let transcribing: boolean = $state(false);
+  let transcriptionProgress: number = $state(0);
   let transcriptionResult: string = $state("");
   let transcribeError: string = $state("");
   let dragOver: boolean = $state(false);
@@ -87,6 +88,10 @@
 
     listen("model-download-progress", (event: any) => {
       downloadProgress = event.payload.progress;
+    });
+
+    listen("transcription-progress", (event: any) => {
+      transcriptionProgress = event.payload;
     });
 
     listen("model-ready", async () => {
@@ -205,6 +210,7 @@
 
   async function handleFileTranscription(filePath: string) {
     transcribing = true;
+    transcriptionProgress = 0;
     transcribeError = "";
     transcriptionResult = "";
     try {
@@ -213,6 +219,7 @@
       transcribeError = typeof e === "string" ? e : e.message || "Transcription failed";
     } finally {
       transcribing = false;
+      transcriptionProgress = 0;
     }
   }
 
@@ -481,7 +488,10 @@
         >
           {#if transcribing}
             <div class="spinner"></div>
-            <div class="drop-zone-text">Transcribing...</div>
+            <div class="drop-zone-text">Transcribing... {transcriptionProgress}%</div>
+            <div class="progress-bar transcription-progress">
+              <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
+            </div>
           {:else}
             <div class="drop-zone-icon">&#x1F4C1;</div>
             <div class="drop-zone-text">Drop an audio or video file here</div>
@@ -929,6 +939,10 @@
   .drop-zone.transcribing {
     border-style: solid;
     border-color: var(--accent);
+  }
+
+  .transcription-progress {
+    width: 80%;
   }
 
   .drop-zone-icon {

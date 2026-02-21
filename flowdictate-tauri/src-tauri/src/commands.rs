@@ -391,11 +391,16 @@ pub async fn transcribe_file(
 
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 
-    // Run blocking transcription
+    // Run blocking transcription with progress reporting
     let whisper = whisper.inner().clone();
-    let result = tokio::task::spawn_blocking(move || whisper.transcribe_sync(&audio, language))
-        .await
-        .map_err(|e| format!("Transcription task failed: {e}"))?;
+    let app_progress = app.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        whisper.transcribe_sync_with_progress(&audio, language, move |pct| {
+            let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
+        })
+    })
+    .await
+    .map_err(|e| format!("Transcription task failed: {e}"))?;
 
     let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
 

@@ -94,6 +94,17 @@ impl WhisperBackend {
         audio: &[f32],
         language: Language,
     ) -> Result<String, DictationError> {
+        self.transcribe_sync_with_progress(audio, language, |_| {})
+    }
+
+    /// Run transcription with a progress callback that receives percentage (0–100).
+    /// The callback is invoked from the whisper.cpp inference thread.
+    pub fn transcribe_sync_with_progress(
+        &self,
+        audio: &[f32],
+        language: Language,
+        on_progress: impl FnMut(i32) + 'static,
+    ) -> Result<String, DictationError> {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
@@ -116,6 +127,7 @@ impl WhisperBackend {
         params.set_print_realtime(false);
         params.set_no_speech_thold(0.6);
         params.set_suppress_blank(true);
+        params.set_progress_callback_safe(on_progress);
 
         info!(
             "Starting local transcription: {} samples, {} threads, lang={:?}",
