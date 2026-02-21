@@ -51,6 +51,9 @@ The master prompt is in `PROMPT.md`. Follow it.
 - `sagascript download-model <id>` — Download a model
 - `sagascript config list|get|set|reset|path` — Manage settings
 - `sagascript formats` — List supported audio formats
+- `sagascript completions <shell>` — Generate shell completions (bash, zsh, fish, powershell, elvish)
+- `sagascript manpages [--dir DIR]` — Generate man pages (stdout or directory)
+- All commands support `--help` / `-h` with examples and detailed descriptions
 
 ## Current status (2026-01-28)
 App is **feature-complete**. Accuracy improvement work (Phase 1) is done on feature branches, not yet merged to main.

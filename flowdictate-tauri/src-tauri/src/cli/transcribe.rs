@@ -13,19 +13,19 @@ pub struct TranscribeArgs {
     /// Path to the audio/video file to transcribe
     pub file: PathBuf,
 
-    /// Language: en, sv, no, auto (default: persisted setting)
-    #[arg(short, long)]
+    /// Language for transcription [possible values: en, sv, no, auto]
+    #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 
-    /// Model ID (e.g. base.en, nb-whisper-base). Default: auto-select for language
-    #[arg(short, long)]
+    /// Whisper model ID to use [see: sagascript list-models]
+    #[arg(short, long, value_name = "MODEL_ID")]
     pub model: Option<String>,
 
-    /// Output result as JSON
+    /// Output result as JSON (includes text, language, model, duration)
     #[arg(long)]
     pub json: bool,
 
-    /// Copy result to clipboard
+    /// Copy transcription result to clipboard
     #[arg(long)]
     pub clipboard: bool,
 }

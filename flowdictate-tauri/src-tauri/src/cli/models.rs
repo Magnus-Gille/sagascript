@@ -8,14 +8,14 @@ use super::transcribe::{model_id_string, parse_language, parse_model};
 
 #[derive(Args)]
 pub struct ListModelsArgs {
-    /// Filter by language: en, sv, no, auto (default: show all)
-    #[arg(short, long)]
+    /// Filter by language [possible values: en, sv, no, auto]
+    #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 }
 
 #[derive(Args)]
 pub struct DownloadModelArgs {
-    /// Model ID to download (e.g. base.en, nb-whisper-base)
+    /// Model ID to download [see: sagascript list-models]
     pub model: String,
 }
 
