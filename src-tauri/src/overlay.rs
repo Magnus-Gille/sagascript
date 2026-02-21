@@ -64,9 +64,10 @@ fn create_overlay(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Erro
 
 /// macOS-specific: configure NSWindow for overlay behaviour
 #[cfg(target_os = "macos")]
+#[allow(deprecated, unexpected_cfgs)]
 fn configure_macos_window(window: &tauri::WebviewWindow) {
     use cocoa::appkit::NSWindow;
-    use cocoa::base::{id, nil, NO};
+    use cocoa::base::{id, NO};
     use objc::runtime::YES;
 
     let ns_window: id = window.ns_window().unwrap() as id;
@@ -94,6 +95,7 @@ fn configure_macos_window(window: &tauri::WebviewWindow) {
 
 /// macOS-specific: bring window to front without stealing focus
 #[cfg(target_os = "macos")]
+#[allow(deprecated, unexpected_cfgs)]
 fn macos_order_front(window: &tauri::WebviewWindow) {
     use cocoa::base::{id, nil};
 

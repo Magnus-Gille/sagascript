@@ -25,6 +25,7 @@ pub fn request_accessibility_permission() {
 }
 
 /// Set the app as an accessory (no dock icon)
+#[allow(deprecated)]
 pub fn set_activation_policy_accessory() {
     use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicy};
     unsafe {
