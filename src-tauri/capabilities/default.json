@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "FlowDictate default capabilities",
+  "description": "Sagascript default capabilities",
   "windows": ["*"],
   "permissions": [
     "core:default",

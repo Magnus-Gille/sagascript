@@ -1,16 +1,16 @@
-# Test Audio Files for FlowDictate
+# Test Audio Files
 
-## Norwegian (NPSC — Norwegian Parliamentary Speech Corpus)
+## Norwegian (NPSC -- Norwegian Parliamentary Speech Corpus)
 Source: NbAiLab/NPSC (CC0 license, Norwegian National Library)
 
 ### norwegian-short-3s.mp3
 - **Duration:** ~3.4s
-- **Ground truth:** "Stortingets møte er lovlig satt"
+- **Ground truth:** "Stortingets mote er lovlig satt"
 - **Speaker:** Marit Nybakk
 
 ### norwegian-medium-8s.mp3
 - **Duration:** ~8s
-- **Ground truth:** "representantene Fredric Helen Fredric Holen Bjørdal og Trond Giske som har vært permitterte har igjen tatt sete"
+- **Ground truth:** "representantene Fredric Helen Fredric Holen Bjordal og Trond Giske som har vaert permitterte har igjen tatt sete"
 
 ## Swedish
 To get Swedish test audio from Rixvox (KBLab/rixvox):
@@ -26,7 +26,7 @@ for sample in ds:
 ```
 
 ## How to test
-1. Run `npm run tauri dev` from the flowdictate-tauri directory
+1. Run `cargo tauri dev` from the repo root
 2. Open Settings > Transcribe tab
 3. Drag one of these files onto the drop zone, or click "Open File..."
 4. Compare the transcription result against the ground truth above
