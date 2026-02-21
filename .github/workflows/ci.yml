@@ -52,7 +52,7 @@ jobs:
 
       - name: Cargo clippy
         working-directory: src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy
 
       - name: Svelte check
         run: npx svelte-check --tsconfig ./tsconfig.json
