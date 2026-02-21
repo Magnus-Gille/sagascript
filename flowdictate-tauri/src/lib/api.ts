@@ -66,6 +66,10 @@ export async function setHotkeyMode(mode: HotkeyMode): Promise<void> {
   return invoke("set_hotkey_mode", { mode });
 }
 
+export async function setHotkey(shortcut: string): Promise<void> {
+  return invoke("set_hotkey", { shortcut });
+}
+
 export async function setAutoPaste(enabled: boolean): Promise<void> {
   return invoke("set_auto_paste", { enabled });
 }
@@ -104,6 +108,14 @@ export async function transcribeFile(filePath: string): Promise<string> {
 
 export async function getSupportedFormats(): Promise<string[]> {
   return invoke("get_supported_formats");
+}
+
+export async function startRecording(): Promise<void> {
+  return invoke("start_recording");
+}
+
+export async function stopAndTranscribe(): Promise<string> {
+  return invoke("stop_and_transcribe");
 }
 
 // -- Permission / platform queries (for onboarding) --
