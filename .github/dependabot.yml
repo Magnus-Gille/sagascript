@@ -1,7 +1,14 @@
 version: 2
 updates:
-  # Swift Package Manager dependencies
-  - package-ecosystem: "swift"
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -9,7 +16,6 @@ updates:
     commit-message:
       prefix: "deps"
 
-  # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
