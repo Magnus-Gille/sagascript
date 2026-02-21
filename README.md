@@ -1,83 +1,90 @@
-# Sagascript — Claude Code Autopilot Starter (Ralph Loop)
+# Sagascript
 
-This repository is a **starter bundle of instructions** (Markdown-first) for running **Claude Code** autonomously using the **Ralph (Ralph Wiggum) loop** to build a **Wispr Flow–style dictation app for macOS**:
-- **Push-to-talk** via a configurable global hotkey / button
-- **English + Swedish** transcription
-- **Ultra low latency + high performance** focus
-- **Paste into the currently active app** (like Wispr Flow)
-- Runs as a **minimal menu-bar app** with a clear **visual indicator** while dictation is active
-- Supports **local models** (preferred) and **remote pay-as-you-go APIs** (optional)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/Magnus-Gille/sagascript/actions/workflows/ci.yml/badge.svg)](https://github.com/Magnus-Gille/sagascript/actions/workflows/ci.yml)
 
-> This bundle is designed so you can unzip it into a cloud sandbox and start Claude Code with minimal fuss.
-> After you start the Ralph loop, it should keep iterating until completion without further user input.
+Low-latency, privacy-first dictation for macOS. Push-to-talk transcription with local Whisper models.
 
----
+![Sagascript](sagascript-screenshot.png)
 
-## What you do (minimal manual steps)
+## Features
 
-### 1) Open Claude Code in this folder
-However you normally run Claude Code (terminal CLI, or the Claude Code web environment), open **this folder**.
+- **Push-to-talk dictation** -- hold a global hotkey, speak, release to transcribe and paste
+- **100% local transcription** -- runs Whisper models on-device via Metal/Core ML (no data leaves your Mac)
+- **Multi-language** -- English, Swedish, Norwegian, and 90+ other languages
+- **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
+- **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
+- **Configurable** -- choose your model, language, hotkey, and output behavior
 
-### 2) Install/enable the Ralph loop plugin (once)
-In the Claude Code REPL:
+## Building from source
 
-```
-/plugin install ralph-loop@claude-plugins-official
-```
+### Prerequisites
 
-### 3) Start the autonomous run
-Copy/paste this single command:
+- macOS 13.0+
+- Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+- Node.js 20+ (`brew install node`)
+- Tauri CLI (`cargo install tauri-cli`)
 
-```
-/ralph-loop:ralph-loop "Read PROMPT.md and execute it exactly. Re-read PROMPT.md at the start of every iteration. Do not ask the user questions. Make reasonable assumptions and document them." --max-iterations 80 --completion-promise "SAGASCRIPT_COMPLETE"
-```
+### Build and run
 
-That’s it. Walk away.
-
-### 4) If you need to stop it
-```
-/ralph-loop:cancel-ralph
+```bash
+git clone https://github.com/Magnus-Gille/sagascript.git
+cd sagascript
+npm install
+cargo tauri dev
 ```
 
----
+### Build a release binary
 
-## What the agent will produce
+```bash
+cargo tauri build
+```
 
-The prompt requires Claude to create (and keep updated):
+The `.app` bundle will be in `src-tauri/target/release/bundle/macos/`.
 
-- A full **PRD** (product requirements doc)
-- A detailed **architecture** (with diagrams)
-- A full **test plan** and runnable tests where possible
-- A complete macOS app implementation (MVP → polish)
-- CI + release automation (GitHub Actions on macOS runners)
-- Security + privacy documentation, and sane defaults
+## CLI usage
 
-See the `docs/` folder for the seed docs and templates.
+Sagascript includes a full CLI. After building, the binary is at `src-tauri/target/release/sagascript` (or use the app bundle).
 
----
+```bash
+# Transcribe an audio/video file
+sagascript transcribe recording.mp3
 
-## Sandboxing / Safety
+# Record from microphone and transcribe
+sagascript record
 
-This starter is explicitly written to run **inside a sandboxed environment**.
+# List available Whisper models
+sagascript list-models
 
-The best sandbox is: **run Claude Code in a cloud workspace** (Codespaces / cloud VM / Claude Code web sandbox), not on your host OS.
+# Download a model
+sagascript download-model ggml-base.en
 
-See:
-- `docs/00_START_HERE.md`
-- `docs/08_SECURITY_PRIVACY_PLAN.md`
+# Manage settings
+sagascript config list
+sagascript config set language sv
+sagascript config get hotkey
 
----
+# Generate shell completions
+sagascript completions zsh > ~/.zfunc/_sagascript
 
-## Repo layout
+# Generate man pages
+sagascript manpages --dir /usr/local/share/man/man1
+```
 
-- `PROMPT.md` — the “master prompt” for the autonomous run
-- `CLAUDE.md` — persistent project context for Claude Code
-- `.claude/` — project-scoped Claude Code configuration and optional subagents
-- `docs/` — requirements, architecture seed, NFRs, test plan seed, etc.
+Run `sagascript --help` for the full list of commands.
 
----
+## macOS permissions
+
+Sagascript needs the following permissions (macOS will prompt you on first use):
+
+- **Microphone** -- for recording audio
+- **Accessibility** -- for pasting transcriptions into the active app
+- **Input Monitoring** -- for the global hotkey
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to submit changes.
 
 ## License
 
-If you want to publish the resulting codebase, pick a license once the app skeleton exists.
-This starter bundle is intended as scaffolding/instructions, not a final product.
+[MIT](LICENSE)
