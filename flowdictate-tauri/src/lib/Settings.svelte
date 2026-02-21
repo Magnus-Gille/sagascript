@@ -15,6 +15,8 @@
     transcribeFile,
     getSupportedFormats,
     getPlatform,
+    checkAccessibilityPermission,
+    requestAccessibilityPermission,
     startRecording,
     stopAndTranscribe,
     type Settings,
@@ -38,6 +40,8 @@
   let downloadProgress: number = $state(0);
 
   let platform: string = $state("macos");
+
+  let accessibilityGranted: boolean = $state(true); // assume true; checked on mount for macOS
 
   // Hotkey recorder state
   let recordingHotkey: boolean = $state(false);
@@ -66,6 +70,9 @@
   onMount(async () => {
     settings = await getSettings();
     platform = await getPlatform();
+    if (platform === "macos") {
+      accessibilityGranted = await checkAccessibilityPermission();
+    }
     buildInfo = await getBuildInfo();
     models = await getModelInfo();
     loadedModel = await getLoadedModel();
@@ -131,8 +138,16 @@
 
   async function onAutoPasteToggle() {
     if (!settings) return;
-    await setAutoPaste(!settings.auto_paste);
+    const enabling = !settings.auto_paste;
+    await setAutoPaste(enabling);
     settings = await getSettings();
+    // When enabling on macOS, check Accessibility permission
+    if (enabling && platform === "macos") {
+      accessibilityGranted = await checkAccessibilityPermission();
+      if (!accessibilityGranted) {
+        await requestAccessibilityPermission();
+      }
+    }
   }
 
   async function onShowOverlayToggle() {
@@ -409,6 +424,10 @@
             aria-checked={settings.auto_paste}
           ></div>
         </div>
+        <div class="hotkey-hint">Automatically paste dictated text into the active app when transcription finishes.</div>
+        {#if settings.auto_paste && platform === "macos" && !accessibilityGranted}
+          <div class="hotkey-error">Requires Accessibility permission. <button class="link-btn" onclick={async () => { await requestAccessibilityPermission(); accessibilityGranted = await checkAccessibilityPermission(); }}>Open System Settings</button></div>
+        {/if}
 
         <div class="test-section">
           <div class="test-section-label">Try it out</div>
@@ -708,6 +727,16 @@
     margin-top: 4px;
     font-size: 11px;
     color: var(--danger);
+  }
+
+  .link-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: inherit;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
   }
 
   .hotkey-hint {
