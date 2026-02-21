@@ -22,8 +22,12 @@ pub fn settings_path() -> PathBuf {
 /// Load settings from disk. Returns defaults if the file is missing or unreadable.
 /// Partial JSON files are handled by `#[serde(default)]` on Settings.
 pub fn load() -> Settings {
-    let path = settings_path();
-    match std::fs::read_to_string(&path) {
+    load_from(&settings_path())
+}
+
+/// Load settings from a specific path. Returns defaults if missing or unreadable.
+pub fn load_from(path: &PathBuf) -> Settings {
+    match std::fs::read_to_string(path) {
         Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
         Err(_) => Settings::default(),
     }
@@ -93,7 +97,10 @@ mod tests {
 
     #[test]
     fn load_returns_defaults_when_file_missing() {
-        let s = load();
+        let nonexistent = std::env::temp_dir()
+            .join(format!("sagascript-test-{}", uuid::Uuid::new_v4()))
+            .join(SETTINGS_FILENAME);
+        let s = load_from(&nonexistent);
         let d = Settings::default();
         assert_eq!(s.language, d.language);
         assert_eq!(s.whisper_model, d.whisper_model);
