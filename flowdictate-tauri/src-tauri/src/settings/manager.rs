@@ -561,4 +561,22 @@ mod tests {
         assert!(s.auto_paste);
         assert_eq!(s.hotkey, "Control+Shift+Space");
     }
+
+    // -- Model consistency --
+
+    #[test]
+    fn recommended_model_is_in_models_for_language() {
+        let languages = [Language::English, Language::Swedish, Language::Norwegian, Language::Auto];
+        for lang in languages {
+            let recommended = WhisperModel::recommended(lang);
+            let models = WhisperModel::models_for_language(lang);
+            assert!(
+                models.contains(&recommended),
+                "recommended model {:?} for {:?} is not in models_for_language: {:?}",
+                recommended,
+                lang,
+                models
+            );
+        }
+    }
 }

@@ -386,3 +386,351 @@ fn render_manpage_tree(cmd: &clap::Command, dir: &PathBuf) -> Result<(), io::Err
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- Completions generation --
+
+    #[test]
+    fn completions_generate_bash() {
+        let mut buf = Vec::new();
+        clap_complete::generate(Shell::Bash, &mut Cli::command(), "sagascript", &mut buf);
+        assert!(!buf.is_empty(), "bash completions should not be empty");
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("sagascript"), "should reference the binary name");
+    }
+
+    #[test]
+    fn completions_generate_zsh() {
+        let mut buf = Vec::new();
+        clap_complete::generate(Shell::Zsh, &mut Cli::command(), "sagascript", &mut buf);
+        assert!(!buf.is_empty(), "zsh completions should not be empty");
+    }
+
+    #[test]
+    fn completions_generate_fish() {
+        let mut buf = Vec::new();
+        clap_complete::generate(Shell::Fish, &mut Cli::command(), "sagascript", &mut buf);
+        assert!(!buf.is_empty(), "fish completions should not be empty");
+    }
+
+    #[test]
+    fn completions_generate_powershell() {
+        let mut buf = Vec::new();
+        clap_complete::generate(Shell::PowerShell, &mut Cli::command(), "sagascript", &mut buf);
+        assert!(!buf.is_empty(), "powershell completions should not be empty");
+    }
+
+    #[test]
+    fn completions_generate_elvish() {
+        let mut buf = Vec::new();
+        clap_complete::generate(Shell::Elvish, &mut Cli::command(), "sagascript", &mut buf);
+        assert!(!buf.is_empty(), "elvish completions should not be empty");
+    }
+
+    // -- Man page rendering --
+
+    #[test]
+    fn manpage_renders_root() {
+        let cmd = Cli::command();
+        let man = clap_mangen::Man::new(cmd);
+        let mut buf = Vec::new();
+        man.render(&mut buf).expect("root man page should render");
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("sagascript"), "man page should contain binary name");
+    }
+
+    #[test]
+    fn manpage_renders_all_subcommands_to_dir() {
+        let dir = std::env::temp_dir().join(format!("sagascript-man-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let cmd = Cli::command();
+        render_manpage_tree(&cmd, &dir).expect("man page tree should render");
+
+        // Root page must exist
+        assert!(dir.join("sagascript.1").exists(), "root man page missing");
+
+        // Subcommand pages
+        let expected = [
+            "sagascript-transcribe.1",
+            "sagascript-record.1",
+            "sagascript-list-models.1",
+            "sagascript-download-model.1",
+            "sagascript-config.1",
+            "sagascript-formats.1",
+            "sagascript-completions.1",
+            "sagascript-manpages.1",
+        ];
+        for name in expected {
+            assert!(dir.join(name).exists(), "missing man page: {name}");
+        }
+
+        // Nested config subcommand pages
+        let config_subs = [
+            "sagascript-config-list.1",
+            "sagascript-config-get.1",
+            "sagascript-config-set.1",
+            "sagascript-config-reset.1",
+            "sagascript-config-path.1",
+        ];
+        for name in config_subs {
+            assert!(dir.join(name).exists(), "missing config man page: {name}");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -- Help text content --
+
+    fn get_help_text(args: &[&str]) -> String {
+        let err = Cli::command()
+            .try_get_matches_from(args)
+            .unwrap_err();
+        err.to_string()
+    }
+
+    fn get_long_help(cmd: &clap::Command) -> String {
+        cmd.clone().render_long_help().to_string()
+    }
+
+    #[test]
+    fn root_help_contains_examples() {
+        let help = get_long_help(&Cli::command());
+        assert!(help.contains("EXAMPLES:"), "root help should contain EXAMPLES section");
+        assert!(help.contains("sagascript transcribe"), "root help should show transcribe example");
+        assert!(help.contains("sagascript record"), "root help should show record example");
+    }
+
+    #[test]
+    fn root_help_contains_auto_detect_caveat() {
+        let help = get_long_help(&Cli::command());
+        assert!(
+            help.contains("Auto-detect uses a generic multilingual model"),
+            "root help should warn about auto-detect accuracy: {help}"
+        );
+    }
+
+    #[test]
+    fn transcribe_help_contains_examples() {
+        let cmd = Cli::command();
+        let sub = cmd.find_subcommand("transcribe").expect("transcribe subcommand missing");
+        let help = get_long_help(sub);
+        assert!(help.contains("EXAMPLES:"), "transcribe help should contain EXAMPLES");
+        assert!(help.contains("--json"), "transcribe help should mention --json");
+    }
+
+    #[test]
+    fn transcribe_help_contains_auto_detect_caveat() {
+        let cmd = Cli::command();
+        let sub = cmd.find_subcommand("transcribe").unwrap();
+        let help = get_long_help(sub);
+        assert!(
+            help.contains("auto uses a generic multilingual model"),
+            "transcribe help should warn about auto-detect"
+        );
+    }
+
+    #[test]
+    fn record_help_contains_examples() {
+        let cmd = Cli::command();
+        let sub = cmd.find_subcommand("record").expect("record subcommand missing");
+        let help = get_long_help(sub);
+        assert!(help.contains("EXAMPLES:"), "record help should contain EXAMPLES");
+        assert!(help.contains("Ctrl+C"), "record help should mention Ctrl+C");
+    }
+
+    #[test]
+    fn all_subcommands_have_long_about() {
+        let cmd = Cli::command();
+        for sub in cmd.get_subcommands() {
+            if sub.get_name() == "help" {
+                continue;
+            }
+            assert!(
+                sub.get_long_about().is_some(),
+                "subcommand '{}' is missing long_about",
+                sub.get_name()
+            );
+        }
+    }
+
+    // -- Clap arg parsing --
+
+    #[test]
+    fn parse_transcribe_minimal() {
+        let cli = Cli::try_parse_from(["sagascript", "transcribe", "file.wav"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Transcribe(args) => {
+                assert_eq!(args.file, PathBuf::from("file.wav"));
+                assert!(args.language.is_none());
+                assert!(args.model.is_none());
+                assert!(!args.json);
+                assert!(!args.clipboard);
+            }
+            other => panic!("expected Transcribe, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn parse_transcribe_all_flags() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "transcribe", "meeting.mp3",
+            "--language", "sv",
+            "--model", "kb-whisper-base",
+            "--json",
+            "--clipboard",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Transcribe(args) => {
+                assert_eq!(args.file, PathBuf::from("meeting.mp3"));
+                assert_eq!(args.language.as_deref(), Some("sv"));
+                assert_eq!(args.model.as_deref(), Some("kb-whisper-base"));
+                assert!(args.json);
+                assert!(args.clipboard);
+            }
+            _ => panic!("expected Transcribe"),
+        }
+    }
+
+    #[test]
+    fn parse_transcribe_short_flags() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "transcribe", "f.wav", "-l", "en", "-m", "base.en",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Transcribe(args) => {
+                assert_eq!(args.language.as_deref(), Some("en"));
+                assert_eq!(args.model.as_deref(), Some("base.en"));
+            }
+            _ => panic!("expected Transcribe"),
+        }
+    }
+
+    #[test]
+    fn parse_record_minimal() {
+        let cli = Cli::try_parse_from(["sagascript", "record"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Record(args) => {
+                assert!(args.language.is_none());
+                assert!(args.model.is_none());
+                assert!(args.duration.is_none());
+                assert!(args.output.is_none());
+                assert!(!args.json);
+                assert!(!args.clipboard);
+            }
+            _ => panic!("expected Record"),
+        }
+    }
+
+    #[test]
+    fn parse_record_all_flags() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "record",
+            "--language", "no",
+            "--model", "nb-whisper-base",
+            "--duration", "30.5",
+            "--output", "capture.wav",
+            "--json",
+            "--clipboard",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Record(args) => {
+                assert_eq!(args.language.as_deref(), Some("no"));
+                assert_eq!(args.model.as_deref(), Some("nb-whisper-base"));
+                assert!((args.duration.unwrap() - 30.5).abs() < f64::EPSILON);
+                assert_eq!(args.output.as_deref(), Some("capture.wav"));
+                assert!(args.json);
+                assert!(args.clipboard);
+            }
+            _ => panic!("expected Record"),
+        }
+    }
+
+    #[test]
+    fn parse_list_models_with_language() {
+        let cli = Cli::try_parse_from(["sagascript", "list-models", "-l", "sv"]).unwrap();
+        match cli.command.unwrap() {
+            Command::ListModels(args) => {
+                assert_eq!(args.language.as_deref(), Some("sv"));
+            }
+            _ => panic!("expected ListModels"),
+        }
+    }
+
+    #[test]
+    fn parse_download_model() {
+        let cli = Cli::try_parse_from(["sagascript", "download-model", "base.en"]).unwrap();
+        match cli.command.unwrap() {
+            Command::DownloadModel(args) => {
+                assert_eq!(args.model, "base.en");
+            }
+            _ => panic!("expected DownloadModel"),
+        }
+    }
+
+    #[test]
+    fn parse_config_set() {
+        let cli = Cli::try_parse_from(["sagascript", "config", "set", "language", "sv"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Config(args) => match args.action {
+                config::ConfigAction::Set { key, value } => {
+                    assert_eq!(key, "language");
+                    assert_eq!(value, "sv");
+                }
+                _ => panic!("expected ConfigAction::Set"),
+            },
+            _ => panic!("expected Config"),
+        }
+    }
+
+    #[test]
+    fn parse_config_reset_all() {
+        let cli = Cli::try_parse_from(["sagascript", "config", "reset"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Config(args) => match args.action {
+                config::ConfigAction::Reset { key } => {
+                    assert!(key.is_none(), "reset without key should be None");
+                }
+                _ => panic!("expected ConfigAction::Reset"),
+            },
+            _ => panic!("expected Config"),
+        }
+    }
+
+    #[test]
+    fn parse_completions() {
+        let cli = Cli::try_parse_from(["sagascript", "completions", "zsh"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Completions { shell } => {
+                assert_eq!(shell, Shell::Zsh);
+            }
+            _ => panic!("expected Completions"),
+        }
+    }
+
+    #[test]
+    fn parse_manpages_with_dir() {
+        let cli = Cli::try_parse_from(["sagascript", "manpages", "--dir", "/tmp/man"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Manpages { dir } => {
+                assert_eq!(dir, Some(PathBuf::from("/tmp/man")));
+            }
+            _ => panic!("expected Manpages"),
+        }
+    }
+
+    #[test]
+    fn parse_no_subcommand_is_none() {
+        let cli = Cli::try_parse_from(["sagascript"]).unwrap();
+        assert!(cli.command.is_none(), "no subcommand should yield None (GUI mode)");
+    }
+
+    #[test]
+    fn parse_unknown_subcommand_is_error() {
+        let result = Cli::try_parse_from(["sagascript", "nonexistent"]);
+        assert!(result.is_err());
+    }
+}

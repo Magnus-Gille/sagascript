@@ -178,4 +178,78 @@ mod tests {
         assert!(s.auto_paste);
         assert!(s.auto_select_model);
     }
+
+    // -- load_from with corrupt/invalid JSON --
+
+    #[test]
+    fn load_from_corrupt_json_returns_defaults() {
+        with_temp_settings(|path| {
+            let dir = path.parent().unwrap();
+            fs::create_dir_all(dir).unwrap();
+            fs::write(&path, "this is not json{{{").unwrap();
+
+            let s = load_from(&path);
+            let d = Settings::default();
+            assert_eq!(s.language, d.language);
+            assert_eq!(s.whisper_model, d.whisper_model);
+            assert_eq!(s.hotkey, d.hotkey);
+        });
+    }
+
+    #[test]
+    fn load_from_empty_file_returns_defaults() {
+        with_temp_settings(|path| {
+            let dir = path.parent().unwrap();
+            fs::create_dir_all(dir).unwrap();
+            fs::write(&path, "").unwrap();
+
+            let s = load_from(&path);
+            let d = Settings::default();
+            assert_eq!(s.language, d.language);
+        });
+    }
+
+    #[test]
+    fn load_from_empty_object_returns_defaults() {
+        with_temp_settings(|path| {
+            let dir = path.parent().unwrap();
+            fs::create_dir_all(dir).unwrap();
+            fs::write(&path, "{}").unwrap();
+
+            let s = load_from(&path);
+            let d = Settings::default();
+            assert_eq!(s.language, d.language);
+            assert_eq!(s.whisper_model, d.whisper_model);
+            assert_eq!(s.hotkey_mode, d.hotkey_mode);
+        });
+    }
+
+    #[test]
+    fn load_from_unknown_fields_ignored() {
+        with_temp_settings(|path| {
+            let dir = path.parent().unwrap();
+            fs::create_dir_all(dir).unwrap();
+            fs::write(&path, r#"{"language":"sv","unknown_field":42}"#).unwrap();
+
+            let s = load_from(&path);
+            assert_eq!(s.language, Language::Swedish);
+            // Unknown field should not cause errors
+            assert_eq!(s.whisper_model, WhisperModel::Base); // default
+        });
+    }
+
+    #[test]
+    fn load_from_invalid_enum_value_returns_defaults() {
+        with_temp_settings(|path| {
+            let dir = path.parent().unwrap();
+            fs::create_dir_all(dir).unwrap();
+            // "de" is not a valid Language variant
+            fs::write(&path, r#"{"language":"de"}"#).unwrap();
+
+            let s = load_from(&path);
+            let d = Settings::default();
+            // Should fall back to full defaults since deserialization fails
+            assert_eq!(s.language, d.language);
+        });
+    }
 }
