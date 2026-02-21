@@ -14,6 +14,7 @@
     downloadModel,
     transcribeFile,
     getSupportedFormats,
+    getPlatform,
     startRecording,
     stopAndTranscribe,
     type Settings,
@@ -35,6 +36,8 @@
   let downloading: string | null = $state(null);
   let downloadingName: string = $state("");
   let downloadProgress: number = $state(0);
+
+  let platform: string = $state("macos");
 
   // Hotkey recorder state
   let recordingHotkey: boolean = $state(false);
@@ -62,6 +65,7 @@
 
   onMount(async () => {
     settings = await getSettings();
+    platform = await getPlatform();
     buildInfo = await getBuildInfo();
     models = await getModelInfo();
     loadedModel = await getLoadedModel();
@@ -235,11 +239,23 @@
     return mapped[key] ?? null;
   }
 
+  /** Platform-correct modifier display names */
+  function modifierNames(): { ctrl: string; alt: string; meta: string } {
+    const mac = platform === "macos";
+    return {
+      ctrl: mac ? "Control" : "Ctrl",
+      alt: mac ? "Option" : "Alt",
+      meta: mac ? "Cmd" : "Win",
+    };
+  }
+
   /** Format a shortcut string for display (e.g. "Control+Shift+Space" → "Ctrl + Shift + Space") */
   function formatHotkeyDisplay(shortcut: string): string {
+    const m = modifierNames();
     return shortcut
-      .replace(/Control/g, "Ctrl")
-      .replace(/Meta/g, "Cmd")
+      .replace(/Control/g, m.ctrl)
+      .replace(/Alt/g, m.alt)
+      .replace(/Super/g, m.meta)
       .split("+")
       .join(" + ");
   }
@@ -259,20 +275,25 @@
     if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
 
     const keyName = tauriKeyName(e.key);
-    if (!keyName) return;
+    if (!keyName) {
+      hotkeyError = `"${e.key}" is not a supported key. Use A–Z, 0–9, F1–F12, Space, Arrow keys, or Tab/Enter/Delete.`;
+      return;
+    }
 
     // Must have at least one modifier
     const hasModifier = e.ctrlKey || e.altKey || e.metaKey || e.shiftKey;
     if (!hasModifier) {
-      hotkeyError = "Shortcut must include a modifier (Ctrl, Alt, Cmd, or Shift)";
+      const m = modifierNames();
+      hotkeyError = `Shortcut must include a modifier (${m.ctrl}, ${m.alt}, ${m.meta}, or Shift)`;
       return;
     }
 
-    // Build Tauri-format shortcut string (order: Control, Alt, Meta, Shift, Key)
+    // Build Tauri-format shortcut string (order: Control, Alt, Super, Shift, Key)
+    // Note: muda crate uses "Super" (not "Meta") for Cmd on macOS / Win key on Windows
     const parts: string[] = [];
     if (e.ctrlKey) parts.push("Control");
     if (e.altKey) parts.push("Alt");
-    if (e.metaKey) parts.push("Meta");
+    if (e.metaKey) parts.push("Super");
     if (e.shiftKey) parts.push("Shift");
     parts.push(keyName);
 
@@ -366,6 +387,7 @@
           {#if hotkeyError}
             <div class="hotkey-error">{hotkeyError}</div>
           {/if}
+          <div class="hotkey-hint">Modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key (A–Z, 0–9, F1–F12, Space, arrows)</div>
         </div>
 
         <div class="field">
@@ -686,6 +708,12 @@
     margin-top: 4px;
     font-size: 11px;
     color: var(--danger);
+  }
+
+  .hotkey-hint {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
   }
 
   /* Model picker */
