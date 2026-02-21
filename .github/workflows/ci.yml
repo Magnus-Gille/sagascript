@@ -58,4 +58,4 @@ jobs:
         run: npx svelte-check --tsconfig ./tsconfig.json
 
       - name: Build Tauri app
-        run: cargo tauri build
+        run: npx tauri build
