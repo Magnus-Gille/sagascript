@@ -28,7 +28,11 @@ Workflow:
   3. Or record live:      sagascript record
 
 Supported languages: English (en), Swedish (sv), Norwegian (no), Auto-detect (auto).
-Models are downloaded from HuggingFace and stored locally.",
+Models are downloaded from HuggingFace and stored locally.
+
+NOTE: Auto-detect uses a generic multilingual model which is less accurate \
+than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
+For best results, set a specific language.",
     after_long_help = "\
 EXAMPLES:
   # Transcribe an audio file with auto-detected language
@@ -71,7 +75,11 @@ The file is decoded to 16 kHz mono PCM, then processed by the selected \
 Whisper model. Supports WAV, MP3, M4A, AAC, MP4, MOV, OGG, WebM, and FLAC.
 
 By default, uses the language and model from your persisted settings \
-(see 'sagascript config list'). Override with --language and --model.",
+(see 'sagascript config list'). Override with --language and --model.
+
+NOTE: --language auto uses a generic multilingual model which is less \
+accurate than the dedicated language models. For best results, specify \
+a language explicitly (en, sv, no).",
         after_long_help = "\
 EXAMPLES:
   # Basic transcription (uses configured language/model)
@@ -100,7 +108,11 @@ Recording continues until you press Ctrl+C, or until --duration seconds \
 have elapsed. The captured audio is then transcribed using the selected model.
 
 Use --output to save the raw audio as a WAV file without transcribing \
-(useful for capturing audio to process later with 'sagascript transcribe').",
+(useful for capturing audio to process later with 'sagascript transcribe').
+
+NOTE: --language auto uses a generic multilingual model which is less \
+accurate than the dedicated language models. For best results, specify \
+a language explicitly (en, sv, no).",
         after_long_help = "\
 EXAMPLES:
   # Record until Ctrl+C, then transcribe
