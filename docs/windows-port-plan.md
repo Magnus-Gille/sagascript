@@ -16,8 +16,7 @@ and website distribution.
 6. [Code Signing & Installer](#6-code-signing--installer)
 7. [Documentation Updates](#7-documentation-updates)
 8. [Website / Distribution](#8-website--distribution)
-9. [Testing Plan](#9-testing-plan)
-10. [Work Item Checklist](#10-work-item-checklist)
+9. [Work Item Checklist](#9-work-item-checklist) (each phase includes its testing gate)
 
 ---
 
@@ -754,10 +753,26 @@ If/when a website exists:
 
 ---
 
-## 9. Testing Plan
+## 9. Work Item Checklist
 
-### 9.1 Manual testing checklist
+Each phase includes its own verification/testing gate — nothing advances
+to the next phase until the tests in the current phase pass.
 
+### Phase 1: Compile & run on Windows
+
+**Code changes:**
+- [ ] Fix `notify` crate features for cross-platform compilation
+- [ ] Implement `platform::windows` module (accessibility stubs)
+- [ ] Add Windows overlay configuration (click-through, always-on-top)
+- [ ] Fix autostart plugin initialization for cross-platform
+- [ ] Verify `commands.rs` accessibility commands compile on Windows
+- [ ] Add `windows` crate dependency (if needed for overlay)
+- [ ] Fix "nothing leaves your Mac" text in Onboarding.svelte
+
+**Testing gate — phase is not done until all pass:**
+- [ ] `cargo check --target x86_64-pc-windows-msvc` succeeds
+- [ ] `cargo test` passes on a Windows machine
+- [ ] `cargo clippy -- -D warnings` passes on Windows
 - [ ] App launches and shows system tray icon
 - [ ] Tray menu works (Open Settings, Transcribe File, Quit)
 - [ ] Settings window opens and renders correctly
@@ -770,75 +785,66 @@ If/when a website exists:
 - [ ] Clipboard fallback works when auto-paste is disabled
 - [ ] Recording overlay appears and disappears correctly
 - [ ] Overlay is click-through
-- [ ] Overlay appears on all virtual desktops
-- [ ] File transcription works (drag & drop, file dialog)
+- [ ] File transcription works (file dialog)
 - [ ] Model download works
 - [ ] Settings persist across restarts
-- [ ] Autostart works (toggle in settings, verify in Task Manager → Startup)
 - [ ] CLI commands work from PowerShell and Command Prompt
-- [ ] Installer: fresh install on clean Windows
-- [ ] Installer: upgrade over previous version
-- [ ] Uninstaller: clean removal via Add/Remove Programs
-
-### 9.2 Test environments
-
-- [ ] Windows 10 (version 1803 minimum)
-- [ ] Windows 11
-- [ ] Windows with non-English locale (test path handling, UI)
-- [ ] Low-RAM system (4 GB) — verify model loading doesn't OOM
-- [ ] HiDPI display (150%, 200% scaling) — verify overlay positioning
-
-### 9.3 Automated tests
-
-- Existing `cargo test` suite should pass on Windows CI
-- Add Windows to the CI matrix (section 5.1)
-- Consider adding a Windows-specific integration test for paste simulation
-
----
-
-## 10. Work Item Checklist
-
-### Phase 1: Compile & run on Windows
-
-- [ ] Fix `notify` crate features for cross-platform compilation
-- [ ] Implement `platform::windows` module (accessibility stubs)
-- [ ] Add Windows overlay configuration (click-through, always-on-top)
-- [ ] Fix autostart plugin initialization for cross-platform
-- [ ] Verify `commands.rs` accessibility commands compile on Windows
-- [ ] Add `windows` crate dependency (if needed for overlay)
-- [ ] Fix "nothing leaves your Mac" text in Onboarding.svelte
-- [ ] Run `cargo check` targeting Windows: `cargo check --target x86_64-pc-windows-msvc`
 
 ### Phase 2: CI/CD
 
+**Code changes:**
 - [ ] Add `check-windows` job to `.github/workflows/ci.yml`
 - [ ] Create `.github/workflows/release.yml` with dual-platform builds
 - [ ] Configure artifact upload for Windows bundles
-- [ ] Verify Windows build produces working NSIS and MSI installers
 
-### Phase 3: Tauri config & installer
+**Testing gate:**
+- [ ] CI passes on both macOS and Windows runners (cargo check, test, clippy, build)
+- [ ] Release workflow produces NSIS `.exe` and `.msi` artifacts
+- [ ] macOS CI is not broken by the changes
 
+### Phase 3: Installer & Tauri config
+
+**Code changes:**
 - [ ] Add `windows` section to `tauri.conf.json` bundle config
 - [ ] Configure NSIS installer settings (install path, shortcuts, uninstaller)
-- [ ] Test WebView2 bootstrapper behavior on clean Windows
-- [ ] Verify icon rendering in taskbar, tray, and installer
+
+**Testing gate:**
+- [ ] Fresh install on clean Windows 10 (version 1803 minimum)
+- [ ] Fresh install on clean Windows 11
+- [ ] Upgrade install over previous version
+- [ ] Uninstaller: clean removal via Add/Remove Programs
+- [ ] WebView2 bootstrapper installs runtime if missing
+- [ ] Icon renders correctly in taskbar, tray, Start menu, and installer
+- [ ] Autostart works (toggle in settings, verify in Task Manager → Startup)
+- [ ] Test on HiDPI display (150%, 200% scaling) — overlay positioning correct
+- [ ] Test with non-English Windows locale (path handling, UI rendering)
 
 ### Phase 4: Code signing
 
+**Code changes:**
 - [ ] Obtain EV code signing certificate
 - [ ] Configure certificate in GitHub Actions secrets
 - [ ] Add signing step to release workflow
-- [ ] Verify SmartScreen warning is resolved
+
+**Testing gate:**
+- [ ] Signed installer does not trigger SmartScreen warning
+- [ ] Certificate details show correct publisher name in file properties
+- [ ] Timestamp server is used (signature remains valid after cert expiry)
 
 ### Phase 5: Documentation & distribution
 
+**Code changes:**
 - [ ] Update README.md with Windows support
 - [ ] Update CONTRIBUTING.md with Windows dev setup
 - [ ] Create `docs/installation.md`
 - [ ] Create `docs/windows-notes.md`
 - [ ] Update website download page (if exists)
-- [ ] Create GitHub Release with Windows artifacts
-- [ ] Submit to winget package manager
+
+**Testing gate:**
+- [ ] GitHub Release created with both macOS and Windows artifacts
+- [ ] Download links work and files are not corrupted
+- [ ] Installation instructions are accurate (follow them on a clean machine)
+- [ ] Submit to winget package manager and verify `winget install` works
 
 ### Phase 6: Post-launch improvements
 
@@ -847,6 +853,7 @@ If/when a website exists:
 - [ ] Test on ARM64 Windows (Snapdragon)
 - [ ] Add Chocolatey package
 - [ ] Performance profiling: CPU transcription benchmarks vs macOS Metal
+- [ ] Low-RAM testing (4 GB) — verify model loading doesn't OOM
 
 ---
 
