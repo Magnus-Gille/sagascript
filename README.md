@@ -3,26 +3,29 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/Magnus-Gille/sagascript/actions/workflows/ci.yml/badge.svg)](https://github.com/Magnus-Gille/sagascript/actions/workflows/ci.yml)
 
-Low-latency, privacy-first dictation for macOS. Push-to-talk transcription with local Whisper models.
-
-![Sagascript](sagascript-screenshot.png)
+Dictate anywhere. Privately. A lightweight menu bar app for macOS and Windows. Press a hotkey, speak, and text appears in any application. Local transcription powered by Whisper — no cloud, no internet required.
 
 ## Features
 
-- **Push-to-talk dictation** -- hold a global hotkey, speak, release to transcribe and paste
-- **100% local transcription** -- runs Whisper models on-device via Metal/Core ML (no data leaves your Mac)
+- **Push-to-talk dictation** -- hold a global hotkey, speak, release to transcribe and paste into any app
+- **100% local transcription** -- runs Whisper models on-device (Metal/Core ML on macOS) with no data leaving your machine
+- **Privacy by default** -- audio is processed in memory and immediately discarded; zero network traffic unless you explicitly opt in to a remote provider
+- **No telemetry or tracking** -- no analytics, no usage sharing, no data collection of any kind
+- **Cloud when you choose** -- optionally use OpenAI's API with your own key for maximum accuracy; remote transcription is never the default
 - **Multi-language** -- English, Swedish, Norwegian, and 90+ other languages
 - **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
 - **Configurable** -- choose your model, language, hotkey, and output behavior
+- **Cross-platform** -- macOS 13+ (Apple Silicon & Intel) and Windows 10+ (coming soon)
 
 ## Building from source
 
 ### Prerequisites
 
-- macOS 13.0+
+- **macOS**: macOS 13.0+ (Apple Silicon or Intel)
+- **Windows**: Windows 10+
 - Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
-- Node.js 20+ (`brew install node`)
+- Node.js 20+ (`brew install node` on macOS, or download from [nodejs.org](https://nodejs.org) on Windows)
 - Tauri CLI (`cargo install tauri-cli`)
 
 ### Build and run
@@ -40,7 +43,7 @@ cargo tauri dev
 cargo tauri build
 ```
 
-The `.app` bundle will be in `src-tauri/target/release/bundle/macos/`.
+On macOS the `.app` bundle will be in `src-tauri/target/release/bundle/macos/`. On Windows the installer will be in `src-tauri/target/release/bundle/msi/` or `src-tauri/target/release/bundle/nsis/`.
 
 ## CLI usage
 
@@ -73,13 +76,19 @@ sagascript manpages --dir /usr/local/share/man/man1
 
 Run `sagascript --help` for the full list of commands.
 
-## macOS permissions
+## Permissions
+
+### macOS
 
 Sagascript needs the following permissions (macOS will prompt you on first use):
 
 - **Microphone** -- for recording audio
 - **Accessibility** -- for pasting transcriptions into the active app
 - **Input Monitoring** -- for the global hotkey
+
+### Windows
+
+- **Microphone** -- for recording audio
 
 ## Contributing
 
