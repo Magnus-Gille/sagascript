@@ -85,6 +85,14 @@ Sagascript needs the following permissions (macOS will prompt you on first use):
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and how to submit changes.
 
+## Acknowledgments
+
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) by Georgi Gerganov -- the inference engine that makes local transcription fast
+- [whisper-rs](https://github.com/tazz4843/whisper-rs) -- Rust bindings for whisper.cpp
+- [Tauri](https://tauri.app/) -- the framework powering the native app shell
+- [OpenAI Whisper](https://github.com/openai/whisper) -- the original speech recognition model
+- [NbAiLab/NPSC](https://huggingface.co/datasets/NbAiLab/NPSC) -- Norwegian test audio (CC0, Norwegian National Library)
+
 ## License
 
 [MIT](LICENSE)
