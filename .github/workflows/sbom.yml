@@ -1,0 +1,62 @@
+name: SBOM
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+jobs:
+  sbom:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install cargo-sbom
+        run: cargo install cargo-sbom
+
+      - name: Generate Rust SBOM (SPDX)
+        working-directory: src-tauri
+        run: cargo sbom --output-format spdx_json_2_3 > ../sbom-rust.spdx.json
+
+      - name: Generate Rust SBOM (CycloneDX)
+        working-directory: src-tauri
+        run: cargo sbom --output-format cyclone_dx_json_1_4 > ../sbom-rust.cdx.json
+
+      - name: Install cdxgen
+        run: npm install -g @cyclonedx/cdxgen
+
+      - name: Generate full-project SBOM (CycloneDX)
+        run: cdxgen -o sbom-full.cdx.json -t rust,javascript --no-recurse .
+        env:
+          CDXGEN_DEBUG_MODE: "false"
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom-rust.spdx.json
+            sbom-rust.cdx.json
+            sbom-full.cdx.json
+
+      - name: Attach SBOMs to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG_NAME" sbom-rust.spdx.json sbom-rust.cdx.json sbom-full.cdx.json
