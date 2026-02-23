@@ -22,6 +22,9 @@ mod transcription;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Maximum time to wait for whisper inference before aborting (seconds)
+const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -437,18 +440,28 @@ fn stop_recording_and_transcribe(
         let result = if let Err(e) = whisper.ensure_model(effective_model) {
             Err(e)
         } else {
-            // Run blocking transcription on a separate thread
-            let whisper = whisper.inner().clone();
+            // Run blocking transcription on a separate thread with a timeout.
+            // If whisper.cpp hangs (e.g. Metal GPU stall), the abort callback
+            // signals it to stop so the context lock is released.
+            let whisper_ref = whisper.inner().clone();
             let audio = audio.clone();
-            match tokio::task::spawn_blocking(move || {
-                whisper.transcribe_sync(&audio, language)
-            })
-            .await
-            {
-                Ok(r) => r,
-                Err(e) => Err(error::DictationError::TranscriptionFailed(
+            let fut = tokio::task::spawn_blocking(move || {
+                whisper_ref.transcribe_sync(&audio, language)
+            });
+
+            let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
+            match tokio::time::timeout(timeout, fut).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => Err(error::DictationError::TranscriptionFailed(
                     format!("Task join error: {e}"),
                 )),
+                Err(_) => {
+                    // Timeout — tell whisper.cpp to abort so it releases the lock
+                    whisper.request_abort();
+                    Err(error::DictationError::TranscriptionFailed(
+                        format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s"),
+                    ))
+                }
             }
         };
 

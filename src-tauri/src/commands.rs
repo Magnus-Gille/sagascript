@@ -1,7 +1,11 @@
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tauri::State;
 use tracing::{error, info};
+
+/// Maximum time to wait for whisper inference before aborting (seconds)
+const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
 use crate::app_controller::{AppController, AppState};
 use crate::audio::decoder;
@@ -222,12 +226,20 @@ pub async fn stop_and_transcribe(
         .ensure_model(effective_model)
         .map_err(|e| e.to_string())?;
 
-    // Run blocking transcription on a separate thread
-    let whisper = whisper.inner().clone();
+    // Run blocking transcription on a separate thread with timeout
+    let whisper_ref = whisper.inner().clone();
     let audio = audio.clone();
-    let result = tokio::task::spawn_blocking(move || whisper.transcribe_sync(&audio, language))
-        .await
-        .map_err(|e| format!("Transcription task failed: {e}"))?;
+    let fut = tokio::task::spawn_blocking(move || whisper_ref.transcribe_sync(&audio, language));
+
+    let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
+    let result = match tokio::time::timeout(timeout, fut).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return Err(format!("Transcription task failed: {e}")),
+        Err(_) => {
+            whisper.request_abort();
+            return Err(format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s"));
+        }
+    };
 
     match result {
         Ok(text) => {
@@ -391,16 +403,28 @@ pub async fn transcribe_file(
 
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 
-    // Run blocking transcription with progress reporting
-    let whisper = whisper.inner().clone();
+    // Run blocking transcription with progress reporting and timeout
+    let whisper_ref = whisper.inner().clone();
     let app_progress = app.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        whisper.transcribe_sync_with_progress(&audio, language, move |pct| {
+    let fut = tokio::task::spawn_blocking(move || {
+        whisper_ref.transcribe_sync_with_progress(&audio, language, move |pct| {
             let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
         })
-    })
-    .await
-    .map_err(|e| format!("Transcription task failed: {e}"))?;
+    });
+
+    let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
+    let result = match tokio::time::timeout(timeout, fut).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+            return Err(format!("Transcription task failed: {e}"));
+        }
+        Err(_) => {
+            whisper.request_abort();
+            let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+            return Err(format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s"));
+        }
+    };
 
     let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
 
