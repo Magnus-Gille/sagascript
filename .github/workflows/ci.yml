@@ -203,9 +203,15 @@ jobs:
       - name: Smoke test — transcribe with JSON output
         run: |
           $env:BINARY = "src-tauri\target\release\sagascript.exe"
-          $result = & $env:BINARY transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3
-          Write-Host "JSON: $result"
-          $json = $result | ConvertFrom-Json
+          $output = & $env:BINARY transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3 2>&1
+          Write-Host "Raw output:"
+          $output | ForEach-Object { Write-Host $_ }
+          # Extract the JSON line (last line starting with '{')
+          $lines = if ($output -is [array]) { $output } else { @($output) }
+          $jsonLine = ($lines | Where-Object { $_ -match '^\s*\{' })[-1]
+          if (-not $jsonLine) { throw "No JSON line found in output" }
+          Write-Host "JSON line: $jsonLine"
+          $json = $jsonLine | ConvertFrom-Json
           if (-not $json.text) { throw "Missing text" }
           if ($json.language -ne "no") { throw "Expected language 'no'" }
           if ($json.duration_seconds -le 0) { throw "Expected positive duration" }
