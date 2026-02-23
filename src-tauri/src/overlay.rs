@@ -56,6 +56,9 @@ fn create_overlay(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Erro
     #[cfg(target_os = "macos")]
     configure_macos_window(&window);
 
+    // Click-through: cross-platform via Tauri API
+    let _ = window.set_ignore_cursor_events(true);
+
     // Suppress close — just hide instead
     let _ = window;
 
@@ -68,7 +71,6 @@ fn create_overlay(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Erro
 fn configure_macos_window(window: &tauri::WebviewWindow) {
     use cocoa::appkit::NSWindow;
     use cocoa::base::{id, NO};
-    use objc::runtime::YES;
 
     let ns_window: id = window.ns_window().unwrap() as id;
 
@@ -84,9 +86,6 @@ fn configure_macos_window(window: &tauri::WebviewWindow) {
         ns_window.setOpaque_(NO);
         let clear_color: id = objc::msg_send![objc::class!(NSColor), clearColor];
         ns_window.setBackgroundColor_(clear_color);
-
-        // Click-through
-        ns_window.setIgnoresMouseEvents_(YES);
 
         // No shadow (CSS provides its own)
         ns_window.setHasShadow_(NO);

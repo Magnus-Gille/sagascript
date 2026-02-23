@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Supported transcription languages
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     #[serde(rename = "en")]
+    #[default]
     English,
     #[serde(rename = "sv")]
     Swedish,
@@ -35,15 +36,9 @@ impl Language {
     }
 }
 
-impl Default for Language {
-    fn default() -> Self {
-        Language::English
-    }
-}
-
 /// Whisper model variants
 /// All models use GGML format via whisper-rs (unified backend)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WhisperModel {
     #[serde(rename = "tiny.en")]
     TinyEn,
@@ -52,6 +47,7 @@ pub enum WhisperModel {
     #[serde(rename = "base.en")]
     BaseEn,
     #[serde(rename = "base")]
+    #[default]
     Base,
     #[serde(rename = "kb-whisper-tiny")]
     KbWhisperTiny,
@@ -134,10 +130,12 @@ impl WhisperModel {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_english_only(&self) -> bool {
         matches!(self, WhisperModel::TinyEn | WhisperModel::BaseEn | WhisperModel::SmallEn | WhisperModel::MediumEn)
     }
 
+    #[allow(dead_code)]
     pub fn is_swedish_optimized(&self) -> bool {
         matches!(
             self,
@@ -146,6 +144,7 @@ impl WhisperModel {
         )
     }
 
+    #[allow(dead_code)]
     pub fn is_norwegian_optimized(&self) -> bool {
         matches!(
             self,
@@ -273,34 +272,24 @@ impl WhisperModel {
     }
 }
 
-impl Default for WhisperModel {
-    fn default() -> Self {
-        WhisperModel::Base
-    }
-}
-
 /// Hotkey activation mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HotkeyMode {
     #[serde(rename = "push")]
+    #[default]
     PushToTalk,
     #[serde(rename = "toggle")]
     Toggle,
 }
 
 impl HotkeyMode {
+    #[allow(dead_code)]
     pub fn display_name(&self) -> &'static str {
         match self {
             HotkeyMode::PushToTalk => "Push-to-talk",
             HotkeyMode::Toggle => "Toggle",
         }
-    }
-}
-
-impl Default for HotkeyMode {
-    fn default() -> Self {
-        HotkeyMode::PushToTalk
     }
 }
 

@@ -117,8 +117,8 @@ fn cmd_list() -> Result<(), DictationError> {
     let current = settings::store::load();
     let defaults = Settings::default();
 
-    println!("{:<20} {:<24} {}", "KEY", "CURRENT", "DEFAULT");
-    println!("{:<20} {:<24} {}", "---", "-------", "-------");
+    println!("{:<20} {:<24} DEFAULT", "KEY", "CURRENT");
+    println!("{:<20} {:<24} -------", "---", "-------");
     println!(
         "{:<20} {:<24} {}",
         "language",
@@ -200,7 +200,7 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
         _ => unreachable!(), // validate_key already checked
     }
 
-    settings::store::save(&settings).map_err(|e| DictationError::SettingsError(e))?;
+    settings::store::save(&settings).map_err(DictationError::SettingsError)?;
     eprintln!("Set {key} = {}", get_setting_value(&settings, key));
     Ok(())
 }
@@ -220,11 +220,11 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
             "hotkey" => settings.hotkey = defaults.hotkey,
             _ => unreachable!(),
         }
-        settings::store::save(&settings).map_err(|e| DictationError::SettingsError(e))?;
+        settings::store::save(&settings).map_err(DictationError::SettingsError)?;
         eprintln!("Reset {key} to {}", get_setting_value(&settings, key));
     } else {
         let defaults = Settings::default();
-        settings::store::save(&defaults).map_err(|e| DictationError::SettingsError(e))?;
+        settings::store::save(&defaults).map_err(DictationError::SettingsError)?;
         eprintln!("All settings reset to defaults");
     }
     Ok(())
@@ -262,20 +262,20 @@ fn get_setting_value(settings: &Settings, key: &str) -> String {
 }
 
 fn format_language(lang: Language) -> String {
-    serde_json::to_value(&lang)
-        .and_then(|v| serde_json::from_value::<String>(v))
+    serde_json::to_value(lang)
+        .and_then(serde_json::from_value::<String>)
         .unwrap_or_else(|_| format!("{:?}", lang))
 }
 
 fn format_model(model: WhisperModel) -> String {
-    serde_json::to_value(&model)
-        .and_then(|v| serde_json::from_value::<String>(v))
+    serde_json::to_value(model)
+        .and_then(serde_json::from_value::<String>)
         .unwrap_or_else(|_| format!("{:?}", model))
 }
 
 fn format_hotkey_mode(mode: HotkeyMode) -> String {
-    serde_json::to_value(&mode)
-        .and_then(|v| serde_json::from_value::<String>(v))
+    serde_json::to_value(mode)
+        .and_then(serde_json::from_value::<String>)
         .unwrap_or_else(|_| format!("{:?}", mode))
 }
 

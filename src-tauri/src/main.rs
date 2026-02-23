@@ -244,15 +244,14 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Sagascript")
-        .run(|_app_handle, event| match event {
+        .run(|_app_handle, event| {
             // Prevent app from exiting when all windows are closed (tray-only app),
             // but allow explicit exit requests (e.g. from tray "Quit" menu)
-            tauri::RunEvent::ExitRequested { api, code, .. } => {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
                 if code.is_none() {
                     api.prevent_exit();
                 }
             }
-            _ => {}
         });
 }
 
