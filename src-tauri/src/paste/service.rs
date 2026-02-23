@@ -1,6 +1,8 @@
 use arboard::Clipboard;
 use enigo::{Enigo, Keyboard, Settings as EnigoSettings, Key, Direction};
-use tracing::{info, warn};
+use tracing::info;
+#[cfg(target_os = "macos")]
+use tracing::warn;
 
 use crate::error::DictationError;
 
