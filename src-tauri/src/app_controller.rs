@@ -10,6 +10,17 @@ use crate::logging::LoggingService;
 use crate::paste::PasteService;
 use crate::settings::{HotkeyMode, Settings};
 
+/// Result of handling a hotkey-down event
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyDownResult {
+    /// Recording was started
+    StartedRecording,
+    /// Toggle mode: recording should be stopped (second press)
+    StopRecording,
+    /// No action taken (e.g. already transcribing)
+    NoOp,
+}
+
 /// Application state machine
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -106,18 +117,22 @@ impl AppController {
     }
 
     /// Handle hotkey down event
-    pub fn handle_hotkey_down(&mut self) -> Result<(), DictationError> {
+    pub fn handle_hotkey_down(&mut self) -> Result<HotkeyDownResult, DictationError> {
         info!("Hotkey DOWN");
 
         match self.settings.hotkey_mode {
-            HotkeyMode::PushToTalk => self.start_recording(),
+            HotkeyMode::PushToTalk => {
+                self.start_recording()?;
+                Ok(HotkeyDownResult::StartedRecording)
+            }
             HotkeyMode::Toggle => {
                 if self.state.is_recording() {
-                    Ok(())
+                    Ok(HotkeyDownResult::StopRecording)
                 } else if self.state == AppState::Idle {
-                    self.start_recording()
+                    self.start_recording()?;
+                    Ok(HotkeyDownResult::StartedRecording)
                 } else {
-                    Ok(())
+                    Ok(HotkeyDownResult::NoOp)
                 }
             }
         }
@@ -380,6 +395,26 @@ mod tests {
         ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
         ctrl.state = AppState::Recording;
         assert!(!ctrl.should_stop_on_key_up());
+    }
+
+    // -- handle_hotkey_down --
+
+    #[test]
+    fn toggle_mode_returns_stop_when_recording() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        ctrl.state = AppState::Recording;
+        let result = ctrl.handle_hotkey_down().unwrap();
+        assert_eq!(result, HotkeyDownResult::StopRecording);
+    }
+
+    #[test]
+    fn toggle_mode_returns_noop_when_transcribing() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        ctrl.state = AppState::Transcribing;
+        let result = ctrl.handle_hotkey_down().unwrap();
+        assert_eq!(result, HotkeyDownResult::NoOp);
     }
 
     // -- auto_paste --
