@@ -59,3 +59,52 @@ jobs:
 
       - name: Build Tauri app
         run: npx tauri build
+
+      # --- Tier 1: CLI smoke tests (no model needed) ---
+
+      - name: Smoke test — help and version
+        run: |
+          BINARY=src-tauri/target/release/sagascript
+          $BINARY --help
+          $BINARY transcribe --help
+          $BINARY record --help
+
+      - name: Smoke test — config management
+        run: |
+          BINARY=src-tauri/target/release/sagascript
+          $BINARY config list
+          $BINARY config get language
+          $BINARY config set language sv
+          $BINARY config get language | grep -q sv
+          $BINARY config reset language
+          $BINARY config get language | grep -q en
+          $BINARY config path
+
+      - name: Smoke test — model listing and formats
+        run: |
+          BINARY=src-tauri/target/release/sagascript
+          $BINARY list-models
+          $BINARY formats
+
+      - name: Smoke test — shell completions
+        run: |
+          BINARY=src-tauri/target/release/sagascript
+          $BINARY completions zsh > /dev/null
+          $BINARY completions bash > /dev/null
+
+      # --- Tier 2: Model download + transcription ---
+
+      - name: Smoke test — download model and transcribe
+        run: |
+          BINARY=src-tauri/target/release/sagascript
+          $BINARY download-model nb-whisper-tiny
+          RESULT=$($BINARY transcribe --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3)
+          echo "Transcription: $RESULT"
+          echo "$RESULT" | grep -iq "stortinget"
+
+      - name: Smoke test — transcribe with JSON output
+        run: |
+          BINARY=src-tauri/target/release/sagascript
+          RESULT=$($BINARY transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3)
+          echo "JSON: $RESULT"
+          echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['text']; assert d['language']=='no'; assert d['duration_seconds']>0"
