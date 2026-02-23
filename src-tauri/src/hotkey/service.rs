@@ -3,11 +3,13 @@ use tracing::info;
 /// Hotkey management service
 /// Uses tauri-plugin-global-shortcut for registration
 /// Push-to-talk needs key-down + key-up events
+#[allow(dead_code)]
 pub struct HotkeyService {
     current_shortcut: Option<String>,
     suspended: bool,
 }
 
+#[allow(dead_code)]
 impl HotkeyService {
     pub fn new() -> Self {
         Self {

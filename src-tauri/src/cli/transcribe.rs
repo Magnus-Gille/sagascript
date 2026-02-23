@@ -122,6 +122,7 @@ pub fn parse_language(s: &str) -> Result<Language, DictationError> {
     }
 }
 
+#[allow(dead_code)]
 pub fn resolve_model(
     model_str: Option<&str>,
     language: Language,

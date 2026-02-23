@@ -181,7 +181,7 @@
         <h1>Microphone Access</h1>
         <p class="description">
           Sagascript can record your voice for live dictation. All audio is
-          processed locally on your device — nothing leaves your Mac.
+          processed locally on your device — nothing leaves your device.
         </p>
 
         <div class="status-indicator" class:granted={micGranted}>

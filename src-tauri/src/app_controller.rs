@@ -17,6 +17,7 @@ pub enum AppState {
     Idle,
     Recording,
     Transcribing,
+    #[allow(dead_code)]
     Error,
 }
 
@@ -25,6 +26,7 @@ impl AppState {
         matches!(self, AppState::Recording)
     }
 
+    #[allow(dead_code)]
     pub fn is_busy(&self) -> bool {
         matches!(self, AppState::Recording | AppState::Transcribing)
     }
@@ -34,6 +36,7 @@ impl AppState {
 pub struct AppController {
     state: AppState,
     audio: AudioCaptureService,
+    #[allow(dead_code)]
     paste: PasteService,
     hotkey: HotkeyService,
     logging: LoggingService,
@@ -182,6 +185,7 @@ impl AppController {
     }
 
     /// Auto-paste text if enabled
+    #[allow(dead_code)]
     pub fn auto_paste(&self, text: &str) -> Result<(), DictationError> {
         if !self.settings.auto_paste {
             return Ok(());
@@ -206,6 +210,7 @@ impl AppController {
             .unwrap_or(Duration::ZERO)
     }
 
+    #[allow(dead_code)]
     pub fn set_model_ready(&mut self, ready: bool) {
         self.model_ready = ready;
     }
