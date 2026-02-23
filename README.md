@@ -9,10 +9,9 @@ Dictate anywhere. Privately. A lightweight menu bar app for macOS and Windows. P
 
 - **Push-to-talk dictation** -- hold a global hotkey, speak, release to transcribe and paste into any app
 - **100% local transcription** -- runs Whisper models on-device (Metal/Core ML on macOS) with no data leaving your machine
-- **Privacy by default** -- audio is processed in memory and immediately discarded; zero network traffic unless you explicitly opt in to a remote provider
+- **Privacy by default** -- audio is processed in memory and immediately discarded; zero network traffic
 - **No telemetry or tracking** -- no analytics, no usage sharing, no data collection of any kind
-- **Cloud when you choose** -- optionally use OpenAI's API with your own key for maximum accuracy; remote transcription is never the default
-- **Multi-language** -- English, Swedish, Norwegian, and 90+ other languages
+- **Multi-language** -- English, Swedish, and Norwegian with dedicated models; additional languages supported via generic Whisper models
 - **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
 - **Configurable** -- choose your model, language, hotkey, and output behavior
