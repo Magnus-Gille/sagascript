@@ -10,6 +10,7 @@ Sagascript is a low-latency, privacy-first macOS dictation app built with Tauri 
 - **Privacy-first**: Default to local transcription. Remote/cloud features are opt-in, never default.
 - Optimize for **latency** and **perceived speed**.
 - Keep UI minimal (menu bar + settings + indicator).
+- **Always work in worktrees**: When making changes, always create a separate branch in a git worktree (`isolation: "worktree"` for Task agents, or `EnterWorktree` for the main session). Never modify the main working tree directly — unstaged changes leak across branches and interfere with parallel work.
 
 ## Code style
 
