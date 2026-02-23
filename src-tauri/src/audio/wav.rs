@@ -1,4 +1,4 @@
-/// Encode f32 samples (16kHz mono) to WAV format for OpenAI API
+/// Encode f32 samples (16kHz mono) to WAV format
 pub fn encode_wav(samples: &[f32]) -> Vec<u8> {
     let sample_rate: u32 = 16_000;
     let channels: u16 = 1;

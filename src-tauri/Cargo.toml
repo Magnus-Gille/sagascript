@@ -25,12 +25,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 tracing-appender = "0.2"
 cpal = "0.15"
-reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 arboard = "3"
 enigo = { version = "0.2", features = ["serde"] }
-keyring = { version = "3", features = [] }
 dirs = "6"
-async-trait = "0.1"
 futures-util = "0.3"
 num_cpus = "1"
 clap = { version = "4", features = ["derive", "string"] }
