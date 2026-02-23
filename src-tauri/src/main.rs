@@ -31,7 +31,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-use app_controller::AppController;
+use app_controller::{AppController, HotkeyDownResult};
 use commands::{SharedController, SharedWhisper};
 use transcription::WhisperBackend;
 
@@ -78,19 +78,32 @@ fn main() {
                     match event.state {
                         ShortcutState::Pressed => {
                             info!("Hotkey pressed: {shortcut}");
-                            let (is_recording, show_overlay) = {
+                            let result = {
                                 let mut c = ctrl.lock().unwrap();
-                                if let Err(e) = c.handle_hotkey_down() {
-                                    error!("Hotkey down error: {e}");
+                                match c.handle_hotkey_down() {
+                                    Ok(r) => r,
+                                    Err(e) => {
+                                        error!("Hotkey down error: {e}");
+                                        HotkeyDownResult::NoOp
+                                    }
                                 }
-                                (c.state().is_recording(), c.settings().show_overlay)
                             };
-                            if is_recording {
-                                let _ = app.emit(events::event::STATE_CHANGED, "recording");
-                                update_tray_status(app, "recording");
-                                if show_overlay {
-                                    overlay::show(app);
+                            match result {
+                                HotkeyDownResult::StartedRecording => {
+                                    let show_overlay = {
+                                        let c = ctrl.lock().unwrap();
+                                        c.settings().show_overlay
+                                    };
+                                    let _ = app.emit(events::event::STATE_CHANGED, "recording");
+                                    update_tray_status(app, "recording");
+                                    if show_overlay {
+                                        overlay::show(app);
+                                    }
                                 }
+                                HotkeyDownResult::StopRecording => {
+                                    stop_recording_and_transcribe(app, &ctrl);
+                                }
+                                HotkeyDownResult::NoOp => {}
                             }
                         }
                         ShortcutState::Released => {
@@ -336,22 +349,35 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
     }
 }
 
-/// Handle hotkey release: check minimum duration, stop recording, transcribe
+/// Handle hotkey release: stop recording for push-to-talk mode
 fn handle_hotkey_release(
     app: &tauri::AppHandle,
     ctrl: &tauri::State<'_, SharedController>,
 ) {
-    // Check if we should stop (push-to-talk mode + currently recording)
-    let (should_stop, elapsed) = {
+    let should_stop = {
         let c = ctrl.lock().unwrap();
-        (c.should_stop_on_key_up(), c.recording_elapsed())
+        c.should_stop_on_key_up()
     };
 
     if !should_stop {
         return;
     }
 
+    stop_recording_and_transcribe(app, ctrl);
+}
+
+/// Stop recording, enforce minimum duration, and spawn transcription.
+/// Shared by both push-to-talk (on key-up) and toggle (on second key-down).
+fn stop_recording_and_transcribe(
+    app: &tauri::AppHandle,
+    ctrl: &tauri::State<'_, SharedController>,
+) {
     // Enforce minimum recording duration
+    let elapsed = {
+        let c = ctrl.lock().unwrap();
+        c.recording_elapsed()
+    };
+
     if elapsed < Duration::from_millis(MIN_RECORDING_MS) {
         let remaining = Duration::from_millis(MIN_RECORDING_MS) - elapsed;
         info!(

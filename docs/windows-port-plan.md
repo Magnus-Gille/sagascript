@@ -831,14 +831,14 @@ to the next phase until the tests in the current phase pass.
 - [ ] Certificate details show correct publisher name in file properties
 - [ ] Timestamp server is used (signature remains valid after cert expiry)
 
-### Phase 5: Documentation & distribution
+### Phase 5: Documentation & distribution (**DONE**)
 
 **Code changes:**
-- [ ] Update README.md with Windows support
-- [ ] Update CONTRIBUTING.md with Windows dev setup
-- [ ] Create `docs/installation.md`
-- [ ] Create `docs/windows-notes.md`
-- [ ] Update website download page (if exists)
+- [x] Update README.md with Windows support
+- [x] Update CONTRIBUTING.md with Windows dev setup
+- [x] Create `docs/installation.md`
+- [x] Create `docs/windows-notes.md`
+- [ ] Update website download page (if exists) — deferred, website not yet deployed
 
 **Testing gate:**
 - [ ] GitHub Release created with both macOS and Windows artifacts

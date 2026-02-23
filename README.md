@@ -15,7 +15,7 @@ Dictate anywhere. Privately. A lightweight menu bar app for macOS and Windows. P
 - **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
 - **Configurable** -- choose your model, language, hotkey, and output behavior
-- **Cross-platform** -- macOS 13+ (Apple Silicon & Intel) and Windows 10+ (coming soon)
+- **Cross-platform** -- macOS 13+ (Apple Silicon & Intel) and Windows 10+
 
 ## Building from source
 
@@ -88,6 +88,11 @@ Sagascript needs the following permissions (macOS will prompt you on first use):
 ### Windows
 
 - **Microphone** -- for recording audio
+
+## Documentation
+
+- [Installation guide](docs/installation.md) -- detailed install instructions for macOS and Windows
+- [Windows-specific notes](docs/windows-notes.md) -- feature comparison, known limitations, and troubleshooting
 
 ## Contributing
 
