@@ -1,6 +1,7 @@
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
-use tracing::info;
+use tracing::{info, warn};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 use crate::error::DictationError;
@@ -18,6 +19,8 @@ pub struct WhisperBackend {
     context: Mutex<Option<WhisperContext>>,
     /// Currently loaded model
     loaded_model: Mutex<Option<WhisperModel>>,
+    /// Abort flag — set to true to cancel in-progress transcription
+    abort_flag: Arc<AtomicBool>,
 }
 
 // WhisperContext is Send+Sync (it wraps a C pointer that's thread-safe)
@@ -30,7 +33,15 @@ impl WhisperBackend {
         Self {
             context: Mutex::new(None),
             loaded_model: Mutex::new(None),
+            abort_flag: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Signal the whisper inference to abort. The abort takes effect at the
+    /// next whisper.cpp checkpoint (typically once per audio segment).
+    pub fn request_abort(&self) {
+        warn!("Transcription abort requested");
+        self.abort_flag.store(true, Ordering::SeqCst);
     }
 
     /// Load a specific model, replacing any previously loaded model
@@ -128,6 +139,11 @@ impl WhisperBackend {
         params.set_no_speech_thold(0.6);
         params.set_suppress_blank(true);
         params.set_progress_callback_safe(on_progress);
+
+        // Wire abort flag so timeouts can cancel inference mid-flight
+        self.abort_flag.store(false, Ordering::SeqCst);
+        let abort = Arc::clone(&self.abort_flag);
+        params.set_abort_callback_safe(move || abort.load(Ordering::SeqCst));
 
         info!(
             "Starting local transcription: {} samples, {} threads, lang={:?}",
