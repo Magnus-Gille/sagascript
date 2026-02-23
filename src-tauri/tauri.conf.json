@@ -29,6 +29,15 @@
     ],
     "macOS": {
       "minimumSystemVersion": "13.0"
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "allowDowngrades": false
     }
   },
   "plugins": {}

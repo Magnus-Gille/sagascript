@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  check:
+  check-macos:
     runs-on: macos-14
 
     steps:
@@ -32,9 +32,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: macos-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            macos-cargo-
 
       - name: Install npm dependencies
         run: npm ci
@@ -52,7 +52,7 @@ jobs:
 
       - name: Cargo clippy
         working-directory: src-tauri
-        run: cargo clippy
+        run: cargo clippy -- -D warnings
 
       - name: Svelte check
         run: npx svelte-check --tsconfig ./tsconfig.json
@@ -108,3 +108,104 @@ jobs:
           RESULT=$($BINARY transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3)
           echo "JSON: $RESULT"
           echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['text']; assert d['language']=='no'; assert d['duration_seconds']>0"
+
+  check-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            src-tauri\target
+          key: windows-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-cargo-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Cargo check
+        working-directory: src-tauri
+        run: cargo check
+
+      - name: Cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy -- -D warnings
+
+      - name: Build Tauri app
+        run: npx tauri build
+
+      # --- CLI smoke tests (Windows / PowerShell) ---
+
+      - name: Smoke test — help and version
+        run: |
+          $env:BINARY = "src-tauri\target\release\sagascript.exe"
+          & $env:BINARY --help
+          & $env:BINARY transcribe --help
+          & $env:BINARY record --help
+
+      - name: Smoke test — config management
+        run: |
+          $env:BINARY = "src-tauri\target\release\sagascript.exe"
+          & $env:BINARY config list
+          & $env:BINARY config get language
+          & $env:BINARY config set language sv
+          $result = & $env:BINARY config get language
+          if ($result -notmatch "sv") { throw "Expected 'sv'" }
+          & $env:BINARY config reset language
+          $result = & $env:BINARY config get language
+          if ($result -notmatch "en") { throw "Expected 'en'" }
+          & $env:BINARY config path
+
+      - name: Smoke test — model listing and formats
+        run: |
+          $env:BINARY = "src-tauri\target\release\sagascript.exe"
+          & $env:BINARY list-models
+          & $env:BINARY formats
+
+      - name: Smoke test — shell completions
+        run: |
+          $env:BINARY = "src-tauri\target\release\sagascript.exe"
+          & $env:BINARY completions powershell | Out-Null
+
+      - name: Smoke test — download model and transcribe
+        run: |
+          $env:BINARY = "src-tauri\target\release\sagascript.exe"
+          & $env:BINARY download-model nb-whisper-tiny
+          $result = & $env:BINARY transcribe --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3
+          Write-Host "Transcription: $result"
+          if ($result -notmatch "(?i)stortinget") { throw "Expected 'stortinget' in output" }
+
+      - name: Smoke test — transcribe with JSON output
+        shell: cmd
+        run: |
+          set BINARY=src-tauri\target\release\sagascript.exe
+          %BINARY% transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3 > json_output.txt 2>nul
+          type json_output.txt
+          findstr /C:"text" json_output.txt
+          findstr /C:"duration_seconds" json_output.txt
+          findstr /C:"language" json_output.txt
