@@ -6,10 +6,20 @@ Thanks for your interest in contributing! This guide will help you get set up an
 
 ### Prerequisites
 
-- macOS 13.0+ (Apple Silicon recommended)
+**All platforms:**
+
 - Rust 1.75+ with the `stable` toolchain
 - Node.js 20+
 - Tauri CLI: `cargo install tauri-cli`
+
+**macOS:**
+
+- macOS 13.0+ (Apple Silicon recommended)
+
+**Windows:**
+
+- Windows 10 (version 1803+) or Windows 11
+- [Visual Studio Build Tools 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **"Desktop development with C++"** workload (required by `whisper-rs` to compile `whisper.cpp`)
 
 ### Getting started
 
@@ -21,6 +31,8 @@ cargo tauri dev
 ```
 
 ### Running tests
+
+All checks must pass on both macOS and Windows (CI runs on both platforms).
 
 ```bash
 # Rust unit tests
@@ -63,11 +75,13 @@ src-tauri/src/        # Rust backend
   credentials/        # Keyring integration
 ```
 
-## macOS threading caveat
+## Platform-specific notes
 
-`enigo` (used for auto-paste) and other TIS/HIToolbox APIs **must run on the main thread**. From async contexts, use `app_handle.run_on_main_thread()`. Calling these APIs from a tokio worker thread will cause a SIGTRAP crash.
+### macOS: threading caveat
 
-## TCC permission reset for dev builds
+`enigo` (used for auto-paste) and other TIS/HIToolbox APIs **must run on the main thread**. From async contexts, use `app_handle.run_on_main_thread()`. Calling these APIs from a tokio worker thread will cause a SIGTRAP crash. This restriction does not apply on Windows.
+
+### macOS: TCC permission reset for dev builds
 
 After rebuilding, macOS may invalidate previously granted permissions (Microphone, Accessibility, Input Monitoring) because the ad-hoc code signature changes.
 
@@ -81,6 +95,12 @@ tccutil reset Accessibility com.sagascript.app
 Then relaunch and re-grant permissions when prompted.
 
 **Why this happens:** Ad-hoc signing generates a new signature each build. macOS ties TCC grants to the signature, not the bundle identifier alone. A stable Developer ID certificate would fix this permanently.
+
+### Windows: debugging notes
+
+- **No TCC equivalent.** Windows does not require accessibility or input monitoring permissions. Microphone access is the only permission needed and is managed via Windows Settings.
+- **`whisper-rs` compilation** requires the MSVC C++ toolchain (installed via Visual Studio Build Tools). If you get linker errors, verify the "Desktop development with C++" workload is installed.
+- **Hotkey conflicts.** If the global hotkey doesn't register, check for conflicts with other applications or Windows keyboard shortcuts.
 
 ## Submitting changes
 
