@@ -99,6 +99,7 @@ impl AudioCaptureService {
     }
 
     /// Get the last captured audio for retry
+    #[allow(dead_code)]
     pub fn last_captured_audio(&self) -> Option<&Vec<f32>> {
         self.last_captured.as_ref()
     }

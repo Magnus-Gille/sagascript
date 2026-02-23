@@ -55,6 +55,9 @@ objc = "0.2"
 whisper-rs = { version = "0.15" }
 notify = { version = "7" }
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

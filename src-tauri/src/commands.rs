@@ -63,8 +63,8 @@ pub async fn get_loaded_model(
     let loaded = whisper.loaded_model();
     Ok(LoadedModelInfo {
         effective_model: effective.display_name().to_string(),
-        effective_model_id: serde_json::to_value(&effective)
-            .and_then(|v| serde_json::from_value::<String>(v))
+        effective_model_id: serde_json::to_value(effective)
+            .and_then(serde_json::from_value::<String>)
             .unwrap_or_else(|_| format!("{:?}", effective)),
         loaded_model: loaded.map(|m| m.display_name().to_string()),
         is_loaded: loaded == Some(effective),
@@ -279,7 +279,7 @@ pub async fn get_model_info(
         .iter()
         .map(|m| ModelInfo {
             id: serde_json::to_value(m)
-                .and_then(|v| serde_json::from_value::<String>(v))
+                .and_then(serde_json::from_value::<String>)
                 .unwrap_or_else(|_| format!("{:?}", m)),
             display_name: m.display_name().to_string(),
             description: m.description().to_string(),
