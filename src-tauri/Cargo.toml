@@ -24,7 +24,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 tracing-appender = "0.2"
-cpal = "0.15"
+cpal = "0.17"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 arboard = "3"
 enigo = { version = "0.2", features = ["serde"] }
