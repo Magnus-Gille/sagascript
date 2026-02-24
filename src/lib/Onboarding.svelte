@@ -1,31 +1,69 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import {
     getPlatform,
+    getSettings,
+    setLanguage,
+    downloadModel,
     checkMicrophonePermission,
     requestMicrophonePermission,
     checkAccessibilityPermission,
     requestAccessibilityPermission,
+    type Language,
   } from "./api";
 
   export let oncomplete: () => void;
 
-  type Step = "welcome" | "microphone" | "accessibility" | "ready";
+  type Step = "welcome" | "language" | "download" | "microphone" | "accessibility" | "ready";
 
   let currentStep: Step = "welcome";
   let platform = "macos";
+
+  // Language selection
+  let selectedLanguage: Language = "en";
+
+  // Model download
+  let downloading = false;
+  let downloadProgress = 0;
+  let downloadError: string | null = null;
+  let downloadComplete = false;
+
+  // Permissions
   let micGranted = false;
   let accessibilityGranted = false;
   let micChecking = false;
   let accessibilityChecking = false;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Determine the ordered list of steps based on platform
+  // Hotkey (read from settings)
+  let hotkeyParts: string[] = ["Ctrl", "Shift", "Space"];
+
+  // Cleanup for event listeners
+  let unlistenProgress: (() => void) | null = null;
+  let unlistenReady: (() => void) | null = null;
+
+  // Model info per language
+  const modelInfo: Record<Language, { name: string; size: string }> = {
+    en: { name: "Base English", size: "142 MB" },
+    sv: { name: "KB-Whisper Base", size: "60 MB" },
+    no: { name: "NB-Whisper Base", size: "55 MB" },
+    auto: { name: "Base Multilingual", size: "142 MB" },
+  };
+
+  // Recommended model ID per language (must match Rust serde rename)
+  const recommendedModelId: Record<Language, string> = {
+    en: "base.en",
+    sv: "kb-whisper-base",
+    no: "nb-whisper-base",
+    auto: "base",
+  };
+
   function getSteps(): Step[] {
     if (platform === "macos") {
-      return ["welcome", "microphone", "accessibility", "ready"];
+      return ["welcome", "language", "download", "microphone", "accessibility", "ready"];
     }
-    return ["welcome", "ready"];
+    return ["welcome", "language", "download", "ready"];
   }
 
   function nextStep() {
@@ -40,8 +78,27 @@
     return getSteps().indexOf(currentStep);
   }
 
-  function totalSteps(): number {
-    return getSteps().length;
+  // -- Language --
+
+  async function selectLanguageAndContinue() {
+    await setLanguage(selectedLanguage);
+    nextStep();
+  }
+
+  // -- Model download --
+
+  async function startDownload() {
+    downloading = true;
+    downloadError = null;
+    downloadProgress = 0;
+
+    try {
+      await downloadModel(recommendedModelId[selectedLanguage]);
+      // model-ready event will set downloadComplete
+    } catch (e: any) {
+      downloading = false;
+      downloadError = typeof e === "string" ? e : e?.message ?? "Download failed. Check your internet connection.";
+    }
   }
 
   // -- Microphone --
@@ -54,7 +111,6 @@
       micChecking = false;
       return;
     }
-    // Poll until granted or user moves on
     startPoll(async () => {
       const granted = await checkMicrophonePermission();
       if (granted) {
@@ -70,7 +126,6 @@
   async function grantAccessibility() {
     accessibilityChecking = true;
     await requestAccessibilityPermission();
-    // Poll until granted or user moves on
     startPoll(async () => {
       const granted = await checkAccessibilityPermission();
       if (granted) {
@@ -95,7 +150,6 @@
 
   async function finish() {
     stopPoll();
-    // Write hasCompletedOnboarding to store
     const { load } = await import("@tauri-apps/plugin-store");
     const store = await load("sagascript-settings.json");
     await store.set("hasCompletedOnboarding", true);
@@ -103,15 +157,42 @@
     oncomplete();
   }
 
+  function formatProgress(pct: number): string {
+    return `${Math.round(pct)}%`;
+  }
+
   onMount(async () => {
     platform = await getPlatform();
-    // Pre-check current permission states
     micGranted = await checkMicrophonePermission();
     accessibilityGranted = await checkAccessibilityPermission();
+
+    // Read hotkey from settings
+    try {
+      const settings = await getSettings();
+      hotkeyParts = settings.hotkey.split("+");
+    } catch {
+      // keep default
+    }
+
+    // Listen for download progress
+    unlistenProgress = await listen("model-download-progress", (event: any) => {
+      const { downloaded, total } = event.payload;
+      if (total > 0) {
+        downloadProgress = (downloaded / total) * 100;
+      }
+    });
+
+    unlistenReady = await listen("model-ready", () => {
+      downloading = false;
+      downloadComplete = true;
+      downloadProgress = 100;
+    });
   });
 
   onDestroy(() => {
     stopPoll();
+    unlistenProgress?.();
+    unlistenReady?.();
   });
 </script>
 
@@ -120,7 +201,6 @@
     <span class="titlebar-text">Sagascript</span>
   </div>
 
-  <!-- Progress dots -->
   <div class="progress">
     {#each getSteps() as _, i}
       <div
@@ -132,7 +212,7 @@
   </div>
 
   <div class="content">
-    <!-- Step 0: Welcome -->
+    <!-- Welcome -->
     {#if currentStep === "welcome"}
       <div class="step">
         <div class="icon">
@@ -152,13 +232,122 @@
           Turn speech into text — dictate anywhere with a hotkey, or transcribe
           audio files. All processing happens locally on your device.
         </p>
-        <p class="subdescription">Let's walk through a few optional setup steps.</p>
+        <p class="subdescription">Let's get you set up in a few quick steps.</p>
         <div class="actions">
           <button class="primary" on:click={nextStep}>Get Started</button>
         </div>
       </div>
 
-    <!-- Step 1: Microphone (macOS only) -->
+    <!-- Language -->
+    {:else if currentStep === "language"}
+      <div class="step">
+        <div class="icon">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <rect width="48" height="48" rx="12" fill="var(--accent-dim)" />
+            <path
+              d="M14 18h10M19 14v4M16 22c1.5 3 4 5.5 7 7M22 22c-1.5 3-4 5.5-7 7"
+              stroke="var(--accent)"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <path
+              d="M26 34l3-8 3 8M27 32h4"
+              stroke="var(--accent)"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
+        <h1>What language do you speak?</h1>
+        <p class="description">
+          We'll download a speech engine optimised for your language.
+          You can add more languages later in Settings.
+        </p>
+        <div class="language-options">
+          <button
+            class="language-option"
+            class:selected={selectedLanguage === "en"}
+            on:click={() => selectedLanguage = "en"}
+          >
+            <span class="lang-flag">EN</span>
+            <span class="lang-name">English</span>
+          </button>
+          <button
+            class="language-option"
+            class:selected={selectedLanguage === "sv"}
+            on:click={() => selectedLanguage = "sv"}
+          >
+            <span class="lang-flag">SV</span>
+            <span class="lang-name">Svenska</span>
+          </button>
+          <button
+            class="language-option"
+            class:selected={selectedLanguage === "no"}
+            on:click={() => selectedLanguage = "no"}
+          >
+            <span class="lang-flag">NO</span>
+            <span class="lang-name">Norsk</span>
+          </button>
+        </div>
+        <div class="actions">
+          <button class="primary" on:click={selectLanguageAndContinue}>Continue</button>
+        </div>
+      </div>
+
+    <!-- Download -->
+    {:else if currentStep === "download"}
+      <div class="step">
+        <div class="icon">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+            <rect width="48" height="48" rx="12" fill="var(--accent-dim)" />
+            <path
+              d="M24 16v12m0 0l-4-4m4 4l4-4M16 32h16"
+              stroke="var(--accent)"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
+        <h1>Setting up speech engine</h1>
+        <p class="description">
+          Downloading {modelInfo[selectedLanguage].name} ({modelInfo[selectedLanguage].size}).
+          This runs entirely on your device — no cloud needed.
+        </p>
+
+        {#if downloadError}
+          <div class="status-indicator error">
+            <span class="status-dot"></span>
+            <span>{downloadError}</span>
+          </div>
+          <div class="actions">
+            <button class="primary" on:click={startDownload}>Try Again</button>
+            <button class="secondary" on:click={nextStep}>Skip for now</button>
+          </div>
+        {:else if downloadComplete}
+          <div class="status-indicator granted">
+            <span class="status-dot"></span>
+            <span>Speech engine ready</span>
+          </div>
+          <div class="actions">
+            <button class="primary" on:click={nextStep}>Continue</button>
+          </div>
+        {:else if downloading}
+          <div class="progress-bar-container">
+            <div class="progress-bar" style="width: {downloadProgress}%"></div>
+          </div>
+          <p class="progress-text">{formatProgress(downloadProgress)}</p>
+        {:else}
+          <div class="actions">
+            <button class="primary" on:click={startDownload}>Download</button>
+            <button class="secondary" on:click={nextStep}>Skip for now</button>
+          </div>
+        {/if}
+      </div>
+
+    <!-- Microphone (macOS only) -->
     {:else if currentStep === "microphone"}
       <div class="step">
         <div class="icon">
@@ -208,7 +397,7 @@
         </div>
       </div>
 
-    <!-- Step 2: Accessibility (macOS only) -->
+    <!-- Accessibility (macOS only) -->
     {:else if currentStep === "accessibility"}
       <div class="step">
         <div class="icon">
@@ -255,7 +444,7 @@
         </div>
       </div>
 
-    <!-- Step 3: Ready -->
+    <!-- Ready -->
     {:else if currentStep === "ready"}
       <div class="step">
         <div class="icon">
@@ -275,7 +464,10 @@
         {#if micGranted || platform !== "macos"}
           <div class="hotkey-display">
             <div class="hotkey-keys">
-              <kbd>Ctrl</kbd><span class="key-sep">+</span><kbd>Shift</kbd><span class="key-sep">+</span><kbd>Space</kbd>
+              {#each hotkeyParts as part, i}
+                {#if i > 0}<span class="key-sep">+</span>{/if}
+                <kbd>{part}</kbd>
+              {/each}
             </div>
             <p class="hotkey-hint">Hold to record, release to transcribe</p>
           </div>
@@ -283,6 +475,12 @@
           <p class="description">
             Open the <strong>Transcribe</strong> tab to convert audio files to text.
             You can grant microphone access later in Settings if you want live dictation.
+          </p>
+        {/if}
+
+        {#if !downloadComplete}
+          <p class="subdescription warning">
+            You skipped the speech engine download. Open Settings to download one before dictating.
           </p>
         {/if}
 
@@ -392,6 +590,85 @@
     margin: 0 0 24px;
   }
 
+  .subdescription.warning {
+    color: var(--danger);
+    opacity: 1;
+  }
+
+  /* Language selector */
+
+  .language-options {
+    display: flex;
+    gap: 10px;
+    margin: 20px 0 24px;
+  }
+
+  .language-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 14px 20px;
+    background: var(--bg-secondary);
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    min-width: 90px;
+  }
+
+  .language-option:hover {
+    border-color: var(--text-muted);
+  }
+
+  .language-option.selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
+  }
+
+  .lang-flag {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 1px;
+  }
+
+  .lang-name {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .language-option.selected .lang-name {
+    color: var(--text);
+  }
+
+  /* Progress bar */
+
+  .progress-bar-container {
+    width: 100%;
+    max-width: 300px;
+    height: 6px;
+    background: var(--bg-secondary);
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 20px 0 8px;
+  }
+
+  .progress-bar {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+
+  .progress-text {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 0 0 16px;
+  }
+
+  /* Status indicators */
+
   .status-indicator {
     display: flex;
     align-items: center;
@@ -409,6 +686,11 @@
     background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
   }
 
+  .status-indicator.error {
+    background: color-mix(in srgb, var(--danger) 12%, var(--bg-secondary));
+    color: var(--danger);
+  }
+
   .status-dot {
     width: 8px;
     height: 8px;
@@ -421,6 +703,12 @@
   .status-indicator.granted .status-dot {
     background: var(--accent);
   }
+
+  .status-indicator.error .status-dot {
+    background: var(--danger);
+  }
+
+  /* Actions */
 
   .actions {
     display: flex;
@@ -451,6 +739,8 @@
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
+
+  /* Hotkey display */
 
   .hotkey-display {
     margin: 16px 0 8px;
