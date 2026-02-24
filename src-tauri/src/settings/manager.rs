@@ -144,6 +144,24 @@ impl WhisperModel {
         )
     }
 
+    /// Optimal no-speech threshold per model.
+    ///
+    /// Smaller English-only models (small.en) aggressively classify speech as
+    /// silence at moderate thresholds, causing large content deletions. Tiny
+    /// models are prone to repetition loops at the default 0.6. Larger and
+    /// language-optimised models are robust to any reasonable threshold.
+    pub fn no_speech_threshold(&self) -> f32 {
+        match self {
+            // small.en drops content even at 0.3 — needs fully disabled filter
+            WhisperModel::SmallEn => 0.0,
+            // medium/large English models: conservative but safe
+            WhisperModel::MediumEn | WhisperModel::Medium
+                | WhisperModel::LargeV3Turbo => 0.3,
+            // Everything else (tiny, base, kb-whisper, nb-whisper): 0.3 works
+            _ => 0.3,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn is_norwegian_optimized(&self) -> bool {
         matches!(
