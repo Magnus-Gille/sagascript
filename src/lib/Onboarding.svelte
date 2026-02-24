@@ -10,53 +10,51 @@
     requestMicrophonePermission,
     checkAccessibilityPermission,
     requestAccessibilityPermission,
-    type Language,
   } from "./api";
 
-  export let oncomplete: () => void;
+  let { oncomplete }: { oncomplete: () => void } = $props();
 
   type Step = "welcome" | "language" | "download" | "microphone" | "accessibility" | "ready";
+  type OnboardingLanguage = "en" | "sv" | "no";
 
-  let currentStep: Step = "welcome";
-  let platform = "macos";
+  let currentStep: Step = $state("welcome");
+  let platform = $state("macos");
 
-  // Language selection
-  let selectedLanguage: Language = "en";
+  // Language selection — seeded from existing settings in onMount
+  let selectedLanguage: OnboardingLanguage = $state("en");
 
   // Model download
-  let downloading = false;
-  let downloadProgress = 0;
-  let downloadError: string | null = null;
-  let downloadComplete = false;
+  let downloading = $state(false);
+  let downloadProgress = $state(0);
+  let downloadError: string | null = $state(null);
+  let downloadComplete = $state(false);
 
   // Permissions
-  let micGranted = false;
-  let accessibilityGranted = false;
-  let micChecking = false;
-  let accessibilityChecking = false;
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let micGranted = $state(false);
+  let accessibilityGranted = $state(false);
+  let micChecking = $state(false);
+  let accessibilityChecking = $state(false);
+  let pollTimer: ReturnType<typeof setInterval> | null = $state(null);
 
   // Hotkey (read from settings)
-  let hotkeyParts: string[] = ["Ctrl", "Shift", "Space"];
+  let hotkeyParts: string[] = $state(["Ctrl", "Shift", "Space"]);
 
   // Cleanup for event listeners
   let unlistenProgress: (() => void) | null = null;
   let unlistenReady: (() => void) | null = null;
 
-  // Model info per language
-  const modelInfo: Record<Language, { name: string; size: string }> = {
+  // Model info per onboarding language (no "auto" — onboarding always picks a specific language)
+  const modelInfo: Record<OnboardingLanguage, { name: string; size: string }> = {
     en: { name: "Base English", size: "142 MB" },
     sv: { name: "KB-Whisper Base", size: "60 MB" },
     no: { name: "NB-Whisper Base", size: "55 MB" },
-    auto: { name: "Base Multilingual", size: "142 MB" },
   };
 
   // Recommended model ID per language (must match Rust serde rename)
-  const recommendedModelId: Record<Language, string> = {
+  const recommendedModelId: Record<OnboardingLanguage, string> = {
     en: "base.en",
     sv: "kb-whisper-base",
     no: "nb-whisper-base",
-    auto: "base",
   };
 
   function getSteps(): Step[] {
@@ -99,6 +97,12 @@
       downloading = false;
       downloadError = typeof e === "string" ? e : e?.message ?? "Download failed. Check your internet connection.";
     }
+  }
+
+  function skipDownload() {
+    downloading = false;
+    downloadProgress = 0;
+    nextStep();
   }
 
   // -- Microphone --
@@ -166,20 +170,22 @@
     micGranted = await checkMicrophonePermission();
     accessibilityGranted = await checkAccessibilityPermission();
 
-    // Read hotkey from settings
+    // Seed language and hotkey from existing settings
     try {
       const settings = await getSettings();
       hotkeyParts = settings.hotkey.split("+");
+      // Map existing language to onboarding options (auto → en since onboarding requires a specific choice)
+      const lang = settings.language;
+      if (lang === "en" || lang === "sv" || lang === "no") {
+        selectedLanguage = lang;
+      }
     } catch {
-      // keep default
+      // keep defaults
     }
 
-    // Listen for download progress
+    // Listen for download progress — use backend-computed progress field
     unlistenProgress = await listen("model-download-progress", (event: any) => {
-      const { downloaded, total } = event.payload;
-      if (total > 0) {
-        downloadProgress = (downloaded / total) * 100;
-      }
+      downloadProgress = event.payload.progress;
     });
 
     unlistenReady = await listen("model-ready", () => {
@@ -234,7 +240,7 @@
         </p>
         <p class="subdescription">Let's get you set up in a few quick steps.</p>
         <div class="actions">
-          <button class="primary" on:click={nextStep}>Get Started</button>
+          <button class="primary" onclick={nextStep}>Get Started</button>
         </div>
       </div>
 
@@ -269,7 +275,7 @@
           <button
             class="language-option"
             class:selected={selectedLanguage === "en"}
-            on:click={() => selectedLanguage = "en"}
+            onclick={() => selectedLanguage = "en"}
           >
             <span class="lang-flag">EN</span>
             <span class="lang-name">English</span>
@@ -277,7 +283,7 @@
           <button
             class="language-option"
             class:selected={selectedLanguage === "sv"}
-            on:click={() => selectedLanguage = "sv"}
+            onclick={() => selectedLanguage = "sv"}
           >
             <span class="lang-flag">SV</span>
             <span class="lang-name">Svenska</span>
@@ -285,14 +291,14 @@
           <button
             class="language-option"
             class:selected={selectedLanguage === "no"}
-            on:click={() => selectedLanguage = "no"}
+            onclick={() => selectedLanguage = "no"}
           >
             <span class="lang-flag">NO</span>
             <span class="lang-name">Norsk</span>
           </button>
         </div>
         <div class="actions">
-          <button class="primary" on:click={selectLanguageAndContinue}>Continue</button>
+          <button class="primary" onclick={selectLanguageAndContinue}>Continue</button>
         </div>
       </div>
 
@@ -323,8 +329,8 @@
             <span>{downloadError}</span>
           </div>
           <div class="actions">
-            <button class="primary" on:click={startDownload}>Try Again</button>
-            <button class="secondary" on:click={nextStep}>Skip for now</button>
+            <button class="primary" onclick={startDownload}>Try Again</button>
+            <button class="secondary" onclick={nextStep}>Skip for now</button>
           </div>
         {:else if downloadComplete}
           <div class="status-indicator granted">
@@ -332,17 +338,20 @@
             <span>Speech engine ready</span>
           </div>
           <div class="actions">
-            <button class="primary" on:click={nextStep}>Continue</button>
+            <button class="primary" onclick={nextStep}>Continue</button>
           </div>
         {:else if downloading}
           <div class="progress-bar-container">
             <div class="progress-bar" style="width: {downloadProgress}%"></div>
           </div>
           <p class="progress-text">{formatProgress(downloadProgress)}</p>
+          <div class="actions">
+            <button class="secondary" onclick={skipDownload}>Skip for now</button>
+          </div>
         {:else}
           <div class="actions">
-            <button class="primary" on:click={startDownload}>Download</button>
-            <button class="secondary" on:click={nextStep}>Skip for now</button>
+            <button class="primary" onclick={startDownload}>Download</button>
+            <button class="secondary" onclick={nextStep}>Skip for now</button>
           </div>
         {/if}
       </div>
@@ -380,9 +389,9 @@
 
         <div class="actions">
           {#if micGranted}
-            <button class="primary" on:click={nextStep}>Continue</button>
+            <button class="primary" onclick={nextStep}>Continue</button>
           {:else}
-            <button class="primary" on:click={grantMicrophone} disabled={micChecking}>
+            <button class="primary" onclick={grantMicrophone} disabled={micChecking}>
               {#if micChecking}
                 <span class="button-spinner"></span>
                 Waiting for permission...
@@ -390,7 +399,7 @@
                 Grant Microphone Access
               {/if}
             </button>
-            <button class="secondary" on:click={() => { stopPoll(); micChecking = false; nextStep(); }}>
+            <button class="secondary" onclick={() => { stopPoll(); micChecking = false; nextStep(); }}>
               I don't need this — I'll only transcribe files
             </button>
           {/if}
@@ -427,9 +436,9 @@
 
         <div class="actions">
           {#if accessibilityGranted}
-            <button class="primary" on:click={nextStep}>Continue</button>
+            <button class="primary" onclick={nextStep}>Continue</button>
           {:else}
-            <button class="primary" on:click={grantAccessibility} disabled={accessibilityChecking}>
+            <button class="primary" onclick={grantAccessibility} disabled={accessibilityChecking}>
               {#if accessibilityChecking}
                 <span class="button-spinner"></span>
                 Waiting for permission...
@@ -437,7 +446,7 @@
                 Open System Settings
               {/if}
             </button>
-            <button class="secondary" on:click={() => { stopPoll(); accessibilityChecking = false; nextStep(); }}>
+            <button class="secondary" onclick={() => { stopPoll(); accessibilityChecking = false; nextStep(); }}>
               I'll paste manually
             </button>
           {/if}
@@ -487,7 +496,7 @@
         <p class="subdescription">You can change any of this in Settings.</p>
 
         <div class="actions">
-          <button class="primary" on:click={finish}>Start Using Sagascript</button>
+          <button class="primary" onclick={finish}>Start Using Sagascript</button>
         </div>
       </div>
     {/if}
