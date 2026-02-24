@@ -36,7 +36,7 @@ clap_complete = "4"
 clap_mangen = "0.2"
 ctrlc = "3"
 indicatif = "0.17"
-notify = { version = "7", default-features = false }
+notify = { version = "8", default-features = false }
 tauri-plugin-dialog = "2"
 symphonia = { version = "0.5", features = ["aac", "alac", "flac", "mp3", "pcm", "vorbis", "isomp4", "mkv", "ogg"] }
 rubato = "0.14"
