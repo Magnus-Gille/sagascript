@@ -110,13 +110,13 @@ jobs:
 
       - name: Rename artifacts to stable filenames
         run: |
-          # macOS
-          cp artifacts/macos-bundle/*.dmg artifacts/Sagascript.dmg
-          cp artifacts/macos-bundle/*.app.tar.gz artifacts/Sagascript.app.tar.gz
+          # macOS (upload-artifact preserves directory structure)
+          find artifacts/macos-bundle -name '*.dmg' -exec cp {} artifacts/Sagascript.dmg \;
+          find artifacts/macos-bundle -name '*.app.tar.gz' -exec cp {} artifacts/Sagascript.app.tar.gz \;
 
           # Windows
-          cp artifacts/windows-bundle/*.exe artifacts/Sagascript-Setup.exe
-          cp artifacts/windows-bundle/*.msi artifacts/Sagascript-Setup.msi
+          find artifacts/windows-bundle -name '*.exe' -exec cp {} artifacts/Sagascript-Setup.exe \;
+          find artifacts/windows-bundle -name '*.msi' -exec cp {} artifacts/Sagascript-Setup.msi \;
 
           echo "Stable artifacts:"
           ls -lh artifacts/Sagascript*
