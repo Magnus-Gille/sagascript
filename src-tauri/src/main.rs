@@ -205,14 +205,8 @@ fn main() {
 
             // Auto-open onboarding on first launch
             {
-                use tauri_plugin_store::StoreExt;
-                let store = app.store("sagascript-settings.json")
-                    .map_err(|e| format!("Failed to open store: {e}"))?;
-                let completed = store
-                    .get("hasCompletedOnboarding")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                if !completed {
+                let settings = crate::settings::store::load();
+                if !settings.has_completed_onboarding {
                     info!("First launch detected, opening onboarding");
                     open_settings_window(app.handle(), Some("onboarding"));
                 }
@@ -257,6 +251,7 @@ fn main() {
             commands::check_microphone_permission,
             commands::request_microphone_permission,
             commands::get_platform,
+            commands::set_onboarding_completed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Sagascript")

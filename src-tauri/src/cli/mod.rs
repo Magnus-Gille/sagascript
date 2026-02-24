@@ -184,6 +184,32 @@ AVAILABLE MODELS:
     )]
     DownloadModel(models::DownloadModelArgs),
 
+    /// Delete a downloaded model
+    #[command(
+        long_about = "\
+Delete a previously downloaded Whisper model from disk.
+
+Frees up disk space by removing the model file. The model can be \
+re-downloaded later with 'sagascript download-model'.",
+        after_long_help = "\
+EXAMPLES:
+  # Delete a specific model
+  sagascript delete-model base.en
+
+  # List models to see which are downloaded
+  sagascript list-models"
+    )]
+    DeleteModel(models::DeleteModelArgs),
+
+    /// Reset first-launch onboarding (re-run setup wizard on next launch)
+    #[command(
+        long_about = "\
+Reset the onboarding flag so the setup wizard runs again on next GUI launch.
+
+Useful for testing or if you want to re-configure language and permissions."
+    )]
+    ResetOnboarding,
+
     /// Manage settings (list, get, set, reset, path)
     #[command(
         long_about = "\
@@ -303,6 +329,16 @@ pub fn run(cli: Cli) {
         Command::Record(args) => record::run(args),
         Command::ListModels(args) => models::list(args),
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
+        Command::DeleteModel(args) => models::delete(args),
+        Command::ResetOnboarding => {
+            let mut settings = crate::settings::store::load();
+            settings.has_completed_onboarding = false;
+            crate::settings::store::save(&settings)
+                .map_err(crate::error::DictationError::SettingsError)
+                .map(|()| {
+                    eprintln!("Onboarding reset. The setup wizard will run on next launch.");
+                })
+        }
         Command::Config(args) => config::run(args),
         Command::Formats => {
             formats();

@@ -320,6 +320,8 @@ pub struct Settings {
     pub auto_select_model: bool,
     /// Hotkey shortcut string (e.g. "Control+Shift+Space")
     pub hotkey: String,
+    /// Whether the user has completed the first-launch onboarding
+    pub has_completed_onboarding: bool,
 }
 
 impl Default for Settings {
@@ -332,6 +334,7 @@ impl Default for Settings {
             auto_paste: true,
             auto_select_model: true,
             hotkey: "Control+Shift+Space".to_string(),
+            has_completed_onboarding: false,
         }
     }
 }

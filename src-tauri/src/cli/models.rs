@@ -61,6 +61,39 @@ pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
     Ok(())
 }
 
+#[derive(Args)]
+pub struct DeleteModelArgs {
+    /// Model ID to delete [see: sagascript list-models]
+    pub model: String,
+}
+
+pub fn delete(args: DeleteModelArgs) -> Result<(), DictationError> {
+    let whisper_model = parse_model(&args.model)?;
+
+    if !model::is_model_downloaded(whisper_model) {
+        eprintln!(
+            "Model '{}' is not downloaded.",
+            whisper_model.display_name()
+        );
+        return Ok(());
+    }
+
+    let path = model::model_path(whisper_model);
+    std::fs::remove_file(&path).map_err(|e| {
+        DictationError::SettingsError(format!(
+            "Failed to delete model file '{}': {e}",
+            path.display()
+        ))
+    })?;
+
+    eprintln!(
+        "Deleted {} ({})",
+        whisper_model.display_name(),
+        path.display()
+    );
+    Ok(())
+}
+
 pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
     let whisper_model = parse_model(&args.model)?;
 
