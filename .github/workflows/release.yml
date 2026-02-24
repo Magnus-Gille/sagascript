@@ -17,6 +17,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -31,9 +33,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: macos-release-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: macos-universal-release-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            macos-release-cargo-
+            macos-universal-release-cargo-
 
       - name: Install npm dependencies
         run: npm ci
@@ -41,16 +43,16 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      - name: Build Tauri app
-        run: npx tauri build
+      - name: Build universal Tauri app
+        run: npx tauri build --target universal-apple-darwin
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-bundle
           path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
 
   build-windows:
     runs-on: windows-latest
