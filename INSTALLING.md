@@ -24,6 +24,26 @@ xattr -cr /Applications/Sagascript.app
 
 You only need to do this once. Subsequent launches will work normally.
 
+### CLI access
+
+Sagascript includes a full CLI for transcribing files, managing models, and configuring settings. The binary lives inside the app bundle, so it's not on your PATH by default.
+
+To add it, create a symlink:
+
+```
+ln -s /Applications/Sagascript.app/Contents/MacOS/sagascript /usr/local/bin/sagascript
+```
+
+Then you can run commands like:
+
+```
+sagascript transcribe recording.mp3
+sagascript list-models
+sagascript config list
+```
+
+Run `sagascript --help` for the full list of subcommands.
+
 ## Windows
 
 Download **Sagascript-Setup.exe** from the [latest release](https://github.com/Magnus-Gille/sagascript/releases/latest).
