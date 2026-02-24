@@ -10,6 +10,7 @@
     requestMicrophonePermission,
     checkAccessibilityPermission,
     requestAccessibilityPermission,
+    setOnboardingCompleted,
   } from "./api";
 
   let { oncomplete }: { oncomplete: () => void } = $props();
@@ -154,10 +155,7 @@
 
   async function finish() {
     stopPoll();
-    const { load } = await import("@tauri-apps/plugin-store");
-    const store = await load("sagascript-settings.json");
-    await store.set("hasCompletedOnboarding", true);
-    await store.save();
+    await setOnboardingCompleted();
     oncomplete();
   }
 

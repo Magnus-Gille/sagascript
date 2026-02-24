@@ -139,3 +139,7 @@ export async function requestMicrophonePermission(): Promise<boolean> {
 export async function getPlatform(): Promise<string> {
   return invoke("get_platform");
 }
+
+export async function setOnboardingCompleted(): Promise<void> {
+  return invoke("set_onboarding_completed");
+}
