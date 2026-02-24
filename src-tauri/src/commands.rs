@@ -112,6 +112,18 @@ pub async fn set_language(
 }
 
 #[tauri::command]
+pub async fn set_onboarding_completed(
+    controller: State<'_, SharedController>,
+) -> Result<(), String> {
+    let mut ctrl = controller.lock().unwrap();
+    ctrl.settings_mut().has_completed_onboarding = true;
+    drop(ctrl);
+    persist_settings(&controller)?;
+    info!("Onboarding marked as completed");
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn set_whisper_model(
     controller: State<'_, SharedController>,
     model: WhisperModel,

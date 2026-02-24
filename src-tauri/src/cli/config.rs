@@ -525,15 +525,17 @@ mod tests {
 
     #[test]
     fn valid_keys_count_matches_settings_struct() {
-        // Settings has 7 user-facing fields. If a new field is added to Settings
-        // but not to VALID_KEYS, this test will catch it.
+        // Internal fields that are serialized but not user-configurable via `config`.
+        // These have dedicated CLI commands instead (e.g. `reset-onboarding`).
+        const INTERNAL_FIELDS: &[&str] = &["has_completed_onboarding"];
+
         let settings = Settings::default();
         let json = serde_json::to_value(&settings).unwrap();
-        let field_count = json.as_object().unwrap().len();
+        let field_count = json.as_object().unwrap().len() - INTERNAL_FIELDS.len();
         assert_eq!(
             VALID_KEYS.len(),
             field_count,
-            "VALID_KEYS has {} entries but Settings has {} fields — did you forget to add a new setting?",
+            "VALID_KEYS has {} entries but Settings has {} user-facing fields — did you forget to add a new setting?",
             VALID_KEYS.len(),
             field_count
         );
