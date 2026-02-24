@@ -108,11 +108,26 @@ jobs:
         with:
           path: artifacts
 
+      - name: Rename artifacts to stable filenames
+        run: |
+          # macOS
+          cp artifacts/macos-bundle/*.dmg artifacts/Sagascript.dmg
+          cp artifacts/macos-bundle/*.app.tar.gz artifacts/Sagascript.app.tar.gz
+
+          # Windows
+          cp artifacts/windows-bundle/*.exe artifacts/Sagascript-Setup.exe
+          cp artifacts/windows-bundle/*.msi artifacts/Sagascript-Setup.msi
+
+          echo "Stable artifacts:"
+          ls -lh artifacts/Sagascript*
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           generate_release_notes: true
           files: |
-            artifacts/macos-bundle/**/*
-            artifacts/windows-bundle/**/*
+            artifacts/Sagascript.dmg
+            artifacts/Sagascript.app.tar.gz
+            artifacts/Sagascript-Setup.exe
+            artifacts/Sagascript-Setup.msi
