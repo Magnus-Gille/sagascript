@@ -441,8 +441,9 @@ fn stop_recording_and_transcribe(
             Err(e)
         } else {
             // Run blocking transcription on a separate thread with a timeout.
-            // If whisper.cpp hangs (e.g. Metal GPU stall), the abort callback
-            // signals it to stop so the context lock is released.
+            // NOTE: The abort callback is currently disabled (whisper-rs error -6).
+            // On timeout, request_abort() is called but has no effect — the blocking
+            // task continues running and holds the context mutex until whisper finishes.
             let whisper_ref = whisper.inner().clone();
             let audio = audio.clone();
             let fut = tokio::task::spawn_blocking(move || {
@@ -456,7 +457,7 @@ fn stop_recording_and_transcribe(
                     format!("Task join error: {e}"),
                 )),
                 Err(_) => {
-                    // Timeout — tell whisper.cpp to abort so it releases the lock
+                    // Timeout — request abort (currently a no-op, see whisper_backend.rs)
                     whisper.request_abort();
                     Err(error::DictationError::TranscriptionFailed(
                         format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s"),

@@ -138,7 +138,8 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
 
     // Mix to mono and resample
     let mono = mix_to_mono(&all_samples, channels);
-    let resampled = resample_to_16khz(mono, sample_rate);
+    let resampled = resample_to_16khz(mono, sample_rate)
+        .map_err(|e| DictationError::TranscriptionFailed(format!("Resample failed: {e}")))?;
 
     info!(
         "Resampled to {} samples ({:.1}s at 16kHz)",
