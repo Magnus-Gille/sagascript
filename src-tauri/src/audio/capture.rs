@@ -209,7 +209,13 @@ fn process_samples(
     buffer: &Arc<Mutex<Vec<f32>>>,
 ) {
     let mono = mix_to_mono(data, channels as usize);
-    let samples = resample_to_16khz(mono, device_rate);
+    let samples = match resample_to_16khz(mono, device_rate) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("Resample failed, dropping audio chunk: {e}");
+            return;
+        }
+    };
 
     // Append to buffer with size limit
     let mut buf = buffer.lock().unwrap();

@@ -18,9 +18,13 @@ pub fn mix_to_mono(data: &[f32], channels: usize) -> Vec<f32> {
 /// High-quality sinc resample from `source_rate` to `TARGET_SAMPLE_RATE` (16 kHz).
 /// Uses rubato's SincFixedIn with sinc interpolation.
 /// Returns the input unchanged if rates already match.
-pub fn resample_to_16khz(mono: Vec<f32>, source_rate: u32) -> Vec<f32> {
+pub fn resample_to_16khz(mono: Vec<f32>, source_rate: u32) -> Result<Vec<f32>, String> {
     if source_rate == TARGET_SAMPLE_RATE || mono.is_empty() {
-        return mono;
+        return Ok(mono);
+    }
+
+    if source_rate == 0 {
+        return Err("source sample rate must be > 0".to_string());
     }
 
     let params = SincInterpolationParameters {
@@ -35,7 +39,7 @@ pub fn resample_to_16khz(mono: Vec<f32>, source_rate: u32) -> Vec<f32> {
     let chunk_size = 1024.min(mono.len());
 
     let mut resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 1)
-        .expect("Failed to create resampler");
+        .map_err(|e| format!("Failed to create resampler: {e}"))?;
 
     let mut output = Vec::with_capacity((mono.len() as f64 * ratio) as usize + 1024);
 
@@ -44,7 +48,9 @@ pub fn resample_to_16khz(mono: Vec<f32>, source_rate: u32) -> Vec<f32> {
     for i in 0..full_chunks {
         let start = i * chunk_size;
         let chunk = vec![mono[start..start + chunk_size].to_vec()];
-        let result = resampler.process(&chunk, None).expect("Resample failed");
+        let result = resampler
+            .process(&chunk, None)
+            .map_err(|e| format!("Resample failed: {e}"))?;
         output.extend_from_slice(&result[0]);
     }
 
@@ -54,16 +60,16 @@ pub fn resample_to_16khz(mono: Vec<f32>, source_rate: u32) -> Vec<f32> {
         let remainder = vec![mono[remaining_start..].to_vec()];
         let result = resampler
             .process_partial(Some(&remainder), None)
-            .expect("Resample partial failed");
+            .map_err(|e| format!("Resample partial failed: {e}"))?;
         output.extend_from_slice(&result[0]);
     } else {
         let result = resampler
             .process_partial(None::<&[Vec<f32>]>, None)
-            .expect("Resample flush failed");
+            .map_err(|e| format!("Resample flush failed: {e}"))?;
         output.extend_from_slice(&result[0]);
     }
 
-    output
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -116,7 +122,7 @@ mod tests {
     #[test]
     fn resample_same_rate_passthrough() {
         let data = vec![0.1, 0.2, 0.3, 0.4];
-        let result = resample_to_16khz(data.clone(), TARGET_SAMPLE_RATE);
+        let result = resample_to_16khz(data.clone(), TARGET_SAMPLE_RATE).unwrap();
         assert_eq!(result, data);
     }
 
@@ -124,7 +130,7 @@ mod tests {
     fn resample_downsample_from_48khz() {
         // Sinc filter flush adds a small tail (typically <2% extra samples)
         let data: Vec<f32> = (0..48000).map(|i| (i as f32) / 48000.0).collect();
-        let result = resample_to_16khz(data, 48_000);
+        let result = resample_to_16khz(data, 48_000).unwrap();
         assert!(
             result.len() >= 15999 && result.len() <= 16400,
             "len={}",
@@ -135,7 +141,7 @@ mod tests {
     #[test]
     fn resample_downsample_from_44100() {
         let data: Vec<f32> = vec![0.0; 44100];
-        let result = resample_to_16khz(data, 44_100);
+        let result = resample_to_16khz(data, 44_100).unwrap();
         assert!(
             result.len() >= 15999 && result.len() <= 16400,
             "len={}",
@@ -146,7 +152,7 @@ mod tests {
     #[test]
     fn resample_upsample_from_8khz() {
         let data: Vec<f32> = vec![0.5; 8000];
-        let result = resample_to_16khz(data, 8_000);
+        let result = resample_to_16khz(data, 8_000).unwrap();
         assert!(
             result.len() >= 15999 && result.len() <= 16200,
             "len={}",
@@ -156,15 +162,23 @@ mod tests {
 
     #[test]
     fn resample_empty_input() {
-        let result = resample_to_16khz(vec![], 44_100);
+        let result = resample_to_16khz(vec![], 44_100).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
     fn resample_preserves_values_at_same_rate() {
         let data = vec![-1.0, 0.0, 0.5, 1.0];
-        let result = resample_to_16khz(data.clone(), TARGET_SAMPLE_RATE);
+        let result = resample_to_16khz(data.clone(), TARGET_SAMPLE_RATE).unwrap();
         assert_eq!(result, data);
+    }
+
+    #[test]
+    fn resample_rejects_zero_sample_rate() {
+        let data = vec![0.1, 0.2, 0.3];
+        let result = resample_to_16khz(data, 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("source sample rate"));
     }
 
     #[test]
@@ -176,7 +190,7 @@ mod tests {
             .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / sample_rate as f32).sin())
             .collect();
 
-        let result = resample_to_16khz(data, sample_rate);
+        let result = resample_to_16khz(data, sample_rate).unwrap();
         assert!(
             result.len() >= 15999 && result.len() <= 16400,
             "len={}",

@@ -226,7 +226,10 @@ pub async fn stop_and_transcribe(
         .ensure_model(effective_model)
         .map_err(|e| e.to_string())?;
 
-    // Run blocking transcription on a separate thread with timeout
+    // Run blocking transcription on a separate thread with timeout.
+    // NOTE: The abort callback is currently disabled (whisper-rs error -6).
+    // On timeout, request_abort() is called but has no effect — the blocking
+    // task continues running and holds the context mutex until whisper finishes.
     let whisper_ref = whisper.inner().clone();
     let audio = audio.clone();
     let fut = tokio::task::spawn_blocking(move || whisper_ref.transcribe_sync(&audio, language));
@@ -237,7 +240,10 @@ pub async fn stop_and_transcribe(
         Ok(Err(e)) => return Err(format!("Transcription task failed: {e}")),
         Err(_) => {
             whisper.request_abort();
-            return Err(format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s"));
+            return Err(format!(
+                "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s \
+                 (inference may still be running in background)"
+            ));
         }
     };
 

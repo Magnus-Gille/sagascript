@@ -37,10 +37,14 @@ impl WhisperBackend {
         }
     }
 
-    /// Signal the whisper inference to abort. The abort takes effect at the
-    /// next whisper.cpp checkpoint (typically once per audio segment).
+    /// Signal the whisper inference to abort.
+    ///
+    /// NOTE: The abort callback that reads this flag is currently disabled
+    /// (whisper-rs 0.15.1 `set_abort_callback_safe` causes error -6).
+    /// This flag is still set for forward compatibility but has no effect
+    /// on in-progress inference until the callback is restored.
     pub fn request_abort(&self) {
-        warn!("Transcription abort requested");
+        warn!("Transcription abort requested (NOTE: abort callback disabled — inference will run to completion)");
         self.abort_flag.store(true, Ordering::SeqCst);
     }
 
@@ -145,8 +149,13 @@ impl WhisperBackend {
         params.set_suppress_blank(true);
         params.set_progress_callback_safe(on_progress);
 
-        // Wire abort flag so timeouts can cancel inference mid-flight
-        // TEMPORARILY DISABLED for A/B test — investigating error -6
+        // Abort callback: DISABLED — whisper-rs 0.15.1 set_abort_callback_safe()
+        // causes error -6 on all models. Without this callback, request_abort() sets
+        // the flag but nothing reads it during inference. If whisper hangs, the context
+        // mutex remains held until inference completes naturally. The tokio timeout in
+        // commands.rs / main.rs will return an error to the caller, but the blocking
+        // task continues running in the background.
+        // TODO: Restore when whisper-rs fixes the FFI callback lifetime issue.
         self.abort_flag.store(false, Ordering::SeqCst);
         // let abort = Arc::clone(&self.abort_flag);
         // params.set_abort_callback_safe(move || abort.load(Ordering::SeqCst));

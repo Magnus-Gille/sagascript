@@ -154,10 +154,7 @@ impl WhisperModel {
         match self {
             // small.en drops content even at 0.3 — needs fully disabled filter
             WhisperModel::SmallEn => 0.0,
-            // medium/large English models: conservative but safe
-            WhisperModel::MediumEn | WhisperModel::Medium
-                | WhisperModel::LargeV3Turbo => 0.3,
-            // Everything else (tiny, base, kb-whisper, nb-whisper): 0.3 works
+            // All other models (tiny, base, kb-whisper, nb-whisper, medium, large): 0.3 works
             _ => 0.3,
         }
     }
@@ -706,6 +703,43 @@ mod tests {
     }
 
     // -- Model consistency --
+
+    #[test]
+    fn no_speech_threshold_small_en_fully_disabled() {
+        assert_eq!(WhisperModel::SmallEn.no_speech_threshold(), 0.0);
+    }
+
+    #[test]
+    fn no_speech_threshold_other_models_at_0_3() {
+        let models = [
+            WhisperModel::TinyEn,
+            WhisperModel::Tiny,
+            WhisperModel::BaseEn,
+            WhisperModel::Base,
+            WhisperModel::KbWhisperTiny,
+            WhisperModel::KbWhisperBase,
+            WhisperModel::KbWhisperSmall,
+            WhisperModel::KbWhisperMedium,
+            WhisperModel::KbWhisperLarge,
+            WhisperModel::NbWhisperTiny,
+            WhisperModel::NbWhisperBase,
+            WhisperModel::NbWhisperSmall,
+            WhisperModel::NbWhisperMedium,
+            WhisperModel::NbWhisperLarge,
+            WhisperModel::Small,
+            WhisperModel::MediumEn,
+            WhisperModel::Medium,
+            WhisperModel::LargeV3Turbo,
+        ];
+        for m in models {
+            assert_eq!(
+                m.no_speech_threshold(),
+                0.3,
+                "{:?} should have threshold 0.3",
+                m
+            );
+        }
+    }
 
     #[test]
     fn recommended_model_is_in_models_for_language() {
