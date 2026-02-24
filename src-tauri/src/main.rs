@@ -348,6 +348,7 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
         .min_inner_size(500.0, 400.0)
         .resizable(true)
         .center()
+        .focused(true)
         .build();
     }
 }
