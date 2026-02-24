@@ -37,10 +37,14 @@ impl WhisperBackend {
         }
     }
 
-    /// Signal the whisper inference to abort. The abort takes effect at the
-    /// next whisper.cpp checkpoint (typically once per audio segment).
+    /// Signal the whisper inference to abort.
+    ///
+    /// NOTE: The abort callback that reads this flag is currently disabled
+    /// (whisper-rs 0.15.1 `set_abort_callback_safe` causes error -6).
+    /// This flag is still set for forward compatibility but has no effect
+    /// on in-progress inference until the callback is restored.
     pub fn request_abort(&self) {
-        warn!("Transcription abort requested");
+        warn!("Transcription abort requested (NOTE: abort callback disabled — inference will run to completion)");
         self.abort_flag.store(true, Ordering::SeqCst);
     }
 
@@ -125,7 +129,12 @@ impl WhisperBackend {
             .as_ref()
             .ok_or(DictationError::ModelNotLoaded)?;
 
+        let model = self
+            .loaded_model()
+            .ok_or(DictationError::ModelNotLoaded)?;
+
         let n_threads = (num_cpus::get() / 2).max(1) as i32;
+        let no_speech_thold = model.no_speech_threshold();
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_language(language.whisper_code());
@@ -136,20 +145,27 @@ impl WhisperBackend {
         params.set_no_timestamps(true);
         params.set_print_progress(false);
         params.set_print_realtime(false);
-        params.set_no_speech_thold(0.6);
+        params.set_no_speech_thold(no_speech_thold);
         params.set_suppress_blank(true);
         params.set_progress_callback_safe(on_progress);
 
-        // Wire abort flag so timeouts can cancel inference mid-flight
+        // Abort callback: DISABLED — whisper-rs 0.15.1 set_abort_callback_safe()
+        // causes error -6 on all models. Without this callback, request_abort() sets
+        // the flag but nothing reads it during inference. If whisper hangs, the context
+        // mutex remains held until inference completes naturally. The tokio timeout in
+        // commands.rs / main.rs will return an error to the caller, but the blocking
+        // task continues running in the background.
+        // TODO: Restore when whisper-rs fixes the FFI callback lifetime issue.
         self.abort_flag.store(false, Ordering::SeqCst);
-        let abort = Arc::clone(&self.abort_flag);
-        params.set_abort_callback_safe(move || abort.load(Ordering::SeqCst));
+        // let abort = Arc::clone(&self.abort_flag);
+        // params.set_abort_callback_safe(move || abort.load(Ordering::SeqCst));
 
         info!(
-            "Starting local transcription: {} samples, {} threads, lang={:?}",
+            "Starting local transcription: {} samples, {} threads, lang={:?}, no_speech_thold={}",
             audio.len(),
             n_threads,
-            language
+            language,
+            no_speech_thold
         );
 
         let mut state = ctx.create_state().map_err(|e| {
