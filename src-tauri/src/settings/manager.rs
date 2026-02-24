@@ -144,6 +144,21 @@ impl WhisperModel {
         )
     }
 
+    /// Optimal no-speech threshold per model.
+    ///
+    /// Smaller English-only models (small.en) aggressively classify speech as
+    /// silence at moderate thresholds, causing large content deletions. Tiny
+    /// models are prone to repetition loops at the default 0.6. Larger and
+    /// language-optimised models are robust to any reasonable threshold.
+    pub fn no_speech_threshold(&self) -> f32 {
+        match self {
+            // small.en drops content even at 0.3 — needs fully disabled filter
+            WhisperModel::SmallEn => 0.0,
+            // All other models (tiny, base, kb-whisper, nb-whisper, medium, large): 0.3 works
+            _ => 0.3,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn is_norwegian_optimized(&self) -> bool {
         matches!(
@@ -688,6 +703,43 @@ mod tests {
     }
 
     // -- Model consistency --
+
+    #[test]
+    fn no_speech_threshold_small_en_fully_disabled() {
+        assert_eq!(WhisperModel::SmallEn.no_speech_threshold(), 0.0);
+    }
+
+    #[test]
+    fn no_speech_threshold_other_models_at_0_3() {
+        let models = [
+            WhisperModel::TinyEn,
+            WhisperModel::Tiny,
+            WhisperModel::BaseEn,
+            WhisperModel::Base,
+            WhisperModel::KbWhisperTiny,
+            WhisperModel::KbWhisperBase,
+            WhisperModel::KbWhisperSmall,
+            WhisperModel::KbWhisperMedium,
+            WhisperModel::KbWhisperLarge,
+            WhisperModel::NbWhisperTiny,
+            WhisperModel::NbWhisperBase,
+            WhisperModel::NbWhisperSmall,
+            WhisperModel::NbWhisperMedium,
+            WhisperModel::NbWhisperLarge,
+            WhisperModel::Small,
+            WhisperModel::MediumEn,
+            WhisperModel::Medium,
+            WhisperModel::LargeV3Turbo,
+        ];
+        for m in models {
+            assert_eq!(
+                m.no_speech_threshold(),
+                0.3,
+                "{:?} should have threshold 0.3",
+                m
+            );
+        }
+    }
 
     #[test]
     fn recommended_model_is_in_models_for_language() {
