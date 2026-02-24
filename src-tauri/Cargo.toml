@@ -45,7 +45,7 @@ rubato = "0.14"
 whisper-rs = { version = "0.15", features = ["coreml", "metal"] }
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
 
-core-graphics = "0.24"
+core-graphics = "0.25"
 core-foundation = "0.10"
 cocoa = "0.26"
 objc = "0.2"
