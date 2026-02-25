@@ -104,6 +104,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and ho
 - [whisper-rs](https://github.com/tazz4843/whisper-rs) -- Rust bindings for whisper.cpp
 - [Tauri](https://tauri.app/) -- the framework powering the native app shell
 - [OpenAI Whisper](https://github.com/openai/whisper) -- the original speech recognition model
+- [KB (Kungliga biblioteket / National Library of Sweden)](https://www.kb.se/) -- Swedish-optimized [KB-Whisper](https://huggingface.co/KBLab) models (tiny, base, small, medium, large) by KBLab, used for Swedish transcription
+- [NB (Nasjonalbiblioteket / National Library of Norway)](https://www.nb.no/) -- Norwegian-optimized [NB-Whisper](https://huggingface.co/NbAiLab) models (tiny, base, small, medium, large) by NbAiLab, used for Norwegian transcription
 - [NbAiLab/NPSC](https://huggingface.co/datasets/NbAiLab/NPSC) -- Norwegian test audio (CC0, Norwegian National Library)
 
 ## License
