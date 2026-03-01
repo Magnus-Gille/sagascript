@@ -9,6 +9,7 @@ Dictate anywhere. Privately. A lightweight menu bar app for macOS and Windows. P
 
 - **Push-to-talk dictation** -- hold a global hotkey, speak, release to transcribe and paste into any app
 - **100% local transcription** -- runs Whisper models on-device (Metal/Core ML on macOS) with no data leaving your machine
+- **Nordic-grade accuracy** -- Swedish and Norwegian use [KB-Whisper](https://huggingface.co/KBLab) (Swedish National Library) and [NB-Whisper](https://huggingface.co/NbAiLab) (Norwegian National Library), fine-tuned on 50,000+ hours of Nordic speech with 47% fewer errors than generic Whisper
 - **Privacy by default** -- audio is processed in memory and immediately discarded; zero network traffic
 - **No telemetry or tracking** -- no analytics, no usage sharing, no data collection of any kind
 - **Multi-language** -- English, Swedish, and Norwegian with dedicated models; additional languages supported via generic Whisper models
