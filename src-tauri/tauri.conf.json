@@ -28,7 +28,9 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "13.0"
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "$APPLE_SIGNING_IDENTITY",
+      "entitlements": "Entitlements.plist"
     },
     "windows": {
       "certificateThumbprint": null,

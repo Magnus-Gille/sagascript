@@ -248,8 +248,9 @@ fn main() {
             commands::get_supported_formats,
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,
-            commands::check_microphone_permission,
-            commands::request_microphone_permission,
+            commands::microphone_status,
+            commands::request_microphone_access,
+            commands::open_microphone_settings,
             commands::get_platform,
             commands::set_onboarding_completed,
         ])
