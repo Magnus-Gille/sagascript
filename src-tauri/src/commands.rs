@@ -636,7 +636,7 @@ mod macos_mic {
                 let ns_bundle_class = Class::get("NSBundle").expect("NSBundle class");
                 let path: *mut Object = msg_send![
                     Class::get("NSString").expect("NSString"),
-                    stringWithUTF8String: b"/System/Library/Frameworks/AVFoundation.framework\0".as_ptr()
+                    stringWithUTF8String: c"/System/Library/Frameworks/AVFoundation.framework".as_ptr()
                 ];
                 let bundle: *mut Object = msg_send![ns_bundle_class, bundleWithPath: path];
                 if !bundle.is_null() {
@@ -658,7 +658,7 @@ mod macos_mic {
     /// AVMediaTypeAudio constant
     fn av_media_type_audio() -> *mut Object {
         let ns_string_class = Class::get("NSString").expect("NSString class");
-        unsafe { msg_send![ns_string_class, stringWithUTF8String: b"soun\0".as_ptr()] }
+        unsafe { msg_send![ns_string_class, stringWithUTF8String: c"soun".as_ptr()] }
     }
 
     /// Return the raw authorization status as a string.
