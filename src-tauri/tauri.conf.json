@@ -29,7 +29,7 @@
     ],
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "signingIdentity": "$APPLE_SIGNING_IDENTITY",
+      "signingIdentity": null,
       "entitlements": "Entitlements.plist"
     },
     "windows": {
