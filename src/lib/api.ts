@@ -128,12 +128,16 @@ export async function requestAccessibilityPermission(): Promise<void> {
   return invoke("request_accessibility_permission");
 }
 
-export async function checkMicrophonePermission(): Promise<boolean> {
-  return invoke("check_microphone_permission");
+export async function microphoneStatus(): Promise<string> {
+  return invoke("microphone_status");
 }
 
-export async function requestMicrophonePermission(): Promise<boolean> {
-  return invoke("request_microphone_permission");
+export async function requestMicrophoneAccess(): Promise<string> {
+  return invoke("request_microphone_access");
+}
+
+export async function openMicrophoneSettings(): Promise<void> {
+  return invoke("open_microphone_settings");
 }
 
 export async function getPlatform(): Promise<string> {

@@ -6,8 +6,9 @@
     getSettings,
     setLanguage,
     downloadModel,
-    checkMicrophonePermission,
-    requestMicrophonePermission,
+    microphoneStatus,
+    requestMicrophoneAccess,
+    openMicrophoneSettings,
     checkAccessibilityPermission,
     requestAccessibilityPermission,
     setOnboardingCompleted,
@@ -31,9 +32,9 @@
   let downloadComplete = $state(false);
 
   // Permissions
-  let micGranted = $state(false);
+  // micStatus: "authorized" | "not_determined" | "denied" | "restricted" | "unsupported" | "checking"
+  let micStatus: string = $state("checking");
   let accessibilityGranted = $state(false);
-  let micChecking = $state(false);
   let accessibilityChecking = $state(false);
   let pollTimer: ReturnType<typeof setInterval> | null = $state(null);
 
@@ -109,36 +110,48 @@
   // -- Microphone --
 
   async function grantMicrophone() {
-    micChecking = true;
-    const result = await requestMicrophonePermission();
-    if (result) {
-      micGranted = true;
-      micChecking = false;
-      return;
-    }
-    startPoll(async () => {
-      const granted = await checkMicrophonePermission();
-      if (granted) {
-        micGranted = true;
-        micChecking = false;
-        stopPoll();
+    try {
+      micStatus = "checking";
+      const result = await requestMicrophoneAccess();
+      micStatus = result;
+      if (result === "denied") {
+        // macOS won't re-show the dialog — open System Settings and poll
+        await openMicrophoneSettings();
+        startPoll(async () => {
+          try {
+            const polled = await microphoneStatus();
+            micStatus = polled;
+            if (polled === "authorized") {
+              stopPoll();
+            }
+          } catch {
+            // keep polling
+          }
+        });
       }
-    });
+    } catch (e) {
+      // Prevent spinner getting stuck
+      micStatus = await microphoneStatus().catch(() => "not_determined");
+    }
   }
 
   // -- Accessibility --
 
   async function grantAccessibility() {
     accessibilityChecking = true;
-    await requestAccessibilityPermission();
-    startPoll(async () => {
-      const granted = await checkAccessibilityPermission();
-      if (granted) {
-        accessibilityGranted = true;
-        accessibilityChecking = false;
-        stopPoll();
-      }
-    });
+    try {
+      await requestAccessibilityPermission();
+      startPoll(async () => {
+        const granted = await checkAccessibilityPermission();
+        if (granted) {
+          accessibilityGranted = true;
+          accessibilityChecking = false;
+          stopPoll();
+        }
+      });
+    } catch {
+      accessibilityChecking = false;
+    }
   }
 
   function startPoll(fn: () => Promise<void>) {
@@ -165,7 +178,11 @@
 
   onMount(async () => {
     platform = await getPlatform();
-    micGranted = await checkMicrophonePermission();
+    try {
+      micStatus = await microphoneStatus();
+    } catch {
+      micStatus = "not_determined";
+    }
     accessibilityGranted = await checkAccessibilityPermission();
 
     // Seed language and hotkey from existing settings
@@ -380,28 +397,72 @@
           processed locally on your device — nothing leaves your device.
         </p>
 
-        <div class="status-indicator" class:granted={micGranted}>
-          <span class="status-dot"></span>
-          <span>{micGranted ? "Microphone access granted" : "Microphone access not granted"}</span>
-        </div>
-
-        <div class="actions">
-          {#if micGranted}
+        {#if micStatus === "authorized"}
+          <div class="status-indicator granted">
+            <span class="status-dot"></span>
+            <span>Microphone access granted</span>
+          </div>
+          <div class="actions">
             <button class="primary" onclick={nextStep}>Continue</button>
-          {:else}
-            <button class="primary" onclick={grantMicrophone} disabled={micChecking}>
-              {#if micChecking}
+          </div>
+
+        {:else if micStatus === "denied"}
+          <div class="status-indicator">
+            <span class="status-dot"></span>
+            <span>Permission was denied</span>
+          </div>
+          <p class="description">
+            Please enable Sagascript in
+            <strong>System Settings &rsaquo; Privacy &amp; Security &rsaquo; Microphone</strong>.
+          </p>
+          <div class="actions">
+            <button class="primary" onclick={() => { openMicrophoneSettings(); startPoll(async () => { try { const s = await microphoneStatus(); micStatus = s; if (s === "authorized") stopPoll(); } catch {} }); }}>
+              <span class="button-spinner"></span>
+              Waiting — Open System Settings
+            </button>
+            <button class="secondary" onclick={() => { stopPoll(); nextStep(); }}>
+              I don't need this — I'll only transcribe files
+            </button>
+          </div>
+
+        {:else if micStatus === "restricted"}
+          <div class="status-indicator">
+            <span class="status-dot"></span>
+            <span>Restricted by your organization</span>
+          </div>
+          <div class="actions">
+            <button class="secondary" onclick={nextStep}>Skip</button>
+          </div>
+
+        {:else if micStatus === "unsupported"}
+          <div class="status-indicator">
+            <span class="status-dot"></span>
+            <span>Permission checks require a built app bundle. Skip to continue.</span>
+          </div>
+          <div class="actions">
+            <button class="primary" onclick={nextStep}>Skip</button>
+          </div>
+
+        {:else}
+          <!-- not_determined or checking -->
+          <div class="status-indicator">
+            <span class="status-dot"></span>
+            <span>Microphone access not granted</span>
+          </div>
+          <div class="actions">
+            <button class="primary" onclick={grantMicrophone} disabled={micStatus === "checking"}>
+              {#if micStatus === "checking"}
                 <span class="button-spinner"></span>
                 Waiting for permission...
               {:else}
                 Grant Microphone Access
               {/if}
             </button>
-            <button class="secondary" onclick={() => { stopPoll(); micChecking = false; nextStep(); }}>
+            <button class="secondary" onclick={() => { stopPoll(); nextStep(); }}>
               I don't need this — I'll only transcribe files
             </button>
-          {/if}
-        </div>
+          </div>
+        {/if}
       </div>
 
     <!-- Accessibility (macOS only) -->
@@ -468,7 +529,7 @@
         </div>
         <h1>You're All Set!</h1>
 
-        {#if micGranted || platform !== "macos"}
+        {#if micStatus === "authorized" || platform !== "macos"}
           <div class="hotkey-display">
             <div class="hotkey-keys">
               {#each hotkeyParts as part, i}

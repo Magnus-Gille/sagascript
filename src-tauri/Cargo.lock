@@ -3933,6 +3933,7 @@ name = "sagascript"
 version = "0.0.1"
 dependencies = [
  "arboard",
+ "block",
  "chrono",
  "clap",
  "clap_complete",

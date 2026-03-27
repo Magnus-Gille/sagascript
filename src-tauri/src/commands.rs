@@ -533,48 +533,215 @@ pub async fn request_accessibility_permission() -> Result<(), String> {
     Ok(())
 }
 
+/// Returns the microphone authorization status as a string.
+/// Possible values: "authorized", "not_determined", "denied", "restricted", "unsupported".
+/// "unsupported" is returned when the binary is not running from a proper .app bundle
+/// (e.g. during `cargo run` or `cargo tauri dev` without a bundle).
 #[tauri::command]
-pub async fn check_microphone_permission() -> Result<bool, String> {
-    use cpal::traits::HostTrait;
-    Ok(cpal::default_host().default_input_device().is_some())
+pub async fn microphone_status() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if !macos_mic::is_in_app_bundle() {
+            return Ok("unsupported".to_string());
+        }
+        Ok(macos_mic::authorization_status_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok("authorized".to_string())
+    }
+}
+
+/// Triggers AVCaptureDevice.requestAccessForMediaType:completionHandler: and returns
+/// the new status string after the user responds (or immediately if already determined).
+/// Possible return values: "authorized", "not_determined", "denied", "restricted", "unsupported".
+#[tauri::command]
+pub async fn request_microphone_access() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if !macos_mic::is_in_app_bundle() {
+            return Ok("unsupported".to_string());
+        }
+        // Use spawn_blocking to avoid starving the tokio runtime during the
+        // up-to-60s wait for the user to respond to the permission dialog.
+        tokio::task::spawn_blocking(|| {
+            use std::sync::mpsc;
+            let (tx, rx) = mpsc::channel();
+            macos_mic::request_access(move |_granted| {
+                let _ = tx.send(());
+            });
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(60));
+            macos_mic::authorization_status_string()
+        })
+        .await
+        .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok("authorized".to_string())
+    }
 }
 
 #[tauri::command]
-pub async fn request_microphone_permission() -> Result<bool, String> {
-    // Briefly open a cpal input stream to trigger macOS's native permission dialog,
-    // then check if the device became available.
-    use std::sync::mpsc;
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-        let host = cpal::default_host();
-        if let Some(device) = host.default_input_device() {
-            let config = device
-                .default_input_config()
-                .map(|c: cpal::SupportedStreamConfig| c.config())
-                .unwrap_or(cpal::StreamConfig {
-                    channels: 1,
-                    sample_rate: cpal::SampleRate(16000),
-                    buffer_size: cpal::BufferSize::Default,
-                });
-            if let Ok(stream) = device.build_input_stream(
-                &config,
-                |_data: &[f32], _: &cpal::InputCallbackInfo| {},
-                |_err| {},
-                None,
-            ) {
-                let _ = stream.play();
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                drop(stream);
+pub async fn open_microphone_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            .spawn()
+            .map_err(|e| format!("Failed to open System Settings: {}", e))?;
+    }
+    Ok(())
+}
+
+/// macOS-specific microphone permission helpers using AVCaptureDevice via objc.
+#[cfg(target_os = "macos")]
+mod macos_mic {
+    use objc::runtime::{Class, Object};
+    use objc::{msg_send, sel, sel_impl};
+    use std::sync::Once;
+
+    /// AVAuthorizationStatus values
+    const AV_AUTH_STATUS_NOT_DETERMINED: isize = 0;
+
+    /// Returns true if the binary is running from inside a proper .app bundle.
+    /// When running via `cargo run` or `cargo tauri dev` without a bundle,
+    /// NSBundle.mainBundle.bundleIdentifier returns nil — TCC won't attribute
+    /// permission requests correctly in that case.
+    pub fn is_in_app_bundle() -> bool {
+        unsafe {
+            let ns_bundle_class = match Class::get("NSBundle") {
+                Some(c) => c,
+                None => return false,
+            };
+            let main_bundle: *mut Object = msg_send![ns_bundle_class, mainBundle];
+            if main_bundle.is_null() {
+                return false;
             }
+            let bundle_id: *mut Object = msg_send![main_bundle, bundleIdentifier];
+            if bundle_id.is_null() {
+                return false;
+            }
+            // Check that the string is non-empty
+            let len: usize = msg_send![bundle_id, length];
+            len > 0
         }
-        let available = host.default_input_device().is_some();
-        let _ = tx.send(available);
-    });
-    let result = rx
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .unwrap_or(false);
-    Ok(result)
+    }
+
+    /// Ensure AVFoundation framework is loaded (required for AVCaptureDevice class lookup).
+    fn ensure_avfoundation_loaded() {
+        static LOAD: Once = Once::new();
+        LOAD.call_once(|| {
+            unsafe {
+                let ns_bundle_class = Class::get("NSBundle").expect("NSBundle class");
+                let path: *mut Object = msg_send![
+                    Class::get("NSString").expect("NSString"),
+                    stringWithUTF8String: c"/System/Library/Frameworks/AVFoundation.framework".as_ptr()
+                ];
+                let bundle: *mut Object = msg_send![ns_bundle_class, bundleWithPath: path];
+                if !bundle.is_null() {
+                    let _loaded: bool = msg_send![bundle, load];
+                }
+            }
+        });
+    }
+
+    fn get_av_capture_device_class() -> Option<&'static Class> {
+        ensure_avfoundation_loaded();
+        let cls = Class::get("AVCaptureDevice");
+        if cls.is_none() {
+            tracing::warn!("AVCaptureDevice class not found");
+        }
+        cls
+    }
+
+    /// AVMediaTypeAudio constant
+    fn av_media_type_audio() -> *mut Object {
+        let ns_string_class = Class::get("NSString").expect("NSString class");
+        unsafe { msg_send![ns_string_class, stringWithUTF8String: c"soun".as_ptr()] }
+    }
+
+    /// Return the raw authorization status as a string.
+    /// AVCaptureDevice can cache `authorizationStatus` in-process, so when it
+    /// reports "denied" we re-query via `requestAccess` which returns the
+    /// current TCC state immediately (no dialog shown for already-determined
+    /// states). This avoids opening a real audio stream as a side effect.
+    pub fn authorization_status_string() -> String {
+        let cls = match get_av_capture_device_class() {
+            Some(c) => c,
+            None => {
+                tracing::warn!("AVCaptureDevice class not found — returning not_determined");
+                return "not_determined".to_string();
+            }
+        };
+        let media_type = av_media_type_audio();
+        let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: media_type] };
+        match status {
+            0 => "not_determined",
+            1 => "restricted",
+            2 => "authorized",
+            3 => {
+                // AVCaptureDevice may cache "denied" even after the user grants
+                // access via System Settings. Re-query via requestAccess which
+                // returns the live TCC state without showing a dialog.
+                if recheck_access_granted() {
+                    "authorized"
+                } else {
+                    "denied"
+                }
+            }
+            _ => "not_determined",
+        }
+        .to_string()
+    }
+
+    /// Re-query TCC permission via `requestAccessForMediaType:completionHandler:`.
+    /// For already-determined states, this returns immediately without showing a dialog.
+    /// This defeats AVCaptureDevice's in-process cache of `authorizationStatus`.
+    fn recheck_access_granted() -> bool {
+        use std::sync::mpsc;
+        let (tx, rx) = mpsc::channel();
+        request_access(move |granted| {
+            let _ = tx.send(granted);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap_or(false)
+    }
+
+    /// Request microphone access using AVCaptureDevice.requestAccessForMediaType:completionHandler:.
+    /// Calls `callback` once the user responds (or immediately if status is already determined).
+    pub fn request_access<F: FnOnce(bool) + Send + 'static>(callback: F) {
+        let cls = match get_av_capture_device_class() {
+            Some(c) => c,
+            None => {
+                callback(false);
+                return;
+            }
+        };
+        let media_type = av_media_type_audio();
+
+        let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: media_type] };
+        if status != AV_AUTH_STATUS_NOT_DETERMINED {
+            // Already determined (authorized, denied, or restricted) — fire callback immediately
+            callback(status == 2 /* AV_AUTH_STATUS_AUTHORIZED */);
+            return;
+        }
+
+        // Use AVCaptureDevice.requestAccessForMediaType:completionHandler: with an objc block.
+        // This properly attributes the permission request to the app's bundle ID.
+        let callback = std::sync::Mutex::new(Some(callback));
+        let completion = block::ConcreteBlock::new(move |granted: bool| {
+            if let Some(cb) = callback.lock().unwrap().take() {
+                cb(granted);
+            }
+        });
+        // The block must be copied to the heap for async use by the framework
+        let completion = completion.copy();
+
+        unsafe {
+            let _: () = msg_send![cls, requestAccessForMediaType: media_type completionHandler: &*completion];
+        }
+    }
 }
 
 #[tauri::command]

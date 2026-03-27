@@ -28,3 +28,6 @@ secrets/
 # Test / benchmark outputs
 *.xcresult
 benchmark/audio/
+
+# Debate artifacts (adversarial review process files)
+debate/
