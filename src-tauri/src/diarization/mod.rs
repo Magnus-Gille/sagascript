@@ -1,5 +1,7 @@
+pub mod clustering;
 pub mod embedding;
 pub mod fbank;
+pub mod merge;
 pub mod model;
 pub mod segmentation;
 

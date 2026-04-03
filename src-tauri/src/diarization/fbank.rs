@@ -46,12 +46,12 @@ fn mel_filterbank() -> Vec<[f32; N_FREQS]> {
         let f_center = freq_bins[m + 1];
         let f_right = freq_bins[m + 2];
 
-        for k in 0..N_FREQS {
+        for (k, filter_val) in filters[m].iter_mut().enumerate() {
             let k_f = k as f32;
             if k_f >= f_left && k_f <= f_center && f_center > f_left {
-                filters[m][k] = (k_f - f_left) / (f_center - f_left);
+                *filter_val = (k_f - f_left) / (f_center - f_left);
             } else if k_f > f_center && k_f <= f_right && f_right > f_center {
-                filters[m][k] = (f_right - k_f) / (f_right - f_center);
+                *filter_val = (f_right - k_f) / (f_right - f_center);
             }
         }
     }
@@ -85,7 +85,7 @@ pub fn compute_fbank(audio: &[f32]) -> Vec<[f32; N_MELS]> {
 
     let mut features = vec![[0.0f32; N_MELS]; n_frames];
 
-    for frame_idx in 0..n_frames {
+    for (frame_idx, frame_features) in features.iter_mut().enumerate() {
         let start = frame_idx * HOP_LENGTH;
         let frame = &audio[start..start + N_FFT];
 
@@ -111,7 +111,7 @@ pub fn compute_fbank(audio: &[f32]) -> Vec<[f32; N_MELS]> {
                 .zip(power.iter())
                 .map(|(&f, &p)| f * p)
                 .sum();
-            features[frame_idx][m] = energy.max(1e-10).ln();
+            frame_features[m] = energy.max(1e-10).ln();
         }
     }
 
