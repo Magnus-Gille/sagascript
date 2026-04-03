@@ -180,7 +180,12 @@ AVAILABLE MODELS:
   English:    tiny.en, base.en
   Swedish:    kb-whisper-tiny, kb-whisper-base, kb-whisper-small
   Norwegian:  nb-whisper-tiny, nb-whisper-base, nb-whisper-small
-  Multilingual: tiny, base"
+  Multilingual: tiny, base
+
+DIARIZATION MODELS (requires --features diarization):
+  pyannote-segmentation   Speaker segmentation (~6 MB)
+  wespeaker-embedding     Speaker embeddings (~27 MB)
+  diarization             Download both models at once"
     )]
     DownloadModel(models::DownloadModelArgs),
 

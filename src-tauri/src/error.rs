@@ -40,6 +40,10 @@ pub enum DictationError {
 
     #[error("Unsupported format: {0}")]
     UnsupportedFormat(String),
+
+    #[cfg(feature = "diarization")]
+    #[error("Diarization error: {0}")]
+    DiarizationError(String),
 }
 
 // Tauri commands need IntoResponse which requires Serialize

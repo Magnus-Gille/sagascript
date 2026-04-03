@@ -9,6 +9,8 @@ mod app_controller;
 mod audio;
 mod cli;
 mod commands;
+#[cfg(feature = "diarization")]
+pub mod diarization;
 mod error;
 mod events;
 mod hotkey;
