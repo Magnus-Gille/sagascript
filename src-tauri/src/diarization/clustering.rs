@@ -42,6 +42,20 @@ pub fn cluster_speakers(
         }
     }
 
+    if !condensed.is_empty() {
+        let mut sorted = condensed.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let n_dist = sorted.len();
+        tracing::debug!(
+            "Embedding distances: n={}, p25={:.3}, p50={:.3}, p75={:.3}, p90={:.3}",
+            n_dist,
+            sorted[n_dist * 25 / 100],
+            sorted[n_dist * 50 / 100],
+            sorted[n_dist * 75 / 100],
+            sorted[(n_dist * 90 / 100).min(n_dist - 1)],
+        );
+    }
+
     let dendrogram = linkage(&mut condensed, n, Method::Average);
     let raw_labels = cutree(&dendrogram, n, threshold);
 
