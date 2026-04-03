@@ -1,3 +1,4 @@
+pub mod fbank;
 pub mod model;
 
 use serde::Serialize;
