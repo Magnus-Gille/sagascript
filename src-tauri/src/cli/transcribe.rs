@@ -35,6 +35,12 @@ pub struct TranscribeArgs {
     #[cfg(feature = "diarization")]
     #[arg(long)]
     pub diarize: bool,
+
+    /// Initial prompt to prime the decoder with domain-specific vocabulary.
+    /// Reduces hallucination on technical terms, proper nouns, and jargon.
+    /// Example: --prompt "Grimnir, MCP, Fortnox, bokföring, kontering, saldo"
+    #[arg(long, value_name = "TEXT")]
+    pub prompt: Option<String>,
 }
 
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
@@ -96,9 +102,8 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         let speaker_segments = diarize(&audio, &DiarizeConfig::default())?;
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
 
-        let n_chunks = (audio.len() + 30 * 16_000 - 1) / (28 * 16_000);
-        eprintln!("Transcribing with timestamps ({n_chunks} chunk(s))...");
-        let raw_segments = backend.transcribe_sync_with_timestamps(&audio, language)?;
+        eprintln!("Transcribing with timestamps...");
+        let raw_segments = backend.transcribe_sync_with_timestamps(&audio, language, args.prompt.as_deref())?;
         eprintln!("Got {} transcript segment(s)", raw_segments.len());
 
         let transcript: Vec<TimestampedSegment> = raw_segments
@@ -150,14 +155,19 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
                 .unwrap(),
         );
         let pb_cb = pb.clone();
-        let text = backend.transcribe_sync_with_progress(&audio, language, move |pct| {
+        let prompt = args.prompt.clone();
+        let text = backend.transcribe_sync_with_progress_and_prompt(&audio, language, prompt.as_deref(), move |pct| {
             pb_cb.set_position(pct as u64);
         })?;
         pb.finish_and_clear();
         text
     } else {
         eprintln!("Transcribing...");
-        backend.transcribe_sync(&audio, language)?
+        if let Some(p) = &args.prompt {
+            backend.transcribe_sync_with_progress_and_prompt(&audio, language, Some(p.as_str()), |_| {})?
+        } else {
+            backend.transcribe_sync(&audio, language)?
+        }
     };
 
     // Output

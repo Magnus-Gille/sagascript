@@ -134,6 +134,18 @@ impl WhisperBackend {
         language: Language,
         on_progress: impl FnMut(i32) + 'static,
     ) -> Result<String, DictationError> {
+        self.transcribe_sync_with_progress_and_prompt(audio, language, None, on_progress)
+    }
+
+    /// Like `transcribe_sync_with_progress` but accepts an optional initial prompt
+    /// to prime the decoder with domain-specific vocabulary and context.
+    pub fn transcribe_sync_with_progress_and_prompt(
+        &self,
+        audio: &[f32],
+        language: Language,
+        prompt: Option<&str>,
+        on_progress: impl FnMut(i32) + 'static,
+    ) -> Result<String, DictationError> {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
@@ -161,6 +173,9 @@ impl WhisperBackend {
         params.set_print_realtime(false);
         params.set_no_speech_thold(no_speech_thold);
         params.set_suppress_blank(true);
+        if let Some(p) = prompt {
+            params.set_initial_prompt(p);
+        }
         params.set_progress_callback_safe(on_progress);
 
         // Abort callback: DISABLED — whisper-rs 0.15.1 set_abort_callback_safe()
@@ -215,45 +230,15 @@ impl WhisperBackend {
         &self,
         audio: &[f32],
         language: Language,
+        prompt: Option<&str>,
     ) -> Result<Vec<(f64, f64, String)>, DictationError> {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
-
-        // 30s windows with 2s overlap — whisper.cpp is reliable up to ~30s per call
-        const CHUNK: usize = 30 * 16_000;
-        const OVERLAP: usize = 2 * 16_000;
-        const STEP: usize = CHUNK - OVERLAP;
-
-        if audio.len() <= CHUNK {
-            return self.transcribe_chunk_timestamps(audio, language, 0.0);
-        }
-
-        let mut results: Vec<(f64, f64, String)> = Vec::new();
-        let mut chunk_start = 0usize;
-        let mut is_first = true;
-
-        while chunk_start < audio.len() {
-            let chunk_end = (chunk_start + CHUNK).min(audio.len());
-            let chunk = &audio[chunk_start..chunk_end];
-            let t_offset = chunk_start as f64 / 16_000.0;
-            // Discard segments from the overlap zone (already covered by previous chunk)
-            let cutoff = if is_first { 0.0 } else { t_offset + OVERLAP as f64 / 16_000.0 };
-
-            for seg in self.transcribe_chunk_timestamps(chunk, language, t_offset)? {
-                if seg.0 >= cutoff {
-                    results.push(seg);
-                }
-            }
-
-            is_first = false;
-            if chunk_end >= audio.len() {
-                break;
-            }
-            chunk_start += STEP;
-        }
-
-        Ok(results)
+        // Process full audio in one call — whisper.cpp handles long audio internally
+        // via its own sliding window. With no_timestamps=true + DTW there is no
+        // looping risk, and the internal context is better than manual chunking.
+        self.transcribe_chunk_timestamps(audio, language, 0.0, prompt)
     }
 
     /// Transcribe a single audio chunk (≤30s) with timestamps via DTW.
@@ -268,6 +253,7 @@ impl WhisperBackend {
         audio: &[f32],
         language: Language,
         t_offset: f64,
+        prompt: Option<&str>,
     ) -> Result<Vec<(f64, f64, String)>, DictationError> {
         let ctx_guard = self.context.lock().unwrap();
         let ctx = ctx_guard
@@ -293,6 +279,9 @@ impl WhisperBackend {
         params.set_print_realtime(false);
         params.set_no_speech_thold(no_speech_thold);
         params.set_suppress_blank(true);
+        if let Some(p) = prompt {
+            params.set_initial_prompt(p);
+        }
 
         let mut state = ctx.create_state().map_err(|e| {
             DictationError::TranscriptionFailed(format!("Failed to create whisper state: {e}"))

@@ -74,12 +74,14 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
         })?;
 
     let track_id = track.id;
-    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(1);
     let sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
+    // channels from codec_params can be wrong (e.g. AAC stereo reporting 1).
+    // We'll detect the real channel count from the first decoded frame.
+    let codec_channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(0);
 
     info!(
-        "Decoding audio: {} Hz, {} ch, codec {:?}",
-        sample_rate, channels, track.codec_params.codec
+        "Decoding audio: {} Hz, codec_channels={}, codec {:?}",
+        sample_rate, codec_channels, track.codec_params.codec
     );
 
     let mut decoder = symphonia::default::get_codecs()
@@ -89,6 +91,7 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
         })?;
 
     let mut all_samples: Vec<f32> = Vec::new();
+    let mut actual_channels: usize = codec_channels.max(1);
 
     // Decode all packets
     loop {
@@ -120,6 +123,8 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
         };
 
         let spec = *decoded.spec();
+        // Use actual channel count from decoded frame spec (more reliable than codec_params)
+        actual_channels = spec.channels.count().max(1);
         let num_frames = decoded.capacity();
 
         let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
@@ -134,15 +139,17 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
         ));
     }
 
-    let duration_secs = all_samples.len() as f64 / (sample_rate as f64 * channels as f64);
+    let duration_secs = all_samples.len() as f64 / (sample_rate as f64 * actual_channels as f64);
     info!(
-        "Decoded {} raw samples ({:.1}s), resampling to 16kHz mono",
+        "Decoded {} raw samples ({:.1}s), {} ch at {} Hz, resampling to 16kHz mono",
         all_samples.len(),
-        duration_secs
+        duration_secs,
+        actual_channels,
+        sample_rate,
     );
 
     // Mix to mono and resample
-    let mono = mix_to_mono(&all_samples, channels);
+    let mono = mix_to_mono(&all_samples, actual_channels);
     let resampled = resample_to_16khz(mono, sample_rate)
         .map_err(|e| DictationError::TranscriptionFailed(format!("Resample failed: {e}")))?;
 
