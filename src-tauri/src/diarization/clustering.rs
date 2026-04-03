@@ -1,7 +1,9 @@
 /// Agglomerative hierarchical clustering for speaker embeddings.
 ///
-/// Uses complete linkage with cosine distance to group embeddings
+/// Uses average linkage with cosine distance to group embeddings
 /// from the segmentation stage into global speaker identities.
+/// Average linkage is more robust than complete linkage for speaker diarization
+/// because it uses mean inter-cluster distance rather than worst-case.
 use kodama::{linkage, Method};
 
 use crate::diarization::embedding::EMBEDDING_DIM;
@@ -40,7 +42,7 @@ pub fn cluster_speakers(
         }
     }
 
-    let dendrogram = linkage(&mut condensed, n, Method::Complete);
+    let dendrogram = linkage(&mut condensed, n, Method::Average);
     let raw_labels = cutree(&dendrogram, n, threshold);
 
     // Remap raw cluster IDs to contiguous 0-based labels in order of first appearance

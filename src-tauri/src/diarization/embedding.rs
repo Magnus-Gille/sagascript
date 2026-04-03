@@ -29,6 +29,8 @@ impl Embedder {
             .commit_from_file(model_path)
             .map_err(|e| DictationError::DiarizationError(format!("Failed to load embedding model: {e}")))?;
         info!("Embedding model loaded from {}", model_path.display());
+        // Log expected input/output shapes so we can verify tensor orientation
+        info!("Embedding model input: {:?}", session.inputs().iter().map(|i| format!("'{}' {:?}", i.name(), i.dtype())).collect::<Vec<_>>());
         Ok(Self { session })
     }
 
@@ -75,7 +77,9 @@ impl Embedder {
     /// Extract embeddings for a list of audio segments.
     ///
     /// `segments` is a slice of `(start_sec, end_sec, speaker_idx)` from the segmentation stage.
-    /// Returns `(speaker_idx, embedding)` for each segment that is long enough to embed.
+    /// Returns `(segment_index, embedding)` — the segment index (not speaker_idx) is used as
+    /// the key so that clustering output can be mapped back to individual segments unambiguously.
+    /// Segments that are too short to embed are silently skipped.
     pub fn extract_embeddings(
         &mut self,
         audio: &[f32],
@@ -84,7 +88,7 @@ impl Embedder {
         let sample_rate = 16_000usize;
         let mut result = Vec::new();
 
-        for &(start_sec, end_sec, speaker_idx) in segments {
+        for (seg_idx, &(start_sec, end_sec, _speaker_idx)) in segments.iter().enumerate() {
             let start_sample = (start_sec * sample_rate as f64) as usize;
             let end_sample = ((end_sec * sample_rate as f64) as usize).min(audio.len());
 
@@ -94,7 +98,7 @@ impl Embedder {
 
             let slice = &audio[start_sample..end_sample];
             if let Some(embedding) = self.embed(slice)? {
-                result.push((speaker_idx, embedding));
+                result.push((seg_idx, embedding));
             }
         }
 

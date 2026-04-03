@@ -23,7 +23,9 @@ pub struct DiarizeConfig {
 impl Default for DiarizeConfig {
     fn default() -> Self {
         Self {
-            threshold: clustering::DEFAULT_THRESHOLD,
+            // 0.5 is tighter than clustering::DEFAULT_THRESHOLD (0.8) — produces
+            // better speaker separation on typical meeting recordings.
+            threshold: 0.7,
             min_segment: 0.3,
             min_gap: 0.5,
         }
@@ -58,26 +60,27 @@ pub fn diarize(audio: &[f32], config: &DiarizeConfig) -> Result<Vec<SpeakerSegme
     let embeddings = embedder.extract_embeddings(audio, &raw_segments)?;
 
     // 4. Cluster embeddings → global speaker IDs
+    // speaker_map[i] = (segment_index, global_id) — segment_index keys into raw_segments
     let speaker_map = if embeddings.is_empty() {
         Vec::new()
     } else {
         clustering::cluster_speakers(&embeddings, config.threshold)
     };
+    let n_global = speaker_map.iter().map(|(_,g)| g).max().map(|&m| m+1).unwrap_or(0);
+    eprintln!("  Found {n_global} speaker(s)");
 
-    // Build local_speaker → global_speaker lookup
-    // (local speaker idx may appear multiple times with different global IDs due to
-    // different segments; take the modal assignment per local speaker)
-    let max_local = raw_segments.iter().map(|(_, _, s)| *s).max().unwrap_or(0) + 1;
-    let mut local_to_global = vec![0usize; max_local];
-    for (local_idx, global_id) in &speaker_map {
-        local_to_global[*local_idx] = *global_id;
+    // Build segment_index → global_id map (default 0 for segments with no embedding)
+    let mut seg_to_global = vec![0usize; raw_segments.len()];
+    for (seg_idx, global_id) in &speaker_map {
+        seg_to_global[*seg_idx] = *global_id;
     }
 
     // 5. Build SpeakerSegment output
     let segments: Vec<SpeakerSegment> = raw_segments
         .iter()
-        .map(|(start, end, local_idx)| {
-            let global_id = local_to_global[*local_idx];
+        .enumerate()
+        .map(|(i, (start, end, _local_idx))| {
+            let global_id = seg_to_global[i];
             SpeakerSegment {
                 start: *start,
                 end: *end,

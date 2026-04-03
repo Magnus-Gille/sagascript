@@ -13,7 +13,7 @@ use crate::error::DictationError;
 
 /// Supported audio/video file extensions.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "wav", "mp3", "m4a", "aac", "mp4", "mov", "ogg", "webm", "flac",
+    "wav", "mp3", "m4a", "aac", "mp4", "mov", "ogg", "webm", "flac", "qta",
 ];
 
 /// Decode an audio or video file to `Vec<f32>` at 16 kHz mono (Whisper input format).
@@ -42,7 +42,12 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
-    hint.with_extension(&ext);
+    // .qta is QuickTime Audio — probe as .mov
+    let hint_ext = match ext.as_str() {
+        "qta" => "mov",
+        other => other,
+    };
+    hint.with_extension(hint_ext);
 
     let probed = symphonia::default::get_probe()
         .format(

@@ -96,8 +96,10 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         let speaker_segments = diarize(&audio, &DiarizeConfig::default())?;
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
 
-        eprintln!("Transcribing with timestamps...");
+        let n_chunks = (audio.len() + 30 * 16_000 - 1) / (28 * 16_000);
+        eprintln!("Transcribing with timestamps ({n_chunks} chunk(s))...");
         let raw_segments = backend.transcribe_sync_with_timestamps(&audio, language)?;
+        eprintln!("Got {} transcript segment(s)", raw_segments.len());
 
         let transcript: Vec<TimestampedSegment> = raw_segments
             .into_iter()

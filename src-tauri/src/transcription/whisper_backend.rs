@@ -194,8 +194,8 @@ impl WhisperBackend {
 
     /// Transcribe audio and return per-segment timestamps.
     ///
-    /// Returns `Vec<(start_secs, end_secs, text)>`. Timestamps come from
-    /// whisper.cpp in centiseconds; we convert to seconds here.
+    /// For audio longer than 30s, uses overlapping 30s windows to prevent
+    /// the Whisper decoder from drifting or looping on long recordings.
     #[cfg(feature = "diarization")]
     pub fn transcribe_sync_with_timestamps(
         &self,
@@ -206,6 +206,51 @@ impl WhisperBackend {
             return Err(DictationError::NoAudioCaptured);
         }
 
+        // 30s windows with 2s overlap — whisper.cpp is reliable up to ~30s per call
+        const CHUNK: usize = 30 * 16_000;
+        const OVERLAP: usize = 2 * 16_000;
+        const STEP: usize = CHUNK - OVERLAP;
+
+        if audio.len() <= CHUNK {
+            return self.transcribe_chunk_timestamps(audio, language, 0.0);
+        }
+
+        let mut results: Vec<(f64, f64, String)> = Vec::new();
+        let mut chunk_start = 0usize;
+        let mut is_first = true;
+
+        while chunk_start < audio.len() {
+            let chunk_end = (chunk_start + CHUNK).min(audio.len());
+            let chunk = &audio[chunk_start..chunk_end];
+            let t_offset = chunk_start as f64 / 16_000.0;
+            // Discard segments from the overlap zone (already covered by previous chunk)
+            let cutoff = if is_first { 0.0 } else { t_offset + OVERLAP as f64 / 16_000.0 };
+
+            for seg in self.transcribe_chunk_timestamps(chunk, language, t_offset)? {
+                if seg.0 >= cutoff {
+                    results.push(seg);
+                }
+            }
+
+            is_first = false;
+            if chunk_end >= audio.len() {
+                break;
+            }
+            chunk_start += STEP;
+        }
+
+        Ok(results)
+    }
+
+    /// Transcribe a single audio chunk (≤30s) with timestamps.
+    /// `t_offset` is added to all returned timestamps.
+    #[cfg(feature = "diarization")]
+    fn transcribe_chunk_timestamps(
+        &self,
+        audio: &[f32],
+        language: Language,
+        t_offset: f64,
+    ) -> Result<Vec<(f64, f64, String)>, DictationError> {
         let ctx_guard = self.context.lock().unwrap();
         let ctx = ctx_guard
             .as_ref()
@@ -230,8 +275,6 @@ impl WhisperBackend {
         params.set_no_speech_thold(no_speech_thold);
         params.set_suppress_blank(true);
 
-        self.abort_flag.store(false, Ordering::SeqCst);
-
         let mut state = ctx.create_state().map_err(|e| {
             DictationError::TranscriptionFailed(format!("Failed to create whisper state: {e}"))
         })?;
@@ -245,13 +288,48 @@ impl WhisperBackend {
 
         for i in 0..n_segments {
             if let Some(segment) = state.get_segment(i) {
-                let t0 = segment.start_timestamp() as f64 / 100.0;
-                let t1 = segment.end_timestamp() as f64 / 100.0;
-                let text = segment.to_str().unwrap_or("").to_string();
-                results.push((t0, t1, text));
+                let t0 = segment.start_timestamp() as f64 / 100.0 + t_offset;
+                let t1 = segment.end_timestamp() as f64 / 100.0 + t_offset;
+                let raw = segment.to_str().unwrap_or("");
+                let text = strip_special_tokens(raw);
+                if !text.trim().is_empty() {
+                    results.push((t0, t1, text));
+                }
             }
         }
 
         Ok(results)
     }
+}
+
+/// Remove Whisper special tokens of the form `<|...|>` from segment text.
+/// These appear in timestamps-enabled mode and include nospeech, language, and timing tokens.
+#[cfg(feature = "diarization")]
+fn strip_special_tokens(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '<' && chars.peek() == Some(&'|') {
+            // Consume until `|>` or end
+            let mut found_close = false;
+            let mut buf = String::from("<");
+            buf.push('|');
+            chars.next(); // consume '|'
+            for inner in chars.by_ref() {
+                buf.push(inner);
+                if inner == '>' && buf.ends_with("|>") {
+                    found_close = true;
+                    break;
+                }
+            }
+            if !found_close {
+                // Not a valid special token — emit what we collected
+                out.push_str(&buf);
+            }
+            // else: drop the token
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
