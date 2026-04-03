@@ -67,19 +67,20 @@ impl WhisperBackend {
             model_path.display()
         );
 
-        let mut ctx_params = WhisperContextParameters::default();
-
         // Enable DTW for attention-based token timestamps (used by --diarize).
         // DTW is incompatible with flash_attn; flash_attn defaults to false so this is safe.
-        #[cfg(feature = "diarization")]
-        {
-            ctx_params.dtw_parameters(DtwParameters {
+        let ctx_params = {
+            #[allow(unused_mut)]
+            let mut p = WhisperContextParameters::default();
+            #[cfg(feature = "diarization")]
+            p.dtw_parameters(DtwParameters {
                 mode: DtwMode::ModelPreset {
                     model_preset: whisper_model.dtw_preset(),
                 },
                 ..DtwParameters::default()
             });
-        }
+            p
+        };
 
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().ok_or_else(|| {
