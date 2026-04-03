@@ -1,5 +1,7 @@
+pub mod embedding;
 pub mod fbank;
 pub mod model;
+pub mod segmentation;
 
 use serde::Serialize;
 

@@ -42,10 +42,10 @@ symphonia = { version = "0.5", features = ["aac", "alac", "flac", "mp3", "pcm", 
 rubato = "0.14"
 
 # Diarization (optional, behind feature flag)
-ort = { version = "2.0.0-rc.12", optional = true }
+ort = { version = "2.0.0-rc.12", features = ["ndarray"], optional = true }
 rustfft = { version = "6", optional = true }
 kodama = { version = "0.2", optional = true }
-ndarray = { version = "0.16", optional = true }
+ndarray = { version = "0.17", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.15", features = ["coreml", "metal"] }
