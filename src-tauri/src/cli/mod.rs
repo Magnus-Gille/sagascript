@@ -72,7 +72,7 @@ pub enum Command {
 Transcribe an audio or video file to text using a local Whisper model.
 
 The file is decoded to 16 kHz mono PCM, then processed by the selected \
-Whisper model. Supports WAV, MP3, M4A, AAC, MP4, MOV, OGG, WebM, and FLAC.
+Whisper model. Supports WAV, MP3, M4A, AAC, MP4, MOV, QTA, OGG, WebM, and FLAC.
 
 By default, uses the language and model from your persisted settings \
 (see 'sagascript config list'). Override with --language and --model.

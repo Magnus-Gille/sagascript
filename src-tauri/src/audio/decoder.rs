@@ -41,12 +41,12 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
-    let mut hint = Hint::new();
-    // .qta is QuickTime Audio — probe as .mov
+    // Map format aliases: Symphonia doesn't know about .qta but decodes it as mov/isomp4
     let hint_ext = match ext.as_str() {
         "qta" => "mov",
         other => other,
     };
+    let mut hint = Hint::new();
     hint.with_extension(hint_ext);
 
     let probed = symphonia::default::get_probe()
@@ -176,6 +176,7 @@ mod tests {
         assert!(SUPPORTED_EXTENSIONS.contains(&"ogg"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"mp4"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"mov"));
+        assert!(SUPPORTED_EXTENSIONS.contains(&"qta"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"webm"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"aac"));
     }
