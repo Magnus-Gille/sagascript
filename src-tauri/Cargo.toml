@@ -41,6 +41,12 @@ tauri-plugin-dialog = "2"
 symphonia = { version = "0.5", features = ["aac", "alac", "flac", "mp3", "pcm", "vorbis", "isomp4", "mkv", "ogg"] }
 rubato = "0.14"
 
+# Diarization (optional, behind feature flag)
+ort = { version = "2.0.0-rc.12", optional = true }
+rustfft = { version = "6", optional = true }
+kodama = { version = "0.2", optional = true }
+ndarray = { version = "0.16", optional = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.15", features = ["coreml", "metal"] }
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
@@ -61,3 +67,4 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-cli
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+diarization = ["dep:ort", "dep:rustfft", "dep:kodama", "dep:ndarray"]
