@@ -19,6 +19,13 @@ Sagascript is a low-latency, privacy-first macOS dictation app built with Tauri 
 - No hardcoded secrets
 - macOS threading: `enigo` and other TIS/HIToolbox APIs MUST run on the main thread — use `app_handle.run_on_main_thread()` from async contexts
 
+## macOS Signing & Entitlements
+
+- **Signing identity** is NOT in `tauri.conf.json` — set via `APPLE_SIGNING_IDENTITY` env var (see `.env`, gitignored)
+- **Entitlements.plist** grants `com.apple.security.device.audio-input` — required for mic access in signed builds
+- `cargo tauri dev` produces an unsigned binary that can't do TCC permission checks — use `cargo tauri build --debug` for testing permissions
+- Microphone permission API uses `AVCaptureDevice` via objc FFI (`macos_mic` module in `commands.rs`)
+
 ## Local commands
 
 - `cargo tauri dev` — build and run the app in dev mode
