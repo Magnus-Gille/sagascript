@@ -30,6 +30,11 @@ pub struct TranscribeArgs {
     /// Copy transcription result to clipboard
     #[arg(long)]
     pub clipboard: bool,
+
+    /// Enable speaker diarization (requires diarization models — run: sagascript download-model diarization)
+    #[cfg(feature = "diarization")]
+    #[arg(long)]
+    pub diarize: bool,
 }
 
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
@@ -69,7 +74,73 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     let backend = WhisperBackend::new();
     backend.load_model(model)?;
 
-    // Transcribe
+    // Diarization branch
+    #[cfg(feature = "diarization")]
+    if args.diarize {
+        use crate::diarization::{
+            DiarizeConfig, TimestampedSegment,
+            diarize,
+            merge::{consolidate, merge_with_transcript},
+            model::all_models_downloaded,
+        };
+
+        if !all_models_downloaded() {
+            return Err(DictationError::DiarizationError(
+                "Diarization models not found. Run: sagascript download-model diarization".to_string(),
+            ));
+        }
+
+        // Run diarization and timestamped transcription in parallel isn't possible
+        // with a single-threaded whisper context, so we run sequentially.
+        eprintln!("Running speaker diarization...");
+        let speaker_segments = diarize(&audio, &DiarizeConfig::default())?;
+        eprintln!("Found {} speaker segment(s)", speaker_segments.len());
+
+        eprintln!("Transcribing with timestamps...");
+        let raw_segments = backend.transcribe_sync_with_timestamps(&audio, language)?;
+
+        let transcript: Vec<TimestampedSegment> = raw_segments
+            .into_iter()
+            .map(|(start, end, text)| TimestampedSegment { start, end, text })
+            .collect();
+
+        let diarized = merge_with_transcript(&speaker_segments, &transcript);
+        let consolidated = consolidate(&diarized);
+
+        if args.json {
+            let speakers: Vec<String> = {
+                let mut seen = std::collections::HashSet::new();
+                consolidated.iter().map(|s| s.speaker.clone()).filter(|s| seen.insert(s.clone())).collect()
+            };
+            let json = serde_json::json!({
+                "segments": consolidated,
+                "speakers": speakers,
+                "language": language,
+                "model": model_id_string(model),
+                "file": args.file.display().to_string(),
+                "duration_seconds": duration,
+            });
+            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        } else {
+            for seg in &consolidated {
+                println!("[{}] {}", seg.speaker, seg.text.trim());
+            }
+        }
+
+        if args.clipboard {
+            let text: String = consolidated
+                .iter()
+                .map(|s| format!("[{}] {}", s.speaker, s.text.trim()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            copy_to_clipboard(&text)?;
+            eprintln!("Copied to clipboard.");
+        }
+
+        return Ok(());
+    }
+
+    // Standard (non-diarized) transcription
     let text = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(

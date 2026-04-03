@@ -191,4 +191,67 @@ impl WhisperBackend {
         info!("Local transcription complete: {} chars", result.len());
         Ok(result)
     }
+
+    /// Transcribe audio and return per-segment timestamps.
+    ///
+    /// Returns `Vec<(start_secs, end_secs, text)>`. Timestamps come from
+    /// whisper.cpp in centiseconds; we convert to seconds here.
+    #[cfg(feature = "diarization")]
+    pub fn transcribe_sync_with_timestamps(
+        &self,
+        audio: &[f32],
+        language: Language,
+    ) -> Result<Vec<(f64, f64, String)>, DictationError> {
+        if audio.is_empty() {
+            return Err(DictationError::NoAudioCaptured);
+        }
+
+        let ctx_guard = self.context.lock().unwrap();
+        let ctx = ctx_guard
+            .as_ref()
+            .ok_or(DictationError::ModelNotLoaded)?;
+
+        let model = self
+            .loaded_model()
+            .ok_or(DictationError::ModelNotLoaded)?;
+
+        let n_threads = (num_cpus::get() / 2).max(1) as i32;
+        let no_speech_thold = model.no_speech_threshold();
+
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(language.whisper_code());
+        params.set_n_threads(n_threads);
+        params.set_temperature(0.0);
+        params.set_temperature_inc(0.2);
+        params.set_translate(false);
+        params.set_no_timestamps(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_no_speech_thold(no_speech_thold);
+        params.set_suppress_blank(true);
+
+        self.abort_flag.store(false, Ordering::SeqCst);
+
+        let mut state = ctx.create_state().map_err(|e| {
+            DictationError::TranscriptionFailed(format!("Failed to create whisper state: {e}"))
+        })?;
+
+        state.full(params, audio).map_err(|e| {
+            DictationError::TranscriptionFailed(format!("Whisper inference failed: {e}"))
+        })?;
+
+        let n_segments = state.full_n_segments();
+        let mut results = Vec::with_capacity(n_segments as usize);
+
+        for i in 0..n_segments {
+            if let Some(segment) = state.get_segment(i) {
+                let t0 = segment.start_timestamp() as f64 / 100.0;
+                let t1 = segment.end_timestamp() as f64 / 100.0;
+                let text = segment.to_str().unwrap_or("").to_string();
+                results.push((t0, t1, text));
+            }
+        }
+
+        Ok(results)
+    }
 }
