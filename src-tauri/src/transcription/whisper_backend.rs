@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use tracing::{info, warn};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+#[cfg(feature = "diarization")]
+use whisper_rs::{DtwMode, DtwParameters};
 
 use crate::error::DictationError;
 use crate::settings::{Language, WhisperModel};
@@ -65,7 +67,19 @@ impl WhisperBackend {
             model_path.display()
         );
 
-        let ctx_params = WhisperContextParameters::default();
+        let mut ctx_params = WhisperContextParameters::default();
+
+        // Enable DTW for attention-based token timestamps (used by --diarize).
+        // DTW is incompatible with flash_attn; flash_attn defaults to false so this is safe.
+        #[cfg(feature = "diarization")]
+        {
+            ctx_params.dtw_parameters(DtwParameters {
+                mode: DtwMode::ModelPreset {
+                    model_preset: whisper_model.dtw_preset(),
+                },
+                ..DtwParameters::default()
+            });
+        }
 
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().ok_or_else(|| {
@@ -242,8 +256,12 @@ impl WhisperBackend {
         Ok(results)
     }
 
-    /// Transcribe a single audio chunk (≤30s) with timestamps.
-    /// `t_offset` is added to all returned timestamps.
+    /// Transcribe a single audio chunk (≤30s) with timestamps via DTW.
+    ///
+    /// Uses `set_no_timestamps(true)` for clean text generation, then derives
+    /// per-segment timing from `token.t_dtw` (cross-attention DTW alignment)
+    /// rather than the generative `<|t.xx|>` tokens that degrade quality.
+    /// `t_offset` (seconds) is added to all returned timestamps.
     #[cfg(feature = "diarization")]
     fn transcribe_chunk_timestamps(
         &self,
@@ -269,7 +287,8 @@ impl WhisperBackend {
         params.set_temperature(0.0);
         params.set_temperature_inc(0.2);
         params.set_translate(false);
-        params.set_no_timestamps(false);
+        params.set_no_timestamps(true);   // clean text — no generative timestamp tokens
+        params.set_token_timestamps(true); // populate token.t0/t1/t_dtw via cross-attention
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_no_speech_thold(no_speech_thold);
@@ -287,49 +306,58 @@ impl WhisperBackend {
         let mut results = Vec::with_capacity(n_segments as usize);
 
         for i in 0..n_segments {
-            if let Some(segment) = state.get_segment(i) {
+            let Some(segment) = state.get_segment(i) else { continue };
+
+            let text = segment.to_str().unwrap_or("").trim().to_string();
+            if text.is_empty() {
+                continue;
+            }
+
+            // Derive segment timing from DTW timestamps on first/last non-special token.
+            // DTW timestamps are in centiseconds; -1 means not computed.
+            // Fall back to segment-level timestamps if DTW was not available.
+            let (t0, t1) = dtw_segment_timestamps(&segment, t_offset).unwrap_or_else(|| {
                 let t0 = segment.start_timestamp() as f64 / 100.0 + t_offset;
                 let t1 = segment.end_timestamp() as f64 / 100.0 + t_offset;
-                let raw = segment.to_str().unwrap_or("");
-                let text = strip_special_tokens(raw);
-                if !text.trim().is_empty() {
-                    results.push((t0, t1, text));
-                }
-            }
+                (t0, t1)
+            });
+
+            results.push((t0, t1, text));
         }
 
         Ok(results)
     }
 }
 
-/// Remove Whisper special tokens of the form `<|...|>` from segment text.
-/// These appear in timestamps-enabled mode and include nospeech, language, and timing tokens.
+/// Extract segment timing from per-token DTW timestamps.
+///
+/// Returns `(start_secs, end_secs)` using the DTW timestamps of the first and last
+/// content tokens (skipping special tokens which have t_dtw = -1).
+/// Returns `None` if no token has a valid DTW timestamp.
 #[cfg(feature = "diarization")]
-fn strip_special_tokens(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '<' && chars.peek() == Some(&'|') {
-            // Consume until `|>` or end
-            let mut found_close = false;
-            let mut buf = String::from("<");
-            buf.push('|');
-            chars.next(); // consume '|'
-            for inner in chars.by_ref() {
-                buf.push(inner);
-                if inner == '>' && buf.ends_with("|>") {
-                    found_close = true;
-                    break;
-                }
+fn dtw_segment_timestamps(
+    segment: &whisper_rs::WhisperSegment<'_>,
+    t_offset: f64,
+) -> Option<(f64, f64)> {
+    let n = segment.n_tokens();
+    let mut t0 = None::<f64>;
+    let mut t1 = None::<f64>;
+
+    for j in 0..n {
+        let Some(token) = segment.get_token(j) else { continue };
+        let td = token.token_data();
+        if td.t_dtw >= 0 {
+            let t = td.t_dtw as f64 / 100.0 + t_offset;
+            if t0.is_none() {
+                t0 = Some(t);
             }
-            if !found_close {
-                // Not a valid special token — emit what we collected
-                out.push_str(&buf);
-            }
-            // else: drop the token
-        } else {
-            out.push(ch);
+            t1 = Some(t);
         }
     }
-    out
+
+    match (t0, t1) {
+        (Some(a), Some(b)) => Some((a, b)),
+        _ => None,
+    }
 }
+
