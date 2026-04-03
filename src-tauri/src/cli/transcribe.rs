@@ -36,6 +36,12 @@ pub struct TranscribeArgs {
     #[arg(long)]
     pub diarize: bool,
 
+    /// Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.85). Higher = fewer speakers.
+    #[cfg(feature = "diarization")]
+    #[arg(long, value_name = "THRESHOLD", default_value = "0.85",
+          help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.85). Higher = fewer speakers.")]
+    pub diarize_threshold: f32,
+
     /// Initial prompt to prime the decoder with domain-specific vocabulary.
     /// Reduces hallucination on technical terms, proper nouns, and jargon.
     /// Example: --prompt "Grimnir, MCP, Fortnox, bokföring, kontering, saldo"
@@ -99,7 +105,10 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         // Run diarization and timestamped transcription in parallel isn't possible
         // with a single-threaded whisper context, so we run sequentially.
         eprintln!("Running speaker diarization...");
-        let speaker_segments = diarize(&audio, &DiarizeConfig::default())?;
+        let speaker_segments = diarize(&audio, &DiarizeConfig {
+            threshold: args.diarize_threshold,
+            ..DiarizeConfig::default()
+        })?;
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
 
         eprintln!("Transcribing with timestamps...");

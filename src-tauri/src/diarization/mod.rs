@@ -12,7 +12,7 @@ use crate::error::DictationError;
 /// Configuration for the diarization pipeline.
 pub struct DiarizeConfig {
     /// Cosine distance threshold for agglomerative clustering (0.0–2.0).
-    /// Lower = stricter (more speakers). Default 0.8.
+    /// Lower = stricter (more speakers). Default 0.85.
     pub threshold: f32,
     /// Minimum segment duration in seconds to keep. Default 0.3s.
     pub min_segment: f64,
@@ -23,9 +23,9 @@ pub struct DiarizeConfig {
 impl Default for DiarizeConfig {
     fn default() -> Self {
         Self {
-            // 0.5 is tighter than clustering::DEFAULT_THRESHOLD (0.8) — produces
-            // better speaker separation on typical meeting recordings.
-            threshold: 0.7,
+            // 0.85 produces fewer, broader clusters — better for typical 2-speaker
+            // recordings where over-clustering is the common failure mode.
+            threshold: 0.85,
             min_segment: 0.3,
             min_gap: 0.5,
         }
