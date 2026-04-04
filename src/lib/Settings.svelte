@@ -67,6 +67,8 @@
   let transcriptionResult: string = $state("");
   let transcribeError: string = $state("");
   let dragOver: boolean = $state(false);
+  let transcribePrompt: string = $state('');
+  let transcribeDiarize: boolean = $state(false);
 
   onMount(async () => {
     settings = await getSettings();
@@ -214,7 +216,10 @@
     transcribeError = "";
     transcriptionResult = "";
     try {
-      transcriptionResult = await transcribeFile(filePath);
+      transcriptionResult = await transcribeFile(filePath, {
+        prompt: transcribePrompt.trim() || undefined,
+        diarize: transcribeDiarize,
+      });
     } catch (e: any) {
       transcribeError = typeof e === "string" ? e : e.message || "Transcription failed";
     } finally {
@@ -503,6 +508,19 @@
 
         <div class="formats-hint">
           Supported: {supportedFormats.map(f => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
+        </div>
+
+        <div class="transcribe-options">
+          <label class="diarize-option">
+            <input type="checkbox" bind:checked={transcribeDiarize} />
+            Speaker diarization
+          </label>
+          <textarea
+            class="prompt-input"
+            placeholder="Context / vocabulary hint (optional) — e.g. names, technical terms"
+            bind:value={transcribePrompt}
+            rows="2"
+          ></textarea>
         </div>
 
         {#if transcribeError}
@@ -977,6 +995,54 @@
     color: var(--text-muted);
     margin-top: 10px;
     text-align: center;
+  }
+
+  .transcribe-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 14px;
+  }
+
+  .diarize-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .diarize-option input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .prompt-input {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+    box-sizing: border-box;
+  }
+
+  .prompt-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .prompt-input:focus {
+    border-color: var(--accent);
   }
 
   .transcribe-error {

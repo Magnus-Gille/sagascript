@@ -388,6 +388,8 @@ pub async fn transcribe_file(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
     file_path: String,
+    prompt: Option<String>,
+    diarize: Option<bool>,
 ) -> Result<String, String> {
     use tauri::Emitter;
 
@@ -402,6 +404,10 @@ pub async fn transcribe_file(
     if audio.is_empty() {
         return Err("No audio decoded from file".to_string());
     }
+
+    // Suppress unused-variable warning on `diarize` when the diarization feature is off
+    #[cfg(not(feature = "diarization"))]
+    let _ = &diarize;
 
     // Get transcription settings
     let (language, effective_model) = {
@@ -421,13 +427,117 @@ pub async fn transcribe_file(
 
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 
-    // Run blocking transcription with progress reporting and timeout
+    // Diarization path — runs both diarization and timestamped transcription in parallel,
+    // then merges and consolidates speaker-attributed segments.
+    #[cfg(feature = "diarization")]
+    if diarize.unwrap_or(false) {
+        use crate::diarization::{
+            DiarizeConfig, TimestampedSegment,
+            diarize as run_diarize,
+            merge::{consolidate, merge_with_transcript},
+            model::all_models_downloaded,
+        };
+
+        if !all_models_downloaded() {
+            let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+            return Err(
+                "Diarization models not downloaded. Use Settings → Models to download them."
+                    .to_string(),
+            );
+        }
+
+        let whisper_ref = whisper.inner().clone();
+        let prompt_ref = prompt.clone();
+        let audio_for_diarize = audio.clone();
+        let audio_for_transcribe = audio.clone();
+
+        // Run diarization
+        let diarize_fut = tokio::task::spawn_blocking(move || {
+            run_diarize(&audio_for_diarize, &DiarizeConfig::default())
+        });
+
+        // Run timestamped transcription
+        let transcribe_fut = tokio::task::spawn_blocking(move || {
+            whisper_ref.transcribe_sync_with_timestamps(
+                &audio_for_transcribe,
+                language,
+                prompt_ref.as_deref(),
+            )
+        });
+
+        let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
+        let (speaker_segments, raw_segments) =
+            match tokio::time::timeout(timeout, async { tokio::join!(diarize_fut, transcribe_fut) })
+                .await
+            {
+                Ok((Ok(Ok(spk)), Ok(Ok(trx)))) => (spk, trx),
+                Ok((Ok(Err(e)), _)) | Ok((_, Ok(Err(e)))) => {
+                    let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                    return Err(e.to_string());
+                }
+                Ok((Err(e), _)) | Ok((_, Err(e))) => {
+                    let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                    return Err(format!("Task join error: {e}"));
+                }
+                Err(_) => {
+                    whisper.request_abort();
+                    let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                    return Err(format!(
+                        "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s"
+                    ));
+                }
+            };
+
+        let transcript: Vec<TimestampedSegment> = raw_segments
+            .into_iter()
+            .map(|(start, end, text)| TimestampedSegment { start, end, text })
+            .collect();
+
+        let diarized = merge_with_transcript(&speaker_segments, &transcript);
+        let consolidated = consolidate(&diarized);
+
+        let text = consolidated
+            .iter()
+            .map(|s| format!("[{}] {}", s.speaker, s.text.trim()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        info!("Diarized file transcription complete: {} chars", text.len());
+
+        let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+
+        // Auto-paste if enabled
+        let should_paste = {
+            let c = controller.lock().unwrap();
+            c.settings().auto_paste
+        };
+        if should_paste {
+            let text_for_paste = text.clone();
+            if let Err(e) = app.run_on_main_thread(move || {
+                let paste_svc = crate::paste::PasteService::new();
+                if let Err(e) = paste_svc.paste(&text_for_paste) {
+                    error!("Auto-paste failed: {e}");
+                }
+            }) {
+                error!("Failed to dispatch paste to main thread: {e}");
+            }
+        }
+
+        return Ok(text);
+    }
+
+    // Standard (non-diarize) transcription path
     let whisper_ref = whisper.inner().clone();
     let app_progress = app.clone();
     let fut = tokio::task::spawn_blocking(move || {
-        whisper_ref.transcribe_sync_with_progress(&audio, language, move |pct| {
-            let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
-        })
+        whisper_ref.transcribe_sync_with_progress_and_prompt(
+            &audio,
+            language,
+            prompt.as_deref(),
+            move |pct| {
+                let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
+            },
+        )
     });
 
     let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);

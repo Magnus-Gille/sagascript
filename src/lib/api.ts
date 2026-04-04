@@ -102,8 +102,15 @@ export async function getBuildInfo(): Promise<BuildInfo> {
   return invoke("get_build_info");
 }
 
-export async function transcribeFile(filePath: string): Promise<string> {
-  return invoke("transcribe_file", { filePath });
+export async function transcribeFile(
+  filePath: string,
+  options?: { prompt?: string; diarize?: boolean }
+): Promise<string> {
+  return invoke("transcribe_file", {
+    filePath,
+    prompt: options?.prompt ?? null,
+    diarize: options?.diarize ?? false,
+  });
 }
 
 export async function getSupportedFormats(): Promise<string[]> {
