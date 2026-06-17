@@ -60,6 +60,10 @@ pub struct WhisperBackend {
     loaded_model: Mutex<Option<WhisperModel>>,
     /// Abort flag — set to true to cancel in-progress transcription
     abort_flag: Arc<AtomicBool>,
+    /// Serializes model (re)loads so concurrent `ensure_model()` callers — e.g.
+    /// the startup warmup thread and the first dictation — don't load the same
+    /// model twice or race the warm-state reset.
+    load_lock: Mutex<()>,
 }
 
 // WhisperContext is Send+Sync (it wraps a C pointer that's thread-safe)
@@ -74,6 +78,7 @@ impl WhisperBackend {
             state: Mutex::new(None),
             loaded_model: Mutex::new(None),
             abort_flag: Arc::new(AtomicBool::new(false)),
+            load_lock: Mutex::new(()),
         }
     }
 
@@ -135,11 +140,17 @@ impl WhisperBackend {
             DictationError::TranscriptionFailed(format!("Failed to load model: {e}"))
         })?;
 
-        *self.context.lock().unwrap() = Some(ctx);
-        *self.loaded_model.lock().unwrap() = Some(whisper_model);
-        // Drop any state bound to the previous model; the next transcription
-        // lazily creates a fresh state for the new context.
-        *self.state.lock().unwrap() = None;
+        // Publish the new context atomically with respect to warm-state users:
+        // hold the state lock across the swap so no in-flight transcription can
+        // observe the new context (via loaded_model) while still holding the old
+        // warm state. The next transcription lazily recreates the state. Lock
+        // order is state -> context, matching with_warm_state().
+        {
+            let mut state = self.state.lock().unwrap();
+            *self.context.lock().unwrap() = Some(ctx);
+            *self.loaded_model.lock().unwrap() = Some(whisper_model);
+            *state = None;
+        }
 
         info!("Model loaded: {}", whisper_model.display_name());
         Ok(())
@@ -155,8 +166,11 @@ impl WhisperBackend {
         self.loaded_model() != Some(desired_model)
     }
 
-    /// Ensure the correct model is loaded
+    /// Ensure the correct model is loaded. Serialized via `load_lock` so two
+    /// concurrent callers don't both load the same model; the loser re-checks
+    /// after acquiring the lock and finds the model already loaded.
     pub fn ensure_model(&self, desired_model: WhisperModel) -> Result<(), DictationError> {
+        let _load = self.load_lock.lock().unwrap();
         if self.needs_reload(desired_model) {
             info!("Loading model: {:?}", desired_model);
             self.load_model(desired_model)?;
@@ -257,10 +271,13 @@ impl WhisperBackend {
         let no_speech_thold = model.no_speech_threshold();
 
         // Beam search (opt-in) is more accurate on hard audio but several times
-        // slower; greedy best_of=1 is the fast default.
-        let strategy = if opts.beam_size >= 2 {
+        // slower; greedy best_of=1 is the fast default. Clamp to a sane range —
+        // an unbounded beam_size from config would overflow the i32 cast or make
+        // whisper.cpp unusably slow.
+        let beam_size = opts.beam_size.clamp(0, 8);
+        let strategy = if beam_size >= 2 {
             SamplingStrategy::BeamSearch {
-                beam_size: opts.beam_size as i32,
+                beam_size: beam_size as i32,
                 patience: -1.0, // whisper default
             }
         } else {

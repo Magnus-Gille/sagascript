@@ -194,10 +194,8 @@ fn run_capture(
                 .build_input_stream(
                     &config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        let float_data: Vec<f32> =
-                            data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                        process_samples(
-                            &float_data,
+                        process_samples_i16(
+                            data,
                             device_channels,
                             device_sample_rate,
                             &buf_clone,
@@ -262,5 +260,104 @@ fn process_samples(
             }
             buf.push(frame.iter().sum::<f32>() / channels as f32);
         }
+    }
+}
+
+/// Like `process_samples` but for i16 input — converts to f32 and downmixes
+/// directly into the buffer, staying allocation-free on the realtime callback
+/// (no intermediate `Vec<f32>`).
+fn process_samples_i16(
+    data: &[i16],
+    channels: u16,
+    device_rate: u32,
+    buffer: &Arc<Mutex<Vec<f32>>>,
+) {
+    let max_samples = (device_rate as usize).saturating_mul(MAX_BUFFER_SECONDS);
+    let channels = channels.max(1) as usize;
+
+    let mut buf = buffer.lock().unwrap();
+    if buf.len() >= max_samples {
+        return;
+    }
+
+    if channels == 1 {
+        for &s in data {
+            if buf.len() >= max_samples {
+                break;
+            }
+            buf.push(s as f32 / i16::MAX as f32);
+        }
+    } else {
+        for frame in data.chunks(channels) {
+            if buf.len() >= max_samples {
+                break;
+            }
+            let avg =
+                frame.iter().map(|&s| s as f32 / i16::MAX as f32).sum::<f32>() / channels as f32;
+            buf.push(avg);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buf() -> Arc<Mutex<Vec<f32>>> {
+        Arc::new(Mutex::new(Vec::new()))
+    }
+
+    #[test]
+    fn f32_mono_appends_raw() {
+        let b = buf();
+        process_samples(&[0.1, 0.2, 0.3], 1, 16_000, &b);
+        assert_eq!(*b.lock().unwrap(), vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn f32_stereo_downmixes_to_mono() {
+        let b = buf();
+        process_samples(&[1.0, 0.0, 0.0, 1.0], 2, 16_000, &b);
+        let out = b.lock().unwrap();
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 0.5).abs() < 1e-6);
+        assert!((out[1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn i16_mono_converts_to_unit_range() {
+        let b = buf();
+        process_samples_i16(&[i16::MAX, 0, i16::MIN], 1, 16_000, &b);
+        let out = b.lock().unwrap();
+        assert_eq!(out.len(), 3);
+        assert!((out[0] - 1.0).abs() < 1e-4);
+        assert!(out[1].abs() < 1e-6);
+        assert!((out[2] - (-1.0)).abs() < 1e-3); // MIN/MAX ≈ -1.00003
+    }
+
+    #[test]
+    fn i16_stereo_downmix_averages_channels() {
+        let b = buf();
+        process_samples_i16(&[i16::MAX, 0, 0, i16::MAX], 2, 16_000, &b);
+        let out = b.lock().unwrap();
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 0.5).abs() < 1e-4);
+        assert!((out[1] - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn cap_enforced_f32() {
+        let b = buf();
+        let cap = MAX_BUFFER_SECONDS; // rate = 1 → cap = MAX_BUFFER_SECONDS samples
+        process_samples(&vec![0.0f32; cap + 100], 1, 1, &b);
+        assert_eq!(b.lock().unwrap().len(), cap);
+    }
+
+    #[test]
+    fn cap_enforced_i16() {
+        let b = buf();
+        let cap = MAX_BUFFER_SECONDS;
+        process_samples_i16(&vec![0i16; cap + 100], 1, 1, &b);
+        assert_eq!(b.lock().unwrap().len(), cap);
     }
 }

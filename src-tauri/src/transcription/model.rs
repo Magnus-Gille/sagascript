@@ -117,6 +117,21 @@ pub async fn download_vad_model(
     Ok(path)
 }
 
+/// Best-effort install of the CoreML encoder for an already-downloaded model —
+/// backfills models obtained before CoreML support existed, so their encoder
+/// runs on the Neural Engine. No-op off macOS, for models without a CoreML
+/// encoder, or if the encoder is already installed.
+#[cfg(target_os = "macos")]
+pub async fn backfill_coreml_encoder(model: WhisperModel) -> Result<(), DictationError> {
+    ensure_coreml_encoder(model, &models_dir()).await
+}
+
+/// Non-macOS stub (no CoreML).
+#[cfg(not(target_os = "macos"))]
+pub async fn backfill_coreml_encoder(_model: WhisperModel) -> Result<(), DictationError> {
+    Ok(())
+}
+
 /// Download a model from HuggingFace
 pub async fn download_model(
     model: WhisperModel,

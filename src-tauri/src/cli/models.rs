@@ -150,6 +150,11 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
             whisper_model.display_name(),
             path.display()
         );
+        // Backfill the CoreML encoder if it's missing (no-op if already present
+        // or unavailable for this model).
+        if let Err(e) = model::backfill_coreml_encoder(whisper_model).await {
+            eprintln!("Note: CoreML encoder not installed: {e}");
+        }
         println!("{}", path.display());
         return Ok(());
     }
