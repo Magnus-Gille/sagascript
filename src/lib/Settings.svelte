@@ -6,8 +6,12 @@
     setHotkeyMode,
     setHotkey,
     setAutoPaste,
+    setInitialPrompt,
     setShowOverlay,
     setWhisperModel,
+    setBeamSize,
+    setTemperatureFallback,
+    setVadEnabled,
     getBuildInfo,
     getModelInfo,
     getLoadedModel,
@@ -160,6 +164,31 @@
   async function onShowOverlayToggle() {
     if (!settings) return;
     await setShowOverlay(!settings.show_overlay);
+    settings = await getSettings();
+  }
+
+  async function onInitialPromptBlur(e: Event) {
+    if (!settings) return;
+    const value = (e.target as HTMLTextAreaElement).value;
+    await setInitialPrompt(value);
+    settings = await getSettings();
+  }
+
+  async function onBeamSizeChange(e: Event) {
+    const value = Number((e.target as HTMLSelectElement).value);
+    await setBeamSize(value);
+    settings = await getSettings();
+  }
+
+  async function onTemperatureFallbackToggle() {
+    if (!settings) return;
+    await setTemperatureFallback(!settings.temperature_fallback);
+    settings = await getSettings();
+  }
+
+  async function onVadToggle() {
+    if (!settings) return;
+    await setVadEnabled(!settings.vad_enabled);
     settings = await getSettings();
   }
 
@@ -596,6 +625,53 @@
         </div>
 
         <div class="field">
+          <label for="initial-prompt">Initial prompt</label>
+          <textarea
+            id="initial-prompt"
+            class="initial-prompt-input"
+            rows="3"
+            value={settings.initial_prompt}
+            onblur={onInitialPromptBlur}
+            placeholder="Prime the transcriber with names, jargon, or preferred spellings."
+          ></textarea>
+          <div class="hotkey-hint">Prime the transcriber with names, jargon, or preferred spellings.</div>
+        </div>
+
+        <div class="field">
+          <label for="beam-size">Decoding mode</label>
+          <select id="beam-size" value={settings.beam_size} onchange={onBeamSizeChange}>
+            <option value={0}>Greedy (fast)</option>
+            <option value={5}>Beam search (accurate)</option>
+          </select>
+        </div>
+
+        <div class="field-row">
+          <label>Temperature fallback</label>
+          <div
+            class="toggle"
+            class:active={settings.temperature_fallback}
+            onclick={onTemperatureFallbackToggle}
+            role="switch"
+            tabindex="0"
+            aria-checked={settings.temperature_fallback}
+          ></div>
+        </div>
+        <div class="hotkey-hint">Re-decode hard segments; off = faster, less robust.</div>
+
+        <div class="field-row">
+          <label>Voice activity detection</label>
+          <div
+            class="toggle"
+            class:active={settings.vad_enabled}
+            onclick={onVadToggle}
+            role="switch"
+            tabindex="0"
+            aria-checked={settings.vad_enabled}
+          ></div>
+        </div>
+        <div class="hotkey-hint">Skip silence; downloads a small model on first enable.</div>
+
+        <div class="field">
           <label>Version</label>
           <div class="version-text">
             {#if buildInfo}
@@ -926,6 +1002,24 @@
   .version-text {
     color: var(--text-muted);
     font-size: 12px;
+  }
+
+  .initial-prompt-input {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+  }
+
+  .initial-prompt-input:focus {
+    border-color: var(--accent);
   }
 
   .loading {

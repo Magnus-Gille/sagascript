@@ -33,7 +33,7 @@ use tauri::{
     Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use app_controller::{AppController, HotkeyDownResult};
@@ -214,6 +214,62 @@ fn main() {
                 }
             }
 
+            // Preload + warm the whisper model in the background so the first
+            // dictation of the session doesn't pay model-load and Metal/CoreML
+            // kernel-compile latency. Best-effort: if the model isn't downloaded
+            // yet (fresh install) we just skip and load lazily on first use.
+            {
+                let whisper: tauri::State<'_, SharedWhisper> = app.state();
+                let whisper = whisper.inner().clone();
+                let (model, language, vad_enabled) = {
+                    let ctrl: tauri::State<'_, SharedController> = app.state();
+                    let c = ctrl.lock().unwrap();
+                    (
+                        c.settings().effective_model(),
+                        c.language(),
+                        c.settings().vad_enabled,
+                    )
+                };
+                std::thread::spawn(move || {
+                    if let Err(e) = whisper.ensure_model(model) {
+                        warn!("Model preload skipped: {e}");
+                        return;
+                    }
+                    if let Err(e) = whisper.warmup(language) {
+                        warn!("Model warmup failed: {e}");
+                    } else {
+                        info!("Model preloaded and warmed: {}", model.display_name());
+                    }
+                });
+
+                // If VAD is enabled (e.g. set via the CLI), make sure the Silero
+                // model is present for the next dictation.
+                if vad_enabled && !crate::transcription::model::is_vad_model_downloaded() {
+                    tauri::async_runtime::spawn(async {
+                        if let Err(e) =
+                            crate::transcription::model::download_vad_model(|_, _| {}).await
+                        {
+                            warn!("VAD model preload failed: {e}");
+                        }
+                    });
+                }
+
+                // Best-effort: backfill the CoreML encoder for the effective
+                // model — covers models downloaded before CoreML support, so the
+                // encoder moves to the Neural Engine without a manual re-download.
+                // Only when the GGML model itself is present (don't fetch an
+                // encoder for a model the user hasn't downloaded yet).
+                if crate::transcription::model::is_model_downloaded(model) {
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) =
+                            crate::transcription::model::backfill_coreml_encoder(model).await
+                        {
+                            warn!("CoreML encoder backfill skipped: {e}");
+                        }
+                    });
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -245,6 +301,10 @@ fn main() {
             commands::download_model,
             commands::set_auto_paste,
             commands::set_show_overlay,
+            commands::set_initial_prompt,
+            commands::set_beam_size,
+            commands::set_temperature_fallback,
+            commands::set_vad_enabled,
             commands::get_build_info,
             commands::transcribe_file,
             commands::get_supported_formats,
@@ -422,9 +482,13 @@ fn stop_recording_and_transcribe(
         let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 
         // Extract what we need for transcription (lock briefly)
-        let (language, effective_model) = {
+        let (language, effective_model, opts) = {
             let c = ctrl.lock().unwrap();
-            (c.language(), c.settings().effective_model())
+            (
+                c.language(),
+                c.settings().effective_model(),
+                commands::build_transcribe_options(c.settings()),
+            )
         };
 
         info!("Transcribing with model: {}", effective_model.display_name());
@@ -444,9 +508,8 @@ fn stop_recording_and_transcribe(
             // On timeout, request_abort() is called but has no effect — the blocking
             // task continues running and holds the context mutex until whisper finishes.
             let whisper_ref = whisper.inner().clone();
-            let audio = audio.clone();
             let fut = tokio::task::spawn_blocking(move || {
-                whisper_ref.transcribe_sync(&audio, language)
+                whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
             });
 
             let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);

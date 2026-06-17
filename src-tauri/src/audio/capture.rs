@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -6,17 +7,23 @@ use cpal::SampleFormat;
 use tracing::{error, info};
 
 use crate::error::DictationError;
-use super::resample::{mix_to_mono, resample_to_16khz, TARGET_SAMPLE_RATE};
+use super::resample::{resample_to_16khz, TARGET_SAMPLE_RATE};
 
-/// Maximum buffer: 15 minutes at 16kHz
-const MAX_BUFFER_SAMPLES: usize = 16_000 * 60 * 15;
+/// Maximum recording length: 15 minutes. Capped in device-rate samples while
+/// recording (the buffer holds raw mono at the device rate), then resampled to
+/// 16 kHz on stop.
+const MAX_BUFFER_SECONDS: usize = 60 * 15;
 
 /// Audio capture service using cpal
 /// The cpal::Stream is !Send, so we spawn a dedicated thread to own it.
 /// Communication happens through shared buffers and a stop signal.
 pub struct AudioCaptureService {
+    /// Raw mono samples at the device sample rate (resampled to 16 kHz on stop).
     buffer: Arc<Mutex<Vec<f32>>>,
     stop_signal: Arc<Mutex<bool>>,
+    /// Device sample rate published by the capture thread once the input opens
+    /// (0 until known). Read by `stop_capture` to resample the whole buffer.
+    device_sample_rate: Arc<AtomicU32>,
     capture_thread: Option<thread::JoinHandle<()>>,
     /// Retained audio from last capture for retry
     last_captured: Option<Vec<f32>>,
@@ -31,6 +38,7 @@ impl AudioCaptureService {
         Self {
             buffer: Arc::new(Mutex::new(Vec::new())),
             stop_signal: Arc::new(Mutex::new(false)),
+            device_sample_rate: Arc::new(AtomicU32::new(0)),
             capture_thread: None,
             last_captured: None,
         }
@@ -50,10 +58,12 @@ impl AudioCaptureService {
 
         let buffer = Arc::clone(&self.buffer);
         let stop_signal = Arc::clone(&self.stop_signal);
+        let device_sample_rate = Arc::clone(&self.device_sample_rate);
+        device_sample_rate.store(0, Ordering::SeqCst);
 
         // Spawn a thread that owns the cpal::Stream
         let handle = thread::spawn(move || {
-            if let Err(e) = run_capture(buffer, stop_signal) {
+            if let Err(e) = run_capture(buffer, stop_signal, device_sample_rate) {
                 error!("Audio capture thread error: {e}");
             }
         });
@@ -80,16 +90,34 @@ impl AudioCaptureService {
             let _ = handle.join();
         }
 
-        let samples = {
+        let raw = {
             let mut buf = self.buffer.lock().unwrap();
             std::mem::take(&mut *buf)
         };
 
+        // Resample the entire recording to 16 kHz in a single pass. Doing it
+        // here (rather than per-callback) keeps the realtime audio thread cheap
+        // and avoids the filter-restart transient that a per-callback resampler
+        // injects at every chunk boundary.
+        let device_rate = self.device_sample_rate.load(Ordering::SeqCst);
+        let samples = if raw.is_empty() || device_rate == 0 {
+            raw
+        } else {
+            match resample_to_16khz(raw, device_rate) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Resample failed, dropping recording: {e}");
+                    Vec::new()
+                }
+            }
+        };
+
         let duration = samples.len() as f64 / TARGET_SAMPLE_RATE as f64;
         info!(
-            "Audio capture stopped: {} samples ({:.2}s)",
+            "Audio capture stopped: {} samples ({:.2}s) [device {} Hz]",
             samples.len(),
-            duration
+            duration,
+            device_rate
         );
 
         // Retain for retry
@@ -114,6 +142,7 @@ impl AudioCaptureService {
 fn run_capture(
     buffer: Arc<Mutex<Vec<f32>>>,
     stop_signal: Arc<Mutex<bool>>,
+    device_sample_rate_out: Arc<AtomicU32>,
 ) -> Result<(), DictationError> {
     let host = cpal::default_host();
     let device = host
@@ -126,6 +155,9 @@ fn run_capture(
 
     let device_sample_rate = config.sample_rate().0;
     let device_channels = config.channels();
+
+    // Publish the rate so stop_capture can resample the buffer.
+    device_sample_rate_out.store(device_sample_rate, Ordering::SeqCst);
 
     info!(
         "Audio input: {} Hz, {} ch, {:?}",
@@ -162,10 +194,8 @@ fn run_capture(
                 .build_input_stream(
                     &config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        let float_data: Vec<f32> =
-                            data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                        process_samples(
-                            &float_data,
+                        process_samples_i16(
+                            data,
                             device_channels,
                             device_sample_rate,
                             &buf_clone,
@@ -208,18 +238,126 @@ fn process_samples(
     device_rate: u32,
     buffer: &Arc<Mutex<Vec<f32>>>,
 ) {
-    let mono = mix_to_mono(data, channels as usize);
-    let samples = match resample_to_16khz(mono, device_rate) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!("Resample failed, dropping audio chunk: {e}");
-            return;
-        }
-    };
+    // Realtime-safe hot path: downmix to mono and append raw device-rate samples
+    // with a length cap. No resampling and no per-callback allocation here —
+    // resampling to 16 kHz happens once on stop (see stop_capture).
+    let max_samples = (device_rate as usize).saturating_mul(MAX_BUFFER_SECONDS);
+    let channels = channels.max(1) as usize;
 
-    // Append to buffer with size limit
     let mut buf = buffer.lock().unwrap();
-    if buf.len() + samples.len() <= MAX_BUFFER_SAMPLES {
-        buf.extend_from_slice(&samples);
+    if buf.len() >= max_samples {
+        return;
+    }
+
+    if channels == 1 {
+        let take = (max_samples - buf.len()).min(data.len());
+        buf.extend_from_slice(&data[..take]);
+    } else {
+        // Average channels into mono, pushing directly to avoid a temporary Vec.
+        for frame in data.chunks(channels) {
+            if buf.len() >= max_samples {
+                break;
+            }
+            buf.push(frame.iter().sum::<f32>() / channels as f32);
+        }
+    }
+}
+
+/// Like `process_samples` but for i16 input — converts to f32 and downmixes
+/// directly into the buffer, staying allocation-free on the realtime callback
+/// (no intermediate `Vec<f32>`).
+fn process_samples_i16(
+    data: &[i16],
+    channels: u16,
+    device_rate: u32,
+    buffer: &Arc<Mutex<Vec<f32>>>,
+) {
+    let max_samples = (device_rate as usize).saturating_mul(MAX_BUFFER_SECONDS);
+    let channels = channels.max(1) as usize;
+
+    let mut buf = buffer.lock().unwrap();
+    if buf.len() >= max_samples {
+        return;
+    }
+
+    if channels == 1 {
+        for &s in data {
+            if buf.len() >= max_samples {
+                break;
+            }
+            buf.push(s as f32 / i16::MAX as f32);
+        }
+    } else {
+        for frame in data.chunks(channels) {
+            if buf.len() >= max_samples {
+                break;
+            }
+            let avg =
+                frame.iter().map(|&s| s as f32 / i16::MAX as f32).sum::<f32>() / channels as f32;
+            buf.push(avg);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buf() -> Arc<Mutex<Vec<f32>>> {
+        Arc::new(Mutex::new(Vec::new()))
+    }
+
+    #[test]
+    fn f32_mono_appends_raw() {
+        let b = buf();
+        process_samples(&[0.1, 0.2, 0.3], 1, 16_000, &b);
+        assert_eq!(*b.lock().unwrap(), vec![0.1, 0.2, 0.3]);
+    }
+
+    #[test]
+    fn f32_stereo_downmixes_to_mono() {
+        let b = buf();
+        process_samples(&[1.0, 0.0, 0.0, 1.0], 2, 16_000, &b);
+        let out = b.lock().unwrap();
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 0.5).abs() < 1e-6);
+        assert!((out[1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn i16_mono_converts_to_unit_range() {
+        let b = buf();
+        process_samples_i16(&[i16::MAX, 0, i16::MIN], 1, 16_000, &b);
+        let out = b.lock().unwrap();
+        assert_eq!(out.len(), 3);
+        assert!((out[0] - 1.0).abs() < 1e-4);
+        assert!(out[1].abs() < 1e-6);
+        assert!((out[2] - (-1.0)).abs() < 1e-3); // MIN/MAX ≈ -1.00003
+    }
+
+    #[test]
+    fn i16_stereo_downmix_averages_channels() {
+        let b = buf();
+        process_samples_i16(&[i16::MAX, 0, 0, i16::MAX], 2, 16_000, &b);
+        let out = b.lock().unwrap();
+        assert_eq!(out.len(), 2);
+        assert!((out[0] - 0.5).abs() < 1e-4);
+        assert!((out[1] - 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn cap_enforced_f32() {
+        let b = buf();
+        let cap = MAX_BUFFER_SECONDS; // rate = 1 → cap = MAX_BUFFER_SECONDS samples
+        process_samples(&vec![0.0f32; cap + 100], 1, 1, &b);
+        assert_eq!(b.lock().unwrap().len(), cap);
+    }
+
+    #[test]
+    fn cap_enforced_i16() {
+        let b = buf();
+        let cap = MAX_BUFFER_SECONDS;
+        process_samples_i16(&vec![0i16; cap + 100], 1, 1, &b);
+        assert_eq!(b.lock().unwrap().len(), cap);
     }
 }
