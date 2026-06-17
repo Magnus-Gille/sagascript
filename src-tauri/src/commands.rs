@@ -243,7 +243,6 @@ pub async fn stop_and_transcribe(
     // On timeout, request_abort() is called but has no effect — the blocking
     // task continues running and holds the context mutex until whisper finishes.
     let whisper_ref = whisper.inner().clone();
-    let audio = audio.clone();
     let fut = tokio::task::spawn_blocking(move || whisper_ref.transcribe_sync(&audio, language));
 
     let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);

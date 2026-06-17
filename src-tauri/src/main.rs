@@ -33,7 +33,7 @@ use tauri::{
     Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use app_controller::{AppController, HotkeyDownResult};
@@ -212,6 +212,31 @@ fn main() {
                     info!("First launch detected, opening onboarding");
                     open_settings_window(app.handle(), Some("onboarding"));
                 }
+            }
+
+            // Preload + warm the whisper model in the background so the first
+            // dictation of the session doesn't pay model-load and Metal/CoreML
+            // kernel-compile latency. Best-effort: if the model isn't downloaded
+            // yet (fresh install) we just skip and load lazily on first use.
+            {
+                let whisper: tauri::State<'_, SharedWhisper> = app.state();
+                let whisper = whisper.inner().clone();
+                let (model, language) = {
+                    let ctrl: tauri::State<'_, SharedController> = app.state();
+                    let c = ctrl.lock().unwrap();
+                    (c.settings().effective_model(), c.language())
+                };
+                std::thread::spawn(move || {
+                    if let Err(e) = whisper.ensure_model(model) {
+                        warn!("Model preload skipped: {e}");
+                        return;
+                    }
+                    if let Err(e) = whisper.warmup(language) {
+                        warn!("Model warmup failed: {e}");
+                    } else {
+                        info!("Model preloaded and warmed: {}", model.display_name());
+                    }
+                });
             }
 
             Ok(())
@@ -444,7 +469,6 @@ fn stop_recording_and_transcribe(
             // On timeout, request_abort() is called but has no effect — the blocking
             // task continues running and holds the context mutex until whisper finishes.
             let whisper_ref = whisper.inner().clone();
-            let audio = audio.clone();
             let fut = tokio::task::spawn_blocking(move || {
                 whisper_ref.transcribe_sync(&audio, language)
             });
