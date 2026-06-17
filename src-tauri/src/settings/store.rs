@@ -111,9 +111,7 @@ mod tests {
     fn save_and_load_roundtrip() {
         with_temp_settings(|path| {
             let dir = path.parent().unwrap();
-            let mut settings = Settings::default();
-            settings.language = Language::Swedish;
-            settings.hotkey = "Alt+Space".to_string();
+            let settings = Settings { language: Language::Swedish, hotkey: "Alt+Space".to_string(), ..Default::default() };
 
             // Write directly to temp path (bypassing app_data_dir)
             fs::create_dir_all(dir).unwrap();
@@ -143,8 +141,7 @@ mod tests {
             fs::write(&path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
 
             // Save settings via merge
-            let mut settings = Settings::default();
-            settings.language = Language::Norwegian;
+            let settings = Settings { language: Language::Norwegian, ..Default::default() };
 
             // Simulate save's merge logic directly on this path
             let mut map: serde_json::Map<String, serde_json::Value> =
