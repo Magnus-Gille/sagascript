@@ -270,6 +270,7 @@ fn main() {
             commands::download_model,
             commands::set_auto_paste,
             commands::set_show_overlay,
+            commands::set_initial_prompt,
             commands::get_build_info,
             commands::transcribe_file,
             commands::get_supported_formats,
@@ -447,9 +448,13 @@ fn stop_recording_and_transcribe(
         let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 
         // Extract what we need for transcription (lock briefly)
-        let (language, effective_model) = {
+        let (language, effective_model, prompt) = {
             let c = ctrl.lock().unwrap();
-            (c.language(), c.settings().effective_model())
+            (
+                c.language(),
+                c.settings().effective_model(),
+                c.settings().initial_prompt.clone(),
+            )
         };
 
         info!("Transcribing with model: {}", effective_model.display_name());
@@ -470,7 +475,12 @@ fn stop_recording_and_transcribe(
             // task continues running and holds the context mutex until whisper finishes.
             let whisper_ref = whisper.inner().clone();
             let fut = tokio::task::spawn_blocking(move || {
-                whisper_ref.transcribe_sync(&audio, language)
+                let prompt = if prompt.trim().is_empty() {
+                    None
+                } else {
+                    Some(prompt.as_str())
+                };
+                whisper_ref.transcribe_sync_with_prompt(&audio, language, prompt)
             });
 
             let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);

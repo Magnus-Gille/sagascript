@@ -79,6 +79,8 @@ pub enum WhisperModel {
     Medium,
     #[serde(rename = "large-v3-turbo")]
     LargeV3Turbo,
+    #[serde(rename = "large-v3-turbo-q8_0")]
+    LargeV3TurboQ8,
 }
 
 impl WhisperModel {
@@ -103,6 +105,7 @@ impl WhisperModel {
             WhisperModel::MediumEn => "Whisper Medium (EN)",
             WhisperModel::Medium => "Whisper Medium",
             WhisperModel::LargeV3Turbo => "Whisper Large v3 Turbo",
+            WhisperModel::LargeV3TurboQ8 => "Whisper Large v3 Turbo (Q8_0)",
         }
     }
 
@@ -127,6 +130,7 @@ impl WhisperModel {
             WhisperModel::MediumEn => "OpenAI Whisper, English-only. High accuracy, slow",
             WhisperModel::Medium => "OpenAI Whisper, multilingual. High accuracy, slow",
             WhisperModel::LargeV3Turbo => "OpenAI Whisper, multilingual. Highest accuracy, slowest",
+            WhisperModel::LargeV3TurboQ8 => "OpenAI Whisper large-v3-turbo, q8_0 quantised. High accuracy, multilingual, 834 MB",
         }
     }
 
@@ -165,7 +169,7 @@ impl WhisperModel {
             WhisperModel::Small | WhisperModel::KbWhisperSmall | WhisperModel::NbWhisperSmall => DtwModelPreset::Small,
             WhisperModel::MediumEn => DtwModelPreset::MediumEn,
             WhisperModel::Medium | WhisperModel::KbWhisperMedium | WhisperModel::NbWhisperMedium => DtwModelPreset::Medium,
-            WhisperModel::LargeV3Turbo => DtwModelPreset::LargeV3Turbo,
+            WhisperModel::LargeV3Turbo | WhisperModel::LargeV3TurboQ8 => DtwModelPreset::LargeV3Turbo,
             // KbWhisperLarge / NbWhisperLarge are large-v3 fine-tunes
             WhisperModel::KbWhisperLarge | WhisperModel::NbWhisperLarge => DtwModelPreset::LargeV3,
         }
@@ -211,6 +215,7 @@ impl WhisperModel {
             WhisperModel::MediumEn => "ggml-medium.en.bin",
             WhisperModel::Medium => "ggml-medium.bin",
             WhisperModel::LargeV3Turbo => "ggml-large-v3-turbo.bin",
+            WhisperModel::LargeV3TurboQ8 => "ggml-large-v3-turbo-q8_0.bin",
         }
     }
 
@@ -236,29 +241,57 @@ impl WhisperModel {
             WhisperModel::MediumEn => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
             WhisperModel::Medium => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
             WhisperModel::LargeV3Turbo => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+            WhisperModel::LargeV3TurboQ8 => "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
         }
     }
 
+    /// CoreML encoder basename whisper.cpp derives from the GGML filename: strip
+    /// `.bin`, then strip a trailing `-qX_X` quantisation suffix (mirrors
+    /// whisper.cpp's `whisper_get_coreml_path_encoder`). The CoreML encoder is
+    /// FP16 and shared across quantisations of a model — so `large-v3-turbo-q8_0`
+    /// reuses the same `ggml-large-v3-turbo-encoder.mlmodelc`. Returns `None` for
+    /// models without a CoreML encoder: only the OpenAI models in the
+    /// ggerganov/whisper.cpp repo ship one; the KB/NB fine-tunes live in their
+    /// own repos and have none.
+    #[cfg(target_os = "macos")]
+    fn coreml_encoder_stem(&self) -> Option<&'static str> {
+        if !self
+            .download_url()
+            .starts_with("https://huggingface.co/ggerganov/whisper.cpp/")
+        {
+            return None;
+        }
+        let stem = self.ggml_filename().strip_suffix(".bin")?;
+        // Strip a trailing "-qX_X" (e.g. "-q8_0"), exactly as whisper.cpp does.
+        let stem = match stem.rfind('-') {
+            Some(pos) => {
+                let suffix = &stem.as_bytes()[pos..];
+                if suffix.len() == 5 && suffix[1] == b'q' && suffix[3] == b'_' {
+                    &stem[..pos]
+                } else {
+                    stem
+                }
+            }
+            None => stem,
+        };
+        Some(stem)
+    }
+
     /// HuggingFace URL of the CoreML encoder bundle (`*-encoder.mlmodelc.zip`),
-    /// or `None` if this model has no CoreML encoder. CoreML encoders are
-    /// published alongside the GGML weights in the ggerganov/whisper.cpp repo;
-    /// the KB/NB fine-tunes live in their own repos and ship none.
+    /// or `None` if this model has no CoreML encoder.
     #[cfg(target_os = "macos")]
     pub fn coreml_encoder_url(&self) -> Option<String> {
-        let url = self.download_url();
-        let base = url
-            .strip_prefix("https://huggingface.co/ggerganov/whisper.cpp/")
-            .and(url.strip_suffix(".bin"))?;
-        Some(format!("{base}-encoder.mlmodelc.zip"))
+        let stem = self.coreml_encoder_stem()?;
+        Some(format!(
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{stem}-encoder.mlmodelc.zip"
+        ))
     }
 
     /// Directory name whisper.cpp expects the CoreML encoder to have next to the
-    /// GGML file (`ggml-<name>-encoder.mlmodelc`). Mirrors whisper.cpp's own
-    /// `.bin` → `-encoder.mlmodelc` derivation. `None` if no CoreML encoder.
+    /// GGML file (`ggml-<name>-encoder.mlmodelc`). `None` if no CoreML encoder.
     #[cfg(target_os = "macos")]
     pub fn coreml_encoder_dirname(&self) -> Option<String> {
-        self.coreml_encoder_url()?;
-        let stem = self.ggml_filename().strip_suffix(".bin")?;
+        let stem = self.coreml_encoder_stem()?;
         Some(format!("{stem}-encoder.mlmodelc"))
     }
 
@@ -284,6 +317,7 @@ impl WhisperModel {
             WhisperModel::MediumEn => 1530,
             WhisperModel::Medium => 1530,
             WhisperModel::LargeV3Turbo => 1620,
+            WhisperModel::LargeV3TurboQ8 => 834,
         }
     }
 
@@ -326,6 +360,7 @@ impl WhisperModel {
                 WhisperModel::Small,
                 WhisperModel::Medium,
                 WhisperModel::LargeV3Turbo,
+                WhisperModel::LargeV3TurboQ8,
             ],
         }
     }
@@ -364,6 +399,9 @@ pub struct Settings {
     pub auto_select_model: bool,
     /// Hotkey shortcut string (e.g. "Control+Shift+Space")
     pub hotkey: String,
+    /// Optional initial prompt that primes the decoder with domain vocabulary
+    /// (names, jargon, spellings) for more accurate transcription. Empty = none.
+    pub initial_prompt: String,
     /// Whether the user has completed the first-launch onboarding
     pub has_completed_onboarding: bool,
 }
@@ -378,6 +416,7 @@ impl Default for Settings {
             auto_paste: true,
             auto_select_model: true,
             hotkey: "Control+Shift+Space".to_string(),
+            initial_prompt: String::new(),
             has_completed_onboarding: false,
         }
     }
@@ -491,6 +530,16 @@ mod tests {
             WhisperModel::LargeV3Turbo.coreml_encoder_dirname().as_deref(),
             Some("ggml-large-v3-turbo-encoder.mlmodelc")
         );
+        // Quantised turbo strips the `-q8_0` suffix and reuses the SAME FP16
+        // CoreML encoder as the f16 turbo (matches whisper.cpp's derivation).
+        assert_eq!(
+            WhisperModel::LargeV3TurboQ8.coreml_encoder_dirname().as_deref(),
+            Some("ggml-large-v3-turbo-encoder.mlmodelc")
+        );
+        assert_eq!(
+            WhisperModel::LargeV3TurboQ8.coreml_encoder_url().as_deref(),
+            Some("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-encoder.mlmodelc.zip")
+        );
         // KB/NB fine-tunes live in other repos and have no CoreML encoder.
         assert_eq!(WhisperModel::KbWhisperBase.coreml_encoder_url(), None);
         assert_eq!(WhisperModel::NbWhisperSmall.coreml_encoder_dirname(), None);
@@ -540,6 +589,7 @@ mod tests {
             WhisperModel::MediumEn,
             WhisperModel::Medium,
             WhisperModel::LargeV3Turbo,
+            WhisperModel::LargeV3TurboQ8,
         ];
         for m in models {
             let filename = m.ggml_filename();
@@ -570,6 +620,7 @@ mod tests {
             WhisperModel::MediumEn,
             WhisperModel::Medium,
             WhisperModel::LargeV3Turbo,
+            WhisperModel::LargeV3TurboQ8,
         ];
         for m in models {
             let url = m.download_url();
@@ -600,6 +651,7 @@ mod tests {
             WhisperModel::MediumEn,
             WhisperModel::Medium,
             WhisperModel::LargeV3Turbo,
+            WhisperModel::LargeV3TurboQ8,
         ];
         for m in models {
             assert!(m.size_mb() > 0, "{:?} has 0 size", m);
@@ -640,12 +692,13 @@ mod tests {
         assert!(no.contains(&WhisperModel::NbWhisperLarge));
 
         let auto = WhisperModel::models_for_language(Language::Auto);
-        assert_eq!(auto.len(), 5);
+        assert_eq!(auto.len(), 6);
         assert!(auto.contains(&WhisperModel::Tiny));
         assert!(auto.contains(&WhisperModel::Base));
         assert!(auto.contains(&WhisperModel::Small));
         assert!(auto.contains(&WhisperModel::Medium));
         assert!(auto.contains(&WhisperModel::LargeV3Turbo));
+        assert!(auto.contains(&WhisperModel::LargeV3TurboQ8));
     }
 
     #[test]
@@ -679,6 +732,7 @@ mod tests {
             (WhisperModel::MediumEn, "\"medium.en\""),
             (WhisperModel::Medium, "\"medium\""),
             (WhisperModel::LargeV3Turbo, "\"large-v3-turbo\""),
+            (WhisperModel::LargeV3TurboQ8, "\"large-v3-turbo-q8_0\""),
         ];
         for (model, expected) in pairs {
             let json = serde_json::to_string(&model).unwrap();
@@ -721,6 +775,7 @@ mod tests {
         assert!(s.auto_paste);
         assert!(s.auto_select_model);
         assert_eq!(s.hotkey, "Control+Shift+Space");
+        assert_eq!(s.initial_prompt, "");
     }
 
     #[test]
@@ -763,6 +818,7 @@ mod tests {
         assert_eq!(deserialized.auto_paste, original.auto_paste);
         assert_eq!(deserialized.auto_select_model, original.auto_select_model);
         assert_eq!(deserialized.hotkey, original.hotkey);
+        assert_eq!(deserialized.initial_prompt, original.initial_prompt);
     }
 
     #[test]
@@ -805,6 +861,7 @@ mod tests {
             WhisperModel::MediumEn,
             WhisperModel::Medium,
             WhisperModel::LargeV3Turbo,
+            WhisperModel::LargeV3TurboQ8,
         ];
         for m in models {
             assert_eq!(

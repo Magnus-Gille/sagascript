@@ -16,7 +16,7 @@ pub enum ConfigAction {
 Show all settings in a table with their current values and defaults.
 
 Valid keys: language, whisper_model, hotkey_mode, show_overlay, \
-auto_paste, auto_select_model, hotkey")]
+auto_paste, auto_select_model, hotkey, initial_prompt")]
     List,
 
     /// Get a single setting value
@@ -25,14 +25,15 @@ auto_paste, auto_select_model, hotkey")]
 Print the current value of a single setting to stdout.
 
 Valid keys: language, whisper_model, hotkey_mode, show_overlay, \
-auto_paste, auto_select_model, hotkey",
+auto_paste, auto_select_model, hotkey, initial_prompt",
         after_long_help = "\
 EXAMPLES:
   sagascript config get language
-  sagascript config get hotkey"
+  sagascript config get hotkey
+  sagascript config get initial_prompt"
     )]
     Get {
-        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey]
+        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt]
         key: String,
     },
 
@@ -51,16 +52,18 @@ Valid values per key:
   show_overlay       true, false
   auto_paste         true, false
   auto_select_model  true, false
-  hotkey             Modifier+Key (e.g. Control+Shift+Space, Option+Space)",
+  hotkey             Modifier+Key (e.g. Control+Shift+Space, Option+Space)
+  initial_prompt     Any string (e.g. names, jargon, preferred spellings)",
         after_long_help = "\
 EXAMPLES:
   sagascript config set language sv
   sagascript config set whisper_model kb-whisper-base
   sagascript config set hotkey 'Option+Space'
-  sagascript config set auto_paste false"
+  sagascript config set auto_paste false
+  sagascript config set initial_prompt 'Sagascript, Tauri, whisper-rs'"
     )]
     Set {
-        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey]
+        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt]
         key: String,
         /// New value for the setting
         value: String,
@@ -101,6 +104,7 @@ const VALID_KEYS: &[&str] = &[
     "auto_paste",
     "auto_select_model",
     "hotkey",
+    "initial_prompt",
 ];
 
 pub fn run(args: ConfigArgs) -> Result<(), DictationError> {
@@ -159,6 +163,10 @@ fn cmd_list() -> Result<(), DictationError> {
         "{:<20} {:<24} {}",
         "hotkey", current.hotkey, defaults.hotkey
     );
+    println!(
+        "{:<20} {:<24} {}",
+        "initial_prompt", current.initial_prompt, defaults.initial_prompt
+    );
     Ok(())
 }
 
@@ -197,6 +205,7 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
             validate_hotkey(value)?;
             settings.hotkey = value.to_string();
         }
+        "initial_prompt" => settings.initial_prompt = value.to_string(),
         _ => unreachable!(), // validate_key already checked
     }
 
@@ -218,6 +227,7 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
             "auto_paste" => settings.auto_paste = defaults.auto_paste,
             "auto_select_model" => settings.auto_select_model = defaults.auto_select_model,
             "hotkey" => settings.hotkey = defaults.hotkey,
+            "initial_prompt" => settings.initial_prompt = defaults.initial_prompt,
             _ => unreachable!(),
         }
         settings::store::save(&settings).map_err(DictationError::SettingsError)?;
@@ -257,6 +267,7 @@ fn get_setting_value(settings: &Settings, key: &str) -> String {
         "auto_paste" => settings.auto_paste.to_string(),
         "auto_select_model" => settings.auto_select_model.to_string(),
         "hotkey" => settings.hotkey.clone(),
+        "initial_prompt" => settings.initial_prompt.clone(),
         _ => "unknown".to_string(),
     }
 }
@@ -630,6 +641,7 @@ mod tests {
         assert_eq!(get_setting_value(&settings, "auto_paste"), "true");
         assert_eq!(get_setting_value(&settings, "auto_select_model"), "true");
         assert_eq!(get_setting_value(&settings, "hotkey"), "Control+Shift+Space");
+        assert_eq!(get_setting_value(&settings, "initial_prompt"), "");
     }
 
     #[test]

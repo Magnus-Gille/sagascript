@@ -177,6 +177,17 @@ impl WhisperBackend {
         self.transcribe_sync_with_progress(audio, language, |_| {})
     }
 
+    /// Like `transcribe_sync` but with an optional initial prompt to prime the
+    /// decoder with domain vocabulary (names, jargon) for better accuracy.
+    pub fn transcribe_sync_with_prompt(
+        &self,
+        audio: &[f32],
+        language: Language,
+        prompt: Option<&str>,
+    ) -> Result<String, DictationError> {
+        self.transcribe_sync_with_progress_and_prompt(audio, language, prompt, |_| {})
+    }
+
     /// Run transcription with a progress callback that receives percentage (0–100).
     /// The callback is invoked from the whisper.cpp inference thread.
     pub fn transcribe_sync_with_progress(

@@ -20,6 +20,7 @@ export interface Settings {
   auto_paste: boolean;
   auto_select_model: boolean;
   hotkey: string;
+  initial_prompt: string;
 }
 
 export interface BuildInfo {
@@ -72,6 +73,10 @@ export async function setHotkey(shortcut: string): Promise<void> {
 
 export async function setAutoPaste(enabled: boolean): Promise<void> {
   return invoke("set_auto_paste", { enabled });
+}
+
+export async function setInitialPrompt(prompt: string): Promise<void> {
+  return invoke("set_initial_prompt", { prompt });
 }
 
 export async function setShowOverlay(enabled: boolean): Promise<void> {

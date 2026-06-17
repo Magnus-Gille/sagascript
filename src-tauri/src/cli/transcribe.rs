@@ -246,6 +246,7 @@ pub fn parse_model(s: &str) -> Result<WhisperModel, DictationError> {
         "medium.en" => Ok(WhisperModel::MediumEn),
         "medium" => Ok(WhisperModel::Medium),
         "large-v3-turbo" => Ok(WhisperModel::LargeV3Turbo),
+        "large-v3-turbo-q8_0" => Ok(WhisperModel::LargeV3TurboQ8),
         other => Err(DictationError::SettingsError(format!(
             "Unknown model '{other}'. Run 'sagascript list-models' to see available models."
         ))),
@@ -273,6 +274,7 @@ pub fn model_id_string(model: WhisperModel) -> &'static str {
         WhisperModel::MediumEn => "medium.en",
         WhisperModel::Medium => "medium",
         WhisperModel::LargeV3Turbo => "large-v3-turbo",
+        WhisperModel::LargeV3TurboQ8 => "large-v3-turbo-q8_0",
     }
 }
 
@@ -346,6 +348,7 @@ mod tests {
             ("medium.en", WhisperModel::MediumEn),
             ("medium", WhisperModel::Medium),
             ("large-v3-turbo", WhisperModel::LargeV3Turbo),
+            ("large-v3-turbo-q8_0", WhisperModel::LargeV3TurboQ8),
         ];
         for (id, expected) in cases {
             assert_eq!(parse_model(id).unwrap(), expected, "parse_model({id})");
@@ -387,6 +390,7 @@ mod tests {
             (WhisperModel::MediumEn, "medium.en"),
             (WhisperModel::Medium, "medium"),
             (WhisperModel::LargeV3Turbo, "large-v3-turbo"),
+            (WhisperModel::LargeV3TurboQ8, "large-v3-turbo-q8_0"),
         ];
         for (model, expected) in models {
             assert_eq!(model_id_string(model), expected);
@@ -411,6 +415,7 @@ mod tests {
             WhisperModel::MediumEn,
             WhisperModel::Medium,
             WhisperModel::LargeV3Turbo,
+            WhisperModel::LargeV3TurboQ8,
         ];
         for model in all_models {
             let id = model_id_string(model);

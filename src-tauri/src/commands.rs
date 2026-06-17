@@ -219,12 +219,13 @@ pub async fn stop_and_transcribe(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
 ) -> Result<String, String> {
-    let (audio, language, effective_model) = {
+    let (audio, language, effective_model, prompt) = {
         let mut ctrl = controller.lock().unwrap();
         let audio = ctrl.stop_recording();
         let language = ctrl.language();
         let effective_model = ctrl.settings().effective_model();
-        (audio, language, effective_model)
+        let prompt = ctrl.settings().initial_prompt.clone();
+        (audio, language, effective_model, prompt)
     };
 
     if audio.is_empty() {
@@ -243,7 +244,10 @@ pub async fn stop_and_transcribe(
     // On timeout, request_abort() is called but has no effect — the blocking
     // task continues running and holds the context mutex until whisper finishes.
     let whisper_ref = whisper.inner().clone();
-    let fut = tokio::task::spawn_blocking(move || whisper_ref.transcribe_sync(&audio, language));
+    let fut = tokio::task::spawn_blocking(move || {
+        let prompt = if prompt.trim().is_empty() { None } else { Some(prompt.as_str()) };
+        whisper_ref.transcribe_sync_with_prompt(&audio, language, prompt)
+    });
 
     let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
     let result = match tokio::time::timeout(timeout, fut).await {
@@ -376,6 +380,19 @@ pub async fn set_show_overlay(
     drop(ctrl);
     persist_settings(&controller)?;
     info!("Show overlay: {enabled}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_initial_prompt(
+    controller: State<'_, SharedController>,
+    prompt: String,
+) -> Result<(), String> {
+    let mut ctrl = controller.lock().unwrap();
+    ctrl.settings_mut().initial_prompt = prompt.clone();
+    drop(ctrl);
+    persist_settings(&controller)?;
+    info!("Initial prompt set ({} chars)", prompt.len());
     Ok(())
 }
 
