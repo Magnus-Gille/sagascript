@@ -9,6 +9,9 @@
     setInitialPrompt,
     setShowOverlay,
     setWhisperModel,
+    setBeamSize,
+    setTemperatureFallback,
+    setVadEnabled,
     getBuildInfo,
     getModelInfo,
     getLoadedModel,
@@ -166,6 +169,24 @@
     if (!settings) return;
     const value = (e.target as HTMLTextAreaElement).value;
     await setInitialPrompt(value);
+    settings = await getSettings();
+  }
+
+  async function onBeamSizeChange(e: Event) {
+    const value = Number((e.target as HTMLSelectElement).value);
+    await setBeamSize(value);
+    settings = await getSettings();
+  }
+
+  async function onTemperatureFallbackToggle() {
+    if (!settings) return;
+    await setTemperatureFallback(!settings.temperature_fallback);
+    settings = await getSettings();
+  }
+
+  async function onVadToggle() {
+    if (!settings) return;
+    await setVadEnabled(!settings.vad_enabled);
     settings = await getSettings();
   }
 
@@ -597,6 +618,40 @@
           ></textarea>
           <div class="hotkey-hint">Prime the transcriber with names, jargon, or preferred spellings.</div>
         </div>
+
+        <div class="field">
+          <label for="beam-size">Decoding mode</label>
+          <select id="beam-size" value={settings.beam_size} onchange={onBeamSizeChange}>
+            <option value={0}>Greedy (fast)</option>
+            <option value={5}>Beam search (accurate)</option>
+          </select>
+        </div>
+
+        <div class="field-row">
+          <label>Temperature fallback</label>
+          <div
+            class="toggle"
+            class:active={settings.temperature_fallback}
+            onclick={onTemperatureFallbackToggle}
+            role="switch"
+            tabindex="0"
+            aria-checked={settings.temperature_fallback}
+          ></div>
+        </div>
+        <div class="hotkey-hint">Re-decode hard segments; off = faster, less robust.</div>
+
+        <div class="field-row">
+          <label>Voice activity detection</label>
+          <div
+            class="toggle"
+            class:active={settings.vad_enabled}
+            onclick={onVadToggle}
+            role="switch"
+            tabindex="0"
+            aria-checked={settings.vad_enabled}
+          ></div>
+        </div>
+        <div class="hotkey-hint">Skip silence; downloads a small model on first enable.</div>
 
         <div class="field">
           <label>Version</label>

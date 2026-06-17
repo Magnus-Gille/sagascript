@@ -21,6 +21,9 @@ export interface Settings {
   auto_select_model: boolean;
   hotkey: string;
   initial_prompt: string;
+  beam_size: number;
+  temperature_fallback: boolean;
+  vad_enabled: boolean;
 }
 
 export interface BuildInfo {
@@ -81,6 +84,18 @@ export async function setInitialPrompt(prompt: string): Promise<void> {
 
 export async function setShowOverlay(enabled: boolean): Promise<void> {
   return invoke("set_show_overlay", { enabled });
+}
+
+export async function setBeamSize(beamSize: number): Promise<void> {
+  return invoke("set_beam_size", { beamSize });
+}
+
+export async function setTemperatureFallback(enabled: boolean): Promise<void> {
+  return invoke("set_temperature_fallback", { enabled });
+}
+
+export async function setVadEnabled(enabled: boolean): Promise<void> {
+  return invoke("set_vad_enabled", { enabled });
 }
 
 export async function getModelInfo(): Promise<WhisperModel[]> {

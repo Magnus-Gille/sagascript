@@ -221,10 +221,14 @@ fn main() {
             {
                 let whisper: tauri::State<'_, SharedWhisper> = app.state();
                 let whisper = whisper.inner().clone();
-                let (model, language) = {
+                let (model, language, vad_enabled) = {
                     let ctrl: tauri::State<'_, SharedController> = app.state();
                     let c = ctrl.lock().unwrap();
-                    (c.settings().effective_model(), c.language())
+                    (
+                        c.settings().effective_model(),
+                        c.language(),
+                        c.settings().vad_enabled,
+                    )
                 };
                 std::thread::spawn(move || {
                     if let Err(e) = whisper.ensure_model(model) {
@@ -237,6 +241,18 @@ fn main() {
                         info!("Model preloaded and warmed: {}", model.display_name());
                     }
                 });
+
+                // If VAD is enabled (e.g. set via the CLI), make sure the Silero
+                // model is present for the next dictation.
+                if vad_enabled && !crate::transcription::model::is_vad_model_downloaded() {
+                    tauri::async_runtime::spawn(async {
+                        if let Err(e) =
+                            crate::transcription::model::download_vad_model(|_, _| {}).await
+                        {
+                            warn!("VAD model preload failed: {e}");
+                        }
+                    });
+                }
             }
 
             Ok(())
@@ -271,6 +287,9 @@ fn main() {
             commands::set_auto_paste,
             commands::set_show_overlay,
             commands::set_initial_prompt,
+            commands::set_beam_size,
+            commands::set_temperature_fallback,
+            commands::set_vad_enabled,
             commands::get_build_info,
             commands::transcribe_file,
             commands::get_supported_formats,
@@ -448,12 +467,12 @@ fn stop_recording_and_transcribe(
         let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 
         // Extract what we need for transcription (lock briefly)
-        let (language, effective_model, prompt) = {
+        let (language, effective_model, opts) = {
             let c = ctrl.lock().unwrap();
             (
                 c.language(),
                 c.settings().effective_model(),
-                c.settings().initial_prompt.clone(),
+                commands::build_transcribe_options(c.settings()),
             )
         };
 
@@ -475,12 +494,7 @@ fn stop_recording_and_transcribe(
             // task continues running and holds the context mutex until whisper finishes.
             let whisper_ref = whisper.inner().clone();
             let fut = tokio::task::spawn_blocking(move || {
-                let prompt = if prompt.trim().is_empty() {
-                    None
-                } else {
-                    Some(prompt.as_str())
-                };
-                whisper_ref.transcribe_sync_with_prompt(&audio, language, prompt)
+                whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
             });
 
             let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);

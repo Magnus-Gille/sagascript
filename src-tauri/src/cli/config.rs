@@ -16,7 +16,8 @@ pub enum ConfigAction {
 Show all settings in a table with their current values and defaults.
 
 Valid keys: language, whisper_model, hotkey_mode, show_overlay, \
-auto_paste, auto_select_model, hotkey, initial_prompt")]
+auto_paste, auto_select_model, hotkey, initial_prompt, \
+beam_size, temperature_fallback, vad_enabled")]
     List,
 
     /// Get a single setting value
@@ -25,7 +26,8 @@ auto_paste, auto_select_model, hotkey, initial_prompt")]
 Print the current value of a single setting to stdout.
 
 Valid keys: language, whisper_model, hotkey_mode, show_overlay, \
-auto_paste, auto_select_model, hotkey, initial_prompt",
+auto_paste, auto_select_model, hotkey, initial_prompt, \
+beam_size, temperature_fallback, vad_enabled",
         after_long_help = "\
 EXAMPLES:
   sagascript config get language
@@ -33,7 +35,7 @@ EXAMPLES:
   sagascript config get initial_prompt"
     )]
     Get {
-        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt]
+        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
         key: String,
     },
 
@@ -44,16 +46,19 @@ Update a setting. The new value takes effect immediately — the GUI \
 hot-reloads changes made via CLI.
 
 Valid values per key:
-  language           en, sv, no, auto (auto uses a generic model — less accurate)
-  whisper_model      tiny.en, tiny, base.en, base, kb-whisper-tiny,
-                     kb-whisper-base, kb-whisper-small, nb-whisper-tiny,
-                     nb-whisper-base, nb-whisper-small
-  hotkey_mode        push, toggle
-  show_overlay       true, false
-  auto_paste         true, false
-  auto_select_model  true, false
-  hotkey             Modifier+Key (e.g. Control+Shift+Space, Option+Space)
-  initial_prompt     Any string (e.g. names, jargon, preferred spellings)",
+  language             en, sv, no, auto (auto uses a generic model — less accurate)
+  whisper_model        tiny.en, tiny, base.en, base, kb-whisper-tiny,
+                       kb-whisper-base, kb-whisper-small, nb-whisper-tiny,
+                       nb-whisper-base, nb-whisper-small
+  hotkey_mode          push, toggle
+  show_overlay         true, false
+  auto_paste           true, false
+  auto_select_model    true, false
+  hotkey               Modifier+Key (e.g. Control+Shift+Space, Option+Space)
+  initial_prompt       Any string (e.g. names, jargon, preferred spellings)
+  beam_size            Integer >= 0 (0 = greedy/fast, 5 = beam search/accurate)
+  temperature_fallback true, false
+  vad_enabled          true, false",
         after_long_help = "\
 EXAMPLES:
   sagascript config set language sv
@@ -63,7 +68,7 @@ EXAMPLES:
   sagascript config set initial_prompt 'Sagascript, Tauri, whisper-rs'"
     )]
     Set {
-        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt]
+        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
         key: String,
         /// New value for the setting
         value: String,
@@ -105,6 +110,9 @@ const VALID_KEYS: &[&str] = &[
     "auto_select_model",
     "hotkey",
     "initial_prompt",
+    "beam_size",
+    "temperature_fallback",
+    "vad_enabled",
 ];
 
 pub fn run(args: ConfigArgs) -> Result<(), DictationError> {
@@ -167,6 +175,18 @@ fn cmd_list() -> Result<(), DictationError> {
         "{:<20} {:<24} {}",
         "initial_prompt", current.initial_prompt, defaults.initial_prompt
     );
+    println!(
+        "{:<20} {:<24} {}",
+        "beam_size", current.beam_size, defaults.beam_size
+    );
+    println!(
+        "{:<20} {:<24} {}",
+        "temperature_fallback", current.temperature_fallback, defaults.temperature_fallback
+    );
+    println!(
+        "{:<20} {:<24} {}",
+        "vad_enabled", current.vad_enabled, defaults.vad_enabled
+    );
     Ok(())
 }
 
@@ -206,6 +226,19 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
             settings.hotkey = value.to_string();
         }
         "initial_prompt" => settings.initial_prompt = value.to_string(),
+        "beam_size" => {
+            settings.beam_size = value.parse::<u32>().map_err(|_| {
+                DictationError::SettingsError(format!(
+                    "beam_size must be a non-negative integer, got '{value}'"
+                ))
+            })?;
+        }
+        "temperature_fallback" => {
+            settings.temperature_fallback = parse_bool(value, "temperature_fallback")?;
+        }
+        "vad_enabled" => {
+            settings.vad_enabled = parse_bool(value, "vad_enabled")?;
+        }
         _ => unreachable!(), // validate_key already checked
     }
 
@@ -228,6 +261,9 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
             "auto_select_model" => settings.auto_select_model = defaults.auto_select_model,
             "hotkey" => settings.hotkey = defaults.hotkey,
             "initial_prompt" => settings.initial_prompt = defaults.initial_prompt,
+            "beam_size" => settings.beam_size = defaults.beam_size,
+            "temperature_fallback" => settings.temperature_fallback = defaults.temperature_fallback,
+            "vad_enabled" => settings.vad_enabled = defaults.vad_enabled,
             _ => unreachable!(),
         }
         settings::store::save(&settings).map_err(DictationError::SettingsError)?;
@@ -268,6 +304,9 @@ fn get_setting_value(settings: &Settings, key: &str) -> String {
         "auto_select_model" => settings.auto_select_model.to_string(),
         "hotkey" => settings.hotkey.clone(),
         "initial_prompt" => settings.initial_prompt.clone(),
+        "beam_size" => settings.beam_size.to_string(),
+        "temperature_fallback" => settings.temperature_fallback.to_string(),
+        "vad_enabled" => settings.vad_enabled.to_string(),
         _ => "unknown".to_string(),
     }
 }
@@ -642,6 +681,9 @@ mod tests {
         assert_eq!(get_setting_value(&settings, "auto_select_model"), "true");
         assert_eq!(get_setting_value(&settings, "hotkey"), "Control+Shift+Space");
         assert_eq!(get_setting_value(&settings, "initial_prompt"), "");
+        assert_eq!(get_setting_value(&settings, "beam_size"), "0");
+        assert_eq!(get_setting_value(&settings, "temperature_fallback"), "true");
+        assert_eq!(get_setting_value(&settings, "vad_enabled"), "false");
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+    WhisperVadParams,
 };
 #[cfg(feature = "diarization")]
 use whisper_rs::{DtwMode, DtwParameters};
@@ -11,6 +12,36 @@ use whisper_rs::{DtwMode, DtwParameters};
 use crate::error::DictationError;
 use crate::settings::{Language, WhisperModel};
 use crate::transcription::model;
+
+/// Per-transcription tuning knobs (opt-in modes). `Default` reproduces the
+/// fast, robust dictation defaults: greedy decoding, temperature fallback on,
+/// no VAD, no prompt.
+#[derive(Clone)]
+pub struct TranscribeOptions {
+    /// Optional decoder priming prompt (domain vocabulary).
+    pub prompt: Option<String>,
+    /// Beam width: 0/1 = greedy (fastest); >=2 enables beam search (more
+    /// accurate on hard audio, ~3-5x slower).
+    pub beam_size: u32,
+    /// Allow whisper's temperature fallback (re-decode harder segments at
+    /// higher temperature). `true` preserves robustness; `false` caps
+    /// worst-case latency.
+    pub temperature_fallback: bool,
+    /// Path to a Silero VAD ggml model to skip non-speech regions, or `None`
+    /// to disable VAD. The caller must ensure the file exists.
+    pub vad_model_path: Option<String>,
+}
+
+impl Default for TranscribeOptions {
+    fn default() -> Self {
+        Self {
+            prompt: None,
+            beam_size: 0,
+            temperature_fallback: true,
+            vad_model_path: None,
+        }
+    }
+}
 
 /// Local transcription backend using whisper-rs (whisper.cpp bindings)
 /// Uses GGML model files with optional CoreML acceleration on macOS.
@@ -177,17 +208,6 @@ impl WhisperBackend {
         self.transcribe_sync_with_progress(audio, language, |_| {})
     }
 
-    /// Like `transcribe_sync` but with an optional initial prompt to prime the
-    /// decoder with domain vocabulary (names, jargon) for better accuracy.
-    pub fn transcribe_sync_with_prompt(
-        &self,
-        audio: &[f32],
-        language: Language,
-        prompt: Option<&str>,
-    ) -> Result<String, DictationError> {
-        self.transcribe_sync_with_progress_and_prompt(audio, language, prompt, |_| {})
-    }
-
     /// Run transcription with a progress callback that receives percentage (0–100).
     /// The callback is invoked from the whisper.cpp inference thread.
     pub fn transcribe_sync_with_progress(
@@ -208,6 +228,23 @@ impl WhisperBackend {
         prompt: Option<&str>,
         on_progress: impl FnMut(i32) + 'static,
     ) -> Result<String, DictationError> {
+        let opts = TranscribeOptions {
+            prompt: prompt.map(str::to_string),
+            ..Default::default()
+        };
+        self.transcribe_sync_with_options(audio, language, &opts, on_progress)
+    }
+
+    /// Core transcription entry point. Honors the opt-in [`TranscribeOptions`]
+    /// (prompt, beam search, temperature fallback, VAD). Blocking — call from
+    /// spawn_blocking.
+    pub fn transcribe_sync_with_options(
+        &self,
+        audio: &[f32],
+        language: Language,
+        opts: &TranscribeOptions,
+        on_progress: impl FnMut(i32) + 'static,
+    ) -> Result<String, DictationError> {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
@@ -219,20 +256,49 @@ impl WhisperBackend {
         let n_threads = whisper_threads();
         let no_speech_thold = model.no_speech_threshold();
 
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        // Beam search (opt-in) is more accurate on hard audio but several times
+        // slower; greedy best_of=1 is the fast default.
+        let strategy = if opts.beam_size >= 2 {
+            SamplingStrategy::BeamSearch {
+                beam_size: opts.beam_size as i32,
+                patience: -1.0, // whisper default
+            }
+        } else {
+            SamplingStrategy::Greedy { best_of: 1 }
+        };
+
+        let mut params = FullParams::new(strategy);
         params.set_language(language.whisper_code());
         params.set_n_threads(n_threads);
         params.set_temperature(0.0);
-        params.set_temperature_inc(0.2);
+        // Temperature fallback re-decodes hard segments at higher temperature.
+        // Disabling it caps worst-case latency at the cost of some robustness.
+        params.set_temperature_inc(if opts.temperature_fallback { 0.2 } else { 0.0 });
         params.set_translate(false);
         params.set_no_timestamps(true);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_no_speech_thold(no_speech_thold);
         params.set_suppress_blank(true);
-        if let Some(p) = prompt {
-            params.set_initial_prompt(p);
+        if let Some(p) = &opts.prompt {
+            if !p.is_empty() {
+                params.set_initial_prompt(p);
+            }
         }
+
+        // VAD (opt-in): skip non-speech regions. The model path MUST be set
+        // before enable_vad — whisper-rs panics otherwise. The caller guarantees
+        // the file exists.
+        if let Some(vad_path) = &opts.vad_model_path {
+            params.set_vad_model_path(Some(vad_path.as_str()));
+            let mut vad = WhisperVadParams::new();
+            vad.set_threshold(0.5);
+            vad.set_min_silence_duration(200); // ms — slightly longer for dictation
+            vad.set_speech_pad(50); // ms — avoid clipping word edges
+            params.set_vad_params(vad);
+            params.enable_vad(true);
+        }
+
         params.set_progress_callback_safe(on_progress);
 
         // Abort callback: DISABLED — whisper-rs 0.15.1 set_abort_callback_safe()
@@ -243,11 +309,13 @@ impl WhisperBackend {
         self.abort_flag.store(false, Ordering::SeqCst);
 
         info!(
-            "Starting local transcription: {} samples, {} threads, lang={:?}, no_speech_thold={}",
+            "Starting local transcription: {} samples, {} threads, lang={:?}, beam={}, temp_fallback={}, vad={}",
             audio.len(),
             n_threads,
             language,
-            no_speech_thold
+            opts.beam_size,
+            opts.temperature_fallback,
+            opts.vad_model_path.is_some()
         );
 
         self.with_warm_state(|state| {

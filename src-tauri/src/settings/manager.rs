@@ -402,6 +402,15 @@ pub struct Settings {
     /// Optional initial prompt that primes the decoder with domain vocabulary
     /// (names, jargon, spellings) for more accurate transcription. Empty = none.
     pub initial_prompt: String,
+    /// Beam search width. 0 = greedy decoding (fastest); >=2 enables beam search
+    /// (more accurate on hard audio, several times slower).
+    pub beam_size: u32,
+    /// Allow whisper's temperature fallback (re-decode hard segments at higher
+    /// temperature). true preserves robustness; false caps worst-case latency.
+    pub temperature_fallback: bool,
+    /// Skip non-speech regions with Silero VAD (reduces silence hallucination
+    /// and speeds up clips with leading/trailing silence). Needs the VAD model.
+    pub vad_enabled: bool,
     /// Whether the user has completed the first-launch onboarding
     pub has_completed_onboarding: bool,
 }
@@ -417,6 +426,9 @@ impl Default for Settings {
             auto_select_model: true,
             hotkey: "Control+Shift+Space".to_string(),
             initial_prompt: String::new(),
+            beam_size: 0,
+            temperature_fallback: true,
+            vad_enabled: false,
             has_completed_onboarding: false,
         }
     }
@@ -776,6 +788,9 @@ mod tests {
         assert!(s.auto_select_model);
         assert_eq!(s.hotkey, "Control+Shift+Space");
         assert_eq!(s.initial_prompt, "");
+        assert_eq!(s.beam_size, 0);
+        assert!(s.temperature_fallback);
+        assert!(!s.vad_enabled);
     }
 
     #[test]
@@ -819,6 +834,9 @@ mod tests {
         assert_eq!(deserialized.auto_select_model, original.auto_select_model);
         assert_eq!(deserialized.hotkey, original.hotkey);
         assert_eq!(deserialized.initial_prompt, original.initial_prompt);
+        assert_eq!(deserialized.beam_size, original.beam_size);
+        assert_eq!(deserialized.temperature_fallback, original.temperature_fallback);
+        assert_eq!(deserialized.vad_enabled, original.vad_enabled);
     }
 
     #[test]

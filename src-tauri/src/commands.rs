@@ -10,7 +10,35 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 use crate::app_controller::{AppController, AppState};
 use crate::audio::decoder;
 use crate::settings::{HotkeyMode, Language, Settings, WhisperModel};
-use crate::transcription::{model, WhisperBackend};
+use crate::transcription::{model, TranscribeOptions, WhisperBackend};
+
+/// Build the per-transcription options from the current settings. Resolves the
+/// VAD model path only when VAD is enabled and the model is present (otherwise
+/// VAD is silently skipped — whisper would fail on a missing model).
+pub(crate) fn build_transcribe_options(settings: &Settings) -> TranscribeOptions {
+    let prompt = settings.initial_prompt.trim();
+    let vad_model_path = if settings.vad_enabled {
+        let p = model::vad_model_path();
+        if p.exists() {
+            p.to_str().map(str::to_string)
+        } else {
+            tracing::warn!("VAD enabled but model not downloaded — skipping VAD");
+            None
+        }
+    } else {
+        None
+    };
+    TranscribeOptions {
+        prompt: if prompt.is_empty() {
+            None
+        } else {
+            Some(prompt.to_string())
+        },
+        beam_size: settings.beam_size,
+        temperature_fallback: settings.temperature_fallback,
+        vad_model_path,
+    }
+}
 
 /// Shared app state type — uses std::sync::Mutex (not tokio) because
 /// cpal::Stream is !Send and we need sync access from Tauri commands
@@ -219,13 +247,13 @@ pub async fn stop_and_transcribe(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
 ) -> Result<String, String> {
-    let (audio, language, effective_model, prompt) = {
+    let (audio, language, effective_model, opts) = {
         let mut ctrl = controller.lock().unwrap();
         let audio = ctrl.stop_recording();
         let language = ctrl.language();
         let effective_model = ctrl.settings().effective_model();
-        let prompt = ctrl.settings().initial_prompt.clone();
-        (audio, language, effective_model, prompt)
+        let opts = build_transcribe_options(ctrl.settings());
+        (audio, language, effective_model, opts)
     };
 
     if audio.is_empty() {
@@ -245,8 +273,7 @@ pub async fn stop_and_transcribe(
     // task continues running and holds the context mutex until whisper finishes.
     let whisper_ref = whisper.inner().clone();
     let fut = tokio::task::spawn_blocking(move || {
-        let prompt = if prompt.trim().is_empty() { None } else { Some(prompt.as_str()) };
-        whisper_ref.transcribe_sync_with_prompt(&audio, language, prompt)
+        whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
     });
 
     let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
@@ -393,6 +420,54 @@ pub async fn set_initial_prompt(
     drop(ctrl);
     persist_settings(&controller)?;
     info!("Initial prompt set ({} chars)", prompt.len());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_beam_size(
+    controller: State<'_, SharedController>,
+    beam_size: u32,
+) -> Result<(), String> {
+    let mut ctrl = controller.lock().unwrap();
+    ctrl.settings_mut().beam_size = beam_size;
+    drop(ctrl);
+    persist_settings(&controller)?;
+    info!("Beam size: {beam_size}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_temperature_fallback(
+    controller: State<'_, SharedController>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut ctrl = controller.lock().unwrap();
+    ctrl.settings_mut().temperature_fallback = enabled;
+    drop(ctrl);
+    persist_settings(&controller)?;
+    info!("Temperature fallback: {enabled}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_vad_enabled(
+    controller: State<'_, SharedController>,
+    enabled: bool,
+) -> Result<(), String> {
+    {
+        let mut ctrl = controller.lock().unwrap();
+        ctrl.settings_mut().vad_enabled = enabled;
+    }
+    persist_settings(&controller)?;
+    // Fetch the Silero VAD model so it's ready for the next dictation. Done
+    // after releasing the lock (no lock held across await).
+    if enabled && !model::is_vad_model_downloaded() {
+        info!("Downloading VAD model...");
+        model::download_vad_model(|_, _| {})
+            .await
+            .map_err(|e| format!("Failed to download VAD model: {e}"))?;
+    }
+    info!("VAD enabled: {enabled}");
     Ok(())
 }
 
