@@ -674,8 +674,7 @@ mod tests {
 
     #[test]
     fn settings_effective_model_with_auto_select() {
-        let mut s = Settings::default();
-        s.auto_select_model = true;
+        let mut s = Settings { auto_select_model: true, ..Default::default() };
 
         s.language = Language::English;
         assert_eq!(s.effective_model(), WhisperModel::BaseEn);
@@ -692,10 +691,7 @@ mod tests {
 
     #[test]
     fn settings_effective_model_without_auto_select() {
-        let mut s = Settings::default();
-        s.auto_select_model = false;
-        s.whisper_model = WhisperModel::KbWhisperSmall;
-        s.language = Language::English; // shouldn't matter
+        let s = Settings { auto_select_model: false, whisper_model: WhisperModel::KbWhisperSmall, language: Language::English, ..Default::default() }; // language shouldn't matter
 
         assert_eq!(s.effective_model(), WhisperModel::KbWhisperSmall);
     }
