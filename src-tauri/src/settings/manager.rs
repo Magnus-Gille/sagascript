@@ -239,6 +239,29 @@ impl WhisperModel {
         }
     }
 
+    /// HuggingFace URL of the CoreML encoder bundle (`*-encoder.mlmodelc.zip`),
+    /// or `None` if this model has no CoreML encoder. CoreML encoders are
+    /// published alongside the GGML weights in the ggerganov/whisper.cpp repo;
+    /// the KB/NB fine-tunes live in their own repos and ship none.
+    #[cfg(target_os = "macos")]
+    pub fn coreml_encoder_url(&self) -> Option<String> {
+        let url = self.download_url();
+        let base = url
+            .strip_prefix("https://huggingface.co/ggerganov/whisper.cpp/")
+            .and(url.strip_suffix(".bin"))?;
+        Some(format!("{base}-encoder.mlmodelc.zip"))
+    }
+
+    /// Directory name whisper.cpp expects the CoreML encoder to have next to the
+    /// GGML file (`ggml-<name>-encoder.mlmodelc`). Mirrors whisper.cpp's own
+    /// `.bin` → `-encoder.mlmodelc` derivation. `None` if no CoreML encoder.
+    #[cfg(target_os = "macos")]
+    pub fn coreml_encoder_dirname(&self) -> Option<String> {
+        self.coreml_encoder_url()?;
+        let stem = self.ggml_filename().strip_suffix(".bin")?;
+        Some(format!("{stem}-encoder.mlmodelc"))
+    }
+
     /// Approximate download size in MB
     pub fn size_mb(&self) -> u32 {
         match self {
@@ -443,6 +466,34 @@ mod tests {
         assert!(!WhisperModel::LargeV3Turbo.is_english_only());
         assert!(!WhisperModel::KbWhisperTiny.is_english_only());
         assert!(!WhisperModel::NbWhisperBase.is_english_only());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn coreml_encoder_derivation() {
+        // OpenAI models: URL + on-disk dir name must match whisper.cpp's
+        // `.bin` → `-encoder.mlmodelc` derivation (verified against the
+        // ggerganov/whisper.cpp HF repo).
+        assert_eq!(
+            WhisperModel::Base.coreml_encoder_url().as_deref(),
+            Some("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-encoder.mlmodelc.zip")
+        );
+        assert_eq!(
+            WhisperModel::Base.coreml_encoder_dirname().as_deref(),
+            Some("ggml-base-encoder.mlmodelc")
+        );
+        // `.en` is part of the name, not a quant suffix — must be preserved.
+        assert_eq!(
+            WhisperModel::BaseEn.coreml_encoder_dirname().as_deref(),
+            Some("ggml-base.en-encoder.mlmodelc")
+        );
+        assert_eq!(
+            WhisperModel::LargeV3Turbo.coreml_encoder_dirname().as_deref(),
+            Some("ggml-large-v3-turbo-encoder.mlmodelc")
+        );
+        // KB/NB fine-tunes live in other repos and have no CoreML encoder.
+        assert_eq!(WhisperModel::KbWhisperBase.coreml_encoder_url(), None);
+        assert_eq!(WhisperModel::NbWhisperSmall.coreml_encoder_dirname(), None);
     }
 
     #[test]
