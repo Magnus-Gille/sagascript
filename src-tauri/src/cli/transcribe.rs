@@ -8,7 +8,7 @@ use crate::audio::decoder::decode_audio_file;
 use crate::error::DictationError;
 use crate::settings::{Language, WhisperModel};
 use crate::transcription::model;
-use crate::transcription::WhisperBackend;
+use crate::transcription::{TranscribeOptions, WhisperBackend};
 
 #[derive(Args)]
 pub struct TranscribeArgs {
@@ -47,6 +47,23 @@ pub struct TranscribeArgs {
     /// Example: --prompt "Grimnir, MCP, Fortnox, bokföring, kontering, saldo"
     #[arg(long, value_name = "TEXT")]
     pub prompt: Option<String>,
+
+    /// Enable voice activity detection (Silero VAD) to skip non-speech regions,
+    /// reducing silence hallucination and repetition loops. Downloads a small
+    /// model on first use. Overrides the `vad_enabled` setting.
+    #[arg(long)]
+    pub vad: bool,
+
+    /// Disable VAD for this run, even if the `vad_enabled` setting is on.
+    #[arg(long, conflicts_with = "vad")]
+    pub no_vad: bool,
+
+    /// Beam search width: 0 = greedy (fast), >=2 = beam search (more accurate,
+    /// slower). Overrides the saved `beam_size` setting. When omitted, a saved
+    /// `beam_size` >=2 is used; otherwise file transcription defaults to 5
+    /// (pass --beam 0 to force greedy).
+    #[arg(long = "beam", value_name = "N")]
+    pub beam_size: Option<u32>,
 }
 
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
@@ -86,9 +103,21 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     let backend = WhisperBackend::new();
     backend.load_model(model)?;
 
+    // Effective prompt: an explicit --prompt, otherwise the saved initial_prompt.
+    // Used by both the diarized and standard paths.
+    let effective_prompt: Option<String> = args.prompt.clone().or_else(|| {
+        let saved = stored.initial_prompt.trim();
+        (!saved.is_empty()).then(|| saved.to_string())
+    });
+
     // Diarization branch
     #[cfg(feature = "diarization")]
     if args.diarize {
+        // The diarized path uses greedy timestamped decoding (DTW), so the
+        // beam/VAD options don't apply — warn rather than silently ignore them.
+        if args.beam_size.is_some() || args.vad || args.no_vad {
+            eprintln!("Note: --beam / --vad have no effect with --diarize.");
+        }
         use crate::diarization::{
             DiarizeConfig, TimestampedSegment,
             diarize,
@@ -112,7 +141,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
 
         eprintln!("Transcribing with timestamps...");
-        let raw_segments = backend.transcribe_sync_with_timestamps(&audio, language, args.prompt.as_deref())?;
+        let raw_segments = backend.transcribe_sync_with_timestamps(&audio, language, effective_prompt.as_deref())?;
         eprintln!("Got {} transcript segment(s)", raw_segments.len());
 
         let transcript: Vec<TimestampedSegment> = raw_segments
@@ -156,27 +185,60 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         return Ok(());
     }
 
-    // Standard (non-diarized) transcription
+    // Standard (non-diarized) transcription. Build options from the saved
+    // settings, with CLI flags overriding.
+    let vad_enabled = if args.no_vad {
+        false
+    } else if args.vad {
+        true
+    } else {
+        stored.vad_enabled
+    };
+    let vad_model_path = if vad_enabled {
+        let path = model::vad_model_path();
+        if !path.exists() {
+            eprintln!("Downloading Silero VAD model (~0.9 MB)...");
+            tokio::runtime::Runtime::new()
+                .map_err(|e| DictationError::ModelDownloadFailed(format!("tokio runtime: {e}")))?
+                .block_on(model::download_vad_model(|_, _| {}))?;
+        }
+        path.to_str().map(str::to_string)
+    } else {
+        None
+    };
+    let opts = TranscribeOptions {
+        prompt: effective_prompt,
+        // File transcription isn't latency-sensitive, so default to beam search
+        // (fewer repetition loops). Honor an explicit beam setting/flag.
+        beam_size: args.beam_size.unwrap_or(if stored.beam_size >= 2 {
+            stored.beam_size
+        } else {
+            crate::commands::FILE_TRANSCRIBE_BEAM
+        }),
+        temperature_fallback: stored.temperature_fallback,
+        vad_model_path,
+    };
+    if opts.beam_size >= 2 {
+        eprintln!("Beam search: width {}", opts.beam_size);
+    }
+    if vad_enabled {
+        eprintln!("VAD: enabled");
+    }
+
     let text = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(
-            ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%")
-                .unwrap(),
+            ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap(),
         );
         let pb_cb = pb.clone();
-        let prompt = args.prompt.clone();
-        let text = backend.transcribe_sync_with_progress_and_prompt(&audio, language, prompt.as_deref(), move |pct| {
+        let text = backend.transcribe_sync_with_options(&audio, language, &opts, move |pct| {
             pb_cb.set_position(pct as u64);
         })?;
         pb.finish_and_clear();
         text
     } else {
         eprintln!("Transcribing...");
-        if let Some(p) = &args.prompt {
-            backend.transcribe_sync_with_progress_and_prompt(&audio, language, Some(p.as_str()), |_| {})?
-        } else {
-            backend.transcribe_sync(&audio, language)?
-        }
+        backend.transcribe_sync_with_options(&audio, language, &opts, |_| {})?
     };
 
     // Output
