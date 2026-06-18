@@ -8,7 +8,7 @@ use crate::audio::decoder::decode_audio_file;
 use crate::error::DictationError;
 use crate::settings::{Language, WhisperModel};
 use crate::transcription::model;
-use crate::transcription::WhisperBackend;
+use crate::transcription::{TranscribeOptions, WhisperBackend};
 
 #[derive(Args)]
 pub struct TranscribeArgs {
@@ -47,6 +47,17 @@ pub struct TranscribeArgs {
     /// Example: --prompt "Grimnir, MCP, Fortnox, bokföring, kontering, saldo"
     #[arg(long, value_name = "TEXT")]
     pub prompt: Option<String>,
+
+    /// Enable voice activity detection (Silero VAD) to skip non-speech regions,
+    /// reducing silence hallucination and repetition loops. Downloads a small
+    /// model on first use. Overrides the `vad_enabled` setting.
+    #[arg(long)]
+    pub vad: bool,
+
+    /// Beam search width: 0 = greedy (fast), >=2 = beam search (more accurate,
+    /// slower). Defaults to the `beam_size` setting.
+    #[arg(long = "beam", value_name = "N")]
+    pub beam_size: Option<u32>,
 }
 
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
@@ -156,27 +167,48 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         return Ok(());
     }
 
-    // Standard (non-diarized) transcription
+    // Standard (non-diarized) transcription. Build options from the saved
+    // settings, with CLI flags overriding.
+    let vad_enabled = args.vad || stored.vad_enabled;
+    let vad_model_path = if vad_enabled {
+        let path = model::vad_model_path();
+        if !path.exists() {
+            eprintln!("Downloading Silero VAD model (~0.9 MB)...");
+            tokio::runtime::Runtime::new()
+                .map_err(|e| DictationError::ModelDownloadFailed(format!("tokio runtime: {e}")))?
+                .block_on(model::download_vad_model(|_, _| {}))?;
+        }
+        path.to_str().map(str::to_string)
+    } else {
+        None
+    };
+    let opts = TranscribeOptions {
+        prompt: args.prompt.clone(),
+        beam_size: args.beam_size.unwrap_or(stored.beam_size),
+        temperature_fallback: stored.temperature_fallback,
+        vad_model_path,
+    };
+    if opts.beam_size >= 2 {
+        eprintln!("Beam search: width {}", opts.beam_size);
+    }
+    if vad_enabled {
+        eprintln!("VAD: enabled");
+    }
+
     let text = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(
-            ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%")
-                .unwrap(),
+            ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap(),
         );
         let pb_cb = pb.clone();
-        let prompt = args.prompt.clone();
-        let text = backend.transcribe_sync_with_progress_and_prompt(&audio, language, prompt.as_deref(), move |pct| {
+        let text = backend.transcribe_sync_with_options(&audio, language, &opts, move |pct| {
             pb_cb.set_position(pct as u64);
         })?;
         pb.finish_and_clear();
         text
     } else {
         eprintln!("Transcribing...");
-        if let Some(p) = &args.prompt {
-            backend.transcribe_sync_with_progress_and_prompt(&audio, language, Some(p.as_str()), |_| {})?
-        } else {
-            backend.transcribe_sync(&audio, language)?
-        }
+        backend.transcribe_sync_with_options(&audio, language, &opts, |_| {})?
     };
 
     // Output
