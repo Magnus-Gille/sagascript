@@ -569,7 +569,12 @@ pub async fn transcribe_file(
         }
 
         let whisper_ref = whisper.inner().clone();
-        let prompt_ref = prompt.clone();
+        // Fall back to the saved initial_prompt when the file-dialog prompt is
+        // empty (matches the standard file path).
+        let prompt_ref: Option<String> = prompt.clone().filter(|p| !p.trim().is_empty()).or_else(|| {
+            let saved = controller.lock().unwrap().settings().initial_prompt.trim().to_string();
+            (!saved.is_empty()).then_some(saved)
+        });
         let audio_for_diarize = audio.clone();
         let audio_for_transcribe = audio.clone();
 

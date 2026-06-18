@@ -103,9 +103,21 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     let backend = WhisperBackend::new();
     backend.load_model(model)?;
 
+    // Effective prompt: an explicit --prompt, otherwise the saved initial_prompt.
+    // Used by both the diarized and standard paths.
+    let effective_prompt: Option<String> = args.prompt.clone().or_else(|| {
+        let saved = stored.initial_prompt.trim();
+        (!saved.is_empty()).then(|| saved.to_string())
+    });
+
     // Diarization branch
     #[cfg(feature = "diarization")]
     if args.diarize {
+        // The diarized path uses greedy timestamped decoding (DTW), so the
+        // beam/VAD options don't apply — warn rather than silently ignore them.
+        if args.beam_size.is_some() || args.vad || args.no_vad {
+            eprintln!("Note: --beam / --vad have no effect with --diarize.");
+        }
         use crate::diarization::{
             DiarizeConfig, TimestampedSegment,
             diarize,
@@ -129,7 +141,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
 
         eprintln!("Transcribing with timestamps...");
-        let raw_segments = backend.transcribe_sync_with_timestamps(&audio, language, args.prompt.as_deref())?;
+        let raw_segments = backend.transcribe_sync_with_timestamps(&audio, language, effective_prompt.as_deref())?;
         eprintln!("Got {} transcript segment(s)", raw_segments.len());
 
         let transcript: Vec<TimestampedSegment> = raw_segments
@@ -194,14 +206,8 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     } else {
         None
     };
-    // Fall back to the saved initial_prompt when --prompt isn't given (matches
-    // the GUI file-transcription path).
-    let prompt = args.prompt.clone().or_else(|| {
-        let saved = stored.initial_prompt.trim();
-        (!saved.is_empty()).then(|| saved.to_string())
-    });
     let opts = TranscribeOptions {
-        prompt,
+        prompt: effective_prompt,
         // File transcription isn't latency-sensitive, so default to beam search
         // (fewer repetition loops). Honor an explicit beam setting/flag.
         beam_size: args.beam_size.unwrap_or(if stored.beam_size >= 2 {
