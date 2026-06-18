@@ -55,7 +55,8 @@ pub struct TranscribeArgs {
     pub vad: bool,
 
     /// Beam search width: 0 = greedy (fast), >=2 = beam search (more accurate,
-    /// slower). Defaults to the `beam_size` setting.
+    /// slower). File transcription defaults to beam search (5); pass --beam 0
+    /// to force greedy. An explicit `beam_size` setting (>=2) takes precedence.
     #[arg(long = "beam", value_name = "N")]
     pub beam_size: Option<u32>,
 }
@@ -184,7 +185,13 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     };
     let opts = TranscribeOptions {
         prompt: args.prompt.clone(),
-        beam_size: args.beam_size.unwrap_or(stored.beam_size),
+        // File transcription isn't latency-sensitive, so default to beam search
+        // (fewer repetition loops). Honor an explicit beam setting/flag.
+        beam_size: args.beam_size.unwrap_or(if stored.beam_size >= 2 {
+            stored.beam_size
+        } else {
+            crate::commands::FILE_TRANSCRIBE_BEAM
+        }),
         temperature_fallback: stored.temperature_fallback,
         vad_model_path,
     };
