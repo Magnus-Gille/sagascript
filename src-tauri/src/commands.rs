@@ -520,6 +520,13 @@ pub async fn transcribe_file(
         return Err("No audio decoded from file".to_string());
     }
 
+    // File transcription (beam search / diarization) is far slower than live
+    // dictation, so scale the timeout by the decoded duration rather than using
+    // the short live-dictation timeout (which beam search could otherwise hit).
+    let file_timeout = Duration::from_secs(
+        ((audio.len() / 16_000) as u64 * 6).max(TRANSCRIPTION_TIMEOUT_SECS),
+    );
+
     // Suppress unused-variable warning on `diarize` when the diarization feature is off
     #[cfg(not(feature = "diarization"))]
     let _ = &diarize;
@@ -580,7 +587,7 @@ pub async fn transcribe_file(
             )
         });
 
-        let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
+        let timeout = file_timeout;
         let (speaker_segments, raw_segments) =
             match tokio::time::timeout(timeout, async { tokio::join!(diarize_fut, transcribe_fut) })
                 .await
@@ -598,7 +605,8 @@ pub async fn transcribe_file(
                     whisper.request_abort();
                     let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
                     return Err(format!(
-                        "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s"
+                        "Transcription timed out after {}s",
+                        timeout.as_secs()
                     ));
                 }
             };
@@ -655,7 +663,7 @@ pub async fn transcribe_file(
         })
     });
 
-    let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
+    let timeout = file_timeout;
     let result = match tokio::time::timeout(timeout, fut).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
@@ -665,7 +673,7 @@ pub async fn transcribe_file(
         Err(_) => {
             whisper.request_abort();
             let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
-            return Err(format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s"));
+            return Err(format!("Transcription timed out after {}s", timeout.as_secs()));
         }
     };
 

@@ -54,9 +54,14 @@ pub struct TranscribeArgs {
     #[arg(long)]
     pub vad: bool,
 
+    /// Disable VAD for this run, even if the `vad_enabled` setting is on.
+    #[arg(long, conflicts_with = "vad")]
+    pub no_vad: bool,
+
     /// Beam search width: 0 = greedy (fast), >=2 = beam search (more accurate,
-    /// slower). File transcription defaults to beam search (5); pass --beam 0
-    /// to force greedy. An explicit `beam_size` setting (>=2) takes precedence.
+    /// slower). Overrides the saved `beam_size` setting. When omitted, a saved
+    /// `beam_size` >=2 is used; otherwise file transcription defaults to 5
+    /// (pass --beam 0 to force greedy).
     #[arg(long = "beam", value_name = "N")]
     pub beam_size: Option<u32>,
 }
@@ -170,7 +175,13 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
 
     // Standard (non-diarized) transcription. Build options from the saved
     // settings, with CLI flags overriding.
-    let vad_enabled = args.vad || stored.vad_enabled;
+    let vad_enabled = if args.no_vad {
+        false
+    } else if args.vad {
+        true
+    } else {
+        stored.vad_enabled
+    };
     let vad_model_path = if vad_enabled {
         let path = model::vad_model_path();
         if !path.exists() {
@@ -183,8 +194,14 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     } else {
         None
     };
+    // Fall back to the saved initial_prompt when --prompt isn't given (matches
+    // the GUI file-transcription path).
+    let prompt = args.prompt.clone().or_else(|| {
+        let saved = stored.initial_prompt.trim();
+        (!saved.is_empty()).then(|| saved.to_string())
+    });
     let opts = TranscribeOptions {
-        prompt: args.prompt.clone(),
+        prompt,
         // File transcription isn't latency-sensitive, so default to beam search
         // (fewer repetition loops). Honor an explicit beam setting/flag.
         beam_size: args.beam_size.unwrap_or(if stored.beam_size >= 2 {
