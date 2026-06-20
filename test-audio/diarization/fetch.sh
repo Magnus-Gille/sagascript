@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fetch diarization benchmark audio and ground truth from medkit/simsamu (MIT, ungated)
 # Run from the repo root or from this directory.
-# Requires: curl, ffmpeg
+# Requires: curl, ffmpeg, and python3 with numpy + soundfile (pip install numpy soundfile)
+# for the nb_samtale clip reconstruction.
 
 set -euo pipefail
 
@@ -104,10 +105,11 @@ if [ "$(ls "$NBSRC"/nb-12_*.wav 2>/dev/null | wc -l | tr -d ' ')" -lt 9 ]; then
     [ "$(ls "$NBSRC"/nb-12_*.wav 2>/dev/null | wc -l | tr -d ' ')" -ge 9 ] && break
     sleep 2
   done
+  # Kill only the curl|tar pipelines we started, by PID + their children — NOT a broad
+  # `pkill -f`, which could match unrelated processes on a shared machine.
   pkill -P $TRAIN_PID 2>/dev/null || true; kill $TRAIN_PID 2>/dev/null || true
   pkill -P $TEST_PID  2>/dev/null || true; kill $TEST_PID  2>/dev/null || true
-  pkill -f "train_bm_1.tar.gz" 2>/dev/null || true
-  pkill -f "test_bm_1.tar.gz"  2>/dev/null || true
+  wait $TRAIN_PID $TEST_PID 2>/dev/null || true
 fi
 NBCNT="$(ls "$NBSRC"/nb-12_*.wav 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$NBCNT" -lt 9 ]; then
@@ -149,6 +151,11 @@ for a, b, spk, _ in SEGS:
     audio, sr = sf.read(path, dtype="float32")
     assert sr == SR, f"{path}: sr={sr}"
     if audio.ndim > 1: audio = audio.mean(axis=1)
+    # Guard against a truncated stream-extract: the per-turn WAV must be ~(end-start) ms long.
+    expected = int(round((b - a) / 1000.0 * SR))
+    if len(audio) < 0.9 * expected:
+        raise SystemExit(f"{path}: {len(audio)} samples (<90% of expected {expected}) — "
+                         "truncated fetch; delete nb_samtale_src/ and re-run fetch.sh")
     off = int(round((a - t0) / 1000.0 * SR)); end = off + len(audio)
     if end > total: audio = audio[:total - off]; end = total
     mix[off:end] += audio            # SUM preserves the overlap region

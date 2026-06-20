@@ -162,7 +162,7 @@ clip's collapse was a narrowband-embedding artifact, not a default-threshold pro
 pip install pyannote-audio meeteval
 ```
 
-`pyannote-audio` includes `pyannote.core` and `pyannote.metrics`.
+`pyannote-audio` includes `pyannote.core` and `pyannote.metrics` (and pulls in `numpy` + `soundfile`, which `fetch.sh` needs to rebuild the `nb_samtale` clip).
 
 ### Step 2: Fetch audio (if not already present)
 
@@ -175,7 +175,9 @@ pip install pyannote-audio meeteval
 > **Measurement note.** This clip is **French**, but Sagascript's default model is
 > `kb-whisper-small` (Swedish, `language=sv`) — on French it mis-detects the language and
 > hallucinates, which collapses ~11s of dialogue and contaminates the DER. Pin a
-> **multilingual** model so you measure diarization, not ASR mismatch. Also mind the
+> **multilingual** model so you measure diarization, not ASR mismatch. **Pass `-l auto`
+> explicitly** — the CLI's `-l` doesn't accept `fr`, and *omitting* it falls back to your
+> configured language (e.g. `sv`), which reintroduces the exact mismatch. Also mind the
 > clustering threshold: the default `0.85` collapses this 2-speaker telephone audio to a
 > single cluster; `0.70–0.80` is the right operating point for this clip. Do **not**
 > generalize that threshold to Swedish recordings without re-validating — `0.85` exists to
@@ -183,7 +185,7 @@ pip install pyannote-audio meeteval
 
 ```bash
 sagascript transcribe test-audio/diarization/dj_2022_feu.wav \
-  --diarize --model small --diarize-threshold 0.70 --json \
+  --diarize --model small -l auto --diarize-threshold 0.70 --json \
   > test-audio/diarization/dj_2022_feu_hyp.json
 ```
 
@@ -277,7 +279,7 @@ diarized turns. Field names come straight from `DiarizedSegment` (`src-tauri/src
 `start` (f64 seconds), `end` (f64 seconds), `speaker` (`"SPEAKER_0"`, …), `text`. Sanity-check with:
 
 ```bash
-sagascript transcribe test-audio/diarization/dj_2022_feu.wav --diarize --json 2>/dev/null | python3 -c "
+sagascript transcribe test-audio/diarization/dj_2022_feu.wav --diarize --model small -l auto --json 2>/dev/null | python3 -c "
 import json, sys
 data = json.load(sys.stdin)
 print('Top-level keys:', list(data.keys()))
