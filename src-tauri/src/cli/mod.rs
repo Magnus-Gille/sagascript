@@ -526,13 +526,6 @@ mod tests {
 
     // -- Help text content --
 
-    fn get_help_text(args: &[&str]) -> String {
-        let err = Cli::command()
-            .try_get_matches_from(args)
-            .unwrap_err();
-        err.to_string()
-    }
-
     fn get_long_help(cmd: &clap::Command) -> String {
         cmd.clone().render_long_help().to_string()
     }

@@ -10,7 +10,59 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 use crate::app_controller::{AppController, AppState};
 use crate::audio::decoder;
 use crate::settings::{HotkeyMode, Language, Settings, WhisperModel};
-use crate::transcription::{model, WhisperBackend};
+use crate::transcription::{model, TranscribeOptions, WhisperBackend};
+
+/// Build the per-transcription options from the current settings. Resolves the
+/// VAD model path only when VAD is enabled and the model is present (otherwise
+/// VAD is silently skipped — whisper would fail on a missing model).
+pub(crate) fn build_transcribe_options(settings: &Settings) -> TranscribeOptions {
+    let prompt = settings.initial_prompt.trim();
+    let vad_model_path = if settings.vad_enabled {
+        let p = model::vad_model_path();
+        if p.exists() {
+            p.to_str().map(str::to_string)
+        } else {
+            tracing::warn!("VAD enabled but model not downloaded — skipping VAD");
+            None
+        }
+    } else {
+        None
+    };
+    TranscribeOptions {
+        prompt: if prompt.is_empty() {
+            None
+        } else {
+            Some(prompt.to_string())
+        },
+        beam_size: settings.beam_size,
+        temperature_fallback: settings.temperature_fallback,
+        vad_model_path,
+    }
+}
+
+/// Default beam-search width for file transcription. Unlike live dictation,
+/// file transcription is not latency-sensitive, and beam search markedly
+/// reduces greedy-decoder repetition loops — so files default to beam search.
+pub(crate) const FILE_TRANSCRIBE_BEAM: u32 = 5;
+
+/// Like [`build_transcribe_options`] but for file transcription: defaults to
+/// beam search for quality (unless the user explicitly set a beam width), and
+/// uses the file dialog's prompt when provided (otherwise the saved prompt).
+pub(crate) fn build_file_transcribe_options(
+    settings: &Settings,
+    prompt: Option<String>,
+) -> TranscribeOptions {
+    let mut opts = build_transcribe_options(settings);
+    if opts.beam_size < 2 {
+        opts.beam_size = FILE_TRANSCRIBE_BEAM;
+    }
+    if let Some(p) = prompt {
+        if !p.trim().is_empty() {
+            opts.prompt = Some(p.trim().to_string());
+        }
+    }
+    opts
+}
 
 /// Shared app state type — uses std::sync::Mutex (not tokio) because
 /// cpal::Stream is !Send and we need sync access from Tauri commands
@@ -219,12 +271,13 @@ pub async fn stop_and_transcribe(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
 ) -> Result<String, String> {
-    let (audio, language, effective_model) = {
+    let (audio, language, effective_model, opts) = {
         let mut ctrl = controller.lock().unwrap();
         let audio = ctrl.stop_recording();
         let language = ctrl.language();
         let effective_model = ctrl.settings().effective_model();
-        (audio, language, effective_model)
+        let opts = build_transcribe_options(ctrl.settings());
+        (audio, language, effective_model, opts)
     };
 
     if audio.is_empty() {
@@ -243,8 +296,9 @@ pub async fn stop_and_transcribe(
     // On timeout, request_abort() is called but has no effect — the blocking
     // task continues running and holds the context mutex until whisper finishes.
     let whisper_ref = whisper.inner().clone();
-    let audio = audio.clone();
-    let fut = tokio::task::spawn_blocking(move || whisper_ref.transcribe_sync(&audio, language));
+    let fut = tokio::task::spawn_blocking(move || {
+        whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
+    });
 
     let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
     let result = match tokio::time::timeout(timeout, fut).await {
@@ -380,6 +434,67 @@ pub async fn set_show_overlay(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn set_initial_prompt(
+    controller: State<'_, SharedController>,
+    prompt: String,
+) -> Result<(), String> {
+    let mut ctrl = controller.lock().unwrap();
+    ctrl.settings_mut().initial_prompt = prompt.clone();
+    drop(ctrl);
+    persist_settings(&controller)?;
+    info!("Initial prompt set ({} chars)", prompt.len());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_beam_size(
+    controller: State<'_, SharedController>,
+    beam_size: u32,
+) -> Result<(), String> {
+    let mut ctrl = controller.lock().unwrap();
+    ctrl.settings_mut().beam_size = beam_size;
+    drop(ctrl);
+    persist_settings(&controller)?;
+    info!("Beam size: {beam_size}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_temperature_fallback(
+    controller: State<'_, SharedController>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut ctrl = controller.lock().unwrap();
+    ctrl.settings_mut().temperature_fallback = enabled;
+    drop(ctrl);
+    persist_settings(&controller)?;
+    info!("Temperature fallback: {enabled}");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_vad_enabled(
+    controller: State<'_, SharedController>,
+    enabled: bool,
+) -> Result<(), String> {
+    {
+        let mut ctrl = controller.lock().unwrap();
+        ctrl.settings_mut().vad_enabled = enabled;
+    }
+    persist_settings(&controller)?;
+    // Fetch the Silero VAD model so it's ready for the next dictation. Done
+    // after releasing the lock (no lock held across await).
+    if enabled && !model::is_vad_model_downloaded() {
+        info!("Downloading VAD model...");
+        model::download_vad_model(|_, _| {})
+            .await
+            .map_err(|e| format!("Failed to download VAD model: {e}"))?;
+    }
+    info!("VAD enabled: {enabled}");
+    Ok(())
+}
+
 // -- File transcription --
 
 #[tauri::command]
@@ -388,6 +503,8 @@ pub async fn transcribe_file(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
     file_path: String,
+    prompt: Option<String>,
+    diarize: Option<bool>,
 ) -> Result<String, String> {
     use tauri::Emitter;
 
@@ -402,6 +519,17 @@ pub async fn transcribe_file(
     if audio.is_empty() {
         return Err("No audio decoded from file".to_string());
     }
+
+    // File transcription (beam search / diarization) is far slower than live
+    // dictation, so scale the timeout by the decoded duration rather than using
+    // the short live-dictation timeout (which beam search could otherwise hit).
+    let file_timeout = Duration::from_secs(
+        ((audio.len() / 16_000) as u64 * 6).max(TRANSCRIPTION_TIMEOUT_SECS),
+    );
+
+    // Suppress unused-variable warning on `diarize` when the diarization feature is off
+    #[cfg(not(feature = "diarization"))]
+    let _ = &diarize;
 
     // Get transcription settings
     let (language, effective_model) = {
@@ -421,16 +549,126 @@ pub async fn transcribe_file(
 
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 
-    // Run blocking transcription with progress reporting and timeout
+    // Diarization path — runs both diarization and timestamped transcription in parallel,
+    // then merges and consolidates speaker-attributed segments.
+    #[cfg(feature = "diarization")]
+    if diarize.unwrap_or(false) {
+        use crate::diarization::{
+            DiarizeConfig, TimestampedSegment,
+            diarize as run_diarize,
+            merge::{consolidate, merge_with_transcript},
+            model::all_models_downloaded,
+        };
+
+        if !all_models_downloaded() {
+            let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+            return Err(
+                "Diarization models not downloaded. Use Settings → Models to download them."
+                    .to_string(),
+            );
+        }
+
+        let whisper_ref = whisper.inner().clone();
+        // Fall back to the saved initial_prompt when the file-dialog prompt is
+        // empty (matches the standard file path).
+        let prompt_ref: Option<String> = prompt.clone().filter(|p| !p.trim().is_empty()).or_else(|| {
+            let saved = controller.lock().unwrap().settings().initial_prompt.trim().to_string();
+            (!saved.is_empty()).then_some(saved)
+        });
+        let audio_for_diarize = audio.clone();
+        let audio_for_transcribe = audio.clone();
+
+        // Run diarization
+        let diarize_fut = tokio::task::spawn_blocking(move || {
+            run_diarize(&audio_for_diarize, &DiarizeConfig::default())
+        });
+
+        // Run timestamped transcription
+        let transcribe_fut = tokio::task::spawn_blocking(move || {
+            whisper_ref.transcribe_sync_with_timestamps(
+                &audio_for_transcribe,
+                language,
+                prompt_ref.as_deref(),
+            )
+        });
+
+        let timeout = file_timeout;
+        let (speaker_segments, raw_segments) =
+            match tokio::time::timeout(timeout, async { tokio::join!(diarize_fut, transcribe_fut) })
+                .await
+            {
+                Ok((Ok(Ok(spk)), Ok(Ok(trx)))) => (spk, trx),
+                Ok((Ok(Err(e)), _)) | Ok((_, Ok(Err(e)))) => {
+                    let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                    return Err(e.to_string());
+                }
+                Ok((Err(e), _)) | Ok((_, Err(e))) => {
+                    let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                    return Err(format!("Task join error: {e}"));
+                }
+                Err(_) => {
+                    whisper.request_abort();
+                    let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                    return Err(format!(
+                        "Transcription timed out after {}s",
+                        timeout.as_secs()
+                    ));
+                }
+            };
+
+        let transcript: Vec<TimestampedSegment> = raw_segments
+            .into_iter()
+            .map(|(start, end, text)| TimestampedSegment { start, end, text })
+            .collect();
+
+        let diarized = merge_with_transcript(&speaker_segments, &transcript);
+        let consolidated = consolidate(&diarized);
+
+        let text = consolidated
+            .iter()
+            .map(|s| format!("[{}] {}", s.speaker, s.text.trim()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        info!("Diarized file transcription complete: {} chars", text.len());
+
+        let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+
+        // Auto-paste if enabled
+        let should_paste = {
+            let c = controller.lock().unwrap();
+            c.settings().auto_paste
+        };
+        if should_paste {
+            let text_for_paste = text.clone();
+            if let Err(e) = app.run_on_main_thread(move || {
+                let paste_svc = crate::paste::PasteService::new();
+                if let Err(e) = paste_svc.paste(&text_for_paste) {
+                    error!("Auto-paste failed: {e}");
+                }
+            }) {
+                error!("Failed to dispatch paste to main thread: {e}");
+            }
+        }
+
+        return Ok(text);
+    }
+
+    // Standard (non-diarize) transcription path. File transcription defaults to
+    // beam search (quality over latency).
+    let opts = {
+        let ctrl = controller.lock().unwrap();
+        build_file_transcribe_options(ctrl.settings(), prompt)
+    };
     let whisper_ref = whisper.inner().clone();
     let app_progress = app.clone();
     let fut = tokio::task::spawn_blocking(move || {
-        whisper_ref.transcribe_sync_with_progress(&audio, language, move |pct| {
+        whisper_ref.transcribe_sync_with_options(&audio, language, &opts, move |pct| {
             let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
         })
     });
 
-    let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
+    let timeout = file_timeout;
     let result = match tokio::time::timeout(timeout, fut).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
@@ -440,7 +678,7 @@ pub async fn transcribe_file(
         Err(_) => {
             whisper.request_abort();
             let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
-            return Err(format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s"));
+            return Err(format!("Transcription timed out after {}s", timeout.as_secs()));
         }
     };
 

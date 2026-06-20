@@ -6,8 +6,12 @@
     setHotkeyMode,
     setHotkey,
     setAutoPaste,
+    setInitialPrompt,
     setShowOverlay,
     setWhisperModel,
+    setBeamSize,
+    setTemperatureFallback,
+    setVadEnabled,
     getBuildInfo,
     getModelInfo,
     getLoadedModel,
@@ -67,6 +71,8 @@
   let transcriptionResult: string = $state("");
   let transcribeError: string = $state("");
   let dragOver: boolean = $state(false);
+  let transcribePrompt: string = $state('');
+  let transcribeDiarize: boolean = $state(false);
 
   onMount(async () => {
     settings = await getSettings();
@@ -161,6 +167,31 @@
     settings = await getSettings();
   }
 
+  async function onInitialPromptBlur(e: Event) {
+    if (!settings) return;
+    const value = (e.target as HTMLTextAreaElement).value;
+    await setInitialPrompt(value);
+    settings = await getSettings();
+  }
+
+  async function onBeamSizeChange(e: Event) {
+    const value = Number((e.target as HTMLSelectElement).value);
+    await setBeamSize(value);
+    settings = await getSettings();
+  }
+
+  async function onTemperatureFallbackToggle() {
+    if (!settings) return;
+    await setTemperatureFallback(!settings.temperature_fallback);
+    settings = await getSettings();
+  }
+
+  async function onVadToggle() {
+    if (!settings) return;
+    await setVadEnabled(!settings.vad_enabled);
+    settings = await getSettings();
+  }
+
   async function selectModel(model: WhisperModel) {
     try {
       if (!model.downloaded) {
@@ -214,7 +245,10 @@
     transcribeError = "";
     transcriptionResult = "";
     try {
-      transcriptionResult = await transcribeFile(filePath);
+      transcriptionResult = await transcribeFile(filePath, {
+        prompt: transcribePrompt.trim() || undefined,
+        diarize: transcribeDiarize,
+      });
     } catch (e: any) {
       transcribeError = typeof e === "string" ? e : e.message || "Transcription failed";
     } finally {
@@ -505,6 +539,19 @@
           Supported: {supportedFormats.map(f => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
         </div>
 
+        <div class="transcribe-options">
+          <label class="diarize-option">
+            <input type="checkbox" bind:checked={transcribeDiarize} />
+            Speaker diarization
+          </label>
+          <textarea
+            class="prompt-input"
+            placeholder="Context / vocabulary hint (optional) — e.g. names, technical terms"
+            bind:value={transcribePrompt}
+            rows="2"
+          ></textarea>
+        </div>
+
         {#if transcribeError}
           <div class="transcribe-error">{transcribeError}</div>
         {/if}
@@ -576,6 +623,53 @@
             aria-checked={settings.show_overlay}
           ></div>
         </div>
+
+        <div class="field">
+          <label for="initial-prompt">Initial prompt</label>
+          <textarea
+            id="initial-prompt"
+            class="initial-prompt-input"
+            rows="3"
+            value={settings.initial_prompt}
+            onblur={onInitialPromptBlur}
+            placeholder="Prime the transcriber with names, jargon, or preferred spellings."
+          ></textarea>
+          <div class="hotkey-hint">Prime the transcriber with names, jargon, or preferred spellings.</div>
+        </div>
+
+        <div class="field">
+          <label for="beam-size">Decoding mode</label>
+          <select id="beam-size" value={settings.beam_size} onchange={onBeamSizeChange}>
+            <option value={0}>Greedy (fast)</option>
+            <option value={5}>Beam search (accurate)</option>
+          </select>
+        </div>
+
+        <div class="field-row">
+          <label>Temperature fallback</label>
+          <div
+            class="toggle"
+            class:active={settings.temperature_fallback}
+            onclick={onTemperatureFallbackToggle}
+            role="switch"
+            tabindex="0"
+            aria-checked={settings.temperature_fallback}
+          ></div>
+        </div>
+        <div class="hotkey-hint">Re-decode hard segments; off = faster, less robust.</div>
+
+        <div class="field-row">
+          <label>Voice activity detection</label>
+          <div
+            class="toggle"
+            class:active={settings.vad_enabled}
+            onclick={onVadToggle}
+            role="switch"
+            tabindex="0"
+            aria-checked={settings.vad_enabled}
+          ></div>
+        </div>
+        <div class="hotkey-hint">Skip silence; downloads a small model on first enable.</div>
 
         <div class="field">
           <label>Version</label>
@@ -910,6 +1004,24 @@
     font-size: 12px;
   }
 
+  .initial-prompt-input {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+  }
+
+  .initial-prompt-input:focus {
+    border-color: var(--accent);
+  }
+
   .loading {
     padding: 40px 20px;
     text-align: center;
@@ -977,6 +1089,54 @@
     color: var(--text-muted);
     margin-top: 10px;
     text-align: center;
+  }
+
+  .transcribe-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 14px;
+  }
+
+  .diarize-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .diarize-option input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .prompt-input {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: none;
+    box-sizing: border-box;
+  }
+
+  .prompt-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .prompt-input:focus {
+    border-color: var(--accent);
   }
 
   .transcribe-error {

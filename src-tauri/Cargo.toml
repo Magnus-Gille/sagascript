@@ -68,3 +68,14 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-cli
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 diarization = ["dep:ort", "dep:rustfft", "dep:kodama", "dep:ndarray"]
+
+# Optimize the Rust DSP/glue (rubato resampler, symphonia decode, audio mixing)
+# in release builds. whisper.cpp itself is compiled -O3 by whisper-rs's build
+# script in release; use `cargo tauri build` for production (`cargo tauri dev`
+# stays unoptimized). `panic = "abort"` is intentionally NOT set so a panic in
+# the blocking transcription thread still unwinds into a JoinError rather than
+# killing the whole app.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

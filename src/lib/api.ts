@@ -20,6 +20,10 @@ export interface Settings {
   auto_paste: boolean;
   auto_select_model: boolean;
   hotkey: string;
+  initial_prompt: string;
+  beam_size: number;
+  temperature_fallback: boolean;
+  vad_enabled: boolean;
 }
 
 export interface BuildInfo {
@@ -74,8 +78,24 @@ export async function setAutoPaste(enabled: boolean): Promise<void> {
   return invoke("set_auto_paste", { enabled });
 }
 
+export async function setInitialPrompt(prompt: string): Promise<void> {
+  return invoke("set_initial_prompt", { prompt });
+}
+
 export async function setShowOverlay(enabled: boolean): Promise<void> {
   return invoke("set_show_overlay", { enabled });
+}
+
+export async function setBeamSize(beamSize: number): Promise<void> {
+  return invoke("set_beam_size", { beamSize });
+}
+
+export async function setTemperatureFallback(enabled: boolean): Promise<void> {
+  return invoke("set_temperature_fallback", { enabled });
+}
+
+export async function setVadEnabled(enabled: boolean): Promise<void> {
+  return invoke("set_vad_enabled", { enabled });
 }
 
 export async function getModelInfo(): Promise<WhisperModel[]> {
@@ -102,8 +122,15 @@ export async function getBuildInfo(): Promise<BuildInfo> {
   return invoke("get_build_info");
 }
 
-export async function transcribeFile(filePath: string): Promise<string> {
-  return invoke("transcribe_file", { filePath });
+export async function transcribeFile(
+  filePath: string,
+  options?: { prompt?: string; diarize?: boolean }
+): Promise<string> {
+  return invoke("transcribe_file", {
+    filePath,
+    prompt: options?.prompt ?? null,
+    diarize: options?.diarize ?? false,
+  });
 }
 
 export async function getSupportedFormats(): Promise<string[]> {

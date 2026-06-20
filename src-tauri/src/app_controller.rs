@@ -299,8 +299,7 @@ mod tests {
 
     #[test]
     fn initial_language_from_settings() {
-        let mut settings = Settings::default();
-        settings.language = crate::settings::Language::Swedish;
+        let settings = Settings { language: crate::settings::Language::Swedish, ..Default::default() };
         let ctrl = AppController::new(settings);
         assert_eq!(ctrl.language(), crate::settings::Language::Swedish);
     }
@@ -323,9 +322,7 @@ mod tests {
     #[test]
     fn update_settings_replaces() {
         let mut ctrl = default_controller();
-        let mut new_settings = Settings::default();
-        new_settings.auto_paste = false;
-        new_settings.language = crate::settings::Language::Swedish;
+        let new_settings = Settings { auto_paste: false, language: crate::settings::Language::Swedish, ..Default::default() };
         ctrl.update_settings(new_settings);
         assert!(!ctrl.settings().auto_paste);
         assert_eq!(ctrl.settings().language, crate::settings::Language::Swedish);
