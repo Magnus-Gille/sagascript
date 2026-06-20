@@ -140,9 +140,25 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         })?;
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
 
-        eprintln!("Transcribing with timestamps...");
-        let raw_segments = backend.transcribe_sync_with_timestamps(&audio, language, effective_prompt.as_deref())?;
-        eprintln!("Got {} transcript segment(s)", raw_segments.len());
+        eprintln!("Transcribing with word-level timestamps...");
+        // Prefer word-level timestamps: each word gets its own entry so the
+        // merge pipeline can assign speakers at per-word granularity instead
+        // of collapsing a multi-speaker Whisper segment to a single speaker.
+        let raw_segments = {
+            let words = backend.transcribe_sync_with_word_timestamps(
+                &audio,
+                language,
+                effective_prompt.as_deref(),
+            )?;
+            if words.is_empty() {
+                // DTW timestamps unavailable — fall back to segment-level
+                eprintln!("Word timestamps empty, falling back to segment-level timestamps");
+                backend.transcribe_sync_with_timestamps(&audio, language, effective_prompt.as_deref())?
+            } else {
+                words
+            }
+        };
+        eprintln!("Got {} word/segment(s) for merging", raw_segments.len());
 
         let transcript: Vec<TimestampedSegment> = raw_segments
             .into_iter()

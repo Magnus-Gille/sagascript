@@ -1,0 +1,23 @@
+[medecin] allo bonjour docteur RICHARDO vous appelez parce qu'il y a un le feu chez votre frère c'est ça
+[patient] oui oui oui oui c'est ça
+[medecin] est ce qu'il y a des victimes déjà
+[patient] bah je sais pas moi je suis en bas en fait
+[medecin] vous êtes en bas d'accord
+[medecin] le feu il sort des des fenêtres
+[patient] bah c'est c'est dans la cuisine
+[medecin] dans la cuisine
+[patient] et lui la chambre elle est juste à côté
+[medecin] comment vous savez qu y a le feu vous l'avez vu le feu
+[patient] mais oui y a déjà du feu là moi je suis en bas et je viens et et y a du feu donc bah moi je vais y aller hein
+[medecin] non non restez en bas vous vous restez en bas dites moi simplement est ce que y a du monde encore dans l'appartement
+[patient] mais mais j'en sais rien
+[medecin] vous savez pas
+[patient] c'est mon frère je sais pas qui y a dedans il me répond pas donc
+[medecin] il répond pas au téléphone
+[medecin] non vous restez en bas surtout vous restez en bas on envoie les pompiers tout de suite
+[medecin] vous restez en bas
+[patient] et je l'attends comme ça
+[medecin] vous l'attendez comme ça oui vous r- vous restez en bas les pompiers arrivent
+[patient] d'accord
+[medecin] voilà au revoir
+[patient] au rev-
