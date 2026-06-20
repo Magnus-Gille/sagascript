@@ -29,5 +29,14 @@ secrets/
 *.xcresult
 benchmark/audio/
 
+# Diarization benchmark — audio binaries (gitignored; fetch with test-audio/diarization/fetch.sh)
+# Ground truth (.rttm, .stm, .json, .txt) and fetch.sh ARE committed.
+test-audio/diarization/*.wav
+test-audio/diarization/*.m4a
+test-audio/diarization/*.mp3
+test-audio/diarization/*_hyp.json
+test-audio/diarization/*_hyp.rttm
+test-audio/diarization/*_hyp.stm
+
 # Debate artifacts (adversarial review process files)
 debate/
