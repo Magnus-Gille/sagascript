@@ -43,6 +43,64 @@ Two metrics:
 
 ---
 
+### nb_samtale_nb12 — NATIVE-SCANDINAVIAN BENCHMARK CLIP (issue #67)
+
+| Property | Value |
+|---|---|
+| Source | [Sprakbanken/nb_samtale](https://huggingface.co/datasets/Sprakbanken/nb_samtale) on HF, recording `nb-12` |
+| License | CC0-1.0 (public domain) |
+| Language | Norwegian Bokmål (native; matches Sagascript's `-l no` + Norwegian/Swedish Whisper path) |
+| Duration | 41.77 seconds |
+| Speakers | 2 (`SPEAKER_A` = guest P9, `SPEAKER_B` = host P63; Bokmål interview on Nordic history) |
+| Audio format | WAV, 16 kHz, mono, pcm_s16le (native bandwidth, **not** upsampled telephone) |
+| Ground truth | RTTM (9 turns) + speaker-attributed transcript + STM |
+| Audio file | `nb_samtale_nb12.wav` — gitignored, built by `fetch.sh` |
+
+**Why this clip exists:** the SimSAMU clip above is French 8 kHz telephone audio, which
+mismatches Sagascript's Swedish/Norwegian-optimized, native-bandwidth path (issue #67). This
+clip exercises the real path: native-language, 16 kHz, two clearly-distinct conversational
+speakers, with one genuine speaker overlap (the guest's "ja" backchannel landing inside the
+host's question at ~21 s).
+
+**How it's built (no 3.77 GB download):** `nb_samtale` ships pre-segmented per-turn WAVs, but
+each file name encodes its **absolute** `start_ms-end_ms` offset within the source recording.
+`fetch.sh` stream-extracts only the 9 per-turn WAVs of recording `nb-12`'s densest contiguous
+2-speaker window (`[952.841 s .. 994.610 s]`) from the HF tarballs (≈1.3 MB of the 1.41 GB +
+174 MB archives — the streams are killed once the 9 members pass by), then places each turn at
+its true offset (summing the one overlap) to reconstruct a faithful continuous clip. The
+reference RTTM/STM timing is therefore the dataset's own segment metadata, rebased to 0.
+
+**Ground truth files committed:**
+- `nb_samtale_nb12_ref.rttm` — reference diarization (9 turns, `SPEAKER_A`/`SPEAKER_B`)
+- `nb_samtale_nb12_ref_transcript.txt` — speaker-attributed transcript
+- `nb_samtale_nb12_ref.stm` — STM for meeteval cpWER
+
+**Measured results (collar=0.25). The headline for #67:** unlike the French telephone clip
+(where the default `0.85` threshold collapsed 2 speakers → 1 cluster, 55 % DER), on this
+**native-bandwidth, native-language** clip the diarizer cleanly resolves 2 speakers at *every*
+threshold {0.5, 0.6, 0.7, 0.85}, and the sweep is **flat** — the two speakers' embeddings are
+separated by a wide margin, so the threshold has no effect here. The default `0.85` behaves
+well.
+
+| model | `-l` | threshold(s) | clusters | DER | cpWER |
+|---|---|---|---|---|---|
+| `kb-whisper-small` (Swedish, the default) | `no` | 0.5–0.85 (flat) | 2 | **26.9 %** | 82.7 % |
+| `nb-whisper-small` (Norwegian, language-matched) | `no` | 0.5–0.85 (flat) | 2 | **7.3 %** | 40.0 % |
+
+DER is driven by the (language-agnostic) WeSpeaker embeddings, so even the Swedish model gets a
+reasonable 26.9 % DER — but it transcribes the Norwegian audio *as Swedish* and merges the
+guest's 37 s turn into one segment, wrecking cpWER (82.7 %) and the within-speaker boundaries.
+The language-matched `nb-whisper-small` more than halves DER and roughly halves cpWER. Takeaway
+for #67: keep the `0.85` default; it does not over-collapse native-bandwidth audio — the French
+clip's collapse was a narrowband-embedding artifact, not a default-threshold problem.
+
+**Fetch audio + build:**
+```bash
+./test-audio/diarization/fetch.sh   # streams nb-12's 9 turns, rebuilds nb_samtale_nb12.wav
+```
+
+---
+
 ## Dataset shortlist
 
 ### 1. medkit/simsamu (RECOMMENDED — fetched above)
@@ -72,15 +130,15 @@ Two metrics:
   ```
 - **Caveat:** 4 speakers per meeting (not 2). Meeting register, not conversational. Full meeting audio is large (~57 MB each embedded in 912 MB parquet). Use ffmpeg to clip to 5 min.
 
-### 3. Sprakbanken/nb_samtale (Norwegian conversational — Bokmal/Nynorsk)
-- **What it is:** 1195 pre-segmented speaker-turn WAV clips from Norwegian conversations. Test set has 35 source recordings, 11 of which are 2-speaker.
-- **Good for:** cpWER (has transcripts). DER requires reconstruction — CRITICAL CAVEAT: audio files are pre-segmented per-speaker turn (not continuous multi-speaker recordings). Diarization benchmark requires reassembling turns in order, but original gap timing is lost.
+### 3. Sprakbanken/nb_samtale (Norwegian conversational — Bokmål/Nynorsk) — FETCHED as `nb_samtale_nb12`
+- **What it is:** ~10.7k pre-segmented speaker-turn WAVs (train+test+validation) from 35 Norwegian conversations. 8 source recordings are genuinely 2-speaker across the whole corpus.
+- **Good for:** **DER + cpWER.** Originally flagged as "DER requires the 3.77 GB ZIP" because the audio is pre-segmented per turn — but the **segment file names encode absolute `start_ms-end_ms` offsets within the source recording** (e.g. `nb-12_0952841-0963097.wav` = 952.841–963.097 s of recording `nb-12`). So a faithful continuous clip can be reconstructed by placing each turn at its true offset, **without** the 3.77 GB ZIP. The one gotcha: a recording's turns are split across train/test/validation, so you must combine metadata from all splits to see a recording's full turn timeline and find a dense contiguous window.
 - **License:** CC0-1.0 (public domain).
 - **Gated:** No.
-- **Fetch metadata:** `curl -sL https://huggingface.co/datasets/Sprakbanken/nb_samtale/resolve/main/data/test_metadata.jsonl -o test_metadata.jsonl`
-- **Fetch audio tar (174 MB):** `curl -L https://huggingface.co/datasets/Sprakbanken/nb_samtale/resolve/main/data/test_bm_1.tar.gz | tar -xzf - --wildcards "data/test/bm/nb-2_*.wav"`
-- **Original full recordings** (needed for proper DER): `https://www.nb.no/sbfil/taledata/nb_samtale.zip` (3.77 GB, no auth, HTTP 200). Required to run diarization on a continuous audio stream.
-- **Caveat:** NOT a drop-in benchmark without the 3.77 GB ZIP. The HF dataset Viewer also has 500 errors on all API calls.
+- **Fetch metadata (all splits):** `for s in train test validation; do curl -sL https://huggingface.co/datasets/Sprakbanken/nb_samtale/resolve/main/data/${s}_metadata.jsonl -o ${s}_metadata.jsonl; done` (note: the `validation`/`dev` URL may 404 in places; train+test is enough).
+- **Fetch audio:** per-file `resolve/.../*.wav` URLs return **404** — the WAVs only exist inside the tarballs (`train_bm_1.tar.gz` 1.41 GB, `test_bm_1.tar.gz` 174 MB, etc.). Stream-extract only the members you need (see `fetch.sh`'s nb_samtale block) — you pull ~tens of MB, not the whole archive, since the per-recording files are clustered early. Kill the curl once your members have passed by.
+- **Built clip:** `nb_samtale_nb12` (recording `nb-12`, 41.8 s, 2-speaker Bokmål, with one real overlap). See "Fetched clips" above.
+- **3.77 GB ZIP** (`https://www.nb.no/sbfil/taledata/nb_samtale.zip`) is **not needed** for this approach; only required if you want the original raw recording with its real silence/non-target-speaker content between turns.
 
 ### 4. diarizers-community/voxconverse
 - **What it is:** 216 clips (YouTube debates, panels), variable speaker count (1–21). Dev set RTTMs at `github.com/joonson/voxconverse`.

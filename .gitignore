@@ -34,9 +34,9 @@ benchmark/audio/
 test-audio/diarization/*.wav
 test-audio/diarization/*.m4a
 test-audio/diarization/*.mp3
-test-audio/diarization/*_hyp.json
-test-audio/diarization/*_hyp.rttm
-test-audio/diarization/*_hyp.stm
+test-audio/diarization/*_hyp*
+# Per-turn source WAVs for nb_samtale clip (re-streamed from HF tarballs by fetch.sh)
+test-audio/diarization/nb_samtale_src/
 
 # Debate artifacts (adversarial review process files)
 debate/
