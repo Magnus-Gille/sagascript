@@ -1,4 +1,4 @@
 pub mod model;
 pub mod whisper_backend;
 
-pub use whisper_backend::{TranscribeOptions, WhisperBackend};
+pub use whisper_backend::{FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};

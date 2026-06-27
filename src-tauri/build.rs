@@ -15,5 +15,8 @@ fn main() {
         chrono::Utc::now().format("%Y-%m-%d")
     );
 
-    tauri_build::build()
+    // Only run the Tauri build script for the GUI build. A headless CLI build
+    // (`--no-default-features`, e.g. on Linux) has no Tauri context to generate.
+    #[cfg(feature = "gui")]
+    tauri_build::build();
 }
