@@ -236,8 +236,8 @@ mod tests {
     #[test]
     fn powerset_single_speakers_exclusive() {
         // Classes 1-3 each activate exactly one speaker
-        for c in 1..=3 {
-            let sum: f32 = POWERSET[c].iter().sum();
+        for (c, row) in POWERSET.iter().enumerate().take(4).skip(1) {
+            let sum: f32 = row.iter().sum();
             assert_eq!(sum, 1.0, "class {c} should activate exactly 1 speaker");
         }
     }
@@ -245,8 +245,8 @@ mod tests {
     #[test]
     fn powerset_pairs_activate_two() {
         // Classes 4-6 each activate exactly two speakers
-        for c in 4..=6 {
-            let sum: f32 = POWERSET[c].iter().sum();
+        for (c, row) in POWERSET.iter().enumerate().take(7).skip(4) {
+            let sum: f32 = row.iter().sum();
             assert_eq!(sum, 2.0, "class {c} should activate exactly 2 speakers");
         }
     }
@@ -255,8 +255,8 @@ mod tests {
     fn frame_activations_to_segments_basic() {
         // Speaker 0 active for frames 0-9, silent after
         let mut activity = vec![[0.0f32; MAX_SPEAKERS]; 20];
-        for f in 0..10 {
-            activity[f][0] = 1.0;
+        for frame in activity.iter_mut().take(10) {
+            frame[0] = 1.0;
         }
         let fa = FrameActivations {
             activity,
@@ -291,13 +291,13 @@ mod tests {
         // Two short bursts close together should merge
         let mut activity = vec![[0.0f32; MAX_SPEAKERS]; 100];
         // Burst 1: frames 0-17 (~0.3s)
-        for f in 0..18 {
-            activity[f][0] = 1.0;
+        for frame in activity.iter_mut().take(18) {
+            frame[0] = 1.0;
         }
         // Gap: frames 18-24 (~7 frames, ~0.12s < 0.5s min_gap)
         // Burst 2: frames 25-42 (~0.3s)
-        for f in 25..43 {
-            activity[f][0] = 1.0;
+        for frame in activity.iter_mut().take(43).skip(25) {
+            frame[0] = 1.0;
         }
         let fa = FrameActivations {
             activity,
@@ -312,12 +312,12 @@ mod tests {
     fn frame_activations_two_speakers() {
         let mut activity = vec![[0.0f32; MAX_SPEAKERS]; 60];
         // Speaker 0: frames 0-29
-        for f in 0..30 {
-            activity[f][0] = 1.0;
+        for frame in activity.iter_mut().take(30) {
+            frame[0] = 1.0;
         }
         // Speaker 1: frames 30-59
-        for f in 30..60 {
-            activity[f][1] = 1.0;
+        for frame in activity.iter_mut().take(60).skip(30) {
+            frame[1] = 1.0;
         }
         let fa = FrameActivations {
             activity,
@@ -346,6 +346,6 @@ mod tests {
     fn frames_per_step_is_reasonable() {
         let fps = frames_per_step();
         // Should be roughly 16000/270 ≈ 59
-        assert!(fps >= 55 && fps <= 65, "frames_per_step should be ~59, got {fps}");
+        assert!((55..=65).contains(&fps), "frames_per_step should be ~59, got {fps}");
     }
 }
