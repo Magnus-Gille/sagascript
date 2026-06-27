@@ -44,6 +44,9 @@
     "linux": {
       "deb": {
         "depends": ["xdotool"]
+      },
+      "rpm": {
+        "depends": ["xdotool"]
       }
     }
   },

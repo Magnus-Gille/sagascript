@@ -16,8 +16,8 @@
 | Default hotkey | Ctrl+Shift+Space | Ctrl+Shift+Space |
 | Paste shortcut | Cmd+V (enigo) | Ctrl+V (via `xdotool`) |
 | Recording overlay | Shown | **Disabled** (see limitations) |
-| Settings path | `~/Library/Application Support/com.sagascript.app/` | `~/.config/com.sagascript.app/` |
-| Model path | `~/.sagascript/models/` | `~/.sagascript/models/` |
+| Settings path | `~/Library/Application Support/com.sagascript.app/` | `~/.local/share/com.sagascript.app/` (`$XDG_DATA_HOME`) |
+| Model path | `~/Library/Application Support/Sagascript/Models/` | `~/.local/share/Sagascript/Models/` (`$XDG_DATA_HOME`) |
 | Installer format | `.dmg` | `.deb` / `.rpm` / `.AppImage` |
 
 ## Prerequisites
