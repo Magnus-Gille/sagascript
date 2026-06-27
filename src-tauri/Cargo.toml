@@ -2,7 +2,7 @@
 name = "sagascript"
 version = "0.0.1"
 edition = "2021"
-description = "Low-latency macOS/Windows dictation app"
+description = "Low-latency macOS/Linux/Windows dictation app"
 license = "MIT"
 build = "build.rs"
 
@@ -67,11 +67,16 @@ whisper-rs = { version = "0.15" }
 notify = { version = "7" }
 enigo = { version = "0.6", features = ["serde"] }
 
-# Linux: headless CLI / batch transcription only (no GUI, no auto-paste).
+# Linux: supports both the headless CLI/batch build (`--no-default-features`)
+# and an experimental Tauri GUI build (`--features gui`, the default).
 # whisper-rs is declared per-target because macOS/Windows enable Metal/CoreML;
 # Linux uses the CPU backend (Vulkan is a separate, currently-broken opt-in).
+# No `enigo` here: its X11 backend leaves the Control modifier unmapped, so the
+# GUI auto-paste shells out to `xdotool` instead (see paste/service.rs).
+# `notify` gets its default (inotify) backend on Linux for the settings watcher.
 [target.'cfg(target_os = "linux")'.dependencies]
 whisper-rs = { version = "0.15" }
+notify = { version = "7" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }

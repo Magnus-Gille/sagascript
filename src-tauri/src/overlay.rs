@@ -1,19 +1,34 @@
 use tauri::Manager;
-use tracing::{error, info};
+use tracing::info;
+#[cfg(not(target_os = "linux"))]
+use tracing::error;
 
 const OVERLAY_LABEL: &str = "overlay";
 
-/// Show the recording overlay window (create lazily on first call)
+/// Show the recording overlay window (create lazily on first call).
+///
+/// Disabled on Linux: creating the transparent, always-on-top overlay window
+/// triggers an X11 window-lifecycle crash that terminates the app on several
+/// compositors. Transcription and auto-paste still work — only the visual
+/// recording indicator is suppressed. See issue #44.
 pub fn show(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {
-        let _ = window.show();
-        #[cfg(target_os = "macos")]
-        macos_order_front(&window);
-        info!("Overlay shown (existing window)");
-    } else {
-        match create_overlay(app) {
-            Ok(_) => info!("Overlay created and shown"),
-            Err(e) => error!("Failed to create overlay: {e}"),
+    #[cfg(target_os = "linux")]
+    {
+        let _ = app;
+        info!("Overlay disabled on Linux (avoids X11 window-lifecycle crash)");
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {
+            let _ = window.show();
+            #[cfg(target_os = "macos")]
+            macos_order_front(&window);
+            info!("Overlay shown (existing window)");
+        } else {
+            match create_overlay(app) {
+                Ok(_) => info!("Overlay created and shown"),
+                Err(e) => error!("Failed to create overlay: {e}"),
+            }
         }
     }
 }
@@ -26,6 +41,7 @@ pub fn hide(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn create_overlay(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // Calculate horizontal center position
     let (x, _screen_width) = if let Some(monitor) = app.primary_monitor()? {

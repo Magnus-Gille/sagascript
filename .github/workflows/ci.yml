@@ -111,6 +111,76 @@ jobs:
           echo "JSON: $RESULT"
           echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['text']; assert d['language']=='no'; assert d['duration_seconds']>0"
 
+  check-linux:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            build-essential \
+            file \
+            xdotool
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: linux-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            linux-cargo-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      # GUI build: compiles the cfg(target_os = "linux") Tauri path so it can't
+      # silently break on a future PR (the macOS/Windows runners never see it).
+      - name: Cargo check (GUI)
+        working-directory: src-tauri
+        run: cargo check --features gui
+
+      - name: Cargo clippy (GUI)
+        working-directory: src-tauri
+        run: cargo clippy --features gui -- -D warnings
+
+      # Headless CLI/batch build (no Tauri) — the other Linux target.
+      - name: Cargo check (headless)
+        working-directory: src-tauri
+        run: cargo check --no-default-features
+
+      - name: Cargo clippy (headless)
+        working-directory: src-tauri
+        run: cargo clippy --no-default-features -- -D warnings
+
+      - name: Cargo test (headless)
+        working-directory: src-tauri
+        run: cargo test --no-default-features
+
   check-windows:
     runs-on: windows-latest
 
