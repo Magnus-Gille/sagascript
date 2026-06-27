@@ -229,7 +229,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         beam_size: args.beam_size.unwrap_or(if stored.beam_size >= 2 {
             stored.beam_size
         } else {
-            crate::commands::FILE_TRANSCRIBE_BEAM
+            crate::transcription::FILE_TRANSCRIBE_BEAM
         }),
         temperature_fallback: stored.temperature_fallback,
         vad_model_path,

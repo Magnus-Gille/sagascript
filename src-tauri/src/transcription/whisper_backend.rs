@@ -13,6 +13,11 @@ use crate::error::DictationError;
 use crate::settings::{Language, WhisperModel};
 use crate::transcription::model;
 
+/// Default beam width for file (non-live) transcription. File transcription
+/// isn't latency-sensitive, so a wider beam trades speed for fewer repetition
+/// loops. Shared by the GUI file-transcribe command and the `transcribe` CLI.
+pub const FILE_TRANSCRIBE_BEAM: u32 = 5;
+
 /// Per-transcription tuning knobs (opt-in modes). `Default` reproduces the
 /// fast, robust dictation defaults: greedy decoding, temperature fallback on,
 /// no VAD, no prompt.

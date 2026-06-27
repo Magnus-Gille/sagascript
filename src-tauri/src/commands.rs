@@ -10,7 +10,7 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 use crate::app_controller::{AppController, AppState};
 use crate::audio::decoder;
 use crate::settings::{HotkeyMode, Language, Settings, WhisperModel};
-use crate::transcription::{model, TranscribeOptions, WhisperBackend};
+use crate::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
 
 /// Build the per-transcription options from the current settings. Resolves the
 /// VAD model path only when VAD is enabled and the model is present (otherwise
@@ -39,11 +39,6 @@ pub(crate) fn build_transcribe_options(settings: &Settings) -> TranscribeOptions
         vad_model_path,
     }
 }
-
-/// Default beam-search width for file transcription. Unlike live dictation,
-/// file transcription is not latency-sensitive, and beam search markedly
-/// reduces greedy-decoder repetition loops — so files default to beam search.
-pub(crate) const FILE_TRANSCRIBE_BEAM: u32 = 5;
 
 /// Like [`build_transcribe_options`] but for file transcription: defaults to
 /// beam search for quality (unless the user explicitly set a beam width), and

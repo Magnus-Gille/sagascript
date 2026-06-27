@@ -19,8 +19,9 @@ Sagascript is a privacy-first dictation app that transcribes speech to text \
 using local Whisper models. It runs as a macOS menu bar app (GUI) or as a \
 standalone CLI tool.
 
-When invoked without a subcommand, Sagascript launches the GUI. \
-Use any subcommand below to operate in CLI mode instead.
+When invoked without a subcommand, the desktop build launches the GUI; \
+the headless CLI build prints this help. Use any subcommand below to \
+operate in CLI mode.
 
 Workflow:
   1. Download a model:   sagascript download-model base.en

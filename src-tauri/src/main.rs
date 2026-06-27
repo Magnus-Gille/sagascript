@@ -1,51 +1,111 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// In the headless (CLI-only) build, the desktop/GUI integrations are gated out,
+// so a number of GUI-only helpers (whisper warmup/abort, model reload checks,
+// settings helpers) are legitimately unused. Allow that rather than scattering
+// per-item cfgs through the core modules the GUI still needs.
+#![cfg_attr(not(feature = "gui"), allow(dead_code))]
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "gui"))]
 #[macro_use]
 extern crate objc;
 
-mod app_controller;
+// CLI + core modules — always compiled (the headless Linux CLI build relies on
+// these being Tauri-free).
 mod audio;
 mod cli;
-mod commands;
 #[cfg(feature = "diarization")]
 pub mod diarization;
 mod error;
-mod events;
-mod hotkey;
-mod logging;
-mod overlay;
-mod paste;
-mod platform;
 mod settings;
 mod transcription;
 
+// File-logging service used by the desktop app only (the CLI logs via
+// tracing_subscriber to stderr).
+#[cfg(feature = "gui")]
+mod logging;
+
+// GUI-only modules — these reference Tauri (directly or transitively) and the
+// desktop integrations (auto-paste, tray, hotkey, overlay), so they are gated
+// behind the `gui` feature and excluded from the headless build.
+#[cfg(feature = "gui")]
+mod app_controller;
+#[cfg(feature = "gui")]
+mod commands;
+#[cfg(feature = "gui")]
+mod events;
+#[cfg(feature = "gui")]
+mod hotkey;
+#[cfg(feature = "gui")]
+mod overlay;
+#[cfg(feature = "gui")]
+mod paste;
+#[cfg(feature = "gui")]
+mod platform;
+
+use tracing_subscriber::EnvFilter;
+
+#[cfg(feature = "gui")]
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "gui")]
 use std::time::Duration;
 
 /// Maximum time to wait for whisper inference before aborting (seconds)
+#[cfg(feature = "gui")]
 const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
+#[cfg(feature = "gui")]
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
+#[cfg(feature = "gui")]
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+#[cfg(feature = "gui")]
 use tracing::{error, info, warn};
-use tracing_subscriber::EnvFilter;
 
+#[cfg(feature = "gui")]
 use app_controller::{AppController, HotkeyDownResult};
+#[cfg(feature = "gui")]
 use commands::{SharedController, SharedWhisper};
+#[cfg(feature = "gui")]
 use transcription::WhisperBackend;
 
 /// Minimum recording duration before we allow stop (300ms)
+#[cfg(feature = "gui")]
 const MIN_RECORDING_MS: u64 = 300;
 
 /// Shared tray status menu item for updating from anywhere
+#[cfg(feature = "gui")]
 type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
 
+/// Headless entry point: CLI-only build (no Tauri / GUI). Used for the Linux
+/// batch-transcription build. A bare invocation (no subcommand) prints help,
+/// since there is no GUI to launch.
+#[cfg(not(feature = "gui"))]
+fn main() {
+    use clap::CommandFactory;
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
+    match cli::try_parse() {
+        Some(parsed) => cli::run(parsed),
+        None => {
+            // No subcommand and no GUI to fall back to — show help and exit non-zero.
+            let _ = cli::Cli::command().print_help();
+            println!();
+            std::process::exit(2);
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
 fn main() {
     // CLI mode: if a subcommand is given, run CLI and exit
     if let Some(parsed) = cli::try_parse() {
@@ -330,6 +390,7 @@ fn main() {
 }
 
 /// Update the tray tooltip, title, and status menu item to reflect current state
+#[cfg(feature = "gui")]
 fn update_tray_status(app: &tauri::AppHandle, state: &str) {
     let (tooltip, title, menu_text) = match state {
         "recording" => ("Sagascript - Recording...", "Rec", "Recording..."),
@@ -347,6 +408,7 @@ fn update_tray_status(app: &tauri::AppHandle, state: &str) {
 }
 
 /// Update the tray status menu item and tooltip to show the last transcription
+#[cfg(feature = "gui")]
 fn update_tray_last_result(app: &tauri::AppHandle, text: &str) {
     let display = if text.len() > 60 {
         format!("{}...", &text[..57])
@@ -362,6 +424,7 @@ fn update_tray_last_result(app: &tauri::AppHandle, text: &str) {
 }
 
 /// Helper to update the status menu item text
+#[cfg(feature = "gui")]
 fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
     let guard = app.state::<SharedStatusItem>().lock().unwrap().clone();
     if let Some(item) = guard {
@@ -370,6 +433,7 @@ fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
 }
 
 /// Open or focus the main window, optionally navigating to a specific tab
+#[cfg(feature = "gui")]
 fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
     info!("Opening main window (tab: {:?})", tab);
 
@@ -412,6 +476,7 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
 }
 
 /// Handle hotkey release: stop recording for push-to-talk mode
+#[cfg(feature = "gui")]
 fn handle_hotkey_release(
     app: &tauri::AppHandle,
     ctrl: &tauri::State<'_, SharedController>,
@@ -430,6 +495,7 @@ fn handle_hotkey_release(
 
 /// Stop recording, enforce minimum duration, and spawn transcription.
 /// Shared by both push-to-talk (on key-up) and toggle (on second key-down).
+#[cfg(feature = "gui")]
 fn stop_recording_and_transcribe(
     app: &tauri::AppHandle,
     ctrl: &tauri::State<'_, SharedController>,
@@ -578,6 +644,7 @@ fn stop_recording_and_transcribe(
 
 /// Watch the settings file for external changes and hot-reload into the running app.
 /// Handles hotkey re-registration and emits a settings-changed event to the frontend.
+#[cfg(feature = "gui")]
 fn start_settings_watcher(app: tauri::AppHandle) {
     use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
     use std::sync::mpsc;

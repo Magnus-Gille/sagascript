@@ -7,14 +7,19 @@ license = "MIT"
 build = "build.rs"
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+# Optional + gated under `gui` so the headless build doesn't compile Tauri
+# tooling. build.rs only calls tauri_build::build() under `feature = "gui"`.
+tauri-build = { version = "2", features = [], optional = true }
 chrono = "0.4"
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
-tauri-plugin-global-shortcut = "2"
-tauri-plugin-autostart = "2"
-tauri-plugin-store = "2"
+# Tauri (GUI) deps are optional behind the default `gui` feature so the CLI
+# (`transcribe`, `record`, diarization) can build headless on Linux.
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"], optional = true }
+tauri-plugin-global-shortcut = { version = "2", optional = true }
+tauri-plugin-autostart = { version = "2", optional = true }
+tauri-plugin-store = { version = "2", optional = true }
+tauri-plugin-dialog = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -27,7 +32,6 @@ tracing-appender = "0.2"
 cpal = "0.15"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 arboard = "3"
-enigo = { version = "0.6", features = ["serde"] }
 dirs = "6"
 futures-util = "0.3"
 num_cpus = "1"
@@ -37,7 +41,6 @@ clap_mangen = "0.2"
 ctrlc = "3"
 indicatif = "0.17"
 notify = { version = "7", default-features = false }
-tauri-plugin-dialog = "2"
 symphonia = { version = "0.5", features = ["aac", "alac", "flac", "mp3", "pcm", "vorbis", "isomp4", "mkv", "ogg"] }
 rubato = "0.14"
 
@@ -50,6 +53,8 @@ ndarray = { version = "0.17", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.15", features = ["coreml", "metal"] }
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+# enigo (auto-paste) only builds/needs the GUI on desktop targets.
+enigo = { version = "0.6", features = ["serde"] }
 
 core-graphics = "0.24"
 core-foundation = "0.10"
@@ -60,13 +65,33 @@ block = "0.1"
 [target.'cfg(target_os = "windows")'.dependencies]
 whisper-rs = { version = "0.15" }
 notify = { version = "7" }
+enigo = { version = "0.6", features = ["serde"] }
+
+# Linux: headless CLI / batch transcription only (no GUI, no auto-paste).
+# whisper-rs is declared per-target because macOS/Windows enable Metal/CoreML;
+# Linux uses the CPU backend (Vulkan is a separate, currently-broken opt-in).
+[target.'cfg(target_os = "linux")'.dependencies]
+whisper-rs = { version = "0.15" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
 
 [features]
-default = ["custom-protocol"]
-custom-protocol = ["tauri/custom-protocol"]
+default = ["gui", "custom-protocol"]
+# `gui` pulls in Tauri and the desktop app entry point. Disable it
+# (`--no-default-features`) for a headless CLI build (e.g. on Linux).
+gui = [
+    "dep:tauri-build",
+    "dep:tauri",
+    "dep:tauri-plugin-global-shortcut",
+    "dep:tauri-plugin-autostart",
+    "dep:tauri-plugin-store",
+    "dep:tauri-plugin-dialog",
+]
+# Weak dep: only enables tauri's custom-protocol when tauri is already pulled in
+# (via `gui`). Keeps a headless `--no-default-features` build Tauri-free even if
+# `custom-protocol` is enabled on its own.
+custom-protocol = ["tauri?/custom-protocol"]
 diarization = ["dep:ort", "dep:rustfft", "dep:kodama", "dep:ndarray"]
 
 # Optimize the Rust DSP/glue (rubato resampler, symphonia decode, audio mixing)
