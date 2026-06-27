@@ -40,6 +40,11 @@
         "type": "downloadBootstrapper"
       },
       "allowDowngrades": false
+    },
+    "linux": {
+      "deb": {
+        "depends": ["xdotool"]
+      }
     }
   },
   "plugins": {}

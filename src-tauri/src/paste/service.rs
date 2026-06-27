@@ -1,4 +1,8 @@
 use arboard::Clipboard;
+// enigo is the input simulator on macOS/Windows. On Linux its X11 backend leaves
+// the Control modifier unmapped (paste silently fails), so we shell out to
+// xdotool instead and don't depend on enigo there.
+#[cfg(not(target_os = "linux"))]
 use enigo::{Enigo, Keyboard, Settings as EnigoSettings, Key, Direction};
 use tracing::info;
 #[cfg(target_os = "macos")]
@@ -7,7 +11,7 @@ use tracing::warn;
 use crate::error::DictationError;
 
 /// Service for pasting transcribed text into the active application
-/// Uses clipboard + simulated Cmd+V (macOS) or Ctrl+V (Windows)
+/// Uses clipboard + simulated Cmd+V (macOS) or Ctrl+V (Windows/Linux)
 pub struct PasteService;
 
 impl PasteService {
@@ -71,6 +75,7 @@ impl PasteService {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn simulate_paste() -> Result<(), DictationError> {
     let mut enigo = Enigo::new(&EnigoSettings::default())
         .map_err(|e| DictationError::PasteError(format!("Failed to create input simulator: {e}")))?;
@@ -78,10 +83,7 @@ fn simulate_paste() -> Result<(), DictationError> {
     #[cfg(target_os = "macos")]
     let modifier = Key::Meta; // Cmd
 
-    #[cfg(target_os = "windows")]
-    let modifier = Key::Control;
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "macos"))]
     let modifier = Key::Control;
 
     enigo
@@ -95,5 +97,31 @@ fn simulate_paste() -> Result<(), DictationError> {
         .map_err(|e| DictationError::PasteError(format!("Key release failed: {e}")))?;
 
     info!("Paste keystroke simulated");
+    Ok(())
+}
+
+/// Linux: simulate Ctrl+V via the `xdotool` CLI. enigo's X11 backend leaves the
+/// Control modifier unmapped, so we shell out instead. Requires `xdotool` and an
+/// X11 session (Wayland needs `ydotool`, which is not yet wired up).
+#[cfg(target_os = "linux")]
+fn simulate_paste() -> Result<(), DictationError> {
+    use std::process::Command;
+
+    let status = Command::new("xdotool")
+        .args(["key", "--clearmodifiers", "ctrl+v"])
+        .status()
+        .map_err(|e| {
+            DictationError::PasteError(format!(
+                "Failed to launch xdotool (install it with `apt install xdotool`): {e}"
+            ))
+        })?;
+
+    if !status.success() {
+        return Err(DictationError::PasteError(format!(
+            "xdotool exited unsuccessfully ({status})"
+        )));
+    }
+
+    info!("Paste keystroke simulated (xdotool)");
     Ok(())
 }

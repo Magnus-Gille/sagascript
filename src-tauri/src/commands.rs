@@ -987,7 +987,11 @@ pub async fn get_platform() -> Result<String, String> {
     {
         Ok("windows".to_string())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        Ok("linux".to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         Ok("unknown".to_string())
     }

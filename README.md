@@ -24,6 +24,7 @@ Dictate anywhere. Privately. A lightweight menu bar app for macOS and Windows. P
 
 - **macOS**: macOS 13.0+ (Apple Silicon or Intel)
 - **Windows**: Windows 10+
+- **Linux** (experimental): X11 session; GTK/WebKit dev libraries + `xdotool` — see [Linux notes](docs/linux-notes.md)
 - Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - Node.js 20+ (`brew install node` on macOS, or download from [nodejs.org](https://nodejs.org) on Windows)
 - Tauri CLI (`cargo install tauri-cli`)
@@ -43,7 +44,7 @@ cargo tauri dev
 cargo tauri build
 ```
 
-On macOS the `.app` bundle will be in `src-tauri/target/release/bundle/macos/`. On Windows the installer will be in `src-tauri/target/release/bundle/msi/` or `src-tauri/target/release/bundle/nsis/`.
+On macOS the `.app` bundle will be in `src-tauri/target/release/bundle/macos/`. On Windows the installer will be in `src-tauri/target/release/bundle/msi/` or `src-tauri/target/release/bundle/nsis/`. On Linux the `.deb`/`.rpm`/`.AppImage` will be in `src-tauri/target/release/bundle/` (see [Linux notes](docs/linux-notes.md)).
 
 ## CLI usage
 
@@ -93,6 +94,7 @@ Sagascript needs the following permissions (macOS will prompt you on first use):
 ## Documentation
 
 - [Installation guide](docs/installation.md) -- detailed install instructions for macOS and Windows
+- [Linux notes](docs/linux-notes.md) -- experimental Linux build, prerequisites, and known limitations
 - [Windows-specific notes](docs/windows-notes.md) -- feature comparison, known limitations, and troubleshooting
 
 ## Contributing
