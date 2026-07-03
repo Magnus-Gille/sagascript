@@ -1,5 +1,9 @@
 pub mod config;
 pub mod models;
+// Live recording is optional (`record` feature, on by default) so a pure
+// batch-transcribe build (`--no-default-features`) carries no audio-capture
+// stack — on Linux, no cpal/ALSA.
+#[cfg(feature = "record")]
 pub mod record;
 pub mod transcribe;
 
@@ -9,12 +13,10 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Generator, Shell};
 
-#[derive(Parser)]
-#[command(
-    name = "sagascript",
-    version,
-    about = "Low-latency dictation app",
-    long_about = "\
+// Root help text is feature-aware: a batch-only build (`--no-default-features`)
+// has no `record` subcommand, so the workflow/examples must not advertise it.
+#[cfg(feature = "record")]
+const ROOT_LONG_ABOUT: &str = "\
 Sagascript is a privacy-first dictation app that transcribes speech to text \
 using local Whisper models. It runs as a macOS menu bar app (GUI) or as a \
 standalone CLI tool.
@@ -33,8 +35,31 @@ Models are downloaded from HuggingFace and stored locally.
 
 NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
-For best results, set a specific language.",
-    after_long_help = "\
+For best results, set a specific language.";
+
+#[cfg(not(feature = "record"))]
+const ROOT_LONG_ABOUT: &str = "\
+Sagascript is a privacy-first dictation app that transcribes speech to text \
+using local Whisper models. This batch-transcription build operates on \
+audio/video files (live recording is not included).
+
+When invoked without a subcommand, the desktop build launches the GUI; \
+the headless CLI build prints this help. Use any subcommand below to \
+operate in CLI mode.
+
+Workflow:
+  1. Download a model:   sagascript download-model base.en
+  2. Transcribe a file:  sagascript transcribe recording.wav
+
+Supported languages: English (en), Swedish (sv), Norwegian (no), Auto-detect (auto).
+Models are downloaded from HuggingFace and stored locally.
+
+NOTE: Auto-detect uses a generic multilingual model which is less accurate \
+than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
+For best results, set a specific language.";
+
+#[cfg(feature = "record")]
+const ROOT_AFTER_LONG_HELP: &str = "\
 EXAMPLES:
   # Transcribe an audio file with auto-detected language
   sagascript transcribe meeting.mp3 --language auto
@@ -58,7 +83,39 @@ EXAMPLES:
   sagascript completions zsh > ~/.zfunc/_sagascript
 
 ENVIRONMENT:
-  RUST_LOG    Set log level (default: warn for CLI). Example: RUST_LOG=info"
+  RUST_LOG    Set log level (default: warn for CLI). Example: RUST_LOG=info";
+
+#[cfg(not(feature = "record"))]
+const ROOT_AFTER_LONG_HELP: &str = "\
+EXAMPLES:
+  # Transcribe an audio file with auto-detected language
+  sagascript transcribe meeting.mp3 --language auto
+
+  # List all available models for Swedish
+  sagascript list-models --language sv
+
+  # Download and use a specific model
+  sagascript download-model kb-whisper-base
+  sagascript transcribe tal.wav --model kb-whisper-base
+
+  # View and change settings
+  sagascript config list
+  sagascript config set language sv
+  sagascript config set hotkey 'Option+Space'
+
+  # Generate shell completions
+  sagascript completions zsh > ~/.zfunc/_sagascript
+
+ENVIRONMENT:
+  RUST_LOG    Set log level (default: warn for CLI). Example: RUST_LOG=info";
+
+#[derive(Parser)]
+#[command(
+    name = "sagascript",
+    version,
+    about = "Low-latency dictation app",
+    long_about = ROOT_LONG_ABOUT,
+    after_long_help = ROOT_AFTER_LONG_HELP
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -101,6 +158,7 @@ EXAMPLES:
     Transcribe(transcribe::TranscribeArgs),
 
     /// Record from microphone and transcribe
+    #[cfg(feature = "record")]
     #[command(
         long_about = "\
 Record audio from the default microphone and transcribe it.
@@ -332,15 +390,16 @@ pub fn run(cli: Cli) {
 
     let result = match cli.command.unwrap() {
         Command::Transcribe(args) => transcribe::run(args),
+        #[cfg(feature = "record")]
         Command::Record(args) => record::run(args),
         Command::ListModels(args) => models::list(args),
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
         Command::ResetOnboarding => {
-            let mut settings = crate::settings::store::load();
+            let mut settings = sagascript_core::settings::store::load();
             settings.has_completed_onboarding = false;
-            crate::settings::store::save(&settings)
-                .map_err(crate::error::DictationError::SettingsError)
+            sagascript_core::settings::store::save(&settings)
+                .map_err(sagascript_core::error::DictationError::SettingsError)
                 .map(|()| {
                     eprintln!("Onboarding reset. The setup wizard will run on next launch.");
                 })
@@ -364,7 +423,7 @@ pub fn run(cli: Cli) {
 }
 
 fn formats() {
-    use crate::audio::decoder::SUPPORTED_EXTENSIONS;
+    use sagascript_core::audio::decoder::SUPPORTED_EXTENSIONS;
 
     println!("Supported audio/video formats:");
     for ext in SUPPORTED_EXTENSIONS {
@@ -376,17 +435,17 @@ fn generate_completions<G: Generator>(gen: G) {
     clap_complete::generate(gen, &mut Cli::command(), "sagascript", &mut io::stdout());
 }
 
-fn generate_manpages(dir: Option<PathBuf>) -> Result<(), crate::error::DictationError> {
+fn generate_manpages(dir: Option<PathBuf>) -> Result<(), sagascript_core::error::DictationError> {
     let cmd = Cli::command();
 
     let map_err = |e: io::Error| {
-        crate::error::DictationError::SettingsError(format!("Failed to generate man pages: {e}"))
+        sagascript_core::error::DictationError::SettingsError(format!("Failed to generate man pages: {e}"))
     };
 
     match dir {
         Some(dir) => {
             std::fs::create_dir_all(&dir).map_err(|e| {
-                crate::error::DictationError::SettingsError(format!(
+                sagascript_core::error::DictationError::SettingsError(format!(
                     "Failed to create directory '{}': {e}",
                     dir.display()
                 ))
@@ -498,6 +557,7 @@ mod tests {
         // Subcommand pages
         let expected = [
             "sagascript-transcribe.1",
+            #[cfg(feature = "record")]
             "sagascript-record.1",
             "sagascript-list-models.1",
             "sagascript-download-model.1",
@@ -536,6 +596,7 @@ mod tests {
         let help = get_long_help(&Cli::command());
         assert!(help.contains("EXAMPLES:"), "root help should contain EXAMPLES section");
         assert!(help.contains("sagascript transcribe"), "root help should show transcribe example");
+        #[cfg(feature = "record")]
         assert!(help.contains("sagascript record"), "root help should show record example");
     }
 
@@ -568,6 +629,26 @@ mod tests {
         );
     }
 
+    /// Batch-only builds must not advertise the absent `record` subcommand
+    /// anywhere in the root help (workflow, examples) — the batch contract
+    /// is "no record", and stale mentions would send users to a command
+    /// that doesn't exist.
+    #[cfg(not(feature = "record"))]
+    #[test]
+    fn record_fully_absent_without_feature() {
+        let mut cmd = Cli::command();
+        assert!(
+            cmd.find_subcommand("record").is_none(),
+            "record subcommand must not exist without the record feature"
+        );
+        let help = cmd.render_long_help().to_string();
+        assert!(
+            !help.contains("sagascript record"),
+            "root help must not mention 'sagascript record' without the record feature"
+        );
+    }
+
+    #[cfg(feature = "record")]
     #[test]
     fn record_help_contains_examples() {
         let cmd = Cli::command();
@@ -644,6 +725,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "record")]
     #[test]
     fn parse_record_minimal() {
         let cli = Cli::try_parse_from(["sagascript", "record"]).unwrap();
@@ -660,6 +742,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "record")]
     #[test]
     fn parse_record_all_flags() {
         let cli = Cli::try_parse_from([

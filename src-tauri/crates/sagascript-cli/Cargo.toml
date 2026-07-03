@@ -1,0 +1,41 @@
+[package]
+name = "sagascript-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Headless CLI for Sagascript: transcribe, record, and manage models from the terminal"
+
+# The binary keeps the `sagascript` name so the headless install UX is
+# unchanged (clap's command name, completions, and manpages all say
+# "sagascript"). The Tauri app crate produces a bin with the same name;
+# see CONTRIBUTING.md for the target/release/sagascript last-build-wins note.
+[[bin]]
+name = "sagascript"
+path = "src/main.rs"
+
+[dependencies]
+sagascript-core = { path = "../sagascript-core" }
+clap = { version = "4", features = ["derive", "string"] }
+clap_complete = "4"
+clap_mangen = "0.2"
+indicatif = "0.17"
+arboard = "3"
+uuid = { version = "1", features = ["v4"] }
+serde = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Live-recording support (the `record` subcommand). Optional so a pure
+# batch-transcribe build (`--no-default-features`) carries no audio-capture
+# stack — on Linux that means no cpal and no ALSA.
+ctrlc = { version = "3", optional = true }
+
+[features]
+default = ["record"]
+record = ["sagascript-core/record", "dep:ctrlc"]
+diarization = ["sagascript-core/diarization"]
+
+[lints]
+workspace = true

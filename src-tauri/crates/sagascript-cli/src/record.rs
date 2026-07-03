@@ -4,13 +4,13 @@ use std::sync::Arc;
 use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::audio::AudioCaptureService;
-use crate::audio::resample::TARGET_SAMPLE_RATE;
-use crate::error::DictationError;
-use crate::transcription::model;
-use crate::transcription::WhisperBackend;
+use sagascript_core::audio::AudioCaptureService;
+use sagascript_core::audio::resample::TARGET_SAMPLE_RATE;
+use sagascript_core::error::DictationError;
+use sagascript_core::transcription::model;
+use sagascript_core::transcription::WhisperBackend;
 
-use crate::settings::WhisperModel;
+use sagascript_core::settings::WhisperModel;
 
 use super::transcribe::{copy_to_clipboard, model_id_string, parse_language, parse_model};
 
@@ -42,7 +42,7 @@ pub struct RecordArgs {
 }
 
 pub fn run(args: RecordArgs) -> Result<(), DictationError> {
-    let stored = crate::settings::store::load();
+    let stored = sagascript_core::settings::store::load();
     let language = match &args.language {
         Some(l) => parse_language(l)?,
         None => stored.language,
@@ -112,7 +112,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
 
     // Save WAV if requested
     if let Some(output_path) = &args.output {
-        let wav_bytes = crate::audio::wav::encode_wav(&audio);
+        let wav_bytes = sagascript_core::audio::wav::encode_wav(&audio);
         std::fs::write(output_path, &wav_bytes).map_err(|e| {
             DictationError::FileDecodeError(format!("Failed to write WAV: {e}"))
         })?;

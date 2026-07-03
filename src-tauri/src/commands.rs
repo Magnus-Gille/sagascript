@@ -8,9 +8,9 @@ use tracing::{error, info};
 const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
 use crate::app_controller::{AppController, AppState};
-use crate::audio::decoder;
-use crate::settings::{HotkeyMode, Language, Settings, WhisperModel};
-use crate::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
+use sagascript_core::audio::decoder;
+use sagascript_core::settings::{HotkeyMode, Language, Settings, WhisperModel};
+use sagascript_core::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
 
 /// Build the per-transcription options from the current settings. Resolves the
 /// VAD model path only when VAD is enabled and the model is present (otherwise
@@ -127,7 +127,7 @@ pub async fn get_loaded_model(
 
 fn persist_settings(controller: &SharedController) -> Result<(), String> {
     let settings = controller.lock().unwrap().settings().clone();
-    crate::settings::store::save(&settings)
+    sagascript_core::settings::store::save(&settings)
 }
 
 // -- Settings mutations --
@@ -548,7 +548,7 @@ pub async fn transcribe_file(
     // then merges and consolidates speaker-attributed segments.
     #[cfg(feature = "diarization")]
     if diarize.unwrap_or(false) {
-        use crate::diarization::{
+        use sagascript_core::diarization::{
             DiarizeConfig, TimestampedSegment,
             diarize as run_diarize,
             merge::{consolidate, merge_with_transcript},

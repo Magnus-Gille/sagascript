@@ -54,6 +54,26 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
 
+      # Workspace members. Bare cargo commands above cover only the root (app)
+      # package; these cover sagascript-core and sagascript-cli explicitly.
+      # NOTE: core is tested in its own invocation so its no-features build is
+      # exercised — combining -p flags would unify features across packages.
+      - name: Cargo test (sagascript-core, no features)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-core
+
+      - name: Cargo test (sagascript-cli)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-cli
+
+      - name: Cargo clippy (sagascript-core, no features)
+        working-directory: src-tauri
+        run: cargo clippy -p sagascript-core --all-targets -- -D warnings
+
+      - name: Cargo clippy (sagascript-cli)
+        working-directory: src-tauri
+        run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
+
       - name: Svelte check
         run: npx svelte-check --tsconfig ./tsconfig.json
 
@@ -160,26 +180,58 @@ jobs:
 
       # GUI build: compiles the cfg(target_os = "linux") Tauri path so it can't
       # silently break on a future PR (the macOS/Windows runners never see it).
-      - name: Cargo check (GUI)
+      # The bare invocation covers the root (app) package, which pulls in
+      # sagascript-core with the `record` feature.
+      - name: Cargo check (GUI app)
         working-directory: src-tauri
-        run: cargo check --features gui
+        run: cargo check
 
-      - name: Cargo clippy (GUI)
+      - name: Cargo clippy (GUI app)
         working-directory: src-tauri
-        run: cargo clippy --features gui -- -D warnings
+        run: cargo clippy -- -D warnings
 
-      # Headless CLI/batch build (no Tauri) — the other Linux target.
-      - name: Cargo check (headless)
+      # Headless CLI (no Tauri) — the sagascript-cli member crate. Default
+      # features include `record` (cpal/ALSA); the --no-default-features runs
+      # cover the pure batch-transcribe build, which must need no ALSA.
+      - name: Cargo check (headless CLI, with record)
         working-directory: src-tauri
-        run: cargo check --no-default-features
+        run: cargo check -p sagascript-cli
 
-      - name: Cargo clippy (headless)
+      - name: Cargo check (headless CLI, batch-only)
         working-directory: src-tauri
-        run: cargo clippy --no-default-features -- -D warnings
+        run: cargo check -p sagascript-cli --no-default-features
 
-      - name: Cargo test (headless)
+      - name: Cargo clippy (headless CLI, batch-only)
         working-directory: src-tauri
-        run: cargo test --no-default-features
+        run: cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings
+
+      - name: Cargo test (headless CLI, batch-only)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-cli --no-default-features
+
+      # Run core's own tests on Linux too — cargo does not run dependency
+      # crates' tests, so without these steps core is only compile-checked
+      # here (its tests would run on macOS/Windows only).
+      - name: Cargo test (sagascript-core, no features)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-core
+
+      - name: Cargo test (sagascript-core, with record)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-core --features record
+
+      # Regression guard for the no-ALSA property (#66): the batch-only CLI
+      # dependency tree must contain neither cpal nor alsa. (grep -c would
+      # exit 1 on zero matches and fail the step, hence the if/grep -q form.)
+      - name: Assert batch-only CLI has no ALSA/cpal dependency
+        working-directory: src-tauri
+        run: |
+          if cargo tree -p sagascript-cli --no-default-features -e normal | grep -qiE 'alsa|cpal'; then
+            echo "ERROR: cpal/ALSA leaked into the batch-only dependency tree:"
+            cargo tree -p sagascript-cli --no-default-features -e normal | grep -iE 'alsa|cpal'
+            exit 1
+          fi
+          echo "OK: no cpal/ALSA in batch-only tree"
 
   check-windows:
     runs-on: windows-latest
@@ -227,6 +279,24 @@ jobs:
       - name: Cargo clippy
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
+
+      # Workspace members (see the macOS job for why these are separate
+      # invocations: combined -p flags would unify features across packages).
+      - name: Cargo test (sagascript-core, no features)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-core
+
+      - name: Cargo test (sagascript-cli)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-cli
+
+      - name: Cargo clippy (sagascript-core, no features)
+        working-directory: src-tauri
+        run: cargo clippy -p sagascript-core --all-targets -- -D warnings
+
+      - name: Cargo clippy (sagascript-cli)
+        working-directory: src-tauri
+        run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
 
       - name: Build Tauri app
         run: npx tauri build

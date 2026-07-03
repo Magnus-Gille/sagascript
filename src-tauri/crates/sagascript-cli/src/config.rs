@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 
-use crate::error::DictationError;
-use crate::settings::{self, HotkeyMode, Language, Settings, WhisperModel};
+use sagascript_core::error::DictationError;
+use sagascript_core::settings::{self, HotkeyMode, Language, Settings, WhisperModel};
 
 #[derive(Args)]
 pub struct ConfigArgs {

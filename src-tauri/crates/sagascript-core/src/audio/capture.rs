@@ -33,6 +33,12 @@ pub struct AudioCaptureService {
 unsafe impl Send for AudioCaptureService {}
 unsafe impl Sync for AudioCaptureService {}
 
+impl Default for AudioCaptureService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioCaptureService {
     pub fn new() -> Self {
         Self {

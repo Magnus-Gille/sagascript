@@ -42,12 +42,20 @@ npm install
 cargo tauri build      # GUI app (.deb/.rpm/.AppImage in src-tauri/target/release/bundle/)
 ```
 
-For a **headless CLI / batch-transcription** build with no GUI or audio-capture
-system libraries beyond ALSA:
+For a **headless CLI** build (no GUI/Tauri), build the `sagascript-cli` crate
+(from `src-tauri/`; the binary is still `target/release/sagascript`):
 
 ```bash
-cargo build --release --no-default-features                 # transcribe / record
-cargo build --release --no-default-features --features diarization   # + speaker diarization
+cargo build --release -p sagascript-cli                     # transcribe / record (needs ALSA)
+cargo build --release -p sagascript-cli --features diarization   # + speaker diarization
+```
+
+For a **pure batch-transcription** build with no audio-capture stack at all —
+no `record` subcommand, no cpal, and **no ALSA system dependency**:
+
+```bash
+cargo build --release -p sagascript-cli --no-default-features
+cargo build --release -p sagascript-cli --no-default-features --features diarization
 ```
 
 ## Known limitations

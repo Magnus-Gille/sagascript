@@ -48,7 +48,7 @@ On macOS the `.app` bundle will be in `src-tauri/target/release/bundle/macos/`. 
 
 ## CLI usage
 
-Sagascript includes a full CLI. After building, the binary is at `src-tauri/target/release/sagascript` (or use the app bundle).
+Sagascript includes a full CLI. The desktop binary itself accepts every CLI subcommand, and a headless CLI-only binary (no GUI dependencies) can be built with `cargo build -p sagascript-cli --release` from `src-tauri/`. Either way the binary lands at `src-tauri/target/release/sagascript` — it is whichever was built last (or use the app bundle).
 
 ```bash
 # Transcribe an audio/video file

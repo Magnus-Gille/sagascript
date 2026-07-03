@@ -8,7 +8,7 @@ use tracing::info;
 #[cfg(target_os = "macos")]
 use tracing::warn;
 
-use crate::error::DictationError;
+use sagascript_core::error::DictationError;
 
 /// Service for pasting transcribed text into the active application
 /// Uses clipboard + simulated Cmd+V (macOS) or Ctrl+V (Windows/Linux)

@@ -46,8 +46,9 @@ pub enum DictationError {
     DiarizationError(String),
 }
 
-// Tauri commands need IntoResponse which requires Serialize
-// We implement this so DictationError can be returned from commands
+// String conversion so callers (e.g. the app crate's Tauri command handlers,
+// which need error types convertible to a serializable form) can return
+// DictationError without depending on its variants.
 impl From<DictationError> for String {
     fn from(err: DictationError) -> String {
         err.to_string()

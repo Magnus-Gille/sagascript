@@ -4045,23 +4045,57 @@ dependencies = [
  "arboard",
  "block",
  "chrono",
+ "cocoa",
+ "core-foundation 0.10.1",
+ "dirs 6.0.0",
+ "enigo",
+ "notify",
+ "objc",
+ "sagascript-cli",
+ "sagascript-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-store",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "sagascript-cli"
+version = "0.0.1"
+dependencies = [
+ "arboard",
  "clap",
  "clap_complete",
  "clap_mangen",
- "cocoa",
- "core-foundation 0.10.1",
- "core-graphics 0.24.0",
- "cpal",
  "ctrlc",
- "dirs 6.0.0",
- "enigo",
- "futures-util",
  "indicatif",
+ "sagascript-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "sagascript-core"
+version = "0.0.1"
+dependencies = [
+ "cpal",
+ "dirs 6.0.0",
+ "futures-util",
  "kodama",
  "ndarray",
- "notify",
  "num_cpus",
- "objc",
  "ort",
  "reqwest 0.12.28",
  "rubato",
@@ -4069,17 +4103,9 @@ dependencies = [
  "serde",
  "serde_json",
  "symphonia",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-store",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
  "uuid",
  "whisper-rs",
 ]
@@ -5548,18 +5574,6 @@ dependencies = [
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",
-]
-
-[[package]]
-name = "tracing-appender"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "786d480bce6247ab75f005b14ae1624ad978d3029d9113f0a22fa1ac773faeaf"
-dependencies = [
- "crossbeam-channel",
- "thiserror 2.0.18",
- "time",
- "tracing-subscriber",
 ]
 
 [[package]]

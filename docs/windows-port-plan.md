@@ -1,5 +1,9 @@
 # Sagascript — Windows Port Plan
 
+> **Historical planning document.** The CI/workflow snippets below predate the
+> Cargo workspace split and the current `.github/workflows/ci.yml`; they are
+> kept for context, not as living documentation.
+
 This document outlines every work item required to ship Sagascript on Windows,
 from code changes through CI/CD, installer generation, code signing, documentation,
 and website distribution.

@@ -1,103 +1,85 @@
-[package]
-name = "sagascript"
+# Workspace root AND the Tauri app package. The root package stays at
+# src-tauri/Cargo.toml so the Tauri CLI's convention-based discovery,
+# Cargo.lock, target/, and every CI path keep working unchanged.
+#
+# Members:
+#   .                        — this package: the desktop app (Tauri GUI + CLI dispatch)
+#   crates/sagascript-core   — lib: audio, transcription, settings, diarization, error
+#   crates/sagascript-cli    — lib + headless `sagascript` bin (no Tauri)
+#
+# Bare `cargo build/test/clippy` here operates on the app package only (root
+# package default; `default-members` documents it). Use `--workspace` or `-p`
+# to cover the member crates — see CONTRIBUTING.md.
+[workspace]
+members = [".", "crates/*"]
+default-members = ["."]
+resolver = "2"
+
+[workspace.package]
 version = "0.0.1"
 edition = "2021"
-description = "Low-latency macOS/Linux/Windows dictation app"
 license = "MIT"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
+[package]
+name = "sagascript"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Low-latency macOS/Linux/Windows dictation app"
 build = "build.rs"
 
 [build-dependencies]
-# Optional + gated under `gui` so the headless build doesn't compile Tauri
-# tooling. build.rs only calls tauri_build::build() under `feature = "gui"`.
-tauri-build = { version = "2", features = [], optional = true }
+tauri-build = { version = "2", features = [] }
 chrono = "0.4"
 
 [dependencies]
-# Tauri (GUI) deps are optional behind the default `gui` feature so the CLI
-# (`transcribe`, `record`, diarization) can build headless on Linux.
-tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"], optional = true }
-tauri-plugin-global-shortcut = { version = "2", optional = true }
-tauri-plugin-autostart = { version = "2", optional = true }
-tauri-plugin-store = { version = "2", optional = true }
-tauri-plugin-dialog = { version = "2", optional = true }
+sagascript-core = { path = "crates/sagascript-core", features = ["record"] }
+sagascript-cli = { path = "crates/sagascript-cli" }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-store = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
-tracing-appender = "0.2"
-cpal = "0.15"
-reqwest = { version = "0.12", features = ["json", "stream"] }
 arboard = "3"
 dirs = "6"
-futures-util = "0.3"
-num_cpus = "1"
-clap = { version = "4", features = ["derive", "string"] }
-clap_complete = "4"
-clap_mangen = "0.2"
-ctrlc = "3"
-indicatif = "0.17"
 notify = { version = "7", default-features = false }
-symphonia = { version = "0.5", features = ["aac", "alac", "flac", "mp3", "pcm", "vorbis", "isomp4", "mkv", "ogg"] }
-rubato = "0.14"
-
-# Diarization (optional, behind feature flag)
-ort = { version = "2.0.0-rc.12", features = ["ndarray"], optional = true }
-rustfft = { version = "6", optional = true }
-kodama = { version = "0.2", optional = true }
-ndarray = { version = "0.17", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.15", features = ["coreml", "metal"] }
 notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
-# enigo (auto-paste) only builds/needs the GUI on desktop targets.
+# enigo (auto-paste) and the objc FFI stack are desktop-GUI integrations.
 enigo = { version = "0.6", features = ["serde"] }
-
-core-graphics = "0.24"
 core-foundation = "0.10"
 cocoa = "0.26"
 objc = "0.2"
 block = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-whisper-rs = { version = "0.15" }
 notify = { version = "7" }
 enigo = { version = "0.6", features = ["serde"] }
 
-# Linux: supports both the headless CLI/batch build (`--no-default-features`)
-# and an experimental Tauri GUI build (`--features gui`, the default).
-# whisper-rs is declared per-target because macOS/Windows enable Metal/CoreML;
-# Linux uses the CPU backend (Vulkan is a separate, currently-broken opt-in).
-# No `enigo` here: its X11 backend leaves the Control modifier unmapped, so the
-# GUI auto-paste shells out to `xdotool` instead (see paste/service.rs).
-# `notify` gets its default (inotify) backend on Linux for the settings watcher.
+# Linux GUI build: auto-paste shells out to `xdotool` (no enigo — its X11
+# backend leaves the Control modifier unmapped). `notify` gets its default
+# (inotify) backend for the settings watcher.
 [target.'cfg(target_os = "linux")'.dependencies]
-whisper-rs = { version = "0.15" }
 notify = { version = "7" }
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+[lints]
+workspace = true
 
 [features]
-default = ["gui", "custom-protocol"]
-# `gui` pulls in Tauri and the desktop app entry point. Disable it
-# (`--no-default-features`) for a headless CLI build (e.g. on Linux).
-gui = [
-    "dep:tauri-build",
-    "dep:tauri",
-    "dep:tauri-plugin-global-shortcut",
-    "dep:tauri-plugin-autostart",
-    "dep:tauri-plugin-store",
-    "dep:tauri-plugin-dialog",
-]
-# Weak dep: only enables tauri's custom-protocol when tauri is already pulled in
-# (via `gui`). Keeps a headless `--no-default-features` build Tauri-free even if
-# `custom-protocol` is enabled on its own.
-custom-protocol = ["tauri?/custom-protocol"]
-diarization = ["dep:ort", "dep:rustfft", "dep:kodama", "dep:ndarray"]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+diarization = ["sagascript-core/diarization", "sagascript-cli/diarization"]
 
 # Optimize the Rust DSP/glue (rubato resampler, symphonia decode, audio mixing)
 # in release builds. whisper.cpp itself is compiled -O3 by whisper-rs's build
