@@ -209,6 +209,17 @@ jobs:
         working-directory: src-tauri
         run: cargo test -p sagascript-cli --no-default-features
 
+      # Run core's own tests on Linux too — cargo does not run dependency
+      # crates' tests, so without these steps core is only compile-checked
+      # here (its tests would run on macOS/Windows only).
+      - name: Cargo test (sagascript-core, no features)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-core
+
+      - name: Cargo test (sagascript-core, with record)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-core --features record
+
       # Regression guard for the no-ALSA property (#66): the batch-only CLI
       # dependency tree must contain neither cpal nor alsa. (grep -c would
       # exit 1 on zero matches and fail the step, hence the if/grep -q form.)

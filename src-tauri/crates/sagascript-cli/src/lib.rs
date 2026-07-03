@@ -13,12 +13,10 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Generator, Shell};
 
-#[derive(Parser)]
-#[command(
-    name = "sagascript",
-    version,
-    about = "Low-latency dictation app",
-    long_about = "\
+// Root help text is feature-aware: a batch-only build (`--no-default-features`)
+// has no `record` subcommand, so the workflow/examples must not advertise it.
+#[cfg(feature = "record")]
+const ROOT_LONG_ABOUT: &str = "\
 Sagascript is a privacy-first dictation app that transcribes speech to text \
 using local Whisper models. It runs as a macOS menu bar app (GUI) or as a \
 standalone CLI tool.
@@ -37,8 +35,31 @@ Models are downloaded from HuggingFace and stored locally.
 
 NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
-For best results, set a specific language.",
-    after_long_help = "\
+For best results, set a specific language.";
+
+#[cfg(not(feature = "record"))]
+const ROOT_LONG_ABOUT: &str = "\
+Sagascript is a privacy-first dictation app that transcribes speech to text \
+using local Whisper models. This batch-transcription build operates on \
+audio/video files (live recording is not included).
+
+When invoked without a subcommand, the desktop build launches the GUI; \
+the headless CLI build prints this help. Use any subcommand below to \
+operate in CLI mode.
+
+Workflow:
+  1. Download a model:   sagascript download-model base.en
+  2. Transcribe a file:  sagascript transcribe recording.wav
+
+Supported languages: English (en), Swedish (sv), Norwegian (no), Auto-detect (auto).
+Models are downloaded from HuggingFace and stored locally.
+
+NOTE: Auto-detect uses a generic multilingual model which is less accurate \
+than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
+For best results, set a specific language.";
+
+#[cfg(feature = "record")]
+const ROOT_AFTER_LONG_HELP: &str = "\
 EXAMPLES:
   # Transcribe an audio file with auto-detected language
   sagascript transcribe meeting.mp3 --language auto
@@ -62,7 +83,39 @@ EXAMPLES:
   sagascript completions zsh > ~/.zfunc/_sagascript
 
 ENVIRONMENT:
-  RUST_LOG    Set log level (default: warn for CLI). Example: RUST_LOG=info"
+  RUST_LOG    Set log level (default: warn for CLI). Example: RUST_LOG=info";
+
+#[cfg(not(feature = "record"))]
+const ROOT_AFTER_LONG_HELP: &str = "\
+EXAMPLES:
+  # Transcribe an audio file with auto-detected language
+  sagascript transcribe meeting.mp3 --language auto
+
+  # List all available models for Swedish
+  sagascript list-models --language sv
+
+  # Download and use a specific model
+  sagascript download-model kb-whisper-base
+  sagascript transcribe tal.wav --model kb-whisper-base
+
+  # View and change settings
+  sagascript config list
+  sagascript config set language sv
+  sagascript config set hotkey 'Option+Space'
+
+  # Generate shell completions
+  sagascript completions zsh > ~/.zfunc/_sagascript
+
+ENVIRONMENT:
+  RUST_LOG    Set log level (default: warn for CLI). Example: RUST_LOG=info";
+
+#[derive(Parser)]
+#[command(
+    name = "sagascript",
+    version,
+    about = "Low-latency dictation app",
+    long_about = ROOT_LONG_ABOUT,
+    after_long_help = ROOT_AFTER_LONG_HELP
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -543,6 +596,7 @@ mod tests {
         let help = get_long_help(&Cli::command());
         assert!(help.contains("EXAMPLES:"), "root help should contain EXAMPLES section");
         assert!(help.contains("sagascript transcribe"), "root help should show transcribe example");
+        #[cfg(feature = "record")]
         assert!(help.contains("sagascript record"), "root help should show record example");
     }
 
@@ -572,6 +626,25 @@ mod tests {
         assert!(
             help.contains("auto uses a generic multilingual model"),
             "transcribe help should warn about auto-detect"
+        );
+    }
+
+    /// Batch-only builds must not advertise the absent `record` subcommand
+    /// anywhere in the root help (workflow, examples) — the batch contract
+    /// is "no record", and stale mentions would send users to a command
+    /// that doesn't exist.
+    #[cfg(not(feature = "record"))]
+    #[test]
+    fn record_fully_absent_without_feature() {
+        let mut cmd = Cli::command();
+        assert!(
+            cmd.find_subcommand("record").is_none(),
+            "record subcommand must not exist without the record feature"
+        );
+        let help = cmd.render_long_help().to_string();
+        assert!(
+            !help.contains("sagascript record"),
+            "root help must not mention 'sagascript record' without the record feature"
         );
     }
 
