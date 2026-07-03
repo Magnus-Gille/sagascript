@@ -31,6 +31,10 @@
   let downloadError: string | null = $state(null);
   let downloadComplete = $state(false);
 
+  // Language step / final "finish" step errors
+  let languageError: string | null = $state(null);
+  let finishError: string | null = $state(null);
+
   // Permissions
   // micStatus: "authorized" | "not_determined" | "denied" | "restricted" | "unsupported" | "checking"
   let micStatus: string = $state("checking");
@@ -81,8 +85,13 @@
   // -- Language --
 
   async function selectLanguageAndContinue() {
-    await setLanguage(selectedLanguage);
-    nextStep();
+    languageError = null;
+    try {
+      await setLanguage(selectedLanguage);
+      nextStep();
+    } catch (e: any) {
+      languageError = typeof e === "string" ? e : e?.message ?? "Failed to save language. Please try again.";
+    }
   }
 
   // -- Model download --
@@ -167,9 +176,14 @@
   }
 
   async function finish() {
-    stopPoll();
-    await setOnboardingCompleted();
-    oncomplete();
+    finishError = null;
+    try {
+      stopPoll();
+      await setOnboardingCompleted();
+      oncomplete();
+    } catch (e: any) {
+      finishError = typeof e === "string" ? e : e?.message ?? "Failed to complete setup. Please try again.";
+    }
   }
 
   function formatProgress(pct: number): string {
@@ -312,6 +326,12 @@
             <span class="lang-name">Norsk</span>
           </button>
         </div>
+        {#if languageError}
+          <div class="status-indicator error">
+            <span class="status-dot"></span>
+            <span>{languageError}</span>
+          </div>
+        {/if}
         <div class="actions">
           <button class="primary" onclick={selectLanguageAndContinue}>Continue</button>
         </div>
@@ -553,6 +573,13 @@
         {/if}
 
         <p class="subdescription">You can change any of this in Settings.</p>
+
+        {#if finishError}
+          <div class="status-indicator error">
+            <span class="status-dot"></span>
+            <span>{finishError}</span>
+          </div>
+        {/if}
 
         <div class="actions">
           <button class="primary" onclick={finish}>Start Using Sagascript</button>
