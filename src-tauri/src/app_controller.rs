@@ -3,12 +3,12 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tracing::{info, warn};
 
-use crate::audio::AudioCaptureService;
-use crate::error::DictationError;
+use sagascript_core::audio::AudioCaptureService;
+use sagascript_core::error::DictationError;
 use crate::hotkey::HotkeyService;
 use crate::logging::LoggingService;
 use crate::paste::PasteService;
-use crate::settings::{HotkeyMode, Settings};
+use sagascript_core::settings::{HotkeyMode, Settings};
 
 /// Result of handling a hotkey-down event
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +112,7 @@ impl AppController {
         self.model_ready
     }
 
-    pub fn language(&self) -> crate::settings::Language {
+    pub fn language(&self) -> sagascript_core::settings::Language {
         self.settings.language
     }
 
@@ -299,9 +299,9 @@ mod tests {
 
     #[test]
     fn initial_language_from_settings() {
-        let settings = Settings { language: crate::settings::Language::Swedish, ..Default::default() };
+        let settings = Settings { language: sagascript_core::settings::Language::Swedish, ..Default::default() };
         let ctrl = AppController::new(settings);
-        assert_eq!(ctrl.language(), crate::settings::Language::Swedish);
+        assert_eq!(ctrl.language(), sagascript_core::settings::Language::Swedish);
     }
 
     // -- Settings --
@@ -309,23 +309,23 @@ mod tests {
     #[test]
     fn settings_getter() {
         let ctrl = default_controller();
-        assert_eq!(ctrl.settings().language, crate::settings::Language::English);
+        assert_eq!(ctrl.settings().language, sagascript_core::settings::Language::English);
     }
 
     #[test]
     fn settings_mut_modifiable() {
         let mut ctrl = default_controller();
-        ctrl.settings_mut().language = crate::settings::Language::Norwegian;
-        assert_eq!(ctrl.settings().language, crate::settings::Language::Norwegian);
+        ctrl.settings_mut().language = sagascript_core::settings::Language::Norwegian;
+        assert_eq!(ctrl.settings().language, sagascript_core::settings::Language::Norwegian);
     }
 
     #[test]
     fn update_settings_replaces() {
         let mut ctrl = default_controller();
-        let new_settings = Settings { auto_paste: false, language: crate::settings::Language::Swedish, ..Default::default() };
+        let new_settings = Settings { auto_paste: false, language: sagascript_core::settings::Language::Swedish, ..Default::default() };
         ctrl.update_settings(new_settings);
         assert!(!ctrl.settings().auto_paste);
-        assert_eq!(ctrl.settings().language, crate::settings::Language::Swedish);
+        assert_eq!(ctrl.settings().language, sagascript_core::settings::Language::Swedish);
     }
 
     // -- Model ready --

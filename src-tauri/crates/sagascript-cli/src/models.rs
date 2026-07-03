@@ -1,8 +1,8 @@
 use clap::Args;
 
-use crate::error::DictationError;
-use crate::settings::{Language, WhisperModel};
-use crate::transcription::model;
+use sagascript_core::error::DictationError;
+use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::transcription::model;
 
 use super::transcribe::{model_id_string, parse_language, parse_model};
 
@@ -61,8 +61,8 @@ pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
     // Diarization models section (only when no language filter, or always show)
     #[cfg(feature = "diarization")]
     if args.language.is_none() {
-        use crate::diarization::model as diar_model;
-        use crate::diarization::model::DiarizationModel;
+        use sagascript_core::diarization::model as diar_model;
+        use sagascript_core::diarization::model::DiarizationModel;
 
         println!();
         println!("Diarization models (speaker identification):");
@@ -126,7 +126,7 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
     // Try diarization model IDs first (when feature is enabled)
     #[cfg(feature = "diarization")]
     {
-        use crate::diarization::model::DiarizationModel;
+        use sagascript_core::diarization::model::DiarizationModel;
 
         // "diarization" meta-ID downloads both models
         if DiarizationModel::is_meta_id(&args.model) {
@@ -186,9 +186,9 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
 
 #[cfg(feature = "diarization")]
 async fn download_diarization_model(
-    model: crate::diarization::model::DiarizationModel,
+    model: sagascript_core::diarization::model::DiarizationModel,
 ) -> Result<(), DictationError> {
-    use crate::diarization::model as diar_model;
+    use sagascript_core::diarization::model as diar_model;
 
     if diar_model::is_model_downloaded(model) {
         let path = diar_model::model_path(model);

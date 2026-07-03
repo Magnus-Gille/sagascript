@@ -4,11 +4,11 @@ use clap::Args;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::audio::decoder::decode_audio_file;
-use crate::error::DictationError;
-use crate::settings::{Language, WhisperModel};
-use crate::transcription::model;
-use crate::transcription::{TranscribeOptions, WhisperBackend};
+use sagascript_core::audio::decoder::decode_audio_file;
+use sagascript_core::error::DictationError;
+use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::transcription::model;
+use sagascript_core::transcription::{TranscribeOptions, WhisperBackend};
 
 #[derive(Args)]
 pub struct TranscribeArgs {
@@ -67,7 +67,7 @@ pub struct TranscribeArgs {
 }
 
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
-    let stored = crate::settings::store::load();
+    let stored = sagascript_core::settings::store::load();
     let language = match &args.language {
         Some(l) => parse_language(l)?,
         None => stored.language,
@@ -118,7 +118,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         if args.beam_size.is_some() || args.vad || args.no_vad {
             eprintln!("Note: --beam / --vad have no effect with --diarize.");
         }
-        use crate::diarization::{
+        use sagascript_core::diarization::{
             DiarizeConfig, TimestampedSegment,
             diarize,
             merge::{consolidate, merge_with_transcript},
@@ -229,7 +229,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         beam_size: args.beam_size.unwrap_or(if stored.beam_size >= 2 {
             stored.beam_size
         } else {
-            crate::transcription::FILE_TRANSCRIBE_BEAM
+            sagascript_core::transcription::FILE_TRANSCRIBE_BEAM
         }),
         temperature_fallback: stored.temperature_fallback,
         vad_model_path,

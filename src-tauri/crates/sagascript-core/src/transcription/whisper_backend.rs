@@ -76,6 +76,12 @@ pub struct WhisperBackend {
 unsafe impl Send for WhisperBackend {}
 unsafe impl Sync for WhisperBackend {}
 
+impl Default for WhisperBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WhisperBackend {
     pub fn new() -> Self {
         Self {

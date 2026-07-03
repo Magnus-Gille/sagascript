@@ -1,5 +1,9 @@
 pub mod config;
 pub mod models;
+// Live recording is optional (`record` feature, on by default) so a pure
+// batch-transcribe build (`--no-default-features`) carries no audio-capture
+// stack — on Linux, no cpal/ALSA.
+#[cfg(feature = "record")]
 pub mod record;
 pub mod transcribe;
 
@@ -101,6 +105,7 @@ EXAMPLES:
     Transcribe(transcribe::TranscribeArgs),
 
     /// Record from microphone and transcribe
+    #[cfg(feature = "record")]
     #[command(
         long_about = "\
 Record audio from the default microphone and transcribe it.
@@ -332,15 +337,16 @@ pub fn run(cli: Cli) {
 
     let result = match cli.command.unwrap() {
         Command::Transcribe(args) => transcribe::run(args),
+        #[cfg(feature = "record")]
         Command::Record(args) => record::run(args),
         Command::ListModels(args) => models::list(args),
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
         Command::ResetOnboarding => {
-            let mut settings = crate::settings::store::load();
+            let mut settings = sagascript_core::settings::store::load();
             settings.has_completed_onboarding = false;
-            crate::settings::store::save(&settings)
-                .map_err(crate::error::DictationError::SettingsError)
+            sagascript_core::settings::store::save(&settings)
+                .map_err(sagascript_core::error::DictationError::SettingsError)
                 .map(|()| {
                     eprintln!("Onboarding reset. The setup wizard will run on next launch.");
                 })
@@ -364,7 +370,7 @@ pub fn run(cli: Cli) {
 }
 
 fn formats() {
-    use crate::audio::decoder::SUPPORTED_EXTENSIONS;
+    use sagascript_core::audio::decoder::SUPPORTED_EXTENSIONS;
 
     println!("Supported audio/video formats:");
     for ext in SUPPORTED_EXTENSIONS {
@@ -376,17 +382,17 @@ fn generate_completions<G: Generator>(gen: G) {
     clap_complete::generate(gen, &mut Cli::command(), "sagascript", &mut io::stdout());
 }
 
-fn generate_manpages(dir: Option<PathBuf>) -> Result<(), crate::error::DictationError> {
+fn generate_manpages(dir: Option<PathBuf>) -> Result<(), sagascript_core::error::DictationError> {
     let cmd = Cli::command();
 
     let map_err = |e: io::Error| {
-        crate::error::DictationError::SettingsError(format!("Failed to generate man pages: {e}"))
+        sagascript_core::error::DictationError::SettingsError(format!("Failed to generate man pages: {e}"))
     };
 
     match dir {
         Some(dir) => {
             std::fs::create_dir_all(&dir).map_err(|e| {
-                crate::error::DictationError::SettingsError(format!(
+                sagascript_core::error::DictationError::SettingsError(format!(
                     "Failed to create directory '{}': {e}",
                     dir.display()
                 ))
@@ -498,6 +504,7 @@ mod tests {
         // Subcommand pages
         let expected = [
             "sagascript-transcribe.1",
+            #[cfg(feature = "record")]
             "sagascript-record.1",
             "sagascript-list-models.1",
             "sagascript-download-model.1",
@@ -568,6 +575,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "record")]
     #[test]
     fn record_help_contains_examples() {
         let cmd = Cli::command();
@@ -644,6 +652,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "record")]
     #[test]
     fn parse_record_minimal() {
         let cli = Cli::try_parse_from(["sagascript", "record"]).unwrap();
@@ -660,6 +669,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "record")]
     #[test]
     fn parse_record_all_flags() {
         let cli = Cli::try_parse_from([

@@ -6,7 +6,7 @@ Sagascript is a low-latency, privacy-first macOS dictation app built with Tauri 
 
 ## Golden rules
 
-- **CLI-first design**: Every feature must have a CLI equivalent. The GUI is a convenience layer on top of CLI commands. The CLI commands in `src-tauri/src/cli/` are the source of truth for what the app can do.
+- **CLI-first design**: Every feature must have a CLI equivalent. The GUI is a convenience layer on top of CLI commands. The CLI commands in `src-tauri/crates/sagascript-cli/src/` are the source of truth for what the app can do.
 - **Privacy-first**: Default to local transcription. Remote/cloud features are opt-in, never default.
 - Optimize for **latency** and **perceived speed**.
 - Keep UI minimal (menu bar + settings + indicator).
@@ -29,9 +29,10 @@ Sagascript is a low-latency, privacy-first macOS dictation app built with Tauri 
 ## Local commands
 
 - `cargo tauri dev` — build and run the app in dev mode
-- `cargo check` — type-check Rust (from `src-tauri/`)
-- `cargo test` — run Rust unit tests (from `src-tauri/`)
-- `cargo clippy -- -D warnings` — lint Rust (from `src-tauri/`)
+- `cargo check --workspace` — type-check Rust (from `src-tauri/`; bare `cargo check` covers only the app crate)
+- `cargo test --workspace` — run Rust unit tests across all three crates (from `src-tauri/`)
+- `cargo clippy --workspace --all-targets -- -D warnings` — lint Rust (from `src-tauri/`)
+- `cargo build -p sagascript-cli --no-default-features` — pure batch-transcribe CLI build (no cpal/ALSA)
 - `npx svelte-check --tsconfig ./tsconfig.json` — type-check Svelte/TS
 - `tail -f ~/Library/Logs/Sagascript/sagascript.log` — watch logs
 
@@ -49,15 +50,20 @@ Sagascript is a low-latency, privacy-first macOS dictation app built with Tauri 
 ## Architecture
 
 ```
-src/                  # Svelte 5 frontend (menu bar UI)
-src-tauri/src/        # Rust backend
-  cli/                # CLI subcommands (clap)
-  audio/              # Audio capture, decoding, resampling
-  transcription/      # Whisper backend, model management
-  settings/           # Settings store (shared between CLI and GUI)
-  hotkey/             # Global hotkey service
-  paste/              # Paste-into-active-app service
-  platform/           # Platform-specific code (macOS, Windows stubs)
-  logging/            # Structured logging
-  credentials/        # Keyring integration
+src/                            # Svelte 5 frontend (menu bar UI)
+src-tauri/                      # Rust workspace (root package = the Tauri app)
+  src/                          # App crate: GUI shell + desktop integrations
+    hotkey/                     # Global hotkey service
+    paste/                      # Paste-into-active-app service
+    platform/                   # Platform-specific code (macOS, Windows stubs)
+    logging/                    # Structured logging
+  crates/sagascript-core/src/   # Lib crate: transcription engine
+    audio/                      # Audio capture (`record` feature), decoding, resampling
+    transcription/              # Whisper backend, model management
+    settings/                   # Settings store (shared between CLI and GUI)
+    diarization/                # Speaker diarization (`diarization` feature)
+  crates/sagascript-cli/src/    # Lib + bin crate: CLI subcommands (clap)
 ```
+
+Both the app crate and `sagascript-cli` produce a bin named `sagascript`;
+`target/release/sagascript` is whichever was built most recently.

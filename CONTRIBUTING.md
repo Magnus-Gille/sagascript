@@ -35,14 +35,16 @@ cargo tauri dev
 All checks must pass on both macOS and Windows (CI runs on both platforms).
 
 ```bash
-# Rust unit tests
-cd src-tauri && cargo test
+# Rust unit tests — all workspace crates (app + sagascript-core + sagascript-cli).
+# NOTE: a bare `cargo test` covers only the app crate; use --workspace or -p.
+cd src-tauri && cargo test --workspace
 
 # Svelte/TypeScript type checking
 npx svelte-check --tsconfig ./tsconfig.json
 
-# Rust lints
-cd src-tauri && cargo clippy -- -D warnings
+# Rust lints (per crate; the member crates gate optional features)
+cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
+cd src-tauri && cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings
 ```
 
 ## Code style
@@ -62,18 +64,27 @@ Default to local transcription. Remote/cloud features are always opt-in, never d
 ## Architecture overview
 
 ```
-src/                  # Svelte 5 frontend (menu bar UI)
-src-tauri/src/        # Rust backend
-  cli/                # CLI subcommands (clap)
-  audio/              # Audio capture, decoding, resampling
-  transcription/      # Whisper backend, model management
-  settings/           # Settings store (shared between CLI and GUI)
-  hotkey/             # Global hotkey service
-  paste/              # Paste-into-active-app service
-  platform/           # Platform-specific code (macOS, Windows stubs)
-  logging/            # Structured logging
-  credentials/        # Keyring integration
+src/                            # Svelte 5 frontend (menu bar UI)
+src-tauri/                      # Rust workspace (root package = the Tauri app)
+  src/                          # App crate: GUI shell + desktop integrations
+    hotkey/                     # Global hotkey service
+    paste/                      # Paste-into-active-app service
+    platform/                   # Platform-specific code (macOS, Windows stubs)
+    logging/                    # Structured logging
+  crates/sagascript-core/       # Lib crate: the transcription engine
+    src/audio/                  # Audio capture (`record` feature), decode, resample
+    src/transcription/          # Whisper backend, model management
+    src/settings/               # Settings store (shared between CLI and GUI)
+    src/diarization/            # Speaker diarization (`diarization` feature)
+  crates/sagascript-cli/        # Lib + bin crate: CLI subcommands (clap)
 ```
+
+The workspace root package is the Tauri app, so bare `cargo build`/`test`/
+`clippy` in `src-tauri/` cover the app only — use `--workspace` or `-p` for the
+member crates. Both the app crate and `sagascript-cli` produce a binary named
+`sagascript`; `target/release/sagascript` is whichever one was built last, so
+build with `-p sagascript-cli` (headless) or `cargo tauri build` (app)
+immediately before using that path.
 
 ## Platform-specific notes
 
@@ -106,7 +117,7 @@ Then relaunch and re-grant permissions when prompted.
 
 1. Fork the repo and create a feature branch from `main`.
 2. Make your changes, following the code style guidelines above.
-3. Ensure tests pass (`cargo test`, `npx svelte-check`, `cargo clippy -- -D warnings`).
+3. Ensure tests pass (`cargo test --workspace`, `npx svelte-check`, `cargo clippy --workspace --all-targets -- -D warnings`).
 4. Open a pull request with a clear description of what you changed and why.
 
 Keep PRs focused -- one feature or fix per PR. If you're planning a large change, open an issue first to discuss the approach.
