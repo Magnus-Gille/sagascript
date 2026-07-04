@@ -83,8 +83,13 @@ impl AudioCaptureService {
         Ok(())
     }
 
-    /// Stop capturing and return the audio samples
-    pub fn stop_capture(&mut self) -> Vec<f32> {
+    /// Stop capturing and return the captured 16 kHz samples.
+    ///
+    /// On resample failure this returns `Err` (finding 4) rather than an empty
+    /// `Vec` — an empty buffer means genuine silence, so masking a device/format
+    /// error as empty made a real failure indistinguishable from silence (and
+    /// surfaced the misleading "No audio captured" to the user).
+    pub fn stop_capture(&mut self) -> Result<Vec<f32>, DictationError> {
         // Signal the capture thread to stop
         {
             let mut stop = self.stop_signal.lock().unwrap();
@@ -104,18 +109,17 @@ impl AudioCaptureService {
         // Resample the entire recording to 16 kHz in a single pass. Doing it
         // here (rather than per-callback) keeps the realtime audio thread cheap
         // and avoids the filter-restart transient that a per-callback resampler
-        // injects at every chunk boundary.
+        // injects at every chunk boundary. An empty buffer or unknown device
+        // rate is genuine silence — Ok(empty); a resample failure is a real
+        // error and is propagated.
         let device_rate = self.device_sample_rate.load(Ordering::SeqCst);
         let samples = if raw.is_empty() || device_rate == 0 {
             raw
         } else {
-            match resample_to_16khz(raw, device_rate) {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("Resample failed, dropping recording: {e}");
-                    Vec::new()
-                }
-            }
+            resample_to_16khz(raw, device_rate).map_err(|e| {
+                error!("Resample failed: {e}");
+                DictationError::AudioCaptureError(format!("Resample failed: {e}"))
+            })?
         };
 
         let duration = samples.len() as f64 / TARGET_SAMPLE_RATE as f64;
@@ -129,7 +133,7 @@ impl AudioCaptureService {
         // Retain for retry
         self.last_captured = Some(samples.clone());
 
-        samples
+        Ok(samples)
     }
 
     /// Get the last captured audio for retry
@@ -365,5 +369,18 @@ mod tests {
         let cap = MAX_BUFFER_SECONDS;
         process_samples_i16(&vec![0i16; cap + 100], 1, 1, &b);
         assert_eq!(b.lock().unwrap().len(), cap);
+    }
+
+    // Finding 4: stop_capture returns a Result so a real device/resample failure
+    // is distinguishable from silence. With no capture ever started the buffer is
+    // empty and the device rate unknown (0), so genuine silence must be
+    // Ok(empty) — NOT an error and NOT indistinguishable from a failure.
+    #[test]
+    fn stop_capture_silence_is_ok_empty() {
+        let mut svc = AudioCaptureService::new();
+        let out = svc
+            .stop_capture()
+            .expect("silence should be Ok(empty), not Err");
+        assert!(out.is_empty());
     }
 }

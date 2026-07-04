@@ -38,7 +38,7 @@ use tauri::{
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tracing::{error, info, warn};
 
-use app_controller::{AppController, HotkeyDownResult};
+use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
 use sagascript_core::transcription::WhisperBackend;
 
@@ -443,56 +443,98 @@ fn handle_hotkey_release(
     stop_recording_and_transcribe(app, ctrl);
 }
 
+/// Run a UI closure on the macOS main thread. NSStatusItem / NSWindow (tray,
+/// overlay) APIs must not be touched from a worker thread; best-effort — logs
+/// if the dispatch itself fails.
+fn dispatch_to_main<F>(app: &tauri::AppHandle, f: F)
+where
+    F: FnOnce(&tauri::AppHandle) + Send + 'static,
+{
+    let app_for_closure = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || f(&app_for_closure)) {
+        error!("Failed to dispatch UI work to main thread: {e}");
+    }
+}
+
 /// Stop recording, enforce minimum duration, and spawn transcription.
 /// Shared by both push-to-talk (on key-up) and toggle (on second key-down).
 fn stop_recording_and_transcribe(
     app: &tauri::AppHandle,
     ctrl: &tauri::State<'_, SharedController>,
 ) {
-    // Enforce minimum recording duration
+    // Compute how long we still need to hold to satisfy the minimum recording
+    // duration — but do NOT block the global-shortcut (UI) thread waiting for it
+    // (finding 2): a std::thread::sleep here freezes UI redraw and stalls
+    // subsequent hotkey events. The delay is offloaded to an async task below.
     let elapsed = {
         let c = ctrl.lock().unwrap();
         c.recording_elapsed()
     };
-
-    if elapsed < Duration::from_millis(MIN_RECORDING_MS) {
-        let remaining = Duration::from_millis(MIN_RECORDING_MS) - elapsed;
+    let min = Duration::from_millis(MIN_RECORDING_MS);
+    let remaining = if elapsed < min {
+        let rem = min - elapsed;
         info!(
-            "Recording too short ({:.0}ms), waiting {:.0}ms...",
+            "Recording too short ({:.0}ms), deferring stop by {:.0}ms off the UI thread...",
             elapsed.as_millis(),
-            remaining.as_millis()
+            rem.as_millis()
         );
-        std::thread::sleep(remaining);
-    }
-
-    // Stop recording (single lock acquisition)
-    let audio = {
-        let mut c = ctrl.lock().unwrap();
-        if c.state().is_recording() {
-            c.stop_recording()
-        } else {
-            return;
-        }
+        Some(rem)
+    } else {
+        None
     };
 
-    // Hide overlay now that recording has stopped
-    overlay::hide(app);
-
-    // Update tray to show transcribing state
-    let _ = app.emit(events::event::STATE_CHANGED, "transcribing");
-    update_tray_status(app, "transcribing");
-
-    if audio.is_empty() {
-        let mut c = ctrl.lock().unwrap();
-        c.on_transcription_error("No audio captured");
-        let _ = app.emit(events::event::STATE_CHANGED, "idle");
-        update_tray_status(app, "idle");
-        return;
-    }
-
-    // Transcribe asynchronously to avoid blocking the hotkey thread
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Min-duration top-up delay, offloaded so the UI thread stays responsive.
+        if let Some(rem) = remaining {
+            tokio::time::sleep(rem).await;
+        }
+
+        // Stop recording (single lock acquisition, re-acquired here since the
+        // controller State can't be moved into the task). Guarded so a stop that
+        // races an already-stopped session is a no-op, and a capture/resample
+        // failure surfaces as a real error (findings 3 & 4).
+        let outcome = {
+            let ctrl: tauri::State<'_, SharedController> = app_handle.state();
+            let mut c = ctrl.lock().unwrap();
+            c.stop_recording_guarded()
+        };
+        let audio = match outcome {
+            StopRecordingOutcome::NotRecording => return,
+            StopRecordingOutcome::Failed(msg) => {
+                error!("Recording stop failed: {msg}");
+                dispatch_to_main(&app_handle, |app| {
+                    overlay::hide(app);
+                    update_tray_status(app, "idle");
+                });
+                let _ = app_handle.emit(events::event::ERROR, msg);
+                let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                return;
+            }
+            StopRecordingOutcome::Stopped(audio) => audio,
+        };
+
+        // Hide overlay + show the transcribing state — re-dispatched to the main
+        // thread now that this runs on a worker.
+        dispatch_to_main(&app_handle, |app| {
+            overlay::hide(app);
+            update_tray_status(app, "transcribing");
+        });
+        let _ = app_handle.emit(events::event::STATE_CHANGED, "transcribing");
+
+        if audio.is_empty() {
+            {
+                let ctrl: tauri::State<'_, SharedController> = app_handle.state();
+                ctrl.lock().unwrap().on_transcription_error("No audio captured");
+            }
+            dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
+            let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+            return;
+        }
+
+        // Transcribe (timeout/cancellation logic is owned by a separate work
+        // package — left unchanged). Runs in this same task, which is already
+        // off the UI thread.
         let ctrl: tauri::State<'_, SharedController> = app_handle.state();
         let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 

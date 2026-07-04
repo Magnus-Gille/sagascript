@@ -98,7 +98,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         }
     }
 
-    let audio = capture.stop_capture();
+    let audio = capture.stop_capture()?;
     let duration = audio.len() as f64 / TARGET_SAMPLE_RATE as f64;
     eprintln!("Captured {:.1}s of audio ({} samples)", duration, audio.len());
 
