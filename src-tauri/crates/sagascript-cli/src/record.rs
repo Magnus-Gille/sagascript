@@ -60,15 +60,20 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         Some(l) => parse_language(l)?,
         None => stored.language,
     };
+    let save_only = args.output.is_some();
     // Effective hint/prompt: --prompt-file, else --hint/--prompt, else the saved
     // initial_prompt. Resolved up front so a bad --prompt-file fails before we
-    // spend time recording.
-    let effective_prompt = resolve_effective_prompt(
-        args.prompt.as_deref(),
-        args.prompt_file.as_deref(),
-        &stored.initial_prompt,
-    )?;
-    let save_only = args.output.is_some();
+    // spend time recording — but skipped entirely on the save-only path, which
+    // never transcribes, so `--output` isn't blocked by an unusable hint file.
+    let effective_prompt = if save_only {
+        None
+    } else {
+        resolve_effective_prompt(
+            args.prompt.as_deref(),
+            args.prompt_file.as_deref(),
+            &stored.initial_prompt,
+        )?
+    };
 
     // Only validate model if we're going to transcribe
     let model = if !save_only {
