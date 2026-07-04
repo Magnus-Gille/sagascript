@@ -32,7 +32,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ctrlc = { version = "3", optional = true }
 
 [features]
-default = ["record"]
+# `diarization` is default-on for discoverability (#81): a default build must
+# show `--diarize` in --help, or users never learn it exists (#75). It adds
+# ~23 MB of statically-linked ONNX Runtime; the lean batch build
+# (`--no-default-features`) strips it along with `record`.
+default = ["record", "diarization"]
 record = ["sagascript-core/record", "dep:ctrlc"]
 diarization = ["sagascript-core/diarization"]
 

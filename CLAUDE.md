@@ -32,7 +32,7 @@ Sagascript is a low-latency, privacy-first macOS dictation app built with Tauri 
 - `cargo check --workspace` — type-check Rust (from `src-tauri/`; bare `cargo check` covers only the app crate)
 - `cargo test --workspace` — run Rust unit tests across all three crates (from `src-tauri/`)
 - `cargo clippy --workspace --all-targets -- -D warnings` — lint Rust (from `src-tauri/`)
-- `cargo build -p sagascript-cli --no-default-features` — pure batch-transcribe CLI build (no cpal/ALSA)
+- `cargo build -p sagascript-cli --no-default-features` — lean batch-transcribe CLI build (no cpal/ALSA, no diarization and its ONNX Runtime; ~8 MB vs ~31 MB default)
 - `npx svelte-check --tsconfig ./tsconfig.json` — type-check Svelte/TS
 - `tail -f ~/Library/Logs/Sagascript/sagascript.log` — watch logs
 
