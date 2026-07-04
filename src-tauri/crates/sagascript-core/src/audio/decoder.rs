@@ -16,6 +16,48 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "wav", "mp3", "m4a", "aac", "mp4", "mov", "ogg", "webm", "flac", "qta",
 ];
 
+/// Hard ceiling on decoded audio length, expressed in samples of a 16kHz mono
+/// clip of equivalent duration (~4 hours: `4 * 3600 * 16_000`). Without a
+/// cap, `decode_audio_file` accumulates the ENTIRE decoded PCM stream into a
+/// single `Vec<f32>` before resampling — a multi-hour, high-sample-rate
+/// multichannel file (or an adversarial/corrupt one that decodes to far more
+/// "audio" than its file size implies) can require tens of GB and OOM the
+/// process.
+///
+/// The check is done against a *duration-normalized* sample count (raw
+/// accumulated samples, divided by channel count and source sample rate, then
+/// scaled to 16kHz) rather than the literal raw interleaved sample count, so
+/// the cap applies consistently regardless of the source format — a 4-hour
+/// clip is rejected the same whether it's mono 16kHz or stereo 48kHz. This is
+/// deliberately generous: no legitimate multi-hour podcast batch-
+/// transcription job should ever hit it.
+pub const MAX_DECODE_SAMPLES: usize = 4 * 3600 * 16_000; // ~230M, ~4h @ 16kHz mono equivalent
+
+/// Check whether the accumulated decode so far has exceeded
+/// [`MAX_DECODE_SAMPLES`], normalized to a 16kHz-mono-equivalent duration.
+/// Factored out of the decode loop so it can be unit tested without
+/// allocating gigabytes of PCM data.
+fn check_decode_size_cap(
+    raw_sample_count: usize,
+    channels: usize,
+    sample_rate: u32,
+) -> Result<(), DictationError> {
+    let channels = (channels.max(1)) as f64;
+    let sample_rate = if sample_rate == 0 { 44_100.0 } else { sample_rate as f64 };
+
+    let duration_secs = raw_sample_count as f64 / channels / sample_rate;
+    let equivalent_16k_mono_samples = duration_secs * 16_000.0;
+
+    if equivalent_16k_mono_samples > MAX_DECODE_SAMPLES as f64 {
+        return Err(DictationError::FileDecodeError(format!(
+            "Audio file is too long to decode (exceeds the ~4 hour / {MAX_DECODE_SAMPLES}-sample \
+             16kHz-mono-equivalent limit); aborting to avoid unbounded memory use"
+        )));
+    }
+
+    Ok(())
+}
+
 /// Decode an audio or video file to `Vec<f32>` at 16 kHz mono (Whisper input format).
 ///
 /// Uses symphonia to probe the file format, find the first audio track,
@@ -131,6 +173,11 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
         sample_buf.copy_interleaved_ref(decoded);
 
         all_samples.extend_from_slice(sample_buf.samples());
+
+        // Abort early (before accumulating further) if this file would decode
+        // to an unreasonably long clip. Checked every packet so we bail out
+        // during decode rather than after the huge buffer already exists.
+        check_decode_size_cap(all_samples.len(), actual_channels, sample_rate)?;
     }
 
     if all_samples.is_empty() {
@@ -278,5 +325,82 @@ mod tests {
             }
             other => panic!("unexpected error: {:?}", other),
         }
+    }
+
+    // -- decode size cap --
+    // These test the extracted check_decode_size_cap function directly
+    // (constructing the accumulated-count condition rather than actually
+    // decoding tens of GB of audio).
+
+    #[test]
+    fn decode_size_cap_rejects_over_limit() {
+        // 5 hours of mono 16kHz raw samples — over the ~4h cap.
+        let raw_samples = 5 * 3600 * 16_000;
+        let result = check_decode_size_cap(raw_samples, 1, 16_000);
+        assert!(result.is_err(), "5h mono 16kHz should exceed the cap");
+        match result.unwrap_err() {
+            DictationError::FileDecodeError(msg) => {
+                assert!(
+                    msg.contains("4 hour") || msg.contains(&MAX_DECODE_SAMPLES.to_string()),
+                    "error should name the limit: {msg}"
+                );
+            }
+            other => panic!("expected FileDecodeError, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn decode_size_cap_allows_under_limit() {
+        // 3 hours of stereo 48kHz raw samples — well under the cap once
+        // normalized to a 16kHz-mono-equivalent duration.
+        let raw_samples = 3 * 3600 * 48_000 * 2;
+        let result = check_decode_size_cap(raw_samples, 2, 48_000);
+        assert!(result.is_ok(), "3h stereo 48kHz should not be rejected: {:?}", result);
+    }
+
+    #[test]
+    fn decode_size_cap_does_not_reject_legitimate_multi_hour_podcasts() {
+        // A ~3h55m clip in several common real-world source formats should
+        // all pass — this is the "generous enough" requirement: the cap must
+        // not reject realistic multi-hour batch-transcription jobs.
+        let almost_four_hours_secs = 3.917 * 3600.0; // ~3h 55m
+        for (channels, sample_rate) in [
+            (1u32, 16_000u32), // mono 16kHz (Whisper-native)
+            (1, 8_000),        // mono 8kHz (phone-quality)
+            (2, 44_100),       // stereo CD-quality
+            (2, 48_000),       // stereo studio/podcast standard
+        ] {
+            let raw = (almost_four_hours_secs * channels as f64 * sample_rate as f64) as usize;
+            let result = check_decode_size_cap(raw, channels as usize, sample_rate);
+            assert!(
+                result.is_ok(),
+                "channels={channels} sample_rate={sample_rate} (~3h55m) should not be rejected: {:?}",
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn decode_size_cap_treats_zero_channels_as_one() {
+        // channels=0 is a defensive/malformed-metadata case; must not divide
+        // by zero (NaN/inf) or panic.
+        let raw_samples = 3600 * 16_000; // 1h mono-equivalent
+        let result = check_decode_size_cap(raw_samples, 0, 16_000);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn decode_size_cap_treats_zero_sample_rate_as_default() {
+        // sample_rate=0 would otherwise divide by zero; must not panic.
+        let result = check_decode_size_cap(1_000_000, 1, 0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn existing_decode_calls_pass_the_cap_check() {
+        // Sanity: the ~1s clip used by decode_wav_from_encode is nowhere
+        // near the cap.
+        let result = check_decode_size_cap(16_000, 1, 16_000);
+        assert!(result.is_ok());
     }
 }

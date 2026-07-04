@@ -199,10 +199,7 @@ fn main() {
                 if let Some(dir) = app_dir {
                     let legacy = dir.join("flowdictate-settings.json");
                     let new_path = dir.join("sagascript-settings.json");
-                    if legacy.exists() && !new_path.exists() {
-                        info!("Migrating settings store from FlowDictate");
-                        let _ = std::fs::rename(&legacy, &new_path);
-                    }
+                    migrate_legacy_settings(&legacy, &new_path);
                 }
             }
 
@@ -348,6 +345,31 @@ fn update_tray_status(app: &tauri::AppHandle, state: &str) {
     }
 
     set_status_menu_text(app, &format!("Sagascript - {menu_text}"));
+}
+
+/// Migrate the legacy FlowDictate settings file to the new Sagascript path, if
+/// present and no Sagascript settings file already exists. Rename failure used
+/// to be silently swallowed (`let _ = std::fs::rename(...)`), which would
+/// silently reset an upgrading user to defaults with no diagnostic trail.
+fn migrate_legacy_settings(legacy: &std::path::Path, new_path: &std::path::Path) {
+    if !legacy.exists() || new_path.exists() {
+        return;
+    }
+
+    info!("Migrating settings store from FlowDictate");
+    match std::fs::rename(legacy, new_path) {
+        Ok(()) => info!(
+            "Migrated settings store from FlowDictate ({}) to Sagascript ({})",
+            legacy.display(),
+            new_path.display()
+        ),
+        Err(e) => warn!(
+            "Failed to migrate FlowDictate settings from {} to {}: {e} — \
+             the upgrading user will fall back to default settings",
+            legacy.display(),
+            new_path.display()
+        ),
+    }
 }
 
 /// Truncate transcription text for tray display, cutting on a char boundary.
@@ -740,5 +762,83 @@ mod tests {
         let text = "🎉".repeat(16);
         let display = truncate_for_tray(&text);
         assert!(std::str::from_utf8(display.as_bytes()).is_ok());
+    }
+
+    fn migrate_test_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("sagascript-migrate-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn migrate_legacy_settings_renames_when_new_absent() {
+        let dir = migrate_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("flowdictate-settings.json");
+        let new_path = dir.join("sagascript-settings.json");
+        std::fs::write(&legacy, r#"{"language":"sv"}"#).unwrap();
+
+        migrate_legacy_settings(&legacy, &new_path);
+
+        assert!(!legacy.exists(), "legacy file should be renamed away");
+        assert!(new_path.exists(), "new path should now hold the migrated settings");
+        assert_eq!(std::fs::read_to_string(&new_path).unwrap(), r#"{"language":"sv"}"#);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrate_legacy_settings_noop_when_new_already_exists() {
+        let dir = migrate_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("flowdictate-settings.json");
+        let new_path = dir.join("sagascript-settings.json");
+        std::fs::write(&legacy, "legacy-content").unwrap();
+        std::fs::write(&new_path, "already-migrated-content").unwrap();
+
+        migrate_legacy_settings(&legacy, &new_path);
+
+        // Neither file should be touched — a Sagascript settings file already exists.
+        assert!(legacy.exists());
+        assert_eq!(std::fs::read_to_string(&legacy).unwrap(), "legacy-content");
+        assert_eq!(std::fs::read_to_string(&new_path).unwrap(), "already-migrated-content");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrate_legacy_settings_noop_when_legacy_absent() {
+        let dir = migrate_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("flowdictate-settings.json");
+        let new_path = dir.join("sagascript-settings.json");
+
+        // Should not panic when there's nothing to migrate.
+        migrate_legacy_settings(&legacy, &new_path);
+
+        assert!(!new_path.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression test for the swallowed-rename bug: a failed rename (here,
+    /// forced by a destination whose parent directory doesn't exist) must not
+    /// panic, and the legacy file must be left in place rather than lost —
+    /// the old `let _ = std::fs::rename(...)` code silently discarded the
+    /// error either way, but this at least confirms the failure path doesn't
+    /// destroy data.
+    #[test]
+    fn migrate_legacy_settings_does_not_panic_on_rename_failure() {
+        let dir = migrate_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("flowdictate-settings.json");
+        std::fs::write(&legacy, "legacy-content").unwrap();
+        // Destination's parent directory doesn't exist -> rename fails.
+        let new_path = dir.join("nonexistent-subdir").join("sagascript-settings.json");
+
+        migrate_legacy_settings(&legacy, &new_path);
+
+        assert!(legacy.exists(), "legacy file must survive a failed rename");
+        assert!(!new_path.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

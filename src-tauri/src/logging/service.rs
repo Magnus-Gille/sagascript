@@ -35,9 +35,20 @@ pub struct LogEntry {
 
 impl LoggingService {
     pub fn new() -> Self {
-        let app_session_id = format!("app-{}", &Uuid::new_v4().to_string()[..8]);
         let log_dir = Self::log_directory();
         let log_path = log_dir.join("sagascript.log");
+        Self::new_with_path(log_path)
+    }
+
+    /// Construct against an explicit log file path. Test seam for
+    /// `new()` — production code always goes through `new()`, which derives
+    /// the path from `log_directory()`.
+    fn new_with_path(log_path: PathBuf) -> Self {
+        let app_session_id = format!("app-{}", &Uuid::new_v4().to_string()[..8]);
+        let log_dir = log_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
 
         // Create log directory with restrictive permissions
         if let Err(e) = fs::create_dir_all(&log_dir) {
@@ -138,7 +149,7 @@ impl LoggingService {
         }
     }
 
-    fn rotate_if_needed(&self, _file: &mut File) {
+    fn rotate_if_needed(&self, file: &mut File) {
         let size = fs::metadata(&self.log_path)
             .map(|m| m.len())
             .unwrap_or(0);
@@ -147,7 +158,12 @@ impl LoggingService {
             return;
         }
 
-        let dir = Self::log_directory();
+        // Directory of the (possibly test-injected) log path, not the
+        // hardcoded platform log_directory() — matters for `new_with_path`.
+        let dir = match self.log_path.parent() {
+            Some(d) => d.to_path_buf(),
+            None => Self::log_directory(),
+        };
 
         // Delete oldest
         let oldest = dir.join(format!("sagascript.{MAX_FILES}.log"));
@@ -162,10 +178,48 @@ impl LoggingService {
 
         // Current -> .1
         let rotated = dir.join("sagascript.1.log");
-        let _ = fs::rename(&self.log_path, rotated);
-
-        // Reopen
-        // (The caller will need to handle this - for simplicity we just create a new file)
+        match fs::rename(&self.log_path, &rotated) {
+            Ok(()) => {
+                // Reopen a fresh file at the original path and swap it into
+                // the already-held &mut File — do NOT re-lock self.log_file,
+                // write_entry already holds that lock (re-locking a
+                // non-reentrant std Mutex would deadlock). Only swap on Ok
+                // so a failed reopen doesn't silently kill logging (the
+                // caller keeps writing to the renamed .1.log instead of
+                // losing entries).
+                match OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&self.log_path)
+                {
+                    Ok(new_file) => {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = fs::set_permissions(
+                                &self.log_path,
+                                fs::Permissions::from_mode(0o600),
+                            );
+                        }
+                        *file = new_file;
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Log rotation: failed to reopen fresh log file at {}: {e} — \
+                             continuing to write to the rotated file",
+                            self.log_path.display()
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Log rotation: failed to rename {} to {}: {e}",
+                    self.log_path.display(),
+                    rotated.display()
+                );
+            }
+        }
     }
 }
 
@@ -271,5 +325,73 @@ mod tests {
     fn constants() {
         assert_eq!(MAX_FILE_SIZE, 5_000_000);
         assert_eq!(MAX_FILES, 5);
+    }
+
+    /// Regression test for the rotation-reopen bug: after the first 5MB
+    /// rotation, the live File handle used to keep writing to the renamed
+    /// `.1.log` inode forever (since fs::metadata on the now-missing
+    /// `sagascript.log` path always failed -> unwrap_or(0) -> rotation never
+    /// fired again). A subsequent write must land in a FRESH sagascript.log,
+    /// not the renamed .1.log, and the fresh file must have 0o600 perms.
+    #[test]
+    fn rotate_reopens_file_so_writes_continue_in_fresh_log() {
+        let dir = std::env::temp_dir().join(format!("sagascript-log-test-{}", Uuid::new_v4()));
+        let log_path = dir.join("sagascript.log");
+        let svc = LoggingService::new_with_path(log_path.clone());
+
+        // Inflate the log file past MAX_FILE_SIZE directly (avoids tens of
+        // thousands of svc.log() calls just to cross the threshold).
+        {
+            let mut f = OpenOptions::new()
+                .append(true)
+                .open(&log_path)
+                .expect("log file should exist after construction");
+            let filler = vec![b'a'; MAX_FILE_SIZE as usize + 1000];
+            f.write_all(&filler).unwrap();
+            f.flush().unwrap();
+        }
+
+        // This write should trigger rotation.
+        svc.log("info", "Test", "trigger_rotation", serde_json::json!({}));
+
+        // Old content should have been moved to sagascript.1.log
+        let rotated = dir.join("sagascript.1.log");
+        assert!(rotated.exists(), "expected rotated file sagascript.1.log to exist");
+        let rotated_size = fs::metadata(&rotated).unwrap().len();
+        assert!(
+            rotated_size >= MAX_FILE_SIZE,
+            "rotated file should hold the old (large) content, got {rotated_size} bytes"
+        );
+
+        // The live path must exist again and be small (just the one JSON
+        // line we wrote after rotation) — NOT the multi-megabyte renamed
+        // content. Against the pre-fix code this fails: either the metadata
+        // call errors (path missing) or the file is still huge.
+        let new_size = fs::metadata(&log_path)
+            .unwrap_or_else(|e| panic!("fresh sagascript.log should exist after rotation: {e}"))
+            .len();
+        assert!(
+            new_size < MAX_FILE_SIZE,
+            "expected a small fresh log file after rotation, got {new_size} bytes (rotation reopen is broken)"
+        );
+
+        // Fresh file must carry the same restrictive permissions as new().
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&log_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "fresh log file should have 0o600 perms");
+        }
+
+        // A second write should append to the fresh file, not error out.
+        let size_before_second_write = new_size;
+        svc.log("info", "Test", "after_rotation", serde_json::json!({}));
+        let size_after_second_write = fs::metadata(&log_path).unwrap().len();
+        assert!(
+            size_after_second_write > size_before_second_write,
+            "second write after rotation should grow the fresh log file"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
