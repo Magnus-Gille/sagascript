@@ -1,5 +1,7 @@
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 use whisper_rs::{
@@ -17,6 +19,21 @@ use crate::transcription::model;
 /// isn't latency-sensitive, so a wider beam trades speed for fewer repetition
 /// loops. Shared by the GUI file-transcribe command and the `transcribe` CLI.
 pub const FILE_TRANSCRIBE_BEAM: u32 = 5;
+
+/// How long `with_warm_state` waits for the state mutex before giving up with
+/// [`DictationError::ModelBusy`] instead of blocking a caller forever.
+///
+/// A normally-finishing dictation releases the state lock in well under this
+/// budget (short utterances transcribe in sub-second to a couple of seconds),
+/// so legitimate back-to-back dictations only ever *briefly* wait and never
+/// spuriously fail. But it is bounded, so a stuck/aborting inference can no
+/// longer wedge every future transcription behind an un-releasable lock — the
+/// caller gets a clear "engine busy" error instead of hanging. 3s is the
+/// deliberate middle of the 2–5s design range (see WP2b).
+const WARM_STATE_GRACE: Duration = Duration::from_secs(3);
+
+/// Poll interval while waiting for the state mutex during the grace budget.
+const WARM_STATE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Per-transcription tuning knobs (opt-in modes). `Default` reproduces the
 /// fast, robust dictation defaults: greedy decoding, temperature fallback on,
@@ -93,15 +110,61 @@ impl WhisperBackend {
         }
     }
 
-    /// Signal the whisper inference to abort.
+    /// Signal any in-progress inference to abort at the next whisper.cpp compute
+    /// step.
     ///
-    /// NOTE: The abort callback that reads this flag is currently disabled
-    /// (whisper-rs 0.15.1 `set_abort_callback_safe` causes error -6).
-    /// This flag is still set for forward compatibility but has no effect
-    /// on in-progress inference until the callback is restored.
+    /// A *real* abort callback (wired by [`Self::install_abort_callback`]) reads
+    /// this flag before every ggml graph compute (the encoder pass and each
+    /// decoder step). Setting it makes the current `full()` FFI call return
+    /// promptly — whisper.cpp reports error `-6` ("failed to encode") when a
+    /// compute is aborted — so the blocking task exits and releases the warm
+    /// [`Self::state`] mutex instead of running to completion. This un-wedges the
+    /// transcription pipeline on the timeout path (see WP2b).
     pub fn request_abort(&self) {
-        warn!("Transcription abort requested (NOTE: abort callback disabled — inference will run to completion)");
+        warn!("Transcription abort requested — signalling whisper to stop at the next compute step");
         self.abort_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// FFI abort callback. whisper.cpp invokes this before each ggml graph
+    /// compute (encoder + every decoder step); returning `true` aborts the
+    /// computation (`whisper_full` then returns error `-6`). `data` points at the
+    /// backend's [`Self::abort_flag`] `AtomicBool`, which lives for the whole
+    /// process.
+    ///
+    /// This raw, correctly-typed trampoline deliberately bypasses whisper-rs
+    /// 0.15.1's [`FullParams::set_abort_callback_safe`], which is unsound in that
+    /// release: its trampoline is instantiated as `trampoline::<F>` (the caller's
+    /// closure type) but the `user_data` it stores is a *double-boxed*
+    /// `Box<dyn FnMut() -> bool>`. The closure is therefore invoked through a
+    /// mismatched type and returns garbage — in practice `true`, aborting every
+    /// inference immediately. That is the historical "error -6 on all models" the
+    /// old code worked around by leaving abort disabled. A hand-written trampoline
+    /// over an `AtomicBool` avoids the buggy generic entirely.
+    unsafe extern "C" fn abort_trampoline(data: *mut c_void) -> bool {
+        if data.is_null() {
+            return false;
+        }
+        // Safety: `data` is the address of the `AtomicBool` inside this backend's
+        // `abort_flag` Arc, which outlives the `full()` call. We only ever read it
+        // (atomically), from whichever thread whisper.cpp runs its compute on.
+        let flag = unsafe { &*(data as *const AtomicBool) };
+        flag.load(Ordering::Relaxed)
+    }
+
+    /// Wire the real abort callback into `params`, pointing it at `abort_flag`.
+    /// The flag's lifecycle (clear-when-stale, discard-state-on-abort) is owned
+    /// exclusively by the state-lock holder inside [`Self::with_warm_state_grace`]
+    /// — see the ownership rules documented there.
+    fn install_abort_callback(&self, params: &mut FullParams) {
+        let flag_ptr = Arc::as_ptr(&self.abort_flag) as *mut c_void;
+        // Safety: `flag_ptr` targets the `AtomicBool` owned by `self.abort_flag`,
+        // which the backend keeps alive for its entire lifetime (well past the
+        // `full()` call these params drive). The trampoline only reads the flag
+        // and never touches the whisper context, satisfying the FFI contract.
+        unsafe {
+            params.set_abort_callback(Some(Self::abort_trampoline));
+            params.set_abort_callback_user_data(flag_ptr);
+        }
     }
 
     /// Load a specific model, replacing any previously loaded model
@@ -156,8 +219,14 @@ impl WhisperBackend {
         // observe the new context (via loaded_model) while still holding the old
         // warm state. The next transcription lazily recreates the state. Lock
         // order is state -> context, matching with_warm_state().
+        //
+        // The state lock is acquired with the same bounded policy as
+        // with_warm_state: if a stuck inference pins it past the grace budget,
+        // return ModelBusy (dropping the freshly loaded `ctx` cleanly and
+        // letting ensure_model release load_lock) instead of blocking a model
+        // switch forever behind a wedged transcription.
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
             *self.context.lock().unwrap() = Some(ctx);
             *self.loaded_model.lock().unwrap() = Some(whisper_model);
             *state = None;
@@ -208,20 +277,112 @@ impl WhisperBackend {
     /// (re)load. The state lock serializes concurrent transcriptions, which is
     /// required anyway — a single whisper state cannot run two `full()` calls at
     /// once.
+    ///
+    /// The state lock is acquired with a *bounded* wait ([`WARM_STATE_GRACE`]):
+    /// if a previous transcription is stuck holding it past the budget, this
+    /// returns [`DictationError::ModelBusy`] instead of blocking the caller
+    /// forever. That converts the old "permanent wedge" (a hung/aborting call
+    /// pinning the lock forced every future transcription to block) into a clear,
+    /// recoverable error.
     fn with_warm_state<R>(
         &self,
         f: impl FnOnce(&mut WhisperState) -> Result<R, DictationError>,
     ) -> Result<R, DictationError> {
-        let mut state_guard = self.state.lock().unwrap();
-        if state_guard.is_none() {
-            let ctx_guard = self.context.lock().unwrap();
-            let ctx = ctx_guard.as_ref().ok_or(DictationError::ModelNotLoaded)?;
-            let st = ctx.create_state().map_err(|e| {
-                DictationError::TranscriptionFailed(format!("Failed to create whisper state: {e}"))
-            })?;
-            *state_guard = Some(st);
+        self.with_warm_state_grace(WARM_STATE_GRACE, f)
+    }
+
+    /// [`Self::with_warm_state`] with an explicit grace budget. Split out so
+    /// tests can shrink the budget and exercise the `ModelBusy` path quickly.
+    ///
+    /// This method is the SOLE owner of the abort-flag lifecycle. Ownership rule:
+    /// only the call that holds the state lock may touch `abort_flag`, because a
+    /// set flag always belongs to the current lock holder's inference:
+    ///
+    /// 1. On failing to acquire the lock (`ModelBusy`), NOTHING is touched — a
+    ///    pending abort request targets the still-running holder, and clearing it
+    ///    here would cancel that abort and re-wedge the pipeline.
+    /// 2. Once the lock is acquired, any prior abort request is stale by
+    ///    definition (its target released the lock), so it is cleared before the
+    ///    closure runs.
+    /// 3. After the closure returns — STILL holding the guard — if an abort was
+    ///    requested during this call, the warm state is discarded (an aborted
+    ///    `full()` leaves whisper mid-compute) and the flag cleared, before any
+    ///    other call can acquire the lock. No gap exists in which a new call
+    ///    could observe the aborted state or race the flag.
+    fn with_warm_state_grace<R>(
+        &self,
+        grace: Duration,
+        f: impl FnOnce(&mut WhisperState) -> Result<R, DictationError>,
+    ) -> Result<R, DictationError> {
+        let mut state_guard = self.lock_state_bounded(grace)?;
+
+        // (2) We own the lock, so we own the flag: clear any stale abort left
+        // over from a previous, already-finished inference.
+        self.abort_flag.store(false, Ordering::SeqCst);
+
+        // No Drop guard is needed for the abort cleanup below: if `f` panics,
+        // the unwind poisons the state mutex and lock_state_bounded panics on
+        // poison for every later caller (fail-fast preserved), so a plain
+        // post-call check suffices.
+        let result = (|| {
+            if state_guard.is_none() {
+                // Lock order state -> context, matching load_model()'s atomic swap.
+                let ctx_guard = self.context.lock().unwrap();
+                let ctx = ctx_guard.as_ref().ok_or(DictationError::ModelNotLoaded)?;
+                let st = ctx.create_state().map_err(|e| {
+                    DictationError::TranscriptionFailed(format!(
+                        "Failed to create whisper state: {e}"
+                    ))
+                })?;
+                *state_guard = Some(st);
+            }
+            f(state_guard.as_mut().unwrap())
+        })();
+
+        // (3) Abort cleanup under the guard: if this call's inference was
+        // aborted, drop the warm state and clear the flag before releasing the
+        // lock, so the next caller starts from a clean slate.
+        if self.abort_flag.swap(false, Ordering::SeqCst) {
+            warn!("Inference was aborted — discarding warm whisper state; next transcription will rebuild it");
+            *state_guard = None;
         }
-        f(state_guard.as_mut().unwrap())
+
+        result
+    }
+
+    /// Acquire the state mutex, polling `try_lock` on a short interval until the
+    /// `grace` budget elapses. Returns [`DictationError::ModelBusy`] if the lock
+    /// is still held when the budget runs out (a previous transcription is stuck
+    /// or genuinely still running), rather than blocking forever like a plain
+    /// `lock()` would.
+    ///
+    /// A poisoned mutex still panics (as the previous `.lock().unwrap()` did) so
+    /// the poison signal is not silently masked.
+    fn lock_state_bounded(
+        &self,
+        grace: Duration,
+    ) -> Result<MutexGuard<'_, Option<WhisperState>>, DictationError> {
+        let deadline = Instant::now() + grace;
+        loop {
+            match self.state.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(TryLockError::Poisoned(e)) => {
+                    // Preserve fail-fast-on-poison; do not suppress the signal.
+                    panic!("whisper state mutex poisoned: {e}");
+                }
+                Err(TryLockError::WouldBlock) => {
+                    if Instant::now() >= deadline {
+                        warn!(
+                            "Whisper state mutex still held after {:?} grace — returning ModelBusy \
+                             (a previous transcription may still be running or stuck)",
+                            grace
+                        );
+                        return Err(DictationError::ModelBusy);
+                    }
+                    std::thread::sleep(WARM_STATE_POLL_INTERVAL);
+                }
+            }
+        }
     }
 
     /// Run transcription on loaded model (blocking — call from spawn_blocking)
@@ -329,12 +490,14 @@ impl WhisperBackend {
 
         params.set_progress_callback_safe(on_progress);
 
-        // Abort callback: DISABLED — whisper-rs 0.15.1 set_abort_callback_safe()
-        // causes error -6 on all models. request_abort() sets the flag but nothing
-        // reads it during inference; the tokio timeout in commands.rs / main.rs
-        // returns an error while the blocking task runs to completion.
-        // TODO: Restore when whisper-rs fixes the FFI callback lifetime issue.
-        self.abort_flag.store(false, Ordering::SeqCst);
+        // Real abort callback: wire the raw FFI trampoline (bypassing whisper-rs
+        // 0.15.1's unsound set_abort_callback_safe — see abort_trampoline). On
+        // timeout the caller flips the flag via request_abort(); whisper.cpp then
+        // aborts at its next compute step, so this blocking call returns and
+        // releases the warm-state mutex instead of running to completion and
+        // wedging the pipeline. The flag's clear/discard lifecycle is handled by
+        // with_warm_state under the state lock — nothing to do here.
+        self.install_abort_callback(&mut params);
 
         info!(
             "Starting local transcription: {} samples, {} threads, lang={:?}, beam={}, temp_fallback={}, vad={}",
@@ -452,6 +615,11 @@ impl WhisperBackend {
         if let Some(p) = prompt {
             params.set_initial_prompt(p);
         }
+
+        // Same real-abort wiring as the dictation path so a timed-out diarization
+        // transcription can be aborted instead of pinning the warm-state mutex.
+        // The flag's lifecycle is owned by with_warm_state under the state lock.
+        self.install_abort_callback(&mut params);
 
         self.with_warm_state(|state| {
             state.full(params, audio).map_err(|e| {
@@ -947,6 +1115,153 @@ mod word_grouping_tests {
         // "silence" inherits 0.0 (nothing before it), "speech" has t=5.0
         let speech = result.iter().find(|w| w.2 == "speech").expect("should have 'speech'");
         assert!((speech.0 - 5.0).abs() < 1e-9, "speech start should be 5.0, got {}", speech.0);
+    }
+}
+
+/// Tests for the WP2b hardening: the bounded-wait `ModelBusy` guard and the real
+/// abort callback. These exercise only the locking/flag machinery — they need no
+/// loaded model, because the state mutex holds `Option<WhisperState>` and can be
+/// locked while holding `None`.
+#[cfg(test)]
+mod warm_state_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+
+    /// Acquire and hold the (private) state mutex on a background thread, blocking
+    /// until `hold` elapses. Returns once the lock is confirmed held, plus the
+    /// join handle so the caller can wait for release.
+    fn hold_state_lock(backend: &Arc<WhisperBackend>, hold: Duration) -> thread::JoinHandle<()> {
+        let holder = Arc::clone(backend);
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let _guard = holder.state.lock().unwrap();
+            tx.send(()).expect("signal lock acquired");
+            thread::sleep(hold);
+        });
+        rx.recv().expect("background thread should acquire the lock");
+        handle
+    }
+
+    #[test]
+    fn lock_state_bounded_returns_model_busy_when_held_past_grace() {
+        let backend = Arc::new(WhisperBackend::new());
+        // Hold the lock well past the grace budget.
+        let holder = hold_state_lock(&backend, Duration::from_millis(400));
+
+        let start = Instant::now();
+        let res = backend.lock_state_bounded(Duration::from_millis(50));
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(res, Err(DictationError::ModelBusy)),
+            "expected ModelBusy while the lock is held past grace, got {res:?}"
+        );
+        // Must give up near the grace budget, NOT block until the holder releases.
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "should return within ~grace, not block for the full hold; took {elapsed:?}"
+        );
+        holder.join().unwrap();
+    }
+
+    #[test]
+    fn lock_state_bounded_acquires_when_lock_freed_within_grace() {
+        // Back-to-back safety: a briefly-held lock (released well within grace)
+        // must NOT produce a spurious ModelBusy.
+        let backend = Arc::new(WhisperBackend::new());
+        let holder = hold_state_lock(&backend, Duration::from_millis(60));
+
+        let res = backend.lock_state_bounded(Duration::from_secs(2));
+        assert!(
+            res.is_ok(),
+            "should acquire once the briefly-held lock is released, got {res:?}"
+        );
+        drop(res); // release before joining
+        holder.join().unwrap();
+    }
+
+    #[test]
+    fn lock_state_bounded_acquires_immediately_when_uncontended() {
+        let backend = WhisperBackend::new();
+        let res = backend.lock_state_bounded(Duration::from_millis(0));
+        assert!(res.is_ok(), "uncontended lock must be acquired immediately");
+    }
+
+    #[test]
+    fn abort_trampoline_polarity_matches_ggml() {
+        // ggml contract: the abort callback returns `true` to ABORT. Verify the
+        // trampoline mirrors the AtomicBool and treats null as "don't abort".
+        let flag = AtomicBool::new(false);
+        let ptr = &flag as *const AtomicBool as *mut c_void;
+        unsafe {
+            assert!(
+                !WhisperBackend::abort_trampoline(ptr),
+                "flag=false must NOT abort"
+            );
+            flag.store(true, Ordering::SeqCst);
+            assert!(
+                WhisperBackend::abort_trampoline(ptr),
+                "flag=true must abort"
+            );
+            assert!(
+                !WhisperBackend::abort_trampoline(std::ptr::null_mut()),
+                "null user_data must NOT abort"
+            );
+        }
+    }
+
+    /// Abort-flag ownership: only the call that ACQUIRES the state lock may
+    /// touch the flag. A caller that gives up with ModelBusy never owned the
+    /// lock, so it must leave a pending abort request (belonging to the current
+    /// lock holder's inference) untouched — otherwise it would cancel the abort
+    /// of a stuck call and re-introduce the wedge.
+    #[test]
+    fn model_busy_return_leaves_abort_flag_untouched() {
+        let backend = Arc::new(WhisperBackend::new());
+        let holder = hold_state_lock(&backend, Duration::from_millis(300));
+
+        // A timed-out caller has requested an abort of the in-flight inference.
+        backend.request_abort();
+        assert!(backend.abort_flag.load(Ordering::SeqCst));
+
+        // A new call that fails with ModelBusy must NOT clear that request.
+        let res = backend.with_warm_state_grace(Duration::from_millis(30), |_state| Ok(()));
+        assert!(
+            matches!(res, Err(DictationError::ModelBusy)),
+            "expected ModelBusy, got {res:?}"
+        );
+        assert!(
+            backend.abort_flag.load(Ordering::SeqCst),
+            "ModelBusy path must not clear a pending abort request — that would \
+             cancel the abort of the still-running inference and re-wedge the app"
+        );
+        holder.join().unwrap();
+    }
+
+    /// Once a call ACQUIRES the state lock, any prior abort request is stale by
+    /// definition (its target inference has finished and released the lock —
+    /// the flag lifecycle is owned by the lock holder), so it is cleared before
+    /// the new inference starts. Exercised via the ModelNotLoaded early-return,
+    /// which happens after lock acquisition but needs no model file.
+    #[test]
+    fn stale_abort_flag_cleared_once_lock_is_owned() {
+        let backend = WhisperBackend::new();
+        backend.request_abort();
+        assert!(backend.abort_flag.load(Ordering::SeqCst));
+
+        // Uncontended: the call acquires the lock, then fails ModelNotLoaded
+        // (no context) — but by then it owns the flag and must have cleared it.
+        let res = backend.with_warm_state_grace(Duration::from_millis(0), |_state| Ok(()));
+        assert!(
+            matches!(res, Err(DictationError::ModelNotLoaded)),
+            "expected ModelNotLoaded (no context in test env), got {res:?}"
+        );
+        assert!(
+            !backend.abort_flag.load(Ordering::SeqCst),
+            "a call that acquired the state lock must clear the stale abort flag \
+             before starting its own inference"
+        );
     }
 }
 

@@ -17,6 +17,12 @@ pub enum DictationError {
     #[error("Transcription failed: {0}")]
     TranscriptionFailed(String),
 
+    #[error(
+        "Transcription engine is busy — a previous transcription may still be running. \
+         Please try again in a moment."
+    )]
+    ModelBusy,
+
     #[error("No audio was captured. Please try again.")]
     NoAudioCaptured,
 
@@ -106,6 +112,20 @@ mod tests {
         let err = DictationError::MicrophonePermissionDenied;
         let json = serde_json::to_value(&err).unwrap();
         assert_eq!(json["kind"], "MicrophonePermissionDenied");
+    }
+
+    #[test]
+    fn model_busy_display_and_serialize() {
+        let err = DictationError::ModelBusy;
+        let msg = err.to_string();
+        assert!(msg.contains("busy"), "message should say busy: {msg}");
+        assert!(
+            msg.contains("previous transcription"),
+            "message should explain a previous transcription may be running: {msg}"
+        );
+        // Serializes as a bare unit variant so the frontend can switch on `kind`.
+        let json = serde_json::to_value(&err).unwrap();
+        assert_eq!(json["kind"], "ModelBusy");
     }
 
     #[test]
