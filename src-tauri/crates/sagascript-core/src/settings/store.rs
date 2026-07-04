@@ -10,7 +10,7 @@ const SETTINGS_FILENAME: &str = "sagascript-settings.json";
 /// Windows: %APPDATA%/com.sagascript.app/
 pub fn app_data_dir() -> PathBuf {
     dirs::data_dir()
-        .expect("could not determine application data directory")
+        .unwrap_or_else(|| PathBuf::from("."))
         .join(APP_IDENTIFIER)
 }
 

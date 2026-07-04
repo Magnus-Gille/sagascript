@@ -350,13 +350,24 @@ fn update_tray_status(app: &tauri::AppHandle, state: &str) {
     set_status_menu_text(app, &format!("Sagascript - {menu_text}"));
 }
 
-/// Update the tray status menu item and tooltip to show the last transcription
-fn update_tray_last_result(app: &tauri::AppHandle, text: &str) {
-    let display = if text.len() > 60 {
-        format!("{}...", &text[..57])
+/// Truncate transcription text for tray display, cutting on a char boundary.
+fn truncate_for_tray(text: &str) -> String {
+    if text.len() > 60 {
+        let cut = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= 57)
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &text[..cut])
     } else {
         text.to_string()
-    };
+    }
+}
+
+/// Update the tray status menu item and tooltip to show the last transcription
+fn update_tray_last_result(app: &tauri::AppHandle, text: &str) {
+    let display = truncate_for_tray(text);
 
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(&format!("Sagascript\nLast: {display}")));
@@ -560,6 +571,7 @@ fn stop_recording_and_transcribe(
 
                 let mut c = ctrl.lock().unwrap();
                 c.on_transcription_success(&text);
+                drop(c);
 
                 let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
@@ -688,4 +700,45 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             info!("Settings hot-reloaded from disk");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_for_tray_empty_string_unchanged() {
+        assert_eq!(truncate_for_tray(""), "");
+    }
+
+    #[test]
+    fn truncate_for_tray_ascii_at_threshold_unchanged() {
+        let text = "a".repeat(60);
+        assert_eq!(truncate_for_tray(&text), text);
+    }
+
+    #[test]
+    fn truncate_for_tray_ascii_over_threshold_truncated() {
+        let text = "a".repeat(61);
+        let display = truncate_for_tray(&text);
+        assert_eq!(display, format!("{}...", "a".repeat(57)));
+    }
+
+    #[test]
+    fn truncate_for_tray_multibyte_straddle_does_not_panic() {
+        // "å" is 2 bytes in UTF-8; placed so its second byte falls exactly at
+        // byte offset 57 — the fixed byte-slice cutoff used before the fix.
+        let text = format!("{}å{}", "a".repeat(56), "b".repeat(10));
+        let display = truncate_for_tray(&text);
+        assert!(std::str::from_utf8(display.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn truncate_for_tray_all_multibyte_does_not_panic() {
+        // "🎉" is 4 bytes in UTF-8; 16 repeats = 64 bytes, so byte offset 57
+        // never lands on a char boundary.
+        let text = "🎉".repeat(16);
+        let display = truncate_for_tray(&text);
+        assert!(std::str::from_utf8(display.as_bytes()).is_ok());
+    }
 }

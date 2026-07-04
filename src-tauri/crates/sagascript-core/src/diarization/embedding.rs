@@ -107,7 +107,14 @@ impl Embedder {
 }
 
 /// L2-normalize a fixed-size embedding vector.
+/// Non-finite components (NaN/Inf from the ONNX model) are replaced with 0.0
+/// so they cannot propagate into the clustering distance matrix.
 pub fn l2_normalize(mut v: [f32; EMBEDDING_DIM]) -> [f32; EMBEDDING_DIM] {
+    for x in &mut v {
+        if !x.is_finite() {
+            *x = 0.0;
+        }
+    }
     let norm: f32 = v.iter().map(|&x| x * x).sum::<f32>().sqrt();
     if norm > 1e-12 {
         for x in &mut v {
@@ -145,6 +152,21 @@ mod tests {
         // Should not panic or produce NaN
         for x in &normalized {
             assert!(!x.is_nan(), "NaN in zero-vector normalization");
+        }
+    }
+
+    #[test]
+    fn l2_normalize_sanitizes_non_finite_components() {
+        // The ONNX model can emit NaN/Inf components; these must not survive
+        // normalization and reach the clustering distance matrix.
+        let mut v = [0.0f32; EMBEDDING_DIM];
+        v[0] = f32::NAN;
+        v[1] = f32::INFINITY;
+        v[2] = f32::NEG_INFINITY;
+        v[3] = 1.0;
+        let normalized = l2_normalize(v);
+        for x in &normalized {
+            assert!(x.is_finite(), "non-finite component survived l2_normalize: {x}");
         }
     }
 
