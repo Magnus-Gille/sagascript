@@ -74,6 +74,38 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
 
+      # `diarization` feature coverage (#68): gates ~1,771 lines of speaker
+      # diarization code (crates/sagascript-core/src/diarization/) and its
+      # CLI wiring (--diarize / --diarize-threshold in sagascript-cli) that
+      # otherwise never compile in CI. All diarization unit tests are pure
+      # (math/serialization/clustering logic) — none load an ONNX model file
+      # at runtime — so no continue-on-error/skip gating is needed here,
+      # unlike the Tier 2 transcription smoke tests below which do need a
+      # downloaded whisper model.
+      - name: Cargo check (sagascript-core, diarization)
+        working-directory: src-tauri
+        run: cargo check -p sagascript-core --features diarization
+
+      - name: Cargo check (sagascript-cli, diarization)
+        working-directory: src-tauri
+        run: cargo check -p sagascript-cli --features diarization
+
+      - name: Cargo test (sagascript-core, diarization)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-core --features diarization
+
+      - name: Cargo test (sagascript-cli, diarization)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-cli --features diarization
+
+      - name: Cargo clippy (sagascript-core, diarization)
+        working-directory: src-tauri
+        run: cargo clippy -p sagascript-core --features diarization --all-targets -- -D warnings
+
+      - name: Cargo clippy (sagascript-cli, diarization)
+        working-directory: src-tauri
+        run: cargo clippy -p sagascript-cli --features diarization --all-targets -- -D warnings
+
       - name: Svelte check
         run: npx svelte-check --tsconfig ./tsconfig.json
 

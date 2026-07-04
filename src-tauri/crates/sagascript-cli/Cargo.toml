@@ -24,7 +24,6 @@ uuid = { version = "1", features = ["v4"] }
 serde = "1"
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Live-recording support (the `record` subcommand). Optional so a pure

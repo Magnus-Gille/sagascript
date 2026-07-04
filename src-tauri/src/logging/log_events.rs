@@ -1,8 +1,16 @@
-/// Log event name constants matching the Swift app's LogEvent structure
-#[allow(dead_code)]
+/// Log event name constants matching the Swift app's LogEvent structure.
+///
+/// Not every constant here is wired up yet from the Rust side — some mirror
+/// events the Swift companion app emits but the Rust app_controller doesn't
+/// (yet) log. Those carry their own `#[allow(dead_code)]` rather than a
+/// blanket module-level one, so newly-wired constants (see `app::STARTED`,
+/// `session::DICTATION_STARTED`) surface a real dead-code warning if their
+/// call site is ever removed without removing the constant too.
 pub mod app {
     pub const STARTED: &str = "app_started";
+    #[allow(dead_code)]
     pub const READY: &str = "app_ready";
+    #[allow(dead_code)]
     pub const TERMINATED: &str = "app_terminated";
 }
 
@@ -38,9 +46,10 @@ pub mod paste {
     pub const FAILED: &str = "paste_failed";
 }
 
-#[allow(dead_code)]
 pub mod session {
     pub const DICTATION_STARTED: &str = "dictation_session_started";
+    #[allow(dead_code)]
     pub const DICTATION_COMPLETE: &str = "dictation_session_complete";
+    #[allow(dead_code)]
     pub const STATE_CHANGED: &str = "state_changed";
 }

@@ -7,6 +7,7 @@ use sagascript_core::audio::AudioCaptureService;
 use sagascript_core::error::DictationError;
 use crate::hotkey::HotkeyService;
 use crate::logging::LoggingService;
+use crate::logging::log_events;
 use crate::paste::PasteService;
 use sagascript_core::settings::{HotkeyMode, Settings};
 
@@ -66,7 +67,7 @@ impl AppController {
         logging.log(
             "info",
             "App",
-            "app_started",
+            log_events::app::STARTED,
             serde_json::json!({ "appSessionId": logging.app_session_id }),
         );
 
@@ -154,7 +155,7 @@ impl AppController {
         self.logging.log(
             "info",
             "App",
-            "dictation_session_started",
+            log_events::session::DICTATION_STARTED,
             serde_json::json!({ "dictationSessionId": session_id }),
         );
 
