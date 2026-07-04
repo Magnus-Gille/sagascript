@@ -23,7 +23,9 @@ pub struct TranscribeArgs {
     #[arg(short, long, value_name = "MODEL_ID")]
     pub model: Option<String>,
 
-    /// Output result as JSON (includes text, language, model, duration)
+    /// Output result as JSON: text, language, model, duration, and a
+    /// `segments` array with per-segment timing and confidence
+    /// (avg_logprob, no_speech_prob) for flagging low-confidence spans.
     #[arg(long)]
     pub json: bool,
 
@@ -256,26 +258,57 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         eprintln!("VAD: enabled");
     }
 
-    let text = if duration > 10.0 {
+    let segments = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(
             ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap(),
         );
         let pb_cb = pb.clone();
-        let text = backend.transcribe_sync_with_options(&audio, language, &opts, move |pct| {
-            pb_cb.set_position(pct as u64);
-        })?;
+        let segments = backend.transcribe_sync_with_options_segments(
+            &audio,
+            language,
+            &opts,
+            move |pct| {
+                pb_cb.set_position(pct as u64);
+            },
+        )?;
         pb.finish_and_clear();
-        text
+        segments
     } else {
         eprintln!("Transcribing...");
-        backend.transcribe_sync_with_options(&audio, language, &opts, |_| {})?
+        backend.transcribe_sync_with_options_segments(&audio, language, &opts, |_| {})?
     };
+    // Same join+trim as WhisperBackend::transcribe_sync_with_options, so the
+    // plain-text output is byte-identical to what it was before segments.
+    let text = segments
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect::<String>()
+        .trim()
+        .to_string();
 
     // Output
     if args.json {
+        // Per-segment confidence (#81): avg_logprob is the mean token
+        // log-probability (null when a segment has no scoreable tokens);
+        // no_speech_prob near 1.0 flags likely-hallucinated segments.
+        // Segment text is trimmed for consumers; top-level `text` keeps the
+        // exact pre-segments contract.
+        let json_segments: Vec<serde_json::Value> = segments
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "start": s.start,
+                    "end": s.end,
+                    "text": s.text.trim(),
+                    "avg_logprob": s.avg_logprob,
+                    "no_speech_prob": s.no_speech_prob,
+                })
+            })
+            .collect();
         let json = serde_json::json!({
             "text": text,
+            "segments": json_segments,
             "language": language,
             "model": model_id_string(model),
             "file": args.file.display().to_string(),

@@ -65,6 +65,38 @@ impl Default for TranscribeOptions {
     }
 }
 
+/// One whisper output segment with timing and confidence metadata.
+///
+/// `avg_logprob` is derived (whisper.cpp does not expose its internal
+/// segment-level value): the mean of per-token log-probabilities over the
+/// segment's text tokens (special tokens excluded), matching whisper.cpp's
+/// own confidence examples. `None` when a segment has no scoreable tokens.
+/// Typical values: > -0.3 confident, -0.3..-0.8 shaky, < -0.8 suspect.
+/// `no_speech_prob` is whisper's own per-segment estimate that the window
+/// contains no speech (near 1.0 ⇒ likely hallucinated text).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TranscriptSegment {
+    /// Segment start in seconds.
+    pub start: f64,
+    /// Segment end in seconds.
+    pub end: f64,
+    /// Raw segment text as whisper emitted it (leading space preserved, so
+    /// concatenating all segments reproduces the plain transcript exactly).
+    pub text: String,
+    /// Mean log-probability of the segment's text tokens.
+    pub avg_logprob: Option<f32>,
+    /// Whisper's probability that the segment window is non-speech.
+    pub no_speech_prob: f32,
+}
+
+/// Mean of per-token log-probabilities; `None` for an empty slice.
+fn mean_logprob(plogs: &[f32]) -> Option<f32> {
+    if plogs.is_empty() {
+        return None;
+    }
+    Some(plogs.iter().sum::<f32>() / plogs.len() as f32)
+}
+
 /// Local transcription backend using whisper-rs (whisper.cpp bindings)
 /// Uses GGML model files with optional CoreML acceleration on macOS.
 ///
@@ -424,6 +456,10 @@ impl WhisperBackend {
     /// Core transcription entry point. Honors the opt-in [`TranscribeOptions`]
     /// (prompt, beam search, temperature fallback, VAD). Blocking — call from
     /// spawn_blocking.
+    ///
+    /// Thin wrapper over [`Self::transcribe_sync_with_options_segments`] that
+    /// concatenates the raw segment texts (whisper's leading spaces make this
+    /// lossless) and trims the result.
     pub fn transcribe_sync_with_options(
         &self,
         audio: &[f32],
@@ -431,6 +467,26 @@ impl WhisperBackend {
         opts: &TranscribeOptions,
         on_progress: impl FnMut(i32) + 'static,
     ) -> Result<String, DictationError> {
+        let segments =
+            self.transcribe_sync_with_options_segments(audio, language, opts, on_progress)?;
+        let mut transcript = String::new();
+        for seg in &segments {
+            transcript.push_str(&seg.text);
+        }
+        Ok(transcript.trim().to_string())
+    }
+
+    /// Like [`Self::transcribe_sync_with_options`] but returns the individual
+    /// whisper segments with timing and confidence metadata
+    /// ([`TranscriptSegment`]) instead of one joined string. Blocking — call
+    /// from spawn_blocking.
+    pub fn transcribe_sync_with_options_segments(
+        &self,
+        audio: &[f32],
+        language: Language,
+        opts: &TranscribeOptions,
+        on_progress: impl FnMut(i32) + 'static,
+    ) -> Result<Vec<TranscriptSegment>, DictationError> {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
@@ -438,6 +494,18 @@ impl WhisperBackend {
         let model = self
             .loaded_model()
             .ok_or(DictationError::ModelNotLoaded)?;
+
+        // End-of-text token id, used to exclude special tokens from the
+        // avg-logprob computation (matching whisper.cpp's confidence examples:
+        // text tokens have id < eot). Read in a short scope so the context
+        // lock is released before with_warm_state re-acquires it.
+        let token_eot = {
+            let guard = self.context.lock().unwrap();
+            guard
+                .as_ref()
+                .ok_or(DictationError::ModelNotLoaded)?
+                .token_eot()
+        };
 
         let n_threads = whisper_threads();
         let no_speech_thold = model.no_speech_threshold();
@@ -515,21 +583,41 @@ impl WhisperBackend {
             })?;
 
             let n_segments = state.full_n_segments();
-            let mut transcript = String::new();
+            let mut segments: Vec<TranscriptSegment> =
+                Vec::with_capacity(n_segments.max(0) as usize);
             for i in 0..n_segments {
                 if let Some(segment) = state.get_segment(i) {
-                    match segment.to_str() {
-                        Ok(text) => transcript.push_str(text),
-                        Err(e) => warn!(
-                            "Segment {i} failed UTF-8 conversion, dropping from transcript: {e}"
-                        ),
+                    let text = match segment.to_str() {
+                        Ok(t) => t.to_string(),
+                        Err(e) => {
+                            warn!(
+                                "Segment {i} failed UTF-8 conversion, dropping from transcript: {e}"
+                            );
+                            continue;
+                        }
+                    };
+                    // avg_logprob over text tokens only (id < eot excludes
+                    // timestamp/control tokens, which would skew the mean).
+                    let mut plogs = Vec::with_capacity(segment.n_tokens().max(0) as usize);
+                    for j in 0..segment.n_tokens() {
+                        if let Some(token) = segment.get_token(j) {
+                            if token.token_id() < token_eot {
+                                plogs.push(token.token_data().plog);
+                            }
+                        }
                     }
+                    segments.push(TranscriptSegment {
+                        start: segment.start_timestamp() as f64 / 100.0,
+                        end: segment.end_timestamp() as f64 / 100.0,
+                        text,
+                        avg_logprob: mean_logprob(&plogs),
+                        no_speech_prob: segment.no_speech_probability(),
+                    });
                 }
             }
 
-            let result = transcript.trim().to_string();
-            info!("Local transcription complete: {} chars", result.len());
-            Ok(result)
+            info!("Local transcription complete: {} segment(s)", segments.len());
+            Ok(segments)
         })
     }
 
@@ -1115,6 +1203,61 @@ mod word_grouping_tests {
         // "silence" inherits 0.0 (nothing before it), "speech" has t=5.0
         let speech = result.iter().find(|w| w.2 == "speech").expect("should have 'speech'");
         assert!((speech.0 - 5.0).abs() < 1e-9, "speech start should be 5.0, got {}", speech.0);
+    }
+}
+
+/// Pure-function tests for the segment-confidence support (#81): the
+/// avg-logprob helper and the `TranscriptSegment` JSON contract. The FFI
+/// accessor calls (no_speech_probability, token_data) need a loaded model and
+/// are covered by the end-to-end CLI smoke instead.
+#[cfg(test)]
+mod segment_confidence_tests {
+    use super::*;
+
+    #[test]
+    fn mean_logprob_empty_is_none() {
+        assert_eq!(mean_logprob(&[]), None);
+    }
+
+    #[test]
+    fn mean_logprob_averages() {
+        let got = mean_logprob(&[-0.2, -0.4, -0.6]).unwrap();
+        assert!((got - (-0.4)).abs() < 1e-6, "got {got}");
+    }
+
+    #[test]
+    fn mean_logprob_single_value() {
+        assert_eq!(mean_logprob(&[-1.5]), Some(-1.5));
+    }
+
+    #[test]
+    fn transcript_segment_serializes_confidence_fields() {
+        let seg = TranscriptSegment {
+            start: 1.25,
+            end: 3.5,
+            text: " hello".to_string(),
+            avg_logprob: Some(-0.42),
+            no_speech_prob: 0.01,
+        };
+        let json = serde_json::to_value(&seg).unwrap();
+        assert_eq!(json["start"], 1.25);
+        assert_eq!(json["end"], 3.5);
+        assert_eq!(json["text"], " hello");
+        assert!((json["avg_logprob"].as_f64().unwrap() - (-0.42)).abs() < 1e-6);
+        assert!((json["no_speech_prob"].as_f64().unwrap() - 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn transcript_segment_serializes_missing_logprob_as_null() {
+        let seg = TranscriptSegment {
+            start: 0.0,
+            end: 0.0,
+            text: String::new(),
+            avg_logprob: None,
+            no_speech_prob: 0.9,
+        };
+        let json = serde_json::to_value(&seg).unwrap();
+        assert!(json["avg_logprob"].is_null());
     }
 }
 
