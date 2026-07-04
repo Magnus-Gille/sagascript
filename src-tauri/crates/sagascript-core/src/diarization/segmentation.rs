@@ -535,10 +535,10 @@ mod tests {
     fn stitch_swapped_slots_reunifies_speaker() {
         let mut st = WindowStitcher::new(150);
         // Window A: frames 0..100, speaker continuously active in slot 0.
-        st.add_window(0, &vec![frame(0); 100]);
+        st.add_window(0, &[frame(0); 100]);
         // Window B: frames 50..150, SAME speaker (still talking through the
         // overlap 50..100) but in local slot 1.
-        st.add_window(50, &vec![frame(1); 100]);
+        st.add_window(50, &[frame(1); 100]);
         let out = st.finish();
 
         let active_per_track: Vec<usize> = (0..MAX_SPEAKERS)
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn stitch_offset_beyond_total_is_ignored() {
         let mut st = WindowStitcher::new(10);
-        st.add_window(20, &vec![frame(0); 5]); // out of range — must not panic
+        st.add_window(20, &[frame(0); 5]); // out of range — must not panic
         let out = st.finish();
         assert!(out.iter().all(|f| f.iter().all(|&v| v == 0.0)));
     }
@@ -595,7 +595,7 @@ mod tests {
     #[test]
     fn stitch_window_clipped_at_total_frames() {
         let mut st = WindowStitcher::new(10);
-        st.add_window(5, &vec![frame(2); 20]); // extends past end — clipped
+        st.add_window(5, &[frame(2); 20]); // extends past end — clipped
         let out = st.finish();
         assert_eq!(out.iter().filter(|f| f[2] >= 0.5).count(), 5);
     }
