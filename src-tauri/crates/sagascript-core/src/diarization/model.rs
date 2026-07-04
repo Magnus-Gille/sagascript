@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use tracing::info;
 
+use crate::download::download_to_path;
 use crate::error::DictationError;
 
 /// ONNX models used for speaker diarization.
@@ -112,12 +113,6 @@ pub async fn download_model(
         return Ok(path);
     }
 
-    // Ensure directory exists
-    let dir = crate::transcription::model::models_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to create models directory: {e}"))
-    })?;
-
     info!(
         "Downloading {} from {} (~{}MB)",
         model.display_name(),
@@ -125,53 +120,12 @@ pub async fn download_model(
         model.size_mb()
     );
 
-    let client = reqwest::Client::new();
-    let response = client
-        .get(model.download_url())
-        .send()
-        .await
-        .map_err(|e| DictationError::ModelDownloadFailed(format!("Download failed: {e}")))?;
-
-    if !response.status().is_success() {
-        return Err(DictationError::ModelDownloadFailed(format!(
-            "HTTP {}: {}",
-            response.status(),
-            model.download_url()
-        )));
-    }
-
-    let total_size = response.content_length().unwrap_or(0);
-    let mut downloaded: u64 = 0;
-
-    // Download to a temp file then rename (atomic)
-    let tmp_path = path.with_extension("onnx.tmp");
-    let mut file = tokio::fs::File::create(&tmp_path).await.map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to create temp file: {e}"))
-    })?;
-
-    use futures_util::StreamExt;
-    use tokio::io::AsyncWriteExt;
-    let mut stream = response.bytes_stream();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| DictationError::ModelDownloadFailed(format!("Download error: {e}")))?;
-        file.write_all(&chunk).await.map_err(|e| {
-            DictationError::ModelDownloadFailed(format!("Write error: {e}"))
-        })?;
-        downloaded += chunk.len() as u64;
-        progress_callback(downloaded, total_size);
-    }
-
-    file.flush().await.map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Flush error: {e}"))
-    })?;
-    drop(file);
-
-    // Rename temp to final
-    tokio::fs::rename(&tmp_path, &path).await.map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to rename temp file: {e}"))
-    })?;
+    // ONNX files are bare protobuf with no fixed leading bytes (the first
+    // bytes vary with ir_version and the producer-name string length), so no
+    // magic check is applied here — only the Content-Length check. A magic
+    // check risks false-rejecting a valid model, which the hardening this is
+    // part of explicitly must never do.
+    download_to_path(model.download_url(), &path, "onnx", None, progress_callback).await?;
 
     info!("Diarization model downloaded: {}", path.display());
     Ok(path)
