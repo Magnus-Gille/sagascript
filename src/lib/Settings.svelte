@@ -23,12 +23,14 @@
     requestAccessibilityPermission,
     startRecording,
     stopAndTranscribe,
+    hotkeyStatus,
     type Settings,
     type BuildInfo,
     type Language,
     type HotkeyMode,
     type WhisperModel,
     type LoadedModelInfo,
+    type HotkeyStatus,
   } from "./api";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -59,6 +61,14 @@
   let recordingHotkey: boolean = $state(false);
   let hotkeyError: string = $state("");
   let hotkeyRecorderEl: HTMLButtonElement | undefined = $state();
+
+  // Hotkey registration health — is the saved hotkey actually bound right
+  // now? (distinct from hotkeyError above, which is about validating a
+  // shortcut the user is in the middle of entering.) Assume healthy until
+  // proven otherwise so there's no flash of a warning before the initial
+  // fetch resolves.
+  let hotkeyStatusOk: boolean = $state(true);
+  let hotkeyStatusError: string = $state("");
 
   $effect(() => {
     if (recordingHotkey && hotkeyRecorderEl) {
@@ -101,6 +111,15 @@
       loadedModel = await getLoadedModel();
     });
 
+    // Hotkey registration health can change at any time (settings-file
+    // hot-reload, a failed re-register racing a Spotlight/Raycast combo
+    // claim, etc.) — not just as a result of something this window did.
+    listen("hotkey-registration-changed", (event: any) => {
+      const status = event.payload as HotkeyStatus;
+      hotkeyStatusOk = status.ok;
+      hotkeyStatusError = status.error ?? "";
+    });
+
     // Listen for tab navigation from tray menu
     listen("navigate_tab", (event: any) => {
       const t = event.payload;
@@ -140,6 +159,9 @@
         models = await getModelInfo();
         loadedModel = await getLoadedModel();
         supportedFormats = await getSupportedFormats();
+        const status = await hotkeyStatus();
+        hotkeyStatusOk = status.ok;
+        hotkeyStatusError = status.error ?? "";
 
         // Check URL params for initial tab
         const params = new URLSearchParams(window.location.search);
@@ -490,6 +512,10 @@
           {/if}
           {#if hotkeyError}
             <div class="hotkey-error">{hotkeyError}</div>
+          {:else if !hotkeyStatusOk}
+            <div class="hotkey-error">
+              ⚠ Not registered{hotkeyStatusError ? `: ${hotkeyStatusError}` : ""} — this shortcut may already be in use by another app. Try a different combination.
+            </div>
           {/if}
           <div class="hotkey-hint">Modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key (A–Z, 0–9, F1–F12, Space, arrows)</div>
         </div>

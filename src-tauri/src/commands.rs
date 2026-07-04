@@ -8,6 +8,7 @@ use tracing::{error, info};
 const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
 use crate::app_controller::{AppController, AppState, StopRecordingOutcome};
+use crate::hotkey::{HotkeyHealth, HotkeyStatus};
 use sagascript_core::audio::decoder;
 use sagascript_core::settings::{HotkeyMode, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
@@ -214,8 +215,10 @@ pub async fn set_hotkey_mode(
 pub async fn set_hotkey(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
+    health: State<'_, HotkeyHealth>,
     shortcut: String,
 ) -> Result<(), String> {
+    use tauri::Emitter;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
     let old_shortcut = {
@@ -232,9 +235,23 @@ pub async fn set_hotkey(
     // Register new shortcut
     if let Err(e) = app.global_shortcut().register(shortcut.as_str()) {
         error!("Failed to register new hotkey '{}': {}", shortcut, e);
-        // Try to re-register the old one
-        if let Err(e2) = app.global_shortcut().register(old_shortcut.as_str()) {
-            error!("Failed to re-register old hotkey '{}': {}", old_shortcut, e2);
+        // Try to re-register the old one so the app isn't left with no
+        // hotkey bound at all. If that succeeds, the app is still healthy
+        // (the *requested* change failed, which is already surfaced to the
+        // caller via the returned Err below) — only record a health failure
+        // if even the fallback re-registration fails.
+        let change = match app.global_shortcut().register(old_shortcut.as_str()) {
+            Ok(()) => {
+                info!("Re-registered old hotkey '{}' after failed change", old_shortcut);
+                health.record(&old_shortcut, None)
+            }
+            Err(e2) => {
+                error!("Failed to re-register old hotkey '{}': {}", old_shortcut, e2);
+                health.record(&old_shortcut, Some(e2.to_string()))
+            }
+        };
+        if change.changed {
+            let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
         }
         return Err(format!("Failed to register hotkey '{}': {}", shortcut, e));
     }
@@ -246,11 +263,27 @@ pub async fn set_hotkey(
         ctrl.hotkey_service_mut().set_shortcut(&shortcut);
     }
 
+    let change = health.record(&shortcut, None);
+    if change.changed {
+        let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+    }
+
     // Persist via shared store
     persist_settings(&controller)?;
 
     info!("Hotkey changed to: {shortcut}");
     Ok(())
+}
+
+/// Current hotkey registration health — whether the last registration
+/// attempt (at startup, from this command, or from the settings-file
+/// watcher's hot-reload) actually succeeded. Reads the process-wide flag
+/// rather than querying the global-shortcut plugin's `is_registered()`,
+/// which only tells you *a* shortcut is bound, not whether *our* most recent
+/// attempt to bind it succeeded.
+#[tauri::command]
+pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStatus, String> {
+    Ok(health.status())
 }
 
 // -- Recording --

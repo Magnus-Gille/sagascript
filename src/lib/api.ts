@@ -42,6 +42,12 @@ export interface LoadedModelInfo {
 
 export type AppState = "idle" | "recording" | "transcribing" | "error";
 
+export interface HotkeyStatus {
+  ok: boolean;
+  error: string | null;
+  shortcut: string;
+}
+
 export async function getState(): Promise<AppState> {
   return invoke("get_state");
 }
@@ -72,6 +78,12 @@ export async function setHotkeyMode(mode: HotkeyMode): Promise<void> {
 
 export async function setHotkey(shortcut: string): Promise<void> {
   return invoke("set_hotkey", { shortcut });
+}
+
+/** Whether the hotkey is actually registered right now (not just the saved
+ * setting) — reads the backend's process-wide registration-health flag. */
+export async function hotkeyStatus(): Promise<HotkeyStatus> {
+  return invoke("hotkey_status");
 }
 
 export async function setAutoPaste(enabled: boolean): Promise<void> {
