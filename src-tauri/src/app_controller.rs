@@ -22,6 +22,23 @@ pub enum HotkeyDownResult {
     NoOp,
 }
 
+/// Outcome of a guarded stop-recording request (see
+/// [`AppController::stop_recording_guarded`]).
+#[derive(Debug)]
+pub enum StopRecordingOutcome {
+    /// Not currently recording — the stop was ignored (guards against a
+    /// duplicate/late stop racing an in-flight transcription). State and
+    /// `last_error` are left untouched.
+    NotRecording,
+    /// Recording stopped; carries the captured 16 kHz samples (may be empty if
+    /// the mic produced only silence).
+    Stopped(Vec<f32>),
+    /// The capture/resample failed. The controller has recorded the error and
+    /// returned to Idle; the message is returned so the caller can surface it
+    /// via the transcription-error event path.
+    Failed(String),
+}
+
 /// Application state machine
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -123,8 +140,15 @@ impl AppController {
 
         match self.settings.hotkey_mode {
             HotkeyMode::PushToTalk => {
-                self.start_recording()?;
-                Ok(HotkeyDownResult::StartedRecording)
+                // Only report StartedRecording if we actually started. Holding
+                // PTT while a prior utterance is still Transcribing must be a
+                // no-op — otherwise the overlay/tray shows a recording that
+                // never happened and never hides (finding 1).
+                if self.start_recording()? {
+                    Ok(HotkeyDownResult::StartedRecording)
+                } else {
+                    Ok(HotkeyDownResult::NoOp)
+                }
             }
             HotkeyMode::Toggle => {
                 if self.state.is_recording() {
@@ -144,11 +168,16 @@ impl AppController {
         self.settings.hotkey_mode == HotkeyMode::PushToTalk && self.state.is_recording()
     }
 
-    /// Start audio recording
-    pub fn start_recording(&mut self) -> Result<(), DictationError> {
+    /// Start audio recording.
+    ///
+    /// Returns `Ok(true)` if recording actually started, `Ok(false)` if it was
+    /// refused because the controller is not idle (e.g. a previous utterance is
+    /// still transcribing). Callers use this to avoid reporting a recording that
+    /// never happened (finding 1).
+    pub fn start_recording(&mut self) -> Result<bool, DictationError> {
         if self.state != AppState::Idle {
             warn!("Cannot start recording: state is {:?}", self.state);
-            return Ok(());
+            return Ok(false);
         }
 
         let session_id = self.logging.start_dictation_session();
@@ -165,12 +194,18 @@ impl AppController {
         self.last_error = None;
 
         info!("Recording started");
-        Ok(())
+        Ok(true)
     }
 
-    /// Stop recording and return the audio samples
-    pub fn stop_recording(&mut self) -> Vec<f32> {
-        let samples = self.audio.stop_capture();
+    /// Stop recording and return the captured 16 kHz samples.
+    ///
+    /// Propagates a capture/resample failure (finding 4) instead of masking it
+    /// as an empty buffer, so a real device/format error can reach the user
+    /// rather than being reported as "No audio captured". On error the state is
+    /// left as `Recording`; callers surface the error and return to Idle (see
+    /// [`Self::stop_recording_guarded`]).
+    pub fn stop_recording(&mut self) -> Result<Vec<f32>, DictationError> {
+        let samples = self.audio.stop_capture()?;
         let duration = self
             .recording_start
             .map(|s| s.elapsed().as_millis())
@@ -182,7 +217,28 @@ impl AppController {
         );
 
         self.state = AppState::Transcribing;
-        samples
+        Ok(samples)
+    }
+
+    /// Stop recording only if currently recording, mapping a capture/resample
+    /// failure onto the error state. Combines the finding-3 guard (a late or
+    /// duplicate stop racing an in-flight transcription must not clobber state)
+    /// and the finding-4 error surfacing (a real capture error is recorded and
+    /// the controller returns to Idle so it reaches the user).
+    pub fn stop_recording_guarded(&mut self) -> StopRecordingOutcome {
+        if !self.state.is_recording() {
+            return StopRecordingOutcome::NotRecording;
+        }
+        match self.stop_recording() {
+            Ok(samples) => StopRecordingOutcome::Stopped(samples),
+            Err(e) => {
+                warn!("Recording stop failed: {e}");
+                let msg = e.to_string();
+                // Records last_error and returns to Idle.
+                self.on_transcription_error(&msg);
+                StopRecordingOutcome::Failed(msg)
+            }
+        }
     }
 
     /// Called after transcription succeeds
@@ -415,6 +471,19 @@ mod tests {
         assert_eq!(result, HotkeyDownResult::NoOp);
     }
 
+    // Finding 1: in push-to-talk mode a hotkey-down while a prior utterance is
+    // still transcribing must NOT report StartedRecording (start_recording
+    // refuses when state != Idle) — otherwise the overlay/tray shows a recording
+    // that never happened and never hides.
+    #[test]
+    fn push_to_talk_down_when_transcribing_is_noop() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        ctrl.state = AppState::Transcribing;
+        let result = ctrl.handle_hotkey_down().unwrap();
+        assert_eq!(result, HotkeyDownResult::NoOp);
+    }
+
     // -- auto_paste --
 
     #[test]
@@ -440,8 +509,38 @@ mod tests {
     fn start_recording_when_transcribing_is_noop() {
         let mut ctrl = default_controller();
         ctrl.state = AppState::Transcribing;
-        let result = ctrl.start_recording();
-        assert!(result.is_ok());
+        // Finding 1: refused start reports `false` (did not actually start).
+        let started = ctrl.start_recording().unwrap();
+        assert!(!started);
         assert_eq!(ctrl.state(), AppState::Transcribing); // unchanged
+    }
+
+    // -- stop_recording_guarded --
+
+    // Finding 3: a stop that races an in-flight transcription (state !=
+    // Recording) must be a no-op — it must not transition state nor set
+    // last_error, so the running transcription is not clobbered.
+    #[test]
+    fn stop_recording_guarded_when_not_recording_is_noop() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        let outcome = ctrl.stop_recording_guarded();
+        assert!(matches!(outcome, StopRecordingOutcome::NotRecording));
+        assert_eq!(ctrl.state(), AppState::Transcribing); // unchanged
+        assert!(ctrl.last_error().is_none());
+    }
+
+    // Finding 4: a guarded stop from the Recording state returns the captured
+    // samples (here empty — no real capture in the test) and transitions to
+    // Transcribing. Exercises the Result plumbing added for finding 4.
+    #[test]
+    fn stop_recording_guarded_from_recording_returns_stopped() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Recording;
+        match ctrl.stop_recording_guarded() {
+            StopRecordingOutcome::Stopped(samples) => assert!(samples.is_empty()),
+            other => panic!("expected Stopped, got {other:?}"),
+        }
+        assert_eq!(ctrl.state(), AppState::Transcribing);
     }
 }

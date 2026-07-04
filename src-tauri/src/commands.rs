@@ -7,7 +7,7 @@ use tracing::{error, info};
 /// Maximum time to wait for whisper inference before aborting (seconds)
 const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
-use crate::app_controller::{AppController, AppState};
+use crate::app_controller::{AppController, AppState, StopRecordingOutcome};
 use sagascript_core::audio::decoder;
 use sagascript_core::settings::{HotkeyMode, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
@@ -258,7 +258,9 @@ pub async fn set_hotkey(
 #[tauri::command]
 pub async fn start_recording(controller: State<'_, SharedController>) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
-    ctrl.start_recording().map_err(|e| e.to_string())
+    // The bool (whether recording actually started) is only meaningful to the
+    // hotkey path; the GUI command just needs success/failure.
+    ctrl.start_recording().map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -268,7 +270,17 @@ pub async fn stop_and_transcribe(
 ) -> Result<String, String> {
     let (audio, language, effective_model, opts) = {
         let mut ctrl = controller.lock().unwrap();
-        let audio = ctrl.stop_recording();
+        // Guard against a late/duplicate invoke racing the hotkey stop path
+        // (finding 3): if we're not recording, do nothing and return Ok-empty
+        // (NOT Err — an error would surface a misleading toast in the UI) so an
+        // in-flight transcription's state/last_error is not clobbered.
+        let audio = match ctrl.stop_recording_guarded() {
+            StopRecordingOutcome::NotRecording => return Ok(String::new()),
+            // Capture/resample failure (finding 4): the controller already
+            // recorded the error and returned to Idle; surface the real error.
+            StopRecordingOutcome::Failed(msg) => return Err(msg),
+            StopRecordingOutcome::Stopped(audio) => audio,
+        };
         let language = ctrl.language();
         let effective_model = ctrl.settings().effective_model();
         let opts = build_transcribe_options(ctrl.settings());
