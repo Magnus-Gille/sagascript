@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -12,6 +13,7 @@ use sagascript_core::transcription::WhisperBackend;
 
 use super::transcribe::{
     copy_to_clipboard, model_id_string, parse_language, resolve_effective_model,
+    resolve_effective_prompt,
 };
 
 #[derive(Args)]
@@ -39,6 +41,17 @@ pub struct RecordArgs {
     /// Copy transcription result to clipboard
     #[arg(long)]
     pub clipboard: bool,
+
+    /// Hint the decoder with domain-specific vocabulary (Whisper initial prompt).
+    /// Reduces mishearings of proper nouns, foreign names, and jargon.
+    /// Example: --hint "Notre Dame, Sara, Grimnir"
+    #[arg(long, visible_alias = "hint", value_name = "TEXT")]
+    pub prompt: Option<String>,
+
+    /// Read the hint/initial prompt from a file instead of the command line.
+    /// Mutually exclusive with --hint/--prompt.
+    #[arg(long, visible_alias = "hint-file", value_name = "PATH", conflicts_with = "prompt")]
+    pub prompt_file: Option<PathBuf>,
 }
 
 pub fn run(args: RecordArgs) -> Result<(), DictationError> {
@@ -47,6 +60,14 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         Some(l) => parse_language(l)?,
         None => stored.language,
     };
+    // Effective hint/prompt: --prompt-file, else --hint/--prompt, else the saved
+    // initial_prompt. Resolved up front so a bad --prompt-file fails before we
+    // spend time recording.
+    let effective_prompt = resolve_effective_prompt(
+        args.prompt.as_deref(),
+        args.prompt_file.as_deref(),
+        &stored.initial_prompt,
+    )?;
     let save_only = args.output.is_some();
 
     // Only validate model if we're going to transcribe
@@ -122,6 +143,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let backend = WhisperBackend::new();
     backend.load_model(model)?;
 
+    let prompt = effective_prompt.as_deref();
     let text = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(
@@ -129,14 +151,19 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
                 .unwrap(),
         );
         let pb_cb = pb.clone();
-        let text = backend.transcribe_sync_with_progress(&audio, language, move |pct| {
-            pb_cb.set_position(pct as u64);
-        })?;
+        let text = backend.transcribe_sync_with_progress_and_prompt(
+            &audio,
+            language,
+            prompt,
+            move |pct| {
+                pb_cb.set_position(pct as u64);
+            },
+        )?;
         pb.finish_and_clear();
         text
     } else {
         eprintln!("Transcribing...");
-        backend.transcribe_sync(&audio, language)?
+        backend.transcribe_sync_with_progress_and_prompt(&audio, language, prompt, |_| {})?
     };
 
     // Output

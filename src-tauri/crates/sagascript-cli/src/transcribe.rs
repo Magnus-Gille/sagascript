@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::Args;
 
@@ -43,11 +43,18 @@ pub struct TranscribeArgs {
           help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.85). Higher = fewer speakers.")]
     pub diarize_threshold: f32,
 
-    /// Initial prompt to prime the decoder with domain-specific vocabulary.
-    /// Reduces hallucination on technical terms, proper nouns, and jargon.
-    /// Example: --prompt "Grimnir, MCP, Fortnox, bokföring, kontering, saldo"
-    #[arg(long, value_name = "TEXT")]
+    /// Hint the decoder with domain-specific vocabulary (Whisper initial prompt).
+    /// Reduces mishearings of proper nouns, foreign names, and jargon by priming
+    /// the model with likely terms.
+    /// Example: --hint "Notre Dame, Sara, Estrid, Grimnir, MCP, Fortnox"
+    #[arg(long, visible_alias = "hint", value_name = "TEXT")]
     pub prompt: Option<String>,
+
+    /// Read the hint/initial prompt from a file instead of the command line
+    /// (handy for longer vocabulary lists). Mutually exclusive with --hint/--prompt.
+    /// Leading/trailing whitespace is trimmed; an empty file means no hint.
+    #[arg(long, visible_alias = "hint-file", value_name = "PATH", conflicts_with = "prompt")]
+    pub prompt_file: Option<PathBuf>,
 
     /// Enable voice activity detection (Silero VAD) to skip non-speech regions,
     /// reducing silence hallucination and repetition loops. Downloads a small
@@ -100,12 +107,13 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     let backend = WhisperBackend::new();
     backend.load_model(model)?;
 
-    // Effective prompt: an explicit --prompt, otherwise the saved initial_prompt.
-    // Used by both the diarized and standard paths.
-    let effective_prompt: Option<String> = args.prompt.clone().or_else(|| {
-        let saved = stored.initial_prompt.trim();
-        (!saved.is_empty()).then(|| saved.to_string())
-    });
+    // Effective hint/prompt: --prompt-file, else --hint/--prompt, else the saved
+    // initial_prompt. Used by both the diarized and standard paths.
+    let effective_prompt = resolve_effective_prompt(
+        args.prompt.as_deref(),
+        args.prompt_file.as_deref(),
+        &stored.initial_prompt,
+    )?;
 
     // Diarization branch
     #[cfg(feature = "diarization")]
@@ -342,6 +350,40 @@ pub fn resolve_effective_model(
     }
 }
 
+/// Resolves the effective initial prompt (a.k.a. the "hint") for a run, in
+/// precedence order:
+///   1. `--prompt-file` / `--hint-file` — the file's contents (trimmed;
+///      an empty or whitespace-only file yields no hint).
+///   2. `--hint` / `--prompt` — the inline string (an explicit empty string
+///      suppresses the hint and does *not* fall back to the saved setting).
+///   3. the saved `initial_prompt` setting (empty ⇒ no hint).
+///
+/// Returns `Ok(None)` when no source provides a non-empty prompt. Shared by
+/// `transcribe::run()` and `record::run()` so both surfaces prime the decoder
+/// identically — keep their call sites pointed here rather than re-deriving it.
+pub fn resolve_effective_prompt(
+    cli_prompt: Option<&str>,
+    cli_prompt_file: Option<&Path>,
+    stored_initial_prompt: &str,
+) -> Result<Option<String>, DictationError> {
+    if let Some(path) = cli_prompt_file {
+        let contents = std::fs::read_to_string(path).map_err(|e| {
+            DictationError::FileDecodeError(format!(
+                "Failed to read prompt file '{}': {e}",
+                path.display()
+            ))
+        })?;
+        let trimmed = contents.trim();
+        return Ok((!trimmed.is_empty()).then(|| trimmed.to_string()));
+    }
+    if let Some(p) = cli_prompt {
+        // An explicit `--hint ""` means "no hint", not "use the saved setting".
+        return Ok((!p.is_empty()).then(|| p.to_string()));
+    }
+    let saved = stored_initial_prompt.trim();
+    Ok((!saved.is_empty()).then(|| saved.to_string()))
+}
+
 pub fn parse_model(s: &str) -> Result<WhisperModel, DictationError> {
     match s {
         "tiny.en" => Ok(WhisperModel::TinyEn),
@@ -408,6 +450,74 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- resolve_effective_prompt --
+
+    #[test]
+    fn effective_prompt_cli_flag_wins_over_stored() {
+        let got = resolve_effective_prompt(Some("Notre Dame"), None, "saved vocab").unwrap();
+        assert_eq!(got.as_deref(), Some("Notre Dame"));
+    }
+
+    #[test]
+    fn effective_prompt_falls_back_to_stored() {
+        let got = resolve_effective_prompt(None, None, "  saved vocab  ").unwrap();
+        // Stored value is trimmed.
+        assert_eq!(got.as_deref(), Some("saved vocab"));
+    }
+
+    #[test]
+    fn effective_prompt_none_when_all_empty() {
+        assert!(resolve_effective_prompt(None, None, "").unwrap().is_none());
+        assert!(resolve_effective_prompt(None, None, "   ").unwrap().is_none());
+    }
+
+    #[test]
+    fn effective_prompt_explicit_empty_flag_suppresses_stored() {
+        // `--hint ""` means "no hint" — it must NOT fall through to the setting.
+        let got = resolve_effective_prompt(Some(""), None, "saved vocab").unwrap();
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn effective_prompt_file_wins_and_is_trimmed() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "sagascript_hint_test_{}_{}.txt",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, "  Estrid, Grimnir\n").unwrap();
+
+        // File beats both the inline flag and the stored setting.
+        let got = resolve_effective_prompt(Some("inline"), Some(&path), "saved").unwrap();
+        assert_eq!(got.as_deref(), Some("Estrid, Grimnir"));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn effective_prompt_empty_file_yields_none() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "sagascript_hint_test_{}_{}.txt",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::write(&path, "   \n\t").unwrap();
+
+        let got = resolve_effective_prompt(None, Some(&path), "saved").unwrap();
+        assert!(got.is_none());
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn effective_prompt_missing_file_errors() {
+        let path = Path::new("/nonexistent/sagascript/hint/vocab.txt");
+        let err = resolve_effective_prompt(None, Some(path), "saved").unwrap_err();
+        assert!(matches!(err, DictationError::FileDecodeError(_)));
+    }
 
     // -- parse_language --
 

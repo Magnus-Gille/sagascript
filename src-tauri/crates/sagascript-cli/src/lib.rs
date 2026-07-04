@@ -698,6 +698,7 @@ mod tests {
             "--model", "kb-whisper-base",
             "--json",
             "--clipboard",
+            "--prompt", "Notre Dame, Sara",
         ]).unwrap();
         match cli.command.unwrap() {
             Command::Transcribe(args) => {
@@ -706,9 +707,50 @@ mod tests {
                 assert_eq!(args.model.as_deref(), Some("kb-whisper-base"));
                 assert!(args.json);
                 assert!(args.clipboard);
+                assert_eq!(args.prompt.as_deref(), Some("Notre Dame, Sara"));
+                assert!(args.prompt_file.is_none());
             }
             _ => panic!("expected Transcribe"),
         }
+    }
+
+    #[test]
+    fn parse_transcribe_hint_alias() {
+        // --hint is a visible alias of --prompt and populates the same field.
+        let cli = Cli::try_parse_from([
+            "sagascript", "transcribe", "f.wav", "--hint", "Estrid, Grimnir",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Transcribe(args) => {
+                assert_eq!(args.prompt.as_deref(), Some("Estrid, Grimnir"));
+            }
+            _ => panic!("expected Transcribe"),
+        }
+    }
+
+    #[test]
+    fn parse_transcribe_prompt_file() {
+        // --hint-file is a visible alias of --prompt-file.
+        let cli = Cli::try_parse_from([
+            "sagascript", "transcribe", "f.wav", "--hint-file", "vocab.txt",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Transcribe(args) => {
+                assert_eq!(args.prompt_file, Some(PathBuf::from("vocab.txt")));
+                assert!(args.prompt.is_none());
+            }
+            _ => panic!("expected Transcribe"),
+        }
+    }
+
+    #[test]
+    fn parse_transcribe_prompt_and_file_conflict() {
+        // --prompt and --prompt-file are mutually exclusive.
+        let result = Cli::try_parse_from([
+            "sagascript", "transcribe", "f.wav",
+            "--prompt", "inline", "--prompt-file", "vocab.txt",
+        ]);
+        assert!(result.is_err(), "expected --prompt + --prompt-file to conflict");
     }
 
     #[test]
@@ -737,6 +779,8 @@ mod tests {
                 assert!(args.output.is_none());
                 assert!(!args.json);
                 assert!(!args.clipboard);
+                assert!(args.prompt.is_none());
+                assert!(args.prompt_file.is_none());
             }
             _ => panic!("expected Record"),
         }
@@ -753,6 +797,7 @@ mod tests {
             "--output", "capture.wav",
             "--json",
             "--clipboard",
+            "--hint", "Notre Dame, Sara",
         ]).unwrap();
         match cli.command.unwrap() {
             Command::Record(args) => {
@@ -762,6 +807,8 @@ mod tests {
                 assert_eq!(args.output.as_deref(), Some("capture.wav"));
                 assert!(args.json);
                 assert!(args.clipboard);
+                // --hint populates the same `prompt` field as --prompt.
+                assert_eq!(args.prompt.as_deref(), Some("Notre Dame, Sara"));
             }
             _ => panic!("expected Record"),
         }
