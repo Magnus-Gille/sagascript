@@ -755,7 +755,7 @@
             {#if buildInfo}
               Sagascript {buildInfo.version} ({buildInfo.git_hash}) - Built {buildInfo.build_date}
             {:else}
-              Sagascript 0.1.0
+              Sagascript
             {/if}
           </div>
         </div>

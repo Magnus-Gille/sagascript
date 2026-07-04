@@ -218,6 +218,12 @@ fn main() {
 
             info!("Tray icon created");
 
+            // Render the initial tray state through the same path as later
+            // updates — the hotkey-health flag was recorded above, before the
+            // tray existed, and no state transition may ever come to refresh
+            // a static "Idle" label if the hotkey is dead.
+            update_tray_status(app.handle(), "idle");
+
             // Migrate settings store from FlowDictate
             {
                 let app_dir = app.path().app_data_dir().ok();
@@ -636,7 +642,7 @@ fn stop_recording_and_transcribe(
         // Show model loading status in tray
         if whisper.needs_reload(effective_model) {
             let _ = app_handle.emit(events::event::STATE_CHANGED, "loading_model");
-            update_tray_status(&app_handle, "loading_model");
+            dispatch_to_main(&app_handle, |app| update_tray_status(app, "loading_model"));
         }
 
         // Ensure model is loaded
@@ -700,17 +706,21 @@ fn stop_recording_and_transcribe(
 
                 let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                update_tray_status(&app_handle, "idle");
-                update_tray_last_result(&app_handle, &text);
+                let text_for_tray = text.clone();
+                dispatch_to_main(&app_handle, move |app| {
+                    update_tray_status(app, "idle");
+                    update_tray_last_result(app, &text_for_tray);
+                });
                 info!("Transcription flow complete, app should remain running");
             }
             Err(e) => {
                 error!("Transcription failed: {e}");
                 let mut c = ctrl.lock().unwrap();
                 c.on_transcription_error(&e.to_string());
+                drop(c);
                 let _ = app_handle.emit(events::event::ERROR, e.to_string());
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                update_tray_status(&app_handle, "idle");
+                dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
                 info!("Error flow complete, app should remain running");
             }
         }
@@ -812,15 +822,30 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                     Err(e) => {
                         error!("Failed to register new hotkey '{}': {e}", new_settings.hotkey);
                         // Re-register the old one as fallback so the app doesn't
-                        // end up with no hotkey bound at all.
+                        // end up with no hotkey bound at all. Either way the
+                        // SAVED shortcut is not registered — health must report
+                        // the saved shortcut's failure, not a false-normal for
+                        // the operational fallback.
                         match app.global_shortcut().register(old_settings.hotkey.as_str()) {
                             Ok(()) => {
                                 info!("Re-registered old hotkey '{}' as fallback", old_settings.hotkey);
-                                health.record(&old_settings.hotkey, None)
+                                health.record(
+                                    &new_settings.hotkey,
+                                    Some(format!(
+                                        "failed to register: {e}; still using previous hotkey '{}'",
+                                        old_settings.hotkey
+                                    )),
+                                )
                             }
                             Err(e2) => {
                                 error!("Failed to re-register old hotkey: {e2}");
-                                health.record(&old_settings.hotkey, Some(e2.to_string()))
+                                health.record(
+                                    &new_settings.hotkey,
+                                    Some(format!(
+                                        "failed to register: {e}; fallback to '{}' also failed: {e2}",
+                                        old_settings.hotkey
+                                    )),
+                                )
                             }
                         }
                     }

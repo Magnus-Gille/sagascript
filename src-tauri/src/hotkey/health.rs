@@ -13,10 +13,11 @@ pub struct HotkeyStatus {
 }
 
 /// Result of recording a registration attempt: the resulting status, plus
-/// whether the ok/failed flag actually flipped. Callers use `changed` to
-/// decide whether to emit `hotkey-registration-changed` — a repeated failure
-/// of the same already-broken shortcut (e.g. the settings watcher firing
-/// again) must not spam listeners.
+/// whether the status actually changed (ok/failed flag, shortcut, or error
+/// detail). Callers use `changed` to decide whether to emit
+/// `hotkey-registration-changed` — a repeated identical failure (e.g. the
+/// settings watcher firing again on the same broken shortcut) must not spam
+/// listeners, but a different shortcut or error while still failed must.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HotkeyStatusChange {
     pub status: HotkeyStatus,
@@ -66,19 +67,21 @@ impl HotkeyHealth {
     /// Record the outcome of a registration attempt for `shortcut`.
     /// `error = None` means the registration succeeded (clears the flag);
     /// `Some(msg)` means it failed (sets the flag). Returns the resulting
-    /// status plus whether the ok/failed flag actually changed.
+    /// status plus whether any part of the status actually changed.
     pub fn record(&self, shortcut: &str, error: Option<String>) -> HotkeyStatusChange {
+        let prev = self.status();
         let new_failed = error.is_some();
-        let prev_failed = self.failed.swap(new_failed, Ordering::SeqCst);
+        self.failed.store(new_failed, Ordering::SeqCst);
         *self.error.lock().unwrap() = error.clone();
         *self.shortcut.lock().unwrap() = shortcut.to_string();
+        let status = HotkeyStatus {
+            ok: !new_failed,
+            error,
+            shortcut: shortcut.to_string(),
+        };
         HotkeyStatusChange {
-            changed: prev_failed != new_failed,
-            status: HotkeyStatus {
-                ok: !new_failed,
-                error,
-                shortcut: shortcut.to_string(),
-            },
+            changed: status != prev,
+            status,
         }
     }
 }
@@ -144,13 +147,13 @@ mod tests {
     }
 
     #[test]
-    fn failure_then_different_failure_is_not_changed_but_updates_detail() {
+    fn failure_then_different_failure_reports_changed() {
         let h = HotkeyHealth::new("Control+Shift+Space");
         let _ = h.record("Control+Shift+Space", Some("busy".to_string()));
         let second = h.record("Alt+D", Some("also busy".to_string()));
-        // The flag itself didn't flip (still failed), but the detail must
-        // still reflect the latest attempt.
-        assert!(!second.changed);
+        // The ok/failed flag didn't flip, but the shortcut/error detail did —
+        // listeners must hear about it or the UI shows a stale failure.
+        assert!(second.changed);
         assert_eq!(second.status.shortcut, "Alt+D");
         assert_eq!(second.status.error.as_deref(), Some("also busy"));
         assert_eq!(h.status().shortcut, "Alt+D");
