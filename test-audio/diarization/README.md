@@ -94,6 +94,16 @@ The language-matched `nb-whisper-small` more than halves DER and roughly halves 
 for #67: keep the `0.85` default; it does not over-collapse native-bandwidth audio — the French
 clip's collapse was a narrowband-embedding artifact, not a default-threshold problem.
 
+> **Addendum (2026-07-04, #75 stitching fix).** The measurements and the takeaway above were
+> made against the *pre-stitching* pipeline, which summed pyannote powerset logits across
+> overlapping windows by raw class index — scrambling per-window speaker slots and feeding
+> mixed-speaker segments to the embedder. The French clip's collapse was primarily *that* bug,
+> not a narrowband artifact. With permutation-aligned window stitching
+> (`segmentation.rs::WindowStitcher`): dj_2022_feu improves 56.5 % → **26.8 %** DER (2 blobs →
+> 12 turns) and nb_samtale_nb12 holds at **7.5 %**. Both files are DER-optimal across
+> thresholds 0.70–0.80, while 0.85 sits on a cliff that merges nb_samtale's two speakers — so
+> **the shipped default is now `0.75`** (`DiarizeConfig::default()`).
+
 **Fetch audio + build:**
 ```bash
 ./test-audio/diarization/fetch.sh   # streams nb-12's 9 turns, rebuilds nb_samtale_nb12.wav
@@ -178,10 +188,10 @@ pip install pyannote-audio meeteval
 > **multilingual** model so you measure diarization, not ASR mismatch. **Pass `-l auto`
 > explicitly** — the CLI's `-l` doesn't accept `fr`, and *omitting* it falls back to your
 > configured language (e.g. `sv`), which reintroduces the exact mismatch. Also mind the
-> clustering threshold: the default `0.85` collapses this 2-speaker telephone audio to a
-> single cluster; `0.70–0.80` is the right operating point for this clip. Do **not**
-> generalize that threshold to Swedish recordings without re-validating — `0.85` exists to
-> curb over-clustering elsewhere (see #67).
+> clustering threshold: the *former* default `0.85` collapsed this 2-speaker telephone audio
+> to a single cluster; `0.70–0.80` is the right operating point for this clip, and since the
+> #75 stitching fix the shipped default is `0.75` — inside that window. (Historical context:
+> `0.85` was chosen to curb over-clustering on the pre-stitching pipeline, see #67.)
 
 ```bash
 sagascript transcribe test-audio/diarization/dj_2022_feu.wav \
@@ -195,7 +205,10 @@ Reference operating points (multilingual `small`, DER vs `--diarize-threshold`):
 |---|---|---|
 | 0.60 | 5 | 33.9% |
 | **0.70–0.80** | 3 | **~21%** |
-| 0.85 (default) | 2→1 | 55.4% |
+| 0.85 (former default; 0.75 since #75) | 2→1 | 55.4% |
+
+*(Table measured pre-stitching-fix; post-fix this clip scores 26.8 % DER at the `0.75`
+default with `large-v3-turbo` — see the #75 addendum above.)*
 
 ~21% is roughly the floor for this 8 kHz upsampled telephone clip — WeSpeaker embeddings
 degrade on narrowband audio. Tracked in #67.

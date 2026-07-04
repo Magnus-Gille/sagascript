@@ -8,9 +8,9 @@ use kodama::{linkage, Method};
 
 use crate::diarization::embedding::EMBEDDING_DIM;
 
-/// Default clustering threshold (cosine distance, 0.0-2.0 range).
-/// At 0.8, embeddings with cosine similarity > 0.2 are merged.
-pub const DEFAULT_THRESHOLD: f32 = 0.8;
+// The default clustering threshold lives in `DiarizeConfig::default()`
+// (diarization/mod.rs) — the single source of truth. A stale `DEFAULT_THRESHOLD`
+// constant here (unused, and out of sync at 0.8) was removed with the #75 fix.
 
 /// Cluster embeddings and return a global speaker label per input.
 ///

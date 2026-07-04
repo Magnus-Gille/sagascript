@@ -36,11 +36,11 @@ pub struct TranscribeArgs {
     #[arg(long)]
     pub diarize: bool,
 
-    /// Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.85). Higher = fewer speakers.
+    /// Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.75). Higher = fewer speakers.
     #[cfg(feature = "diarization")]
-    #[arg(long, value_name = "THRESHOLD", default_value = "0.85",
+    #[arg(long, value_name = "THRESHOLD", default_value = "0.75",
           value_parser = parse_diarize_threshold,
-          help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.85). Higher = fewer speakers.")]
+          help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.75). Higher = fewer speakers.")]
     pub diarize_threshold: f32,
 
     /// Hint the decoder with domain-specific vocabulary (Whisper initial prompt).
@@ -144,6 +144,11 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             ..DiarizeConfig::default()
         })?;
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
+        if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
+            for s in &speaker_segments {
+                eprintln!("DIARSEG\t{:.3}\t{:.3}\t{}", s.start, s.end, s.speaker);
+            }
+        }
 
         eprintln!("Transcribing with word-level timestamps...");
         // Prefer word-level timestamps: each word gets its own entry so the
@@ -164,6 +169,11 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             }
         };
         eprintln!("Got {} word/segment(s) for merging", raw_segments.len());
+        if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
+            for (st, en, tx) in &raw_segments {
+                eprintln!("WORD\t{:.3}\t{:.3}\t{}", st, en, tx.replace('\t', " "));
+            }
+        }
 
         let transcript: Vec<TimestampedSegment> = raw_segments
             .into_iter()
@@ -736,7 +746,7 @@ mod diarize_threshold_tests {
 
     #[test]
     fn accepts_default_value() {
-        assert_eq!(parse_threshold("0.85").unwrap(), 0.85);
+        assert_eq!(parse_threshold("0.75").unwrap(), 0.75);
     }
 
     #[test]
@@ -747,7 +757,7 @@ mod diarize_threshold_tests {
     #[test]
     fn default_applies_when_flag_omitted() {
         let cli = TestCli::try_parse_from(["sagascript", "file.wav"]).unwrap();
-        assert_eq!(cli.args.diarize_threshold, 0.85);
+        assert_eq!(cli.args.diarize_threshold, 0.75);
     }
 
     #[test]
