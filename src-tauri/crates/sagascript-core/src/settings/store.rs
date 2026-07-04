@@ -28,7 +28,20 @@ pub fn load() -> Settings {
 /// Load settings from a specific path. Returns defaults if missing or unreadable.
 pub fn load_from(path: &PathBuf) -> Settings {
     match std::fs::read_to_string(path) {
-        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+        Ok(contents) => match serde_json::from_str(&contents) {
+            Ok(settings) => settings,
+            Err(e) => {
+                // One wrong-typed field would otherwise silently reset ALL
+                // user settings to defaults with no diagnostic trail. We
+                // still fall back to defaults (self-healing contract), but
+                // now there's a log line to explain why.
+                tracing::warn!(
+                    "Failed to parse settings file at {}: {e} — falling back to defaults",
+                    path.display()
+                );
+                Settings::default()
+            }
+        },
         Err(_) => Settings::default(),
     }
 }
@@ -37,17 +50,47 @@ pub fn load_from(path: &PathBuf) -> Settings {
 /// (e.g. `hasCompletedOnboarding` from Tauri plugin store).
 /// Uses atomic write: write to .tmp then rename.
 pub fn save(settings: &Settings) -> Result<(), String> {
-    let path = settings_path();
-    let dir = app_data_dir();
+    save_to(&settings_path(), settings)
+}
+
+/// Persist settings to a specific path. Test seam for `save`, which always
+/// targets `settings_path()`.
+fn save_to(path: &PathBuf, settings: &Settings) -> Result<(), String> {
+    let dir = path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
 
     // Ensure directory exists
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create settings dir: {e}"))?;
 
     // Read existing file to preserve non-settings keys
     let mut map: serde_json::Map<String, serde_json::Value> = if let Ok(contents) =
-        std::fs::read_to_string(&path)
+        std::fs::read_to_string(path)
     {
-        serde_json::from_str(&contents).unwrap_or_default()
+        match serde_json::from_str(&contents) {
+            Ok(m) => m,
+            Err(e) => {
+                // A parse failure here used to silently drop every
+                // preserved non-Settings key (e.g. hasCompletedOnboarding)
+                // this read-merge-write exists to protect. Back up the
+                // corrupt bytes to a sidecar before starting fresh, rather
+                // than aborting the save (aborting would contradict the
+                // corrupt-to-defaults self-healing contract).
+                tracing::warn!(
+                    "Existing settings file at {} is corrupt ({e}) — backing up to .bak and starting fresh",
+                    path.display()
+                );
+                let bak_path = path.with_extension("json.bak");
+                if let Err(be) = std::fs::write(&bak_path, &contents) {
+                    tracing::warn!(
+                        "Failed to write corrupt settings backup to {}: {be}",
+                        bak_path.display()
+                    );
+                }
+                serde_json::Map::new()
+            }
+        }
     } else {
         serde_json::Map::new()
     };
@@ -67,7 +110,7 @@ pub fn save(settings: &Settings) -> Result<(), String> {
     let tmp_path = path.with_extension("json.tmp");
     std::fs::write(&tmp_path, &json)
         .map_err(|e| format!("Failed to write settings: {e}"))?;
-    std::fs::rename(&tmp_path, &path)
+    std::fs::rename(&tmp_path, path)
         .map_err(|e| format!("Failed to rename settings file: {e}"))?;
 
     Ok(())
@@ -247,6 +290,47 @@ mod tests {
             let d = Settings::default();
             // Should fall back to full defaults since deserialization fails
             assert_eq!(s.language, d.language);
+        });
+    }
+
+    // -- save_to backing up a corrupt existing file --
+
+    #[test]
+    fn save_backs_up_corrupt_existing_file() {
+        with_temp_settings(|path| {
+            let dir = path.parent().unwrap();
+            fs::create_dir_all(dir).unwrap();
+
+            let corrupt = "this is not json{{{";
+            fs::write(&path, corrupt).unwrap();
+
+            let settings = Settings { language: Language::Swedish, ..Default::default() };
+            let result = save_to(&path, &settings);
+            assert!(result.is_ok(), "save_to should still succeed over a corrupt existing file: {result:?}");
+
+            // The corrupt bytes must be preserved in a .bak sidecar rather
+            // than silently discarded.
+            let bak_path = path.with_extension("json.bak");
+            assert!(bak_path.exists(), "expected a .bak sidecar for the corrupt file");
+            let bak_contents = fs::read_to_string(&bak_path).unwrap();
+            assert_eq!(bak_contents, corrupt);
+
+            // And the save itself produced valid, fresh settings.
+            let raw: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(raw["language"], "sv");
+        });
+    }
+
+    #[test]
+    fn save_to_no_existing_file_does_not_create_bak() {
+        with_temp_settings(|path| {
+            let settings = Settings::default();
+            let result = save_to(&path, &settings);
+            assert!(result.is_ok());
+
+            let bak_path = path.with_extension("json.bak");
+            assert!(!bak_path.exists(), "no corrupt file existed, so no .bak should be created");
         });
     }
 }

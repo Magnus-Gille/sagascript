@@ -355,8 +355,11 @@ impl WhisperBackend {
             let mut transcript = String::new();
             for i in 0..n_segments {
                 if let Some(segment) = state.get_segment(i) {
-                    if let Ok(text) = segment.to_str() {
-                        transcript.push_str(text);
+                    match segment.to_str() {
+                        Ok(text) => transcript.push_str(text),
+                        Err(e) => warn!(
+                            "Segment {i} failed UTF-8 conversion, dropping from transcript: {e}"
+                        ),
                     }
                 }
             }
@@ -462,7 +465,16 @@ impl WhisperBackend {
                 Granularity::Segment => {
                     for i in 0..n_segments {
                         let Some(segment) = state.get_segment(i) else { continue };
-                        let text = segment.to_str().unwrap_or("").trim().to_string();
+                        let text = match segment.to_str() {
+                            Ok(s) => s,
+                            Err(e) => {
+                                warn!(
+                                    "Segment {i} failed UTF-8 conversion, dropping from transcript: {e}"
+                                );
+                                continue;
+                            }
+                        };
+                        let text = text.trim().to_string();
                         if text.is_empty() {
                             continue;
                         }
