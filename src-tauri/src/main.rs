@@ -30,6 +30,10 @@ use std::time::Duration;
 /// Maximum time to wait for whisper inference before aborting (seconds)
 const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
+/// Grace after a timeout-triggered abort for the blocking inference to unwind and
+/// release the warm-state lock before we log it as still stuck.
+const ABORT_GRACE_SECS: u64 = 5;
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -649,26 +653,38 @@ fn stop_recording_and_transcribe(
         let result = if let Err(e) = whisper.ensure_model(effective_model) {
             Err(e)
         } else {
-            // Run blocking transcription on a separate thread with a timeout.
-            // NOTE: The abort callback is currently disabled (whisper-rs error -6).
-            // On timeout, request_abort() is called but has no effect — the blocking
-            // task continues running and holds the context mutex until whisper finishes.
+            // Run blocking transcription on a separate thread with a timeout. On
+            // timeout we trigger a REAL abort (whisper-rs abort callback wired in
+            // WhisperBackend): request_abort() flips the flag whisper.cpp checks
+            // between compute steps, so the blocking task returns and releases the
+            // warm state instead of running to completion and wedging the pipeline.
             let whisper_ref = whisper.inner().clone();
-            let fut = tokio::task::spawn_blocking(move || {
+            let mut fut = tokio::task::spawn_blocking(move || {
                 whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
             });
 
             let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
-            match tokio::time::timeout(timeout, fut).await {
+            match tokio::time::timeout(timeout, &mut fut).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => Err(sagascript_core::error::DictationError::TranscriptionFailed(
                     format!("Task join error: {e}"),
                 )),
                 Err(_) => {
-                    // Timeout — request abort (currently a no-op, see whisper_backend.rs)
+                    warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
                     whisper.request_abort();
+                    // Brief grace for the aborted inference to unwind; log which
+                    // outcome occurred so a genuine hang is visible.
+                    match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut).await
+                    {
+                        Ok(_) => info!("Aborted transcription task exited — warm-state lock released"),
+                        Err(_) => error!(
+                            "Transcription task still running {ABORT_GRACE_SECS}s after abort — \
+                             warm state may stay locked until it unwinds; further transcriptions \
+                             will report ModelBusy rather than block forever"
+                        ),
+                    }
                     Err(sagascript_core::error::DictationError::TranscriptionFailed(
-                        format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s"),
+                        format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"),
                     ))
                 }
             }
