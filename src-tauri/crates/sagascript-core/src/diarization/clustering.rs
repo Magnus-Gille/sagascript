@@ -37,14 +37,17 @@ pub fn cluster_speakers(
     for i in 0..n {
         for j in (i + 1)..n {
             let sim = cosine_similarity(&embeddings[i].1, &embeddings[j].1);
-            // Clamp to [0, 2] — cosine distance range for L2-normalized vectors
-            condensed.push((1.0 - sim).clamp(0.0, 2.0));
+            // Clamp to [0, 2] — cosine distance range for L2-normalized vectors.
+            // Non-finite distances (NaN embeddings) map to max distance so they
+            // never merge and cannot panic kodama::linkage.
+            let dist = (1.0 - sim).clamp(0.0, 2.0);
+            condensed.push(if dist.is_finite() { dist } else { 2.0 });
         }
     }
 
     if !condensed.is_empty() {
         let mut sorted = condensed.clone();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let n_dist = sorted.len();
         tracing::debug!(
             "Embedding distances: n={}, p25={:.3}, p50={:.3}, p75={:.3}, p90={:.3}",
@@ -282,5 +285,16 @@ mod tests {
         // Should not panic or produce NaN
         let sim = cosine_similarity(&zero, &v);
         assert!(!sim.is_nan());
+    }
+
+    #[test]
+    fn cluster_speakers_survives_nan_in_distance_matrix() {
+        // A NaN component (e.g. a non-finite ONNX embedding output that bypassed
+        // l2_normalize's sanitization) must not panic the distance sort.
+        let mut nan_emb = [0.0f32; EMBEDDING_DIM];
+        nan_emb[0] = f32::NAN;
+        let input = vec![(0, nan_emb), (1, unit_embedding(1)), (2, unit_embedding(2))];
+        let result = cluster_speakers(&input, 0.8);
+        assert_eq!(result.len(), 3);
     }
 }
