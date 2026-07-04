@@ -29,9 +29,6 @@ pub enum DictationError {
     #[error("Settings error: {0}")]
     SettingsError(String),
 
-    #[error("Hotkey error: {0}")]
-    HotkeyError(String),
-
     #[error("Paste error: {0}")]
     PasteError(String),
 
@@ -128,9 +125,9 @@ mod tests {
 
     #[test]
     fn debug_format() {
-        let err = DictationError::HotkeyError("conflict".into());
+        let err = DictationError::PasteError("conflict".into());
         let debug = format!("{:?}", err);
-        assert!(debug.contains("HotkeyError"));
+        assert!(debug.contains("PasteError"));
         assert!(debug.contains("conflict"));
     }
 }

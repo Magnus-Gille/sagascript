@@ -12,6 +12,9 @@ pub mod event {
     pub const MODEL_READY: &str = "model-ready";
     /// Transcription progress percentage (0–100)
     pub const TRANSCRIPTION_PROGRESS: &str = "transcription-progress";
+    /// Hotkey registration health changed (registered OK <-> failed to
+    /// register). Payload: `{ ok: bool, error: string | null, shortcut: string }`.
+    pub const HOTKEY_REGISTRATION_CHANGED: &str = "hotkey-registration-changed";
 }
 
 #[cfg(test)]
@@ -27,6 +30,7 @@ mod tests {
             MODEL_DOWNLOAD_PROGRESS,
             MODEL_READY,
             TRANSCRIPTION_PROGRESS,
+            HOTKEY_REGISTRATION_CHANGED,
         ];
         for name in events {
             assert!(!name.is_empty());
@@ -50,6 +54,7 @@ mod tests {
             MODEL_DOWNLOAD_PROGRESS,
             MODEL_READY,
             TRANSCRIPTION_PROGRESS,
+            HOTKEY_REGISTRATION_CHANGED,
         ];
         for (i, a) in events.iter().enumerate() {
             for (j, b) in events.iter().enumerate() {

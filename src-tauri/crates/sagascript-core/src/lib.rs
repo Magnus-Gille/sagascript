@@ -4,6 +4,7 @@
 //! entry points and integrations on top.
 
 pub mod audio;
+pub mod download;
 pub mod error;
 pub mod settings;
 pub mod transcription;

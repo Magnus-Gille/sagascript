@@ -7,7 +7,8 @@ use tracing::{error, info};
 /// Maximum time to wait for whisper inference before aborting (seconds)
 const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
-use crate::app_controller::{AppController, AppState};
+use crate::app_controller::{AppController, AppState, StopRecordingOutcome};
+use crate::hotkey::{HotkeyHealth, HotkeyStatus};
 use sagascript_core::audio::decoder;
 use sagascript_core::settings::{HotkeyMode, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
@@ -214,8 +215,10 @@ pub async fn set_hotkey_mode(
 pub async fn set_hotkey(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
+    health: State<'_, HotkeyHealth>,
     shortcut: String,
 ) -> Result<(), String> {
+    use tauri::Emitter;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
     let old_shortcut = {
@@ -232,9 +235,23 @@ pub async fn set_hotkey(
     // Register new shortcut
     if let Err(e) = app.global_shortcut().register(shortcut.as_str()) {
         error!("Failed to register new hotkey '{}': {}", shortcut, e);
-        // Try to re-register the old one
-        if let Err(e2) = app.global_shortcut().register(old_shortcut.as_str()) {
-            error!("Failed to re-register old hotkey '{}': {}", old_shortcut, e2);
+        // Try to re-register the old one so the app isn't left with no
+        // hotkey bound at all. If that succeeds, the app is still healthy
+        // (the *requested* change failed, which is already surfaced to the
+        // caller via the returned Err below) — only record a health failure
+        // if even the fallback re-registration fails.
+        let change = match app.global_shortcut().register(old_shortcut.as_str()) {
+            Ok(()) => {
+                info!("Re-registered old hotkey '{}' after failed change", old_shortcut);
+                health.record(&old_shortcut, None)
+            }
+            Err(e2) => {
+                error!("Failed to re-register old hotkey '{}': {}", old_shortcut, e2);
+                health.record(&old_shortcut, Some(e2.to_string()))
+            }
+        };
+        if change.changed {
+            let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
         }
         return Err(format!("Failed to register hotkey '{}': {}", shortcut, e));
     }
@@ -246,6 +263,11 @@ pub async fn set_hotkey(
         ctrl.hotkey_service_mut().set_shortcut(&shortcut);
     }
 
+    let change = health.record(&shortcut, None);
+    if change.changed {
+        let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+    }
+
     // Persist via shared store
     persist_settings(&controller)?;
 
@@ -253,12 +275,25 @@ pub async fn set_hotkey(
     Ok(())
 }
 
+/// Current hotkey registration health — whether the last registration
+/// attempt (at startup, from this command, or from the settings-file
+/// watcher's hot-reload) actually succeeded. Reads the process-wide flag
+/// rather than querying the global-shortcut plugin's `is_registered()`,
+/// which only tells you *a* shortcut is bound, not whether *our* most recent
+/// attempt to bind it succeeded.
+#[tauri::command]
+pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStatus, String> {
+    Ok(health.status())
+}
+
 // -- Recording --
 
 #[tauri::command]
 pub async fn start_recording(controller: State<'_, SharedController>) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
-    ctrl.start_recording().map_err(|e| e.to_string())
+    // The bool (whether recording actually started) is only meaningful to the
+    // hotkey path; the GUI command just needs success/failure.
+    ctrl.start_recording().map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -268,7 +303,17 @@ pub async fn stop_and_transcribe(
 ) -> Result<String, String> {
     let (audio, language, effective_model, opts) = {
         let mut ctrl = controller.lock().unwrap();
-        let audio = ctrl.stop_recording();
+        // Guard against a late/duplicate invoke racing the hotkey stop path
+        // (finding 3): if we're not recording, do nothing and return Ok-empty
+        // (NOT Err — an error would surface a misleading toast in the UI) so an
+        // in-flight transcription's state/last_error is not clobbered.
+        let audio = match ctrl.stop_recording_guarded() {
+            StopRecordingOutcome::NotRecording => return Ok(String::new()),
+            // Capture/resample failure (finding 4): the controller already
+            // recorded the error and returned to Idle; surface the real error.
+            StopRecordingOutcome::Failed(msg) => return Err(msg),
+            StopRecordingOutcome::Stopped(audio) => audio,
+        };
         let language = ctrl.language();
         let effective_model = ctrl.settings().effective_model();
         let opts = build_transcribe_options(ctrl.settings());

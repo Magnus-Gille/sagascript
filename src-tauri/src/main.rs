@@ -38,7 +38,7 @@ use tauri::{
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tracing::{error, info, warn};
 
-use app_controller::{AppController, HotkeyDownResult};
+use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
 use sagascript_core::transcription::WhisperBackend;
 
@@ -75,8 +75,15 @@ fn main() {
 
     let settings = sagascript_core::settings::store::load();
     info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
+    let initial_hotkey = settings.hotkey.clone();
     let controller = Mutex::new(AppController::new(settings));
     let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
+    // Process-wide hotkey registration health (see hotkey::health for why this
+    // is deliberately independent of the AppController mutex). Assumed healthy
+    // until the first real registration attempt in `.setup()` below proves
+    // otherwise — there's no observable window in between since that attempt
+    // runs synchronously before the event loop starts.
+    let hotkey_health = hotkey::HotkeyHealth::new(&initial_hotkey);
 
     tauri::Builder::default()
         .plugin(
@@ -131,6 +138,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(controller)
         .manage(whisper)
+        .manage(hotkey_health)
         .manage(Mutex::new(None::<MenuItem<tauri::Wry>>) as SharedStatusItem)
         .setup(|app| {
             // Hide from dock on macOS (tray-only app)
@@ -146,10 +154,27 @@ fn main() {
                 shortcut
             };
 
-            // Register global shortcut
+            // Register global shortcut. Failure here (combo already claimed by
+            // Spotlight/Raycast/etc.) used to be log-only: the app would look
+            // fine (tray shows "Idle") while being completely unable to
+            // dictate. Recorded in the process-wide health flag so the tray
+            // and Settings UI can surface it.
+            let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
             match app.global_shortcut().register(shortcut.as_str()) {
-                Ok(()) => info!("Hotkey registered: {shortcut}"),
-                Err(e) => error!("Failed to register hotkey: {e}"),
+                Ok(()) => {
+                    info!("Hotkey registered: {shortcut}");
+                    let change = health.record(&shortcut, None);
+                    if change.changed {
+                        let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to register hotkey: {e}");
+                    let change = health.record(&shortcut, Some(e.to_string()));
+                    if change.changed {
+                        let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+                    }
+                }
             }
 
             // Build tray menu
@@ -193,16 +218,19 @@ fn main() {
 
             info!("Tray icon created");
 
+            // Render the initial tray state through the same path as later
+            // updates — the hotkey-health flag was recorded above, before the
+            // tray existed, and no state transition may ever come to refresh
+            // a static "Idle" label if the hotkey is dead.
+            update_tray_status(app.handle(), "idle");
+
             // Migrate settings store from FlowDictate
             {
                 let app_dir = app.path().app_data_dir().ok();
                 if let Some(dir) = app_dir {
                     let legacy = dir.join("flowdictate-settings.json");
                     let new_path = dir.join("sagascript-settings.json");
-                    if legacy.exists() && !new_path.exists() {
-                        info!("Migrating settings store from FlowDictate");
-                        let _ = std::fs::rename(&legacy, &new_path);
-                    }
+                    migrate_legacy_settings(&legacy, &new_path);
                 }
             }
 
@@ -297,6 +325,7 @@ fn main() {
             commands::set_auto_select_model,
             commands::set_hotkey_mode,
             commands::set_hotkey,
+            commands::hotkey_status,
             commands::start_recording,
             commands::stop_and_transcribe,
             commands::cancel_recording,
@@ -333,14 +362,37 @@ fn main() {
         });
 }
 
-/// Update the tray tooltip, title, and status menu item to reflect current state
-fn update_tray_status(app: &tauri::AppHandle, state: &str) {
-    let (tooltip, title, menu_text) = match state {
+/// Pure state -> (tooltip, title, menu_text) mapping for the tray, extracted
+/// so the "hotkey unavailable" sticky-warning behavior can be unit tested
+/// without a running Tauri app. `hotkey_failed` must win over every normal
+/// state (idle/recording/transcribing/loading_model): once the hotkey is
+/// known to be unregistered, no ordinary state transition is allowed to
+/// silently paper back over "Idle" — that's the whole point of making the
+/// warning sticky.
+fn tray_label(state: &str, hotkey_failed: bool) -> (&'static str, &'static str, &'static str) {
+    if hotkey_failed {
+        return (
+            "Sagascript - Hotkey unavailable",
+            "\u{26A0}",
+            "Hotkey unavailable",
+        );
+    }
+    match state {
         "recording" => ("Sagascript - Recording...", "Rec", "Recording..."),
         "loading_model" => ("Sagascript - Loading model...", "Loading...", "Loading model..."),
         "transcribing" => ("Sagascript - Transcribing...", "...", "Transcribing..."),
         _ => ("Sagascript", "", "Idle"),
-    };
+    }
+}
+
+/// Update the tray tooltip, title, and status menu item to reflect current
+/// state. Consults the process-wide hotkey health flag on every call so a
+/// broken hotkey registration renders as a sticky "Hotkey unavailable"
+/// warning that later state changes (recording -> idle, model-preload status,
+/// etc.) cannot silently overwrite.
+fn update_tray_status(app: &tauri::AppHandle, state: &str) {
+    let hotkey_failed = app.state::<hotkey::HotkeyHealth>().is_failed();
+    let (tooltip, title, menu_text) = tray_label(state, hotkey_failed);
 
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(tooltip));
@@ -350,13 +402,61 @@ fn update_tray_status(app: &tauri::AppHandle, state: &str) {
     set_status_menu_text(app, &format!("Sagascript - {menu_text}"));
 }
 
-/// Update the tray status menu item and tooltip to show the last transcription
-fn update_tray_last_result(app: &tauri::AppHandle, text: &str) {
-    let display = if text.len() > 60 {
-        format!("{}...", &text[..57])
+/// Migrate the legacy FlowDictate settings file to the new Sagascript path, if
+/// present and no Sagascript settings file already exists. Rename failure used
+/// to be silently swallowed (`let _ = std::fs::rename(...)`), which would
+/// silently reset an upgrading user to defaults with no diagnostic trail.
+fn migrate_legacy_settings(legacy: &std::path::Path, new_path: &std::path::Path) {
+    if !legacy.exists() || new_path.exists() {
+        return;
+    }
+
+    info!("Migrating settings store from FlowDictate");
+    match std::fs::rename(legacy, new_path) {
+        Ok(()) => info!(
+            "Migrated settings store from FlowDictate ({}) to Sagascript ({})",
+            legacy.display(),
+            new_path.display()
+        ),
+        Err(e) => warn!(
+            "Failed to migrate FlowDictate settings from {} to {}: {e} — \
+             the upgrading user will fall back to default settings",
+            legacy.display(),
+            new_path.display()
+        ),
+    }
+}
+
+/// Truncate transcription text for tray display, cutting on a char boundary.
+fn truncate_for_tray(text: &str) -> String {
+    if text.len() > 60 {
+        let cut = text
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= 57)
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &text[..cut])
     } else {
         text.to_string()
-    };
+    }
+}
+
+/// Update the tray status menu item and tooltip to show the last transcription.
+///
+/// Guarded the same way as [`update_tray_status`]: if the hotkey is currently
+/// unregistered, showing "Last: <transcription>" would silently overwrite the
+/// sticky "Hotkey unavailable" warning (the exact trap called out in review —
+/// this call always follows an `update_tray_status(_, "idle")` in the success
+/// path). Delegate to `update_tray_status` in that case instead of duplicating
+/// the warning text here.
+fn update_tray_last_result(app: &tauri::AppHandle, text: &str) {
+    if app.state::<hotkey::HotkeyHealth>().is_failed() {
+        update_tray_status(app, "idle");
+        return;
+    }
+
+    let display = truncate_for_tray(text);
 
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(&format!("Sagascript\nLast: {display}")));
@@ -432,56 +532,98 @@ fn handle_hotkey_release(
     stop_recording_and_transcribe(app, ctrl);
 }
 
+/// Run a UI closure on the macOS main thread. NSStatusItem / NSWindow (tray,
+/// overlay) APIs must not be touched from a worker thread; best-effort — logs
+/// if the dispatch itself fails.
+fn dispatch_to_main<F>(app: &tauri::AppHandle, f: F)
+where
+    F: FnOnce(&tauri::AppHandle) + Send + 'static,
+{
+    let app_for_closure = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || f(&app_for_closure)) {
+        error!("Failed to dispatch UI work to main thread: {e}");
+    }
+}
+
 /// Stop recording, enforce minimum duration, and spawn transcription.
 /// Shared by both push-to-talk (on key-up) and toggle (on second key-down).
 fn stop_recording_and_transcribe(
     app: &tauri::AppHandle,
     ctrl: &tauri::State<'_, SharedController>,
 ) {
-    // Enforce minimum recording duration
+    // Compute how long we still need to hold to satisfy the minimum recording
+    // duration — but do NOT block the global-shortcut (UI) thread waiting for it
+    // (finding 2): a std::thread::sleep here freezes UI redraw and stalls
+    // subsequent hotkey events. The delay is offloaded to an async task below.
     let elapsed = {
         let c = ctrl.lock().unwrap();
         c.recording_elapsed()
     };
-
-    if elapsed < Duration::from_millis(MIN_RECORDING_MS) {
-        let remaining = Duration::from_millis(MIN_RECORDING_MS) - elapsed;
+    let min = Duration::from_millis(MIN_RECORDING_MS);
+    let remaining = if elapsed < min {
+        let rem = min - elapsed;
         info!(
-            "Recording too short ({:.0}ms), waiting {:.0}ms...",
+            "Recording too short ({:.0}ms), deferring stop by {:.0}ms off the UI thread...",
             elapsed.as_millis(),
-            remaining.as_millis()
+            rem.as_millis()
         );
-        std::thread::sleep(remaining);
-    }
-
-    // Stop recording (single lock acquisition)
-    let audio = {
-        let mut c = ctrl.lock().unwrap();
-        if c.state().is_recording() {
-            c.stop_recording()
-        } else {
-            return;
-        }
+        Some(rem)
+    } else {
+        None
     };
 
-    // Hide overlay now that recording has stopped
-    overlay::hide(app);
-
-    // Update tray to show transcribing state
-    let _ = app.emit(events::event::STATE_CHANGED, "transcribing");
-    update_tray_status(app, "transcribing");
-
-    if audio.is_empty() {
-        let mut c = ctrl.lock().unwrap();
-        c.on_transcription_error("No audio captured");
-        let _ = app.emit(events::event::STATE_CHANGED, "idle");
-        update_tray_status(app, "idle");
-        return;
-    }
-
-    // Transcribe asynchronously to avoid blocking the hotkey thread
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
+        // Min-duration top-up delay, offloaded so the UI thread stays responsive.
+        if let Some(rem) = remaining {
+            tokio::time::sleep(rem).await;
+        }
+
+        // Stop recording (single lock acquisition, re-acquired here since the
+        // controller State can't be moved into the task). Guarded so a stop that
+        // races an already-stopped session is a no-op, and a capture/resample
+        // failure surfaces as a real error (findings 3 & 4).
+        let outcome = {
+            let ctrl: tauri::State<'_, SharedController> = app_handle.state();
+            let mut c = ctrl.lock().unwrap();
+            c.stop_recording_guarded()
+        };
+        let audio = match outcome {
+            StopRecordingOutcome::NotRecording => return,
+            StopRecordingOutcome::Failed(msg) => {
+                error!("Recording stop failed: {msg}");
+                dispatch_to_main(&app_handle, |app| {
+                    overlay::hide(app);
+                    update_tray_status(app, "idle");
+                });
+                let _ = app_handle.emit(events::event::ERROR, msg);
+                let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                return;
+            }
+            StopRecordingOutcome::Stopped(audio) => audio,
+        };
+
+        // Hide overlay + show the transcribing state — re-dispatched to the main
+        // thread now that this runs on a worker.
+        dispatch_to_main(&app_handle, |app| {
+            overlay::hide(app);
+            update_tray_status(app, "transcribing");
+        });
+        let _ = app_handle.emit(events::event::STATE_CHANGED, "transcribing");
+
+        if audio.is_empty() {
+            {
+                let ctrl: tauri::State<'_, SharedController> = app_handle.state();
+                ctrl.lock().unwrap().on_transcription_error("No audio captured");
+            }
+            dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
+            let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+            return;
+        }
+
+        // Transcribe (timeout/cancellation logic is owned by a separate work
+        // package — left unchanged). Runs in this same task, which is already
+        // off the UI thread.
         let ctrl: tauri::State<'_, SharedController> = app_handle.state();
         let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 
@@ -500,7 +642,7 @@ fn stop_recording_and_transcribe(
         // Show model loading status in tray
         if whisper.needs_reload(effective_model) {
             let _ = app_handle.emit(events::event::STATE_CHANGED, "loading_model");
-            update_tray_status(&app_handle, "loading_model");
+            dispatch_to_main(&app_handle, |app| update_tray_status(app, "loading_model"));
         }
 
         // Ensure model is loaded
@@ -560,20 +702,25 @@ fn stop_recording_and_transcribe(
 
                 let mut c = ctrl.lock().unwrap();
                 c.on_transcription_success(&text);
+                drop(c);
 
                 let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                update_tray_status(&app_handle, "idle");
-                update_tray_last_result(&app_handle, &text);
+                let text_for_tray = text.clone();
+                dispatch_to_main(&app_handle, move |app| {
+                    update_tray_status(app, "idle");
+                    update_tray_last_result(app, &text_for_tray);
+                });
                 info!("Transcription flow complete, app should remain running");
             }
             Err(e) => {
                 error!("Transcription failed: {e}");
                 let mut c = ctrl.lock().unwrap();
                 c.on_transcription_error(&e.to_string());
+                drop(c);
                 let _ = app_handle.emit(events::event::ERROR, e.to_string());
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                update_tray_status(&app_handle, "idle");
+                dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
                 info!("Error flow complete, app should remain running");
             }
         }
@@ -666,13 +813,45 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                     error!("Failed to unregister old hotkey: {e}");
                 }
 
-                match app.global_shortcut().register(new_settings.hotkey.as_str()) {
-                    Ok(()) => info!("Hotkey re-registered: {}", new_settings.hotkey),
+                let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
+                let change = match app.global_shortcut().register(new_settings.hotkey.as_str()) {
+                    Ok(()) => {
+                        info!("Hotkey re-registered: {}", new_settings.hotkey);
+                        health.record(&new_settings.hotkey, None)
+                    }
                     Err(e) => {
                         error!("Failed to register new hotkey '{}': {e}", new_settings.hotkey);
-                        // Re-register the old one as fallback
-                        let _ = app.global_shortcut().register(old_settings.hotkey.as_str());
+                        // Re-register the old one as fallback so the app doesn't
+                        // end up with no hotkey bound at all. Either way the
+                        // SAVED shortcut is not registered — health must report
+                        // the saved shortcut's failure, not a false-normal for
+                        // the operational fallback.
+                        match app.global_shortcut().register(old_settings.hotkey.as_str()) {
+                            Ok(()) => {
+                                info!("Re-registered old hotkey '{}' as fallback", old_settings.hotkey);
+                                health.record(
+                                    &new_settings.hotkey,
+                                    Some(format!(
+                                        "failed to register: {e}; still using previous hotkey '{}'",
+                                        old_settings.hotkey
+                                    )),
+                                )
+                            }
+                            Err(e2) => {
+                                error!("Failed to re-register old hotkey: {e2}");
+                                health.record(
+                                    &new_settings.hotkey,
+                                    Some(format!(
+                                        "failed to register: {e}; fallback to '{}' also failed: {e2}",
+                                        old_settings.hotkey
+                                    )),
+                                )
+                            }
+                        }
                     }
+                };
+                if change.changed {
+                    let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
                 }
             }
 
@@ -688,4 +867,163 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             info!("Settings hot-reloaded from disk");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- tray_label --
+
+    #[test]
+    fn tray_label_idle_not_failed() {
+        assert_eq!(tray_label("idle", false), ("Sagascript", "", "Idle"));
+    }
+
+    #[test]
+    fn tray_label_recording_not_failed() {
+        assert_eq!(
+            tray_label("recording", false),
+            ("Sagascript - Recording...", "Rec", "Recording...")
+        );
+    }
+
+    #[test]
+    fn tray_label_hotkey_failed_is_distinct_from_idle() {
+        let failed = tray_label("idle", true);
+        assert_ne!(failed, tray_label("idle", false));
+        assert_eq!(failed.2, "Hotkey unavailable");
+    }
+
+    #[test]
+    fn tray_label_hotkey_failed_wins_over_recording() {
+        // The sticky warning must win over a normal state transition into
+        // "recording" — a hotkey that isn't registered can't actually be
+        // driving a recording state the user trusts.
+        assert_eq!(tray_label("recording", true), tray_label("idle", true));
+    }
+
+    #[test]
+    fn tray_label_hotkey_failed_wins_over_transcribing() {
+        assert_eq!(tray_label("transcribing", true), tray_label("idle", true));
+    }
+
+    #[test]
+    fn tray_label_hotkey_failed_wins_over_loading_model() {
+        assert_eq!(tray_label("loading_model", true), tray_label("idle", true));
+    }
+
+    #[test]
+    fn truncate_for_tray_empty_string_unchanged() {
+        assert_eq!(truncate_for_tray(""), "");
+    }
+
+    #[test]
+    fn truncate_for_tray_ascii_at_threshold_unchanged() {
+        let text = "a".repeat(60);
+        assert_eq!(truncate_for_tray(&text), text);
+    }
+
+    #[test]
+    fn truncate_for_tray_ascii_over_threshold_truncated() {
+        let text = "a".repeat(61);
+        let display = truncate_for_tray(&text);
+        assert_eq!(display, format!("{}...", "a".repeat(57)));
+    }
+
+    #[test]
+    fn truncate_for_tray_multibyte_straddle_does_not_panic() {
+        // "å" is 2 bytes in UTF-8; placed so its second byte falls exactly at
+        // byte offset 57 — the fixed byte-slice cutoff used before the fix.
+        let text = format!("{}å{}", "a".repeat(56), "b".repeat(10));
+        let display = truncate_for_tray(&text);
+        assert!(std::str::from_utf8(display.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn truncate_for_tray_all_multibyte_does_not_panic() {
+        // "🎉" is 4 bytes in UTF-8; 16 repeats = 64 bytes, so byte offset 57
+        // never lands on a char boundary.
+        let text = "🎉".repeat(16);
+        let display = truncate_for_tray(&text);
+        assert!(std::str::from_utf8(display.as_bytes()).is_ok());
+    }
+
+    fn migrate_test_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("sagascript-migrate-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn migrate_legacy_settings_renames_when_new_absent() {
+        let dir = migrate_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("flowdictate-settings.json");
+        let new_path = dir.join("sagascript-settings.json");
+        std::fs::write(&legacy, r#"{"language":"sv"}"#).unwrap();
+
+        migrate_legacy_settings(&legacy, &new_path);
+
+        assert!(!legacy.exists(), "legacy file should be renamed away");
+        assert!(new_path.exists(), "new path should now hold the migrated settings");
+        assert_eq!(std::fs::read_to_string(&new_path).unwrap(), r#"{"language":"sv"}"#);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrate_legacy_settings_noop_when_new_already_exists() {
+        let dir = migrate_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("flowdictate-settings.json");
+        let new_path = dir.join("sagascript-settings.json");
+        std::fs::write(&legacy, "legacy-content").unwrap();
+        std::fs::write(&new_path, "already-migrated-content").unwrap();
+
+        migrate_legacy_settings(&legacy, &new_path);
+
+        // Neither file should be touched — a Sagascript settings file already exists.
+        assert!(legacy.exists());
+        assert_eq!(std::fs::read_to_string(&legacy).unwrap(), "legacy-content");
+        assert_eq!(std::fs::read_to_string(&new_path).unwrap(), "already-migrated-content");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrate_legacy_settings_noop_when_legacy_absent() {
+        let dir = migrate_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("flowdictate-settings.json");
+        let new_path = dir.join("sagascript-settings.json");
+
+        // Should not panic when there's nothing to migrate.
+        migrate_legacy_settings(&legacy, &new_path);
+
+        assert!(!new_path.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression test for the swallowed-rename bug: a failed rename (here,
+    /// forced by a destination whose parent directory doesn't exist) must not
+    /// panic, and the legacy file must be left in place rather than lost —
+    /// the old `let _ = std::fs::rename(...)` code silently discarded the
+    /// error either way, but this at least confirms the failure path doesn't
+    /// destroy data.
+    #[test]
+    fn migrate_legacy_settings_does_not_panic_on_rename_failure() {
+        let dir = migrate_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("flowdictate-settings.json");
+        std::fs::write(&legacy, "legacy-content").unwrap();
+        // Destination's parent directory doesn't exist -> rename fails.
+        let new_path = dir.join("nonexistent-subdir").join("sagascript-settings.json");
+
+        migrate_legacy_settings(&legacy, &new_path);
+
+        assert!(legacy.exists(), "legacy file must survive a failed rename");
+        assert!(!new_path.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

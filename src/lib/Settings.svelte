@@ -23,12 +23,14 @@
     requestAccessibilityPermission,
     startRecording,
     stopAndTranscribe,
+    hotkeyStatus,
     type Settings,
     type BuildInfo,
     type Language,
     type HotkeyMode,
     type WhisperModel,
     type LoadedModelInfo,
+    type HotkeyStatus,
   } from "./api";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -45,12 +47,28 @@
 
   let platform: string = $state("macos");
 
+  // Initial data-fetch + settings-mutation error states
+  let initError: string = $state("");
+  let settingsError: string = $state("");
+
+  // Model selection state
+  let selecting: boolean = $state(false);
+  let modelError: string = $state("");
+
   let accessibilityGranted: boolean = $state(true); // assume true; checked on mount for macOS
 
   // Hotkey recorder state
   let recordingHotkey: boolean = $state(false);
   let hotkeyError: string = $state("");
   let hotkeyRecorderEl: HTMLButtonElement | undefined = $state();
+
+  // Hotkey registration health — is the saved hotkey actually bound right
+  // now? (distinct from hotkeyError above, which is about validating a
+  // shortcut the user is in the middle of entering.) Assume healthy until
+  // proven otherwise so there's no flash of a warning before the initial
+  // fetch resolves.
+  let hotkeyStatusOk: boolean = $state(true);
+  let hotkeyStatusError: string = $state("");
 
   $effect(() => {
     if (recordingHotkey && hotkeyRecorderEl) {
@@ -74,24 +92,10 @@
   let transcribePrompt: string = $state('');
   let transcribeDiarize: boolean = $state(false);
 
-  onMount(async () => {
-    settings = await getSettings();
-    platform = await getPlatform();
-    if (platform === "macos") {
-      accessibilityGranted = await checkAccessibilityPermission();
-    }
-    buildInfo = await getBuildInfo();
-    models = await getModelInfo();
-    loadedModel = await getLoadedModel();
-    supportedFormats = await getSupportedFormats();
-
-    // Check URL params for initial tab
-    const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab");
-    if (tab === "dictate" || tab === "transcribe" || tab === "settings") {
-      activeTab = tab;
-    }
-
+  onMount(() => {
+    // Register listeners + drag-drop FIRST — they don't depend on the data
+    // fetched below, so a rejected invoke in the fetch sequence must never
+    // prevent them from wiring up (e.g. a stuck-at-0% download).
     listen("model-download-progress", (event: any) => {
       downloadProgress = event.payload.progress;
     });
@@ -105,6 +109,15 @@
       downloadProgress = 0;
       models = await getModelInfo();
       loadedModel = await getLoadedModel();
+    });
+
+    // Hotkey registration health can change at any time (settings-file
+    // hot-reload, a failed re-register racing a Spotlight/Raycast combo
+    // claim, etc.) — not just as a result of something this window did.
+    listen("hotkey-registration-changed", (event: any) => {
+      const status = event.payload as HotkeyStatus;
+      hotkeyStatusOk = status.ok;
+      hotkeyStatusError = status.error ?? "";
     });
 
     // Listen for tab navigation from tray menu
@@ -131,29 +144,77 @@
         dragOver = false;
       }
     });
+
+    // Fetch initial data. A rejection here surfaces as a visible inline
+    // error instead of leaving a half-initialized window.
+    (async () => {
+      initError = "";
+      try {
+        settings = await getSettings();
+        platform = await getPlatform();
+        if (platform === "macos") {
+          accessibilityGranted = await checkAccessibilityPermission();
+        }
+        buildInfo = await getBuildInfo();
+        models = await getModelInfo();
+        loadedModel = await getLoadedModel();
+        supportedFormats = await getSupportedFormats();
+        const status = await hotkeyStatus();
+        hotkeyStatusOk = status.ok;
+        hotkeyStatusError = status.error ?? "";
+
+        // Check URL params for initial tab
+        const params = new URLSearchParams(window.location.search);
+        const tab = params.get("tab");
+        if (tab === "dictate" || tab === "transcribe" || tab === "settings") {
+          activeTab = tab;
+        }
+      } catch (e: any) {
+        initError = typeof e === "string" ? e : e?.message || "Failed to load settings.";
+      }
+    })();
   });
+
+  /**
+   * Shared wrapper for the common "mutate then refresh settings" pattern.
+   * On failure: records a visible error and forces bound controls back to
+   * last-known-good by reassigning `settings` to a fresh object (one-way
+   * bindings re-render from state, so a native control that already shows
+   * the rejected value snaps back). Never re-throws.
+   */
+  async function applySetting(mutate: () => Promise<void>): Promise<boolean> {
+    settingsError = "";
+    try {
+      await mutate();
+      settings = await getSettings();
+      return true;
+    } catch (e: any) {
+      settingsError = typeof e === "string" ? e : e?.message || "Failed to save setting.";
+      if (settings) settings = { ...settings };
+      return false;
+    }
+  }
 
   async function onLanguageChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value as Language;
-    await setLanguage(value);
-    settings = await getSettings();
-    models = await getModelInfo();
-    loadedModel = await getLoadedModel();
+    const ok = await applySetting(() => setLanguage(value));
+    if (ok) {
+      models = await getModelInfo();
+      loadedModel = await getLoadedModel();
+    }
   }
 
   async function onHotkeyModeChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value as HotkeyMode;
-    await setHotkeyMode(value);
-    settings = await getSettings();
+    await applySetting(() => setHotkeyMode(value));
   }
 
   async function onAutoPasteToggle() {
     if (!settings) return;
     const enabling = !settings.auto_paste;
-    await setAutoPaste(enabling);
-    settings = await getSettings();
+    const ok = await applySetting(() => setAutoPaste(enabling));
     // When enabling on macOS, check Accessibility permission
-    if (enabling && platform === "macos") {
+    if (ok && enabling && platform === "macos") {
       accessibilityGranted = await checkAccessibilityPermission();
       if (!accessibilityGranted) {
         await requestAccessibilityPermission();
@@ -163,36 +224,37 @@
 
   async function onShowOverlayToggle() {
     if (!settings) return;
-    await setShowOverlay(!settings.show_overlay);
-    settings = await getSettings();
+    const next = !settings.show_overlay;
+    await applySetting(() => setShowOverlay(next));
   }
 
   async function onInitialPromptBlur(e: Event) {
     if (!settings) return;
     const value = (e.target as HTMLTextAreaElement).value;
-    await setInitialPrompt(value);
-    settings = await getSettings();
+    await applySetting(() => setInitialPrompt(value));
   }
 
   async function onBeamSizeChange(e: Event) {
     const value = Number((e.target as HTMLSelectElement).value);
-    await setBeamSize(value);
-    settings = await getSettings();
+    await applySetting(() => setBeamSize(value));
   }
 
   async function onTemperatureFallbackToggle() {
     if (!settings) return;
-    await setTemperatureFallback(!settings.temperature_fallback);
-    settings = await getSettings();
+    const next = !settings.temperature_fallback;
+    await applySetting(() => setTemperatureFallback(next));
   }
 
   async function onVadToggle() {
     if (!settings) return;
-    await setVadEnabled(!settings.vad_enabled);
-    settings = await getSettings();
+    const next = !settings.vad_enabled;
+    await applySetting(() => setVadEnabled(next));
   }
 
   async function selectModel(model: WhisperModel) {
+    if (selecting) return;
+    selecting = true;
+    modelError = "";
     try {
       if (!model.downloaded) {
         downloading = model.id;
@@ -205,11 +267,12 @@
       settings = await getSettings();
       models = await getModelInfo();
       loadedModel = await getLoadedModel();
-    } catch (e) {
-      console.error("Model selection failed:", e);
+    } catch (e: any) {
+      modelError = typeof e === "string" ? e : e?.message || "Model selection failed.";
     } finally {
       downloading = null;
       downloadProgress = 0;
+      selecting = false;
     }
   }
 
@@ -240,6 +303,7 @@
   }
 
   async function handleFileTranscription(filePath: string) {
+    if (transcribing) return;
     transcribing = true;
     transcriptionProgress = 0;
     transcribeError = "";
@@ -405,6 +469,12 @@
 
   {#if settings}
     <div class="content">
+      {#if initError}
+        <div class="transcribe-error">{initError}</div>
+      {/if}
+      {#if settingsError}
+        <div class="transcribe-error">{settingsError}</div>
+      {/if}
       {#if activeTab === "dictate"}
         <button class="active-config-bar" onclick={() => (activeTab = "settings")}>
           <div class="active-config-row">
@@ -442,6 +512,10 @@
           {/if}
           {#if hotkeyError}
             <div class="hotkey-error">{hotkeyError}</div>
+          {:else if !hotkeyStatusOk}
+            <div class="hotkey-error">
+              ⚠ Not registered{hotkeyStatusError ? `: ${hotkeyStatusError}` : ""} — this shortcut may already be in use by another app. Try a different combination.
+            </div>
           {/if}
           <div class="hotkey-hint">Modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key (A–Z, 0–9, F1–F12, Space, arrows)</div>
         </div>
@@ -583,7 +657,7 @@
               class:active={model.active}
               class:downloading={downloading === model.id}
               onclick={() => selectModel(model)}
-              disabled={downloading !== null}
+              disabled={downloading !== null || selecting}
             >
               <div class="model-card-header">
                 <span class="model-card-name">{model.display_name}</span>
@@ -604,6 +678,10 @@
             </button>
           {/each}
         </div>
+
+        {#if modelError}
+          <div class="transcribe-error">{modelError}</div>
+        {/if}
 
         <div class="model-hint">
           Pick a size. Larger models are more accurate but take longer to transcribe.
@@ -677,14 +755,20 @@
             {#if buildInfo}
               Sagascript {buildInfo.version} ({buildInfo.git_hash}) - Built {buildInfo.build_date}
             {:else}
-              Sagascript 0.1.0
+              Sagascript
             {/if}
           </div>
         </div>
       {/if}
     </div>
   {:else}
-    <div class="loading">Loading settings...</div>
+    <div class="loading">
+      {#if initError}
+        <div class="transcribe-error">{initError}</div>
+      {:else}
+        Loading settings...
+      {/if}
+    </div>
   {/if}
 
   {#if downloading}

@@ -39,6 +39,7 @@ pub struct TranscribeArgs {
     /// Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.85). Higher = fewer speakers.
     #[cfg(feature = "diarization")]
     #[arg(long, value_name = "THRESHOLD", default_value = "0.85",
+          value_parser = parse_diarize_threshold,
           help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.85). Higher = fewer speakers.")]
     pub diarize_threshold: f32,
 
@@ -72,16 +73,12 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         Some(l) => parse_language(l)?,
         None => stored.language,
     };
-    let model = match &args.model {
-        Some(m) => parse_model(m)?,
-        None => {
-            if stored.auto_select_model {
-                WhisperModel::recommended(language)
-            } else {
-                stored.whisper_model
-            }
-        }
-    };
+    let model = resolve_effective_model(
+        args.model.as_deref(),
+        language,
+        stored.auto_select_model,
+        stored.whisper_model,
+    )?;
 
     // Check model is downloaded
     if !model::is_model_downloaded(model) {
@@ -280,6 +277,28 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     Ok(())
 }
 
+/// Validates a `--diarize-threshold` value: must parse as a finite f32 in the
+/// documented 0.0-2.0 range. NaN/infinite or out-of-range values silently
+/// produce degenerate agglomerative clustering downstream, so reject them at
+/// the CLI boundary rather than at the clustering call site.
+#[cfg(feature = "diarization")]
+fn parse_diarize_threshold(s: &str) -> Result<f32, String> {
+    let value: f32 = s
+        .parse()
+        .map_err(|_| format!("'{s}' is not a valid number"))?;
+    if !value.is_finite() {
+        return Err(format!(
+            "diarize-threshold must be a finite number, got '{s}'"
+        ));
+    }
+    if !(0.0..=2.0).contains(&value) {
+        return Err(format!(
+            "diarize-threshold must be between 0.0 and 2.0, got {value}"
+        ));
+    }
+    Ok(value)
+}
+
 pub fn parse_language(s: &str) -> Result<Language, DictationError> {
     match s {
         "en" | "english" => Ok(Language::English),
@@ -292,14 +311,34 @@ pub fn parse_language(s: &str) -> Result<Language, DictationError> {
     }
 }
 
-#[allow(dead_code)]
-pub fn resolve_model(
-    model_str: Option<&str>,
+/// Resolves the whisper model to use for a run: an explicit `--model` argument
+/// always wins; otherwise, if `auto_select_model` is set, the model
+/// recommended for `language` is used; otherwise `fallback` (the stored
+/// `whisper_model` setting) is used, ignoring `language`.
+///
+/// This is the single source of truth for the branch shared by
+/// `transcribe::run()` and `record::run()` — keep their call sites in sync
+/// with this function rather than re-deriving the logic inline.
+///
+/// Note: this intentionally does not delegate to
+/// `Settings::effective_model()` (core/settings/manager.rs), because that
+/// method always uses the *stored* `Settings::language`, while callers here
+/// need to honor a `--language` override that differs from the stored value
+/// (e.g. `--language sv` with auto-select on should recommend the Swedish
+/// model even if the stored language is English).
+pub fn resolve_effective_model(
+    model_arg: Option<&str>,
     language: Language,
+    auto_select_model: bool,
+    fallback: WhisperModel,
 ) -> Result<WhisperModel, DictationError> {
-    match model_str {
-        None => Ok(WhisperModel::recommended(language)),
+    match model_arg {
         Some(s) => parse_model(s),
+        None => Ok(if auto_select_model {
+            WhisperModel::recommended(language)
+        } else {
+            fallback
+        }),
     }
 }
 
@@ -502,25 +541,108 @@ mod tests {
         }
     }
 
-    // -- resolve_model --
+    // -- resolve_effective_model --
+    //
+    // These exercise the exact branch used by both transcribe::run() and
+    // record::run(): explicit arg wins -> auto_select_model recommends by
+    // language -> otherwise the stored fallback model (language ignored).
 
     #[test]
-    fn resolve_model_none_uses_recommended() {
-        let result = resolve_model(None, Language::English).unwrap();
-        assert_eq!(result, WhisperModel::BaseEn);
-
-        let result = resolve_model(None, Language::Swedish).unwrap();
+    fn resolve_effective_model_none_auto_recommends_by_language() {
+        let result =
+            resolve_effective_model(None, Language::Swedish, true, WhisperModel::Base).unwrap();
         assert_eq!(result, WhisperModel::KbWhisperBase);
     }
 
     #[test]
-    fn resolve_model_explicit_overrides() {
-        let result = resolve_model(Some("tiny.en"), Language::Swedish).unwrap();
+    fn resolve_effective_model_none_no_auto_uses_fallback_ignoring_language() {
+        let result = resolve_effective_model(
+            None,
+            Language::Swedish,
+            false,
+            WhisperModel::LargeV3Turbo,
+        )
+        .unwrap();
+        assert_eq!(result, WhisperModel::LargeV3Turbo);
+    }
+
+    #[test]
+    fn resolve_effective_model_explicit_arg_wins_over_auto_select() {
+        let result = resolve_effective_model(
+            Some("tiny.en"),
+            Language::Swedish,
+            true,
+            WhisperModel::Base,
+        )
+        .unwrap();
         assert_eq!(result, WhisperModel::TinyEn);
     }
 
     #[test]
-    fn resolve_model_invalid_string() {
-        assert!(resolve_model(Some("invalid"), Language::Auto).is_err());
+    fn resolve_effective_model_invalid_arg_errors() {
+        assert!(
+            resolve_effective_model(Some("bogus"), Language::Auto, true, WhisperModel::Base)
+                .is_err()
+        );
+    }
+}
+
+// -- diarize_threshold validation --
+//
+// Exercised via clap's try_parse_from against a small wrapper so the
+// value_parser attribute itself (not just the bare parsing function) is
+// under test.
+#[cfg(all(test, feature = "diarization"))]
+mod diarize_threshold_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        args: TranscribeArgs,
+    }
+
+    fn parse_threshold(value: &str) -> Result<f32, String> {
+        TestCli::try_parse_from(["sagascript", "file.wav", "--diarize-threshold", value])
+            .map(|cli| cli.args.diarize_threshold)
+            .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn rejects_nan() {
+        assert!(parse_threshold("nan").is_err());
+    }
+
+    #[test]
+    fn rejects_negative() {
+        assert!(parse_threshold("-1.0").is_err());
+    }
+
+    #[test]
+    fn rejects_above_range() {
+        assert!(parse_threshold("3.0").is_err());
+    }
+
+    #[test]
+    fn accepts_default_value() {
+        assert_eq!(parse_threshold("0.85").unwrap(), 0.85);
+    }
+
+    #[test]
+    fn accepts_in_range_value() {
+        assert_eq!(parse_threshold("1.5").unwrap(), 1.5);
+    }
+
+    #[test]
+    fn default_applies_when_flag_omitted() {
+        let cli = TestCli::try_parse_from(["sagascript", "file.wav"]).unwrap();
+        assert_eq!(cli.args.diarize_threshold, 0.85);
+    }
+
+    #[test]
+    fn accepts_boundary_values() {
+        assert_eq!(parse_threshold("0.0").unwrap(), 0.0);
+        assert_eq!(parse_threshold("2.0").unwrap(), 2.0);
     }
 }

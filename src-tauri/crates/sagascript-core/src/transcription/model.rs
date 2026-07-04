@@ -1,13 +1,30 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tracing::info;
 
+use crate::download::{GGML_MAGIC, download_to_path};
 use crate::error::DictationError;
 use crate::settings::WhisperModel;
 
 /// Get the models directory for storing GGML files
 pub fn models_dir() -> PathBuf {
     let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+    migrate_legacy_models_dir(&base)
+}
+
+/// Migrate the legacy FlowDictate models directory to Sagascript's, given a
+/// base app-data directory (`dirs::data_dir()` in production; a tempdir in
+/// tests). Pure with respect to the filesystem seam — no global state — so
+/// it's fully unit-testable without touching the real
+/// `~/Library/Application Support`.
+///
+/// - Fresh install (neither dir exists): no-op, just returns the new path.
+/// - Legacy dir only: renamed into place; the now-empty legacy parent
+///   (`<base>/FlowDictate`) is removed best-effort (`remove_dir` is a no-op
+///   if it's not actually empty, e.g. the old app left other files there).
+/// - Both dirs exist: the legacy dir is left untouched — never silently
+///   clobber a Models dir that's already populated at the new location.
+pub fn migrate_legacy_models_dir(base: &Path) -> PathBuf {
     let new_dir = base.join("Sagascript").join("Models");
 
     // Migrate from legacy FlowDictate models directory
@@ -66,52 +83,11 @@ pub async fn download_vad_model(
         return Ok(path);
     }
 
-    let dir = models_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to create models directory: {e}"))
-    })?;
-
     info!("Downloading Silero VAD model from {VAD_MODEL_URL}");
 
-    use futures_util::StreamExt;
-    use tokio::io::AsyncWriteExt;
-
-    let client = reqwest::Client::new();
-    let response = client
-        .get(VAD_MODEL_URL)
-        .send()
-        .await
-        .map_err(|e| DictationError::ModelDownloadFailed(format!("VAD download failed: {e}")))?;
-    if !response.status().is_success() {
-        return Err(DictationError::ModelDownloadFailed(format!(
-            "VAD HTTP {}: {VAD_MODEL_URL}",
-            response.status()
-        )));
-    }
-
-    let total_size = response.content_length().unwrap_or(0);
-    let mut downloaded: u64 = 0;
-    let tmp_path = path.with_extension("bin.tmp");
-    let mut file = tokio::fs::File::create(&tmp_path).await.map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to create temp file: {e}"))
-    })?;
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk
-            .map_err(|e| DictationError::ModelDownloadFailed(format!("VAD download error: {e}")))?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| DictationError::ModelDownloadFailed(format!("Write error: {e}")))?;
-        downloaded += chunk.len() as u64;
-        progress_callback(downloaded, total_size);
-    }
-    file.flush()
-        .await
-        .map_err(|e| DictationError::ModelDownloadFailed(format!("Flush error: {e}")))?;
-    drop(file);
-    tokio::fs::rename(&tmp_path, &path).await.map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to rename temp file: {e}"))
-    })?;
+    // The Silero VAD model has shipped in ggml format since whisper.cpp
+    // v1.7.4, so the same magic check as the whisper models applies.
+    download_to_path(VAD_MODEL_URL, &path, "bin", Some(&GGML_MAGIC), progress_callback).await?;
 
     info!("VAD model downloaded: {}", path.display());
     Ok(path)
@@ -150,11 +126,6 @@ pub async fn download_model(
         return Ok(path);
     }
 
-    // Ensure directory exists
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to create models directory: {e}"))
-    })?;
-
     info!(
         "Downloading {} from {} (~{}MB)",
         model.display_name(),
@@ -162,53 +133,8 @@ pub async fn download_model(
         model.size_mb()
     );
 
-    let client = reqwest::Client::new();
-    let response = client
-        .get(model.download_url())
-        .send()
-        .await
-        .map_err(|e| DictationError::ModelDownloadFailed(format!("Download failed: {e}")))?;
-
-    if !response.status().is_success() {
-        return Err(DictationError::ModelDownloadFailed(format!(
-            "HTTP {}: {}",
-            response.status(),
-            model.download_url()
-        )));
-    }
-
-    let total_size = response.content_length().unwrap_or(0);
-    let mut downloaded: u64 = 0;
-
-    // Download to a temp file then rename (atomic)
-    let tmp_path = path.with_extension("bin.tmp");
-    let mut file = tokio::fs::File::create(&tmp_path).await.map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to create temp file: {e}"))
-    })?;
-
-    use tokio::io::AsyncWriteExt;
-    let mut stream = response.bytes_stream();
-    use futures_util::StreamExt;
-
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| DictationError::ModelDownloadFailed(format!("Download error: {e}")))?;
-        file.write_all(&chunk).await.map_err(|e| {
-            DictationError::ModelDownloadFailed(format!("Write error: {e}"))
-        })?;
-        downloaded += chunk.len() as u64;
-        progress_callback(downloaded, total_size);
-    }
-
-    file.flush().await.map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Flush error: {e}"))
-    })?;
-    drop(file);
-
-    // Rename temp to final
-    tokio::fs::rename(&tmp_path, &path).await.map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to rename temp file: {e}"))
-    })?;
+    download_to_path(model.download_url(), &path, "bin", Some(&GGML_MAGIC), progress_callback)
+        .await?;
 
     info!("Model downloaded: {}", path.display());
 
@@ -339,4 +265,100 @@ async fn run_ditto(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod migrate_legacy_models_dir_tests {
+    use super::*;
+
+    fn temp_base() -> PathBuf {
+        std::env::temp_dir().join(format!("sagascript-migrate-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn fresh_install_creates_nothing_and_returns_new_path() {
+        let base = temp_base();
+        // Deliberately don't create `base` itself — a fresh install has
+        // neither the legacy nor the new dir yet.
+
+        let result = migrate_legacy_models_dir(&base);
+
+        assert_eq!(result, base.join("Sagascript").join("Models"));
+        assert!(!base.join("FlowDictate").exists(), "must not create the legacy dir");
+        assert!(!result.exists(), "migration itself must not create the new dir either");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn legacy_dir_with_file_is_moved_and_old_dir_removed() {
+        let base = temp_base();
+        let legacy_models = base.join("FlowDictate").join("Models");
+        std::fs::create_dir_all(&legacy_models).unwrap();
+        std::fs::write(legacy_models.join("ggml-base.bin"), b"dummy").unwrap();
+
+        let result = migrate_legacy_models_dir(&base);
+
+        assert_eq!(result, base.join("Sagascript").join("Models"));
+        assert!(result.join("ggml-base.bin").exists(), "file must end up under Sagascript/Models");
+        assert!(
+            !base.join("FlowDictate").exists(),
+            "now-empty legacy parent should be cleaned up"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn both_dirs_present_leaves_legacy_untouched() {
+        let base = temp_base();
+
+        let new_models = base.join("Sagascript").join("Models");
+        std::fs::create_dir_all(&new_models).unwrap();
+        std::fs::write(new_models.join("ggml-base.bin"), b"current").unwrap();
+
+        let legacy_models = base.join("FlowDictate").join("Models");
+        std::fs::create_dir_all(&legacy_models).unwrap();
+        std::fs::write(legacy_models.join("ggml-tiny.bin"), b"legacy").unwrap();
+
+        let result = migrate_legacy_models_dir(&base);
+
+        assert_eq!(result, new_models);
+        assert!(
+            legacy_models.join("ggml-tiny.bin").exists(),
+            "legacy dir must survive untouched when the new dir already exists"
+        );
+        assert!(
+            new_models.join("ggml-base.bin").exists(),
+            "existing new-dir contents must be untouched"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn sibling_file_in_legacy_parent_survives_migration() {
+        let base = temp_base();
+        let legacy_models = base.join("FlowDictate").join("Models");
+        std::fs::create_dir_all(&legacy_models).unwrap();
+        std::fs::write(legacy_models.join("ggml-base.bin"), b"dummy").unwrap();
+
+        // A sibling file directly under FlowDictate/ (not under Models/) —
+        // e.g. a leftover settings file from the old app. `remove_dir` only
+        // removes empty directories, so this must survive the migration.
+        let sibling = base.join("FlowDictate").join("settings.json");
+        std::fs::write(&sibling, b"{}").unwrap();
+
+        let result = migrate_legacy_models_dir(&base);
+
+        assert_eq!(result, base.join("Sagascript").join("Models"));
+        assert!(result.join("ggml-base.bin").exists());
+        assert!(sibling.exists(), "sibling file in legacy parent must survive");
+        assert!(
+            base.join("FlowDictate").exists(),
+            "legacy parent must survive since it's not empty"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

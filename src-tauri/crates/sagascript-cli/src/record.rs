@@ -10,9 +10,9 @@ use sagascript_core::error::DictationError;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::WhisperBackend;
 
-use sagascript_core::settings::WhisperModel;
-
-use super::transcribe::{copy_to_clipboard, model_id_string, parse_language, parse_model};
+use super::transcribe::{
+    copy_to_clipboard, model_id_string, parse_language, resolve_effective_model,
+};
 
 #[derive(Args)]
 pub struct RecordArgs {
@@ -51,16 +51,12 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
 
     // Only validate model if we're going to transcribe
     let model = if !save_only {
-        let m = match &args.model {
-            Some(s) => parse_model(s)?,
-            None => {
-                if stored.auto_select_model {
-                    WhisperModel::recommended(language)
-                } else {
-                    stored.whisper_model
-                }
-            }
-        };
+        let m = resolve_effective_model(
+            args.model.as_deref(),
+            language,
+            stored.auto_select_model,
+            stored.whisper_model,
+        )?;
         if !model::is_model_downloaded(m) {
             return Err(DictationError::TranscriptionFailed(format!(
                 "Model '{}' is not downloaded. Run: sagascript download-model {}",
@@ -102,7 +98,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         }
     }
 
-    let audio = capture.stop_capture();
+    let audio = capture.stop_capture()?;
     let duration = audio.len() as f64 / TARGET_SAMPLE_RATE as f64;
     eprintln!("Captured {:.1}s of audio ({} samples)", duration, audio.len());
 
