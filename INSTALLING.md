@@ -4,25 +4,10 @@
 
 Download **Sagascript.dmg** from the [latest release](https://github.com/Magnus-Gille/sagascript/releases/latest). This is a universal binary that runs natively on both Apple Silicon and Intel Macs.
 
-### Unsigned build warning
-
-Sagascript is not yet code-signed with an Apple Developer certificate. macOS will block the app the first time you open it.
-
-**To open it:**
-
-1. Open the DMG and drag Sagascript to Applications
-2. Open Sagascript from Applications — macOS will show *"Sagascript can't be opened because Apple cannot check it for malicious software"*
-3. Open **System Settings > Privacy & Security**, scroll down to the Security section
-4. You'll see *"Sagascript was blocked from use because it is not from an identified developer"* — click **Open Anyway**
-5. Confirm in the dialog that appears
-
-Alternatively, run this in Terminal before the first launch:
-
-```
-xattr -cr /Applications/Sagascript.app
-```
-
-You only need to do this once. Subsequent launches will work normally.
+Open the DMG, drag Sagascript to Applications, and launch the copy in
+`/Applications`. Official releases are signed with Developer ID and notarized by
+Apple; do not bypass Gatekeeper with `xattr` or “Open Anyway”. If an official
+artifact is blocked, do not run it—report the release version and download URL.
 
 ## Windows
 
@@ -48,6 +33,11 @@ On first launch, Sagascript will walk you through setup:
 2. **Speech engine download** — downloads the recommended Whisper model for your language (55-142 MB)
 3. **Microphone permission** (macOS) — required for live dictation
 4. **Accessibility permission** (macOS) — allows auto-paste into any app after dictation
+
+Each permission should be requested once. The global hotkey itself does not
+require an additional TCC grant. If an older pre-release build keeps reappearing in
+Privacy & Security, remove the old rows and reinstall one fresh copy in
+`/Applications`; see the repository's troubleshooting instructions.
 
 All speech processing happens locally on your device. No audio is sent to any server.
 

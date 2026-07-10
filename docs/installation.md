@@ -20,7 +20,6 @@ Download the latest `.dmg` from the [Releases page](https://github.com/Magnus-Gi
 4. Grant permissions when prompted:
    - **Microphone** -- for recording audio
    - **Accessibility** -- for pasting transcriptions into the active app
-   - **Input Monitoring** -- for the global hotkey
 
 ### Homebrew (planned)
 

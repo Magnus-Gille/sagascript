@@ -8,7 +8,59 @@ permissions:
   contents: write
 
 jobs:
+  quality-gate:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: release-gate-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json') }}
+          restore-keys: |
+            release-gate-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Verify release metadata and tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run release:check
+
+      - name: Build fresh frontend
+        run: npm run build
+
+      - name: Check Svelte and TypeScript
+        run: npm run check
+
+      - name: Test Rust workspace
+        working-directory: src-tauri
+        run: cargo test --workspace
+
+      - name: Lint Rust workspace
+        working-directory: src-tauri
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
   build-macos:
+    needs: quality-gate
     runs-on: macos-14
 
     steps:
@@ -40,21 +92,76 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build frontend
-        run: npm run build
+      - name: Verify release metadata and tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run release:check
 
-      - name: Build universal Tauri app
-        run: npx tauri build --target universal-apple-darwin
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          : "${APPLE_CERTIFICATE:?APPLE_CERTIFICATE secret is required}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?APPLE_CERTIFICATE_PASSWORD secret is required}"
+          : "${KEYCHAIN_PASSWORD:?KEYCHAIN_PASSWORD secret is required}"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          keychain="$RUNNER_TEMP/sagascript-build.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$certificate" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          security list-keychains -d user -s "$keychain"
+
+      - name: Prepare notarization credentials and build metadata
+        env:
+          APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          : "${APPLE_API_PRIVATE_KEY_BASE64:?APPLE_API_PRIVATE_KEY_BASE64 secret is required}"
+          : "${APPLE_API_KEY:?APPLE_API_KEY secret is required}"
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY_BASE64" | base64 --decode > "$api_key_path"
+          chmod 600 "$api_key_path"
+          echo "APPLE_API_KEY_PATH=$api_key_path" >> "$GITHUB_ENV"
+          echo "SAGASCRIPT_GIT_HASH=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_ENV"
+          echo "SAGASCRIPT_BUILD_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize, and staple universal app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
+          : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
+          npx tauri build --target universal-apple-darwin
+
+      - name: Verify macOS release artifact
+        run: |
+          version=$(node -p "require('./package.json').version")
+          app="src-tauri/target/universal-apple-darwin/release/bundle/macos/Sagascript.app"
+          dmg=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
+          [[ -n "$dmg" ]]
+          ./scripts/verify-macos-release.sh "$app" "$dmg" "$version"
+          mkdir -p artifacts
+          cp "$dmg" artifacts/Sagascript.dmg
+          tar -czf artifacts/Sagascript.app.tar.gz -C "$(dirname "$app")" "$(basename "$app")"
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: macos-bundle
           path: |
-            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
+            artifacts/Sagascript.dmg
+            artifacts/Sagascript.app.tar.gz
+          if-no-files-found: error
 
   build-windows:
+    needs: quality-gate
     runs-on: windows-latest
 
     steps:
@@ -84,19 +191,32 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build frontend
-        run: npm run build
+      - name: Verify release metadata and tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: npm run release:check
 
       - name: Build Tauri app
         run: npx tauri build
+
+      - name: Prepare stable Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          $msi = Get-ChildItem src-tauri/target/release/bundle/msi/*.msi | Select-Object -First 1
+          if (-not $exe -or -not $msi) { throw "Expected NSIS and MSI artifacts" }
+          Copy-Item $exe.FullName artifacts/Sagascript-Setup.exe
+          Copy-Item $msi.FullName artifacts/Sagascript-Setup.msi
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-bundle
           path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
+            artifacts/Sagascript-Setup.exe
+            artifacts/Sagascript-Setup.msi
+          if-no-files-found: error
 
   publish-release:
     needs: [build-macos, build-windows]
@@ -110,13 +230,10 @@ jobs:
 
       - name: Rename artifacts to stable filenames
         run: |
-          # macOS (upload-artifact preserves directory structure)
-          find artifacts/macos-bundle -name '*.dmg' -exec cp {} artifacts/Sagascript.dmg \;
-          find artifacts/macos-bundle -name '*.app.tar.gz' -exec cp {} artifacts/Sagascript.app.tar.gz \;
-
-          # Windows
-          find artifacts/windows-bundle -name '*.exe' -exec cp {} artifacts/Sagascript-Setup.exe \;
-          find artifacts/windows-bundle -name '*.msi' -exec cp {} artifacts/Sagascript-Setup.msi \;
+          cp artifacts/macos-bundle/Sagascript.dmg artifacts/Sagascript.dmg
+          cp artifacts/macos-bundle/Sagascript.app.tar.gz artifacts/Sagascript.app.tar.gz
+          cp artifacts/windows-bundle/Sagascript-Setup.exe artifacts/Sagascript-Setup.exe
+          cp artifacts/windows-bundle/Sagascript-Setup.msi artifacts/Sagascript-Setup.msi
 
           echo "Stable artifacts:"
           ls -lh artifacts/Sagascript*

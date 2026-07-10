@@ -2,12 +2,13 @@ use std::path::PathBuf;
 
 use crate::settings::Settings;
 
-const APP_IDENTIFIER: &str = "com.sagascript.app";
+const APP_IDENTIFIER: &str = "ai.gille.sagascript";
+const LEGACY_APP_IDENTIFIERS: &[&str] = &["com.sagascript.app"];
 const SETTINGS_FILENAME: &str = "sagascript-settings.json";
 
 /// Returns the application data directory (platform-specific).
-/// macOS: ~/Library/Application Support/com.sagascript.app/
-/// Windows: %APPDATA%/com.sagascript.app/
+/// macOS: ~/Library/Application Support/ai.gille.sagascript/
+/// Windows: %APPDATA%/ai.gille.sagascript/
 pub fn app_data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -19,10 +20,61 @@ pub fn settings_path() -> PathBuf {
     app_data_dir().join(SETTINGS_FILENAME)
 }
 
+fn legacy_settings_paths() -> impl Iterator<Item = PathBuf> {
+    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+    LEGACY_APP_IDENTIFIERS
+        .iter()
+        .map(move |identifier| base.join(identifier).join(SETTINGS_FILENAME))
+}
+
+fn copy_legacy_settings(source: &PathBuf, destination: &PathBuf) -> Result<bool, String> {
+    if destination.exists() || !source.is_file() {
+        return Ok(false);
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "Settings destination has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Failed to create settings directory: {error}"))?;
+    std::fs::copy(source, destination)
+        .map_err(|error| format!("Failed to copy legacy settings: {error}"))?;
+    Ok(true)
+}
+
+/// Copy settings from an earlier bundle identifier on first use of the new
+/// identifier. Keep the source in place so rolling back a pre-launch build is
+/// safe. Once the destination exists it always wins.
+fn migrate_legacy_identifier_settings(destination: &PathBuf) {
+    if destination.exists() {
+        return;
+    }
+
+    for source in legacy_settings_paths() {
+        if !source.is_file() {
+            continue;
+        }
+        match copy_legacy_settings(&source, destination) {
+            Ok(true) => tracing::info!(
+                "Migrated settings from legacy application identifier ({})",
+                source.display()
+            ),
+            Ok(false) => {}
+            Err(error) => tracing::warn!(
+                "Failed to migrate settings from {} to {}: {error}",
+                source.display(),
+                destination.display()
+            ),
+        }
+        return;
+    }
+}
+
 /// Load settings from disk. Returns defaults if the file is missing or unreadable.
 /// Partial JSON files are handled by `#[serde(default)]` on Settings.
 pub fn load() -> Settings {
-    load_from(&settings_path())
+    let path = settings_path();
+    migrate_legacy_identifier_settings(&path);
+    load_from(&path)
 }
 
 /// Load settings from a specific path. Returns defaults if missing or unreadable.
@@ -50,7 +102,9 @@ pub fn load_from(path: &PathBuf) -> Settings {
 /// (e.g. `hasCompletedOnboarding` from Tauri plugin store).
 /// Uses atomic write: write to .tmp then rename.
 pub fn save(settings: &Settings) -> Result<(), String> {
-    save_to(&settings_path(), settings)
+    let path = settings_path();
+    migrate_legacy_identifier_settings(&path);
+    save_to(&path, settings)
 }
 
 /// Persist settings to a specific path. Test seam for `save`, which always
@@ -96,22 +150,20 @@ fn save_to(path: &PathBuf, settings: &Settings) -> Result<(), String> {
     };
 
     // Merge settings fields into the map
-    let settings_value = serde_json::to_value(settings).map_err(|e| format!("Serialize error: {e}"))?;
+    let settings_value =
+        serde_json::to_value(settings).map_err(|e| format!("Serialize error: {e}"))?;
     if let serde_json::Value::Object(settings_map) = settings_value {
         for (k, v) in settings_map {
             map.insert(k, v);
         }
     }
 
-    let json =
-        serde_json::to_string_pretty(&map).map_err(|e| format!("Serialize error: {e}"))?;
+    let json = serde_json::to_string_pretty(&map).map_err(|e| format!("Serialize error: {e}"))?;
 
     // Atomic write: .tmp + rename
     let tmp_path = path.with_extension("json.tmp");
-    std::fs::write(&tmp_path, &json)
-        .map_err(|e| format!("Failed to write settings: {e}"))?;
-    std::fs::rename(&tmp_path, path)
-        .map_err(|e| format!("Failed to rename settings file: {e}"))?;
+    std::fs::write(&tmp_path, &json).map_err(|e| format!("Failed to write settings: {e}"))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| format!("Failed to rename settings file: {e}"))?;
 
     Ok(())
 }
@@ -139,6 +191,36 @@ mod tests {
     }
 
     #[test]
+    fn migration_copies_legacy_settings_without_overwriting_destination() {
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-identifier-migration-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let legacy = root.join("legacy").join(SETTINGS_FILENAME);
+        let destination = root.join("current").join(SETTINGS_FILENAME);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, r#"{"language":"sv"}"#).unwrap();
+
+        assert!(copy_legacy_settings(&legacy, &destination).unwrap());
+        assert_eq!(
+            fs::read_to_string(&destination).unwrap(),
+            r#"{"language":"sv"}"#
+        );
+        assert!(
+            legacy.exists(),
+            "migration must leave rollback source intact"
+        );
+
+        fs::write(&destination, r#"{"language":"no"}"#).unwrap();
+        assert!(!copy_legacy_settings(&legacy, &destination).unwrap());
+        assert_eq!(
+            fs::read_to_string(&destination).unwrap(),
+            r#"{"language":"no"}"#
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn load_returns_defaults_when_file_missing() {
         let nonexistent = std::env::temp_dir()
             .join(format!("sagascript-test-{}", uuid::Uuid::new_v4()))
@@ -154,7 +236,11 @@ mod tests {
     fn save_and_load_roundtrip() {
         with_temp_settings(|path| {
             let dir = path.parent().unwrap();
-            let settings = Settings { language: Language::Swedish, hotkey: "Alt+Space".to_string(), ..Default::default() };
+            let settings = Settings {
+                language: Language::Swedish,
+                hotkey: "Alt+Space".to_string(),
+                ..Default::default()
+            };
 
             // Write directly to temp path (bypassing app_data_dir)
             fs::create_dir_all(dir).unwrap();
@@ -184,7 +270,10 @@ mod tests {
             fs::write(&path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
 
             // Save settings via merge
-            let settings = Settings { language: Language::Norwegian, ..Default::default() };
+            let settings = Settings {
+                language: Language::Norwegian,
+                ..Default::default()
+            };
 
             // Simulate save's merge logic directly on this path
             let mut map: serde_json::Map<String, serde_json::Value> =
@@ -304,14 +393,23 @@ mod tests {
             let corrupt = "this is not json{{{";
             fs::write(&path, corrupt).unwrap();
 
-            let settings = Settings { language: Language::Swedish, ..Default::default() };
+            let settings = Settings {
+                language: Language::Swedish,
+                ..Default::default()
+            };
             let result = save_to(&path, &settings);
-            assert!(result.is_ok(), "save_to should still succeed over a corrupt existing file: {result:?}");
+            assert!(
+                result.is_ok(),
+                "save_to should still succeed over a corrupt existing file: {result:?}"
+            );
 
             // The corrupt bytes must be preserved in a .bak sidecar rather
             // than silently discarded.
             let bak_path = path.with_extension("json.bak");
-            assert!(bak_path.exists(), "expected a .bak sidecar for the corrupt file");
+            assert!(
+                bak_path.exists(),
+                "expected a .bak sidecar for the corrupt file"
+            );
             let bak_contents = fs::read_to_string(&bak_path).unwrap();
             assert_eq!(bak_contents, corrupt);
 
@@ -330,7 +428,10 @@ mod tests {
             assert!(result.is_ok());
 
             let bak_path = path.with_extension("json.bak");
-            assert!(!bak_path.exists(), "no corrupt file existed, so no .bak should be created");
+            assert!(
+                !bak_path.exists(),
+                "no corrupt file existed, so no .bak should be created"
+            );
         });
     }
 }

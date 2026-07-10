@@ -85,7 +85,8 @@ Sagascript needs the following permissions (macOS will prompt you on first use):
 
 - **Microphone** -- for recording audio
 - **Accessibility** -- for pasting transcriptions into the active app
-- **Input Monitoring** -- for the global hotkey
+Official macOS releases are Developer ID signed and notarized. If a downloaded
+release asks you to bypass Gatekeeper, do not run it; report the artifact.
 
 ### Windows
 

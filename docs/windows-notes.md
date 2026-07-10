@@ -5,11 +5,11 @@
 | Feature | macOS | Windows |
 |---|---|---|
 | Transcription backend | Metal + Core ML (GPU) | CPU only (CUDA planned) |
-| Permissions required | Microphone, Accessibility, Input Monitoring | Microphone only |
+| Permissions required | Microphone, Accessibility | Microphone only |
 | Tray behavior | Menu bar icon | System tray icon |
 | Default hotkey | Ctrl+Shift+Space | Ctrl+Shift+Space |
 | Paste shortcut | Cmd+V | Ctrl+V |
-| Settings path | `~/Library/Application Support/com.sagascript.app/` | `%APPDATA%\com.sagascript.app\` |
+| Settings path | `~/Library/Application Support/ai.gille.sagascript/` | `%APPDATA%\ai.gille.sagascript\` |
 | Log path | `~/Library/Logs/Sagascript/` | `%LOCALAPPDATA%\Sagascript\Logs\` |
 | Model path | `~/.sagascript/models/` | `%USERPROFILE%\.sagascript\models\` |
 | Installer format | `.dmg` | `.exe` (NSIS) / `.msi` |

@@ -8,6 +8,7 @@ target/
 # Node
 node_modules/
 dist/
+src-tauri/build-meta.env
 
 # Claude Code local state
 .claude/settings.local.json
