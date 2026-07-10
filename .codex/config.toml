@@ -1,0 +1,9 @@
+# Project-scoped Codex defaults. These are intentionally portable: authentication,
+# MCP credentials, personal notifications, and user-specific skills stay in ~/.codex.
+
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+# Retain the pre-Codex project guide as a compatibility fallback for any worktree
+# that has not yet received the tracked AGENTS.md file.
+project_doc_fallback_filenames = ["CLAUDE.md"]

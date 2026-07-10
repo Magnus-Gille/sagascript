@@ -14,6 +14,11 @@ dist/
 .claude/**/.local.*
 .claude/**/cache/**
 
+# Codex local state (the tracked project config is .codex/config.toml)
+.codex/*.local.toml
+.codex/**/.local.*
+.codex/**/cache/**
+
 # Secrets
 .env
 .env.*
