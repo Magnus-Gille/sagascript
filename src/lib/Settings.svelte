@@ -56,6 +56,8 @@
   let modelError: string = $state("");
 
   let accessibilityGranted: boolean = $state(true); // assume true; checked on mount for macOS
+  let accessibilityChecking: boolean = $state(false);
+  let accessibilityRequested: boolean = $state(false);
 
   // Hotkey recorder state
   let recordingHotkey: boolean = $state(false);
@@ -222,14 +224,45 @@
   async function onAutoPasteToggle() {
     if (!settings) return;
     const enabling = !settings.auto_paste;
-    const ok = await applySetting(() => setAutoPaste(enabling));
-    // When enabling on macOS, check Accessibility permission
-    if (ok && enabling && platform === "macos") {
+    if (!enabling || platform !== "macos") {
+      await applySetting(() => setAutoPaste(enabling));
+      return;
+    }
+
+    // Keep the preference off until TCC actually reports approval. This is an
+    // explicit user action, so it is the one place where prompting is allowed.
+    accessibilityChecking = true;
+    accessibilityRequested = true;
+    settingsError = "";
+    try {
       accessibilityGranted = await checkAccessibilityPermission();
       if (!accessibilityGranted) {
         await requestAccessibilityPermission();
+        accessibilityGranted = await waitForAccessibilityPermission();
       }
+
+      if (accessibilityGranted) {
+        await applySetting(() => setAutoPaste(true));
+      } else {
+        await applySetting(() => setAutoPaste(false));
+        settingsError = "Accessibility permission was not granted. Auto-paste remains off.";
+      }
+    } catch (e: any) {
+      await applySetting(() => setAutoPaste(false));
+      settingsError = typeof e === "string" ? e : e?.message || "Failed to check Accessibility permission.";
+    } finally {
+      accessibilityChecking = false;
     }
+  }
+
+  async function waitForAccessibilityPermission(): Promise<boolean> {
+    // System Settings can take a while to update TCC. Recheck for at most one
+    // minute; no unbounded timer survives after this explicit attempt.
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (await checkAccessibilityPermission()) return true;
+    }
+    return false;
   }
 
   async function onShowOverlayToggle() {
@@ -548,11 +581,12 @@
             role="switch"
             aria-checked={settings.auto_paste}
             aria-label="Auto-paste transcription"
+            disabled={accessibilityChecking}
           ></button>
         </div>
         <div class="hotkey-hint">Automatically paste dictated text into the active app when transcription finishes.</div>
-        {#if settings.auto_paste && platform === "macos" && !accessibilityGranted}
-          <div class="hotkey-error">Requires Accessibility permission. <button class="link-btn" onclick={async () => { await requestAccessibilityPermission(); accessibilityGranted = await checkAccessibilityPermission(); }}>Open System Settings</button></div>
+        {#if platform === "macos" && !accessibilityGranted && (settings.auto_paste || accessibilityRequested)}
+          <div class="hotkey-error">Requires Accessibility permission. Auto-paste remains off until approved. <button class="link-btn" onclick={onAutoPasteToggle} disabled={accessibilityChecking}>{accessibilityChecking ? "Checking…" : "Open System Settings"}</button></div>
         {/if}
 
         <div class="test-section">

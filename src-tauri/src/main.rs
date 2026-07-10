@@ -52,6 +52,39 @@ const MIN_RECORDING_MS: u64 = 300;
 /// Shared tray status menu item for updating from anywhere
 type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
 
+#[cfg(any(target_os = "macos", test))]
+fn auto_paste_permitted(requested: bool, accessibility_trusted: bool) -> bool {
+    !requested || accessibility_trusted
+}
+
+/// Treat macOS TCC approval as runtime authorization, never as a preference
+/// that can be inherited from another bundle identity or forced by the CLI.
+fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
+    let settings = sagascript_core::settings::store::load();
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut settings = settings;
+        if !auto_paste_permitted(
+            settings.auto_paste,
+            crate::platform::macos::is_accessibility_trusted(),
+        ) {
+            warn!("Auto-paste was enabled without Accessibility permission; disabling it");
+            match sagascript_core::settings::store::update(|latest| latest.auto_paste = false) {
+                Ok(persisted) => settings = persisted,
+                Err(error) => {
+                    error!("Failed to persist permission-gated auto-paste setting: {error}");
+                    settings.auto_paste = false;
+                }
+            }
+        }
+        settings
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    settings
+}
+
 fn main() {
     // CLI mode: if a subcommand is given, run CLI and exit. The desktop
     // binary is a full CLI (CLI-first design) — the GUI only launches on a
@@ -77,7 +110,7 @@ fn main() {
 
     info!("Sagascript starting...");
 
-    let settings = sagascript_core::settings::store::load();
+    let settings = load_settings_with_permission_gate();
     info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
     let initial_hotkey = settings.hotkey.clone();
     let controller = Mutex::new(AppController::new(settings));
@@ -808,7 +841,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             // Small delay to let atomic rename complete
             std::thread::sleep(Duration::from_millis(50));
 
-            let new_settings = sagascript_core::settings::store::load();
+            let new_settings = load_settings_with_permission_gate();
 
             let ctrl: tauri::State<'_, SharedController> = app.state();
             let old_settings = {
@@ -886,6 +919,14 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_paste_requires_runtime_accessibility_approval() {
+        assert!(auto_paste_permitted(false, false));
+        assert!(auto_paste_permitted(false, true));
+        assert!(!auto_paste_permitted(true, false));
+        assert!(auto_paste_permitted(true, true));
+    }
 
     // -- tray_label --
 

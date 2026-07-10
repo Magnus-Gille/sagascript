@@ -41,8 +41,22 @@ fn copy_legacy_settings(source: &PathBuf, destination: &PathBuf) -> Result<bool,
         .ok_or_else(|| "Settings destination has no parent directory".to_string())?;
     std::fs::create_dir_all(parent)
         .map_err(|error| format!("Failed to create settings directory: {error}"))?;
-    std::fs::copy(source, destination)
-        .map_err(|error| format!("Failed to copy legacy settings: {error}"))?;
+    let contents = std::fs::read_to_string(source)
+        .map_err(|error| format!("Failed to read legacy settings: {error}"))?;
+    let mut value: serde_json::Value = serde_json::from_str(&contents)
+        .map_err(|error| format!("Failed to parse legacy settings: {error}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "Legacy settings root is not an object".to_string())?;
+
+    // Accessibility approval is tied to the signed bundle identity, not to
+    // user preferences. The new identity must be approved explicitly before
+    // auto-paste can be re-enabled.
+    object.insert("auto_paste".to_string(), serde_json::Value::Bool(false));
+    let migrated = serde_json::to_string_pretty(&value)
+        .map_err(|error| format!("Failed to serialize migrated settings: {error}"))?;
+    std::fs::write(destination, migrated)
+        .map_err(|error| format!("Failed to write migrated settings: {error}"))?;
     Ok(true)
 }
 
@@ -265,10 +279,10 @@ mod tests {
         fs::write(&legacy, r#"{"language":"sv"}"#).unwrap();
 
         assert!(copy_legacy_settings(&legacy, &destination).unwrap());
-        assert_eq!(
-            fs::read_to_string(&destination).unwrap(),
-            r#"{"language":"sv"}"#
-        );
+        let migrated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&destination).unwrap()).unwrap();
+        assert_eq!(migrated["language"], "sv");
+        assert_eq!(migrated["auto_paste"], false);
         assert!(
             legacy.exists(),
             "migration must leave rollback source intact"
@@ -280,6 +294,29 @@ mod tests {
             fs::read_to_string(&destination).unwrap(),
             r#"{"language":"no"}"#
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_disables_previously_enabled_auto_paste() {
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-permission-migration-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let legacy = root.join("legacy").join(SETTINGS_FILENAME);
+        let destination = root.join("current").join(SETTINGS_FILENAME);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(
+            &legacy,
+            r#"{"language":"sv","auto_paste":true,"future_key":{"x":1}}"#,
+        )
+        .unwrap();
+
+        assert!(copy_legacy_settings(&legacy, &destination).unwrap());
+        let migrated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&destination).unwrap()).unwrap();
+        assert_eq!(migrated["auto_paste"], false);
+        assert_eq!(migrated["future_key"]["x"], 1);
         let _ = fs::remove_dir_all(root);
     }
 

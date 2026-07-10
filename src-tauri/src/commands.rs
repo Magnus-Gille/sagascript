@@ -483,18 +483,44 @@ pub async fn download_model(
 
 // -- Settings toggles --
 
+fn effective_auto_paste(requested: bool, permission_granted: bool) -> bool {
+    requested && permission_granted
+}
+
 #[tauri::command]
 pub async fn set_auto_paste(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let permission_granted = !enabled || crate::platform::macos::is_accessibility_trusted();
+    #[cfg(not(target_os = "macos"))]
+    let permission_granted = true;
+
+    let effective = effective_auto_paste(enabled, permission_granted);
     let persisted = sagascript_core::settings::store::update(|settings| {
-        settings.auto_paste = enabled;
+        settings.auto_paste = effective;
     })?;
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().auto_paste = persisted.auto_paste;
-    info!("Auto-paste: {enabled}");
-    Ok(())
+    info!("Auto-paste: {effective}");
+    if enabled && !permission_granted {
+        Err("Accessibility permission is required before auto-paste can be enabled".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod auto_paste_tests {
+    use super::effective_auto_paste;
+
+    #[test]
+    fn enabling_never_persists_true_before_accessibility_is_trusted() {
+        assert!(!effective_auto_paste(true, false));
+        assert!(effective_auto_paste(true, true));
+        assert!(!effective_auto_paste(false, true));
+    }
 }
 
 #[tauri::command]
@@ -1027,6 +1053,17 @@ mod macos_mic {
         unsafe { msg_send![ns_string_class, stringWithUTF8String: c"soun".as_ptr()] }
     }
 
+    fn authorization_status_label(status: isize, denied_recheck_granted: bool) -> &'static str {
+        match status {
+            0 => "not_determined",
+            1 => "restricted",
+            2 if denied_recheck_granted => "authorized",
+            2 => "denied",
+            3 => "authorized",
+            _ => "not_determined",
+        }
+    }
+
     /// Return the raw authorization status as a string.
     /// AVCaptureDevice can cache `authorizationStatus` in-process, so when it
     /// reports "denied" we re-query via `requestAccess` which returns the
@@ -1042,23 +1079,11 @@ mod macos_mic {
         };
         let media_type = av_media_type_audio();
         let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: media_type] };
-        match status {
-            0 => "not_determined",
-            1 => "restricted",
-            2 => "authorized",
-            3 => {
-                // AVCaptureDevice may cache "denied" even after the user grants
-                // access via System Settings. Re-query via requestAccess which
-                // returns the live TCC state without showing a dialog.
-                if recheck_access_granted() {
-                    "authorized"
-                } else {
-                    "denied"
-                }
-            }
-            _ => "not_determined",
-        }
-        .to_string()
+        // AVCaptureDevice may cache "denied" after a System Settings change.
+        // The raw request API returns the current TCC state without a new dialog
+        // for an already-determined permission.
+        let denied_recheck_granted = status == 2 && recheck_access_granted();
+        authorization_status_label(status, denied_recheck_granted).to_string()
     }
 
     /// Re-query TCC permission via `requestAccessForMediaType:completionHandler:`.
@@ -1067,7 +1092,7 @@ mod macos_mic {
     fn recheck_access_granted() -> bool {
         use std::sync::mpsc;
         let (tx, rx) = mpsc::channel();
-        request_access(move |granted| {
+        request_access_from_system(move |granted| {
             let _ = tx.send(granted);
         });
         rx.recv_timeout(std::time::Duration::from_secs(2))
@@ -1089,9 +1114,24 @@ mod macos_mic {
         let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: media_type] };
         if status != AV_AUTH_STATUS_NOT_DETERMINED {
             // Already determined (authorized, denied, or restricted) — fire callback immediately
-            callback(status == 2 /* AV_AUTH_STATUS_AUTHORIZED */);
+            callback(authorization_status_label(status, false) == "authorized");
             return;
         }
+
+        request_access_from_system(callback);
+    }
+
+    /// Invoke AVFoundation's request API without consulting the potentially
+    /// stale in-process `authorizationStatus` value first.
+    fn request_access_from_system<F: FnOnce(bool) + Send + 'static>(callback: F) {
+        let cls = match get_av_capture_device_class() {
+            Some(c) => c,
+            None => {
+                callback(false);
+                return;
+            }
+        };
+        let media_type = av_media_type_audio();
 
         // Use AVCaptureDevice.requestAccessForMediaType:completionHandler: with an objc block.
         // This properly attributes the permission request to the app's bundle ID.
@@ -1106,6 +1146,25 @@ mod macos_mic {
 
         unsafe {
             let _: () = msg_send![cls, requestAccessForMediaType: media_type completionHandler: &*completion];
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::authorization_status_label;
+
+        #[test]
+        fn maps_avfoundation_authorization_constants_correctly() {
+            assert_eq!(authorization_status_label(0, false), "not_determined");
+            assert_eq!(authorization_status_label(1, false), "restricted");
+            assert_eq!(authorization_status_label(2, false), "denied");
+            assert_eq!(authorization_status_label(3, false), "authorized");
+        }
+
+        #[test]
+        fn denied_cache_can_be_refreshed_without_remapping_authorized() {
+            assert_eq!(authorization_status_label(2, true), "authorized");
+            assert_eq!(authorization_status_label(3, false), "authorized");
         }
     }
 }
