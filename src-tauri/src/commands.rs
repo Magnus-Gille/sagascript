@@ -44,6 +44,7 @@ pub(crate) fn build_transcribe_options(settings: &Settings) -> TranscribeOptions
         beam_size: settings.beam_size,
         temperature_fallback: settings.temperature_fallback,
         vad_model_path,
+        segment_timestamps: false,
     }
 }
 

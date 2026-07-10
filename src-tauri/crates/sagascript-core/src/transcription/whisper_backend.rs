@@ -52,6 +52,9 @@ pub struct TranscribeOptions {
     /// Path to a Silero VAD ggml model to skip non-speech regions, or `None`
     /// to disable VAD. The caller must ensure the file exists.
     pub vad_model_path: Option<String>,
+    /// Request real Whisper segment timestamps for structured outputs such as
+    /// CLI JSON. Text decoding remains in no-timestamps mode.
+    pub segment_timestamps: bool,
 }
 
 impl Default for TranscribeOptions {
@@ -61,6 +64,7 @@ impl Default for TranscribeOptions {
             beam_size: 0,
             temperature_fallback: true,
             vad_model_path: None,
+            segment_timestamps: false,
         }
     }
 }
@@ -95,6 +99,36 @@ fn mean_logprob(plogs: &[f32]) -> Option<f32> {
         return None;
     }
     Some(plogs.iter().sum::<f32>() / plogs.len() as f32)
+}
+
+/// Bound whisper's segment timestamps to the source audio and preserve output
+/// ordering. With `no_timestamps` enabled, whisper.cpp can expose its internal
+/// seek offset as a large negative segment start and its padded 30-second
+/// window as the end. Those values are not valid media timestamps and must not
+/// leak into the CLI JSON contract.
+fn sanitize_segment_bounds(
+    raw_start: f64,
+    raw_end: f64,
+    audio_duration: f64,
+    previous_end: f64,
+) -> (f64, f64) {
+    let duration = if audio_duration.is_finite() {
+        audio_duration.max(0.0)
+    } else {
+        0.0
+    };
+    let floor = previous_end.clamp(0.0, duration);
+    let start = if raw_start.is_finite() {
+        raw_start.clamp(floor, duration)
+    } else {
+        floor
+    };
+    let end = if raw_end.is_finite() {
+        raw_end.clamp(start, duration)
+    } else {
+        start
+    };
+    (start, end)
 }
 
 /// Local transcription backend using whisper-rs (whisper.cpp bindings)
@@ -235,6 +269,13 @@ impl WhisperBackend {
             });
             p
         };
+
+        // whisper.cpp's Metal backend registration assumes that macOS returns
+        // a GPU device and crashes on a null device before it can return an
+        // error. Guard that FFI boundary so headless/restricted processes fail
+        // cleanly while normal CLI and GUI execution remain unchanged.
+        #[cfg(target_os = "macos")]
+        super::metal_preflight::ensure_available()?;
 
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().ok_or_else(|| {
@@ -532,7 +573,11 @@ impl WhisperBackend {
         // Disabling it caps worst-case latency at the cost of some robustness.
         params.set_temperature_inc(if opts.temperature_fallback { 0.2 } else { 0.0 });
         params.set_translate(false);
+        // Keep text decoding stable: generative timestamp tokens materially
+        // change some transcripts. Structured callers get timing from token
+        // alignment instead (DTW in the default macOS build).
         params.set_no_timestamps(true);
+        params.set_token_timestamps(opts.segment_timestamps);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_no_speech_thold(no_speech_thold);
@@ -585,6 +630,8 @@ impl WhisperBackend {
             let n_segments = state.full_n_segments();
             let mut segments: Vec<TranscriptSegment> =
                 Vec::with_capacity(n_segments.max(0) as usize);
+            let audio_duration = audio.len() as f64 / 16_000.0;
+            let mut previous_end = 0.0;
             for i in 0..n_segments {
                 if let Some(segment) = state.get_segment(i) {
                     let text = match segment.to_str() {
@@ -606,9 +653,41 @@ impl WhisperBackend {
                             }
                         }
                     }
+                    let raw_bounds = {
+                        #[cfg(feature = "diarization")]
+                        {
+                            if opts.segment_timestamps {
+                                dtw_segment_timestamps(&segment, 0.0).unwrap_or_else(|| {
+                                    (
+                                        segment.start_timestamp() as f64 / 100.0,
+                                        segment.end_timestamp() as f64 / 100.0,
+                                    )
+                                })
+                            } else {
+                                (
+                                    segment.start_timestamp() as f64 / 100.0,
+                                    segment.end_timestamp() as f64 / 100.0,
+                                )
+                            }
+                        }
+                        #[cfg(not(feature = "diarization"))]
+                        {
+                            (
+                                segment.start_timestamp() as f64 / 100.0,
+                                segment.end_timestamp() as f64 / 100.0,
+                            )
+                        }
+                    };
+                    let (start, end) = sanitize_segment_bounds(
+                        raw_bounds.0,
+                        raw_bounds.1,
+                        audio_duration,
+                        previous_end,
+                    );
+                    previous_end = end;
                     segments.push(TranscriptSegment {
-                        start: segment.start_timestamp() as f64 / 100.0,
-                        end: segment.end_timestamp() as f64 / 100.0,
+                        start,
+                        end,
                         text,
                         avg_logprob: mean_logprob(&plogs),
                         no_speech_prob: segment.no_speech_probability(),
@@ -1220,6 +1299,11 @@ mod segment_confidence_tests {
     }
 
     #[test]
+    fn segment_timestamps_are_opt_in() {
+        assert!(!TranscribeOptions::default().segment_timestamps);
+    }
+
+    #[test]
     fn mean_logprob_averages() {
         let got = mean_logprob(&[-0.2, -0.4, -0.6]).unwrap();
         assert!((got - (-0.4)).abs() < 1e-6, "got {got}");
@@ -1228,6 +1312,22 @@ mod segment_confidence_tests {
     #[test]
     fn mean_logprob_single_value() {
         assert_eq!(mean_logprob(&[-1.5]), Some(-1.5));
+    }
+
+    #[test]
+    fn segment_bounds_clamp_whisper_window_to_audio() {
+        let (start, end) = sanitize_segment_bounds(-1007.28, 30.0, 3.456, 0.0);
+        assert_eq!(start, 0.0);
+        assert_eq!(end, 3.456);
+    }
+
+    #[test]
+    fn segment_bounds_are_monotonic_and_finite() {
+        assert_eq!(sanitize_segment_bounds(1.0, 2.0, 10.0, 4.0), (4.0, 4.0));
+        assert_eq!(
+            sanitize_segment_bounds(f64::NAN, f64::INFINITY, 10.0, 4.0),
+            (4.0, 4.0)
+        );
     }
 
     #[test]
@@ -1407,4 +1507,3 @@ mod warm_state_tests {
         );
     }
 }
-

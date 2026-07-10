@@ -250,6 +250,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         }),
         temperature_fallback: stored.temperature_fallback,
         vad_model_path,
+        segment_timestamps: args.json,
     };
     if opts.beam_size >= 2 {
         eprintln!("Beam search: width {}", opts.beam_size);
