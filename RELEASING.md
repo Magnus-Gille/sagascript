@@ -16,7 +16,10 @@ workflow refuses to publish an unsigned or unverifiable macOS artifact.
 
    - `APPLE_CERTIFICATE`: base64-encoded `.p12`
    - `APPLE_CERTIFICATE_PASSWORD`: export password for the `.p12`
-   - `APPLE_SIGNING_IDENTITY`: full `Developer ID Application: … (TEAMID)` name
+   - `APPLE_SIGNING_IDENTITY`: full
+     `Developer ID Application: … (U7MYD3Z5CB)` name. Release verification is
+     intentionally pinned to this production team so macOS TCC permissions
+     survive upgrades.
    - `KEYCHAIN_PASSWORD`: random password for the ephemeral CI keychain
    - `APPLE_API_ISSUER`: App Store Connect issuer UUID
    - `APPLE_API_KEY`: App Store Connect key ID

@@ -10,6 +10,7 @@ app=$1
 dmg=$2
 version=$3
 expected_identifier=ai.gille.sagascript
+expected_team_identifier=U7MYD3Z5CB
 
 [[ -d "$app" ]] || { echo "Missing app bundle: $app" >&2; exit 1; }
 [[ -f "$dmg" ]] || { echo "Missing disk image: $dmg" >&2; exit 1; }
@@ -32,8 +33,12 @@ grep -q '^Authority=Developer ID Application:' <<<"$signature" || {
   echo "App is not signed with Developer ID Application" >&2
   exit 1
 }
-grep -Eq '^TeamIdentifier=.+$' <<<"$signature" || {
-  echo "Signed app has no TeamIdentifier" >&2
+grep -q "^TeamIdentifier=${expected_team_identifier}$" <<<"$signature" || {
+  echo "Signed app has the wrong TeamIdentifier (expected ${expected_team_identifier})" >&2
+  exit 1
+}
+grep -Eq "^Authority=Developer ID Application:.*\\(${expected_team_identifier}\\)$" <<<"$signature" || {
+  echo "Developer ID authority does not belong to team ${expected_team_identifier}" >&2
   exit 1
 }
 grep -Eq '^CodeDirectory .*flags=.*\(runtime\)' <<<"$signature" || {
@@ -54,4 +59,4 @@ xcrun stapler validate "$dmg"
 spctl --assess --type execute --verbose=2 "$app"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 
-echo "Verified signed, hardened, notarized Sagascript ${version} (${expected_identifier})"
+echo "Verified signed, hardened, notarized Sagascript ${version} (${expected_identifier}, team ${expected_team_identifier})"
