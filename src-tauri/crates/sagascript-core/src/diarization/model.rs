@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use tracing::info;
 
-use crate::download::download_to_path;
+use crate::download::{DownloadIntegrity, download_to_path, verify_file};
 use crate::error::DictationError;
 
 /// ONNX models used for speaker diarization.
@@ -33,11 +33,25 @@ impl DiarizationModel {
     pub fn download_url(&self) -> &'static str {
         match self {
             Self::PyannoteSegmentation3 => {
-                "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/model.onnx"
+                "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/9403a6902bb58e3d5ae8c7e77c3422de279db2e0/model.onnx"
             }
             Self::WeSpeakerResNet34LM => {
-                "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/main/voxceleb_resnet34_LM.onnx"
+                "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/f0c48c298fd835726c27956a5d617bad7115627e/voxceleb_resnet34_LM.onnx"
             }
+        }
+    }
+
+    /// Exact git-LFS metadata for the pinned ONNX artifact.
+    pub fn download_integrity(&self) -> DownloadIntegrity {
+        match self {
+            Self::PyannoteSegmentation3 => DownloadIntegrity {
+                sha256: "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079",
+                size: 5_992_913,
+            },
+            Self::WeSpeakerResNet34LM => DownloadIntegrity {
+                sha256: "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068",
+                size: 26_530_309,
+            },
         }
     }
 
@@ -89,7 +103,8 @@ pub fn model_path(model: DiarizationModel) -> PathBuf {
 
 /// Check if a diarization model is already downloaded.
 pub fn is_model_downloaded(model: DiarizationModel) -> bool {
-    model_path(model).exists()
+    std::fs::metadata(model_path(model))
+        .is_ok_and(|metadata| metadata.len() == model.download_integrity().size)
 }
 
 /// Check if all diarization models are downloaded.
@@ -105,6 +120,7 @@ pub async fn download_model(
     let path = model_path(model);
 
     if path.exists() {
+        verify_file(&path, model.download_integrity())?;
         info!(
             "Diarization model {} already exists at {}",
             model.display_name(),
@@ -125,7 +141,15 @@ pub async fn download_model(
     // magic check is applied here — only the Content-Length check. A magic
     // check risks false-rejecting a valid model, which the hardening this is
     // part of explicitly must never do.
-    download_to_path(model.download_url(), &path, "onnx", None, progress_callback).await?;
+    download_to_path(
+        model.download_url(),
+        &path,
+        "onnx",
+        model.download_integrity(),
+        None,
+        progress_callback,
+    )
+    .await?;
 
     info!("Diarization model downloaded: {}", path.display());
     Ok(path)
@@ -192,6 +216,19 @@ mod tests {
             assert!(
                 m.download_url().starts_with("https://"),
                 "{} URL should be HTTPS",
+                m.display_name()
+            );
+            assert!(
+                !m.download_url().contains("/resolve/main/"),
+                "{} URL must pin an immutable revision",
+                m.display_name()
+            );
+            let integrity = m.download_integrity();
+            assert_eq!(integrity.sha256.len(), 64);
+            assert!(integrity.sha256.bytes().all(|b| b.is_ascii_hexdigit()));
+            assert!(
+                integrity.size >= 5 * 1024 * 1024,
+                "{} artifact is implausibly small",
                 m.display_name()
             );
         }

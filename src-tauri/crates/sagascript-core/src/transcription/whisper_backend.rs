@@ -244,6 +244,13 @@ impl WhisperBackend {
             )));
         }
 
+
+        // Never hand an unverified GGML file to whisper.cpp's native parser.
+        // This also performs a one-time compatibility check for files saved by
+        // versions released before download integrity was enforced.
+        crate::download::verify_file(&model_path, whisper_model.download_integrity())?;
+        model::quarantine_unverified_coreml_encoder(whisper_model)?;
+
         info!(
             "Loading whisper model: {} from {}",
             whisper_model.display_name(),
@@ -592,6 +599,7 @@ impl WhisperBackend {
         // before enable_vad — whisper-rs panics otherwise. The caller guarantees
         // the file exists.
         if let Some(vad_path) = &opts.vad_model_path {
+            model::verify_vad_model(std::path::Path::new(vad_path))?;
             params.set_vad_model_path(Some(vad_path.as_str()));
             let mut vad = WhisperVadParams::new();
             vad.set_threshold(0.5);

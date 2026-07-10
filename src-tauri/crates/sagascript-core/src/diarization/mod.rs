@@ -48,6 +48,17 @@ pub fn diarize(audio: &[f32], config: &DiarizeConfig) -> Result<Vec<SpeakerSegme
     let seg_path = model_path(DiarizationModel::PyannoteSegmentation3);
     let emb_path = model_path(DiarizationModel::WeSpeakerResNet34LM);
 
+    // ONNX Runtime is a native protobuf parser. Verify both artifacts in full
+    // before giving it either path, including models saved by older releases.
+    crate::download::verify_file(
+        &seg_path,
+        DiarizationModel::PyannoteSegmentation3.download_integrity(),
+    )?;
+    crate::download::verify_file(
+        &emb_path,
+        DiarizationModel::WeSpeakerResNet34LM.download_integrity(),
+    )?;
+
     let mut segmenter = segmentation::Segmenter::new(&seg_path)?;
     let mut embedder = embedding::Embedder::new(&emb_path)?;
 

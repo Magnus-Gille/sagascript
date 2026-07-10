@@ -105,6 +105,7 @@ for recording audio. Do not install an unsigned binary from an untrusted party.
 - [Linux notes](docs/linux-notes.md) -- experimental Linux build, prerequisites, and known limitations
 - [Windows-specific notes](docs/windows-notes.md) -- feature comparison, known limitations, and troubleshooting
 - [Third-party notices](THIRD_PARTY_NOTICES.md) -- dependency and downloadable-model licenses
+- [Model sources and integrity manifest](docs/model-sources.md) -- pinned revisions, licenses, sizes, and SHA-256 checksums
 
 ## Contributing
 

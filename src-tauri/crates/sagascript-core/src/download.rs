@@ -19,10 +19,14 @@
 //!   opportunistically sweeps stale `.tmp` files from the destination
 //!   directory before it starts.
 
+use std::collections::HashMap;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use futures_util::StreamExt;
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::DictationError;
@@ -52,6 +56,15 @@ const MAGIC_PREFIX_LEN: usize = 8;
 /// long, so this is generous on purpose.
 const ORPHAN_TMP_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
+/// Immutable integrity metadata for a downloadable model artifact. Values are
+/// taken from the pinned Hugging Face revision's git-LFS metadata (`oid
+/// sha256` and `size`), not from a mutable branch or a locally computed guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadIntegrity {
+    pub sha256: &'static str,
+    pub size: u64,
+}
+
 /// Stream `url` to `dest`, via a uniquely-named temp file in the same
 /// directory so the final rename is atomic and same-filesystem.
 ///
@@ -72,6 +85,7 @@ pub async fn download_to_path(
     url: &str,
     dest: &Path,
     tmp_ext: &str,
+    integrity: DownloadIntegrity,
     expected_magic: Option<&[u8]>,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<(), DictationError> {
@@ -84,7 +98,9 @@ pub async fn download_to_path(
 
     let tmp_path = unique_tmp_path(dest, tmp_ext);
 
-    if let Err(e) = fetch_to_tmp(url, &tmp_path, expected_magic, progress_callback).await {
+    if let Err(e) =
+        fetch_to_tmp(url, &tmp_path, integrity, expected_magic, progress_callback).await
+    {
         let _ = tokio::fs::remove_file(&tmp_path).await;
         return Err(e);
     }
@@ -100,6 +116,13 @@ pub async fn download_to_path(
         )));
     }
 
+    // The streamed bytes were verified immediately above. Cache that result
+    // against the installed file's filesystem fingerprint so normal model
+    // loads in this process do not rehash multi-gigabyte artifacts. The cache
+    // is deliberately process-memory-only: every new app/CLI launch performs
+    // at least one exact hash before its first native parse.
+    cache_verified_file(dest, integrity);
+
     Ok(())
 }
 
@@ -109,6 +132,7 @@ pub async fn download_to_path(
 async fn fetch_to_tmp(
     url: &str,
     tmp_path: &Path,
+    integrity: DownloadIntegrity,
     expected_magic: Option<&[u8]>,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<(), DictationError> {
@@ -130,6 +154,7 @@ async fn fetch_to_tmp(
     let total_size = content_length.unwrap_or(0);
     let mut downloaded: u64 = 0;
     let mut prefix: Vec<u8> = Vec::with_capacity(MAGIC_PREFIX_LEN);
+    let mut hasher = Sha256::new();
 
     let mut file = tokio::fs::File::create(tmp_path).await.map_err(|e| {
         DictationError::ModelDownloadFailed(format!("Failed to create temp file: {e}"))
@@ -147,6 +172,7 @@ async fn fetch_to_tmp(
             .await
             .map_err(|e| DictationError::ModelDownloadFailed(format!("Write error: {e}")))?;
         downloaded += chunk.len() as u64;
+        hasher.update(&chunk);
         progress_callback(downloaded, total_size);
     }
 
@@ -155,7 +181,15 @@ async fn fetch_to_tmp(
         .map_err(|e| DictationError::ModelDownloadFailed(format!("Flush error: {e}")))?;
     drop(file);
 
-    validate_download(&prefix, downloaded, content_length, expected_magic)
+    let sha256 = format!("{:x}", hasher.finalize());
+    validate_download(
+        &prefix,
+        downloaded,
+        content_length,
+        &sha256,
+        integrity,
+        expected_magic,
+    )
         .map_err(DictationError::ModelDownloadFailed)?;
 
     Ok(())
@@ -176,6 +210,8 @@ pub fn validate_download(
     prefix_bytes: &[u8],
     bytes_written: u64,
     content_length: Option<u64>,
+    actual_sha256: &str,
+    integrity: DownloadIntegrity,
     expected_magic: Option<&[u8]>,
 ) -> Result<(), String> {
     if let Some(expected_len) = content_length {
@@ -185,6 +221,24 @@ pub fn validate_download(
                  {expected_len} (truncated or interrupted download)"
             ));
         }
+    }
+
+    if bytes_written != integrity.size {
+        return Err(format!(
+            "downloaded {bytes_written} bytes but the pinned artifact must be exactly {} bytes",
+            integrity.size
+        ));
+    }
+
+    if !is_sha256(integrity.sha256) {
+        return Err("internal model manifest contains an invalid SHA-256 digest".to_string());
+    }
+
+    if !actual_sha256.eq_ignore_ascii_case(integrity.sha256) {
+        return Err(format!(
+            "SHA-256 mismatch for downloaded model (expected {}, got {actual_sha256})",
+            integrity.sha256
+        ));
     }
 
     if let Some(magic) = expected_magic {
@@ -200,6 +254,133 @@ pub fn validate_download(
     }
 
     Ok(())
+}
+
+/// Verify an already-present artifact before handing it to native model
+/// parsers. This also covers models downloaded by older Sagascript versions,
+/// which predate the immutable integrity manifest.
+pub fn verify_file(path: &Path, integrity: DownloadIntegrity) -> Result<(), DictationError> {
+    let file = std::fs::File::open(path).map_err(|e| {
+        DictationError::ModelDownloadFailed(format!(
+            "Failed to open model for integrity verification ({}): {e}",
+            path.display()
+        ))
+    })?;
+    let metadata = file.metadata().map_err(|e| {
+        DictationError::ModelDownloadFailed(format!(
+            "Failed to inspect model before integrity verification ({}): {e}",
+            path.display()
+        ))
+    })?;
+    if metadata.len() != integrity.size {
+        return Err(DictationError::ModelDownloadFailed(format!(
+            "Model integrity check failed for {}: expected {} bytes, got {}. Delete and re-download the model.",
+            path.display(),
+            integrity.size,
+            metadata.len()
+        )));
+    }
+
+    if !is_sha256(integrity.sha256) {
+        return Err(DictationError::ModelDownloadFailed(
+            "Internal model manifest contains an invalid SHA-256 digest".to_string(),
+        ));
+    }
+
+    if verification_cache_matches(path, &metadata, integrity) {
+        return Ok(());
+    }
+
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = reader.read(&mut buffer).map_err(|e| {
+            DictationError::ModelDownloadFailed(format!(
+                "Failed while hashing model {}: {e}",
+                path.display()
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if !actual.eq_ignore_ascii_case(integrity.sha256) {
+        return Err(DictationError::ModelDownloadFailed(format!(
+            "Model integrity check failed for {}: SHA-256 mismatch. Delete and re-download the model.",
+            path.display()
+        )));
+    }
+    cache_verified_file(path, integrity);
+    Ok(())
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn verification_cache() -> &'static Mutex<HashMap<PathBuf, String>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn verification_cache_matches(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    integrity: DownloadIntegrity,
+) -> bool {
+    let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    verification_cache()
+        .lock()
+        .is_ok_and(|cache| cache.get(&key) == Some(&integrity_cache_record(metadata, integrity)))
+}
+
+fn cache_verified_file(path: &Path, integrity: DownloadIntegrity) {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Ok(mut cache) = verification_cache().lock() {
+        cache.insert(key, integrity_cache_record(&metadata, integrity));
+    }
+}
+
+fn integrity_cache_record(
+    metadata: &std::fs::Metadata,
+    integrity: DownloadIntegrity,
+) -> String {
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        format!(
+            "v1\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+            integrity.sha256,
+            metadata.len(),
+            modified,
+            metadata.dev(),
+            metadata.ino(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        format!(
+            "v1\n{}\n{}\n{}\n",
+            integrity.sha256,
+            metadata.len(),
+            modified,
+        )
+    }
 }
 
 /// Build a temp-file path in the same directory as `dest`, unique per call
@@ -250,6 +431,15 @@ fn sweep_orphaned_tmp_files(dir: &Path) {
 mod tests {
     use super::*;
 
+    const TEST_SHA: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn integrity(size: u64) -> DownloadIntegrity {
+        DownloadIntegrity {
+            sha256: TEST_SHA,
+            size,
+        }
+    }
+
     fn temp_test_dir() -> PathBuf {
         std::env::temp_dir().join(format!("sagascript-download-test-{}", uuid::Uuid::new_v4()))
     }
@@ -260,7 +450,15 @@ mod tests {
     fn accepts_valid_ggml_prefix_with_matching_length() {
         let prefix = [0x6c, 0x6d, 0x67, 0x67, 0x0a, 0x00, 0x00, 0x00];
         assert!(
-            validate_download(&prefix, 142_000_000, Some(142_000_000), Some(&GGML_MAGIC)).is_ok()
+            validate_download(
+                &prefix,
+                142_000_000,
+                Some(142_000_000),
+                TEST_SHA,
+                integrity(142_000_000),
+                Some(&GGML_MAGIC),
+            )
+            .is_ok()
         );
     }
 
@@ -268,8 +466,15 @@ mod tests {
     fn rejects_html_rate_limit_page() {
         let prefix = b"<!DOCTYPE html><html><head><title>429</title>";
         let err =
-            validate_download(prefix, prefix.len() as u64, Some(prefix.len() as u64), Some(&GGML_MAGIC))
-                .unwrap_err();
+            validate_download(
+                prefix,
+                prefix.len() as u64,
+                Some(prefix.len() as u64),
+                TEST_SHA,
+                integrity(prefix.len() as u64),
+                Some(&GGML_MAGIC),
+            )
+            .unwrap_err();
         assert!(err.contains("magic"), "error should mention magic bytes: {err}");
     }
 
@@ -277,7 +482,15 @@ mod tests {
     fn rejects_git_lfs_pointer_file() {
         let prefix =
             b"version https://git-lfs.github.com/spec/v1\noid sha256:deadbeef\nsize 142000000\n";
-        let err = validate_download(prefix, prefix.len() as u64, None, Some(&GGML_MAGIC)).unwrap_err();
+        let err = validate_download(
+            prefix,
+            prefix.len() as u64,
+            None,
+            TEST_SHA,
+            integrity(prefix.len() as u64),
+            Some(&GGML_MAGIC),
+        )
+        .unwrap_err();
         assert!(err.contains("magic"), "error should mention magic bytes: {err}");
     }
 
@@ -285,7 +498,8 @@ mod tests {
     fn rejects_length_mismatch_even_without_magic_check() {
         // Simulates a dropped connection: server promised 1000 bytes, only 400 arrived.
         let prefix = b"partial-body-bytes";
-        let err = validate_download(prefix, 400, Some(1000), None).unwrap_err();
+        let err = validate_download(prefix, 400, Some(1000), TEST_SHA, integrity(400), None)
+            .unwrap_err();
         assert!(
             err.contains("400") && err.contains("1000"),
             "error should name both byte counts: {err}"
@@ -295,15 +509,75 @@ mod tests {
     #[test]
     fn skips_length_check_when_content_length_unknown_or_zero() {
         let prefix = GGML_MAGIC;
-        assert!(validate_download(&prefix, 999, None, Some(&GGML_MAGIC)).is_ok());
-        assert!(validate_download(&prefix, 999, Some(0), Some(&GGML_MAGIC)).is_ok());
+        assert!(
+            validate_download(&prefix, 999, None, TEST_SHA, integrity(999), Some(&GGML_MAGIC))
+                .is_ok()
+        );
+        assert!(
+            validate_download(
+                &prefix,
+                999,
+                Some(0),
+                TEST_SHA,
+                integrity(999),
+                Some(&GGML_MAGIC),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn skips_magic_check_when_none_e_g_onnx() {
         // ONNX files are protobuf-encoded with no fixed magic; only length is checked.
         let onnx_like_prefix = [0x08, 0x07, 0x12, 0x07];
-        assert!(validate_download(&onnx_like_prefix, 27_000_000, Some(27_000_000), None).is_ok());
+        assert!(
+            validate_download(
+                &onnx_like_prefix,
+                27_000_000,
+                Some(27_000_000),
+                TEST_SHA,
+                integrity(27_000_000),
+                None,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_exact_size_mismatch_even_when_server_length_matches() {
+        let err = validate_download(b"model", 512, Some(512), TEST_SHA, integrity(1024), None)
+            .unwrap_err();
+        assert!(err.contains("exactly 1024"), "error: {err}");
+    }
+
+    #[test]
+    fn rejects_sha256_mismatch() {
+        let err = validate_download(
+            b"model",
+            512,
+            Some(512),
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            integrity(512),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("SHA-256 mismatch"), "error: {err}");
+    }
+
+    #[test]
+    fn verify_file_hashes_existing_artifact_before_use() {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.bin");
+        std::fs::write(&path, b"verified model").unwrap();
+        let expected = DownloadIntegrity {
+            sha256: "6c736b3dfa943bf4e7c61df78d1dfcad9a3d8b56369f0559670497b19127e74d",
+            size: 14,
+        };
+        assert!(verify_file(&path, expected).is_ok());
+        std::fs::write(&path, b"tampered model").unwrap();
+        assert!(verify_file(&path, expected).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // -- unique_tmp_path --
