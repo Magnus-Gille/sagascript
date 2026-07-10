@@ -38,15 +38,9 @@ function addTree(hash, path, relative = "") {
 const hash = createHash("sha256");
 addTree(hash, dist);
 const frontendHash = hash.digest("hex");
-const gitHash = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
-  cwd: root,
-  encoding: "utf8",
-}).trim();
-const buildDate = new Date().toISOString().slice(0, 10);
-
 // build.rs watches this ignored file. A changed frontend content hash forces
 // Cargo/Tauri to regenerate the embedded asset context even with target/ cached.
 writeFileSync(
   join(root, "src-tauri", "build-meta.env"),
-  `SAGASCRIPT_GIT_HASH=${gitHash}\nSAGASCRIPT_BUILD_DATE=${buildDate}\nSAGASCRIPT_FRONTEND_HASH=${frontendHash}\n`,
+  `SAGASCRIPT_FRONTEND_HASH=${frontendHash}\n`,
 );

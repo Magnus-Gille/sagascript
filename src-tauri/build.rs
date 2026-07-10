@@ -1,4 +1,4 @@
-use std::{fs, process::Command};
+use std::process::Command;
 
 fn command_output(args: &[&str]) -> Option<String> {
     Command::new("git")
@@ -10,22 +10,8 @@ fn command_output(args: &[&str]) -> Option<String> {
         .map(|value| value.trim().to_string())
 }
 
-fn metadata_file_value(key: &str) -> Option<String> {
-    fs::read_to_string("build-meta.env")
-        .ok()
-        .and_then(|contents| {
-            contents.lines().find_map(|line| {
-                let (candidate, value) = line.split_once('=')?;
-                (candidate == key).then(|| value.to_string())
-            })
-        })
-}
-
 fn metadata_value(key: &str, fallback: impl FnOnce() -> String) -> String {
-    std::env::var(key)
-        .ok()
-        .or_else(|| metadata_file_value(key))
-        .unwrap_or_else(fallback)
+    std::env::var(key).ok().unwrap_or_else(fallback)
 }
 
 fn emit_git_rerun_triggers() {
