@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "release:check": "node scripts/check-release.mjs",
+    "licenses:generate": "node scripts/generate-third-party-notices.mjs --write",
+    "licenses:check": "node scripts/generate-third-party-notices.mjs --check",
     "tauri": "tauri"
   },
   "devDependencies": {

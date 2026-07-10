@@ -1,8 +1,14 @@
 # Releasing Sagascript
 
+Sagascript v1 is a **macOS-only binary release**. Windows remains a
+build-from-source preview and the release workflow must not publish unsigned
+Windows installers.
+
 Production macOS releases must be signed with a **Developer ID Application**
 certificate, use hardened runtime, and be notarized and stapled. The release
 workflow refuses to publish an unsigned or unverifiable macOS artifact.
+The production signing Team ID is **`U7MYD3Z5CB`**; the verifier rejects a
+different Team ID even if the certificate is otherwise valid.
 
 ## One-time Apple setup (repository owner)
 
@@ -34,11 +40,11 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
 
 1. Update the version in `package.json`, `package-lock.json`,
    `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
-2. Run `npm run release:check`, `npm run check`,
+2. Run `npm run release:check`, `npm run licenses:check`, `npm run check`,
    `cargo test --workspace`, and
    `cargo clippy --workspace --all-targets -- -D warnings`.
 3. Merge the release commit to `main`, then create and push exactly `vVERSION`.
-4. The Release workflow gates both platform builds on tests, checks version/tag
+4. The Release workflow gates the macOS build on tests, checks version/tag
    consistency, imports the Apple certificate into an ephemeral keychain, and
    lets Tauri sign, notarize, and staple the universal macOS build.
 5. The workflow independently verifies the Developer ID authority, Team ID,
@@ -55,8 +61,11 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
   dictation, auto-paste, and quit/relaunch behavior.
 - Confirm the app does not request the same permission again after relaunch.
 - Test both Apple Silicon and Intel hardware before claiming universal support.
-- Test the Windows installers on a clean Windows 10 and Windows 11 VM. Windows
-  artifacts remain unsigned until a separate Windows signing identity is added.
+- Confirm the draft contains `Sagascript.dmg`, `Sagascript.app.tar.gz`, and
+  `SHA256SUMS`; no Windows installer is a v1 release artifact. Verify both
+  downloads against the published checksums before clean-machine testing.
+- Review `THIRD_PARTY_NOTICES.md`. Run `npm run licenses:generate` and inspect
+  any diff whenever either lockfile or a model source changes.
 
 ## macOS permission identity migration
 

@@ -2,7 +2,9 @@
 
 > **Historical planning document.** The CI/workflow snippets below predate the
 > Cargo workspace split and the current `.github/workflows/ci.yml`; they are
-> kept for context, not as living documentation.
+> kept for context, not as living documentation. Sagascript v1 publishes only
+> signed, notarized macOS artifacts. A future Windows release must add code
+> signing before enabling any Windows artifact-publishing job.
 
 This document outlines every work item required to ship Sagascript on Windows,
 from code changes through CI/CD, installer generation, code signing, documentation,
@@ -427,74 +429,13 @@ jobs:
         run: npx tauri build
 ```
 
-### 5.2 Release workflow — `.github/workflows/release.yml` (new)
+### 5.2 Release workflow
 
-Create a dedicated release workflow triggered by tags:
-
-```yaml
-name: Release
-
-on:
-  push:
-    tags: ["v*"]
-
-permissions:
-  contents: write
-
-jobs:
-  build-macos:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
-      - run: npm ci
-      - run: npm run build
-      - run: npx tauri build
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-bundle
-          path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.app.tar.gz
-
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
-      - run: npm ci
-      - run: npm run build
-      - run: npx tauri build
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-bundle
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
-
-  publish-release:
-    needs: [build-macos, build-windows]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          generate_release_notes: true
-          files: |
-            artifacts/macos-bundle/**/*
-            artifacts/windows-bundle/**/*
-```
+The historical unsigned Windows publishing design has been retired. The v1
+release workflow builds, verifies, and publishes only the signed/notarized
+macOS artifact. Windows CI may continue compiling and testing the preview, but
+must not upload an installer or attach one to a GitHub Release until Windows
+code signing and clean-machine acceptance are implemented.
 
 ### 5.3 CI considerations
 
@@ -634,18 +575,10 @@ brew install --cask sagascript
 
 ## Windows
 
-### Download
-Download the latest `Sagascript_x.x.x_x64-setup.exe` from the [Releases page](https://github.com/Magnus-Gille/sagascript/releases).
-
-### Install
-1. Run the installer
-2. If SmartScreen warns about an unrecognized app, click "More info" → "Run anyway"
-   (this will not appear once the app is code-signed)
-3. Sagascript will appear in your system tray
-4. Allow microphone access if prompted by Windows
-
-### MSI (enterprise)
-An MSI installer is also available for IT deployment via Group Policy.
+### Preview status
+Sagascript v1 does not publish Windows installers. Inspect the source and build
+the preview locally. A future download section must not be added until the
+installer is signed and passes Windows release acceptance.
 
 ### System Requirements
 - Windows 10 version 1803 or later / Windows 11
@@ -686,8 +619,8 @@ An MSI installer is also available for IT deployment via Group Policy.
 ## Troubleshooting
 
 ### "Windows protected your PC" SmartScreen warning
-This appears for unsigned applications. Click "More info" → "Run anyway".
-This warning will be removed once the app is code-signed.
+Do not bypass this warning for an unsigned installer. The project must sign a
+future Windows release before distributing it.
 
 ### Microphone not working
 Go to Windows Settings → Privacy & Security → Microphone, and ensure

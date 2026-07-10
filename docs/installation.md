@@ -5,7 +5,9 @@
 ### System requirements
 
 - macOS 13.0 (Ventura) or later
-- Apple Silicon (M1+) or Intel x86_64
+- Apple Silicon (M1+) is the tested launch platform. The release is built as a
+  universal binary, but Intel x86_64 support remains pending clean-machine
+  hardware acceptance.
 - ~200 MB disk space (plus Whisper model files)
 
 ### Download
@@ -29,6 +31,11 @@ brew install --cask sagascript
 
 ## Windows
 
+> **Build-from-source preview:** Sagascript v1 publishes official binaries for
+> macOS only. The project does not publish or endorse unsigned Windows
+> installers. Windows users can inspect and build the current preview from
+> source.
+
 ### System requirements
 
 - Windows 10 version 1803 or later, or Windows 11
@@ -36,26 +43,8 @@ brew install --cask sagascript
 - ~200 MB disk space (plus Whisper model files)
 - Edge WebView2 Runtime (automatically installed if missing)
 
-### Download
-
-Download the latest `Sagascript_x.x.x_x64-setup.exe` from the [Releases page](https://github.com/Magnus-Gille/sagascript/releases).
-
-### Install
-
-1. Run the installer
-2. If Windows SmartScreen warns about an unrecognized app, click **"More info"** then **"Run anyway"** (this will not appear once the app is code-signed)
-3. Sagascript will appear in your system tray
-4. Allow microphone access if prompted by Windows
-
-### MSI (enterprise)
-
-An `.msi` installer is also available on the [Releases page](https://github.com/Magnus-Gille/sagascript/releases) for IT deployment via Group Policy or other management tools.
-
-### winget (planned)
-
-```
-winget install Sagascript.Sagascript
-```
+Follow the build-from-source instructions below. If Windows warns about a
+binary, do not bypass SmartScreen; verify the source and build it yourself.
 
 ## Building from source
 
@@ -91,4 +80,7 @@ cargo tauri build
 ```
 
 - **macOS:** The `.app` bundle will be in `src-tauri/target/release/bundle/macos/`
-- **Windows:** The NSIS installer will be in `src-tauri/target/release/bundle/nsis/` and the MSI in `src-tauri/target/release/bundle/msi/`
+- **Windows preview:** Local source builds produce an NSIS installer in
+  `src-tauri/target/release/bundle/nsis/` and an MSI in
+  `src-tauri/target/release/bundle/msi/`. These locally built packages are not
+  official Sagascript v1 artifacts.

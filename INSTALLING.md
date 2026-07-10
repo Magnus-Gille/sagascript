@@ -2,7 +2,9 @@
 
 ## macOS
 
-Download **Sagascript.dmg** from the [latest release](https://github.com/Magnus-Gille/sagascript/releases/latest). This is a universal binary that runs natively on both Apple Silicon and Intel Macs.
+Download **Sagascript.dmg** from the [latest release](https://github.com/Magnus-Gille/sagascript/releases/latest).
+The artifact is a universal binary. Apple Silicon is the tested launch
+platform; the Intel slice remains pending clean-machine hardware acceptance.
 
 Open the DMG, drag Sagascript to Applications, and launch the copy in
 `/Applications`. Official releases are signed with Developer ID and notarized by
@@ -11,19 +13,9 @@ artifact is blocked, do not run it—report the release version and download URL
 
 ## Windows
 
-Download **Sagascript-Setup.exe** from the [latest release](https://github.com/Magnus-Gille/sagascript/releases/latest).
-
-### SmartScreen warning
-
-Sagascript is not yet signed with a Windows code-signing certificate. Windows Defender SmartScreen will show a warning on first run.
-
-**To proceed:**
-
-1. Run the installer — SmartScreen shows *"Windows protected your PC"*
-2. Click **More info**
-3. Click **Run anyway**
-
-The warning only appears once per downloaded file.
+Sagascript v1 does not publish Windows installers. Windows remains a
+build-from-source preview. Do not bypass SmartScreen for an unsigned installer
+downloaded from another party; inspect the source and build it locally.
 
 ## First launch
 
@@ -39,9 +31,11 @@ require an additional TCC grant. If an older pre-release build keeps reappearing
 Privacy & Security, remove the old rows and reinstall one fresh copy in
 `/Applications`; see the repository's troubleshooting instructions.
 
-All speech processing happens locally on your device. No audio is sent to any server.
+Speech processing happens locally on your device. Audio and transcripts are not
+uploaded. Network access is used when you choose to download a speech,
+diarization, or VAD model.
 
 ## System requirements
 
-- **macOS:** 13.0 (Ventura) or later, Apple Silicon or Intel
-- **Windows:** 10 or later, WebView2 runtime (installed automatically)
+- **macOS:** 13.0 (Ventura) or later; Apple Silicon tested at launch
+- **Windows preview:** 10 or later, built from source

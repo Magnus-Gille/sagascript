@@ -3,27 +3,31 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/Magnus-Gille/sagascript/actions/workflows/ci.yml/badge.svg)](https://github.com/Magnus-Gille/sagascript/actions/workflows/ci.yml)
 
-Dictate anywhere. Privately. A lightweight menu bar app for macOS and Windows. Press a hotkey, speak, and text appears in any application. Local transcription powered by Whisper — no cloud, no internet required.
+Dictate anywhere. Privately. A lightweight menu bar app for macOS. Press a
+hotkey, speak, and text appears in any application. Audio and transcripts stay
+on your Mac; an internet connection is used only when you choose to download a
+speech or diarization model.
 
 ## Features
 
 - **Push-to-talk dictation** -- hold a global hotkey, speak, release to transcribe and paste into any app
-- **100% local transcription** -- runs Whisper models on-device (Metal/Core ML on macOS) with no data leaving your machine
+- **Local transcription** -- audio and transcripts are processed on-device with Metal/Core ML; they are not uploaded
 - **Nordic-grade accuracy** -- Swedish and Norwegian use [KB-Whisper](https://huggingface.co/KBLab) (Swedish National Library) and [NB-Whisper](https://huggingface.co/NbAiLab) (Norwegian National Library), fine-tuned on 50,000+ hours of Nordic speech with 47% fewer errors than generic Whisper
-- **Privacy by default** -- audio is processed in memory and immediately discarded; zero network traffic
+- **Privacy by default** -- no telemetry, cloud transcription, or transcript upload; network access is limited to model downloads you initiate
 - **No telemetry or tracking** -- no analytics, no usage sharing, no data collection of any kind
 - **Multi-language** -- English, Swedish, and Norwegian with dedicated models; additional languages supported via generic Whisper models
 - **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
 - **Configurable** -- choose your model, language, hotkey, and output behavior
-- **Cross-platform** -- macOS 13+ (Apple Silicon & Intel) and Windows 10+
+- **macOS v1** -- official releases are signed and notarized for macOS 13+; Apple Silicon is the tested launch platform, while the universal build's Intel slice still requires hardware acceptance
+- **Windows preview** -- the Windows port remains available for build-from-source testing; no official Windows binaries are published yet
 
 ## Building from source
 
 ### Prerequisites
 
-- **macOS**: macOS 13.0+ (Apple Silicon or Intel)
-- **Windows**: Windows 10+
+- **macOS**: macOS 13.0+ (Apple Silicon tested; the universal build's Intel slice requires hardware acceptance before support is claimed)
+- **Windows preview**: Windows 10+ (build from source; not an official v1 release)
 - **Linux** (experimental): X11 session; GTK/WebKit dev libraries + `xdotool` — see [Linux notes](docs/linux-notes.md)
 - Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - Node.js 20+ (`brew install node` on macOS, or download from [nodejs.org](https://nodejs.org) on Windows)
@@ -44,7 +48,9 @@ cargo tauri dev
 cargo tauri build
 ```
 
-On macOS the `.app` bundle will be in `src-tauri/target/release/bundle/macos/`. On Windows the installer will be in `src-tauri/target/release/bundle/msi/` or `src-tauri/target/release/bundle/nsis/`. On Linux the `.deb`/`.rpm`/`.AppImage` will be in `src-tauri/target/release/bundle/` (see [Linux notes](docs/linux-notes.md)).
+On macOS the `.app` bundle will be in `src-tauri/target/release/bundle/macos/`.
+Source builds can also produce Windows or experimental Linux packages; these
+are not official v1 release artifacts. See the platform notes below.
 
 ## CLI usage
 
@@ -90,13 +96,15 @@ release asks you to bypass Gatekeeper, do not run it; report the artifact.
 
 ### Windows
 
-- **Microphone** -- for recording audio
+Windows is currently a build-from-source preview. It needs microphone access
+for recording audio. Do not install an unsigned binary from an untrusted party.
 
 ## Documentation
 
 - [Installation guide](docs/installation.md) -- detailed install instructions for macOS and Windows
 - [Linux notes](docs/linux-notes.md) -- experimental Linux build, prerequisites, and known limitations
 - [Windows-specific notes](docs/windows-notes.md) -- feature comparison, known limitations, and troubleshooting
+- [Third-party notices](THIRD_PARTY_NOTICES.md) -- dependency and downloadable-model licenses
 
 ## Contributing
 
