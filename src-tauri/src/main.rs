@@ -322,20 +322,9 @@ fn main() {
                     });
                 }
 
-                // Best-effort: backfill the CoreML encoder for the effective
-                // model — covers models downloaded before CoreML support, so the
-                // encoder moves to the Neural Engine without a manual re-download.
-                // Only when the GGML model itself is present (don't fetch an
-                // encoder for a model the user hasn't downloaded yet).
-                if sagascript_core::transcription::model::is_model_downloaded(model) {
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) =
-                            sagascript_core::transcription::model::backfill_coreml_encoder(model).await
-                        {
-                            warn!("CoreML encoder backfill skipped: {e}");
-                        }
-                    });
-                }
+                // Model and accelerator assets are downloaded only from an
+                // explicit model-selection/download action. Startup never
+                // performs a silent CoreML network backfill.
             }
 
             Ok(())

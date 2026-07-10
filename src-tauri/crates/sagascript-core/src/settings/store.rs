@@ -10,6 +10,14 @@ use crate::settings::Settings;
 const APP_IDENTIFIER: &str = "ai.gille.sagascript";
 const LEGACY_APP_IDENTIFIERS: &[&str] = &["com.sagascript.app"];
 const SETTINGS_FILENAME: &str = "sagascript-settings.json";
+const LEGACY_ONBOARDING_KEY: &str = "hasCompletedOnboarding";
+const ONBOARDING_KEY: &str = "has_completed_onboarding";
+
+fn canonicalize_legacy_keys(map: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Some(legacy) = map.remove(LEGACY_ONBOARDING_KEY) {
+        map.entry(ONBOARDING_KEY.to_string()).or_insert(legacy);
+    }
+}
 
 /// Returns the application data directory (platform-specific).
 /// macOS: ~/Library/Application Support/ai.gille.sagascript/
@@ -48,6 +56,7 @@ fn copy_legacy_settings(source: &PathBuf, destination: &PathBuf) -> Result<bool,
     let object = value
         .as_object_mut()
         .ok_or_else(|| "Legacy settings root is not an object".to_string())?;
+    canonicalize_legacy_keys(object);
 
     // Accessibility approval is tied to the signed bundle identity, not to
     // user preferences. The new identity must be approved explicitly before
@@ -99,7 +108,14 @@ pub fn load() -> Settings {
 /// Load settings from a specific path. Returns defaults if missing or unreadable.
 pub fn load_from(path: &Path) -> Settings {
     match std::fs::read_to_string(path) {
-        Ok(contents) => match serde_json::from_str(&contents) {
+        Ok(contents) => match serde_json::from_str::<serde_json::Value>(&contents).and_then(
+            |mut value| {
+                if let Some(map) = value.as_object_mut() {
+                    canonicalize_legacy_keys(map);
+                }
+                serde_json::from_value(value)
+            },
+        ) {
             Ok(settings) => settings,
             Err(e) => {
                 // One wrong-typed field would otherwise silently reset ALL
@@ -225,6 +241,7 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     } else {
         serde_json::Map::new()
     };
+    canonicalize_legacy_keys(&mut map);
 
     // Merge settings fields into the map
     let settings_value =
@@ -308,7 +325,7 @@ mod tests {
         fs::create_dir_all(legacy.parent().unwrap()).unwrap();
         fs::write(
             &legacy,
-            r#"{"language":"sv","auto_paste":true,"future_key":{"x":1}}"#,
+            r#"{"language":"sv","auto_paste":true,"hasCompletedOnboarding":true,"future_key":{"x":1}}"#,
         )
         .unwrap();
 
@@ -316,6 +333,8 @@ mod tests {
         let migrated: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&destination).unwrap()).unwrap();
         assert_eq!(migrated["auto_paste"], false);
+        assert_eq!(migrated["has_completed_onboarding"], true);
+        assert!(migrated.get("hasCompletedOnboarding").is_none());
         assert_eq!(migrated["future_key"]["x"], 1);
         let _ = fs::remove_dir_all(root);
     }
@@ -391,7 +410,22 @@ mod tests {
     }
 
     #[test]
-    fn save_preserves_non_settings_keys() {
+    fn load_accepts_both_legacy_and_canonical_onboarding_keys() {
+        with_temp_settings(|path| {
+            fs::write(
+                &path,
+                r#"{"language":"sv","hasCompletedOnboarding":false,"has_completed_onboarding":true}"#,
+            )
+            .unwrap();
+
+            let loaded = load_from(&path);
+            assert_eq!(loaded.language, Language::Swedish);
+            assert!(loaded.has_completed_onboarding);
+        });
+    }
+
+    #[test]
+    fn save_preserves_unknown_keys_and_canonicalizes_legacy_key() {
         with_temp_settings(|path| {
             let dir = path.parent().unwrap();
             fs::create_dir_all(dir).unwrap();
@@ -399,7 +433,8 @@ mod tests {
             // Pre-populate with the legacy camelCase onboarding key.
             let initial = serde_json::json!({
                 "hasCompletedOnboarding": true,
-                "language": "en"
+                "language": "en",
+                "future_key": {"x": 1}
             });
             fs::write(&path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
 
@@ -409,21 +444,15 @@ mod tests {
                 ..Default::default()
             };
 
-            // Simulate save's merge logic directly on this path
-            let mut map: serde_json::Map<String, serde_json::Value> =
-                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-            let settings_value = serde_json::to_value(&settings).unwrap();
-            if let serde_json::Value::Object(sm) = settings_value {
-                for (k, v) in sm {
-                    map.insert(k, v);
-                }
-            }
-            fs::write(&path, serde_json::to_string_pretty(&map).unwrap()).unwrap();
+            save_to(&path, &settings).unwrap();
 
-            // Verify non-settings key preserved
+            // Unknown data survives, but the alias is removed so serde cannot
+            // see the same field twice on the next launch.
             let raw: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-            assert_eq!(raw["hasCompletedOnboarding"], true);
+            assert!(raw.get("hasCompletedOnboarding").is_none());
+            assert_eq!(raw["has_completed_onboarding"], false);
+            assert_eq!(raw["future_key"]["x"], 1);
             assert_eq!(raw["language"], "no"); // updated
         });
     }

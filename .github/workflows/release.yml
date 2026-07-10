@@ -62,6 +62,41 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Build release CLI for inference smoke tests
+        working-directory: src-tauri
+        run: cargo build --release -p sagascript-cli
+
+      - name: Gate real transcription
+        run: |
+          binary=src-tauri/target/release/sagascript
+          "$binary" download-model nb-whisper-tiny
+          "$binary" transcribe \
+            --language no \
+            --model nb-whisper-tiny \
+            --beam 0 \
+            --json \
+            test-audio/norwegian-short-3s.mp3 > "$RUNNER_TEMP/transcription-smoke.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "storting" in d["text"].lower(); assert d["language"] == "no"; assert d["segments"]' "$RUNNER_TEMP/transcription-smoke.json"
+
+      - name: Gate real two-speaker diarization
+        run: |
+          binary=src-tauri/target/release/sagascript
+          fixture="$RUNNER_TEMP/dj_2022_feu.m4a"
+          result="$RUNNER_TEMP/diarization-smoke.json"
+          "$binary" download-model tiny
+          "$binary" download-model diarization
+          curl --fail --location --retry 3 \
+            'https://huggingface.co/datasets/medkit/simsamu/resolve/6b639431f658d636c30dbf342074d723bf303e0f/dj_2022_feu/dj_2022_feu.m4a' \
+            --output "$fixture"
+          "$binary" transcribe \
+            --language auto \
+            --model tiny \
+            --diarize \
+            --diarize-threshold 0.75 \
+            --json \
+            "$fixture" > "$result"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d["segments"]; assert len({x["speaker"] for x in s}) == 2; assert len(s) >= 2; assert all(0 <= x["start"] <= x["end"] <= d["duration_seconds"] + 0.1 for x in s)' "$result"
+
   build-macos:
     needs: quality-gate
     runs-on: macos-14

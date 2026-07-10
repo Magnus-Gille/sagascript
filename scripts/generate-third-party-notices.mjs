@@ -181,12 +181,12 @@ for (const pkg of lockedNpmPackages) {
 }
 
 const modelSources = [
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/",
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/",
   "https://huggingface.co/KBLab/kb-whisper-",
   "https://huggingface.co/NbAiLab/nb-whisper-",
-  "https://huggingface.co/ggml-org/whisper-vad/resolve/main/",
-  "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/model.onnx",
-  "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/main/voxceleb_resnet34_LM.onnx",
+  "https://huggingface.co/ggml-org/whisper-vad/resolve/",
+  "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/",
+  "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/",
 ];
 const modelSourceCode = [
   readFileSync(join(root, "src-tauri/crates/sagascript-core/src/settings/manager.rs"), "utf8"),
