@@ -169,6 +169,34 @@ mod tests {
     }
 
     #[test]
+    fn word_granularity_preserves_turns_that_coarse_segment_collapses() {
+        let speakers = vec![
+            spk(0.0, 6.0, "SPEAKER_0"),
+            spk(6.0, 10.0, "SPEAKER_1"),
+        ];
+
+        // The GUI's former segment-level path attributed this entire Whisper
+        // segment to SPEAKER_0 because it has the larger total overlap.
+        let coarse = merge_with_transcript(&speakers, &[seg(0.0, 10.0, "Hello there Yes")]);
+        assert_eq!(coarse.len(), 1);
+        assert_eq!(coarse[0].speaker, "SPEAKER_0");
+
+        // Word-sized timestamps retain the turn boundary for consolidation.
+        let words = merge_with_transcript(
+            &speakers,
+            &[
+                seg(0.0, 2.5, "Hello"),
+                seg(2.5, 5.5, "there"),
+                seg(6.0, 9.0, "Yes"),
+            ],
+        );
+        let consolidated = consolidate(&words);
+        assert_eq!(consolidated.len(), 2);
+        assert_eq!(consolidated[0].speaker, "SPEAKER_0");
+        assert_eq!(consolidated[1].speaker, "SPEAKER_1");
+    }
+
+    #[test]
     fn no_overlap_uses_nearest() {
         // Transcript segment [5.0, 6.0], speakers end at 4.0
         let speakers = vec![

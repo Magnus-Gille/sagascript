@@ -644,9 +644,11 @@ pub async fn transcribe_file(
             run_diarize(&audio_for_diarize, &DiarizeConfig::default())
         });
 
-        // Run timestamped transcription
+        // Run word-level timestamped transcription when DTW is available.
+        // Segment-level timestamps can span multiple speaker turns and would
+        // cause maximum-overlap merging to collapse the GUI output to one label.
         let mut transcribe_fut = tokio::task::spawn_blocking(move || {
-            whisper_ref.transcribe_sync_with_timestamps(
+            whisper_ref.transcribe_sync_for_diarization(
                 &audio_for_transcribe,
                 language,
                 prompt_ref.as_deref(),

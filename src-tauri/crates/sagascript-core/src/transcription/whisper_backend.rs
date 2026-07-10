@@ -742,6 +742,29 @@ impl WhisperBackend {
         self.transcribe_chunk_timestamps(audio, language, 0.0, prompt, Granularity::Word)
     }
 
+    /// Transcribe audio at the finest timestamp granularity available for
+    /// speaker attribution.
+    ///
+    /// Word-level DTW timestamps prevent a long Whisper segment containing
+    /// multiple turns from being assigned wholesale to one speaker. Some
+    /// models/platforms may not expose valid DTW timestamps, so this preserves
+    /// the segment-level fallback in one shared path for both CLI and GUI.
+    #[cfg(feature = "diarization")]
+    pub fn transcribe_sync_for_diarization(
+        &self,
+        audio: &[f32],
+        language: Language,
+        prompt: Option<&str>,
+    ) -> Result<Vec<(f64, f64, String)>, DictationError> {
+        let words = self.transcribe_sync_with_word_timestamps(audio, language, prompt)?;
+        if words.is_empty() {
+            warn!("Word-level DTW timestamps unavailable; falling back to segment timestamps");
+            self.transcribe_sync_with_timestamps(audio, language, prompt)
+        } else {
+            Ok(words)
+        }
+    }
+
     /// Transcribe a single audio chunk with timestamps via DTW.
     ///
     /// `granularity` controls whether to emit one entry per Whisper segment
