@@ -138,7 +138,6 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(controller)
         .manage(whisper)
@@ -323,7 +322,6 @@ fn main() {
             commands::get_last_error,
             commands::is_model_ready,
             commands::get_loaded_model,
-            commands::update_settings,
             commands::set_language,
             commands::set_whisper_model,
             commands::set_auto_select_model,

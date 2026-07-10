@@ -412,6 +412,7 @@ pub struct Settings {
     /// and speeds up clips with leading/trailing silence). Needs the VAD model.
     pub vad_enabled: bool,
     /// Whether the user has completed the first-launch onboarding
+    #[serde(alias = "hasCompletedOnboarding")]
     pub has_completed_onboarding: bool,
 }
 
@@ -833,6 +834,17 @@ mod tests {
         assert_eq!(deserialized.beam_size, original.beam_size);
         assert_eq!(deserialized.temperature_fallback, original.temperature_fallback);
         assert_eq!(deserialized.vad_enabled, original.vad_enabled);
+        assert_eq!(
+            deserialized.has_completed_onboarding,
+            original.has_completed_onboarding
+        );
+    }
+
+    #[test]
+    fn settings_accepts_legacy_camel_case_onboarding_key() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"hasCompletedOnboarding":true}"#).unwrap();
+        assert!(settings.has_completed_onboarding);
     }
 
     #[test]

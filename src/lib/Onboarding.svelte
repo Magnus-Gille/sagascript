@@ -11,6 +11,7 @@
     openMicrophoneSettings,
     checkAccessibilityPermission,
     requestAccessibilityPermission,
+    setAutoPaste,
     setOnboardingCompleted,
   } from "./api";
 
@@ -34,12 +35,14 @@
   // Language step / final "finish" step errors
   let languageError: string | null = $state(null);
   let finishError: string | null = $state(null);
+  let accessibilityError: string | null = $state(null);
 
   // Permissions
   // micStatus: "authorized" | "not_determined" | "denied" | "restricted" | "unsupported" | "checking"
   let micStatus: string = $state("checking");
   let accessibilityGranted = $state(false);
   let accessibilityChecking = $state(false);
+  let savingManualPaste = $state(false);
   let pollTimer: ReturnType<typeof setInterval> | null = $state(null);
 
   // Hotkey (read from settings)
@@ -160,6 +163,23 @@
       });
     } catch {
       accessibilityChecking = false;
+    }
+  }
+
+  async function skipAccessibility() {
+    stopPoll();
+    savingManualPaste = true;
+    accessibilityError = null;
+    try {
+      // "Paste manually" is a product setting, not merely permission advice.
+      // Persist it now so finishing onboarding cannot leave auto-paste enabled.
+      await setAutoPaste(false);
+      nextStep();
+    } catch (e: any) {
+      accessibilityError =
+        typeof e === "string" ? e : e?.message ?? "Failed to disable auto-paste. Please try again.";
+    } finally {
+      savingManualPaste = false;
     }
   }
 
@@ -525,11 +545,17 @@
                 Open System Settings
               {/if}
             </button>
-            <button class="secondary" onclick={() => { stopPoll(); accessibilityChecking = false; nextStep(); }}>
+            <button class="secondary" onclick={skipAccessibility} disabled={savingManualPaste}>
               I'll paste manually
             </button>
           {/if}
         </div>
+        {#if accessibilityError}
+          <div class="status-indicator error">
+            <span class="status-dot"></span>
+            <span>{accessibilityError}</span>
+          </div>
+        {/if}
       </div>
 
     <!-- Ready -->

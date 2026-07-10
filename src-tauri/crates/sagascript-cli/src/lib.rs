@@ -396,11 +396,11 @@ pub fn run(cli: Cli) {
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
         Command::ResetOnboarding => {
-            let mut settings = sagascript_core::settings::store::load();
-            settings.has_completed_onboarding = false;
-            sagascript_core::settings::store::save(&settings)
+            sagascript_core::settings::store::update(|settings| {
+                settings.has_completed_onboarding = false;
+            })
                 .map_err(sagascript_core::error::DictationError::SettingsError)
-                .map(|()| {
+                .map(|_| {
                     eprintln!("Onboarding reset. The setup wizard will run on next launch.");
                 })
         }

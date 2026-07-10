@@ -24,6 +24,7 @@ export interface Settings {
   beam_size: number;
   temperature_fallback: boolean;
   vad_enabled: boolean;
+  has_completed_onboarding: boolean;
 }
 
 export interface BuildInfo {
@@ -54,10 +55,6 @@ export async function getState(): Promise<AppState> {
 
 export async function getSettings(): Promise<Settings> {
   return invoke("get_settings");
-}
-
-export async function updateSettings(settings: Settings): Promise<void> {
-  return invoke("update_settings", { settings });
 }
 
 export async function setLanguage(language: Language): Promise<void> {

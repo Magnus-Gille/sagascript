@@ -131,37 +131,18 @@ pub async fn get_loaded_model(
     })
 }
 
-// -- Settings persistence helper --
-
-fn persist_settings(controller: &SharedController) -> Result<(), String> {
-    let settings = controller.lock().unwrap().settings().clone();
-    sagascript_core::settings::store::save(&settings)
-}
-
 // -- Settings mutations --
-
-#[tauri::command]
-pub async fn update_settings(
-    controller: State<'_, SharedController>,
-    settings: Settings,
-) -> Result<(), String> {
-    let mut ctrl = controller.lock().unwrap();
-    ctrl.update_settings(settings);
-    drop(ctrl);
-    persist_settings(&controller)?;
-    info!("Settings updated");
-    Ok(())
-}
 
 #[tauri::command]
 pub async fn set_language(
     controller: State<'_, SharedController>,
     language: Language,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.language = language;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().language = language;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().language = persisted.language;
     info!("Language set to {:?}", language);
     Ok(())
 }
@@ -170,10 +151,11 @@ pub async fn set_language(
 pub async fn set_onboarding_completed(
     controller: State<'_, SharedController>,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.has_completed_onboarding = true;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().has_completed_onboarding = true;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().has_completed_onboarding = persisted.has_completed_onboarding;
     info!("Onboarding marked as completed");
     Ok(())
 }
@@ -183,11 +165,13 @@ pub async fn set_whisper_model(
     controller: State<'_, SharedController>,
     model: WhisperModel,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.whisper_model = model;
+        settings.auto_select_model = false;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().whisper_model = model;
-    ctrl.settings_mut().auto_select_model = false;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().whisper_model = persisted.whisper_model;
+    ctrl.settings_mut().auto_select_model = persisted.auto_select_model;
     info!("Model set to {:?}", model);
     Ok(())
 }
@@ -197,10 +181,11 @@ pub async fn set_auto_select_model(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.auto_select_model = enabled;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().auto_select_model = enabled;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().auto_select_model = persisted.auto_select_model;
     info!("Auto-select model: {enabled}");
     Ok(())
 }
@@ -210,10 +195,11 @@ pub async fn set_hotkey_mode(
     controller: State<'_, SharedController>,
     mode: HotkeyMode,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.hotkey_mode = mode;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().hotkey_mode = mode;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().hotkey_mode = persisted.hotkey_mode;
     info!("Hotkey mode set to {:?}", mode);
     Ok(())
 }
@@ -263,20 +249,48 @@ pub async fn set_hotkey(
         return Err(format!("Failed to register hotkey '{}': {}", shortcut, e));
     }
 
-    // Update controller state
+    let persisted = match sagascript_core::settings::store::update(|settings| {
+        settings.hotkey = shortcut.clone();
+    }) {
+        Ok(settings) => settings,
+        Err(save_error) => {
+            // Registration already changed process-global state. If the disk
+            // write fails, restore the operational shortcut so controller,
+            // disk, and registration cannot diverge.
+            if let Err(e) = app.global_shortcut().unregister(shortcut.as_str()) {
+                error!("Failed to unregister unpersisted hotkey '{shortcut}': {e}");
+            }
+            let rollback_error = app
+                .global_shortcut()
+                .register(old_shortcut.as_str())
+                .err()
+                .map(|e| e.to_string());
+            let change = health.record(&old_shortcut, rollback_error.clone());
+            if change.changed {
+                let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+            }
+            return match rollback_error {
+                Some(error) => Err(format!(
+                    "Failed to persist hotkey: {save_error}; restoring '{old_shortcut}' also failed: {error}"
+                )),
+                None => Err(format!(
+                    "Failed to persist hotkey: {save_error}; restored '{old_shortcut}'"
+                )),
+            };
+        }
+    };
+
+    // Update controller state after persistence succeeds.
     {
         let mut ctrl = controller.lock().unwrap();
-        ctrl.settings_mut().hotkey = shortcut.clone();
-        ctrl.hotkey_service_mut().set_shortcut(&shortcut);
+        ctrl.settings_mut().hotkey = persisted.hotkey.clone();
+        ctrl.hotkey_service_mut().set_shortcut(&persisted.hotkey);
     }
 
     let change = health.record(&shortcut, None);
     if change.changed {
         let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
     }
-
-    // Persist via shared store
-    persist_settings(&controller)?;
 
     info!("Hotkey changed to: {shortcut}");
     Ok(())
@@ -474,10 +488,11 @@ pub async fn set_auto_paste(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.auto_paste = enabled;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().auto_paste = enabled;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().auto_paste = persisted.auto_paste;
     info!("Auto-paste: {enabled}");
     Ok(())
 }
@@ -487,10 +502,11 @@ pub async fn set_show_overlay(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.show_overlay = enabled;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().show_overlay = enabled;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().show_overlay = persisted.show_overlay;
     info!("Show overlay: {enabled}");
     Ok(())
 }
@@ -500,10 +516,11 @@ pub async fn set_initial_prompt(
     controller: State<'_, SharedController>,
     prompt: String,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.initial_prompt = prompt.clone();
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().initial_prompt = prompt.clone();
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().initial_prompt = persisted.initial_prompt;
     info!("Initial prompt set ({} chars)", prompt.len());
     Ok(())
 }
@@ -513,10 +530,11 @@ pub async fn set_beam_size(
     controller: State<'_, SharedController>,
     beam_size: u32,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.beam_size = beam_size;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().beam_size = beam_size;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().beam_size = persisted.beam_size;
     info!("Beam size: {beam_size}");
     Ok(())
 }
@@ -526,10 +544,11 @@ pub async fn set_temperature_fallback(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.temperature_fallback = enabled;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().temperature_fallback = enabled;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().temperature_fallback = persisted.temperature_fallback;
     info!("Temperature fallback: {enabled}");
     Ok(())
 }
@@ -539,11 +558,13 @@ pub async fn set_vad_enabled(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.vad_enabled = enabled;
+    })?;
     {
         let mut ctrl = controller.lock().unwrap();
-        ctrl.settings_mut().vad_enabled = enabled;
+        ctrl.settings_mut().vad_enabled = persisted.vad_enabled;
     }
-    persist_settings(&controller)?;
     // Fetch the Silero VAD model so it's ready for the next dictation. Done
     // after releasing the lock (no lock held across await).
     if enabled && !model::is_vad_model_downloaded() {

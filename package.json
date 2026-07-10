@@ -25,7 +25,6 @@
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-autostart": "^2.0.0",
     "@tauri-apps/plugin-global-shortcut": "^2.0.0",
-    "@tauri-apps/plugin-dialog": "^2.0.0",
-    "@tauri-apps/plugin-store": "^2.0.0"
+    "@tauri-apps/plugin-dialog": "^2.0.0"
   }
 }

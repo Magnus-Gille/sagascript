@@ -1,4 +1,9 @@
-use std::path::PathBuf;
+use std::{
+    fs::OpenOptions,
+    path::{Path, PathBuf},
+};
+
+use fs2::FileExt;
 
 use crate::settings::Settings;
 
@@ -78,7 +83,7 @@ pub fn load() -> Settings {
 }
 
 /// Load settings from a specific path. Returns defaults if missing or unreadable.
-pub fn load_from(path: &PathBuf) -> Settings {
+pub fn load_from(path: &Path) -> Settings {
     match std::fs::read_to_string(path) {
         Ok(contents) => match serde_json::from_str(&contents) {
             Ok(settings) => settings,
@@ -98,18 +103,76 @@ pub fn load_from(path: &PathBuf) -> Settings {
     }
 }
 
-/// Persist settings to disk using read-merge-write to preserve non-settings keys
-/// (e.g. `hasCompletedOnboarding` from Tauri plugin store).
+/// Persist settings to disk using read-merge-write to preserve unknown or
+/// legacy keys while writing the canonical Settings fields.
 /// Uses atomic write: write to .tmp then rename.
 pub fn save(settings: &Settings) -> Result<(), String> {
     let path = settings_path();
     migrate_legacy_identifier_settings(&path);
-    save_to(&path, settings)
+    with_settings_lock(&path, || save_to(&path, settings))
+}
+
+/// Apply a field-level settings mutation to the latest on-disk snapshot and
+/// return the persisted result.
+///
+/// GUI commands use this instead of saving their in-memory `Settings` clone,
+/// which may be stale when the CLI changed another field moments earlier.
+pub fn update<F>(mutate: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings),
+{
+    let path = settings_path();
+    migrate_legacy_identifier_settings(&path);
+    update_at(&path, mutate)
+}
+
+fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings),
+{
+    with_settings_lock(path, || {
+        let mut settings = load_from(path);
+        mutate(&mut settings);
+        save_to(path, &settings)?;
+        Ok(settings)
+    })
+}
+
+fn with_settings_lock<T, F>(path: &Path, operation: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+{
+    let dir = path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create settings dir: {e}"))?;
+
+    let lock_path = path.with_extension("json.lock");
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| format!("Failed to open settings lock: {e}"))?;
+    lock_file
+        .lock_exclusive()
+        .map_err(|e| format!("Failed to lock settings: {e}"))?;
+
+    let result = operation();
+    if let Err(e) = lock_file.unlock() {
+        tracing::warn!(
+            "Failed to unlock settings file {}: {e}",
+            lock_path.display()
+        );
+    }
+    result
 }
 
 /// Persist settings to a specific path. Test seam for `save`, which always
 /// targets `settings_path()`.
-fn save_to(path: &PathBuf, settings: &Settings) -> Result<(), String> {
+fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     let dir = path
         .parent()
         .map(|p| p.to_path_buf())
@@ -126,7 +189,7 @@ fn save_to(path: &PathBuf, settings: &Settings) -> Result<(), String> {
             Ok(m) => m,
             Err(e) => {
                 // A parse failure here used to silently drop every
-                // preserved non-Settings key (e.g. hasCompletedOnboarding)
+                // preserved unknown or legacy key
                 // this read-merge-write exists to protect. Back up the
                 // corrupt bytes to a sidecar before starting fresh, rather
                 // than aborting the save (aborting would contradict the
@@ -257,12 +320,46 @@ mod tests {
     }
 
     #[test]
+    fn field_update_preserves_external_changes_from_latest_disk_snapshot() {
+        with_temp_settings(|path| {
+            let external = Settings {
+                hotkey: "Super+Q".to_string(),
+                language: Language::English,
+                ..Default::default()
+            };
+            save_to(&path, &external).unwrap();
+
+            // Simulate a GUI language control whose in-memory snapshot still
+            // contains the default hotkey. Only the selected field is passed
+            // to the store mutation, so the CLI's newer hotkey must survive.
+            let persisted = update_at(&path, |settings| {
+                settings.language = Language::Swedish;
+            })
+            .unwrap();
+
+            assert_eq!(persisted.language, Language::Swedish);
+            assert_eq!(persisted.hotkey, "Super+Q");
+            let reloaded = load_from(&path);
+            assert_eq!(reloaded.hotkey, "Super+Q");
+        });
+    }
+
+    #[test]
+    fn update_uses_a_cross_process_lock_file() {
+        with_temp_settings(|path| {
+            update_at(&path, |settings| settings.auto_paste = false).unwrap();
+            assert!(path.with_extension("json.lock").exists());
+            assert!(!load_from(&path).auto_paste);
+        });
+    }
+
+    #[test]
     fn save_preserves_non_settings_keys() {
         with_temp_settings(|path| {
             let dir = path.parent().unwrap();
             fs::create_dir_all(dir).unwrap();
 
-            // Pre-populate with a non-settings key
+            // Pre-populate with the legacy camelCase onboarding key.
             let initial = serde_json::json!({
                 "hasCompletedOnboarding": true,
                 "language": "en"

@@ -200,8 +200,24 @@ fn cmd_get(key: &str) -> Result<(), DictationError> {
 
 fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
     validate_key(key)?;
-    let mut settings = settings::store::load();
+    // Parse before acquiring the settings lock so invalid input never writes.
+    let mut validation_target = Settings::default();
+    apply_setting_value(&mut validation_target, key, value)?;
+    let settings = settings::store::update(|settings| {
+        apply_setting_value(settings, key, value)
+            .expect("setting value was validated before acquiring the lock");
+    })
+    .map_err(DictationError::SettingsError)?;
 
+    eprintln!("Set {key} = {}", get_setting_value(&settings, key));
+    Ok(())
+}
+
+fn apply_setting_value(
+    settings: &mut Settings,
+    key: &str,
+    value: &str,
+) -> Result<(), DictationError> {
     match key {
         "language" => {
             settings.language = parse_enum_value::<Language>(value, "language")?;
@@ -241,18 +257,14 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
         }
         _ => unreachable!(), // validate_key already checked
     }
-
-    settings::store::save(&settings).map_err(DictationError::SettingsError)?;
-    eprintln!("Set {key} = {}", get_setting_value(&settings, key));
     Ok(())
 }
 
 fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
     if let Some(key) = key {
         validate_key(key)?;
-        let mut settings = settings::store::load();
         let defaults = Settings::default();
-        match key {
+        let settings = settings::store::update(|settings| match key {
             "language" => settings.language = defaults.language,
             "whisper_model" => settings.whisper_model = defaults.whisper_model,
             "hotkey_mode" => settings.hotkey_mode = defaults.hotkey_mode,
@@ -265,8 +277,8 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
             "temperature_fallback" => settings.temperature_fallback = defaults.temperature_fallback,
             "vad_enabled" => settings.vad_enabled = defaults.vad_enabled,
             _ => unreachable!(),
-        }
-        settings::store::save(&settings).map_err(DictationError::SettingsError)?;
+        })
+        .map_err(DictationError::SettingsError)?;
         eprintln!("Reset {key} to {}", get_setting_value(&settings, key));
     } else {
         let defaults = Settings::default();
