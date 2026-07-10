@@ -41,7 +41,7 @@ and website distribution.
 | Settings storage | `src-tauri/src/settings/` | JSON file via `tauri-plugin-store` |
 | Credentials | `src-tauri/src/credentials/` | Uses `keyring` crate (wraps Windows Credential Manager) |
 | Logging paths | `src-tauri/src/logging/` | Already has `#[cfg(target_os = "windows")]` branch → `%LOCALAPPDATA%\Sagascript\Logs\` |
-| CLI commands | `src-tauri/src/cli/` | All platform-agnostic; includes PowerShell completions |
+| CLI commands | `src-tauri/crates/sagascript-cli/src/` | All platform-agnostic; includes PowerShell completions |
 | Whisper (CPU) | `src-tauri/Cargo.toml` | `whisper-rs = "0.15"` already declared under `[target.'cfg(target_os = "windows")'.dependencies]` |
 | Tray icon | `src-tauri/src/main.rs` | Tauri system tray is cross-platform |
 | Window hide-on-close | `src-tauri/src/main.rs` | Standard Tauri event handling |
@@ -727,16 +727,16 @@ to the next phase until the tests in the current phase pass.
 - [ ] Settings persist across restarts
 - [ ] CLI commands work from PowerShell and Command Prompt
 
-### Phase 2: CI/CD (**DONE** — PR #23)
+### Phase 2: CI validation (**DONE** — PR #23; release publishing superseded)
 
 **Code changes:**
 - [x] Add `check-windows` job to `.github/workflows/ci.yml`
-- [x] Create `.github/workflows/release.yml` with dual-platform builds
-- [x] Configure artifact upload for Windows bundles
+- [x] Create `.github/workflows/release.yml` with dual-platform builds (historical; v1 publishing is now macOS-only)
+- [x] Configure artifact upload for Windows bundles (historical; removed from the v1 release workflow)
 
 **Testing gate:**
 - [ ] CI passes on both macOS and Windows runners (cargo check, test, clippy, build)
-- [ ] Release workflow produces NSIS `.exe` and `.msi` artifacts
+- [ ] A future Windows release workflow produces signed NSIS `.exe` and `.msi` artifacts
 - [ ] macOS CI is not broken by the changes
 
 ### Phase 3: Installer & Tauri config (**DONE** — PR #23)
@@ -768,7 +768,7 @@ to the next phase until the tests in the current phase pass.
 - [ ] Certificate details show correct publisher name in file properties
 - [ ] Timestamp server is used (signature remains valid after cert expiry)
 
-### Phase 5: Documentation & distribution (**DONE**)
+### Phase 5: Source-preview documentation (**DONE**); binary distribution deferred
 
 **Code changes:**
 - [x] Update README.md with Windows support
@@ -778,7 +778,7 @@ to the next phase until the tests in the current phase pass.
 - [ ] Update website download page (if exists) — deferred, website not yet deployed
 
 **Testing gate:**
-- [ ] GitHub Release created with both macOS and Windows artifacts
+- [ ] After signing and hardware acceptance, create a Windows release with signed Windows artifacts (v1 GitHub releases are macOS-only)
 - [ ] Download links work and files are not corrupted
 - [ ] Installation instructions are accurate (follow them on a clean machine)
 - [ ] Submit to winget package manager and verify `winget install` works

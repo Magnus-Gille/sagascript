@@ -55,7 +55,7 @@ cd src-tauri && cargo clippy -p sagascript-cli --all-targets --no-default-featur
 
 ### CLI-first design rule
 
-Every user-facing feature must have a CLI equivalent. The GUI is a convenience layer on top of CLI commands. When adding a new feature, implement the CLI subcommand first (or alongside the GUI). The CLI commands in `src-tauri/src/cli/` are the source of truth for what the app can do.
+Every user-facing feature must have a CLI equivalent. The GUI is a convenience layer on top of CLI commands. When adding a new feature, implement the CLI subcommand first (or alongside the GUI). The CLI commands in `src-tauri/crates/sagascript-cli/src/` are the source of truth for what the app can do.
 
 ### Privacy-first rule
 
