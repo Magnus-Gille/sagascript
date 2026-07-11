@@ -4050,7 +4050,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sagascript"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "arboard",
  "block",
@@ -4078,7 +4078,7 @@ dependencies = [
 
 [[package]]
 name = "sagascript-cli"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "arboard",
  "clap",
@@ -4096,7 +4096,7 @@ dependencies = [
 
 [[package]]
 name = "sagascript-core"
-version = "0.0.1"
+version = "1.0.0"
 dependencies = [
  "cpal",
  "dirs 6.0.0",

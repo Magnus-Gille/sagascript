@@ -22,7 +22,7 @@ app=$1
 dmg=$2
 version=$3
 expected_identifier=ai.gille.sagascript
-expected_team_id=U7MYD3Z5CB
+expected_team_id=7C6WF6GFZ4
 
 [[ -d "$app" ]] || { echo "Missing app bundle: $app" >&2; exit 1; }
 [[ -f "$dmg" ]] || { echo "Missing disk image: $dmg" >&2; exit 1; }
