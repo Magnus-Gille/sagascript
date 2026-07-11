@@ -609,7 +609,13 @@ impl WhisperBackend {
             params.enable_vad(true);
         }
 
-        params.set_progress_callback_safe(on_progress);
+        // whisper.cpp derives progress from its internal processing windows.
+        // On clips whose final window extends beyond the decoded duration it
+        // can report a value outside the documented percentage range. Keep the
+        // backend's public callback contract (0..=100) so callers such as the
+        // CLI cannot overrun their progress bar (or cast a negative value to a
+        // very large u64).
+        params.set_progress_callback_safe(clamped_progress_callback(on_progress));
 
         // Real abort callback: wire the raw FFI trampoline (bypassing whisper-rs
         // 0.15.1's unsound set_abort_callback_safe — see abort_trampoline). On
@@ -886,6 +892,14 @@ impl WhisperBackend {
             Ok(results)
         })
     }
+}
+
+/// Adapt whisper.cpp's native progress values to the backend's public
+/// percentage contract.
+fn clamped_progress_callback(
+    mut on_progress: impl FnMut(i32) + 'static,
+) -> impl FnMut(i32) + 'static {
+    move |percentage| on_progress(percentage.clamp(0, 100))
 }
 
 /// Controls whether `transcribe_chunk_timestamps` emits one entry per segment or per word.
@@ -1323,6 +1337,22 @@ mod word_grouping_tests {
 #[cfg(test)]
 mod segment_confidence_tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn final_window_progress_is_clamped_to_audio_percentage_range() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&received);
+        let mut callback = clamped_progress_callback(move |percentage| {
+            captured.lock().unwrap().push(percentage);
+        });
+
+        for percentage in [-1, 0, 99, 100, 101] {
+            callback(percentage);
+        }
+
+        assert_eq!(*received.lock().unwrap(), [0, 0, 99, 100, 100]);
+    }
 
     #[test]
     fn mean_logprob_empty_is_none() {
