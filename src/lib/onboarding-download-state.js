@@ -55,3 +55,18 @@ export async function registerDownloadListeners(registerProgress, registerReady,
 
   return /** @type {[() => void, () => void]} */ (owned);
 }
+
+/**
+ * @param {[() => void, () => void] | null} listeners
+ * @param {() => boolean} isCancelled
+ * @param {(progress: () => void, ready: () => void) => void} adopt
+ */
+export function adoptDownloadListeners(listeners, isCancelled, adopt) {
+  if (!listeners) return false;
+  if (isCancelled()) {
+    listeners.forEach((unlisten) => unlisten());
+    return false;
+  }
+  adopt(...listeners);
+  return true;
+}

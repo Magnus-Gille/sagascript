@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
+    adoptDownloadListeners,
     awaitDownloadCompletion,
     completedDownloadState,
     registerDownloadListeners,
@@ -316,10 +317,15 @@
     } catch (error) {
       console.error("Failed to register onboarding download listeners", error);
     }
+    adoptDownloadListeners(
+      registeredListeners,
+      () => componentDestroyed,
+      (progress, ready) => {
+        unlistenProgress = progress;
+        unlistenReady = ready;
+      },
+    );
     if (componentDestroyed) return;
-    if (registeredListeners) {
-      [unlistenProgress, unlistenReady] = registeredListeners;
-    }
 
     platform = await getPlatform();
     try {

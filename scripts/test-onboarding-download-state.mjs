@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  adoptDownloadListeners,
   awaitDownloadCompletion,
   completedDownloadState,
   registerDownloadListeners,
@@ -120,4 +121,34 @@ test("destroyed component immediately releases late registrations", async () => 
 
   assert.equal(await pending, null);
   assert.equal(cleaned, 2);
+});
+
+test("destruction before ownership adoption releases both listeners", () => {
+  let cleaned = 0;
+  let adopted = false;
+  const listeners = [
+    () => cleaned++,
+    () => cleaned++,
+  ];
+
+  assert.equal(
+    adoptDownloadListeners(listeners, () => true, () => {
+      adopted = true;
+    }),
+    false,
+  );
+  assert.equal(cleaned, 2);
+  assert.equal(adopted, false);
+});
+
+test("live component atomically adopts both listener owners", () => {
+  const listeners = [() => {}, () => {}];
+  let adopted;
+  assert.equal(
+    adoptDownloadListeners(listeners, () => false, (progress, ready) => {
+      adopted = [progress, ready];
+    }),
+    true,
+  );
+  assert.deepEqual(adopted, listeners);
 });
