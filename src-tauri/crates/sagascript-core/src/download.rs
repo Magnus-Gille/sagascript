@@ -68,6 +68,19 @@ pub struct DownloadIntegrity {
     pub size: u64,
 }
 
+/// Result of preparing an app-managed artifact for a download attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExistingArtifact {
+    Missing,
+    Verified,
+    RemovedInvalid,
+}
+
+enum VerificationFailure {
+    IntegrityMismatch(String),
+    Other(DictationError),
+}
+
 /// Stream `url` to `dest`, via a uniquely-named temp file in the same
 /// directory so the final rename is atomic and same-filesystem.
 ///
@@ -263,31 +276,86 @@ pub fn validate_download(
 /// parsers. This also covers models downloaded by older Sagascript versions,
 /// which predate the immutable integrity manifest.
 pub fn verify_file(path: &Path, integrity: DownloadIntegrity) -> Result<(), DictationError> {
+    verify_file_detailed(path, integrity).map_err(|failure| match failure {
+        VerificationFailure::IntegrityMismatch(message) => {
+            DictationError::ModelDownloadFailed(message)
+        }
+        VerificationFailure::Other(error) => error,
+    })
+}
+
+/// Verify an app-managed artifact and remove it only when its bytes are proven
+/// not to match the immutable manifest. I/O failures and invalid manifest data
+/// are returned without touching the file.
+pub fn prepare_existing_artifact(
+    path: &Path,
+    integrity: DownloadIntegrity,
+) -> Result<ExistingArtifact, DictationError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ExistingArtifact::Missing);
+        }
+        Err(error) => {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "Failed to inspect model before integrity verification ({}): {error}",
+                path.display()
+            )));
+        }
+    }
+
+    match verify_file_detailed(path, integrity) {
+        Ok(()) => Ok(ExistingArtifact::Verified),
+        Err(VerificationFailure::Other(error)) => Err(error),
+        Err(VerificationFailure::IntegrityMismatch(message)) => {
+            std::fs::remove_file(path).map_err(|error| {
+                DictationError::ModelDownloadFailed(format!(
+                    "{message} The invalid artifact could not be removed ({}): {error}",
+                    path.display()
+                ))
+            })?;
+            tracing::warn!(
+                "Removed invalid app-managed artifact {}; downloading a verified replacement",
+                path.display()
+            );
+            Ok(ExistingArtifact::RemovedInvalid)
+        }
+    }
+}
+
+fn verify_file_detailed(
+    path: &Path,
+    integrity: DownloadIntegrity,
+) -> Result<(), VerificationFailure> {
+    // Validate trusted program metadata before inspecting or mutating a user
+    // file. A packaging bug must never turn into an artifact deletion.
+    if !is_sha256(integrity.sha256) {
+        return Err(VerificationFailure::Other(
+            DictationError::ModelDownloadFailed(
+                "Internal model manifest contains an invalid SHA-256 digest".to_string(),
+            ),
+        ));
+    }
+
     let file = std::fs::File::open(path).map_err(|e| {
-        DictationError::ModelDownloadFailed(format!(
+        VerificationFailure::Other(DictationError::ModelDownloadFailed(format!(
             "Failed to open model for integrity verification ({}): {e}",
             path.display()
-        ))
+        )))
     })?;
     let metadata = file.metadata().map_err(|e| {
-        DictationError::ModelDownloadFailed(format!(
+        VerificationFailure::Other(DictationError::ModelDownloadFailed(format!(
             "Failed to inspect model before integrity verification ({}): {e}",
             path.display()
-        ))
+        )))
     })?;
     if metadata.len() != integrity.size {
-        return Err(DictationError::ModelDownloadFailed(format!(
+        return Err(VerificationFailure::IntegrityMismatch(format!(
             "Model integrity check failed for {}: expected {} bytes, got {}. Delete and re-download the model.",
             path.display(),
             integrity.size,
             metadata.len()
         )));
-    }
-
-    if !is_sha256(integrity.sha256) {
-        return Err(DictationError::ModelDownloadFailed(
-            "Internal model manifest contains an invalid SHA-256 digest".to_string(),
-        ));
     }
 
     if verification_cache_matches(path, &metadata, integrity) {
@@ -299,10 +367,10 @@ pub fn verify_file(path: &Path, integrity: DownloadIntegrity) -> Result<(), Dict
     let mut buffer = [0_u8; 1024 * 1024];
     loop {
         let read = reader.read(&mut buffer).map_err(|e| {
-            DictationError::ModelDownloadFailed(format!(
+            VerificationFailure::Other(DictationError::ModelDownloadFailed(format!(
                 "Failed while hashing model {}: {e}",
                 path.display()
-            ))
+            )))
         })?;
         if read == 0 {
             break;
@@ -311,7 +379,7 @@ pub fn verify_file(path: &Path, integrity: DownloadIntegrity) -> Result<(), Dict
     }
     let actual = format!("{:x}", hasher.finalize());
     if !actual.eq_ignore_ascii_case(integrity.sha256) {
-        return Err(DictationError::ModelDownloadFailed(format!(
+        return Err(VerificationFailure::IntegrityMismatch(format!(
             "Model integrity check failed for {}: SHA-256 mismatch. Delete and re-download the model.",
             path.display()
         )));
@@ -588,6 +656,179 @@ mod tests {
         assert!(verify_file(&path, expected).is_ok());
         std::fs::write(&path, b"tampered model").unwrap();
         assert!(verify_file(&path, expected).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prepare_existing_artifact_keeps_verified_file() {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.bin");
+        std::fs::write(&path, b"verified model").unwrap();
+        let expected = DownloadIntegrity {
+            sha256: "6c736b3dfa943bf4e7c61df78d1dfcad9a3d8b56369f0559670497b19127e74d",
+            size: 14,
+        };
+
+        assert_eq!(
+            prepare_existing_artifact(&path, expected).unwrap(),
+            ExistingArtifact::Verified
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"verified model");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prepare_existing_artifact_removes_same_size_hash_mismatch() {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.bin");
+        std::fs::write(&path, b"tampered model").unwrap();
+        let expected = DownloadIntegrity {
+            sha256: "6c736b3dfa943bf4e7c61df78d1dfcad9a3d8b56369f0559670497b19127e74d",
+            size: 14,
+        };
+
+        assert_eq!(
+            prepare_existing_artifact(&path, expected).unwrap(),
+            ExistingArtifact::RemovedInvalid
+        );
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prepare_existing_artifact_preserves_file_for_invalid_manifest() {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.bin");
+        std::fs::write(&path, b"untrusted bytes").unwrap();
+        let invalid_manifest = DownloadIntegrity {
+            sha256: "not-a-sha256",
+            size: 1,
+        };
+
+        assert!(prepare_existing_artifact(&path, invalid_manifest).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"untrusted bytes");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prepare_existing_artifact_preserves_path_on_io_error() {
+        let dir = temp_test_dir();
+        let path = dir.join("model.bin");
+        std::fs::create_dir_all(&path).unwrap();
+        let expected = DownloadIntegrity {
+            sha256: TEST_SHA,
+            size: std::fs::metadata(&path).unwrap().len(),
+        };
+
+        assert!(prepare_existing_artifact(&path, expected).is_err());
+        assert!(path.is_dir(), "generic I/O failure must not delete the path");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_existing_artifact_preserves_dangling_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.bin");
+        symlink(dir.join("missing-target"), &path).unwrap();
+
+        assert!(prepare_existing_artifact(&path, integrity(1)).is_err());
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "an open failure must not remove or replace the existing path"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn serve_once(body: &'static [u8]) -> String {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(body).unwrap();
+        });
+        format!("http://{address}/model.bin")
+    }
+
+    #[tokio::test]
+    async fn invalid_existing_artifact_is_replaced_by_verified_download() {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.bin");
+        std::fs::write(&path, b"tampered model").unwrap();
+        let expected = DownloadIntegrity {
+            sha256: "6c736b3dfa943bf4e7c61df78d1dfcad9a3d8b56369f0559670497b19127e74d",
+            size: 14,
+        };
+
+        assert_eq!(
+            prepare_existing_artifact(&path, expected).unwrap(),
+            ExistingArtifact::RemovedInvalid
+        );
+        download_to_path(
+            &serve_once(b"verified model"),
+            &path,
+            "bin",
+            expected,
+            None,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"verified model");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn failed_replacement_never_installs_partial_artifact() {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.bin");
+        std::fs::write(&path, b"tampered model").unwrap();
+        let expected = DownloadIntegrity {
+            sha256: "6c736b3dfa943bf4e7c61df78d1dfcad9a3d8b56369f0559670497b19127e74d",
+            size: 14,
+        };
+
+        prepare_existing_artifact(&path, expected).unwrap();
+        assert!(
+            download_to_path(
+                &serve_once(b"partial"),
+                &path,
+                "bin",
+                expected,
+                None,
+                |_, _| {},
+            )
+            .await
+            .is_err()
+        );
+        assert!(!path.exists());
+        assert!(
+            std::fs::read_dir(&dir).unwrap().next().is_none(),
+            "failed replacement must clean its unique temp file"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

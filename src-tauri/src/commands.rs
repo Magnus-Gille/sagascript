@@ -593,8 +593,8 @@ pub async fn set_vad_enabled(
     }
     // Fetch the Silero VAD model so it's ready for the next dictation. Done
     // after releasing the lock (no lock held across await).
-    if enabled && !model::is_vad_model_downloaded() {
-        info!("Downloading VAD model...");
+    if enabled {
+        info!("Verifying or downloading VAD model...");
         model::download_vad_model(|_, _| {})
             .await
             .map_err(|e| format!("Failed to download VAD model: {e}"))?;
@@ -651,9 +651,10 @@ pub async fn transcribe_file(
     }
 
     // Ensure model is loaded
-    whisper
-        .ensure_model(effective_model)
-        .map_err(|e| e.to_string())?;
+    if let Err(error) = whisper.ensure_model(effective_model) {
+        let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+        return Err(error.to_string());
+    }
 
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 
@@ -665,15 +666,18 @@ pub async fn transcribe_file(
             DiarizeConfig, TimestampedSegment,
             diarize as run_diarize,
             merge::{consolidate, merge_with_transcript},
-            model::all_models_downloaded,
+            model::{DiarizationModel, download_model as download_diarization_model},
         };
 
-        if !all_models_downloaded() {
-            let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
-            return Err(
-                "Diarization models not downloaded. Use Settings → Models to download them."
-                    .to_string(),
-            );
+        // Checking diarization in the file-transcription UI is an explicit
+        // action: verify existing app-managed artifacts and repair only exact
+        // integrity mismatches before native ONNX parsing. This never runs as
+        // a silent startup download.
+        for diarization_model in DiarizationModel::ALL {
+            if let Err(error) = download_diarization_model(*diarization_model, |_, _| {}).await {
+                let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                return Err(error.to_string());
+            }
         }
 
         let whisper_ref = whisper.inner().clone();

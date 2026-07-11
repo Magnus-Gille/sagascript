@@ -310,16 +310,23 @@ fn main() {
                     }
                 });
 
-                // If VAD is enabled (e.g. set via the CLI), make sure the Silero
-                // model is present for the next dictation.
-                if vad_enabled && !sagascript_core::transcription::model::is_vad_model_downloaded() {
-                    tauri::async_runtime::spawn(async {
+                // Startup is verification-only: model repair/download remains
+                // tied to an explicit GUI enable action or CLI transcription.
+                if vad_enabled {
+                    let vad_path = sagascript_core::transcription::model::vad_model_path();
+                    if vad_path.exists() {
                         if let Err(e) =
-                            sagascript_core::transcription::model::download_vad_model(|_, _| {}).await
+                            sagascript_core::transcription::model::verify_vad_model(&vad_path)
                         {
-                            warn!("VAD model preload failed: {e}");
+                            warn!(
+                                "VAD model startup verification failed; re-enable VAD or use the CLI to repair it: {e}"
+                            );
                         }
-                    });
+                    } else {
+                        warn!(
+                            "VAD is enabled but its model is missing; re-enable VAD or use the CLI to download it"
+                        );
+                    }
                 }
 
                 // Model and accelerator assets are downloaded only from an

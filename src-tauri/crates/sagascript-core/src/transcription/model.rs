@@ -1,8 +1,13 @@
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::time::{Duration, SystemTime};
 
 use tracing::info;
 
-use crate::download::{DownloadIntegrity, GGML_MAGIC, download_to_path, verify_file};
+use crate::download::{
+    DownloadIntegrity, ExistingArtifact, GGML_MAGIC, download_to_path,
+    prepare_existing_artifact, verify_file,
+};
 use crate::error::DictationError;
 use crate::settings::WhisperModel;
 
@@ -68,6 +73,8 @@ const VAD_MODEL_INTEGRITY: DownloadIntegrity = DownloadIntegrity {
 };
 #[cfg(target_os = "macos")]
 const COREML_INTEGRITY_MARKER: &str = ".sagascript-archive-sha256";
+#[cfg(target_os = "macos")]
+const COREML_ORPHAN_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
 /// Full path to the Silero VAD model in the models directory.
 pub fn vad_model_path() -> PathBuf {
@@ -85,8 +92,7 @@ pub async fn download_vad_model(
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<PathBuf, DictationError> {
     let path = vad_model_path();
-    if path.exists() {
-        verify_vad_model(&path)?;
+    if prepare_existing_artifact(&path, VAD_MODEL_INTEGRITY)? == ExistingArtifact::Verified {
         return Ok(path);
     }
 
@@ -136,8 +142,7 @@ pub async fn download_model(
     let dir = models_dir();
     let path = dir.join(model.ggml_filename());
 
-    if path.exists() {
-        verify_file(&path, model.download_integrity())?;
+    if prepare_existing_artifact(&path, model.download_integrity())? == ExistingArtifact::Verified {
         info!("Model {} already exists at {}", model.display_name(), path.display());
         // Backfill the CoreML encoder for models downloaded before it was added.
         #[cfg(target_os = "macos")]
@@ -195,6 +200,8 @@ async fn ensure_coreml_encoder(
     else {
         return Ok(()); // this model has no CoreML encoder
     };
+
+    sweep_orphaned_coreml_extract_dirs(dir, &dirname);
 
     let dest = dir.join(&dirname);
     if dest.exists() {
@@ -265,6 +272,50 @@ async fn ensure_coreml_encoder(
     install?;
     info!("CoreML encoder installed: {}", dest.display());
     Ok(())
+}
+
+/// Remove only stale extraction directories created by this encoder's exact
+/// UUID staging-name scheme. Fresh directories may belong to a concurrent
+/// backfill and malformed/foreign paths are never touched.
+#[cfg(target_os = "macos")]
+fn sweep_orphaned_coreml_extract_dirs(dir: &Path, dirname: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let prefix = format!(".{dirname}.");
+    let suffix = ".extract";
+    let now = SystemTime::now();
+
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(unique) = name
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix(suffix))
+        else {
+            continue;
+        };
+        if uuid::Uuid::parse_str(unique).is_err() {
+            continue;
+        }
+        let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+            continue;
+        };
+        let Ok(age) = now.duration_since(modified) else {
+            continue;
+        };
+        if age > COREML_ORPHAN_MAX_AGE {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Keep unverified CoreML bundles away from whisper.cpp's native CoreML
@@ -396,6 +447,50 @@ mod migrate_legacy_models_dir_tests {
         quarantine_unverified_coreml_encoder_at(&verified, integrity).unwrap();
         assert!(verified.exists());
 
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn coreml_sweep_removes_only_stale_owned_extract_directories() {
+        let base = temp_base();
+        std::fs::create_dir_all(&base).unwrap();
+        let dirname = "ggml-base-encoder.mlmodelc";
+        let stale = base.join(format!(
+            ".{dirname}.{}.extract",
+            uuid::Uuid::new_v4()
+        ));
+        let fresh = base.join(format!(
+            ".{dirname}.{}.extract",
+            uuid::Uuid::new_v4()
+        ));
+        let malformed = base.join(format!(".{dirname}.not-a-uuid.extract"));
+        let other_model = base.join(format!(
+            ".ggml-small-encoder.mlmodelc.{}.extract",
+            uuid::Uuid::new_v4()
+        ));
+        let matching_file = base.join(format!(
+            ".{dirname}.{}.extract",
+            uuid::Uuid::new_v4()
+        ));
+        for path in [&stale, &fresh, &malformed, &other_model] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        std::fs::write(&matching_file, b"not a staging directory").unwrap();
+
+        let ancient = SystemTime::now() - (COREML_ORPHAN_MAX_AGE + Duration::from_secs(60));
+        let stale_dir = std::fs::File::open(&stale).unwrap();
+        stale_dir
+            .set_times(std::fs::FileTimes::new().set_modified(ancient))
+            .unwrap();
+
+        sweep_orphaned_coreml_extract_dirs(&base, dirname);
+
+        assert!(!stale.exists());
+        assert!(fresh.exists());
+        assert!(malformed.exists());
+        assert!(other_model.exists());
+        assert!(matching_file.exists());
         let _ = std::fs::remove_dir_all(base);
     }
 

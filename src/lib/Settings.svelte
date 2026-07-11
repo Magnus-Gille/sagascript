@@ -299,13 +299,13 @@
     selecting = true;
     modelError = "";
     try {
-      if (!model.downloaded) {
-        downloading = model.id;
-        downloadingName = model.display_name;
-        downloadProgress = 0;
-        await downloadModel(model.id);
-        // model_ready event will refresh the list
-      }
+      // The backend verifies Ready models and replaces only artifacts whose
+      // bytes provably fail the immutable integrity manifest.
+      downloading = model.id;
+      downloadingName = model.display_name;
+      downloadProgress = 0;
+      await downloadModel(model.id);
+      // model_ready event will refresh the list
       await setWhisperModel(model.id);
       settings = await getSettings();
       models = await getModelInfo();
