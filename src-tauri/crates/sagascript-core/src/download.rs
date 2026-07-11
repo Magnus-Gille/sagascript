@@ -19,11 +19,14 @@
 //!   opportunistically sweeps stale `.tmp` files from the destination
 //!   directory before it starts.
 
-use std::collections::HashMap;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
+
+#[cfg(unix)]
+use std::collections::HashMap;
+#[cfg(unix)]
+use std::sync::{Mutex, OnceLock};
 
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
@@ -321,11 +324,13 @@ fn is_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+#[cfg(unix)]
 fn verification_cache() -> &'static Mutex<HashMap<PathBuf, String>> {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(unix)]
 fn verification_cache_matches(
     path: &Path,
     metadata: &std::fs::Metadata,
@@ -337,6 +342,19 @@ fn verification_cache_matches(
         .is_ok_and(|cache| cache.get(&key) == Some(&integrity_cache_record(metadata, integrity)))
 }
 
+#[cfg(not(unix))]
+fn verification_cache_matches(
+    _path: &Path,
+    _metadata: &std::fs::Metadata,
+    _integrity: DownloadIntegrity,
+) -> bool {
+    // A size plus modification timestamp is not a reliable change token: on
+    // Windows, a same-size overwrite can retain both values. Rehash on every
+    // use rather than let mutable model bytes bypass integrity verification.
+    false
+}
+
+#[cfg(unix)]
 fn cache_verified_file(path: &Path, integrity: DownloadIntegrity) {
     let Ok(metadata) = std::fs::metadata(path) else {
         return;
@@ -347,10 +365,16 @@ fn cache_verified_file(path: &Path, integrity: DownloadIntegrity) {
     }
 }
 
-fn integrity_cache_record(
-    metadata: &std::fs::Metadata,
-    integrity: DownloadIntegrity,
-) -> String {
+#[cfg(not(unix))]
+fn cache_verified_file(_path: &Path, _integrity: DownloadIntegrity) {
+    // See `verification_cache_matches`: without a trustworthy filesystem
+    // identity/change token, caching a successful hash would be unsafe.
+}
+
+#[cfg(unix)]
+fn integrity_cache_record(metadata: &std::fs::Metadata, integrity: DownloadIntegrity) -> String {
+    use std::os::unix::fs::MetadataExt;
+
     let modified = metadata
         .modified()
         .ok()
@@ -358,29 +382,16 @@ fn integrity_cache_record(
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        format!(
-            "v1\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
-            integrity.sha256,
-            metadata.len(),
-            modified,
-            metadata.dev(),
-            metadata.ino(),
-            metadata.ctime(),
-            metadata.ctime_nsec(),
-        )
-    }
-    #[cfg(not(unix))]
-    {
-        format!(
-            "v1\n{}\n{}\n{}\n",
-            integrity.sha256,
-            metadata.len(),
-            modified,
-        )
-    }
+    format!(
+        "v1\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        integrity.sha256,
+        metadata.len(),
+        modified,
+        metadata.dev(),
+        metadata.ino(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+    )
 }
 
 /// Build a temp-file path in the same directory as `dest`, unique per call
