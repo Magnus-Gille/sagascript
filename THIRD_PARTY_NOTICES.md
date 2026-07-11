@@ -1,7 +1,7 @@
 # Third-party notices
 
 This notice covers the runtime and build-time dependencies used to produce the
-official universal macOS build, plus the separately downloaded models
+official Apple Silicon macOS build, plus the separately downloaded models
 Sagascript can use. It is generated from the locked Rust and npm dependency
 graphs; do not edit the generated inventories by hand. Sagascript itself is
 licensed under the MIT License in `LICENSE`.

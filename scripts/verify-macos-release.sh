@@ -39,6 +39,13 @@ actual_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' 
   exit 1
 }
 
+binary="$app/Contents/MacOS/sagascript"
+actual_architectures=$(lipo -archs "$binary")
+[[ "$actual_architectures" == "arm64" ]] || {
+  echo "Unexpected release architectures: $actual_architectures (wanted arm64)" >&2
+  exit 1
+}
+
 codesign --verify --deep --strict --verbose=2 "$app"
 signature=$(codesign -dvvv "$app" 2>&1)
 grep -q '^Authority=Developer ID Application:' <<<"$signature" || {

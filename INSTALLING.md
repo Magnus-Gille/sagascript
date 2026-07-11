@@ -3,8 +3,8 @@
 ## macOS
 
 Download **Sagascript.dmg** from the [latest release](https://github.com/Magnus-Gille/sagascript/releases/latest).
-The artifact is a universal binary. Apple Silicon is the tested launch
-platform; the Intel slice remains pending clean-machine hardware acceptance.
+The v1 artifact is an Apple Silicon binary. Intel Macs are not supported by the
+v1 binary release.
 
 Open the DMG, drag Sagascript to Applications, and launch the copy in
 `/Applications`. Official releases are signed with Developer ID and notarized by
@@ -37,5 +37,5 @@ diarization, or VAD model.
 
 ## System requirements
 
-- **macOS:** 13.0 (Ventura) or later; Apple Silicon tested at launch
+- **macOS:** 13.0 (Ventura) or later on Apple Silicon
 - **Windows preview:** 10 or later, built from source

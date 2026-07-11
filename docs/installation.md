@@ -5,9 +5,8 @@
 ### System requirements
 
 - macOS 13.0 (Ventura) or later
-- Apple Silicon (M1+) is the tested launch platform. The release is built as a
-  universal binary, but Intel x86_64 support remains pending clean-machine
-  hardware acceptance.
+- Apple Silicon (M1+) is required for the v1 binary release. Intel Macs are not
+  supported by the v1 installer.
 - ~200 MB disk space (plus Whisper model files)
 
 ### Download

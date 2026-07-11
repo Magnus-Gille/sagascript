@@ -19,14 +19,14 @@ speech or diarization model.
 - **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
 - **Configurable** -- choose your model, language, hotkey, and output behavior
-- **macOS v1** -- official releases are signed and notarized for macOS 13+; Apple Silicon is the tested launch platform, while the universal build's Intel slice still requires hardware acceptance
+- **macOS v1** -- official releases are signed and notarized for macOS 13+ on Apple Silicon; Intel Macs are not supported by the v1 binary release
 - **Windows preview** -- the Windows port remains available for build-from-source testing; no official Windows binaries are published yet
 
 ## Building from source
 
 ### Prerequisites
 
-- **macOS**: macOS 13.0+ (Apple Silicon tested; the universal build's Intel slice requires hardware acceptance before support is claimed)
+- **macOS**: macOS 13.0+ on Apple Silicon (Intel Macs are not supported by the v1 binary release)
 - **Windows preview**: Windows 10+ (build from source; not an official v1 release)
 - **Linux** (experimental): X11 session; GTK/WebKit dev libraries + `xdotool` — see [Linux notes](docs/linux-notes.md)
 - Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)

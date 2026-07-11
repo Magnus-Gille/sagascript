@@ -115,7 +115,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -130,9 +130,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: macos-universal-release-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: macos-arm64-release-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: |
-            macos-universal-release-cargo-
+            macos-arm64-release-cargo-
 
       - name: Install npm dependencies
         run: npm ci
@@ -175,7 +175,7 @@ jobs:
           echo "SAGASCRIPT_GIT_HASH=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_ENV"
           echo "SAGASCRIPT_BUILD_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
 
-      - name: Build, sign, notarize, and staple universal app
+      - name: Build, sign, notarize, and staple Apple Silicon app
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -183,13 +183,13 @@ jobs:
         run: |
           : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
           : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
-          npx tauri build --target universal-apple-darwin
+          npx tauri build --target aarch64-apple-darwin
 
       - name: Verify macOS release artifact
         run: |
           version=$(node -p "require('./package.json').version")
-          app="src-tauri/target/universal-apple-darwin/release/bundle/macos/Sagascript.app"
-          dmg=$(find src-tauri/target/universal-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
+          dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
           [[ -n "$dmg" ]]
           ./scripts/verify-macos-release.sh "$app" "$dmg" "$version"
           mkdir -p artifacts
@@ -199,7 +199,7 @@ jobs:
       - name: Gate upgrade and installed CLI transcription
         run: |
           version=$(node -p "require('./package.json').version")
-          app="src-tauri/target/universal-apple-darwin/release/bundle/macos/Sagascript.app"
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
 
           # Seed an obsolete executable at the normal installation path, then
           # perform the same replace operation expected when upgrading the app.
