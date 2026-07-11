@@ -995,6 +995,7 @@ mod macos_mic {
 
     /// AVAuthorizationStatus values
     const AV_AUTH_STATUS_NOT_DETERMINED: isize = 0;
+    const AV_AUTH_STATUS_DENIED: isize = 2;
 
     /// Returns true if the binary is running from inside a proper .app bundle.
     /// When running via `cargo run` or `cargo tauri dev` without a bundle,
@@ -1064,6 +1065,22 @@ mod macos_mic {
         }
     }
 
+    #[derive(Debug, PartialEq, Eq)]
+    enum AccessRequestDecision {
+        QuerySystem,
+        Complete(bool),
+    }
+
+    fn access_request_decision(status: isize) -> AccessRequestDecision {
+        match status {
+            AV_AUTH_STATUS_NOT_DETERMINED | AV_AUTH_STATUS_DENIED => {
+                AccessRequestDecision::QuerySystem
+            }
+            3 => AccessRequestDecision::Complete(true),
+            _ => AccessRequestDecision::Complete(false),
+        }
+    }
+
     /// Return the raw authorization status as a string.
     /// AVCaptureDevice can cache `authorizationStatus` in-process, so when it
     /// reports "denied" we re-query via `requestAccess` which returns the
@@ -1112,13 +1129,10 @@ mod macos_mic {
         let media_type = av_media_type_audio();
 
         let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: media_type] };
-        if status != AV_AUTH_STATUS_NOT_DETERMINED {
-            // Already determined (authorized, denied, or restricted) — fire callback immediately
-            callback(authorization_status_label(status, false) == "authorized");
-            return;
+        match access_request_decision(status) {
+            AccessRequestDecision::QuerySystem => request_access_from_system(callback),
+            AccessRequestDecision::Complete(granted) => callback(granted),
         }
-
-        request_access_from_system(callback);
     }
 
     /// Invoke AVFoundation's request API without consulting the potentially
@@ -1151,7 +1165,7 @@ mod macos_mic {
 
     #[cfg(test)]
     mod tests {
-        use super::authorization_status_label;
+        use super::{AccessRequestDecision, access_request_decision, authorization_status_label};
 
         #[test]
         fn maps_avfoundation_authorization_constants_correctly() {
@@ -1165,6 +1179,24 @@ mod macos_mic {
         fn denied_cache_can_be_refreshed_without_remapping_authorized() {
             assert_eq!(authorization_status_label(2, true), "authorized");
             assert_eq!(authorization_status_label(3, false), "authorized");
+        }
+
+        #[test]
+        fn request_decision_live_queries_undetermined_and_cached_denied() {
+            assert_eq!(access_request_decision(0), AccessRequestDecision::QuerySystem);
+            assert_eq!(access_request_decision(2), AccessRequestDecision::QuerySystem);
+        }
+
+        #[test]
+        fn request_decision_completes_known_restricted_and_authorized_states() {
+            assert_eq!(
+                access_request_decision(1),
+                AccessRequestDecision::Complete(false)
+            );
+            assert_eq!(
+                access_request_decision(3),
+                AccessRequestDecision::Complete(true)
+            );
         }
     }
 }

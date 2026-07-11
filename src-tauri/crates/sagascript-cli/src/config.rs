@@ -52,7 +52,7 @@ Valid values per key:
                        nb-whisper-base, nb-whisper-small
   hotkey_mode          push, toggle
   show_overlay         true, false
-  auto_paste           true, false
+  auto_paste           true, false (enabling requires Accessibility approval for the installed GUI)
   auto_select_model    true, false
   hotkey               Modifier+Key (e.g. Control+Shift+Space, Option+Space)
   initial_prompt       Any string (e.g. names, jargon, preferred spellings)
@@ -210,7 +210,17 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
     .map_err(DictationError::SettingsError)?;
 
     eprintln!("Set {key} = {}", get_setting_value(&settings, key));
+    if let Some(warning) = setting_warning(key, &settings) {
+        eprintln!("Warning: {warning}");
+    }
     Ok(())
+}
+
+fn setting_warning(key: &str, settings: &Settings) -> Option<&'static str> {
+    (key == "auto_paste" && settings.auto_paste).then_some(
+        "auto-paste requires Accessibility approval for the installed Sagascript app; \
+         until it is granted, the GUI will keep or reset auto-paste to false",
+    )
 }
 
 fn apply_setting_value(
@@ -702,5 +712,20 @@ mod tests {
     fn get_setting_value_unknown_key_returns_unknown() {
         let settings = Settings::default();
         assert_eq!(get_setting_value(&settings, "nonexistent"), "unknown");
+    }
+
+    #[test]
+    fn enabling_auto_paste_warns_about_gui_accessibility_requirement() {
+        let settings = Settings::default();
+        let warning = setting_warning("auto_paste", &settings).unwrap();
+        assert!(warning.contains("Accessibility approval"));
+        assert!(warning.contains("reset auto-paste to false"));
+
+        let disabled = Settings {
+            auto_paste: false,
+            ..Default::default()
+        };
+        assert!(setting_warning("auto_paste", &disabled).is_none());
+        assert!(setting_warning("show_overlay", &Settings::default()).is_none());
     }
 }
