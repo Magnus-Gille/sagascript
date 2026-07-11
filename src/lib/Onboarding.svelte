@@ -1,7 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { awaitDownloadCompletion, completedDownloadState } from "./onboarding-download-state.js";
+  import {
+    awaitDownloadCompletion,
+    completedDownloadState,
+    registerDownloadListeners,
+  } from "./onboarding-download-state.js";
   import {
     getPlatform,
     getSettings,
@@ -116,15 +120,13 @@
     downloadProgress = 0;
 
     try {
-      const completed = await awaitDownloadCompletion(
+      await awaitDownloadCompletion(
         downloadModel(recommendedModelId[selectedLanguage]),
+        markDownloadComplete,
       );
       // The command result is authoritative. `model-ready` remains useful for
       // live progress, but a fast verification may emit it before listeners
       // finish registering.
-      downloading = completed.downloading;
-      downloadComplete = completed.downloadComplete;
-      downloadProgress = completed.downloadProgress;
     } catch (e: any) {
       downloading = false;
       downloadError = typeof e === "string" ? e : e?.message ?? "Download failed. Check your internet connection.";
@@ -302,21 +304,22 @@
     // Start listener registration before any initialization invokes. The
     // component is interactive while awaits are pending, so registering these
     // after permission/settings calls can miss a fast model-ready event.
-    const listenerRegistrations = Promise.all([
-      listen("model-download-progress", (event: any) => {
-        downloadProgress = event.payload.progress;
-      }),
-      listen("model-ready", markDownloadComplete),
-    ]);
-
-    const [registeredProgress, registeredReady] = await listenerRegistrations;
-    if (componentDestroyed) {
-      registeredProgress();
-      registeredReady();
-      return;
+    let registeredListeners: [() => void, () => void] | null = null;
+    try {
+      registeredListeners = await registerDownloadListeners(
+        () => listen("model-download-progress", (event: any) => {
+          downloadProgress = event.payload.progress;
+        }),
+        () => listen("model-ready", markDownloadComplete),
+        () => componentDestroyed,
+      );
+    } catch (error) {
+      console.error("Failed to register onboarding download listeners", error);
     }
-    unlistenProgress = registeredProgress;
-    unlistenReady = registeredReady;
+    if (componentDestroyed) return;
+    if (registeredListeners) {
+      [unlistenProgress, unlistenReady] = registeredListeners;
+    }
 
     platform = await getPlatform();
     try {
@@ -338,7 +341,6 @@
     } catch {
       // keep defaults
     }
-
   });
 
   onDestroy(() => {
