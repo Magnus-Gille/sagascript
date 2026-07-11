@@ -150,6 +150,7 @@
   // -- Accessibility --
 
   async function grantAccessibility() {
+    accessibilityError = null;
     accessibilityChecking = true;
     try {
       await requestAccessibilityPermission();
@@ -161,7 +162,24 @@
           stopPoll();
         }
       });
-    } catch {
+    } catch (e: any) {
+      accessibilityError =
+        typeof e === "string" ? e : e?.message ?? "Failed to request Accessibility permission. Please try again.";
+      accessibilityChecking = false;
+    }
+  }
+
+  async function continueWithAccessibility() {
+    stopPoll();
+    accessibilityChecking = true;
+    accessibilityError = null;
+    try {
+      await setAutoPaste(true);
+      nextStep();
+    } catch (e: any) {
+      accessibilityError =
+        typeof e === "string" ? e : e?.message ?? "Failed to enable auto-paste. Please try again.";
+    } finally {
       accessibilityChecking = false;
     }
   }
@@ -535,7 +553,9 @@
 
         <div class="actions">
           {#if accessibilityGranted}
-            <button class="primary" onclick={nextStep}>Continue</button>
+            <button class="primary" onclick={continueWithAccessibility} disabled={accessibilityChecking}>
+              {accessibilityChecking ? "Saving…" : "Continue"}
+            </button>
           {:else}
             <button class="primary" onclick={grantAccessibility} disabled={accessibilityChecking}>
               {#if accessibilityChecking}

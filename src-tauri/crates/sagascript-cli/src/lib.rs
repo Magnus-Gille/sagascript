@@ -667,6 +667,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn config_set_help_explains_auto_paste_permission_requirement() {
+        let cmd = Cli::command();
+        let config = cmd.find_subcommand("config").unwrap();
+        let set = config.find_subcommand("set").unwrap();
+        let help = get_long_help(set);
+        assert!(
+            help.contains("enabling requires Accessibility approval for the installed GUI"),
+            "config set help should explain the auto-paste permission requirement"
+        );
+    }
+
     /// Batch-only builds must not advertise the absent `record` subcommand
     /// anywhere in the root help (workflow, examples) — the batch contract
     /// is "no record", and stale mentions would send users to a command
