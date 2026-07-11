@@ -53,6 +53,11 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
 6. Download the draft artifacts and perform the clean-machine checklist below.
    Publish the draft only after it passes.
 
+The macOS build job also simulates replacing an obsolete
+`/Applications/Sagascript.app`, then runs a real Norwegian file transcription
+through `/usr/local/bin/sagascript`. This protects the supported app-bundle CLI
+link from silently continuing to execute a stale binary after an upgrade.
+
 ## Clean-machine acceptance checklist
 
 - Download the DMG through a browser on a Mac that has never run Sagascript.
@@ -60,6 +65,9 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
 - Confirm onboarding, model download, microphone, Accessibility, global hotkey,
   dictation, auto-paste, and quit/relaunch behavior.
 - Confirm the app does not request the same permission again after relaunch.
+- Confirm `sagascript --version` reports the release Git revision, and run one
+  file transcription through `/usr/local/bin/sagascript` after upgrading an
+  existing installation.
 - Test both Apple Silicon and Intel hardware before claiming universal support.
 - Confirm the draft contains `Sagascript.dmg`, `Sagascript.app.tar.gz`, and
   `SHA256SUMS`; no Windows installer is a v1 release artifact. Verify both

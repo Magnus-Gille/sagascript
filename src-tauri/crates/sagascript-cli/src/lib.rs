@@ -17,6 +17,18 @@ pub(crate) fn set_transcription_progress(progress: &indicatif::ProgressBar, perc
     progress.set_position(percentage.clamp(0, 100) as u64);
 }
 
+/// `--version` deliberately includes the source revision and build date. A
+/// semantic version alone cannot distinguish a stale app-bundle executable
+/// from a rebuilt release candidate with the same pre-release version.
+pub const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (git ",
+    env!("SAGASCRIPT_CLI_GIT_HASH"),
+    ", built ",
+    env!("SAGASCRIPT_CLI_BUILD_DATE"),
+    ")"
+);
+
 // Root help text is feature-aware: a batch-only build (`--no-default-features`)
 // has no `record` subcommand, so the workflow/examples must not advertise it.
 #[cfg(feature = "record")]
@@ -117,6 +129,7 @@ ENVIRONMENT:
 #[command(
     name = "sagascript",
     version,
+    long_version = LONG_VERSION,
     about = "Low-latency dictation app",
     long_about = ROOT_LONG_ABOUT,
     after_long_help = ROOT_AFTER_LONG_HELP
@@ -505,6 +518,16 @@ mod tests {
 
         set_transcription_progress(&progress, -1);
         assert_eq!(progress.position(), 0);
+    }
+
+    #[test]
+    fn long_version_identifies_the_exact_build() {
+        assert!(LONG_VERSION.contains(env!("CARGO_PKG_VERSION")));
+        assert!(LONG_VERSION.contains("git "));
+        assert!(LONG_VERSION.contains("built "));
+
+        let command = Cli::command();
+        assert_eq!(command.get_long_version(), Some(LONG_VERSION));
     }
 
     // -- Completions generation --

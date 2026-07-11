@@ -189,6 +189,28 @@ jobs:
           cp "$dmg" artifacts/Sagascript.dmg
           tar -czf artifacts/Sagascript.app.tar.gz -C "$(dirname "$app")" "$(basename "$app")"
 
+      - name: Gate upgrade and installed CLI transcription
+        run: |
+          version=$(node -p "require('./package.json').version")
+          app="src-tauri/target/universal-apple-darwin/release/bundle/macos/Sagascript.app"
+
+          # Seed an obsolete executable at the normal installation path, then
+          # perform the same replace operation expected when upgrading the app.
+          # The persistent /usr/local/bin link must consequently execute the
+          # newly installed app-bundle binary, never the stale placeholder.
+          sudo mkdir -p /Applications/Sagascript.app/Contents/MacOS /usr/local/bin
+          printf '#!/bin/sh\necho stale-install\n' > "$RUNNER_TEMP/stale-sagascript"
+          chmod +x "$RUNNER_TEMP/stale-sagascript"
+          sudo cp "$RUNNER_TEMP/stale-sagascript" /Applications/Sagascript.app/Contents/MacOS/sagascript
+          sudo ln -sfn /Applications/Sagascript.app/Contents/MacOS/sagascript /usr/local/bin/sagascript
+          sudo rm -rf /Applications/Sagascript.app
+          sudo ditto "$app" /Applications/Sagascript.app
+
+          ./scripts/smoke-installed-macos-cli.sh \
+            "$version" \
+            "${SAGASCRIPT_GIT_HASH}" \
+            test-audio/norwegian-short-3s.mp3
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:

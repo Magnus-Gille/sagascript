@@ -23,6 +23,28 @@ Download the latest `.dmg` from the [Releases page](https://github.com/Magnus-Gi
    - **Microphone** -- for recording audio
    - **Accessibility** -- for pasting transcriptions into the active app
 
+To make the app's CLI available in your shell, create this link once:
+
+```bash
+sudo mkdir -p /usr/local/bin
+sudo ln -sfn /Applications/Sagascript.app/Contents/MacOS/sagascript /usr/local/bin/sagascript
+sagascript --version
+```
+
+The version output includes the release's Git revision and build date so a
+stale installation is immediately visible.
+
+### Upgrade
+
+1. Quit Sagascript completely.
+2. Open the new DMG and drag Sagascript to Applications.
+3. Choose **Replace** when Finder asks; do not merge or retain the old bundle.
+4. Run `sagascript --version` and confirm it reports the new release revision.
+
+The `/usr/local/bin/sagascript` link above points into the app bundle, so it
+automatically reaches the replacement executable. If it points elsewhere,
+repeat the `ln -sfn` command before testing the upgraded CLI.
+
 ### Homebrew (planned)
 
 ```
