@@ -312,9 +312,33 @@ pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStat
 #[tauri::command]
 pub async fn start_recording(controller: State<'_, SharedController>) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
-    // The bool (whether recording actually started) is only meaningful to the
-    // hotkey path; the GUI command just needs success/failure.
-    ctrl.start_recording().map(|_| ()).map_err(|e| e.to_string())
+    gui_start_recording_result(ctrl.start_recording())
+}
+
+fn gui_start_recording_result(
+    result: Result<bool, sagascript_core::error::DictationError>,
+) -> Result<(), String> {
+    match result {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(
+            "Cannot start recording while Sagascript is busy. Wait for the current transcription to finish."
+                .to_string(),
+        ),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod gui_recording_tests {
+    use super::gui_start_recording_result;
+
+    #[test]
+    fn gui_start_while_transcribing_returns_busy_error() {
+        let error = gui_start_recording_result(Ok(false)).unwrap_err();
+
+        assert!(error.contains("busy"));
+        assert!(error.contains("current transcription"));
+    }
 }
 
 #[tauri::command]
