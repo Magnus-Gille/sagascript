@@ -43,7 +43,8 @@
   let accessibilityGranted = $state(false);
   let accessibilityChecking = $state(false);
   let savingManualPaste = $state(false);
-  let pollTimer: ReturnType<typeof setInterval> | null = $state(null);
+  let pollTimer: ReturnType<typeof setTimeout> | null = $state(null);
+  let pollGeneration = 0;
 
   // Hotkey (read from settings)
   let hotkeyParts: string[] = $state(["Ctrl", "Shift", "Space"]);
@@ -121,50 +122,72 @@
 
   // -- Microphone --
 
+  function startMicrophonePoll(generation: number) {
+    startPoll(generation, async (isCurrent) => {
+      try {
+        const polled = await microphoneStatus();
+        if (!isCurrent()) return;
+        micStatus = polled;
+        if (polled === "authorized") stopPoll();
+      } catch {
+        // A transient query failure is retried by the serialized poll loop.
+      }
+    });
+  }
+
+  async function openMicrophoneSettingsAndPoll() {
+    const generation = beginPollOperation();
+    try {
+      await openMicrophoneSettings();
+      if (!isPollCurrent(generation)) return;
+      startMicrophonePoll(generation);
+    } catch {
+      // Leave the denied state visible so the user can retry opening Settings.
+    }
+  }
+
   async function grantMicrophone() {
+    const generation = beginPollOperation();
     try {
       micStatus = "checking";
       const result = await requestMicrophoneAccess();
+      if (!isPollCurrent(generation)) return;
       micStatus = result;
       if (result === "denied") {
         // macOS won't re-show the dialog — open System Settings and poll
         await openMicrophoneSettings();
-        startPoll(async () => {
-          try {
-            const polled = await microphoneStatus();
-            micStatus = polled;
-            if (polled === "authorized") {
-              stopPoll();
-            }
-          } catch {
-            // keep polling
-          }
-        });
+        if (!isPollCurrent(generation)) return;
+        startMicrophonePoll(generation);
       }
     } catch (e) {
+      if (!isPollCurrent(generation)) return;
       // Prevent spinner getting stuck
-      micStatus = await microphoneStatus().catch(() => "not_determined");
+      const fallback = await microphoneStatus().catch(() => "not_determined");
+      if (!isPollCurrent(generation)) return;
+      micStatus = fallback;
     }
   }
 
   // -- Accessibility --
 
   async function grantAccessibility() {
+    const generation = beginPollOperation();
     accessibilityError = null;
     accessibilityChecking = true;
     try {
       await requestAccessibilityPermission();
-      startPoll(async () => {
+      if (!isPollCurrent(generation)) return;
+      startPoll(generation, async (isCurrent) => {
         try {
           const granted = await checkAccessibilityPermission();
-          if (!accessibilityChecking) return;
+          if (!isCurrent()) return;
           if (granted) {
             accessibilityGranted = true;
             accessibilityChecking = false;
             stopPoll();
           }
         } catch (e: any) {
-          if (!accessibilityChecking) return;
+          if (!isCurrent()) return;
           stopPoll();
           accessibilityChecking = false;
           accessibilityError =
@@ -172,6 +195,7 @@
         }
       });
     } catch (e: any) {
+      if (!isPollCurrent(generation)) return;
       accessibilityError =
         typeof e === "string" ? e : e?.message ?? "Failed to request Accessibility permission. Please try again.";
       accessibilityChecking = false;
@@ -211,14 +235,33 @@
     }
   }
 
-  function startPoll(fn: () => Promise<void>) {
+  function beginPollOperation(): number {
     stopPoll();
-    pollTimer = setInterval(fn, 1000);
+    return pollGeneration;
+  }
+
+  function isPollCurrent(generation: number): boolean {
+    return generation === pollGeneration;
+  }
+
+  function startPoll(generation: number, fn: (isCurrent: () => boolean) => Promise<void>) {
+    if (!isPollCurrent(generation)) return;
+
+    const run = async () => {
+      if (!isPollCurrent(generation)) return;
+      pollTimer = null;
+      await fn(() => isPollCurrent(generation));
+      if (!isPollCurrent(generation)) return;
+      pollTimer = setTimeout(run, 1000);
+    };
+
+    pollTimer = setTimeout(run, 1000);
   }
 
   function stopPoll() {
+    pollGeneration += 1;
     if (pollTimer) {
-      clearInterval(pollTimer);
+      clearTimeout(pollTimer);
       pollTimer = null;
     }
   }
@@ -484,7 +527,7 @@
             <strong>System Settings &rsaquo; Privacy &amp; Security &rsaquo; Microphone</strong>.
           </p>
           <div class="actions">
-            <button class="primary" onclick={() => { openMicrophoneSettings(); startPoll(async () => { try { const s = await microphoneStatus(); micStatus = s; if (s === "authorized") stopPoll(); } catch {} }); }}>
+            <button class="primary" onclick={openMicrophoneSettingsAndPoll}>
               <span class="button-spinner"></span>
               Waiting — Open System Settings
             </button>
