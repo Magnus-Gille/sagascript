@@ -1330,13 +1330,9 @@ mod word_grouping_tests {
     }
 }
 
-/// Pure-function tests for the segment-confidence support (#81): the
-/// avg-logprob helper and the `TranscriptSegment` JSON contract. The FFI
-/// accessor calls (no_speech_probability, token_data) need a loaded model and
-/// are covered by the end-to-end CLI smoke instead.
 #[cfg(test)]
-mod segment_confidence_tests {
-    use super::*;
+mod progress_callback_tests {
+    use super::clamped_progress_callback;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -1353,6 +1349,15 @@ mod segment_confidence_tests {
 
         assert_eq!(*received.lock().unwrap(), [0, 0, 99, 100, 100]);
     }
+}
+
+/// Pure-function tests for the segment-confidence support (#81): the
+/// avg-logprob helper and the `TranscriptSegment` JSON contract. The FFI
+/// accessor calls (no_speech_probability, token_data) need a loaded model and
+/// are covered by the end-to-end CLI smoke instead.
+#[cfg(test)]
+mod segment_confidence_tests {
+    use super::*;
 
     #[test]
     fn mean_logprob_empty_is_none() {
