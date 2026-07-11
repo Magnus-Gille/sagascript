@@ -45,6 +45,13 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: npm run release:check
 
+      - name: Test deterministic release helpers
+        run: |
+          ./scripts/test-verify-audio-entitlement.sh
+          en_sort=$(LC_ALL=en_US.UTF-8 node scripts/generate-third-party-notices.mjs --test-sort)
+          sv_sort=$(LC_ALL=sv_SE.UTF-8 node scripts/generate-third-party-notices.mjs --test-sort)
+          [[ "$en_sort" == "$sv_sort" ]]
+
       - name: Verify third-party notices
         run: npm run licenses:check
 

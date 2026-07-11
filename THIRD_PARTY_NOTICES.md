@@ -64,14 +64,14 @@ link; the upstream repository is authoritative for its license terms.
 | byteorder-lite | 0.1.0 | Unlicense OR MIT | [upstream](https://github.com/image-rs/byteorder-lite) |
 | bytes | 1.11.1 | MIT | [upstream](https://github.com/tokio-rs/bytes) |
 | camino | 1.2.2 | MIT OR Apache-2.0 | [upstream](https://github.com/camino-rs/camino) |
+| cargo-platform | 0.1.9 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/cargo) |
 | cargo_metadata | 0.19.2 | MIT | [upstream](https://github.com/oli-obk/cargo_metadata) |
 | cargo_toml | 0.22.3 | Apache-2.0 OR MIT | [upstream](https://gitlab.com/lib.rs/cargo_toml) |
-| cargo-platform | 0.1.9 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/cargo) |
 | cc | 1.2.56 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/cc-rs) |
 | cexpr | 0.6.0 | Apache-2.0/MIT | [upstream](https://github.com/jethrogb/rust-cexpr) |
 | cfb | 0.7.3 | MIT | [upstream](https://github.com/mdsteele/rust-cfb) |
-| cfg_aliases | 0.2.1 | MIT | [upstream](https://github.com/katharostech/cfg_aliases) |
 | cfg-if | 1.0.4 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/cfg-if) |
+| cfg_aliases | 0.2.1 | MIT | [upstream](https://github.com/katharostech/cfg_aliases) |
 | chrono | 0.4.43 | MIT OR Apache-2.0 | [upstream](https://github.com/chronotope/chrono) |
 | clang-sys | 1.8.1 | Apache-2.0 | [upstream](https://github.com/KyleMayes/clang-sys) |
 | clap | 4.5.60 | MIT OR Apache-2.0 | [upstream](https://github.com/clap-rs/clap) |
@@ -126,8 +126,8 @@ link; the upstream repository is authoritative for its license terms.
 | dunce | 1.0.5 | CC0-1.0 OR MIT-0 OR Apache-2.0 | [upstream](https://gitlab.com/kornelski/dunce) |
 | dyn-clone | 1.0.20 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/dyn-clone) |
 | either | 1.15.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rayon-rs/either) |
-| embed_plist | 1.2.2 | MIT OR Apache-2.0 | [upstream](https://github.com/nvzqz/embed-plist-rs) |
 | embed-resource | 3.0.6 | MIT | [upstream](https://github.com/nabijaczleweli/rust-embed-resource) |
+| embed_plist | 1.2.2 | MIT OR Apache-2.0 | [upstream](https://github.com/nvzqz/embed-plist-rs) |
 | encoding_rs | 0.8.35 | (Apache-2.0 OR MIT) AND BSD-3-Clause | [upstream](https://github.com/hsivonen/encoding_rs) |
 | enigo | 0.6.1 | MIT | [upstream](https://github.com/enigo-rs/enigo) |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT | [upstream](https://github.com/indexmap-rs/equivalent) |
@@ -146,8 +146,8 @@ link; the upstream repository is authoritative for its license terms.
 | foreign-types-macros | 0.2.3 | MIT/Apache-2.0 | [upstream](https://github.com/sfackler/foreign-types) |
 | foreign-types-shared | 0.3.1 | MIT/Apache-2.0 | [upstream](https://github.com/sfackler/foreign-types) |
 | form_urlencoded | 1.2.2 | MIT OR Apache-2.0 | [upstream](https://github.com/servo/rust-url) |
-| fs_extra | 1.3.0 | MIT | [upstream](https://github.com/webdesus/fs_extra) |
 | fs2 | 0.4.3 | MIT/Apache-2.0 | [upstream](https://github.com/danburkert/fs2-rs) |
+| fs_extra | 1.3.0 | MIT | [upstream](https://github.com/webdesus/fs_extra) |
 | fsevent-sys | 4.1.0 | MIT | [upstream](https://github.com/octplane/fsevent-rust/tree/master/fsevent-sys) |
 | futf | 0.1.5 | MIT / Apache-2.0 | [upstream](https://github.com/servo/futf) |
 | futures-channel | 0.3.32 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/futures-rs) |
@@ -243,11 +243,11 @@ link; the upstream repository is authoritative for its license terms.
 | notify | 7.0.0 | CC0-1.0 | [upstream](https://github.com/notify-rs/notify.git) |
 | notify-types | 1.0.1 | MIT OR Apache-2.0 | [upstream](https://github.com/notify-rs/notify.git) |
 | nu-ansi-term | 0.50.3 | MIT | [upstream](https://github.com/nushell/nu-ansi-term) |
-| num_cpus | 1.17.0 | MIT OR Apache-2.0 | [upstream](https://github.com/seanmonstar/num_cpus) |
 | num-complex | 0.4.6 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-num/num-complex) |
 | num-conv | 0.2.0 | MIT OR Apache-2.0 | [upstream](https://github.com/jhpratt/num-conv) |
 | num-integer | 0.1.46 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-num/num-integer) |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-num/num-traits) |
+| num_cpus | 1.17.0 | MIT OR Apache-2.0 | [upstream](https://github.com/seanmonstar/num_cpus) |
 | number_prefix | 0.4.0 | MIT | [upstream](https://github.com/ogham/rust-number-prefix) |
 | objc | 0.2.7 | MIT | [upstream](http://github.com/SSheldon/rust-objc) |
 | objc2 | 0.6.3 | MIT | [upstream](https://github.com/madsmtm/objc2) |
@@ -326,8 +326,8 @@ link; the upstream repository is authoritative for its license terms.
 | ring | 0.17.14 | Apache-2.0 AND ISC | [upstream](https://github.com/briansmith/ring) |
 | roff | 0.2.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-cli/roff-rs) |
 | rubato | 0.14.1 | MIT | [upstream](https://github.com/HEnquist/rubato) |
-| rustc_version | 0.4.1 | MIT OR Apache-2.0 | [upstream](https://github.com/djc/rustc-version-rs) |
 | rustc-hash | 2.1.1 | Apache-2.0 OR MIT | [upstream](https://github.com/rust-lang/rustc-hash) |
+| rustc_version | 0.4.1 | MIT OR Apache-2.0 | [upstream](https://github.com/djc/rustc-version-rs) |
 | rustfft | 6.4.1 | MIT OR Apache-2.0 | [upstream](https://github.com/ejmahler/RustFFT) |
 | rustix | 1.1.3 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [upstream](https://github.com/bytecodealliance/rustix) |
 | rustls | 0.23.36 | Apache-2.0 OR ISC OR MIT | [upstream](https://github.com/rustls/rustls) |
@@ -345,6 +345,7 @@ link; the upstream repository is authoritative for its license terms.
 | selectors | 0.24.0 | MPL-2.0 | [upstream](https://github.com/servo/servo) |
 | semver | 1.0.27 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/semver) |
 | serde | 1.0.228 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
+| serde-untagged | 0.1.9 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/serde-untagged) |
 | serde_core | 1.0.228 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
 | serde_derive | 1.0.228 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
 | serde_derive_internals | 0.29.1 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/serde) |
@@ -354,7 +355,6 @@ link; the upstream repository is authoritative for its license terms.
 | serde_urlencoded | 0.7.1 | MIT/Apache-2.0 | [upstream](https://github.com/nox/serde_urlencoded) |
 | serde_with | 3.16.1 | MIT OR Apache-2.0 | [upstream](https://github.com/jonasbb/serde_with/) |
 | serde_with_macros | 3.16.1 | MIT OR Apache-2.0 | [upstream](https://github.com/jonasbb/serde_with/) |
-| serde-untagged | 0.1.9 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/serde-untagged) |
 | serialize-to-javascript | 0.1.2 | MIT OR Apache-2.0 | [upstream](https://github.com/chippers/serialize-to-javascript) |
 | serialize-to-javascript-impl | 0.1.2 | MIT OR Apache-2.0 | [upstream](https://github.com/chippers/serialize-to-javascript) |
 | servo_arc | 0.2.0 | MIT OR Apache-2.0 | [upstream](https://github.com/servo/servo) |
@@ -461,8 +461,8 @@ link; the upstream repository is authoritative for its license terms.
 | url | 2.5.8 | MIT OR Apache-2.0 | [upstream](https://github.com/servo/rust-url) |
 | urlpattern | 0.3.0 | MIT | [upstream](https://github.com/denoland/rust-urlpattern) |
 | utf-8 | 0.7.6 | MIT OR Apache-2.0 | [upstream](https://github.com/SimonSapin/rust-utf8) |
-| utf8_iter | 1.0.4 | Apache-2.0 OR MIT | [upstream](https://github.com/hsivonen/utf8_iter) |
 | utf8-zero | 0.8.1 | MIT OR Apache-2.0 | [upstream](https://github.com/algesten/utf8-zero) |
+| utf8_iter | 1.0.4 | Apache-2.0 OR MIT | [upstream](https://github.com/hsivonen/utf8_iter) |
 | utf8parse | 0.2.2 | Apache-2.0 OR MIT | [upstream](https://github.com/alacritty/vte) |
 | uuid | 1.21.0 | Apache-2.0 OR MIT | [upstream](https://github.com/uuid-rs/uuid) |
 | version_check | 0.9.5 | MIT/Apache-2.0 | [upstream](https://github.com/SergioBenitez/version_check) |
