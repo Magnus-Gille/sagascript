@@ -651,9 +651,10 @@ pub async fn transcribe_file(
     }
 
     // Ensure model is loaded
-    whisper
-        .ensure_model(effective_model)
-        .map_err(|e| e.to_string())?;
+    if let Err(error) = whisper.ensure_model(effective_model) {
+        let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+        return Err(error.to_string());
+    }
 
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 

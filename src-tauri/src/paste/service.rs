@@ -47,8 +47,23 @@ impl PasteService {
         // generation created by our clear, closing the race that a later
         // changeCount sample could accidentally attribute to another app.
         #[cfg(target_os = "macos")]
-        let owned_change_count = macos_clipboard::set_temporary_text(text)
-            .map_err(|e| DictationError::PasteError(format!("Failed to set clipboard: {e}")))?;
+        let owned_change_count = match macos_clipboard::set_temporary_text(text) {
+            Ok(generation) => generation,
+            Err(error) => {
+                if let Some(snapshot) = saved_pasteboard {
+                    // A failed write may already have cleared the pasteboard.
+                    // Restore only if no other app has taken ownership since.
+                    let _ = macos_clipboard::restore_if_unchanged(
+                        snapshot,
+                        error.owned_generation,
+                    );
+                }
+                return Err(DictationError::PasteError(format!(
+                    "Failed to set clipboard: {}",
+                    error.message
+                )));
+            }
+        };
 
         #[cfg(not(target_os = "macos"))]
         clipboard
