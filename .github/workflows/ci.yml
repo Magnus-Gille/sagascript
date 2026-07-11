@@ -39,6 +39,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Test frontend lifecycle helpers
+        run: npm run test:frontend
+
       - name: Build frontend
         run: npm run build
 
