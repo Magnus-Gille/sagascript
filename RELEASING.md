@@ -7,7 +7,7 @@ Windows installers.
 Production macOS releases must be signed with a **Developer ID Application**
 certificate, use hardened runtime, and be notarized and stapled. The release
 workflow refuses to publish an unsigned or unverifiable macOS artifact.
-The production signing Team ID is **`U7MYD3Z5CB`**; the verifier rejects a
+The production signing Team ID is **`7C6WF6GFZ4`**; the verifier rejects a
 different Team ID even if the certificate is otherwise valid.
 
 ## One-time Apple setup (repository owner)
@@ -23,7 +23,7 @@ different Team ID even if the certificate is otherwise valid.
    - `APPLE_CERTIFICATE`: base64-encoded `.p12`
    - `APPLE_CERTIFICATE_PASSWORD`: export password for the `.p12`
    - `APPLE_SIGNING_IDENTITY`: full
-     `Developer ID Application: … (U7MYD3Z5CB)` name. Release verification is
+     `Developer ID Application: … (7C6WF6GFZ4)` name. Release verification is
      intentionally pinned to this production team so macOS TCC permissions
      survive upgrades.
    - `KEYCHAIN_PASSWORD`: random password for the ephemeral CI keychain
