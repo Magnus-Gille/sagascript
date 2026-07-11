@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use tracing::info;
 
-use crate::download::{DownloadIntegrity, download_to_path, verify_file};
+use crate::download::{
+    DownloadIntegrity, ExistingArtifact, download_to_path, prepare_existing_artifact,
+};
 use crate::error::DictationError;
 
 /// ONNX models used for speaker diarization.
@@ -119,8 +121,7 @@ pub async fn download_model(
 ) -> Result<PathBuf, DictationError> {
     let path = model_path(model);
 
-    if path.exists() {
-        verify_file(&path, model.download_integrity())?;
+    if prepare_existing_artifact(&path, model.download_integrity())? == ExistingArtifact::Verified {
         info!(
             "Diarization model {} already exists at {}",
             model.display_name(),

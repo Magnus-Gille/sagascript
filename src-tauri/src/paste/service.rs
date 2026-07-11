@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "macos"))]
 use arboard::Clipboard;
 #[cfg(target_os = "macos")]
 #[path = "macos_clipboard.rs"]
@@ -29,8 +30,9 @@ impl PasteService {
             return Ok(());
         }
 
-        let mut clipboard =
-            Clipboard::new().map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
+        #[cfg(not(target_os = "macos"))]
+        let mut clipboard = Clipboard::new()
+            .map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
 
         // On macOS, preserve every pasteboard item and declared representation
         // (RTF, images, file URLs, custom app formats, etc.), not just plain text.
@@ -41,13 +43,17 @@ impl PasteService {
         #[cfg(not(target_os = "macos"))]
         let saved_text = clipboard.get_text().ok();
 
-        // Set new text
+        // Set new text. On macOS the native write returns the pasteboard
+        // generation created by our clear, closing the race that a later
+        // changeCount sample could accidentally attribute to another app.
+        #[cfg(target_os = "macos")]
+        let owned_change_count = macos_clipboard::set_temporary_text(text)
+            .map_err(|e| DictationError::PasteError(format!("Failed to set clipboard: {e}")))?;
+
+        #[cfg(not(target_os = "macos"))]
         clipboard
             .set_text(text)
             .map_err(|e| DictationError::PasteError(format!("Failed to set clipboard: {e}")))?;
-
-        #[cfg(target_os = "macos")]
-        let owned_change_count = macos_clipboard::change_count();
 
         info!("Text copied to clipboard ({} chars)", text.len());
 

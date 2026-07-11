@@ -72,8 +72,47 @@ pub(super) fn change_count() -> isize {
     }
 }
 
+/// Replace the pasteboard with temporary UTF-8 text and return the generation
+/// created by our own `clearContents` call. Capturing ownership at the clear,
+/// rather than sampling `changeCount` after the write, ensures a foreign copy
+/// racing immediately afterward can never be mistaken for ours.
+pub(super) fn set_temporary_text(text: &str) -> Result<isize, String> {
+    unsafe {
+        let pool: id = msg_send![class!(NSAutoreleasePool), new];
+        let pasteboard: id = msg_send![class!(NSPasteboard), generalPasteboard];
+        if pasteboard == nil {
+            let _: () = msg_send![pool, drain];
+            return Err("general pasteboard is unavailable".to_string());
+        }
+
+        let owned_generation: isize = msg_send![pasteboard, clearContents];
+        let value = NSString::alloc(nil).init_str(text);
+        let pasteboard_type = NSString::alloc(nil).init_str("public.utf8-plain-text");
+        let written: bool = msg_send![pasteboard, setString: value forType: pasteboard_type];
+        let current_generation: isize = msg_send![pasteboard, changeCount];
+        let _: () = msg_send![value, release];
+        let _: () = msg_send![pasteboard_type, release];
+        let _: () = msg_send![pool, drain];
+
+        if written && generation_still_owned(owned_generation, current_generation) {
+            Ok(owned_generation)
+        } else if written {
+            // The text write succeeded, but another owner raced our clear (or
+            // AppKit reported a different generation). Paste it, but disable
+            // restoration rather than risk clobbering foreign content.
+            Ok(-1)
+        } else {
+            Err("NSPasteboard failed to store temporary text".to_string())
+        }
+    }
+}
+
+fn generation_still_owned(owned: isize, current: isize) -> bool {
+    owned >= 0 && owned == current
+}
+
 fn should_restore(expected: isize, current: isize) -> bool {
-    expected >= 0 && expected == current
+    generation_still_owned(expected, current)
 }
 
 /// Restore only while Sagascript's temporary text is still the newest write.
@@ -115,12 +154,29 @@ pub(super) fn restore_if_unchanged(snapshot: Snapshot, expected_change_count: is
 
 #[cfg(test)]
 mod tests {
-    use super::should_restore;
+    use super::{generation_still_owned, should_restore};
 
     #[test]
     fn restores_only_when_app_still_owns_pasteboard() {
         assert!(should_restore(42, 42));
         assert!(!should_restore(42, 43));
         assert!(!should_restore(-1, -1));
+    }
+
+    #[test]
+    fn foreign_copy_after_our_clear_invalidates_ownership() {
+        let generation_returned_by_our_clear = 100;
+        let generation_after_foreign_copy = 101;
+        assert!(!should_restore(
+            generation_returned_by_our_clear,
+            generation_after_foreign_copy
+        ));
+    }
+
+    #[test]
+    fn write_never_adopts_a_later_generation() {
+        assert!(generation_still_owned(100, 100));
+        assert!(!generation_still_owned(100, 101));
+        assert!(!generation_still_owned(-1, -1));
     }
 }

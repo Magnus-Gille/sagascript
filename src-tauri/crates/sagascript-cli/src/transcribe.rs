@@ -220,12 +220,10 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     };
     let vad_model_path = if vad_enabled {
         let path = model::vad_model_path();
-        if !path.exists() {
-            eprintln!("Downloading Silero VAD model (~0.9 MB)...");
-            tokio::runtime::Runtime::new()
-                .map_err(|e| DictationError::ModelDownloadFailed(format!("tokio runtime: {e}")))?
-                .block_on(model::download_vad_model(|_, _| {}))?;
-        }
+        eprintln!("Verifying Silero VAD model...");
+        tokio::runtime::Runtime::new()
+            .map_err(|e| DictationError::ModelDownloadFailed(format!("tokio runtime: {e}")))?
+            .block_on(model::download_vad_model(|_, _| {}))?;
         path.to_str().map(str::to_string)
     } else {
         None
