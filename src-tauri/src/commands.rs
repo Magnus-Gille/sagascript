@@ -342,9 +342,10 @@ pub async fn stop_and_transcribe(
     };
 
     if audio.is_empty() {
-        let mut ctrl = controller.lock().unwrap();
-        ctrl.on_transcription_error("No audio captured");
-        return Err("No audio captured".to_string());
+        return controller
+            .lock()
+            .unwrap()
+            .finish_transcription(Err("No audio captured".to_string()));
     }
 
     // Every outcome after recording stops must flow through

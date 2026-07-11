@@ -451,6 +451,18 @@ mod tests {
     }
 
     #[test]
+    fn finish_transcription_empty_audio_returns_idle() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+
+        let result = ctrl.finish_transcription(Err("No audio captured".to_string()));
+
+        assert_eq!(result, Err("No audio captured".to_string()));
+        assert_eq!(ctrl.last_error(), Some("No audio captured"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
     fn finish_transcription_success_returns_idle_and_preserves_text() {
         let mut ctrl = default_controller();
         ctrl.state = AppState::Transcribing;
