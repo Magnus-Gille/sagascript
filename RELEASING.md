@@ -46,7 +46,7 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
 3. Merge the release commit to `main`, then create and push exactly `vVERSION`.
 4. The Release workflow gates the macOS build on tests, checks version/tag
    consistency, imports the Apple certificate into an ephemeral keychain, and
-   lets Tauri sign, notarize, and staple the universal macOS build.
+   lets Tauri sign, notarize, and staple the Apple Silicon macOS build.
 5. The workflow independently verifies the Developer ID authority, Team ID,
    hardened-runtime flag, audio-input entitlement, notarization tickets,
    Gatekeeper acceptance, and bundle metadata before creating a draft release.
@@ -68,7 +68,8 @@ link from silently continuing to execute a stale binary after an upgrade.
 - Confirm `sagascript --version` reports the release Git revision, and run one
   file transcription through `/usr/local/bin/sagascript` after upgrading an
   existing installation.
-- Test both Apple Silicon and Intel hardware before claiming universal support.
+- Test the signed artifact on Apple Silicon. Do not claim Intel support for v1;
+  the diarization runtime does not provide the required Intel macOS binary.
 - Confirm the draft contains `Sagascript.dmg`, `Sagascript.app.tar.gz`, and
   `SHA256SUMS`; no Windows installer is a v1 release artifact. Verify both
   downloads against the published checksums before clean-machine testing.

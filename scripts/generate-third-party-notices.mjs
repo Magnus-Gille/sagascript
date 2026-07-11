@@ -126,7 +126,7 @@ function rootLicenseFiles(directory) {
 }
 
 const rustById = new Map();
-for (const target of ["aarch64-apple-darwin", "x86_64-apple-darwin"]) {
+for (const target of ["aarch64-apple-darwin"]) {
   const metadata = cargoMetadata(target);
   const nodes = new Map(metadata.resolve.nodes.map((node) => [node.id, node]));
   const resolvedIds = new Set();
@@ -251,7 +251,7 @@ function table(packages) {
 const generated = `# Third-party notices
 
 This notice covers the runtime and build-time dependencies used to produce the
-official universal macOS build, plus the separately downloaded models
+official Apple Silicon macOS build, plus the separately downloaded models
 Sagascript can use. It is generated from the locked Rust and npm dependency
 graphs; do not edit the generated inventories by hand. Sagascript itself is
 licensed under the MIT License in \`LICENSE\`.

@@ -14,7 +14,7 @@ Thanks for your interest in contributing! This guide will help you get set up an
 
 **macOS:**
 
-- macOS 13.0+ (Apple Silicon recommended)
+- macOS 13.0+ on Apple Silicon for the default diarization-enabled build
 
 **Windows:**
 
