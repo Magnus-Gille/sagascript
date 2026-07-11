@@ -56,6 +56,8 @@
   let modelError: string = $state("");
 
   let accessibilityGranted: boolean = $state(true); // assume true; checked on mount for macOS
+  let accessibilityChecking: boolean = $state(false);
+  let accessibilityRequested: boolean = $state(false);
 
   // Hotkey recorder state
   let recordingHotkey: boolean = $state(false);
@@ -118,6 +120,16 @@
       const status = event.payload as HotkeyStatus;
       hotkeyStatusOk = status.ok;
       hotkeyStatusError = status.error ?? "";
+    });
+
+    // Keep an already-open window in sync with settings changed by the CLI or
+    // another process. Backend commands are field-granular, so this refresh is
+    // display-only and never writes a stale snapshot back.
+    listen("state-changed", async (event: any) => {
+      if (event.payload !== "settings_reloaded") return;
+      settings = await getSettings();
+      models = await getModelInfo();
+      loadedModel = await getLoadedModel();
     });
 
     // Listen for tab navigation from tray menu
@@ -212,14 +224,45 @@
   async function onAutoPasteToggle() {
     if (!settings) return;
     const enabling = !settings.auto_paste;
-    const ok = await applySetting(() => setAutoPaste(enabling));
-    // When enabling on macOS, check Accessibility permission
-    if (ok && enabling && platform === "macos") {
+    if (!enabling || platform !== "macos") {
+      await applySetting(() => setAutoPaste(enabling));
+      return;
+    }
+
+    // Keep the preference off until TCC actually reports approval. This is an
+    // explicit user action, so it is the one place where prompting is allowed.
+    accessibilityChecking = true;
+    accessibilityRequested = true;
+    settingsError = "";
+    try {
       accessibilityGranted = await checkAccessibilityPermission();
       if (!accessibilityGranted) {
         await requestAccessibilityPermission();
+        accessibilityGranted = await waitForAccessibilityPermission();
       }
+
+      if (accessibilityGranted) {
+        await applySetting(() => setAutoPaste(true));
+      } else {
+        await applySetting(() => setAutoPaste(false));
+        settingsError = "Accessibility permission was not granted. Auto-paste remains off.";
+      }
+    } catch (e: any) {
+      await applySetting(() => setAutoPaste(false));
+      settingsError = typeof e === "string" ? e : e?.message || "Failed to check Accessibility permission.";
+    } finally {
+      accessibilityChecking = false;
     }
+  }
+
+  async function waitForAccessibilityPermission(): Promise<boolean> {
+    // System Settings can take a while to update TCC. Recheck for at most one
+    // minute; no unbounded timer survives after this explicit attempt.
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      if (await checkAccessibilityPermission()) return true;
+    }
+    return false;
   }
 
   async function onShowOverlayToggle() {
@@ -256,13 +299,13 @@
     selecting = true;
     modelError = "";
     try {
-      if (!model.downloaded) {
-        downloading = model.id;
-        downloadingName = model.display_name;
-        downloadProgress = 0;
-        await downloadModel(model.id);
-        // model_ready event will refresh the list
-      }
+      // The backend verifies Ready models and replaces only artifacts whose
+      // bytes provably fail the immutable integrity manifest.
+      downloading = model.id;
+      downloadingName = model.display_name;
+      downloadProgress = 0;
+      await downloadModel(model.id);
+      // model_ready event will refresh the list
       await setWhisperModel(model.id);
       settings = await getSettings();
       models = await getModelInfo();
@@ -492,7 +535,7 @@
         </button>
 
         <div class="field">
-          <label>Hotkey</label>
+          <span class="field-label">Hotkey</span>
           {#if recordingHotkey}
             <button
               class="hotkey-recorder recording"
@@ -529,19 +572,21 @@
         </div>
 
         <div class="field-row">
-          <label>Auto-paste transcription</label>
-          <div
+          <span class="field-label">Auto-paste transcription</span>
+          <button
+            type="button"
             class="toggle"
             class:active={settings.auto_paste}
             onclick={onAutoPasteToggle}
             role="switch"
-            tabindex="0"
             aria-checked={settings.auto_paste}
-          ></div>
+            aria-label="Auto-paste transcription"
+            disabled={accessibilityChecking}
+          ></button>
         </div>
         <div class="hotkey-hint">Automatically paste dictated text into the active app when transcription finishes.</div>
-        {#if settings.auto_paste && platform === "macos" && !accessibilityGranted}
-          <div class="hotkey-error">Requires Accessibility permission. <button class="link-btn" onclick={async () => { await requestAccessibilityPermission(); accessibilityGranted = await checkAccessibilityPermission(); }}>Open System Settings</button></div>
+        {#if platform === "macos" && !accessibilityGranted && (settings.auto_paste || accessibilityRequested)}
+          <div class="hotkey-error">Requires Accessibility permission. Auto-paste remains off until approved. <button class="link-btn" onclick={onAutoPasteToggle} disabled={accessibilityChecking}>{accessibilityChecking ? "Checking…" : "Open System Settings"}</button></div>
         {/if}
 
         <div class="test-section">
@@ -691,15 +736,16 @@
         </div>
 
         <div class="field-row" style="margin-top: 20px;">
-          <label>Show recording overlay</label>
-          <div
+          <span class="field-label">Show recording overlay</span>
+          <button
+            type="button"
             class="toggle"
             class:active={settings.show_overlay}
             onclick={onShowOverlayToggle}
             role="switch"
-            tabindex="0"
             aria-checked={settings.show_overlay}
-          ></div>
+            aria-label="Show recording overlay"
+          ></button>
         </div>
 
         <div class="field">
@@ -724,33 +770,35 @@
         </div>
 
         <div class="field-row">
-          <label>Temperature fallback</label>
-          <div
+          <span class="field-label">Temperature fallback</span>
+          <button
+            type="button"
             class="toggle"
             class:active={settings.temperature_fallback}
             onclick={onTemperatureFallbackToggle}
             role="switch"
-            tabindex="0"
             aria-checked={settings.temperature_fallback}
-          ></div>
+            aria-label="Temperature fallback"
+          ></button>
         </div>
         <div class="hotkey-hint">Re-decode hard segments; off = faster, less robust.</div>
 
         <div class="field-row">
-          <label>Voice activity detection</label>
-          <div
+          <span class="field-label">Voice activity detection</span>
+          <button
+            type="button"
             class="toggle"
             class:active={settings.vad_enabled}
             onclick={onVadToggle}
             role="switch"
-            tabindex="0"
             aria-checked={settings.vad_enabled}
-          ></div>
+            aria-label="Voice activity detection"
+          ></button>
         </div>
         <div class="hotkey-hint">Skip silence; downloads a small model on first enable.</div>
 
         <div class="field">
-          <label>Version</label>
+          <span class="field-label">Version</span>
           <div class="version-text">
             {#if buildInfo}
               Sagascript {buildInfo.version} ({buildInfo.git_hash}) - Built {buildInfo.build_date}

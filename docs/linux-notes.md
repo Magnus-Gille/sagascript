@@ -11,12 +11,12 @@
 | Feature | macOS | Linux |
 |---|---|---|
 | Transcription backend | Metal + Core ML (GPU) | CPU only (Vulkan is a broken upstream opt-in) |
-| Permissions required | Microphone, Accessibility, Input Monitoring | None (no TCC-style gate) |
+| Permissions required | Microphone, Accessibility | None (no TCC-style gate) |
 | Tray behavior | Menu bar icon | System tray via libayatana-appindicator |
 | Default hotkey | Ctrl+Shift+Space | Ctrl+Shift+Space |
 | Paste shortcut | Cmd+V (enigo) | Ctrl+V (via `xdotool`) |
 | Recording overlay | Shown | **Disabled** (see limitations) |
-| Settings path | `~/Library/Application Support/com.sagascript.app/` | `~/.local/share/com.sagascript.app/` (`$XDG_DATA_HOME`) |
+| Settings path | `~/Library/Application Support/ai.gille.sagascript/` | `~/.local/share/ai.gille.sagascript/` (`$XDG_DATA_HOME`) |
 | Model path | `~/Library/Application Support/Sagascript/Models/` | `~/.local/share/Sagascript/Models/` (`$XDG_DATA_HOME`) |
 | Installer format | `.dmg` | `.deb` / `.rpm` / `.AppImage` |
 

@@ -2,7 +2,9 @@
 
 > **Historical planning document.** The CI/workflow snippets below predate the
 > Cargo workspace split and the current `.github/workflows/ci.yml`; they are
-> kept for context, not as living documentation.
+> kept for context, not as living documentation. Sagascript v1 publishes only
+> signed, notarized macOS artifacts. A future Windows release must add code
+> signing before enabling any Windows artifact-publishing job.
 
 This document outlines every work item required to ship Sagascript on Windows,
 from code changes through CI/CD, installer generation, code signing, documentation,
@@ -39,7 +41,7 @@ and website distribution.
 | Settings storage | `src-tauri/src/settings/` | JSON file via `tauri-plugin-store` |
 | Credentials | `src-tauri/src/credentials/` | Uses `keyring` crate (wraps Windows Credential Manager) |
 | Logging paths | `src-tauri/src/logging/` | Already has `#[cfg(target_os = "windows")]` branch → `%LOCALAPPDATA%\Sagascript\Logs\` |
-| CLI commands | `src-tauri/src/cli/` | All platform-agnostic; includes PowerShell completions |
+| CLI commands | `src-tauri/crates/sagascript-cli/src/` | All platform-agnostic; includes PowerShell completions |
 | Whisper (CPU) | `src-tauri/Cargo.toml` | `whisper-rs = "0.15"` already declared under `[target.'cfg(target_os = "windows")'.dependencies]` |
 | Tray icon | `src-tauri/src/main.rs` | Tauri system tray is cross-platform |
 | Window hide-on-close | `src-tauri/src/main.rs` | Standard Tauri event handling |
@@ -427,74 +429,13 @@ jobs:
         run: npx tauri build
 ```
 
-### 5.2 Release workflow — `.github/workflows/release.yml` (new)
+### 5.2 Release workflow
 
-Create a dedicated release workflow triggered by tags:
-
-```yaml
-name: Release
-
-on:
-  push:
-    tags: ["v*"]
-
-permissions:
-  contents: write
-
-jobs:
-  build-macos:
-    runs-on: macos-14
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
-      - run: npm ci
-      - run: npm run build
-      - run: npx tauri build
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-bundle
-          path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.app.tar.gz
-
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v4
-        with: { node-version: 20, cache: npm }
-      - run: npm ci
-      - run: npm run build
-      - run: npx tauri build
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-bundle
-          path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/msi/*.msi
-
-  publish-release:
-    needs: [build-macos, build-windows]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: true
-          generate_release_notes: true
-          files: |
-            artifacts/macos-bundle/**/*
-            artifacts/windows-bundle/**/*
-```
+The historical unsigned Windows publishing design has been retired. The v1
+release workflow builds, verifies, and publishes only the signed/notarized
+macOS artifact. Windows CI may continue compiling and testing the preview, but
+must not upload an installer or attach one to a GitHub Release until Windows
+code signing and clean-machine acceptance are implemented.
 
 ### 5.3 CI considerations
 
@@ -634,18 +575,10 @@ brew install --cask sagascript
 
 ## Windows
 
-### Download
-Download the latest `Sagascript_x.x.x_x64-setup.exe` from the [Releases page](https://github.com/Magnus-Gille/sagascript/releases).
-
-### Install
-1. Run the installer
-2. If SmartScreen warns about an unrecognized app, click "More info" → "Run anyway"
-   (this will not appear once the app is code-signed)
-3. Sagascript will appear in your system tray
-4. Allow microphone access if prompted by Windows
-
-### MSI (enterprise)
-An MSI installer is also available for IT deployment via Group Policy.
+### Preview status
+Sagascript v1 does not publish Windows installers. Inspect the source and build
+the preview locally. A future download section must not be added until the
+installer is signed and passes Windows release acceptance.
 
 ### System Requirements
 - Windows 10 version 1803 or later / Windows 11
@@ -686,8 +619,8 @@ An MSI installer is also available for IT deployment via Group Policy.
 ## Troubleshooting
 
 ### "Windows protected your PC" SmartScreen warning
-This appears for unsigned applications. Click "More info" → "Run anyway".
-This warning will be removed once the app is code-signed.
+Do not bypass this warning for an unsigned installer. The project must sign a
+future Windows release before distributing it.
 
 ### Microphone not working
 Go to Windows Settings → Privacy & Security → Microphone, and ensure
@@ -794,16 +727,16 @@ to the next phase until the tests in the current phase pass.
 - [ ] Settings persist across restarts
 - [ ] CLI commands work from PowerShell and Command Prompt
 
-### Phase 2: CI/CD (**DONE** — PR #23)
+### Phase 2: CI validation (**DONE** — PR #23; release publishing superseded)
 
 **Code changes:**
 - [x] Add `check-windows` job to `.github/workflows/ci.yml`
-- [x] Create `.github/workflows/release.yml` with dual-platform builds
-- [x] Configure artifact upload for Windows bundles
+- [x] Create `.github/workflows/release.yml` with dual-platform builds (historical; v1 publishing is now macOS-only)
+- [x] Configure artifact upload for Windows bundles (historical; removed from the v1 release workflow)
 
 **Testing gate:**
 - [ ] CI passes on both macOS and Windows runners (cargo check, test, clippy, build)
-- [ ] Release workflow produces NSIS `.exe` and `.msi` artifacts
+- [ ] A future Windows release workflow produces signed NSIS `.exe` and `.msi` artifacts
 - [ ] macOS CI is not broken by the changes
 
 ### Phase 3: Installer & Tauri config (**DONE** — PR #23)
@@ -835,7 +768,7 @@ to the next phase until the tests in the current phase pass.
 - [ ] Certificate details show correct publisher name in file properties
 - [ ] Timestamp server is used (signature remains valid after cert expiry)
 
-### Phase 5: Documentation & distribution (**DONE**)
+### Phase 5: Source-preview documentation (**DONE**); binary distribution deferred
 
 **Code changes:**
 - [x] Update README.md with Windows support
@@ -845,7 +778,7 @@ to the next phase until the tests in the current phase pass.
 - [ ] Update website download page (if exists) — deferred, website not yet deployed
 
 **Testing gate:**
-- [ ] GitHub Release created with both macOS and Windows artifacts
+- [ ] After signing and hardware acceptance, create a Windows release with signed Windows artifacts (v1 GitHub releases are macOS-only)
 - [ ] Download links work and files are not corrupted
 - [ ] Installation instructions are accurate (follow them on a clean machine)
 - [ ] Submit to winget package manager and verify `winget install` works

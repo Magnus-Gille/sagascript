@@ -3,6 +3,7 @@
   import Settings from "./lib/Settings.svelte";
   import Onboarding from "./lib/Onboarding.svelte";
   import Overlay from "./lib/Overlay.svelte";
+  import { getSettings } from "./lib/api";
 
   // null = loading, true = show onboarding, false = show settings
   let showOnboarding: boolean | null = null;
@@ -24,12 +25,10 @@
       return;
     }
 
-    // Check store for completed flag
+    // Read the same snake_case Settings field the Rust backend persists.
     try {
-      const { load } = await import("@tauri-apps/plugin-store");
-      const store = await load("sagascript-settings.json");
-      const completed = await store.get<boolean>("hasCompletedOnboarding");
-      showOnboarding = !completed;
+      const settings = await getSettings();
+      showOnboarding = !settings.has_completed_onboarding;
     } catch {
       showOnboarding = false;
     }

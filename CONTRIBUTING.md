@@ -55,7 +55,7 @@ cd src-tauri && cargo clippy -p sagascript-cli --all-targets --no-default-featur
 
 ### CLI-first design rule
 
-Every user-facing feature must have a CLI equivalent. The GUI is a convenience layer on top of CLI commands. When adding a new feature, implement the CLI subcommand first (or alongside the GUI). The CLI commands in `src-tauri/src/cli/` are the source of truth for what the app can do.
+Every user-facing feature must have a CLI equivalent. The GUI is a convenience layer on top of CLI commands. When adding a new feature, implement the CLI subcommand first (or alongside the GUI). The CLI commands in `src-tauri/crates/sagascript-cli/src/` are the source of truth for what the app can do.
 
 ### Privacy-first rule
 
@@ -94,18 +94,30 @@ immediately before using that path.
 
 ### macOS: TCC permission reset for dev builds
 
-After rebuilding, macOS may invalidate previously granted permissions (Microphone, Accessibility, Input Monitoring) because the ad-hoc code signature changes.
+After rebuilding, macOS may invalidate previously granted permissions
+(Microphone and Accessibility) because an ad-hoc code signature
+changes. A build in `target/` and an installed copy in `/Applications` are also
+different app identities from TCC's perspective, even if their icons and names
+match.
 
-To fix:
+For a clean permission test, quit all Sagascript copies and run:
 
 ```bash
-tccutil reset Microphone com.sagascript.app
-tccutil reset Accessibility com.sagascript.app
+./scripts/reset-macos-permissions.sh
 ```
 
-Then relaunch and re-grant permissions when prompted.
+Remove stale Sagascript entries from **System Settings > Privacy & Security >
+Microphone and Accessibility**. If the old Accessibility row
+will not update, remove it with the minus button, click plus, and explicitly add
+`/Applications/Sagascript.app`. Install one fresh build there, launch that exact
+copy, and re-grant permissions. Do not test a `target/debug` copy at the same
+time.
 
-**Why this happens:** Ad-hoc signing generates a new signature each build. macOS ties TCC grants to the signature, not the bundle identifier alone. A stable Developer ID certificate would fix this permanently.
+Pre-launch builds used the old `com.sagascript.app` identifier. The helper resets
+both that identity and the production `ai.gille.sagascript` identity. User
+settings migrate automatically; macOS deliberately requires permissions to be
+approved again. Official releases use a stable Developer ID signature so this
+should happen only for the identity transition, not on every update.
 
 ### Windows: debugging notes
 

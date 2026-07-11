@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Headless CLI for Sagascript: transcribe, record, and manage models from the terminal"
+build = "build.rs"
 
 # The binary keeps the `sagascript` name so the headless install UX is
 # unchanged (clap's command name, completions, and manpages all say

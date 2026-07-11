@@ -39,6 +39,9 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Test frontend lifecycle helpers
+        run: npm run test:frontend
+
       - name: Build frontend
         run: npm run build
 
@@ -79,9 +82,9 @@ jobs:
       # CLI wiring (--diarize / --diarize-threshold in sagascript-cli) that
       # otherwise never compile in CI. All diarization unit tests are pure
       # (math/serialization/clustering logic) — none load an ONNX model file
-      # at runtime — so no continue-on-error/skip gating is needed here,
-      # unlike the Tier 2 transcription smoke tests below which do need a
-      # downloaded whisper model.
+      # at runtime, so this layer needs no downloaded artifacts. The macOS
+      # model-backed smoke tests below are also release-critical and fail the
+      # job on inference regressions.
       - name: Cargo check (sagascript-core, diarization)
         working-directory: src-tauri
         run: cargo check -p sagascript-core --features diarization
@@ -147,7 +150,6 @@ jobs:
       # --- Tier 2: Model download + transcription ---
 
       - name: Smoke test — download model and transcribe
-        continue-on-error: true  # GPU/CoreML availability varies across CI runners
         run: |
           BINARY=src-tauri/target/release/sagascript
           $BINARY download-model nb-whisper-tiny
@@ -156,7 +158,6 @@ jobs:
           echo "$RESULT" | grep -iq "stortinget"
 
       - name: Smoke test — transcribe with JSON output
-        continue-on-error: true  # GPU/CoreML availability varies across CI runners
         run: |
           BINARY=src-tauri/target/release/sagascript
           RESULT=$($BINARY transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3)

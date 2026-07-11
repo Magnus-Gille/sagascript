@@ -13,6 +13,22 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Generator, Shell};
 
+pub(crate) fn set_transcription_progress(progress: &indicatif::ProgressBar, percentage: i32) {
+    progress.set_position(percentage.clamp(0, 100) as u64);
+}
+
+/// `--version` deliberately includes the source revision and build date. A
+/// semantic version alone cannot distinguish a stale app-bundle executable
+/// from a rebuilt release candidate with the same pre-release version.
+pub const LONG_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (git ",
+    env!("SAGASCRIPT_CLI_GIT_HASH"),
+    ", built ",
+    env!("SAGASCRIPT_CLI_BUILD_DATE"),
+    ")"
+);
+
 // Root help text is feature-aware: a batch-only build (`--no-default-features`)
 // has no `record` subcommand, so the workflow/examples must not advertise it.
 #[cfg(feature = "record")]
@@ -113,6 +129,7 @@ ENVIRONMENT:
 #[command(
     name = "sagascript",
     version,
+    long_version = LONG_VERSION,
     about = "Low-latency dictation app",
     long_about = ROOT_LONG_ABOUT,
     after_long_help = ROOT_AFTER_LONG_HELP
@@ -396,11 +413,11 @@ pub fn run(cli: Cli) {
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
         Command::ResetOnboarding => {
-            let mut settings = sagascript_core::settings::store::load();
-            settings.has_completed_onboarding = false;
-            sagascript_core::settings::store::save(&settings)
+            sagascript_core::settings::store::update(|settings| {
+                settings.has_completed_onboarding = false;
+            })
                 .map_err(sagascript_core::error::DictationError::SettingsError)
-                .map(|()| {
+                .map(|_| {
                     eprintln!("Onboarding reset. The setup wizard will run on next launch.");
                 })
         }
@@ -491,6 +508,27 @@ fn render_manpage_tree(cmd: &clap::Command, dir: &PathBuf) -> Result<(), io::Err
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcription_progress_bar_never_renders_outside_zero_to_one_hundred() {
+        let progress = indicatif::ProgressBar::new(100);
+
+        set_transcription_progress(&progress, 101);
+        assert_eq!(progress.position(), 100);
+
+        set_transcription_progress(&progress, -1);
+        assert_eq!(progress.position(), 0);
+    }
+
+    #[test]
+    fn long_version_identifies_the_exact_build() {
+        assert!(LONG_VERSION.contains(env!("CARGO_PKG_VERSION")));
+        assert!(LONG_VERSION.contains("git "));
+        assert!(LONG_VERSION.contains("built "));
+
+        let command = Cli::command();
+        assert_eq!(command.get_long_version(), Some(LONG_VERSION));
+    }
 
     // -- Completions generation --
 
@@ -626,6 +664,18 @@ mod tests {
         assert!(
             help.contains("auto uses a generic multilingual model"),
             "transcribe help should warn about auto-detect"
+        );
+    }
+
+    #[test]
+    fn config_set_help_explains_auto_paste_permission_requirement() {
+        let cmd = Cli::command();
+        let config = cmd.find_subcommand("config").unwrap();
+        let set = config.find_subcommand("set").unwrap();
+        let help = get_long_help(set);
+        assert!(
+            help.contains("enabling requires Accessibility approval for the installed GUI"),
+            "config set help should explain the auto-paste permission requirement"
         );
     }
 

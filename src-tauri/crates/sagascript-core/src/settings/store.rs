@@ -1,13 +1,27 @@
-use std::path::PathBuf;
+use std::{
+    fs::OpenOptions,
+    path::{Path, PathBuf},
+};
+
+use fs2::FileExt;
 
 use crate::settings::Settings;
 
-const APP_IDENTIFIER: &str = "com.sagascript.app";
+const APP_IDENTIFIER: &str = "ai.gille.sagascript";
+const LEGACY_APP_IDENTIFIERS: &[&str] = &["com.sagascript.app"];
 const SETTINGS_FILENAME: &str = "sagascript-settings.json";
+const LEGACY_ONBOARDING_KEY: &str = "hasCompletedOnboarding";
+const ONBOARDING_KEY: &str = "has_completed_onboarding";
+
+fn canonicalize_legacy_keys(map: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Some(legacy) = map.remove(LEGACY_ONBOARDING_KEY) {
+        map.entry(ONBOARDING_KEY.to_string()).or_insert(legacy);
+    }
+}
 
 /// Returns the application data directory (platform-specific).
-/// macOS: ~/Library/Application Support/com.sagascript.app/
-/// Windows: %APPDATA%/com.sagascript.app/
+/// macOS: ~/Library/Application Support/ai.gille.sagascript/
+/// Windows: %APPDATA%/ai.gille.sagascript/
 pub fn app_data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -19,16 +33,111 @@ pub fn settings_path() -> PathBuf {
     app_data_dir().join(SETTINGS_FILENAME)
 }
 
+fn legacy_settings_paths() -> impl Iterator<Item = PathBuf> {
+    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+    LEGACY_APP_IDENTIFIERS
+        .iter()
+        .map(move |identifier| base.join(identifier).join(SETTINGS_FILENAME))
+}
+
+/// Caller must hold the destination's settings lock.
+fn copy_legacy_settings(source: &Path, destination: &Path) -> Result<bool, String> {
+    if destination.exists() || !source.is_file() {
+        return Ok(false);
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "Settings destination has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Failed to create settings directory: {error}"))?;
+    let contents = std::fs::read_to_string(source)
+        .map_err(|error| format!("Failed to read legacy settings: {error}"))?;
+    let mut value: serde_json::Value = serde_json::from_str(&contents)
+        .map_err(|error| format!("Failed to parse legacy settings: {error}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "Legacy settings root is not an object".to_string())?;
+    canonicalize_legacy_keys(object);
+
+    // Accessibility approval is tied to the signed bundle identity, not to
+    // user preferences. The new identity must be approved explicitly before
+    // auto-paste can be re-enabled.
+    object.insert("auto_paste".to_string(), serde_json::Value::Bool(false));
+    let migrated = serde_json::to_string_pretty(&value)
+        .map_err(|error| format!("Failed to serialize migrated settings: {error}"))?;
+    let tmp_path = destination.with_extension("json.tmp");
+    std::fs::write(&tmp_path, migrated)
+        .map_err(|error| format!("Failed to write migrated settings: {error}"))?;
+    std::fs::rename(&tmp_path, destination)
+        .map_err(|error| format!("Failed to install migrated settings: {error}"))?;
+    Ok(true)
+}
+
+/// Copy settings from an earlier bundle identifier on first use of the new
+/// identifier. Keep the source in place so rolling back a pre-launch build is
+/// safe. Once the destination exists it always wins.
+fn migrate_legacy_identifier_settings_locked(
+    destination: &Path,
+    sources: impl IntoIterator<Item = PathBuf>,
+) {
+    if destination.exists() {
+        return;
+    }
+
+    for source in sources {
+        if !source.is_file() {
+            continue;
+        }
+        match copy_legacy_settings(&source, destination) {
+            Ok(true) => tracing::info!(
+                "Migrated settings from legacy application identifier ({})",
+                source.display()
+            ),
+            Ok(false) => {}
+            Err(error) => tracing::warn!(
+                "Failed to migrate settings from {} to {}: {error}",
+                source.display(),
+                destination.display()
+            ),
+        }
+        return;
+    }
+}
+
 /// Load settings from disk. Returns defaults if the file is missing or unreadable.
 /// Partial JSON files are handled by `#[serde(default)]` on Settings.
 pub fn load() -> Settings {
-    load_from(&settings_path())
+    let path = settings_path();
+    // Existing settings are installed with atomic rename, so a read needs no
+    // lock. Only the first-run missing-file path can migrate and must share the
+    // writers' lock for its existence recheck, write, and initial read.
+    if path.exists() {
+        return load_from(&path);
+    }
+    with_settings_lock(&path, || {
+        migrate_legacy_identifier_settings_locked(&path, legacy_settings_paths());
+        Ok(load_from(&path))
+    })
+    .unwrap_or_else(|error| {
+        tracing::warn!(
+            "Failed to lock settings file at {} for loading: {error} — falling back to defaults",
+            path.display()
+        );
+        Settings::default()
+    })
 }
 
 /// Load settings from a specific path. Returns defaults if missing or unreadable.
-pub fn load_from(path: &PathBuf) -> Settings {
+pub fn load_from(path: &Path) -> Settings {
     match std::fs::read_to_string(path) {
-        Ok(contents) => match serde_json::from_str(&contents) {
+        Ok(contents) => match serde_json::from_str::<serde_json::Value>(&contents).and_then(
+            |mut value| {
+                if let Some(map) = value.as_object_mut() {
+                    canonicalize_legacy_keys(map);
+                }
+                serde_json::from_value(value)
+            },
+        ) {
             Ok(settings) => settings,
             Err(e) => {
                 // One wrong-typed field would otherwise silently reset ALL
@@ -46,16 +155,90 @@ pub fn load_from(path: &PathBuf) -> Settings {
     }
 }
 
-/// Persist settings to disk using read-merge-write to preserve non-settings keys
-/// (e.g. `hasCompletedOnboarding` from Tauri plugin store).
+/// Persist settings to disk using read-merge-write to preserve unknown or
+/// legacy keys while writing the canonical Settings fields.
 /// Uses atomic write: write to .tmp then rename.
 pub fn save(settings: &Settings) -> Result<(), String> {
-    save_to(&settings_path(), settings)
+    let path = settings_path();
+    with_settings_lock(&path, || {
+        migrate_legacy_identifier_settings_locked(&path, legacy_settings_paths());
+        save_to(&path, settings)
+    })
+}
+
+/// Apply a field-level settings mutation to the latest on-disk snapshot and
+/// return the persisted result.
+///
+/// GUI commands use this instead of saving their in-memory `Settings` clone,
+/// which may be stale when the CLI changed another field moments earlier.
+pub fn update<F>(mutate: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings),
+{
+    let path = settings_path();
+    update_at_with_legacy_sources(&path, legacy_settings_paths(), mutate)
+}
+
+#[cfg(test)]
+fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings),
+{
+    update_at_with_legacy_sources(path, std::iter::empty(), mutate)
+}
+
+fn update_at_with_legacy_sources<F>(
+    path: &Path,
+    sources: impl IntoIterator<Item = PathBuf>,
+    mutate: F,
+) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings),
+{
+    with_settings_lock(path, || {
+        migrate_legacy_identifier_settings_locked(path, sources);
+        let mut settings = load_from(path);
+        mutate(&mut settings);
+        save_to(path, &settings)?;
+        Ok(settings)
+    })
+}
+
+fn with_settings_lock<T, F>(path: &Path, operation: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+{
+    let dir = path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create settings dir: {e}"))?;
+
+    let lock_path = path.with_extension("json.lock");
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| format!("Failed to open settings lock: {e}"))?;
+    lock_file
+        .lock_exclusive()
+        .map_err(|e| format!("Failed to lock settings: {e}"))?;
+
+    let result = operation();
+    if let Err(e) = lock_file.unlock() {
+        tracing::warn!(
+            "Failed to unlock settings file {}: {e}",
+            lock_path.display()
+        );
+    }
+    result
 }
 
 /// Persist settings to a specific path. Test seam for `save`, which always
 /// targets `settings_path()`.
-fn save_to(path: &PathBuf, settings: &Settings) -> Result<(), String> {
+fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     let dir = path
         .parent()
         .map(|p| p.to_path_buf())
@@ -72,7 +255,7 @@ fn save_to(path: &PathBuf, settings: &Settings) -> Result<(), String> {
             Ok(m) => m,
             Err(e) => {
                 // A parse failure here used to silently drop every
-                // preserved non-Settings key (e.g. hasCompletedOnboarding)
+                // preserved unknown or legacy key
                 // this read-merge-write exists to protect. Back up the
                 // corrupt bytes to a sidecar before starting fresh, rather
                 // than aborting the save (aborting would contradict the
@@ -94,24 +277,23 @@ fn save_to(path: &PathBuf, settings: &Settings) -> Result<(), String> {
     } else {
         serde_json::Map::new()
     };
+    canonicalize_legacy_keys(&mut map);
 
     // Merge settings fields into the map
-    let settings_value = serde_json::to_value(settings).map_err(|e| format!("Serialize error: {e}"))?;
+    let settings_value =
+        serde_json::to_value(settings).map_err(|e| format!("Serialize error: {e}"))?;
     if let serde_json::Value::Object(settings_map) = settings_value {
         for (k, v) in settings_map {
             map.insert(k, v);
         }
     }
 
-    let json =
-        serde_json::to_string_pretty(&map).map_err(|e| format!("Serialize error: {e}"))?;
+    let json = serde_json::to_string_pretty(&map).map_err(|e| format!("Serialize error: {e}"))?;
 
     // Atomic write: .tmp + rename
     let tmp_path = path.with_extension("json.tmp");
-    std::fs::write(&tmp_path, &json)
-        .map_err(|e| format!("Failed to write settings: {e}"))?;
-    std::fs::rename(&tmp_path, path)
-        .map_err(|e| format!("Failed to rename settings file: {e}"))?;
+    std::fs::write(&tmp_path, &json).map_err(|e| format!("Failed to write settings: {e}"))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| format!("Failed to rename settings file: {e}"))?;
 
     Ok(())
 }
@@ -121,6 +303,8 @@ mod tests {
     use super::*;
     use crate::settings::{HotkeyMode, Language, WhisperModel};
     use std::fs;
+    use std::sync::mpsc;
+    use std::thread;
 
     /// Helper: create a temp dir and override settings_path for testing
     fn with_temp_settings<F: FnOnce(PathBuf)>(f: F) {
@@ -139,6 +323,131 @@ mod tests {
     }
 
     #[test]
+    fn migration_copies_legacy_settings_without_overwriting_destination() {
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-identifier-migration-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let legacy = root.join("legacy").join(SETTINGS_FILENAME);
+        let destination = root.join("current").join(SETTINGS_FILENAME);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, r#"{"language":"sv"}"#).unwrap();
+
+        assert!(copy_legacy_settings(&legacy, &destination).unwrap());
+        let migrated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&destination).unwrap()).unwrap();
+        assert_eq!(migrated["language"], "sv");
+        assert_eq!(migrated["auto_paste"], false);
+        assert!(
+            legacy.exists(),
+            "migration must leave rollback source intact"
+        );
+
+        fs::write(&destination, r#"{"language":"no"}"#).unwrap();
+        assert!(!copy_legacy_settings(&legacy, &destination).unwrap());
+        assert_eq!(
+            fs::read_to_string(&destination).unwrap(),
+            r#"{"language":"no"}"#
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn migration_disables_previously_enabled_auto_paste() {
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-permission-migration-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let legacy = root.join("legacy").join(SETTINGS_FILENAME);
+        let destination = root.join("current").join(SETTINGS_FILENAME);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(
+            &legacy,
+            r#"{"language":"sv","auto_paste":true,"hasCompletedOnboarding":true,"future_key":{"x":1}}"#,
+        )
+        .unwrap();
+
+        assert!(copy_legacy_settings(&legacy, &destination).unwrap());
+        let migrated: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&destination).unwrap()).unwrap();
+        assert_eq!(migrated["auto_paste"], false);
+        assert_eq!(migrated["has_completed_onboarding"], true);
+        assert!(migrated.get("hasCompletedOnboarding").is_none());
+        assert_eq!(migrated["future_key"]["x"], 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn concurrent_first_run_update_waits_for_atomic_migration() {
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-concurrent-migration-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let legacy = root.join("legacy").join(SETTINGS_FILENAME);
+        let destination = root.join("current").join(SETTINGS_FILENAME);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(
+            &legacy,
+            r#"{"language":"sv","auto_paste":true,"future_key":{"x":1}}"#,
+        )
+        .unwrap();
+
+        let (migration_locked_tx, migration_locked_rx) = mpsc::channel();
+        let (release_migration_tx, release_migration_rx) = mpsc::channel();
+        let migration_destination = destination.clone();
+        let migration_legacy = legacy.clone();
+        let migration = thread::spawn(move || {
+            with_settings_lock(&migration_destination, || {
+                migrate_legacy_identifier_settings_locked(
+                    &migration_destination,
+                    [migration_legacy],
+                );
+                migration_locked_tx.send(()).unwrap();
+                release_migration_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+
+        // Hold the lock after the atomic migration has installed the file,
+        // then start an update in a second thread. It cannot read or write the
+        // destination until the migration's critical section is released.
+        migration_locked_rx.recv().unwrap();
+        let (update_blocked_tx, update_blocked_rx) = mpsc::channel();
+        let update_destination = destination.clone();
+        let update_legacy = legacy.clone();
+        let update = thread::spawn(move || {
+            let lock_probe = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(update_destination.with_extension("json.lock"))
+                .unwrap();
+            assert!(
+                lock_probe.try_lock_exclusive().is_err(),
+                "migration must still hold the settings lock"
+            );
+            update_blocked_tx.send(()).unwrap();
+            update_at_with_legacy_sources(&update_destination, [update_legacy], |settings| {
+                settings.language = Language::Norwegian;
+            })
+        });
+        update_blocked_rx.recv().unwrap();
+        release_migration_tx.send(()).unwrap();
+
+        migration.join().unwrap().unwrap();
+        let updated = update.join().unwrap().unwrap();
+        assert_eq!(updated.language, Language::Norwegian);
+        assert!(!updated.auto_paste);
+
+        let contents = fs::read_to_string(&destination).unwrap();
+        let persisted: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(persisted["language"], "no");
+        assert_eq!(persisted["auto_paste"], false);
+        assert_eq!(persisted["future_key"]["x"], 1);
+        assert!(!destination.with_extension("json.tmp").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn load_returns_defaults_when_file_missing() {
         let nonexistent = std::env::temp_dir()
             .join(format!("sagascript-test-{}", uuid::Uuid::new_v4()))
@@ -154,7 +463,11 @@ mod tests {
     fn save_and_load_roundtrip() {
         with_temp_settings(|path| {
             let dir = path.parent().unwrap();
-            let settings = Settings { language: Language::Swedish, hotkey: "Alt+Space".to_string(), ..Default::default() };
+            let settings = Settings {
+                language: Language::Swedish,
+                hotkey: "Alt+Space".to_string(),
+                ..Default::default()
+            };
 
             // Write directly to temp path (bypassing app_data_dir)
             fs::create_dir_all(dir).unwrap();
@@ -171,36 +484,83 @@ mod tests {
     }
 
     #[test]
-    fn save_preserves_non_settings_keys() {
+    fn field_update_preserves_external_changes_from_latest_disk_snapshot() {
+        with_temp_settings(|path| {
+            let external = Settings {
+                hotkey: "Super+Q".to_string(),
+                language: Language::English,
+                ..Default::default()
+            };
+            save_to(&path, &external).unwrap();
+
+            // Simulate a GUI language control whose in-memory snapshot still
+            // contains the default hotkey. Only the selected field is passed
+            // to the store mutation, so the CLI's newer hotkey must survive.
+            let persisted = update_at(&path, |settings| {
+                settings.language = Language::Swedish;
+            })
+            .unwrap();
+
+            assert_eq!(persisted.language, Language::Swedish);
+            assert_eq!(persisted.hotkey, "Super+Q");
+            let reloaded = load_from(&path);
+            assert_eq!(reloaded.hotkey, "Super+Q");
+        });
+    }
+
+    #[test]
+    fn update_uses_a_cross_process_lock_file() {
+        with_temp_settings(|path| {
+            update_at(&path, |settings| settings.auto_paste = false).unwrap();
+            assert!(path.with_extension("json.lock").exists());
+            assert!(!load_from(&path).auto_paste);
+        });
+    }
+
+    #[test]
+    fn load_accepts_both_legacy_and_canonical_onboarding_keys() {
+        with_temp_settings(|path| {
+            fs::write(
+                &path,
+                r#"{"language":"sv","hasCompletedOnboarding":false,"has_completed_onboarding":true}"#,
+            )
+            .unwrap();
+
+            let loaded = load_from(&path);
+            assert_eq!(loaded.language, Language::Swedish);
+            assert!(loaded.has_completed_onboarding);
+        });
+    }
+
+    #[test]
+    fn save_preserves_unknown_keys_and_canonicalizes_legacy_key() {
         with_temp_settings(|path| {
             let dir = path.parent().unwrap();
             fs::create_dir_all(dir).unwrap();
 
-            // Pre-populate with a non-settings key
+            // Pre-populate with the legacy camelCase onboarding key.
             let initial = serde_json::json!({
                 "hasCompletedOnboarding": true,
-                "language": "en"
+                "language": "en",
+                "future_key": {"x": 1}
             });
             fs::write(&path, serde_json::to_string_pretty(&initial).unwrap()).unwrap();
 
             // Save settings via merge
-            let settings = Settings { language: Language::Norwegian, ..Default::default() };
+            let settings = Settings {
+                language: Language::Norwegian,
+                ..Default::default()
+            };
 
-            // Simulate save's merge logic directly on this path
-            let mut map: serde_json::Map<String, serde_json::Value> =
-                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-            let settings_value = serde_json::to_value(&settings).unwrap();
-            if let serde_json::Value::Object(sm) = settings_value {
-                for (k, v) in sm {
-                    map.insert(k, v);
-                }
-            }
-            fs::write(&path, serde_json::to_string_pretty(&map).unwrap()).unwrap();
+            save_to(&path, &settings).unwrap();
 
-            // Verify non-settings key preserved
+            // Unknown data survives, but the alias is removed so serde cannot
+            // see the same field twice on the next launch.
             let raw: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-            assert_eq!(raw["hasCompletedOnboarding"], true);
+            assert!(raw.get("hasCompletedOnboarding").is_none());
+            assert_eq!(raw["has_completed_onboarding"], false);
+            assert_eq!(raw["future_key"]["x"], 1);
             assert_eq!(raw["language"], "no"); // updated
         });
     }
@@ -304,14 +664,23 @@ mod tests {
             let corrupt = "this is not json{{{";
             fs::write(&path, corrupt).unwrap();
 
-            let settings = Settings { language: Language::Swedish, ..Default::default() };
+            let settings = Settings {
+                language: Language::Swedish,
+                ..Default::default()
+            };
             let result = save_to(&path, &settings);
-            assert!(result.is_ok(), "save_to should still succeed over a corrupt existing file: {result:?}");
+            assert!(
+                result.is_ok(),
+                "save_to should still succeed over a corrupt existing file: {result:?}"
+            );
 
             // The corrupt bytes must be preserved in a .bak sidecar rather
             // than silently discarded.
             let bak_path = path.with_extension("json.bak");
-            assert!(bak_path.exists(), "expected a .bak sidecar for the corrupt file");
+            assert!(
+                bak_path.exists(),
+                "expected a .bak sidecar for the corrupt file"
+            );
             let bak_contents = fs::read_to_string(&bak_path).unwrap();
             assert_eq!(bak_contents, corrupt);
 
@@ -330,7 +699,10 @@ mod tests {
             assert!(result.is_ok());
 
             let bak_path = path.with_extension("json.bak");
-            assert!(!bak_path.exists(), "no corrupt file existed, so no .bak should be created");
+            assert!(
+                !bak_path.exists(),
+                "no corrupt file existed, so no .bak should be created"
+            );
         });
     }
 }

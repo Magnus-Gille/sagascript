@@ -8,11 +8,17 @@ target/
 # Node
 node_modules/
 dist/
+src-tauri/build-meta.env
 
 # Claude Code local state
 .claude/settings.local.json
 .claude/**/.local.*
 .claude/**/cache/**
+
+# Codex local state (the tracked project config is .codex/config.toml)
+.codex/*.local.toml
+.codex/**/.local.*
+.codex/**/cache/**
 
 # Secrets
 .env

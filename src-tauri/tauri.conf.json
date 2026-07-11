@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nicerdicer/tauri-v2-schema/refs/heads/main/tauri.conf.schema.json",
   "productName": "Sagascript",
   "version": "0.0.1",
-  "identifier": "com.sagascript.app",
+  "identifier": "ai.gille.sagascript",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -20,6 +20,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -29,7 +32,6 @@
     ],
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "signingIdentity": null,
       "entitlements": "Entitlements.plist"
     },
     "windows": {

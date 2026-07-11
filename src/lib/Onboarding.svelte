@@ -2,6 +2,12 @@
   import { onMount, onDestroy } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import {
+    adoptDownloadListeners,
+    awaitDownloadCompletion,
+    completedDownloadState,
+    registerDownloadListeners,
+  } from "./onboarding-download-state.js";
+  import {
     getPlatform,
     getSettings,
     setLanguage,
@@ -11,6 +17,7 @@
     openMicrophoneSettings,
     checkAccessibilityPermission,
     requestAccessibilityPermission,
+    setAutoPaste,
     setOnboardingCompleted,
   } from "./api";
 
@@ -34,13 +41,16 @@
   // Language step / final "finish" step errors
   let languageError: string | null = $state(null);
   let finishError: string | null = $state(null);
+  let accessibilityError: string | null = $state(null);
 
   // Permissions
   // micStatus: "authorized" | "not_determined" | "denied" | "restricted" | "unsupported" | "checking"
   let micStatus: string = $state("checking");
   let accessibilityGranted = $state(false);
   let accessibilityChecking = $state(false);
-  let pollTimer: ReturnType<typeof setInterval> | null = $state(null);
+  let savingManualPaste = $state(false);
+  let pollTimer: ReturnType<typeof setTimeout> | null = $state(null);
+  let pollGeneration = 0;
 
   // Hotkey (read from settings)
   let hotkeyParts: string[] = $state(["Ctrl", "Shift", "Space"]);
@@ -48,6 +58,7 @@
   // Cleanup for event listeners
   let unlistenProgress: (() => void) | null = null;
   let unlistenReady: (() => void) | null = null;
+  let componentDestroyed = false;
 
   // Model info per onboarding language (no "auto" — onboarding always picks a specific language)
   const modelInfo: Record<OnboardingLanguage, { name: string; size: string }> = {
@@ -96,14 +107,27 @@
 
   // -- Model download --
 
+  function markDownloadComplete() {
+    const completed = completedDownloadState();
+    downloading = completed.downloading;
+    downloadComplete = completed.downloadComplete;
+    downloadProgress = completed.downloadProgress;
+  }
+
   async function startDownload() {
     downloading = true;
+    downloadComplete = false;
     downloadError = null;
     downloadProgress = 0;
 
     try {
-      await downloadModel(recommendedModelId[selectedLanguage]);
-      // model-ready event will set downloadComplete
+      await awaitDownloadCompletion(
+        downloadModel(recommendedModelId[selectedLanguage]),
+        markDownloadComplete,
+      );
+      // The command result is authoritative. `model-ready` remains useful for
+      // live progress, but a fast verification may emit it before listeners
+      // finish registering.
     } catch (e: any) {
       downloading = false;
       downloadError = typeof e === "string" ? e : e?.message ?? "Download failed. Check your internet connection.";
@@ -118,59 +142,146 @@
 
   // -- Microphone --
 
+  function startMicrophonePoll(generation: number) {
+    startPoll(generation, async (isCurrent) => {
+      try {
+        const polled = await microphoneStatus();
+        if (!isCurrent()) return;
+        micStatus = polled;
+        if (polled === "authorized") stopPoll();
+      } catch {
+        // A transient query failure is retried by the serialized poll loop.
+      }
+    });
+  }
+
+  async function openMicrophoneSettingsAndPoll() {
+    const generation = beginPollOperation();
+    try {
+      await openMicrophoneSettings();
+      if (!isPollCurrent(generation)) return;
+      startMicrophonePoll(generation);
+    } catch {
+      // Leave the denied state visible so the user can retry opening Settings.
+    }
+  }
+
   async function grantMicrophone() {
+    const generation = beginPollOperation();
     try {
       micStatus = "checking";
       const result = await requestMicrophoneAccess();
+      if (!isPollCurrent(generation)) return;
       micStatus = result;
       if (result === "denied") {
         // macOS won't re-show the dialog — open System Settings and poll
         await openMicrophoneSettings();
-        startPoll(async () => {
-          try {
-            const polled = await microphoneStatus();
-            micStatus = polled;
-            if (polled === "authorized") {
-              stopPoll();
-            }
-          } catch {
-            // keep polling
-          }
-        });
+        if (!isPollCurrent(generation)) return;
+        startMicrophonePoll(generation);
       }
     } catch (e) {
+      if (!isPollCurrent(generation)) return;
       // Prevent spinner getting stuck
-      micStatus = await microphoneStatus().catch(() => "not_determined");
+      const fallback = await microphoneStatus().catch(() => "not_determined");
+      if (!isPollCurrent(generation)) return;
+      micStatus = fallback;
     }
   }
 
   // -- Accessibility --
 
   async function grantAccessibility() {
+    const generation = beginPollOperation();
+    accessibilityError = null;
     accessibilityChecking = true;
     try {
       await requestAccessibilityPermission();
-      startPoll(async () => {
-        const granted = await checkAccessibilityPermission();
-        if (granted) {
-          accessibilityGranted = true;
-          accessibilityChecking = false;
+      if (!isPollCurrent(generation)) return;
+      startPoll(generation, async (isCurrent) => {
+        try {
+          const granted = await checkAccessibilityPermission();
+          if (!isCurrent()) return;
+          if (granted) {
+            accessibilityGranted = true;
+            accessibilityChecking = false;
+            stopPoll();
+          }
+        } catch (e: any) {
+          if (!isCurrent()) return;
           stopPoll();
+          accessibilityChecking = false;
+          accessibilityError =
+            typeof e === "string" ? e : e?.message ?? "Failed to check Accessibility permission. Please try again.";
         }
       });
-    } catch {
+    } catch (e: any) {
+      if (!isPollCurrent(generation)) return;
+      accessibilityError =
+        typeof e === "string" ? e : e?.message ?? "Failed to request Accessibility permission. Please try again.";
       accessibilityChecking = false;
     }
   }
 
-  function startPoll(fn: () => Promise<void>) {
+  async function continueWithAccessibility() {
     stopPoll();
-    pollTimer = setInterval(fn, 1000);
+    accessibilityChecking = true;
+    accessibilityError = null;
+    try {
+      await setAutoPaste(true);
+      nextStep();
+    } catch (e: any) {
+      accessibilityError =
+        typeof e === "string" ? e : e?.message ?? "Failed to enable auto-paste. Please try again.";
+    } finally {
+      accessibilityChecking = false;
+    }
+  }
+
+  async function skipAccessibility() {
+    stopPoll();
+    accessibilityChecking = false;
+    savingManualPaste = true;
+    accessibilityError = null;
+    try {
+      // "Paste manually" is a product setting, not merely permission advice.
+      // Persist it now so finishing onboarding cannot leave auto-paste enabled.
+      await setAutoPaste(false);
+      nextStep();
+    } catch (e: any) {
+      accessibilityError =
+        typeof e === "string" ? e : e?.message ?? "Failed to disable auto-paste. Please try again.";
+    } finally {
+      savingManualPaste = false;
+    }
+  }
+
+  function beginPollOperation(): number {
+    stopPoll();
+    return pollGeneration;
+  }
+
+  function isPollCurrent(generation: number): boolean {
+    return generation === pollGeneration;
+  }
+
+  function startPoll(generation: number, fn: (isCurrent: () => boolean) => Promise<void>) {
+    if (!isPollCurrent(generation)) return;
+
+    const run = async () => {
+      if (!isPollCurrent(generation)) return;
+      pollTimer = null;
+      await fn(() => isPollCurrent(generation));
+      if (!isPollCurrent(generation)) return;
+      pollTimer = setTimeout(run, 1000);
+    };
+
+    pollTimer = setTimeout(run, 1000);
   }
 
   function stopPoll() {
+    pollGeneration += 1;
     if (pollTimer) {
-      clearInterval(pollTimer);
+      clearTimeout(pollTimer);
       pollTimer = null;
     }
   }
@@ -191,6 +302,31 @@
   }
 
   onMount(async () => {
+    // Start listener registration before any initialization invokes. The
+    // component is interactive while awaits are pending, so registering these
+    // after permission/settings calls can miss a fast model-ready event.
+    let registeredListeners: [() => void, () => void] | null = null;
+    try {
+      registeredListeners = await registerDownloadListeners(
+        () => listen("model-download-progress", (event: any) => {
+          downloadProgress = event.payload.progress;
+        }),
+        () => listen("model-ready", markDownloadComplete),
+        () => componentDestroyed,
+      );
+    } catch (error) {
+      console.error("Failed to register onboarding download listeners", error);
+    }
+    adoptDownloadListeners(
+      registeredListeners,
+      () => componentDestroyed,
+      (progress, ready) => {
+        unlistenProgress = progress;
+        unlistenReady = ready;
+      },
+    );
+    if (componentDestroyed) return;
+
     platform = await getPlatform();
     try {
       micStatus = await microphoneStatus();
@@ -211,20 +347,10 @@
     } catch {
       // keep defaults
     }
-
-    // Listen for download progress — use backend-computed progress field
-    unlistenProgress = await listen("model-download-progress", (event: any) => {
-      downloadProgress = event.payload.progress;
-    });
-
-    unlistenReady = await listen("model-ready", () => {
-      downloading = false;
-      downloadComplete = true;
-      downloadProgress = 100;
-    });
   });
 
   onDestroy(() => {
+    componentDestroyed = true;
     stopPoll();
     unlistenProgress?.();
     unlistenReady?.();
@@ -436,7 +562,7 @@
             <strong>System Settings &rsaquo; Privacy &amp; Security &rsaquo; Microphone</strong>.
           </p>
           <div class="actions">
-            <button class="primary" onclick={() => { openMicrophoneSettings(); startPoll(async () => { try { const s = await microphoneStatus(); micStatus = s; if (s === "authorized") stopPoll(); } catch {} }); }}>
+            <button class="primary" onclick={openMicrophoneSettingsAndPoll}>
               <span class="button-spinner"></span>
               Waiting — Open System Settings
             </button>
@@ -515,7 +641,9 @@
 
         <div class="actions">
           {#if accessibilityGranted}
-            <button class="primary" onclick={nextStep}>Continue</button>
+            <button class="primary" onclick={continueWithAccessibility} disabled={accessibilityChecking}>
+              {accessibilityChecking ? "Saving…" : "Continue"}
+            </button>
           {:else}
             <button class="primary" onclick={grantAccessibility} disabled={accessibilityChecking}>
               {#if accessibilityChecking}
@@ -525,11 +653,17 @@
                 Open System Settings
               {/if}
             </button>
-            <button class="secondary" onclick={() => { stopPoll(); accessibilityChecking = false; nextStep(); }}>
+            <button class="secondary" onclick={skipAccessibility} disabled={savingManualPaste}>
               I'll paste manually
             </button>
           {/if}
         </div>
+        {#if accessibilityError}
+          <div class="status-indicator error" role="alert" aria-live="assertive">
+            <span class="status-dot"></span>
+            <span>{accessibilityError}</span>
+          </div>
+        {/if}
       </div>
 
     <!-- Ready -->

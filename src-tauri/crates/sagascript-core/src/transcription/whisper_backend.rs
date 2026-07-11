@@ -52,6 +52,9 @@ pub struct TranscribeOptions {
     /// Path to a Silero VAD ggml model to skip non-speech regions, or `None`
     /// to disable VAD. The caller must ensure the file exists.
     pub vad_model_path: Option<String>,
+    /// Request real Whisper segment timestamps for structured outputs such as
+    /// CLI JSON. Text decoding remains in no-timestamps mode.
+    pub segment_timestamps: bool,
 }
 
 impl Default for TranscribeOptions {
@@ -61,6 +64,7 @@ impl Default for TranscribeOptions {
             beam_size: 0,
             temperature_fallback: true,
             vad_model_path: None,
+            segment_timestamps: false,
         }
     }
 }
@@ -95,6 +99,36 @@ fn mean_logprob(plogs: &[f32]) -> Option<f32> {
         return None;
     }
     Some(plogs.iter().sum::<f32>() / plogs.len() as f32)
+}
+
+/// Bound whisper's segment timestamps to the source audio and preserve output
+/// ordering. With `no_timestamps` enabled, whisper.cpp can expose its internal
+/// seek offset as a large negative segment start and its padded 30-second
+/// window as the end. Those values are not valid media timestamps and must not
+/// leak into the CLI JSON contract.
+fn sanitize_segment_bounds(
+    raw_start: f64,
+    raw_end: f64,
+    audio_duration: f64,
+    previous_end: f64,
+) -> (f64, f64) {
+    let duration = if audio_duration.is_finite() {
+        audio_duration.max(0.0)
+    } else {
+        0.0
+    };
+    let floor = previous_end.clamp(0.0, duration);
+    let start = if raw_start.is_finite() {
+        raw_start.clamp(floor, duration)
+    } else {
+        floor
+    };
+    let end = if raw_end.is_finite() {
+        raw_end.clamp(start, duration)
+    } else {
+        start
+    };
+    (start, end)
 }
 
 /// Local transcription backend using whisper-rs (whisper.cpp bindings)
@@ -210,6 +244,13 @@ impl WhisperBackend {
             )));
         }
 
+
+        // Never hand an unverified GGML file to whisper.cpp's native parser.
+        // This also performs a one-time compatibility check for files saved by
+        // versions released before download integrity was enforced.
+        crate::download::verify_file(&model_path, whisper_model.download_integrity())?;
+        model::quarantine_unverified_coreml_encoder(whisper_model)?;
+
         info!(
             "Loading whisper model: {} from {}",
             whisper_model.display_name(),
@@ -235,6 +276,13 @@ impl WhisperBackend {
             });
             p
         };
+
+        // whisper.cpp's Metal backend registration assumes that macOS returns
+        // a GPU device and crashes on a null device before it can return an
+        // error. Guard that FFI boundary so headless/restricted processes fail
+        // cleanly while normal CLI and GUI execution remain unchanged.
+        #[cfg(target_os = "macos")]
+        super::metal_preflight::ensure_available()?;
 
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().ok_or_else(|| {
@@ -532,7 +580,11 @@ impl WhisperBackend {
         // Disabling it caps worst-case latency at the cost of some robustness.
         params.set_temperature_inc(if opts.temperature_fallback { 0.2 } else { 0.0 });
         params.set_translate(false);
+        // Keep text decoding stable: generative timestamp tokens materially
+        // change some transcripts. Structured callers get timing from token
+        // alignment instead (DTW in the default macOS build).
         params.set_no_timestamps(true);
+        params.set_token_timestamps(opts.segment_timestamps);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_no_speech_thold(no_speech_thold);
@@ -547,6 +599,7 @@ impl WhisperBackend {
         // before enable_vad — whisper-rs panics otherwise. The caller guarantees
         // the file exists.
         if let Some(vad_path) = &opts.vad_model_path {
+            model::verify_vad_model(std::path::Path::new(vad_path))?;
             params.set_vad_model_path(Some(vad_path.as_str()));
             let mut vad = WhisperVadParams::new();
             vad.set_threshold(0.5);
@@ -556,7 +609,13 @@ impl WhisperBackend {
             params.enable_vad(true);
         }
 
-        params.set_progress_callback_safe(on_progress);
+        // whisper.cpp derives progress from its internal processing windows.
+        // On clips whose final window extends beyond the decoded duration it
+        // can report a value outside the documented percentage range. Keep the
+        // backend's public callback contract (0..=100) so callers such as the
+        // CLI cannot overrun their progress bar (or cast a negative value to a
+        // very large u64).
+        params.set_progress_callback_safe(clamped_progress_callback(on_progress));
 
         // Real abort callback: wire the raw FFI trampoline (bypassing whisper-rs
         // 0.15.1's unsound set_abort_callback_safe — see abort_trampoline). On
@@ -585,6 +644,8 @@ impl WhisperBackend {
             let n_segments = state.full_n_segments();
             let mut segments: Vec<TranscriptSegment> =
                 Vec::with_capacity(n_segments.max(0) as usize);
+            let audio_duration = audio.len() as f64 / 16_000.0;
+            let mut previous_end = 0.0;
             for i in 0..n_segments {
                 if let Some(segment) = state.get_segment(i) {
                     let text = match segment.to_str() {
@@ -606,9 +667,41 @@ impl WhisperBackend {
                             }
                         }
                     }
+                    let raw_bounds = {
+                        #[cfg(feature = "diarization")]
+                        {
+                            if opts.segment_timestamps {
+                                dtw_segment_timestamps(&segment, 0.0).unwrap_or_else(|| {
+                                    (
+                                        segment.start_timestamp() as f64 / 100.0,
+                                        segment.end_timestamp() as f64 / 100.0,
+                                    )
+                                })
+                            } else {
+                                (
+                                    segment.start_timestamp() as f64 / 100.0,
+                                    segment.end_timestamp() as f64 / 100.0,
+                                )
+                            }
+                        }
+                        #[cfg(not(feature = "diarization"))]
+                        {
+                            (
+                                segment.start_timestamp() as f64 / 100.0,
+                                segment.end_timestamp() as f64 / 100.0,
+                            )
+                        }
+                    };
+                    let (start, end) = sanitize_segment_bounds(
+                        raw_bounds.0,
+                        raw_bounds.1,
+                        audio_duration,
+                        previous_end,
+                    );
+                    previous_end = end;
                     segments.push(TranscriptSegment {
-                        start: segment.start_timestamp() as f64 / 100.0,
-                        end: segment.end_timestamp() as f64 / 100.0,
+                        start,
+                        end,
                         text,
                         avg_logprob: mean_logprob(&plogs),
                         no_speech_prob: segment.no_speech_probability(),
@@ -661,6 +754,29 @@ impl WhisperBackend {
             return Err(DictationError::NoAudioCaptured);
         }
         self.transcribe_chunk_timestamps(audio, language, 0.0, prompt, Granularity::Word)
+    }
+
+    /// Transcribe audio at the finest timestamp granularity available for
+    /// speaker attribution.
+    ///
+    /// Word-level DTW timestamps prevent a long Whisper segment containing
+    /// multiple turns from being assigned wholesale to one speaker. Some
+    /// models/platforms may not expose valid DTW timestamps, so this preserves
+    /// the segment-level fallback in one shared path for both CLI and GUI.
+    #[cfg(feature = "diarization")]
+    pub fn transcribe_sync_for_diarization(
+        &self,
+        audio: &[f32],
+        language: Language,
+        prompt: Option<&str>,
+    ) -> Result<Vec<(f64, f64, String)>, DictationError> {
+        let words = self.transcribe_sync_with_word_timestamps(audio, language, prompt)?;
+        if words.is_empty() {
+            warn!("Word-level DTW timestamps unavailable; falling back to segment timestamps");
+            self.transcribe_sync_with_timestamps(audio, language, prompt)
+        } else {
+            Ok(words)
+        }
     }
 
     /// Transcribe a single audio chunk with timestamps via DTW.
@@ -776,6 +892,14 @@ impl WhisperBackend {
             Ok(results)
         })
     }
+}
+
+/// Adapt whisper.cpp's native progress values to the backend's public
+/// percentage contract.
+fn clamped_progress_callback(
+    mut on_progress: impl FnMut(i32) + 'static,
+) -> impl FnMut(i32) + 'static {
+    move |percentage| on_progress(percentage.clamp(0, 100))
 }
 
 /// Controls whether `transcribe_chunk_timestamps` emits one entry per segment or per word.
@@ -1206,6 +1330,27 @@ mod word_grouping_tests {
     }
 }
 
+#[cfg(test)]
+mod progress_callback_tests {
+    use super::clamped_progress_callback;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn final_window_progress_is_clamped_to_audio_percentage_range() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&received);
+        let mut callback = clamped_progress_callback(move |percentage| {
+            captured.lock().unwrap().push(percentage);
+        });
+
+        for percentage in [-1, 0, 99, 100, 101] {
+            callback(percentage);
+        }
+
+        assert_eq!(*received.lock().unwrap(), [0, 0, 99, 100, 100]);
+    }
+}
+
 /// Pure-function tests for the segment-confidence support (#81): the
 /// avg-logprob helper and the `TranscriptSegment` JSON contract. The FFI
 /// accessor calls (no_speech_probability, token_data) need a loaded model and
@@ -1220,6 +1365,11 @@ mod segment_confidence_tests {
     }
 
     #[test]
+    fn segment_timestamps_are_opt_in() {
+        assert!(!TranscribeOptions::default().segment_timestamps);
+    }
+
+    #[test]
     fn mean_logprob_averages() {
         let got = mean_logprob(&[-0.2, -0.4, -0.6]).unwrap();
         assert!((got - (-0.4)).abs() < 1e-6, "got {got}");
@@ -1228,6 +1378,22 @@ mod segment_confidence_tests {
     #[test]
     fn mean_logprob_single_value() {
         assert_eq!(mean_logprob(&[-1.5]), Some(-1.5));
+    }
+
+    #[test]
+    fn segment_bounds_clamp_whisper_window_to_audio() {
+        let (start, end) = sanitize_segment_bounds(-1007.28, 30.0, 3.456, 0.0);
+        assert_eq!(start, 0.0);
+        assert_eq!(end, 3.456);
+    }
+
+    #[test]
+    fn segment_bounds_are_monotonic_and_finite() {
+        assert_eq!(sanitize_segment_bounds(1.0, 2.0, 10.0, 4.0), (4.0, 4.0));
+        assert_eq!(
+            sanitize_segment_bounds(f64::NAN, f64::INFINITY, 10.0, 4.0),
+            (4.0, 4.0)
+        );
     }
 
     #[test]
@@ -1407,4 +1573,3 @@ mod warm_state_tests {
         );
     }
 }
-

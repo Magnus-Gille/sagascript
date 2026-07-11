@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "node scripts/build-frontend.mjs",
+    "test:frontend": "node --test scripts/test-onboarding-download-state.mjs",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "release:check": "node scripts/check-release.mjs",
+    "licenses:generate": "node scripts/generate-third-party-notices.mjs --write",
+    "licenses:check": "node scripts/generate-third-party-notices.mjs --check",
     "tauri": "tauri"
   },
   "devDependencies": {
@@ -24,7 +28,6 @@
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-autostart": "^2.0.0",
     "@tauri-apps/plugin-global-shortcut": "^2.0.0",
-    "@tauri-apps/plugin-dialog": "^2.0.0",
-    "@tauri-apps/plugin-store": "^2.0.0"
+    "@tauri-apps/plugin-dialog": "^2.0.0"
   }
 }

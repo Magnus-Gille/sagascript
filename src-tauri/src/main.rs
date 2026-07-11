@@ -52,6 +52,39 @@ const MIN_RECORDING_MS: u64 = 300;
 /// Shared tray status menu item for updating from anywhere
 type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
 
+#[cfg(any(target_os = "macos", test))]
+fn auto_paste_permitted(requested: bool, accessibility_trusted: bool) -> bool {
+    !requested || accessibility_trusted
+}
+
+/// Treat macOS TCC approval as runtime authorization, never as a preference
+/// that can be inherited from another bundle identity or forced by the CLI.
+fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
+    let settings = sagascript_core::settings::store::load();
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut settings = settings;
+        if !auto_paste_permitted(
+            settings.auto_paste,
+            crate::platform::macos::is_accessibility_trusted(),
+        ) {
+            warn!("Auto-paste was enabled without Accessibility permission; disabling it");
+            match sagascript_core::settings::store::update(|latest| latest.auto_paste = false) {
+                Ok(persisted) => settings = persisted,
+                Err(error) => {
+                    error!("Failed to persist permission-gated auto-paste setting: {error}");
+                    settings.auto_paste = false;
+                }
+            }
+        }
+        settings
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    settings
+}
+
 fn main() {
     // CLI mode: if a subcommand is given, run CLI and exit. The desktop
     // binary is a full CLI (CLI-first design) — the GUI only launches on a
@@ -77,7 +110,7 @@ fn main() {
 
     info!("Sagascript starting...");
 
-    let settings = sagascript_core::settings::store::load();
+    let settings = load_settings_with_permission_gate();
     info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
     let initial_hotkey = settings.hotkey.clone();
     let controller = Mutex::new(AppController::new(settings));
@@ -138,7 +171,6 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(controller)
         .manage(whisper)
@@ -278,32 +310,28 @@ fn main() {
                     }
                 });
 
-                // If VAD is enabled (e.g. set via the CLI), make sure the Silero
-                // model is present for the next dictation.
-                if vad_enabled && !sagascript_core::transcription::model::is_vad_model_downloaded() {
-                    tauri::async_runtime::spawn(async {
+                // Startup is verification-only: model repair/download remains
+                // tied to an explicit GUI enable action or CLI transcription.
+                if vad_enabled {
+                    let vad_path = sagascript_core::transcription::model::vad_model_path();
+                    if vad_path.exists() {
                         if let Err(e) =
-                            sagascript_core::transcription::model::download_vad_model(|_, _| {}).await
+                            sagascript_core::transcription::model::verify_vad_model(&vad_path)
                         {
-                            warn!("VAD model preload failed: {e}");
+                            warn!(
+                                "VAD model startup verification failed; re-enable VAD or use the CLI to repair it: {e}"
+                            );
                         }
-                    });
+                    } else {
+                        warn!(
+                            "VAD is enabled but its model is missing; re-enable VAD or use the CLI to download it"
+                        );
+                    }
                 }
 
-                // Best-effort: backfill the CoreML encoder for the effective
-                // model — covers models downloaded before CoreML support, so the
-                // encoder moves to the Neural Engine without a manual re-download.
-                // Only when the GGML model itself is present (don't fetch an
-                // encoder for a model the user hasn't downloaded yet).
-                if sagascript_core::transcription::model::is_model_downloaded(model) {
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) =
-                            sagascript_core::transcription::model::backfill_coreml_encoder(model).await
-                        {
-                            warn!("CoreML encoder backfill skipped: {e}");
-                        }
-                    });
-                }
+                // Model and accelerator assets are downloaded only from an
+                // explicit model-selection/download action. Startup never
+                // performs a silent CoreML network backfill.
             }
 
             Ok(())
@@ -323,7 +351,6 @@ fn main() {
             commands::get_last_error,
             commands::is_model_ready,
             commands::get_loaded_model,
-            commands::update_settings,
             commands::set_language,
             commands::set_whisper_model,
             commands::set_auto_select_model,
@@ -810,7 +837,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             // Small delay to let atomic rename complete
             std::thread::sleep(Duration::from_millis(50));
 
-            let new_settings = sagascript_core::settings::store::load();
+            let new_settings = load_settings_with_permission_gate();
 
             let ctrl: tauri::State<'_, SharedController> = app.state();
             let old_settings = {
@@ -888,6 +915,14 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_paste_requires_runtime_accessibility_approval() {
+        assert!(auto_paste_permitted(false, false));
+        assert!(auto_paste_permitted(false, true));
+        assert!(!auto_paste_permitted(true, false));
+        assert!(auto_paste_permitted(true, true));
+    }
 
     // -- tray_label --
 

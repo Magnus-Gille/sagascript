@@ -142,28 +142,16 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
     }
 
     let whisper_model = parse_model(&args.model)?;
-
-    if model::is_model_downloaded(whisper_model) {
-        let path = model::model_path(whisper_model);
+    let was_present = model::is_model_downloaded(whisper_model);
+    if was_present {
+        eprintln!("Verifying {}...", whisper_model.display_name());
+    } else {
         eprintln!(
-            "Model '{}' is already downloaded at {}",
+            "Downloading {} (~{} MB)...",
             whisper_model.display_name(),
-            path.display()
+            whisper_model.size_mb()
         );
-        // Backfill the CoreML encoder if it's missing (no-op if already present
-        // or unavailable for this model).
-        if let Err(e) = model::backfill_coreml_encoder(whisper_model).await {
-            eprintln!("Note: CoreML encoder not installed: {e}");
-        }
-        println!("{}", path.display());
-        return Ok(());
     }
-
-    eprintln!(
-        "Downloading {} (~{} MB)...",
-        whisper_model.display_name(),
-        whisper_model.size_mb()
-    );
 
     let path = model::download_model(whisper_model, |downloaded, total| {
         if total > 0 {
@@ -178,8 +166,8 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
     })
     .await?;
 
-    eprintln!(); // newline after progress
-    eprintln!("Download complete.");
+    eprintln!(); // newline after progress (or verification message)
+    eprintln!("Model ready.");
     println!("{}", path.display());
     Ok(())
 }
@@ -191,21 +179,14 @@ async fn download_diarization_model(
     use sagascript_core::diarization::model as diar_model;
 
     if diar_model::is_model_downloaded(model) {
-        let path = diar_model::model_path(model);
+        eprintln!("Verifying {}...", model.display_name());
+    } else {
         eprintln!(
-            "Model '{}' is already downloaded at {}",
+            "Downloading {} (~{} MB)...",
             model.display_name(),
-            path.display()
+            model.size_mb()
         );
-        println!("{}", path.display());
-        return Ok(());
     }
-
-    eprintln!(
-        "Downloading {} (~{} MB)...",
-        model.display_name(),
-        model.size_mb()
-    );
 
     let path = diar_model::download_model(model, |downloaded, total| {
         if total > 0 {
@@ -221,7 +202,7 @@ async fn download_diarization_model(
     .await?;
 
     eprintln!(); // newline after progress
-    eprintln!("Download complete.");
+    eprintln!("Model ready.");
     println!("{}", path.display());
     Ok(())
 }

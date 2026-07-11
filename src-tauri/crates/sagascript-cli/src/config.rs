@@ -52,7 +52,7 @@ Valid values per key:
                        nb-whisper-base, nb-whisper-small
   hotkey_mode          push, toggle
   show_overlay         true, false
-  auto_paste           true, false
+  auto_paste           true, false (enabling requires Accessibility approval for the installed GUI)
   auto_select_model    true, false
   hotkey               Modifier+Key (e.g. Control+Shift+Space, Option+Space)
   initial_prompt       Any string (e.g. names, jargon, preferred spellings)
@@ -200,8 +200,34 @@ fn cmd_get(key: &str) -> Result<(), DictationError> {
 
 fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
     validate_key(key)?;
-    let mut settings = settings::store::load();
+    // Parse before acquiring the settings lock so invalid input never writes.
+    let mut validation_target = Settings::default();
+    apply_setting_value(&mut validation_target, key, value)?;
+    let settings = settings::store::update(|settings| {
+        apply_setting_value(settings, key, value)
+            .expect("setting value was validated before acquiring the lock");
+    })
+    .map_err(DictationError::SettingsError)?;
 
+    eprintln!("Set {key} = {}", get_setting_value(&settings, key));
+    if let Some(warning) = setting_warning(key, &settings) {
+        eprintln!("Warning: {warning}");
+    }
+    Ok(())
+}
+
+fn setting_warning(key: &str, settings: &Settings) -> Option<&'static str> {
+    (key == "auto_paste" && settings.auto_paste).then_some(
+        "auto-paste requires Accessibility approval for the installed Sagascript app; \
+         until it is granted, the GUI will keep or reset auto-paste to false",
+    )
+}
+
+fn apply_setting_value(
+    settings: &mut Settings,
+    key: &str,
+    value: &str,
+) -> Result<(), DictationError> {
     match key {
         "language" => {
             settings.language = parse_enum_value::<Language>(value, "language")?;
@@ -241,18 +267,14 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
         }
         _ => unreachable!(), // validate_key already checked
     }
-
-    settings::store::save(&settings).map_err(DictationError::SettingsError)?;
-    eprintln!("Set {key} = {}", get_setting_value(&settings, key));
     Ok(())
 }
 
 fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
     if let Some(key) = key {
         validate_key(key)?;
-        let mut settings = settings::store::load();
         let defaults = Settings::default();
-        match key {
+        let settings = settings::store::update(|settings| match key {
             "language" => settings.language = defaults.language,
             "whisper_model" => settings.whisper_model = defaults.whisper_model,
             "hotkey_mode" => settings.hotkey_mode = defaults.hotkey_mode,
@@ -265,8 +287,8 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
             "temperature_fallback" => settings.temperature_fallback = defaults.temperature_fallback,
             "vad_enabled" => settings.vad_enabled = defaults.vad_enabled,
             _ => unreachable!(),
-        }
-        settings::store::save(&settings).map_err(DictationError::SettingsError)?;
+        })
+        .map_err(DictationError::SettingsError)?;
         eprintln!("Reset {key} to {}", get_setting_value(&settings, key));
     } else {
         let defaults = Settings::default();
@@ -690,5 +712,20 @@ mod tests {
     fn get_setting_value_unknown_key_returns_unknown() {
         let settings = Settings::default();
         assert_eq!(get_setting_value(&settings, "nonexistent"), "unknown");
+    }
+
+    #[test]
+    fn enabling_auto_paste_warns_about_gui_accessibility_requirement() {
+        let settings = Settings::default();
+        let warning = setting_warning("auto_paste", &settings).unwrap();
+        assert!(warning.contains("Accessibility approval"));
+        assert!(warning.contains("reset auto-paste to false"));
+
+        let disabled = Settings {
+            auto_paste: false,
+            ..Default::default()
+        };
+        assert!(setting_warning("auto_paste", &disabled).is_none());
+        assert!(setting_warning("show_overlay", &Settings::default()).is_none());
     }
 }

@@ -15,10 +15,6 @@ fn metadata_value(key: &str, fallback: impl FnOnce() -> String) -> String {
 }
 
 fn emit_git_rerun_triggers() {
-    println!("cargo:rerun-if-env-changed=SAGASCRIPT_GIT_HASH");
-    println!("cargo:rerun-if-env-changed=SAGASCRIPT_BUILD_DATE");
-    println!("cargo:rerun-if-changed=build-meta.env");
-
     if let Some(git_dir) = command_output(&["rev-parse", "--absolute-git-dir"]) {
         println!("cargo:rerun-if-changed={git_dir}/HEAD");
         if let Some(reference) = command_output(&["symbolic-ref", "-q", "HEAD"]) {
@@ -35,17 +31,21 @@ fn emit_git_rerun_triggers() {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=SAGASCRIPT_GIT_HASH");
+    println!("cargo:rerun-if-env-changed=SAGASCRIPT_BUILD_DATE");
     emit_git_rerun_triggers();
 
     let git_hash = metadata_value("SAGASCRIPT_GIT_HASH", || {
         command_output(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_string())
     });
     let build_date = metadata_value("SAGASCRIPT_BUILD_DATE", || {
-        chrono::Utc::now().format("%Y-%m-%d").to_string()
+        // Keep local builds reproducible enough to identify without adding a
+        // chrono build dependency to the CLI crate. Release CI always supplies
+        // an ISO date explicitly.
+        command_output(&["show", "-s", "--format=%cs", "HEAD"])
+            .unwrap_or_else(|| "unknown".to_string())
     });
 
-    println!("cargo:rustc-env=GIT_HASH={git_hash}");
-    println!("cargo:rustc-env=BUILD_DATE={build_date}");
-
-    tauri_build::build();
+    println!("cargo:rustc-env=SAGASCRIPT_CLI_GIT_HASH={git_hash}");
+    println!("cargo:rustc-env=SAGASCRIPT_CLI_BUILD_DATE={build_date}");
 }

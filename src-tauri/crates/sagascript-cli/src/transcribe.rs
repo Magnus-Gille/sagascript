@@ -153,23 +153,14 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         }
 
         eprintln!("Transcribing with word-level timestamps...");
-        // Prefer word-level timestamps: each word gets its own entry so the
-        // merge pipeline can assign speakers at per-word granularity instead
-        // of collapsing a multi-speaker Whisper segment to a single speaker.
-        let raw_segments = {
-            let words = backend.transcribe_sync_with_word_timestamps(
-                &audio,
-                language,
-                effective_prompt.as_deref(),
-            )?;
-            if words.is_empty() {
-                // DTW timestamps unavailable — fall back to segment-level
-                eprintln!("Word timestamps empty, falling back to segment-level timestamps");
-                backend.transcribe_sync_with_timestamps(&audio, language, effective_prompt.as_deref())?
-            } else {
-                words
-            }
-        };
+        // Prefer word-level timestamps so a long Whisper segment containing
+        // multiple turns is not collapsed to one speaker. The shared helper
+        // retains a segment-level fallback when DTW is unavailable.
+        let raw_segments = backend.transcribe_sync_for_diarization(
+            &audio,
+            language,
+            effective_prompt.as_deref(),
+        )?;
         eprintln!("Got {} word/segment(s) for merging", raw_segments.len());
         if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
             for (st, en, tx) in &raw_segments {
@@ -229,12 +220,10 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     };
     let vad_model_path = if vad_enabled {
         let path = model::vad_model_path();
-        if !path.exists() {
-            eprintln!("Downloading Silero VAD model (~0.9 MB)...");
-            tokio::runtime::Runtime::new()
-                .map_err(|e| DictationError::ModelDownloadFailed(format!("tokio runtime: {e}")))?
-                .block_on(model::download_vad_model(|_, _| {}))?;
-        }
+        eprintln!("Verifying Silero VAD model...");
+        tokio::runtime::Runtime::new()
+            .map_err(|e| DictationError::ModelDownloadFailed(format!("tokio runtime: {e}")))?
+            .block_on(model::download_vad_model(|_, _| {}))?;
         path.to_str().map(str::to_string)
     } else {
         None
@@ -250,6 +239,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         }),
         temperature_fallback: stored.temperature_fallback,
         vad_model_path,
+        segment_timestamps: args.json,
     };
     if opts.beam_size >= 2 {
         eprintln!("Beam search: width {}", opts.beam_size);
@@ -269,7 +259,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             language,
             &opts,
             move |pct| {
-                pb_cb.set_position(pct as u64);
+                crate::set_transcription_progress(&pb_cb, pct);
             },
         )?;
         pb.finish_and_clear();

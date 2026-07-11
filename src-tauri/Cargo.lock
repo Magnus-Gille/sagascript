@@ -1297,6 +1297,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4060,7 +4070,6 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-dialog",
  "tauri-plugin-global-shortcut",
- "tauri-plugin-store",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4091,6 +4100,7 @@ version = "0.0.1"
 dependencies = [
  "cpal",
  "dirs 6.0.0",
+ "fs2",
  "futures-util",
  "kodama",
  "ndarray",
@@ -4101,6 +4111,7 @@ dependencies = [
  "rustfft",
  "serde",
  "serde_json",
+ "sha2",
  "symphonia",
  "thiserror 2.0.18",
  "tokio",
@@ -5115,22 +5126,6 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "tauri-plugin-store"
-version = "2.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca1a8ff83c269b115e98726ffc13f9e548a10161544a92ad121d6d0a96e16ea"
-dependencies = [
- "dunce",
- "serde",
- "serde_json",
- "tauri",
- "tauri-plugin",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
 ]
 
 [[package]]

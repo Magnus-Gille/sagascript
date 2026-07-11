@@ -44,6 +44,7 @@ pub(crate) fn build_transcribe_options(settings: &Settings) -> TranscribeOptions
         beam_size: settings.beam_size,
         temperature_fallback: settings.temperature_fallback,
         vad_model_path,
+        segment_timestamps: false,
     }
 }
 
@@ -130,37 +131,18 @@ pub async fn get_loaded_model(
     })
 }
 
-// -- Settings persistence helper --
-
-fn persist_settings(controller: &SharedController) -> Result<(), String> {
-    let settings = controller.lock().unwrap().settings().clone();
-    sagascript_core::settings::store::save(&settings)
-}
-
 // -- Settings mutations --
-
-#[tauri::command]
-pub async fn update_settings(
-    controller: State<'_, SharedController>,
-    settings: Settings,
-) -> Result<(), String> {
-    let mut ctrl = controller.lock().unwrap();
-    ctrl.update_settings(settings);
-    drop(ctrl);
-    persist_settings(&controller)?;
-    info!("Settings updated");
-    Ok(())
-}
 
 #[tauri::command]
 pub async fn set_language(
     controller: State<'_, SharedController>,
     language: Language,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.language = language;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().language = language;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().language = persisted.language;
     info!("Language set to {:?}", language);
     Ok(())
 }
@@ -169,10 +151,11 @@ pub async fn set_language(
 pub async fn set_onboarding_completed(
     controller: State<'_, SharedController>,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.has_completed_onboarding = true;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().has_completed_onboarding = true;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().has_completed_onboarding = persisted.has_completed_onboarding;
     info!("Onboarding marked as completed");
     Ok(())
 }
@@ -182,11 +165,13 @@ pub async fn set_whisper_model(
     controller: State<'_, SharedController>,
     model: WhisperModel,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.whisper_model = model;
+        settings.auto_select_model = false;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().whisper_model = model;
-    ctrl.settings_mut().auto_select_model = false;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().whisper_model = persisted.whisper_model;
+    ctrl.settings_mut().auto_select_model = persisted.auto_select_model;
     info!("Model set to {:?}", model);
     Ok(())
 }
@@ -196,10 +181,11 @@ pub async fn set_auto_select_model(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.auto_select_model = enabled;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().auto_select_model = enabled;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().auto_select_model = persisted.auto_select_model;
     info!("Auto-select model: {enabled}");
     Ok(())
 }
@@ -209,10 +195,11 @@ pub async fn set_hotkey_mode(
     controller: State<'_, SharedController>,
     mode: HotkeyMode,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.hotkey_mode = mode;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().hotkey_mode = mode;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().hotkey_mode = persisted.hotkey_mode;
     info!("Hotkey mode set to {:?}", mode);
     Ok(())
 }
@@ -262,20 +249,48 @@ pub async fn set_hotkey(
         return Err(format!("Failed to register hotkey '{}': {}", shortcut, e));
     }
 
-    // Update controller state
+    let persisted = match sagascript_core::settings::store::update(|settings| {
+        settings.hotkey = shortcut.clone();
+    }) {
+        Ok(settings) => settings,
+        Err(save_error) => {
+            // Registration already changed process-global state. If the disk
+            // write fails, restore the operational shortcut so controller,
+            // disk, and registration cannot diverge.
+            if let Err(e) = app.global_shortcut().unregister(shortcut.as_str()) {
+                error!("Failed to unregister unpersisted hotkey '{shortcut}': {e}");
+            }
+            let rollback_error = app
+                .global_shortcut()
+                .register(old_shortcut.as_str())
+                .err()
+                .map(|e| e.to_string());
+            let change = health.record(&old_shortcut, rollback_error.clone());
+            if change.changed {
+                let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+            }
+            return match rollback_error {
+                Some(error) => Err(format!(
+                    "Failed to persist hotkey: {save_error}; restoring '{old_shortcut}' also failed: {error}"
+                )),
+                None => Err(format!(
+                    "Failed to persist hotkey: {save_error}; restored '{old_shortcut}'"
+                )),
+            };
+        }
+    };
+
+    // Update controller state after persistence succeeds.
     {
         let mut ctrl = controller.lock().unwrap();
-        ctrl.settings_mut().hotkey = shortcut.clone();
-        ctrl.hotkey_service_mut().set_shortcut(&shortcut);
+        ctrl.settings_mut().hotkey = persisted.hotkey.clone();
+        ctrl.hotkey_service_mut().set_shortcut(&persisted.hotkey);
     }
 
     let change = health.record(&shortcut, None);
     if change.changed {
         let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
     }
-
-    // Persist via shared store
-    persist_settings(&controller)?;
 
     info!("Hotkey changed to: {shortcut}");
     Ok(())
@@ -297,9 +312,33 @@ pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStat
 #[tauri::command]
 pub async fn start_recording(controller: State<'_, SharedController>) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
-    // The bool (whether recording actually started) is only meaningful to the
-    // hotkey path; the GUI command just needs success/failure.
-    ctrl.start_recording().map(|_| ()).map_err(|e| e.to_string())
+    gui_start_recording_result(ctrl.start_recording())
+}
+
+fn gui_start_recording_result(
+    result: Result<bool, sagascript_core::error::DictationError>,
+) -> Result<(), String> {
+    match result {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(
+            "Cannot start recording while Sagascript is busy. Wait for the current transcription to finish."
+                .to_string(),
+        ),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod gui_recording_tests {
+    use super::gui_start_recording_result;
+
+    #[test]
+    fn gui_start_while_transcribing_returns_busy_error() {
+        let error = gui_start_recording_result(Ok(false)).unwrap_err();
+
+        assert!(error.contains("busy"));
+        assert!(error.contains("current transcription"));
+    }
 }
 
 #[tauri::command]
@@ -327,68 +366,61 @@ pub async fn stop_and_transcribe(
     };
 
     if audio.is_empty() {
-        let mut ctrl = controller.lock().unwrap();
-        ctrl.on_transcription_error("No audio captured");
-        return Err("No audio captured".to_string());
+        return controller
+            .lock()
+            .unwrap()
+            .finish_transcription(Err("No audio captured".to_string()));
     }
 
-    // Ensure model is loaded
-    whisper
-        .ensure_model(effective_model)
-        .map_err(|e| e.to_string())?;
+    // Every outcome after recording stops must flow through
+    // `finish_transcription`: stop_recording_guarded has already moved the
+    // controller to Transcribing, so returning early would wedge subsequent
+    // recording attempts until the app restarts.
+    let result = if let Err(error) = whisper.ensure_model(effective_model) {
+        Err(error.to_string())
+    } else {
+        // Run blocking transcription on a separate thread with a timeout. On timeout
+        // we now trigger a REAL abort (the whisper-rs abort callback wired in
+        // WhisperBackend): request_abort() flips the flag whisper.cpp checks between
+        // compute steps, so the blocking task returns promptly and releases the warm
+        // state instead of running to completion and wedging the pipeline. The handle
+        // is kept borrowed (`&mut fut`) across the timeout so we can await its actual
+        // exit after abort and log whether the lock was released.
+        let whisper_ref = whisper.inner().clone();
+        let mut fut = tokio::task::spawn_blocking(move || {
+            whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
+        });
 
-    // Run blocking transcription on a separate thread with a timeout. On timeout
-    // we now trigger a REAL abort (the whisper-rs abort callback wired in
-    // WhisperBackend): request_abort() flips the flag whisper.cpp checks between
-    // compute steps, so the blocking task returns promptly and releases the warm
-    // state instead of running to completion and wedging the pipeline. The handle
-    // is kept borrowed (`&mut fut`) across the timeout so we can await its actual
-    // exit after abort and log whether the lock was released.
-    let whisper_ref = whisper.inner().clone();
-    let mut fut = tokio::task::spawn_blocking(move || {
-        whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
-    });
-
-    let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
-    let result = match tokio::time::timeout(timeout, &mut fut).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(format!("Transcription task failed: {e}")),
-        Err(_) => {
-            warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
-            whisper.request_abort();
-            // Give the aborted inference a brief grace to unwind, and log which
-            // outcome occurred so a genuine hang is distinguishable from a clean
-            // abort.
-            match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut).await {
-                Ok(_) => info!("Aborted transcription task exited — warm-state lock released"),
-                Err(_) => error!(
-                    "Transcription task still running {ABORT_GRACE_SECS}s after abort — the \
-                     warm state may stay locked until it unwinds; further transcriptions will \
-                     report ModelBusy rather than block forever"
-                ),
+        let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
+        match tokio::time::timeout(timeout, &mut fut).await {
+            Ok(Ok(result)) => result.map_err(|error| error.to_string()),
+            Ok(Err(error)) => Err(format!("Transcription task failed: {error}")),
+            Err(_) => {
+                warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
+                whisper.request_abort();
+                // Give the aborted inference a brief grace to unwind, and log which
+                // outcome occurred so a genuine hang is distinguishable from a clean
+                // abort.
+                match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut).await {
+                    Ok(_) => info!("Aborted transcription task exited — warm-state lock released"),
+                    Err(_) => error!(
+                        "Transcription task still running {ABORT_GRACE_SECS}s after abort — the \
+                         warm state may stay locked until it unwinds; further transcriptions will \
+                         report ModelBusy rather than block forever"
+                    ),
+                }
+                Err(format!(
+                    "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"
+                ))
             }
-            return Err(format!(
-                "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"
-            ));
         }
     };
 
-    match result {
-        Ok(text) => {
-            let mut ctrl = controller.lock().unwrap();
-            ctrl.on_transcription_success(&text);
-            // NOTE: auto-paste is NOT done here — enigo's macOS TIS APIs crash
-            // if called from a tokio worker thread (SIGTRAP in dispatch_assert_queue).
-            // The hotkey path in main.rs handles paste via run_on_main_thread().
-            // This command returns the text to the frontend for display instead.
-            Ok(text)
-        }
-        Err(e) => {
-            let mut ctrl = controller.lock().unwrap();
-            ctrl.on_transcription_error(&e.to_string());
-            Err(e.to_string())
-        }
-    }
+    // NOTE: auto-paste is NOT done here — enigo's macOS TIS APIs crash if
+    // called from a tokio worker thread (SIGTRAP in dispatch_assert_queue).
+    // The hotkey path in main.rs handles paste via run_on_main_thread(). This
+    // command returns the text to the frontend for display instead.
+    controller.lock().unwrap().finish_transcription(result)
 }
 
 #[tauri::command]
@@ -468,17 +500,44 @@ pub async fn download_model(
 
 // -- Settings toggles --
 
+fn effective_auto_paste(requested: bool, permission_granted: bool) -> bool {
+    requested && permission_granted
+}
+
 #[tauri::command]
 pub async fn set_auto_paste(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let permission_granted = !enabled || crate::platform::macos::is_accessibility_trusted();
+    #[cfg(not(target_os = "macos"))]
+    let permission_granted = true;
+
+    let effective = effective_auto_paste(enabled, permission_granted);
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.auto_paste = effective;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().auto_paste = enabled;
-    drop(ctrl);
-    persist_settings(&controller)?;
-    info!("Auto-paste: {enabled}");
-    Ok(())
+    ctrl.settings_mut().auto_paste = persisted.auto_paste;
+    info!("Auto-paste: {effective}");
+    if enabled && !permission_granted {
+        Err("Accessibility permission is required before auto-paste can be enabled".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod auto_paste_tests {
+    use super::effective_auto_paste;
+
+    #[test]
+    fn enabling_never_persists_true_before_accessibility_is_trusted() {
+        assert!(!effective_auto_paste(true, false));
+        assert!(effective_auto_paste(true, true));
+        assert!(!effective_auto_paste(false, true));
+    }
 }
 
 #[tauri::command]
@@ -486,10 +545,11 @@ pub async fn set_show_overlay(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.show_overlay = enabled;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().show_overlay = enabled;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().show_overlay = persisted.show_overlay;
     info!("Show overlay: {enabled}");
     Ok(())
 }
@@ -499,10 +559,11 @@ pub async fn set_initial_prompt(
     controller: State<'_, SharedController>,
     prompt: String,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.initial_prompt = prompt.clone();
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().initial_prompt = prompt.clone();
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().initial_prompt = persisted.initial_prompt;
     info!("Initial prompt set ({} chars)", prompt.len());
     Ok(())
 }
@@ -512,10 +573,11 @@ pub async fn set_beam_size(
     controller: State<'_, SharedController>,
     beam_size: u32,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.beam_size = beam_size;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().beam_size = beam_size;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().beam_size = persisted.beam_size;
     info!("Beam size: {beam_size}");
     Ok(())
 }
@@ -525,10 +587,11 @@ pub async fn set_temperature_fallback(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.temperature_fallback = enabled;
+    })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().temperature_fallback = enabled;
-    drop(ctrl);
-    persist_settings(&controller)?;
+    ctrl.settings_mut().temperature_fallback = persisted.temperature_fallback;
     info!("Temperature fallback: {enabled}");
     Ok(())
 }
@@ -538,15 +601,17 @@ pub async fn set_vad_enabled(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.vad_enabled = enabled;
+    })?;
     {
         let mut ctrl = controller.lock().unwrap();
-        ctrl.settings_mut().vad_enabled = enabled;
+        ctrl.settings_mut().vad_enabled = persisted.vad_enabled;
     }
-    persist_settings(&controller)?;
     // Fetch the Silero VAD model so it's ready for the next dictation. Done
     // after releasing the lock (no lock held across await).
-    if enabled && !model::is_vad_model_downloaded() {
-        info!("Downloading VAD model...");
+    if enabled {
+        info!("Verifying or downloading VAD model...");
         model::download_vad_model(|_, _| {})
             .await
             .map_err(|e| format!("Failed to download VAD model: {e}"))?;
@@ -603,9 +668,10 @@ pub async fn transcribe_file(
     }
 
     // Ensure model is loaded
-    whisper
-        .ensure_model(effective_model)
-        .map_err(|e| e.to_string())?;
+    if let Err(error) = whisper.ensure_model(effective_model) {
+        let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+        return Err(error.to_string());
+    }
 
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 
@@ -617,15 +683,18 @@ pub async fn transcribe_file(
             DiarizeConfig, TimestampedSegment,
             diarize as run_diarize,
             merge::{consolidate, merge_with_transcript},
-            model::all_models_downloaded,
+            model::{DiarizationModel, download_model as download_diarization_model},
         };
 
-        if !all_models_downloaded() {
-            let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
-            return Err(
-                "Diarization models not downloaded. Use Settings → Models to download them."
-                    .to_string(),
-            );
+        // Checking diarization in the file-transcription UI is an explicit
+        // action: verify existing app-managed artifacts and repair only exact
+        // integrity mismatches before native ONNX parsing. This never runs as
+        // a silent startup download.
+        for diarization_model in DiarizationModel::ALL {
+            if let Err(error) = download_diarization_model(*diarization_model, |_, _| {}).await {
+                let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+                return Err(error.to_string());
+            }
         }
 
         let whisper_ref = whisper.inner().clone();
@@ -643,9 +712,11 @@ pub async fn transcribe_file(
             run_diarize(&audio_for_diarize, &DiarizeConfig::default())
         });
 
-        // Run timestamped transcription
+        // Run word-level timestamped transcription when DTW is available.
+        // Segment-level timestamps can span multiple speaker turns and would
+        // cause maximum-overlap merging to collapse the GUI output to one label.
         let mut transcribe_fut = tokio::task::spawn_blocking(move || {
-            whisper_ref.transcribe_sync_with_timestamps(
+            whisper_ref.transcribe_sync_for_diarization(
                 &audio_for_transcribe,
                 language,
                 prompt_ref.as_deref(),
@@ -945,6 +1016,7 @@ mod macos_mic {
 
     /// AVAuthorizationStatus values
     const AV_AUTH_STATUS_NOT_DETERMINED: isize = 0;
+    const AV_AUTH_STATUS_DENIED: isize = 2;
 
     /// Returns true if the binary is running from inside a proper .app bundle.
     /// When running via `cargo run` or `cargo tauri dev` without a bundle,
@@ -1003,6 +1075,33 @@ mod macos_mic {
         unsafe { msg_send![ns_string_class, stringWithUTF8String: c"soun".as_ptr()] }
     }
 
+    fn authorization_status_label(status: isize, denied_recheck_granted: bool) -> &'static str {
+        match status {
+            0 => "not_determined",
+            1 => "restricted",
+            2 if denied_recheck_granted => "authorized",
+            2 => "denied",
+            3 => "authorized",
+            _ => "not_determined",
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum AccessRequestDecision {
+        QuerySystem,
+        Complete(bool),
+    }
+
+    fn access_request_decision(status: isize) -> AccessRequestDecision {
+        match status {
+            AV_AUTH_STATUS_NOT_DETERMINED | AV_AUTH_STATUS_DENIED => {
+                AccessRequestDecision::QuerySystem
+            }
+            3 => AccessRequestDecision::Complete(true),
+            _ => AccessRequestDecision::Complete(false),
+        }
+    }
+
     /// Return the raw authorization status as a string.
     /// AVCaptureDevice can cache `authorizationStatus` in-process, so when it
     /// reports "denied" we re-query via `requestAccess` which returns the
@@ -1018,23 +1117,11 @@ mod macos_mic {
         };
         let media_type = av_media_type_audio();
         let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: media_type] };
-        match status {
-            0 => "not_determined",
-            1 => "restricted",
-            2 => "authorized",
-            3 => {
-                // AVCaptureDevice may cache "denied" even after the user grants
-                // access via System Settings. Re-query via requestAccess which
-                // returns the live TCC state without showing a dialog.
-                if recheck_access_granted() {
-                    "authorized"
-                } else {
-                    "denied"
-                }
-            }
-            _ => "not_determined",
-        }
-        .to_string()
+        // AVCaptureDevice may cache "denied" after a System Settings change.
+        // The raw request API returns the current TCC state without a new dialog
+        // for an already-determined permission.
+        let denied_recheck_granted = status == 2 && recheck_access_granted();
+        authorization_status_label(status, denied_recheck_granted).to_string()
     }
 
     /// Re-query TCC permission via `requestAccessForMediaType:completionHandler:`.
@@ -1043,7 +1130,7 @@ mod macos_mic {
     fn recheck_access_granted() -> bool {
         use std::sync::mpsc;
         let (tx, rx) = mpsc::channel();
-        request_access(move |granted| {
+        request_access_from_system(move |granted| {
             let _ = tx.send(granted);
         });
         rx.recv_timeout(std::time::Duration::from_secs(2))
@@ -1063,11 +1150,23 @@ mod macos_mic {
         let media_type = av_media_type_audio();
 
         let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: media_type] };
-        if status != AV_AUTH_STATUS_NOT_DETERMINED {
-            // Already determined (authorized, denied, or restricted) — fire callback immediately
-            callback(status == 2 /* AV_AUTH_STATUS_AUTHORIZED */);
-            return;
+        match access_request_decision(status) {
+            AccessRequestDecision::QuerySystem => request_access_from_system(callback),
+            AccessRequestDecision::Complete(granted) => callback(granted),
         }
+    }
+
+    /// Invoke AVFoundation's request API without consulting the potentially
+    /// stale in-process `authorizationStatus` value first.
+    fn request_access_from_system<F: FnOnce(bool) + Send + 'static>(callback: F) {
+        let cls = match get_av_capture_device_class() {
+            Some(c) => c,
+            None => {
+                callback(false);
+                return;
+            }
+        };
+        let media_type = av_media_type_audio();
 
         // Use AVCaptureDevice.requestAccessForMediaType:completionHandler: with an objc block.
         // This properly attributes the permission request to the app's bundle ID.
@@ -1082,6 +1181,43 @@ mod macos_mic {
 
         unsafe {
             let _: () = msg_send![cls, requestAccessForMediaType: media_type completionHandler: &*completion];
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{AccessRequestDecision, access_request_decision, authorization_status_label};
+
+        #[test]
+        fn maps_avfoundation_authorization_constants_correctly() {
+            assert_eq!(authorization_status_label(0, false), "not_determined");
+            assert_eq!(authorization_status_label(1, false), "restricted");
+            assert_eq!(authorization_status_label(2, false), "denied");
+            assert_eq!(authorization_status_label(3, false), "authorized");
+        }
+
+        #[test]
+        fn denied_cache_can_be_refreshed_without_remapping_authorized() {
+            assert_eq!(authorization_status_label(2, true), "authorized");
+            assert_eq!(authorization_status_label(3, false), "authorized");
+        }
+
+        #[test]
+        fn request_decision_live_queries_undetermined_and_cached_denied() {
+            assert_eq!(access_request_decision(0), AccessRequestDecision::QuerySystem);
+            assert_eq!(access_request_decision(2), AccessRequestDecision::QuerySystem);
+        }
+
+        #[test]
+        fn request_decision_completes_known_restricted_and_authorized_states() {
+            assert_eq!(
+                access_request_decision(1),
+                AccessRequestDecision::Complete(false)
+            );
+            assert_eq!(
+                access_request_decision(3),
+                AccessRequestDecision::Complete(true)
+            );
         }
     }
 }
