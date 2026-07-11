@@ -312,9 +312,33 @@ pub async fn hotkey_status(health: State<'_, HotkeyHealth>) -> Result<HotkeyStat
 #[tauri::command]
 pub async fn start_recording(controller: State<'_, SharedController>) -> Result<(), String> {
     let mut ctrl = controller.lock().unwrap();
-    // The bool (whether recording actually started) is only meaningful to the
-    // hotkey path; the GUI command just needs success/failure.
-    ctrl.start_recording().map(|_| ()).map_err(|e| e.to_string())
+    gui_start_recording_result(ctrl.start_recording())
+}
+
+fn gui_start_recording_result(
+    result: Result<bool, sagascript_core::error::DictationError>,
+) -> Result<(), String> {
+    match result {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(
+            "Cannot start recording while Sagascript is busy. Wait for the current transcription to finish."
+                .to_string(),
+        ),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod gui_recording_tests {
+    use super::gui_start_recording_result;
+
+    #[test]
+    fn gui_start_while_transcribing_returns_busy_error() {
+        let error = gui_start_recording_result(Ok(false)).unwrap_err();
+
+        assert!(error.contains("busy"));
+        assert!(error.contains("current transcription"));
+    }
 }
 
 #[tauri::command]
@@ -342,68 +366,61 @@ pub async fn stop_and_transcribe(
     };
 
     if audio.is_empty() {
-        let mut ctrl = controller.lock().unwrap();
-        ctrl.on_transcription_error("No audio captured");
-        return Err("No audio captured".to_string());
+        return controller
+            .lock()
+            .unwrap()
+            .finish_transcription(Err("No audio captured".to_string()));
     }
 
-    // Ensure model is loaded
-    whisper
-        .ensure_model(effective_model)
-        .map_err(|e| e.to_string())?;
+    // Every outcome after recording stops must flow through
+    // `finish_transcription`: stop_recording_guarded has already moved the
+    // controller to Transcribing, so returning early would wedge subsequent
+    // recording attempts until the app restarts.
+    let result = if let Err(error) = whisper.ensure_model(effective_model) {
+        Err(error.to_string())
+    } else {
+        // Run blocking transcription on a separate thread with a timeout. On timeout
+        // we now trigger a REAL abort (the whisper-rs abort callback wired in
+        // WhisperBackend): request_abort() flips the flag whisper.cpp checks between
+        // compute steps, so the blocking task returns promptly and releases the warm
+        // state instead of running to completion and wedging the pipeline. The handle
+        // is kept borrowed (`&mut fut`) across the timeout so we can await its actual
+        // exit after abort and log whether the lock was released.
+        let whisper_ref = whisper.inner().clone();
+        let mut fut = tokio::task::spawn_blocking(move || {
+            whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
+        });
 
-    // Run blocking transcription on a separate thread with a timeout. On timeout
-    // we now trigger a REAL abort (the whisper-rs abort callback wired in
-    // WhisperBackend): request_abort() flips the flag whisper.cpp checks between
-    // compute steps, so the blocking task returns promptly and releases the warm
-    // state instead of running to completion and wedging the pipeline. The handle
-    // is kept borrowed (`&mut fut`) across the timeout so we can await its actual
-    // exit after abort and log whether the lock was released.
-    let whisper_ref = whisper.inner().clone();
-    let mut fut = tokio::task::spawn_blocking(move || {
-        whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
-    });
-
-    let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
-    let result = match tokio::time::timeout(timeout, &mut fut).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(format!("Transcription task failed: {e}")),
-        Err(_) => {
-            warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
-            whisper.request_abort();
-            // Give the aborted inference a brief grace to unwind, and log which
-            // outcome occurred so a genuine hang is distinguishable from a clean
-            // abort.
-            match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut).await {
-                Ok(_) => info!("Aborted transcription task exited — warm-state lock released"),
-                Err(_) => error!(
-                    "Transcription task still running {ABORT_GRACE_SECS}s after abort — the \
-                     warm state may stay locked until it unwinds; further transcriptions will \
-                     report ModelBusy rather than block forever"
-                ),
+        let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
+        match tokio::time::timeout(timeout, &mut fut).await {
+            Ok(Ok(result)) => result.map_err(|error| error.to_string()),
+            Ok(Err(error)) => Err(format!("Transcription task failed: {error}")),
+            Err(_) => {
+                warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
+                whisper.request_abort();
+                // Give the aborted inference a brief grace to unwind, and log which
+                // outcome occurred so a genuine hang is distinguishable from a clean
+                // abort.
+                match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut).await {
+                    Ok(_) => info!("Aborted transcription task exited — warm-state lock released"),
+                    Err(_) => error!(
+                        "Transcription task still running {ABORT_GRACE_SECS}s after abort — the \
+                         warm state may stay locked until it unwinds; further transcriptions will \
+                         report ModelBusy rather than block forever"
+                    ),
+                }
+                Err(format!(
+                    "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"
+                ))
             }
-            return Err(format!(
-                "Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"
-            ));
         }
     };
 
-    match result {
-        Ok(text) => {
-            let mut ctrl = controller.lock().unwrap();
-            ctrl.on_transcription_success(&text);
-            // NOTE: auto-paste is NOT done here — enigo's macOS TIS APIs crash
-            // if called from a tokio worker thread (SIGTRAP in dispatch_assert_queue).
-            // The hotkey path in main.rs handles paste via run_on_main_thread().
-            // This command returns the text to the frontend for display instead.
-            Ok(text)
-        }
-        Err(e) => {
-            let mut ctrl = controller.lock().unwrap();
-            ctrl.on_transcription_error(&e.to_string());
-            Err(e.to_string())
-        }
-    }
+    // NOTE: auto-paste is NOT done here — enigo's macOS TIS APIs crash if
+    // called from a tokio worker thread (SIGTRAP in dispatch_assert_queue).
+    // The hotkey path in main.rs handles paste via run_on_main_thread(). This
+    // command returns the text to the frontend for display instead.
+    controller.lock().unwrap().finish_transcription(result)
 }
 
 #[tauri::command]

@@ -256,6 +256,27 @@ impl AppController {
         self.logging.end_dictation_session();
     }
 
+    /// Complete a transcription attempt and restore the controller to Idle.
+    ///
+    /// Keeping this transition in the state machine prevents callers from
+    /// accidentally returning early on model-load, task, or timeout failures
+    /// while leaving the app permanently stuck in `Transcribing`.
+    pub fn finish_transcription(
+        &mut self,
+        result: Result<String, String>,
+    ) -> Result<String, String> {
+        match result {
+            Ok(text) => {
+                self.on_transcription_success(&text);
+                Ok(text)
+            }
+            Err(error) => {
+                self.on_transcription_error(&error);
+                Err(error)
+            }
+        }
+    }
+
     /// Auto-paste text if enabled
     #[allow(dead_code)]
     pub fn auto_paste(&self, text: &str) -> Result<(), DictationError> {
@@ -414,6 +435,42 @@ mod tests {
         ctrl.state = AppState::Transcribing;
         ctrl.on_transcription_error("model crashed");
         assert_eq!(ctrl.last_error(), Some("model crashed"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn finish_transcription_failure_returns_idle_and_preserves_error() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+
+        let result = ctrl.finish_transcription(Err("model failed to load".to_string()));
+
+        assert_eq!(result, Err("model failed to load".to_string()));
+        assert_eq!(ctrl.last_error(), Some("model failed to load"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn finish_transcription_empty_audio_returns_idle() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+
+        let result = ctrl.finish_transcription(Err("No audio captured".to_string()));
+
+        assert_eq!(result, Err("No audio captured".to_string()));
+        assert_eq!(ctrl.last_error(), Some("No audio captured"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn finish_transcription_success_returns_idle_and_preserves_text() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+
+        let result = ctrl.finish_transcription(Ok("Hello again".to_string()));
+
+        assert_eq!(result, Ok("Hello again".to_string()));
+        assert_eq!(ctrl.last_transcription(), Some("Hello again"));
         assert_eq!(ctrl.state(), AppState::Idle);
     }
 
