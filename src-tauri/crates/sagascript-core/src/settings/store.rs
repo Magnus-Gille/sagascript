@@ -40,7 +40,8 @@ fn legacy_settings_paths() -> impl Iterator<Item = PathBuf> {
         .map(move |identifier| base.join(identifier).join(SETTINGS_FILENAME))
 }
 
-fn copy_legacy_settings(source: &PathBuf, destination: &PathBuf) -> Result<bool, String> {
+/// Caller must hold the destination's settings lock.
+fn copy_legacy_settings(source: &Path, destination: &Path) -> Result<bool, String> {
     if destination.exists() || !source.is_file() {
         return Ok(false);
     }
@@ -64,20 +65,26 @@ fn copy_legacy_settings(source: &PathBuf, destination: &PathBuf) -> Result<bool,
     object.insert("auto_paste".to_string(), serde_json::Value::Bool(false));
     let migrated = serde_json::to_string_pretty(&value)
         .map_err(|error| format!("Failed to serialize migrated settings: {error}"))?;
-    std::fs::write(destination, migrated)
+    let tmp_path = destination.with_extension("json.tmp");
+    std::fs::write(&tmp_path, migrated)
         .map_err(|error| format!("Failed to write migrated settings: {error}"))?;
+    std::fs::rename(&tmp_path, destination)
+        .map_err(|error| format!("Failed to install migrated settings: {error}"))?;
     Ok(true)
 }
 
 /// Copy settings from an earlier bundle identifier on first use of the new
 /// identifier. Keep the source in place so rolling back a pre-launch build is
 /// safe. Once the destination exists it always wins.
-fn migrate_legacy_identifier_settings(destination: &PathBuf) {
+fn migrate_legacy_identifier_settings_locked(
+    destination: &Path,
+    sources: impl IntoIterator<Item = PathBuf>,
+) {
     if destination.exists() {
         return;
     }
 
-    for source in legacy_settings_paths() {
+    for source in sources {
         if !source.is_file() {
             continue;
         }
@@ -101,8 +108,23 @@ fn migrate_legacy_identifier_settings(destination: &PathBuf) {
 /// Partial JSON files are handled by `#[serde(default)]` on Settings.
 pub fn load() -> Settings {
     let path = settings_path();
-    migrate_legacy_identifier_settings(&path);
-    load_from(&path)
+    // Existing settings are installed with atomic rename, so a read needs no
+    // lock. Only the first-run missing-file path can migrate and must share the
+    // writers' lock for its existence recheck, write, and initial read.
+    if path.exists() {
+        return load_from(&path);
+    }
+    with_settings_lock(&path, || {
+        migrate_legacy_identifier_settings_locked(&path, legacy_settings_paths());
+        Ok(load_from(&path))
+    })
+    .unwrap_or_else(|error| {
+        tracing::warn!(
+            "Failed to lock settings file at {} for loading: {error} — falling back to defaults",
+            path.display()
+        );
+        Settings::default()
+    })
 }
 
 /// Load settings from a specific path. Returns defaults if missing or unreadable.
@@ -138,8 +160,10 @@ pub fn load_from(path: &Path) -> Settings {
 /// Uses atomic write: write to .tmp then rename.
 pub fn save(settings: &Settings) -> Result<(), String> {
     let path = settings_path();
-    migrate_legacy_identifier_settings(&path);
-    with_settings_lock(&path, || save_to(&path, settings))
+    with_settings_lock(&path, || {
+        migrate_legacy_identifier_settings_locked(&path, legacy_settings_paths());
+        save_to(&path, settings)
+    })
 }
 
 /// Apply a field-level settings mutation to the latest on-disk snapshot and
@@ -152,15 +176,27 @@ where
     F: FnOnce(&mut Settings),
 {
     let path = settings_path();
-    migrate_legacy_identifier_settings(&path);
-    update_at(&path, mutate)
+    update_at_with_legacy_sources(&path, legacy_settings_paths(), mutate)
 }
 
+#[cfg(test)]
 fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings),
 {
+    update_at_with_legacy_sources(path, std::iter::empty(), mutate)
+}
+
+fn update_at_with_legacy_sources<F>(
+    path: &Path,
+    sources: impl IntoIterator<Item = PathBuf>,
+    mutate: F,
+) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings),
+{
     with_settings_lock(path, || {
+        migrate_legacy_identifier_settings_locked(path, sources);
         let mut settings = load_from(path);
         mutate(&mut settings);
         save_to(path, &settings)?;
@@ -267,6 +303,8 @@ mod tests {
     use super::*;
     use crate::settings::{HotkeyMode, Language, WhisperModel};
     use std::fs;
+    use std::sync::mpsc;
+    use std::thread;
 
     /// Helper: create a temp dir and override settings_path for testing
     fn with_temp_settings<F: FnOnce(PathBuf)>(f: F) {
@@ -336,6 +374,76 @@ mod tests {
         assert_eq!(migrated["has_completed_onboarding"], true);
         assert!(migrated.get("hasCompletedOnboarding").is_none());
         assert_eq!(migrated["future_key"]["x"], 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn concurrent_first_run_update_waits_for_atomic_migration() {
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-concurrent-migration-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let legacy = root.join("legacy").join(SETTINGS_FILENAME);
+        let destination = root.join("current").join(SETTINGS_FILENAME);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(
+            &legacy,
+            r#"{"language":"sv","auto_paste":true,"future_key":{"x":1}}"#,
+        )
+        .unwrap();
+
+        let (migration_locked_tx, migration_locked_rx) = mpsc::channel();
+        let (release_migration_tx, release_migration_rx) = mpsc::channel();
+        let migration_destination = destination.clone();
+        let migration_legacy = legacy.clone();
+        let migration = thread::spawn(move || {
+            with_settings_lock(&migration_destination, || {
+                migrate_legacy_identifier_settings_locked(
+                    &migration_destination,
+                    [migration_legacy],
+                );
+                migration_locked_tx.send(()).unwrap();
+                release_migration_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+
+        // Hold the lock after the atomic migration has installed the file,
+        // then start an update in a second thread. It cannot read or write the
+        // destination until the migration's critical section is released.
+        migration_locked_rx.recv().unwrap();
+        let (update_blocked_tx, update_blocked_rx) = mpsc::channel();
+        let update_destination = destination.clone();
+        let update_legacy = legacy.clone();
+        let update = thread::spawn(move || {
+            let lock_probe = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(update_destination.with_extension("json.lock"))
+                .unwrap();
+            assert!(
+                lock_probe.try_lock_exclusive().is_err(),
+                "migration must still hold the settings lock"
+            );
+            update_blocked_tx.send(()).unwrap();
+            update_at_with_legacy_sources(&update_destination, [update_legacy], |settings| {
+                settings.language = Language::Norwegian;
+            })
+        });
+        update_blocked_rx.recv().unwrap();
+        release_migration_tx.send(()).unwrap();
+
+        migration.join().unwrap().unwrap();
+        let updated = update.join().unwrap().unwrap();
+        assert_eq!(updated.language, Language::Norwegian);
+        assert!(!updated.auto_paste);
+
+        let contents = fs::read_to_string(&destination).unwrap();
+        let persisted: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(persisted["language"], "no");
+        assert_eq!(persisted["auto_paste"], false);
+        assert_eq!(persisted["future_key"]["x"], 1);
+        assert!(!destination.with_extension("json.tmp").exists());
         let _ = fs::remove_dir_all(root);
     }
 

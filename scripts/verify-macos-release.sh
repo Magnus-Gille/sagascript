@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+verify_audio_input_entitlement() {
+  local value
+  value=$(plutil -extract 'com\.apple\.security\.device\.audio-input' raw "$1" 2>/dev/null) || return 1
+  [[ "$value" == "true" ]]
+}
+
+if [[ ${1:-} == "--check-entitlements-plist" ]]; then
+  [[ $# -eq 2 ]] || { echo "Usage: $0 --check-entitlements-plist /path/to/entitlements.plist" >&2; exit 2; }
+  verify_audio_input_entitlement "$2"
+  exit
+fi
+
 if [[ $# -ne 3 ]]; then
   echo "Usage: $0 /path/to/Sagascript.app /path/to/Sagascript.dmg VERSION" >&2
   exit 2
@@ -50,7 +62,7 @@ grep -Eq '^CodeDirectory .*flags=.*\(runtime\)' <<<"$signature" || {
 entitlements=$(mktemp)
 trap 'rm -f "$entitlements"' EXIT
 codesign -d --entitlements :- "$app" >"$entitlements" 2>/dev/null
-[[ "$(plutil -extract com.apple.security.device.audio-input raw "$entitlements")" == "true" ]] || {
+verify_audio_input_entitlement "$entitlements" || {
   echo "Signed app is missing the audio-input entitlement" >&2
   exit 1
 }

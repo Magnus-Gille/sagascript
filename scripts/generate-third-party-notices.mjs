@@ -14,8 +14,22 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = join(root, "THIRD_PARTY_NOTICES.md");
 const mode = process.argv[2];
 
+function compareCodeUnits(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+if (mode === "--test-sort") {
+  const fixture = ["z", "ä", "a", "å", "A"].sort(compareCodeUnits);
+  const expected = ["A", "a", "z", "ä", "å"];
+  if (fixture.join("\0") !== expected.join("\0")) {
+    throw new Error(`Unexpected deterministic sort order: ${fixture.join(", ")}`);
+  }
+  console.log(createHash("sha256").update(fixture.join("\n")).digest("hex"));
+  process.exit(0);
+}
+
 if (!new Set(["--check", "--write"]).has(mode)) {
-  console.error("Usage: node scripts/generate-third-party-notices.mjs --check|--write");
+  console.error("Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort");
   process.exit(2);
 }
 
@@ -108,7 +122,7 @@ function rootLicenseFiles(directory) {
     .filter((name) => /^(licen[sc]e|copying|notice)([._-].*)?$/i.test(name))
     .map((name) => join(directory, name))
     .filter((path) => statSync(path).isFile())
-    .sort();
+    .sort(compareCodeUnits);
 }
 
 const rustById = new Map();
@@ -139,7 +153,7 @@ const rustPackages = [...rustById.values()]
     source: componentSource(pkg, "Rust"),
     directory: dirname(pkg.manifest_path),
   }))
-  .sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+  .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.version, b.version));
 
 const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
 const lockedNpmPackages = Object.entries(lock.packages)
@@ -156,7 +170,7 @@ const lockedNpmPackages = Object.entries(lock.packages)
       optional: pkg.optional === true,
     };
   })
-  .sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+  .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.version, b.version));
 // Keep every locked npm package in the inventory so output is identical on
 // Apple Silicon and Intel CI. Platform-specific optional packages are not
 // installed on the other architecture, so their SPDX metadata is recorded but
@@ -280,13 +294,13 @@ The following verbatim texts are collected from root-level \`LICENSE\`,
 texts are deduplicated while retaining the associated component list.
 
 ${[...licenseTexts.entries()]
-  .sort(([a], [b]) => a.localeCompare(b))
+  .sort(([a], [b]) => compareCodeUnits(a, b))
   .map(
     ([digest, entry]) => `### ${digest.slice(0, 12)}
 
-Components: ${entry.components.sort().join(", ")}
+Components: ${entry.components.sort(compareCodeUnits).join(", ")}
 
-Source filenames: ${[...entry.filenames].sort().join(", ")}
+Source filenames: ${[...entry.filenames].sort(compareCodeUnits).join(", ")}
 
 ~~~~text
 ${entry.content}
