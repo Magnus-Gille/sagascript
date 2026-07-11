@@ -13,6 +13,10 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Generator, Shell};
 
+pub(crate) fn set_transcription_progress(progress: &indicatif::ProgressBar, percentage: i32) {
+    progress.set_position(percentage.clamp(0, 100) as u64);
+}
+
 // Root help text is feature-aware: a batch-only build (`--no-default-features`)
 // has no `record` subcommand, so the workflow/examples must not advertise it.
 #[cfg(feature = "record")]
@@ -491,6 +495,17 @@ fn render_manpage_tree(cmd: &clap::Command, dir: &PathBuf) -> Result<(), io::Err
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transcription_progress_bar_never_renders_outside_zero_to_one_hundred() {
+        let progress = indicatif::ProgressBar::new(100);
+
+        set_transcription_progress(&progress, 101);
+        assert_eq!(progress.position(), 100);
+
+        set_transcription_progress(&progress, -1);
+        assert_eq!(progress.position(), 0);
+    }
 
     // -- Completions generation --
 

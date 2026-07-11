@@ -161,7 +161,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
             language,
             prompt,
             move |pct| {
-                pb_cb.set_position(pct as u64);
+                crate::set_transcription_progress(&pb_cb, pct);
             },
         )?;
         pb.finish_and_clear();
