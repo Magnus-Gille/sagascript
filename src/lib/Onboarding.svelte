@@ -155,11 +155,20 @@
     try {
       await requestAccessibilityPermission();
       startPoll(async () => {
-        const granted = await checkAccessibilityPermission();
-        if (granted) {
-          accessibilityGranted = true;
-          accessibilityChecking = false;
+        try {
+          const granted = await checkAccessibilityPermission();
+          if (!accessibilityChecking) return;
+          if (granted) {
+            accessibilityGranted = true;
+            accessibilityChecking = false;
+            stopPoll();
+          }
+        } catch (e: any) {
+          if (!accessibilityChecking) return;
           stopPoll();
+          accessibilityChecking = false;
+          accessibilityError =
+            typeof e === "string" ? e : e?.message ?? "Failed to check Accessibility permission. Please try again.";
         }
       });
     } catch (e: any) {
@@ -186,6 +195,7 @@
 
   async function skipAccessibility() {
     stopPoll();
+    accessibilityChecking = false;
     savingManualPaste = true;
     accessibilityError = null;
     try {
@@ -571,7 +581,7 @@
           {/if}
         </div>
         {#if accessibilityError}
-          <div class="status-indicator error">
+          <div class="status-indicator error" role="alert" aria-live="assertive">
             <span class="status-dot"></span>
             <span>{accessibilityError}</span>
           </div>
