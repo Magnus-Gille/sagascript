@@ -185,6 +185,22 @@ jobs:
           : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
           npx tauri build --target aarch64-apple-darwin
 
+      - name: Notarize and staple disk image
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
+          : "${APPLE_API_KEY:?APPLE_API_KEY secret is required}"
+          dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
+          [[ -n "$dmg" ]]
+          xcrun notarytool submit "$dmg" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$dmg"
+
       - name: Verify macOS release artifact
         run: |
           version=$(node -p "require('./package.json').version")
