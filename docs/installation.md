@@ -44,6 +44,23 @@ The `/usr/local/bin/sagascript` link above points into the app bundle, so it
 automatically reaches the replacement executable. If it points elsewhere,
 repeat the `ln -sfn` command before testing the upgraded CLI.
 
+### Accessibility onboarding release check
+
+Release acceptance must exercise the case where System Settings is already
+open on an unrelated pane:
+
+1. Install and launch the signed `/Applications/Sagascript.app`; do not use an
+   unsigned development bundle for this check.
+2. Leave System Settings open on Wi-Fi (or another unrelated pane).
+3. Reset only the release app's grant with
+   `tccutil reset Accessibility ai.gille.sagascript`.
+4. In onboarding, click **Open System Settings**.
+5. Verify System Settings comes forward on **Privacy & Security >
+   Accessibility**, enable the exact installed Sagascript row, and confirm
+   onboarding changes to **Accessibility granted** without an app relaunch.
+6. Confirm **I'll paste manually** remains available while permission is not
+   granted.
+
 ### Homebrew (planned)
 
 ```

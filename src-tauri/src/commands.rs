@@ -947,7 +947,7 @@ pub async fn check_accessibility_permission() -> Result<bool, String> {
 pub async fn request_accessibility_permission() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        crate::platform::macos::request_accessibility_permission();
+        crate::platform::macos::request_accessibility_permission()?;
     }
     Ok(())
 }
