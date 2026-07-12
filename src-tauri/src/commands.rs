@@ -778,7 +778,13 @@ pub async fn transcribe_file(
             .collect();
 
         let diarized = merge_with_transcript(&speaker_segments, &transcript);
-        let consolidated = consolidate(&diarized);
+        let mut consolidated = consolidate(&diarized);
+        for segment in &mut consolidated {
+            segment.text = sagascript_core::transcription::normalize_nonspeech_markers(
+                &segment.text,
+                language,
+            );
+        }
 
         let text = consolidated
             .iter()
