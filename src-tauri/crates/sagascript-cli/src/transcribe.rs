@@ -8,7 +8,9 @@ use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::transcription::model;
-use sagascript_core::transcription::{TranscribeOptions, WhisperBackend};
+use sagascript_core::transcription::{
+    TranscribeOptions, WhisperBackend, normalize_nonspeech_markers,
+};
 
 #[derive(Args)]
 pub struct TranscribeArgs {
@@ -174,7 +176,10 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             .collect();
 
         let diarized = merge_with_transcript(&speaker_segments, &transcript);
-        let consolidated = consolidate(&diarized);
+        let mut consolidated = consolidate(&diarized);
+        for segment in &mut consolidated {
+            segment.text = normalize_nonspeech_markers(&segment.text, language);
+        }
 
         if args.json {
             let speakers: Vec<String> = {
@@ -268,22 +273,23 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         eprintln!("Transcribing...");
         backend.transcribe_sync_with_options_segments(&audio, language, &opts, |_| {})?
     };
-    // Same join+trim as WhisperBackend::transcribe_sync_with_options, so the
-    // plain-text output is byte-identical to what it was before segments.
-    let text = segments
+    // Keep timestamped segment text source-faithful, while the rendered
+    // top-level text uses the same display normalization as live dictation.
+    let raw_text = segments
         .iter()
         .map(|s| s.text.as_str())
         .collect::<String>()
         .trim()
         .to_string();
+    let text = normalize_nonspeech_markers(&raw_text, language);
 
     // Output
     if args.json {
         // Per-segment confidence (#81): avg_logprob is the mean token
         // log-probability (null when a segment has no scoreable tokens);
         // no_speech_prob near 1.0 flags likely-hallucinated segments.
-        // Segment text is trimmed for consumers; top-level `text` keeps the
-        // exact pre-segments contract.
+        // Segment text is trimmed but otherwise raw for confidence/timing
+        // consumers; top-level `text` is the display-normalized rendering.
         let json_segments: Vec<serde_json::Value> = segments
             .iter()
             .map(|s| {

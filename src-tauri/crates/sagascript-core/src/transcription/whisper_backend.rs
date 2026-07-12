@@ -506,8 +506,8 @@ impl WhisperBackend {
     /// spawn_blocking.
     ///
     /// Thin wrapper over [`Self::transcribe_sync_with_options_segments`] that
-    /// concatenates the raw segment texts (whisper's leading spaces make this
-    /// lossless) and trims the result.
+    /// concatenates the raw segment texts, then applies display-only
+    /// non-speech marker normalization. Timestamped segment text stays raw.
     pub fn transcribe_sync_with_options(
         &self,
         audio: &[f32],
@@ -521,7 +521,7 @@ impl WhisperBackend {
         for seg in &segments {
             transcript.push_str(&seg.text);
         }
-        Ok(transcript.trim().to_string())
+        Ok(super::normalize_nonspeech_markers(transcript.trim(), language))
     }
 
     /// Like [`Self::transcribe_sync_with_options`] but returns the individual
