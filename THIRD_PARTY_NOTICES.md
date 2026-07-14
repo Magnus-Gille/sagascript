@@ -209,8 +209,6 @@ link; the upstream repository is authoritative for its license terms.
 | jsonptr | 0.6.3 | MIT OR Apache-2.0 | [upstream](https://github.com/chanced/jsonptr) |
 | keyboard-types | 0.7.0 | MIT OR Apache-2.0 | [upstream](https://github.com/pyfisch/keyboard-types) |
 | kodama | 0.2.3 | MIT | [upstream](https://github.com/diffeo/kodama) |
-| kqueue | 1.1.1 | MIT | [upstream](https://gitlab.com/rust-kqueue/rust-kqueue) |
-| kqueue-sys | 1.0.4 | MIT | [upstream](https://gitlab.com/rust-kqueue/rust-kqueue-sys) |
 | kuchikiki | 0.8.8-speedreader | MIT | [upstream](https://github.com/brave/kuchikiki) |
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang-nursery/lazy-static.rs) |
 | libc | 0.2.180 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/libc) |
@@ -2126,34 +2124,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-~~~~
-
-### 208693b9bfa9
-
-Components: Rust kqueue-sys@1.0.4, Rust kqueue@1.1.1
-
-Source filenames: LICENSE
-
-~~~~text
-Copyright (c) 2016 William Orr <will@worrbase.com>
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 ~~~~
 
 ### 23c3dce12b90

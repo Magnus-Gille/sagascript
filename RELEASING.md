@@ -39,7 +39,8 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
 ## Release procedure
 
 1. Update the version in `package.json`, `package-lock.json`,
-   `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
+   `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and
+   `src-tauri/tauri.conf.json`.
 2. Run `npm run release:check`, `npm run licenses:check`, `npm run check`,
    `cargo test --workspace`, and
    `cargo clippy --workspace --all-targets -- -D warnings`.
