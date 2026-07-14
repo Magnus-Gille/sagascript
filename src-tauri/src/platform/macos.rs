@@ -6,7 +6,7 @@ use std::io;
 use std::process::{Command, ExitStatus};
 
 const ACCESSIBILITY_SETTINGS_URL: &str =
-    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+    "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility";
 
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
