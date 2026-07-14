@@ -199,14 +199,22 @@ fn main() {
             match app.global_shortcut().register(shortcut.as_str()) {
                 Ok(()) => {
                     info!("Hotkey registered: {shortcut}");
-                    let change = health.record(&shortcut, None);
+                    let change = health.record(
+                        &shortcut,
+                        None,
+                        hotkey::OperationalHotkey::registered(&shortcut),
+                    );
                     if change.changed {
                         let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
                     }
                 }
                 Err(e) => {
                     error!("Failed to register hotkey: {e}");
-                    let change = health.record(&shortcut, Some(e.to_string()));
+                    let change = health.record(
+                        &shortcut,
+                        Some(e.to_string()),
+                        hotkey::OperationalHotkey::Inactive,
+                    );
                     if change.changed {
                         let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
                     }
@@ -770,10 +778,31 @@ fn stop_recording_and_transcribe(
     });
 }
 
+/// Whether a filesystem event may reflect creation or replacement of the settings file.
+fn settings_event_may_affect(
+    event: &notify::Event,
+    settings_path: &std::path::Path,
+) -> bool {
+    let relevant_kind = matches!(
+        event.kind,
+        notify::EventKind::Create(_) | notify::EventKind::Modify(_)
+    );
+
+    relevant_kind
+        && event
+            .paths
+            .iter()
+            .any(|path| path == settings_path)
+}
+
 /// Watch the settings file for external changes and hot-reload into the running app.
 /// Handles hotkey re-registration and emits a settings-changed event to the frontend.
 fn start_settings_watcher(app: tauri::AppHandle) {
-    use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use notify::{Config, RecursiveMode, Watcher};
+    #[cfg(not(target_os = "macos"))]
+    use notify::RecommendedWatcher;
+    #[cfg(target_os = "macos")]
+    use notify::PollWatcher;
     use std::sync::mpsc;
 
     let settings_path = sagascript_core::settings::store::settings_path();
@@ -784,15 +813,26 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             return;
         }
     };
-    let settings_filename = settings_path
-        .file_name()
-        .map(|f| f.to_os_string())
-        .unwrap_or_default();
-
     std::thread::spawn(move || {
         let (tx, rx) = mpsc::channel();
 
-        let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
+        // notify's optional macOS kqueue backend can panic after our atomic
+        // settings-file replacement. Polling this tiny directory avoids that
+        // stale-file-descriptor path. Comparing contents is required because
+        // several rapid saves can share the same whole-second mtime and size.
+        // One-second polling keeps this background safety net inexpensive;
+        // CLI-driven settings hot reload is not latency-sensitive.
+        #[cfg(target_os = "macos")]
+        let watcher_result = PollWatcher::new(
+            tx,
+            Config::default()
+                .with_poll_interval(Duration::from_secs(1))
+                .with_compare_contents(true),
+        );
+        #[cfg(not(target_os = "macos"))]
+        let watcher_result = RecommendedWatcher::new(tx, Config::default());
+
+        let mut watcher = match watcher_result {
             Ok(w) => w,
             Err(e) => {
                 error!("Failed to create settings file watcher: {e}");
@@ -816,29 +856,16 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 }
             };
 
-            // Only react to modify/create events on our settings file
-            let dominated = matches!(
-                event.kind,
-                EventKind::Modify(_) | EventKind::Create(_)
-            );
-            if !dominated {
-                continue;
-            }
-
-            let is_our_file = event.paths.iter().any(|p| {
-                p.file_name()
-                    .map(|f| f == settings_filename)
-                    .unwrap_or(false)
-            });
-            if !is_our_file {
+            if !settings_event_may_affect(&event, &settings_path) {
                 continue;
             }
 
             // Small delay to let atomic rename complete
             std::thread::sleep(Duration::from_millis(50));
 
+            let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
+            let _transition = health.transition_guard();
             let new_settings = load_settings_with_permission_gate();
-
             let ctrl: tauri::State<'_, SharedController> = app.state();
             let old_settings = {
                 let c = ctrl.lock().unwrap();
@@ -852,43 +879,91 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                     old_settings.hotkey, new_settings.hotkey
                 );
 
-                if let Err(e) = app.global_shortcut().unregister(old_settings.hotkey.as_str()) {
-                    error!("Failed to unregister old hotkey: {e}");
-                }
+                let old_operational = health.operational_hotkey();
+                let unregister_error = match &old_operational {
+                    hotkey::OperationalHotkey::Registered(shortcut) => app
+                        .global_shortcut()
+                        .unregister(shortcut.as_str())
+                        .err()
+                        .map(|e| {
+                            error!(
+                                "Failed to unregister operational hotkey '{shortcut}': {e}"
+                            );
+                            e.to_string()
+                        }),
+                    hotkey::OperationalHotkey::Inactive => None,
+                    hotkey::OperationalHotkey::Unknown => Some(
+                        "registration state is unknown after an earlier OS error; restart Sagascript"
+                            .to_string(),
+                    ),
+                };
 
-                let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
-                let change = match app.global_shortcut().register(new_settings.hotkey.as_str()) {
-                    Ok(()) => {
-                        info!("Hotkey re-registered: {}", new_settings.hotkey);
-                        health.record(&new_settings.hotkey, None)
-                    }
-                    Err(e) => {
-                        error!("Failed to register new hotkey '{}': {e}", new_settings.hotkey);
-                        // Re-register the old one as fallback so the app doesn't
-                        // end up with no hotkey bound at all. Either way the
-                        // SAVED shortcut is not registered — health must report
-                        // the saved shortcut's failure, not a false-normal for
-                        // the operational fallback.
-                        match app.global_shortcut().register(old_settings.hotkey.as_str()) {
-                            Ok(()) => {
-                                info!("Re-registered old hotkey '{}' as fallback", old_settings.hotkey);
-                                health.record(
+                let change = if let Some(e) = unregister_error {
+                    // The OS registration is now unknown. Do not risk adding a
+                    // second active shortcut after a failed unregister.
+                    health.record(
+                        &new_settings.hotkey,
+                        Some(format!(
+                            "failed to replace previous hotkey because it could not be unregistered: {e}"
+                        )),
+                        hotkey::OperationalHotkey::Unknown,
+                    )
+                } else {
+                    match app.global_shortcut().register(new_settings.hotkey.as_str()) {
+                        Ok(()) => {
+                            info!("Hotkey re-registered: {}", new_settings.hotkey);
+                            health.record(
+                                &new_settings.hotkey,
+                                None,
+                                hotkey::OperationalHotkey::registered(&new_settings.hotkey),
+                            )
+                        }
+                        Err(e) => {
+                            error!("Failed to register new hotkey '{}': {e}", new_settings.hotkey);
+                            // Re-register the old one as fallback so the app doesn't
+                            // end up with no hotkey bound at all. Either way the
+                            // SAVED shortcut is not registered — health must report
+                            // the saved shortcut's failure, not a false-normal for
+                            // the operational fallback.
+                            match &old_operational {
+                                hotkey::OperationalHotkey::Registered(old_shortcut) => {
+                                    match app.global_shortcut().register(old_shortcut.as_str()) {
+                                        Ok(()) => {
+                                            info!(
+                                                "Re-registered old hotkey '{old_shortcut}' as fallback"
+                                            );
+                                            health.record(
+                                                &new_settings.hotkey,
+                                                Some(format!(
+                                                    "failed to register: {e}; still using previous hotkey '{old_shortcut}'"
+                                                )),
+                                                hotkey::OperationalHotkey::Registered(
+                                                    old_shortcut.clone(),
+                                                ),
+                                            )
+                                        }
+                                        Err(e2) => {
+                                            error!("Failed to re-register old hotkey: {e2}");
+                                            health.record(
+                                                &new_settings.hotkey,
+                                                Some(format!(
+                                                    "failed to register: {e}; fallback to '{old_shortcut}' also failed: {e2}"
+                                                )),
+                                                hotkey::OperationalHotkey::Inactive,
+                                            )
+                                        }
+                                    }
+                                }
+                                hotkey::OperationalHotkey::Inactive => health.record(
                                     &new_settings.hotkey,
                                     Some(format!(
-                                        "failed to register: {e}; still using previous hotkey '{}'",
-                                        old_settings.hotkey
+                                        "failed to register: {e}; no previous hotkey was active"
                                     )),
-                                )
-                            }
-                            Err(e2) => {
-                                error!("Failed to re-register old hotkey: {e2}");
-                                health.record(
-                                    &new_settings.hotkey,
-                                    Some(format!(
-                                        "failed to register: {e}; fallback to '{}' also failed: {e2}",
-                                        old_settings.hotkey
-                                    )),
-                                )
+                                    hotkey::OperationalHotkey::Inactive,
+                                ),
+                                hotkey::OperationalHotkey::Unknown => {
+                                    unreachable!("unknown state handled before registration")
+                                }
                             }
                         }
                     }
@@ -915,6 +990,103 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    fn wait_for_settings_event(
+        rx: &std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+        settings_path: &std::path::Path,
+    ) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+            match rx.recv_timeout(remaining) {
+                Ok(Ok(event)) if settings_event_may_affect(&event, settings_path) => {
+                    return true;
+                }
+                Ok(_) => continue,
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_settings_watcher_survives_repeated_atomic_replacements() {
+        use notify::{Config, PollWatcher, RecursiveMode, Watcher};
+
+        let dir = std::env::temp_dir().join(format!(
+            "sagascript-settings-watcher-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings_path = dir.join("sagascript-settings.json");
+        std::fs::write(&settings_path, b"{}\n").unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = PollWatcher::new(
+            tx,
+            Config::default()
+                .with_poll_interval(Duration::from_millis(100))
+                .with_compare_contents(true),
+        )
+        .unwrap();
+        watcher
+            .watch(&dir, RecursiveMode::NonRecursive)
+            .unwrap();
+
+        for value in [1, 2, 3, 4, 5] {
+            let temporary = dir.join(format!("settings-{value}.tmp"));
+            std::fs::write(&temporary, format!("{{\"value\":{value}}}\n")).unwrap();
+            std::fs::rename(&temporary, &settings_path).unwrap();
+            assert!(
+                wait_for_settings_event(&rx, &settings_path),
+                "watcher stopped reporting the settings path after atomic replacement {value}"
+            );
+        }
+
+        drop(watcher);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn settings_event_filter_accepts_target_create_and_modify_events() {
+        use notify::event::{CreateKind, ModifyKind};
+        use notify::{Event, EventKind};
+
+        let watch_dir = std::path::Path::new("/tmp/sagascript");
+        let settings_path = watch_dir.join("sagascript-settings.json");
+
+        for kind in [
+            EventKind::Create(CreateKind::Any),
+            EventKind::Modify(ModifyKind::Any),
+        ] {
+            let target_event = Event::new(kind).add_path(settings_path.clone());
+            assert!(settings_event_may_affect(&target_event, &settings_path));
+        }
+    }
+
+    #[test]
+    fn settings_event_filter_rejects_unrelated_and_non_mutating_events() {
+        use notify::event::{AccessKind, ModifyKind, RemoveKind};
+        use notify::{Event, EventKind};
+
+        let watch_dir = std::path::Path::new("/tmp/sagascript");
+        let settings_path = watch_dir.join("sagascript-settings.json");
+        let unrelated = Event::new(EventKind::Modify(ModifyKind::Any))
+            .add_path(watch_dir.join("settings.tmp"));
+        assert!(!settings_event_may_affect(&unrelated, &settings_path));
+
+        let remove = Event::new(EventKind::Remove(RemoveKind::Any))
+            .add_path(settings_path.clone());
+        assert!(!settings_event_may_affect(&remove, &settings_path));
+
+        let access = Event::new(EventKind::Access(AccessKind::Any))
+            .add_path(settings_path.clone());
+        assert!(!settings_event_may_affect(&access, &settings_path));
+
+        let other = Event::new(EventKind::Other).add_path(settings_path.clone());
+        assert!(!settings_event_may_affect(&other, &settings_path));
+    }
 
     #[test]
     fn auto_paste_requires_runtime_accessibility_approval() {

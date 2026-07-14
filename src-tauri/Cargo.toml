@@ -54,7 +54,9 @@ dirs = "6"
 notify = { version = "7", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+# notify 7 requires one native macOS backend feature even when this app uses
+# PollWatcher explicitly for settings (see start_settings_watcher).
+notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
 # enigo (auto-paste) and the objc FFI stack are desktop-GUI integrations.
 enigo = { version = "0.6", features = ["serde"] }
 core-foundation = "0.10"
