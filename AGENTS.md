@@ -1,4 +1,4 @@
-# Sagascript — Codex Project Context
+# Sagascript — project instructions
 
 ## What this is
 
