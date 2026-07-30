@@ -7,10 +7,16 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::transcription::diagnostics::{
+    CoverageDiagnostics, LanguageDetection, TranscriptionWarning, analyze_coverage,
+    language_mismatch_warning,
+};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::{
     TranscribeOptions, WhisperBackend, normalize_nonspeech_markers,
 };
+#[cfg(feature = "diarization")]
+use sagascript_core::transcription::TranscriptSegment;
 
 #[derive(Args)]
 pub struct TranscribeArgs {
@@ -26,8 +32,8 @@ pub struct TranscribeArgs {
     pub model: Option<String>,
 
     /// Output result as JSON: text, language, model, duration, and a
-    /// `segments` array with per-segment timing and confidence
-    /// (avg_logprob, no_speech_prob) for flagging low-confidence spans.
+    /// `segments` array with per-segment timing/confidence plus
+    /// `coverage_ratio`, `uncovered_spans`, detected language, and warnings.
     #[arg(long)]
     pub json: bool,
 
@@ -110,6 +116,13 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     eprintln!("Loading model: {}...", model.display_name());
     let backend = WhisperBackend::new();
     backend.load_model(model)?;
+    let detected_language = match detect_file_language(&backend, &audio, model) {
+        Ok(detection) => detection,
+        Err(error) => {
+            eprintln!("Warning: local language detection was unavailable: {error}");
+            None
+        }
+    };
 
     // Effective hint/prompt: --prompt-file, else --hint/--prompt, else the saved
     // initial_prompt. Used by both the diarized and standard paths.
@@ -180,6 +193,19 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         for segment in &mut consolidated {
             segment.text = normalize_nonspeech_markers(&segment.text, language);
         }
+        let diagnostic_segments: Vec<TranscriptSegment> = consolidated
+            .iter()
+            .map(|segment| TranscriptSegment {
+                start: segment.start,
+                end: segment.end,
+                text: segment.text.clone(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            })
+            .collect();
+        let coverage = analyze_coverage(&audio, &diagnostic_segments);
+        let warnings = combined_warnings(&coverage, language, detected_language.as_ref());
+        emit_warnings(&warnings);
 
         if args.json {
             let speakers: Vec<String> = {
@@ -193,6 +219,10 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
                 "model": model_id_string(model),
                 "file": args.file.display().to_string(),
                 "duration_seconds": duration,
+                "coverage_ratio": coverage.coverage_ratio,
+                "uncovered_spans": coverage.uncovered_spans,
+                "detected_language": detected_language,
+                "warnings": warnings,
             });
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
         } else {
@@ -244,7 +274,9 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         }),
         temperature_fallback: stored.temperature_fallback,
         vad_model_path,
-        segment_timestamps: args.json,
+        // Coverage diagnostics need real segment bounds for both human and
+        // JSON output. Text decoding remains in no-timestamps mode.
+        segment_timestamps: true,
     };
     if opts.beam_size >= 2 {
         eprintln!("Beam search: width {}", opts.beam_size);
@@ -282,6 +314,9 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         .trim()
         .to_string();
     let text = normalize_nonspeech_markers(&raw_text, language);
+    let coverage = analyze_coverage(&audio, &segments);
+    let warnings = combined_warnings(&coverage, language, detected_language.as_ref());
+    emit_warnings(&warnings);
 
     // Output
     if args.json {
@@ -309,6 +344,10 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             "model": model_id_string(model),
             "file": args.file.display().to_string(),
             "duration_seconds": duration,
+            "coverage_ratio": coverage.coverage_ratio,
+            "uncovered_spans": coverage.uncovered_spans,
+            "detected_language": detected_language,
+            "warnings": warnings,
         });
         println!("{}", serde_json::to_string_pretty(&json).unwrap());
     } else {
@@ -322,6 +361,109 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     }
 
     Ok(())
+}
+
+fn combined_warnings(
+    coverage: &CoverageDiagnostics,
+    configured_language: Language,
+    detected_language: Option<&LanguageDetection>,
+) -> Vec<TranscriptionWarning> {
+    let mut warnings = coverage.warnings.clone();
+    if let Some(detected) = detected_language {
+        if let Some(warning) = language_mismatch_warning(configured_language, detected) {
+            warnings.push(warning);
+        }
+    }
+    warnings
+}
+
+fn emit_warnings(warnings: &[TranscriptionWarning]) {
+    for warning in warnings {
+        eprintln!("Warning [{}]: {}", warning.code, warning.message);
+    }
+}
+
+fn detect_file_language(
+    transcription_backend: &WhisperBackend,
+    audio: &[f32],
+    transcription_model: WhisperModel,
+) -> Result<Option<LanguageDetection>, DictationError> {
+    if transcription_model.is_english_only() {
+        return Ok(None);
+    }
+    if !transcription_model.is_language_optimized() {
+        return transcription_backend.detect_language(audio);
+    }
+
+    let Some(detection_model) = neutral_language_detection_model(model::is_model_downloaded)
+    else {
+        eprintln!(
+            "Warning: language mismatch check skipped because no neutral multilingual model is downloaded."
+        );
+        return Ok(None);
+    };
+    eprintln!(
+        "Checking language with neutral model: {}...",
+        detection_model.display_name()
+    );
+    let detection_backend = WhisperBackend::new();
+    detection_backend.load_model(detection_model)?;
+    let initial_detection = detection_backend.detect_language(audio)?;
+    let Some(initial) = initial_detection else {
+        return Ok(None);
+    };
+    if initial.probability >= 0.90 {
+        return Ok(Some(initial));
+    }
+
+    // Release the cheap detector before loading the larger fallback. The
+    // transcription backend is still resident, so keeping both detection
+    // contexts alive here would needlessly increase peak memory.
+    drop(detection_backend);
+
+    let Some(accurate_model) =
+        accurate_language_detection_model(model::is_model_downloaded, detection_model)
+    else {
+        return Ok(Some(initial));
+    };
+    eprintln!(
+        "Language check was uncertain ({} p={:.3}); verifying with {}...",
+        initial.language,
+        initial.probability,
+        accurate_model.display_name()
+    );
+    let accurate_backend = WhisperBackend::new();
+    accurate_backend.load_model(accurate_model)?;
+    accurate_backend.detect_language(audio)
+}
+
+fn neutral_language_detection_model(
+    is_downloaded: impl Fn(WhisperModel) -> bool,
+) -> Option<WhisperModel> {
+    // Start with a small neutral model so the common, confident case stays
+    // cheap. An uncertain result is escalated below.
+    [
+        WhisperModel::Base,
+        WhisperModel::Tiny,
+        WhisperModel::Small,
+        WhisperModel::Medium,
+        WhisperModel::LargeV3TurboQ8,
+        WhisperModel::LargeV3Turbo,
+    ]
+    .into_iter()
+    .find(|&candidate| is_downloaded(candidate))
+}
+
+fn accurate_language_detection_model(
+    is_downloaded: impl Fn(WhisperModel) -> bool,
+    exclude: WhisperModel,
+) -> Option<WhisperModel> {
+    // Older Whisper language classifiers can confuse accented English with
+    // Swedish. Large v3 Turbo is used only when the cheap detector is below
+    // the strong-confidence threshold.
+    [WhisperModel::LargeV3TurboQ8, WhisperModel::LargeV3Turbo]
+        .into_iter()
+        .find(|&candidate| candidate != exclude && is_downloaded(candidate))
 }
 
 /// Validates a `--diarize-threshold` value: must parse as a finite f32 in the
@@ -732,6 +874,38 @@ mod tests {
         assert!(
             resolve_effective_model(Some("bogus"), Language::Auto, true, WhisperModel::Base)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn neutral_language_detector_prefers_downloaded_base() {
+        let selected = neutral_language_detection_model(|model| {
+            matches!(model, WhisperModel::Base | WhisperModel::Tiny)
+        });
+        assert_eq!(selected, Some(WhisperModel::Base));
+    }
+
+    #[test]
+    fn neutral_language_detector_falls_back_and_can_be_unavailable() {
+        let selected =
+            neutral_language_detection_model(|model| model == WhisperModel::LargeV3Turbo);
+        assert_eq!(selected, Some(WhisperModel::LargeV3Turbo));
+        assert_eq!(neutral_language_detection_model(|_| false), None);
+    }
+
+    #[test]
+    fn uncertain_language_detector_escalates_to_downloaded_turbo() {
+        let selected = accurate_language_detection_model(
+            |model| matches!(model, WhisperModel::LargeV3TurboQ8 | WhisperModel::LargeV3Turbo),
+            WhisperModel::Base,
+        );
+        assert_eq!(selected, Some(WhisperModel::LargeV3TurboQ8));
+        assert_eq!(
+            accurate_language_detection_model(
+                |model| model == WhisperModel::LargeV3Turbo,
+                WhisperModel::LargeV3Turbo,
+            ),
+            None
         );
     }
 }

@@ -6,13 +6,14 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
-    WhisperVadParams,
+    WhisperVadParams, get_lang_str,
 };
 #[cfg(feature = "diarization")]
 use whisper_rs::{DtwMode, DtwParameters};
 
 use crate::error::DictationError;
 use crate::settings::{Language, WhisperModel};
+use crate::transcription::diagnostics::LanguageDetection;
 use crate::transcription::model;
 
 /// Default beam width for file (non-live) transcription. File transcription
@@ -174,6 +175,62 @@ impl WhisperBackend {
             abort_flag: Arc::new(AtomicBool::new(false)),
             load_lock: Mutex::new(()),
         }
+    }
+
+    /// Run Whisper's local language classifier on a bounded, speech-rich
+    /// preview of the decoded audio. English-only models cannot classify
+    /// languages and return `Ok(None)`.
+    ///
+    /// The preview is capped at 30 seconds and chosen from the first five
+    /// minutes by RMS energy. This keeps the check cheap while avoiding a
+    /// silent intro when the recording starts later.
+    pub fn detect_language(
+        &self,
+        audio: &[f32],
+    ) -> Result<Option<LanguageDetection>, DictationError> {
+        if audio.is_empty() {
+            return Err(DictationError::NoAudioCaptured);
+        }
+
+        let is_multilingual = {
+            let guard = self.context.lock().unwrap();
+            guard
+                .as_ref()
+                .ok_or(DictationError::ModelNotLoaded)?
+                .is_multilingual()
+        };
+        if !is_multilingual {
+            return Ok(None);
+        }
+
+        let preview = language_detection_preview(audio);
+        let n_threads = whisper_threads().max(1) as usize;
+        self.with_warm_state(|state| {
+            state.pcm_to_mel(preview, n_threads).map_err(|error| {
+                DictationError::TranscriptionFailed(format!(
+                    "Language detection spectrogram failed: {error}"
+                ))
+            })?;
+            let (language_id, probabilities) =
+                state.lang_detect(0, n_threads).map_err(|error| {
+                    DictationError::TranscriptionFailed(format!(
+                        "Language detection failed: {error}"
+                    ))
+                })?;
+            let language = get_lang_str(language_id).ok_or_else(|| {
+                DictationError::TranscriptionFailed(format!(
+                    "Language detection returned unknown language id {language_id}"
+                ))
+            })?;
+            let probability = probabilities
+                .get(language_id as usize)
+                .copied()
+                .unwrap_or_default();
+            Ok(Some(LanguageDetection {
+                language: language.to_string(),
+                probability,
+            }))
+        })
     }
 
     /// Signal any in-progress inference to abort at the next whisper.cpp compute
@@ -891,6 +948,61 @@ impl WhisperBackend {
 
             Ok(results)
         })
+    }
+}
+
+/// Choose at most 30 seconds from the first five minutes for language
+/// detection, preferring the non-overlapping window with the highest RMS
+/// energy. Scanning non-overlapping windows keeps this linear in the bounded
+/// prefix and is sufficient to skip long silent intros.
+fn language_detection_preview(audio: &[f32]) -> &[f32] {
+    const PREVIEW_SAMPLES: usize = 30 * 16_000;
+    const SCAN_SAMPLES: usize = 5 * 60 * 16_000;
+
+    if audio.len() <= PREVIEW_SAMPLES {
+        return audio;
+    }
+
+    let scan_end = audio.len().min(SCAN_SAMPLES);
+    let mut best_start = 0usize;
+    let mut best_mean_square = f64::NEG_INFINITY;
+    for start in (0..scan_end).step_by(PREVIEW_SAMPLES) {
+        let end = (start + PREVIEW_SAMPLES).min(scan_end);
+        let window = &audio[start..end];
+        let mean_square = window
+            .iter()
+            .map(|&sample| f64::from(sample) * f64::from(sample))
+            .sum::<f64>()
+            / window.len().max(1) as f64;
+        if mean_square > best_mean_square {
+            best_mean_square = mean_square;
+            best_start = start;
+        }
+    }
+    let best_end = (best_start + PREVIEW_SAMPLES).min(audio.len());
+    &audio[best_start..best_end]
+}
+
+#[cfg(test)]
+mod language_detection_preview_tests {
+    use super::language_detection_preview;
+
+    #[test]
+    fn keeps_short_audio_intact() {
+        let audio = vec![0.1; 16_000];
+        assert_eq!(language_detection_preview(&audio).len(), audio.len());
+    }
+
+    #[test]
+    fn chooses_loudest_thirty_second_window() {
+        let window = 30 * 16_000;
+        let mut audio = vec![0.001; window * 3];
+        audio[window..window * 2].fill(0.1);
+
+        let preview = language_detection_preview(&audio);
+
+        assert_eq!(preview.len(), window);
+        assert!(preview.iter().all(|&sample| sample == 0.1));
     }
 }
 

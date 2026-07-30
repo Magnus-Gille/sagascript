@@ -198,6 +198,14 @@ impl WhisperModel {
         )
     }
 
+    /// Fine-tuned language-specific models are intentionally biased toward
+    /// their target language, so they must not be used to independently check
+    /// whether the configured language matches an input file.
+    #[allow(dead_code)]
+    pub fn is_language_optimized(&self) -> bool {
+        self.is_swedish_optimized() || self.is_norwegian_optimized()
+    }
+
     /// GGML model filename
     pub fn ggml_filename(&self) -> &'static str {
         match self {
@@ -575,6 +583,14 @@ mod tests {
         assert!(!WhisperModel::LargeV3Turbo.is_english_only());
         assert!(!WhisperModel::KbWhisperTiny.is_english_only());
         assert!(!WhisperModel::NbWhisperBase.is_english_only());
+    }
+
+    #[test]
+    fn language_optimized_models_are_not_neutral_detectors() {
+        assert!(WhisperModel::KbWhisperSmall.is_language_optimized());
+        assert!(WhisperModel::NbWhisperBase.is_language_optimized());
+        assert!(!WhisperModel::Base.is_language_optimized());
+        assert!(!WhisperModel::MediumEn.is_language_optimized());
     }
 
     #[cfg(target_os = "macos")]
