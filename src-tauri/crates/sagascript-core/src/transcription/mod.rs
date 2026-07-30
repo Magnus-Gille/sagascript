@@ -1,3 +1,4 @@
+pub mod diagnostics;
 pub mod model;
 mod postprocess;
 pub mod whisper_backend;
