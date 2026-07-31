@@ -566,7 +566,6 @@ link; the upstream repository is authoritative for its license terms.
 | @tauri-apps/cli-win32-x64-msvc | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://www.npmjs.com/package/@tauri-apps/cli-win32-x64-msvc/v/2.10.0) |
 | @tauri-apps/plugin-autostart | 2.5.1 | MIT OR Apache-2.0 | [upstream](https://www.npmjs.com/package/@tauri-apps/plugin-autostart/v/2.5.1) |
 | @tauri-apps/plugin-dialog | 2.6.0 | MIT OR Apache-2.0 | [upstream](https://www.npmjs.com/package/@tauri-apps/plugin-dialog/v/2.6.0) |
-| @tauri-apps/plugin-global-shortcut | 2.3.1 | MIT OR Apache-2.0 | [upstream](https://www.npmjs.com/package/@tauri-apps/plugin-global-shortcut/v/2.3.1) |
 | @tsconfig/svelte | 5.0.8 | MIT | [upstream](https://www.npmjs.com/package/@tsconfig/svelte/v/5.0.8) |
 | @types/estree | 1.0.9 | MIT | [upstream](https://www.npmjs.com/package/@types/estree/v/1.0.9) |
 | @types/trusted-types | 2.0.7 | MIT | [upstream](https://www.npmjs.com/package/@types/trusted-types/v/2.0.7) |
@@ -19229,7 +19228,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 ### eb8a6c846304
 
-Components: Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, npm @tauri-apps/plugin-autostart@2.5.1, npm @tauri-apps/plugin-dialog@2.6.0, npm @tauri-apps/plugin-global-shortcut@2.3.1
+Components: Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, npm @tauri-apps/plugin-autostart@2.5.1, npm @tauri-apps/plugin-dialog@2.6.0
 
 Source filenames: LICENSE.spdx
 
