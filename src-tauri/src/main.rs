@@ -281,13 +281,17 @@ fn main() {
             // Watch settings file for external changes (e.g. `sagascript config set`)
             start_settings_watcher(app.handle().clone());
 
-            // Auto-open onboarding on first launch
+            // A bare GUI launch is an explicit request to see Sagascript. The
+            // app has no configured Tauri windows, so completed-onboarding
+            // launches must open Settings here too instead of leaving the user
+            // with only a menu-bar icon.
             {
                 let settings = sagascript_core::settings::store::load();
-                if !settings.has_completed_onboarding {
+                let initial_tab = initial_main_window_tab(settings.has_completed_onboarding);
+                if initial_tab == Some("onboarding") {
                     info!("First launch detected, opening onboarding");
-                    open_settings_window(app.handle(), Some("onboarding"));
                 }
+                open_settings_window(app.handle(), initial_tab);
             }
 
             // Preload + warm the whisper model in the background so the first
@@ -390,13 +394,24 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Sagascript")
-        .run(|_app_handle, event| {
-            // Prevent app from exiting when all windows are closed (tray-only app),
-            // but allow explicit exit requests (e.g. from tray "Quit" menu)
-            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
-                if code.is_none() {
-                    api.prevent_exit();
+        .run(|app_handle, event| {
+            match event {
+                // Prevent app from exiting when all windows are closed (tray-only app),
+                // but allow explicit exit requests (e.g. from tray "Quit" menu)
+                tauri::RunEvent::ExitRequested { api, code, .. } => {
+                    if code.is_none() {
+                        api.prevent_exit();
+                    }
                 }
+                // Finder/Spotlight sends Reopen when the already-running app is
+                // launched again. A miniaturized NSWindow may still count as
+                // "visible", so always run the full reveal path.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    info!("Application reopen requested");
+                    open_settings_window(app_handle, None);
+                }
+                _ => {}
             }
         });
 }
@@ -512,10 +527,57 @@ fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
     }
 }
 
-/// Open or focus the main window, optionally navigating to a specific tab
+fn initial_main_window_tab(has_completed_onboarding: bool) -> Option<&'static str> {
+    if has_completed_onboarding {
+        None
+    } else {
+        Some("onboarding")
+    }
+}
+
+trait MainWindowVisibility {
+    fn unminimize(&self) -> Result<(), String>;
+    fn show(&self) -> Result<(), String>;
+    fn set_focus(&self) -> Result<(), String>;
+}
+
+impl MainWindowVisibility for tauri::WebviewWindow {
+    fn unminimize(&self) -> Result<(), String> {
+        tauri::WebviewWindow::unminimize(self).map_err(|error| error.to_string())
+    }
+
+    fn show(&self) -> Result<(), String> {
+        tauri::WebviewWindow::show(self).map_err(|error| error.to_string())
+    }
+
+    fn set_focus(&self) -> Result<(), String> {
+        tauri::WebviewWindow::set_focus(self).map_err(|error| error.to_string())
+    }
+}
+
+fn reveal_existing_main_window(window: &impl MainWindowVisibility) -> Result<(), String> {
+    window
+        .unminimize()
+        .map_err(|error| format!("failed to restore main window: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("failed to show main window: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("failed to focus main window: {error}"))
+}
+
+/// Open or focus the main window, optionally navigating to a specific tab.
+/// Errors are surfaced in the application log instead of being silently lost.
 fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
     info!("Opening main window (tab: {:?})", tab);
 
+    if let Err(error) = try_open_settings_window(app, tab) {
+        error!("Failed to open main window: {error}");
+    }
+}
+
+fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result<(), String> {
     // Build a URL with optional query parameter
     let url = match tab {
         Some("onboarding") => "index.html?onboarding=true".to_string(),
@@ -526,10 +588,11 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
     if let Some(window) = app.get_webview_window("settings") {
         // If switching tab on existing window, emit an event
         if let Some(t) = tab {
-            let _ = window.emit("navigate_tab", t);
+            if let Err(error) = window.emit("navigate_tab", t) {
+                warn!("Failed to navigate main window to '{t}': {error}");
+            }
         }
-        let _ = window.show();
-        let _ = window.set_focus();
+        reveal_existing_main_window(&window)
     } else {
         // Cap default height to 80% of screen so it fits on small displays (e.g. 768p laptops)
         let default_height = if let Ok(Some(monitor)) = app.primary_monitor() {
@@ -539,7 +602,7 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
             660.0
         };
 
-        let _window = tauri::WebviewWindowBuilder::new(
+        let window = tauri::WebviewWindowBuilder::new(
             app,
             "settings",
             tauri::WebviewUrl::App(url.into()),
@@ -550,7 +613,10 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
         .resizable(true)
         .center()
         .focused(true)
-        .build();
+        .build()
+        .map_err(|error| format!("failed to create main window: {error}"))?;
+
+        reveal_existing_main_window(&window)
     }
 }
 
@@ -990,6 +1056,77 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct MockMainWindow {
+        operations: std::cell::RefCell<Vec<&'static str>>,
+        fail_at: Option<&'static str>,
+    }
+
+    impl MainWindowVisibility for MockMainWindow {
+        fn unminimize(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("unminimize");
+            if self.fail_at == Some("unminimize") {
+                Err("restore failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn show(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("show");
+            if self.fail_at == Some("show") {
+                Err("show failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn set_focus(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("set_focus");
+            if self.fail_at == Some("set_focus") {
+                Err("focus failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn main_window_reveal_restores_before_showing_and_focusing() {
+        let window = MockMainWindow::default();
+
+        reveal_existing_main_window(&window).unwrap();
+
+        assert_eq!(
+            *window.operations.borrow(),
+            ["unminimize", "show", "set_focus"]
+        );
+    }
+
+    #[test]
+    fn main_window_reveal_reports_the_failed_step_and_stops() {
+        let window = MockMainWindow {
+            fail_at: Some("show"),
+            ..Default::default()
+        };
+
+        let error = reveal_existing_main_window(&window).unwrap_err();
+
+        assert!(error.contains("show main window"));
+        assert!(error.contains("show failed"));
+        assert_eq!(*window.operations.borrow(), ["unminimize", "show"]);
+    }
+
+    #[test]
+    fn completed_onboarding_starts_on_the_settings_view() {
+        assert_eq!(initial_main_window_tab(true), None);
+    }
+
+    #[test]
+    fn incomplete_onboarding_starts_on_the_onboarding_view() {
+        assert_eq!(initial_main_window_tab(false), Some("onboarding"));
+    }
 
     #[cfg(target_os = "macos")]
     fn wait_for_settings_event(
