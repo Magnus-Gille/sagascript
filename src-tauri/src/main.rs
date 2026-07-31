@@ -44,6 +44,7 @@ use tracing::{error, info, warn};
 
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
+use sagascript_core::settings::validate_hotkey;
 use sagascript_core::transcription::WhisperBackend;
 
 /// Minimum recording duration before we allow stop (300ms)
@@ -55,6 +56,20 @@ type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
 #[cfg(any(target_os = "macos", test))]
 fn auto_paste_permitted(requested: bool, accessibility_trusted: bool) -> bool {
     !requested || accessibility_trusted
+}
+
+/// Select the shortcut that is safe to register at startup. Invalid persisted
+/// values remain visible in Settings, but never become active; the default
+/// stays operational so an upgrade cannot strand dictation entirely.
+fn startup_hotkey_candidate(requested: &str) -> (String, Option<String>) {
+    match validate_hotkey(requested) {
+        Ok(()) => (requested.to_string(), None),
+        Err(error) => {
+            let fallback = sagascript_core::settings::Settings::default().hotkey;
+            debug_assert!(validate_hotkey(&fallback).is_ok());
+            (fallback, Some(error))
+        }
+    }
 }
 
 /// Treat macOS TCC approval as runtime authorization, never as a preference
@@ -196,29 +211,47 @@ fn main() {
             // dictate. Recorded in the process-wide health flag so the tray
             // and Settings UI can surface it.
             let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
-            match app.global_shortcut().register(shortcut.as_str()) {
-                Ok(()) => {
-                    info!("Hotkey registered: {shortcut}");
-                    let change = health.record(
-                        &shortcut,
-                        None,
-                        hotkey::OperationalHotkey::registered(&shortcut),
-                    );
-                    if change.changed {
-                        let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
-                    }
+            let (registration_shortcut, validation_error) =
+                startup_hotkey_candidate(&shortcut);
+            if let Some(error) = &validation_error {
+                warn!(
+                    "Refusing invalid saved hotkey '{shortcut}': {error}; trying safe fallback '{registration_shortcut}'"
+                );
+            }
+            let registration_error = app
+                .global_shortcut()
+                .register(registration_shortcut.as_str())
+                .err()
+                .map(|error| error.to_string());
+            if let Some(error) = &registration_error {
+                error!("Failed to register hotkey '{registration_shortcut}': {error}");
+            } else {
+                info!("Hotkey registered: {registration_shortcut}");
+            }
+            let (health_error, operational_hotkey) = match (validation_error, registration_error) {
+                (None, None) => (
+                    None,
+                    hotkey::OperationalHotkey::registered(&registration_shortcut),
+                ),
+                (Some(validation), None) => (
+                    Some(format!(
+                        "{validation}; using safe fallback '{registration_shortcut}'"
+                    )),
+                    hotkey::OperationalHotkey::registered(&registration_shortcut),
+                ),
+                (None, Some(registration)) => {
+                    (Some(registration), hotkey::OperationalHotkey::Inactive)
                 }
-                Err(e) => {
-                    error!("Failed to register hotkey: {e}");
-                    let change = health.record(
-                        &shortcut,
-                        Some(e.to_string()),
-                        hotkey::OperationalHotkey::Inactive,
-                    );
-                    if change.changed {
-                        let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
-                    }
-                }
+                (Some(validation), Some(registration)) => (
+                    Some(format!(
+                        "{validation}; fallback '{registration_shortcut}' also failed: {registration}"
+                    )),
+                    hotkey::OperationalHotkey::Inactive,
+                ),
+            };
+            let change = health.record(&shortcut, health_error, operational_hotkey);
+            if change.changed {
+                let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
             }
 
             // Build tray menu
@@ -946,25 +979,42 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 );
 
                 let old_operational = health.operational_hotkey();
-                let unregister_error = match &old_operational {
-                    hotkey::OperationalHotkey::Registered(shortcut) => app
-                        .global_shortcut()
-                        .unregister(shortcut.as_str())
-                        .err()
-                        .map(|e| {
-                            error!(
-                                "Failed to unregister operational hotkey '{shortcut}': {e}"
-                            );
-                            e.to_string()
-                        }),
-                    hotkey::OperationalHotkey::Inactive => None,
-                    hotkey::OperationalHotkey::Unknown => Some(
-                        "registration state is unknown after an earlier OS error; restart Sagascript"
-                            .to_string(),
-                    ),
+                let validation_error = validate_hotkey(&new_settings.hotkey).err();
+                let unregister_error = if validation_error.is_none() {
+                    match &old_operational {
+                        hotkey::OperationalHotkey::Registered(shortcut) => app
+                            .global_shortcut()
+                            .unregister(shortcut.as_str())
+                            .err()
+                            .map(|e| {
+                                error!(
+                                    "Failed to unregister operational hotkey '{shortcut}': {e}"
+                                );
+                                e.to_string()
+                            }),
+                        hotkey::OperationalHotkey::Inactive => None,
+                        hotkey::OperationalHotkey::Unknown => Some(
+                            "registration state is unknown after an earlier OS error; restart Sagascript"
+                                .to_string(),
+                        ),
+                    }
+                } else {
+                    None
                 };
 
-                let change = if let Some(e) = unregister_error {
+                let change = if let Some(validation_error) = validation_error {
+                    error!(
+                        "Refusing invalid hotkey '{}' from settings reload: {validation_error}",
+                        new_settings.hotkey
+                    );
+                    health.record(
+                        &new_settings.hotkey,
+                        Some(format!(
+                            "{validation_error}; previous operational hotkey was left unchanged"
+                        )),
+                        old_operational.clone(),
+                    )
+                } else if let Some(e) = unregister_error {
                     // The OS registration is now unknown. Do not risk adding a
                     // second active shortcut after a failed unregister.
                     health.record(
@@ -1231,6 +1281,26 @@ mod tests {
         assert!(auto_paste_permitted(false, true));
         assert!(!auto_paste_permitted(true, false));
         assert!(auto_paste_permitted(true, true));
+    }
+
+    #[test]
+    fn startup_keeps_a_valid_hotkey() {
+        let requested = "Option+Space";
+        let (candidate, error) = startup_hotkey_candidate(requested);
+
+        assert_eq!(candidate, requested);
+        assert!(error.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn startup_replaces_reserved_hotkey_with_safe_operational_fallback() {
+        let (candidate, error) = startup_hotkey_candidate("Super+Q");
+
+        assert_eq!(candidate, sagascript_core::settings::Settings::default().hotkey);
+        assert!(error
+            .as_deref()
+            .is_some_and(|message| message.contains("reserved for Quit on macOS")));
     }
 
     // -- tray_label --

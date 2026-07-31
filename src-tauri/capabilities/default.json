@@ -4,10 +4,6 @@
   "windows": ["*"],
   "permissions": [
     "core:default",
-    "global-shortcut:default",
-    "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister",
-    "global-shortcut:allow-is-registered",
     "autostart:default",
     "dialog:default",
     "dialog:allow-open",

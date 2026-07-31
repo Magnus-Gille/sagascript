@@ -16,7 +16,9 @@ const ABORT_GRACE_SECS: u64 = 5;
 use crate::app_controller::{AppController, AppState, StopRecordingOutcome};
 use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 use sagascript_core::audio::decoder;
-use sagascript_core::settings::{HotkeyMode, Language, Settings, WhisperModel};
+use sagascript_core::settings::{
+    validate_hotkey, HotkeyMode, Language, Settings, WhisperModel,
+};
 use sagascript_core::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
 
 /// Build the per-transcription options from the current settings. Resolves the
@@ -213,6 +215,10 @@ pub async fn set_hotkey(
 ) -> Result<(), String> {
     use tauri::Emitter;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    // Reject malformed or platform-reserved shortcuts before touching the
+    // currently working OS registration.
+    validate_hotkey(&shortcut)?;
 
     let _transition = health.transition_guard();
     let old_shortcut = {
