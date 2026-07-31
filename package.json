@@ -1,7 +1,7 @@
 {
   "name": "sagascript",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -27,7 +27,6 @@
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-autostart": "^2.0.0",
-    "@tauri-apps/plugin-global-shortcut": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0"
   }
 }

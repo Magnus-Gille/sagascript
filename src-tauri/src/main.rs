@@ -44,6 +44,7 @@ use tracing::{error, info, warn};
 
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
+use sagascript_core::settings::validate_hotkey;
 use sagascript_core::transcription::WhisperBackend;
 
 /// Minimum recording duration before we allow stop (300ms)
@@ -55,6 +56,20 @@ type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
 #[cfg(any(target_os = "macos", test))]
 fn auto_paste_permitted(requested: bool, accessibility_trusted: bool) -> bool {
     !requested || accessibility_trusted
+}
+
+/// Select the shortcut that is safe to register at startup. Invalid persisted
+/// values remain visible in Settings, but never become active; the default
+/// stays operational so an upgrade cannot strand dictation entirely.
+fn startup_hotkey_candidate(requested: &str) -> (String, Option<String>) {
+    match validate_hotkey(requested) {
+        Ok(()) => (requested.to_string(), None),
+        Err(error) => {
+            let fallback = sagascript_core::settings::Settings::default().hotkey;
+            debug_assert!(validate_hotkey(&fallback).is_ok());
+            (fallback, Some(error))
+        }
+    }
 }
 
 /// Treat macOS TCC approval as runtime authorization, never as a preference
@@ -196,29 +211,47 @@ fn main() {
             // dictate. Recorded in the process-wide health flag so the tray
             // and Settings UI can surface it.
             let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
-            match app.global_shortcut().register(shortcut.as_str()) {
-                Ok(()) => {
-                    info!("Hotkey registered: {shortcut}");
-                    let change = health.record(
-                        &shortcut,
-                        None,
-                        hotkey::OperationalHotkey::registered(&shortcut),
-                    );
-                    if change.changed {
-                        let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
-                    }
+            let (registration_shortcut, validation_error) =
+                startup_hotkey_candidate(&shortcut);
+            if let Some(error) = &validation_error {
+                warn!(
+                    "Refusing invalid saved hotkey '{shortcut}': {error}; trying safe fallback '{registration_shortcut}'"
+                );
+            }
+            let registration_error = app
+                .global_shortcut()
+                .register(registration_shortcut.as_str())
+                .err()
+                .map(|error| error.to_string());
+            if let Some(error) = &registration_error {
+                error!("Failed to register hotkey '{registration_shortcut}': {error}");
+            } else {
+                info!("Hotkey registered: {registration_shortcut}");
+            }
+            let (health_error, operational_hotkey) = match (validation_error, registration_error) {
+                (None, None) => (
+                    None,
+                    hotkey::OperationalHotkey::registered(&registration_shortcut),
+                ),
+                (Some(validation), None) => (
+                    Some(format!(
+                        "{validation}; using safe fallback '{registration_shortcut}'"
+                    )),
+                    hotkey::OperationalHotkey::registered(&registration_shortcut),
+                ),
+                (None, Some(registration)) => {
+                    (Some(registration), hotkey::OperationalHotkey::Inactive)
                 }
-                Err(e) => {
-                    error!("Failed to register hotkey: {e}");
-                    let change = health.record(
-                        &shortcut,
-                        Some(e.to_string()),
-                        hotkey::OperationalHotkey::Inactive,
-                    );
-                    if change.changed {
-                        let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
-                    }
-                }
+                (Some(validation), Some(registration)) => (
+                    Some(format!(
+                        "{validation}; fallback '{registration_shortcut}' also failed: {registration}"
+                    )),
+                    hotkey::OperationalHotkey::Inactive,
+                ),
+            };
+            let change = health.record(&shortcut, health_error, operational_hotkey);
+            if change.changed {
+                let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
             }
 
             // Build tray menu
@@ -281,13 +314,17 @@ fn main() {
             // Watch settings file for external changes (e.g. `sagascript config set`)
             start_settings_watcher(app.handle().clone());
 
-            // Auto-open onboarding on first launch
+            // A bare GUI launch is an explicit request to see Sagascript. The
+            // app has no configured Tauri windows, so completed-onboarding
+            // launches must open Settings here too instead of leaving the user
+            // with only a menu-bar icon.
             {
                 let settings = sagascript_core::settings::store::load();
-                if !settings.has_completed_onboarding {
+                let initial_tab = initial_main_window_tab(settings.has_completed_onboarding);
+                if initial_tab == Some("onboarding") {
                     info!("First launch detected, opening onboarding");
-                    open_settings_window(app.handle(), Some("onboarding"));
                 }
+                open_settings_window(app.handle(), initial_tab);
             }
 
             // Preload + warm the whisper model in the background so the first
@@ -391,12 +428,21 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Sagascript")
         .run(|_app_handle, event| {
-            // Prevent app from exiting when all windows are closed (tray-only app),
-            // but allow explicit exit requests (e.g. from tray "Quit" menu)
-            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
-                if code.is_none() {
-                    api.prevent_exit();
+            match event {
+                // Prevent app from exiting when all windows are closed (tray-only app),
+                // but allow explicit exit requests (e.g. from tray "Quit" menu)
+                tauri::RunEvent::ExitRequested {
+                    api, code: None, ..
+                } => api.prevent_exit(),
+                // Finder/Spotlight sends Reopen when the already-running app is
+                // launched again. A miniaturized NSWindow may still count as
+                // "visible", so always run the full reveal path.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    info!("Application reopen requested");
+                    open_settings_window(_app_handle, None);
                 }
+                _ => {}
             }
         });
 }
@@ -512,10 +558,57 @@ fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
     }
 }
 
-/// Open or focus the main window, optionally navigating to a specific tab
+fn initial_main_window_tab(has_completed_onboarding: bool) -> Option<&'static str> {
+    if has_completed_onboarding {
+        None
+    } else {
+        Some("onboarding")
+    }
+}
+
+trait MainWindowVisibility {
+    fn unminimize(&self) -> Result<(), String>;
+    fn show(&self) -> Result<(), String>;
+    fn set_focus(&self) -> Result<(), String>;
+}
+
+impl MainWindowVisibility for tauri::WebviewWindow {
+    fn unminimize(&self) -> Result<(), String> {
+        tauri::WebviewWindow::unminimize(self).map_err(|error| error.to_string())
+    }
+
+    fn show(&self) -> Result<(), String> {
+        tauri::WebviewWindow::show(self).map_err(|error| error.to_string())
+    }
+
+    fn set_focus(&self) -> Result<(), String> {
+        tauri::WebviewWindow::set_focus(self).map_err(|error| error.to_string())
+    }
+}
+
+fn reveal_existing_main_window(window: &impl MainWindowVisibility) -> Result<(), String> {
+    window
+        .unminimize()
+        .map_err(|error| format!("failed to restore main window: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("failed to show main window: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("failed to focus main window: {error}"))
+}
+
+/// Open or focus the main window, optionally navigating to a specific tab.
+/// Errors are surfaced in the application log instead of being silently lost.
 fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
     info!("Opening main window (tab: {:?})", tab);
 
+    if let Err(error) = try_open_settings_window(app, tab) {
+        error!("Failed to open main window: {error}");
+    }
+}
+
+fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result<(), String> {
     // Build a URL with optional query parameter
     let url = match tab {
         Some("onboarding") => "index.html?onboarding=true".to_string(),
@@ -526,10 +619,11 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
     if let Some(window) = app.get_webview_window("settings") {
         // If switching tab on existing window, emit an event
         if let Some(t) = tab {
-            let _ = window.emit("navigate_tab", t);
+            if let Err(error) = window.emit("navigate_tab", t) {
+                warn!("Failed to navigate main window to '{t}': {error}");
+            }
         }
-        let _ = window.show();
-        let _ = window.set_focus();
+        reveal_existing_main_window(&window)
     } else {
         // Cap default height to 80% of screen so it fits on small displays (e.g. 768p laptops)
         let default_height = if let Ok(Some(monitor)) = app.primary_monitor() {
@@ -539,7 +633,7 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
             660.0
         };
 
-        let _window = tauri::WebviewWindowBuilder::new(
+        let window = tauri::WebviewWindowBuilder::new(
             app,
             "settings",
             tauri::WebviewUrl::App(url.into()),
@@ -550,7 +644,10 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
         .resizable(true)
         .center()
         .focused(true)
-        .build();
+        .build()
+        .map_err(|error| format!("failed to create main window: {error}"))?;
+
+        reveal_existing_main_window(&window)
     }
 }
 
@@ -880,25 +977,42 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 );
 
                 let old_operational = health.operational_hotkey();
-                let unregister_error = match &old_operational {
-                    hotkey::OperationalHotkey::Registered(shortcut) => app
-                        .global_shortcut()
-                        .unregister(shortcut.as_str())
-                        .err()
-                        .map(|e| {
-                            error!(
-                                "Failed to unregister operational hotkey '{shortcut}': {e}"
-                            );
-                            e.to_string()
-                        }),
-                    hotkey::OperationalHotkey::Inactive => None,
-                    hotkey::OperationalHotkey::Unknown => Some(
-                        "registration state is unknown after an earlier OS error; restart Sagascript"
-                            .to_string(),
-                    ),
+                let validation_error = validate_hotkey(&new_settings.hotkey).err();
+                let unregister_error = if validation_error.is_none() {
+                    match &old_operational {
+                        hotkey::OperationalHotkey::Registered(shortcut) => app
+                            .global_shortcut()
+                            .unregister(shortcut.as_str())
+                            .err()
+                            .map(|e| {
+                                error!(
+                                    "Failed to unregister operational hotkey '{shortcut}': {e}"
+                                );
+                                e.to_string()
+                            }),
+                        hotkey::OperationalHotkey::Inactive => None,
+                        hotkey::OperationalHotkey::Unknown => Some(
+                            "registration state is unknown after an earlier OS error; restart Sagascript"
+                                .to_string(),
+                        ),
+                    }
+                } else {
+                    None
                 };
 
-                let change = if let Some(e) = unregister_error {
+                let change = if let Some(validation_error) = validation_error {
+                    error!(
+                        "Refusing invalid hotkey '{}' from settings reload: {validation_error}",
+                        new_settings.hotkey
+                    );
+                    health.record(
+                        &new_settings.hotkey,
+                        Some(format!(
+                            "{validation_error}; previous operational hotkey was left unchanged"
+                        )),
+                        old_operational.clone(),
+                    )
+                } else if let Some(e) = unregister_error {
                     // The OS registration is now unknown. Do not risk adding a
                     // second active shortcut after a failed unregister.
                     health.record(
@@ -990,6 +1104,77 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct MockMainWindow {
+        operations: std::cell::RefCell<Vec<&'static str>>,
+        fail_at: Option<&'static str>,
+    }
+
+    impl MainWindowVisibility for MockMainWindow {
+        fn unminimize(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("unminimize");
+            if self.fail_at == Some("unminimize") {
+                Err("restore failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn show(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("show");
+            if self.fail_at == Some("show") {
+                Err("show failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn set_focus(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("set_focus");
+            if self.fail_at == Some("set_focus") {
+                Err("focus failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn main_window_reveal_restores_before_showing_and_focusing() {
+        let window = MockMainWindow::default();
+
+        reveal_existing_main_window(&window).unwrap();
+
+        assert_eq!(
+            *window.operations.borrow(),
+            ["unminimize", "show", "set_focus"]
+        );
+    }
+
+    #[test]
+    fn main_window_reveal_reports_the_failed_step_and_stops() {
+        let window = MockMainWindow {
+            fail_at: Some("show"),
+            ..Default::default()
+        };
+
+        let error = reveal_existing_main_window(&window).unwrap_err();
+
+        assert!(error.contains("show main window"));
+        assert!(error.contains("show failed"));
+        assert_eq!(*window.operations.borrow(), ["unminimize", "show"]);
+    }
+
+    #[test]
+    fn completed_onboarding_starts_on_the_settings_view() {
+        assert_eq!(initial_main_window_tab(true), None);
+    }
+
+    #[test]
+    fn incomplete_onboarding_starts_on_the_onboarding_view() {
+        assert_eq!(initial_main_window_tab(false), Some("onboarding"));
+    }
 
     #[cfg(target_os = "macos")]
     fn wait_for_settings_event(
@@ -1094,6 +1279,26 @@ mod tests {
         assert!(auto_paste_permitted(false, true));
         assert!(!auto_paste_permitted(true, false));
         assert!(auto_paste_permitted(true, true));
+    }
+
+    #[test]
+    fn startup_keeps_a_valid_hotkey() {
+        let requested = "Option+Space";
+        let (candidate, error) = startup_hotkey_candidate(requested);
+
+        assert_eq!(candidate, requested);
+        assert!(error.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn startup_replaces_reserved_hotkey_with_safe_operational_fallback() {
+        let (candidate, error) = startup_hotkey_candidate("Super+Q");
+
+        assert_eq!(candidate, sagascript_core::settings::Settings::default().hotkey);
+        assert!(error
+            .as_deref()
+            .is_some_and(|message| message.contains("reserved for Quit on macOS")));
     }
 
     // -- tray_label --
