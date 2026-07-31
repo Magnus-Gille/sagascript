@@ -427,22 +427,20 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Sagascript")
-        .run(|app_handle, event| {
+        .run(|_app_handle, event| {
             match event {
                 // Prevent app from exiting when all windows are closed (tray-only app),
                 // but allow explicit exit requests (e.g. from tray "Quit" menu)
-                tauri::RunEvent::ExitRequested { api, code, .. } => {
-                    if code.is_none() {
-                        api.prevent_exit();
-                    }
-                }
+                tauri::RunEvent::ExitRequested {
+                    api, code: None, ..
+                } => api.prevent_exit(),
                 // Finder/Spotlight sends Reopen when the already-running app is
                 // launched again. A miniaturized NSWindow may still count as
                 // "visible", so always run the full reveal path.
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
                     info!("Application reopen requested");
-                    open_settings_window(app_handle, None);
+                    open_settings_window(_app_handle, None);
                 }
                 _ => {}
             }
