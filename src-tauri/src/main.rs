@@ -1301,6 +1301,17 @@ mod tests {
             .is_some_and(|message| message.contains("reserved for Quit on macOS")));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn startup_replaces_saved_cut_hotkey_with_safe_operational_fallback() {
+        let (candidate, error) = startup_hotkey_candidate("Super+X");
+
+        assert_eq!(candidate, sagascript_core::settings::Settings::default().hotkey);
+        assert!(error
+            .as_deref()
+            .is_some_and(|message| message.contains("reserved for Cut on macOS")));
+    }
+
     // -- tray_label --
 
     #[test]
