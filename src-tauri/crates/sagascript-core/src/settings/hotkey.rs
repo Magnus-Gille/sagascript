@@ -317,6 +317,13 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
             "x" | "keyx" if uses_command && modifier_tokens.len() == 1 => {
                 Some(("X", "Cut"))
             }
+            // Like Cut, Bold Text is a ubiquitous editor command. A global
+            // bare Command+B hotkey intercepts it in the active application,
+            // and can leave toggle-mode recording running with no obvious way
+            // to stop it from that editor.
+            "b" | "keyb" if uses_command && modifier_tokens.len() == 1 => {
+                Some(("B", "Bold Text"))
+            }
             _ => None,
         };
         if let Some((key, action)) = reserved_shortcut {
@@ -366,6 +373,24 @@ mod tests {
             let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).unwrap_err();
             assert!(
                 error.contains("reserved for Cut on macOS"),
+                "unexpected error for {shortcut}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_bold_shortcut_is_reserved_for_every_command_alias() {
+        for shortcut in [
+            "Command+B",
+            "Cmd+KeyB",
+            "Super+B",
+            "CmdOrCtrl+B",
+            "CommandOrControl+b",
+            "  cOmMaNd + keyB  ",
+        ] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).unwrap_err();
+            assert!(
+                error.contains("reserved for Bold Text on macOS"),
                 "unexpected error for {shortcut}: {error}"
             );
         }

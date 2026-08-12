@@ -454,7 +454,7 @@ fn gui_start_recording_result(
     match result {
         Ok(true) => Ok(()),
         Ok(false) => Err(
-            "Cannot start recording while Sagascript is busy. Wait for the current transcription to finish."
+            "Cannot start recording while Sagascript is busy. Stop the current recording or wait for transcription to finish."
                 .to_string(),
         ),
         Err(error) => Err(error.to_string()),
@@ -470,7 +470,7 @@ mod gui_recording_tests {
         let error = gui_start_recording_result(Ok(false)).unwrap_err();
 
         assert!(error.contains("busy"));
-        assert!(error.contains("current transcription"));
+        assert!(error.contains("current recording"));
     }
 }
 

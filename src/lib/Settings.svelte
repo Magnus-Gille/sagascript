@@ -126,10 +126,31 @@
     // another process. Backend commands are field-granular, so this refresh is
     // display-only and never writes a stale snapshot back.
     listen("state-changed", async (event: any) => {
-      if (event.payload !== "settings_reloaded") return;
-      settings = await getSettings();
-      models = await getModelInfo();
-      loadedModel = await getLoadedModel();
+      switch (event.payload) {
+        case "settings_reloaded":
+          settings = await getSettings();
+          models = await getModelInfo();
+          loadedModel = await getLoadedModel();
+          break;
+        case "recording":
+          // A global hotkey can start recording while this window is open.
+          // Mirror that state so the visible test button becomes "Stop" rather
+          // than issuing a second start request and showing a misleading busy
+          // error.
+          testRecording = true;
+          testTranscribing = false;
+          testError = "";
+          break;
+        case "transcribing":
+        case "loading_model":
+          testRecording = false;
+          testTranscribing = true;
+          break;
+        case "idle":
+          testRecording = false;
+          testTranscribing = false;
+          break;
+      }
     });
 
     // Listen for tab navigation from tray menu
