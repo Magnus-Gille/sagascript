@@ -13,10 +13,8 @@ use sagascript_core::transcription::diagnostics::{
 };
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::{
-    TranscribeOptions, WhisperBackend, normalize_nonspeech_markers,
+    TranscriptSegment, TranscribeOptions, WhisperBackend, normalize_nonspeech_markers,
 };
-#[cfg(feature = "diarization")]
-use sagascript_core::transcription::TranscriptSegment;
 
 #[derive(Args)]
 pub struct TranscribeArgs {
@@ -66,6 +64,12 @@ pub struct TranscribeArgs {
     #[arg(long, visible_alias = "hint-file", value_name = "PATH", conflicts_with = "prompt")]
     pub prompt_file: Option<PathBuf>,
 
+    /// Opt in to strict one-edit vocabulary correction from the selected hint.
+    /// Requires --json so every applied correction is reported with its source
+    /// text and segment confidence. Only single-word, unambiguous hints apply.
+    #[arg(long, requires = "json")]
+    pub correct_hints: bool,
+
     /// Enable voice activity detection (Silero VAD) to skip non-speech regions,
     /// reducing silence hallucination and repetition loops. Downloads a small
     /// model on first use. Overrides the `vad_enabled` setting.
@@ -97,6 +101,32 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         stored.whisper_model,
     )?;
 
+    // Resolve and validate this before decoding or loading a model: an invalid
+    // opt-in correction request should not spend time on transcription first.
+    let effective_prompt = resolve_effective_prompt(
+        args.prompt.as_deref(),
+        args.prompt_file.as_deref(),
+        &stored.initial_prompt,
+    )?;
+    let correction_vocabulary = if args.correct_hints {
+        let prompt = effective_prompt.as_deref().ok_or_else(|| {
+            DictationError::SettingsError(
+                "--correct-hints requires a non-empty --hint/--prompt (or saved initial_prompt)"
+                    .to_string(),
+            )
+        })?;
+        let vocabulary = correction_vocabulary_from_hint(prompt);
+        if vocabulary.is_empty() {
+            return Err(DictationError::SettingsError(
+                "--correct-hints requires at least one single-word vocabulary item in the hint"
+                    .to_string(),
+            ));
+        }
+        vocabulary
+    } else {
+        Vec::new()
+    };
+
     // Check model is downloaded
     if !model::is_model_downloaded(model) {
         return Err(DictationError::TranscriptionFailed(format!(
@@ -124,17 +154,15 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         }
     };
 
-    // Effective hint/prompt: --prompt-file, else --hint/--prompt, else the saved
-    // initial_prompt. Used by both the diarized and standard paths.
-    let effective_prompt = resolve_effective_prompt(
-        args.prompt.as_deref(),
-        args.prompt_file.as_deref(),
-        &stored.initial_prompt,
-    )?;
-
     // Diarization branch
     #[cfg(feature = "diarization")]
     if args.diarize {
+        if args.correct_hints {
+            return Err(DictationError::SettingsError(
+                "--correct-hints is not available with --diarize because diarized output has no segment confidence"
+                    .to_string(),
+            ));
+        }
         // The diarized path uses greedy timestamped decoding (DTW), so the
         // beam/VAD options don't apply — warn rather than silently ignore them.
         if args.beam_size.is_some() || args.vad || args.no_vad {
@@ -285,7 +313,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         eprintln!("VAD: enabled");
     }
 
-    let segments = if duration > 10.0 {
+    let mut segments = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(
             ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap(),
@@ -304,6 +332,11 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     } else {
         eprintln!("Transcribing...");
         backend.transcribe_sync_with_options_segments(&audio, language, &opts, |_| {})?
+    };
+    let corrections = if args.correct_hints {
+        apply_hint_corrections(&mut segments, &correction_vocabulary)
+    } else {
+        Vec::new()
     };
     // Keep timestamped segment text source-faithful, while the rendered
     // top-level text uses the same display normalization as live dictation.
@@ -348,6 +381,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             "uncovered_spans": coverage.uncovered_spans,
             "detected_language": detected_language,
             "warnings": warnings,
+            "vocabulary_corrections": corrections,
         });
         println!("{}", serde_json::to_string_pretty(&json).unwrap());
     } else {
@@ -361,6 +395,155 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     }
 
     Ok(())
+}
+
+/// Segment scores in this band are uncertain enough to consider an explicit
+/// user-supplied spelling, but not so unreliable that a blind edit is useful.
+const VOCAB_CORRECTION_MIN_LOGPROB: f32 = -0.8;
+const VOCAB_CORRECTION_MAX_LOGPROB: f32 = -0.3;
+const VOCAB_CORRECTION_MAX_NO_SPEECH_PROB: f32 = 0.5;
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+struct VocabularyCorrection {
+    segment_index: usize,
+    original: String,
+    replacement: String,
+    avg_logprob: f32,
+    no_speech_prob: f32,
+}
+
+/// Extract the deliberately narrow v1 correction vocabulary from an existing
+/// decoder hint. Hints are comma- or newline-separated; phrases, numbers and
+/// punctuation are intentionally ignored so ordinary prose cannot become a
+/// correction target.
+fn correction_vocabulary_from_hint(hint: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    hint
+        .split([',', '\n'])
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty() && candidate.chars().all(char::is_alphabetic))
+        .filter(|candidate| seen.insert(candidate.to_lowercase()))
+        .map(str::to_string)
+        .collect()
+}
+
+fn apply_hint_corrections(
+    segments: &mut [TranscriptSegment],
+    vocabulary: &[String],
+) -> Vec<VocabularyCorrection> {
+    let mut corrections = Vec::new();
+    for (segment_index, segment) in segments.iter_mut().enumerate() {
+        let Some(avg_logprob) = segment.avg_logprob else {
+            continue;
+        };
+        if !(VOCAB_CORRECTION_MIN_LOGPROB..=VOCAB_CORRECTION_MAX_LOGPROB)
+            .contains(&avg_logprob)
+            || segment.no_speech_prob > VOCAB_CORRECTION_MAX_NO_SPEECH_PROB
+        {
+            continue;
+        }
+
+        let (corrected, segment_corrections) = correct_segment_text(
+            &segment.text,
+            vocabulary,
+            segment_index,
+            avg_logprob,
+            segment.no_speech_prob,
+        );
+        segment.text = corrected;
+        corrections.extend(segment_corrections);
+    }
+    corrections
+}
+
+fn correct_segment_text(
+    text: &str,
+    vocabulary: &[String],
+    segment_index: usize,
+    avg_logprob: f32,
+    no_speech_prob: f32,
+) -> (String, Vec<VocabularyCorrection>) {
+    let mut corrected = String::with_capacity(text.len());
+    let mut corrections = Vec::new();
+    let mut word = String::new();
+
+    let mut finish_word = |word: &mut String, corrected: &mut String| {
+        if word.is_empty() {
+            return;
+        }
+        let word_lowercase = word.to_lowercase();
+        if vocabulary
+            .iter()
+            .any(|candidate| candidate.to_lowercase() == word_lowercase)
+        {
+            corrected.push_str(word);
+            word.clear();
+            return;
+        }
+        let matches: Vec<&String> = vocabulary
+            .iter()
+            .filter(|candidate| levenshtein_distance_one_or_less(word, candidate) == Some(1))
+            .collect();
+        if matches.len() == 1 {
+            let replacement = matches[0].clone();
+            corrections.push(VocabularyCorrection {
+                segment_index,
+                original: word.clone(),
+                replacement: replacement.clone(),
+                avg_logprob,
+                no_speech_prob,
+            });
+            corrected.push_str(&replacement);
+        } else {
+            corrected.push_str(word);
+        }
+        word.clear();
+    };
+
+    for character in text.chars() {
+        if character.is_alphabetic() {
+            word.push(character);
+        } else {
+            finish_word(&mut word, &mut corrected);
+            corrected.push(character);
+        }
+    }
+    finish_word(&mut word, &mut corrected);
+    (corrected, corrections)
+}
+
+/// Returns `Some(distance)` only for strings at edit distance zero or one.
+/// Anything farther is irrelevant to this deliberately strict correction path.
+fn levenshtein_distance_one_or_less(left: &str, right: &str) -> Option<usize> {
+    let left: Vec<char> = left.to_lowercase().chars().collect();
+    let right: Vec<char> = right.to_lowercase().chars().collect();
+    let length_difference = left.len().abs_diff(right.len());
+    if length_difference > 1 {
+        return None;
+    }
+
+    let (mut left_index, mut right_index, mut edits) = (0, 0, 0);
+    while left_index < left.len() && right_index < right.len() {
+        if left[left_index] == right[right_index] {
+            left_index += 1;
+            right_index += 1;
+        } else {
+            edits += 1;
+            if edits > 1 {
+                return None;
+            }
+            if left.len() > right.len() {
+                left_index += 1;
+            } else if right.len() > left.len() {
+                right_index += 1;
+            } else {
+                left_index += 1;
+                right_index += 1;
+            }
+        }
+    }
+    edits += left.len() - left_index + right.len() - right_index;
+    (edits <= 1).then_some(edits)
 }
 
 fn combined_warnings(
@@ -631,6 +814,71 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn segment(text: &str, avg_logprob: Option<f32>, no_speech_prob: f32) -> TranscriptSegment {
+        TranscriptSegment {
+            start: 0.0,
+            end: 1.0,
+            text: text.to_string(),
+            avg_logprob,
+            no_speech_prob,
+        }
+    }
+
+    #[test]
+    fn correction_vocabulary_accepts_only_single_word_hint_items() {
+        assert_eq!(
+            correction_vocabulary_from_hint("Grimnir, grimnir, Erik Fredlund\nHugin, M5, AI-agent"),
+            vec!["Grimnir", "Hugin"]
+        );
+    }
+
+    #[test]
+    fn corrects_repeated_unambiguous_one_edit_hint_matches() {
+        let mut segments = vec![segment(" Grimner och Grimner.", Some(-0.313), 0.0)];
+        let corrections = apply_hint_corrections(&mut segments, &["Grimnir".to_string()]);
+
+        assert_eq!(segments[0].text, " Grimnir och Grimnir.");
+        assert_eq!(corrections.len(), 2);
+        assert_eq!(corrections[0].original, "Grimner");
+        assert_eq!(corrections[0].replacement, "Grimnir");
+        assert_eq!(corrections[0].segment_index, 0);
+        assert_eq!(corrections[0].avg_logprob, -0.313);
+    }
+
+    #[test]
+    fn does_not_correct_confident_suspect_or_non_speech_segments() {
+        let vocabulary = ["Grimnir".to_string()];
+        for (avg_logprob, no_speech_prob) in [(Some(-0.2), 0.0), (Some(-0.9), 0.0), (None, 0.0), (Some(-0.313), 0.6)] {
+            let mut segments = vec![segment(" Grimner", avg_logprob, no_speech_prob)];
+            assert!(apply_hint_corrections(&mut segments, &vocabulary).is_empty());
+            assert_eq!(segments[0].text, " Grimner");
+        }
+    }
+
+    #[test]
+    fn does_not_correct_ambiguous_or_more_distant_matches() {
+        let mut segments = vec![segment(" Grimner Grimmer", Some(-0.313), 0.0)];
+        let corrections = apply_hint_corrections(
+            &mut segments,
+            &["Grimnir".to_string(), "Grimnera".to_string()],
+        );
+
+        assert!(corrections.is_empty());
+        assert_eq!(segments[0].text, " Grimner Grimmer");
+    }
+
+    #[test]
+    fn does_not_replace_a_word_that_is_already_an_explicit_hint() {
+        let mut segments = vec![segment(" Grimner", Some(-0.313), 0.0)];
+        let corrections = apply_hint_corrections(
+            &mut segments,
+            &["Grimner".to_string(), "Grimnir".to_string()],
+        );
+
+        assert!(corrections.is_empty());
+        assert_eq!(segments[0].text, " Grimner");
+    }
 
     // -- resolve_effective_prompt --
 
