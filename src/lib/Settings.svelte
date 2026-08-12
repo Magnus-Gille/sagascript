@@ -32,6 +32,7 @@
     type LoadedModelInfo,
     type HotkeyStatus,
   } from "./api";
+  import { dictationTestStateForEvent } from "./dictation-test-state.js";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -133,22 +134,23 @@
           loadedModel = await getLoadedModel();
           break;
         case "recording":
-          // A global hotkey can start recording while this window is open.
-          // Mirror that state so the visible test button becomes "Stop" rather
-          // than issuing a second start request and showing a misleading busy
-          // error.
-          testRecording = true;
-          testTranscribing = false;
-          testError = "";
-          break;
         case "transcribing":
         case "loading_model":
-          testRecording = false;
-          testTranscribing = true;
-          break;
         case "idle":
-          testRecording = false;
-          testTranscribing = false;
+          // A global hotkey can change the recorder while this window is open.
+          // Keep the test control honest: a recording must show "Stop", not
+          // invite a second start that only reports a misleading busy error.
+          const next = dictationTestStateForEvent(
+            {
+              recording: testRecording,
+              transcribing: testTranscribing,
+              error: testError,
+            },
+            event.payload,
+          );
+          testRecording = next.recording;
+          testTranscribing = next.transcribing;
+          testError = next.error;
           break;
       }
     });
