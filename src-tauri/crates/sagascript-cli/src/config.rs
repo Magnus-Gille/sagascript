@@ -388,7 +388,7 @@ mod tests {
             "Command+A",
             "CmdOrCtrl+Space",
             "Ctrl+Shift+Alt+F1",
-            "Super+KeyX",
+            "Super+Shift+KeyX",
             "Shift+Enter",
             "Control+Tab",
             "CommandOrControl+Z",
@@ -421,6 +421,18 @@ mod tests {
                 "unexpected error for {shortcut}: {error}"
             );
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn validate_hotkey_rejects_macos_cut_shortcut_before_settings_mutation() {
+        let mut settings = Settings::default();
+        let original = settings.hotkey.clone();
+
+        let error = apply_setting_value(&mut settings, "hotkey", "Super+X").unwrap_err();
+
+        assert!(error.to_string().contains("reserved for Cut on macOS"));
+        assert_eq!(settings.hotkey, original);
     }
 
     #[cfg(target_os = "macos")]

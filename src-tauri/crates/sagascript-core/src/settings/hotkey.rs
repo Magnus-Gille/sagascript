@@ -294,25 +294,37 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
         ));
     }
 
-    if platform == HotkeyPlatform::MacOS
-        && matches!(key.as_str(), "q" | "keyq")
-        && modifier_tokens.iter().any(|token| {
-            matches!(
-                token.to_lowercase().as_str(),
-                "super"
-                    | "command"
-                    | "cmd"
-                    | "commandorcontrol"
-                    | "commandorctrl"
-                    | "cmdorctrl"
-                    | "cmdorcontrol"
-            )
-        })
-    {
-        return Err(format!(
-            "Invalid hotkey '{value}': Command+Q is reserved for Quit on macOS. \
-             Choose a different shortcut, such as 'Control+Shift+Space'."
-        ));
+    let uses_command = modifier_tokens.iter().any(|token| {
+        matches!(
+            token.to_lowercase().as_str(),
+            "super"
+                | "command"
+                | "cmd"
+                | "commandorcontrol"
+                | "commandorctrl"
+                | "cmdorctrl"
+                | "cmdorcontrol"
+        )
+    });
+
+    if platform == HotkeyPlatform::MacOS {
+        let reserved_shortcut = match key.as_str() {
+            // Keep the existing stricter Quit guard: any shortcut containing a
+            // Command alias and Q is unsafe to expose as a global hotkey.
+            "q" | "keyq" if uses_command => Some(("Q", "Quit")),
+            // Cut is only Command+X itself. Modified variants such as
+            // Command+Shift+X are distinct macOS shortcuts and remain valid.
+            "x" | "keyx" if uses_command && modifier_tokens.len() == 1 => {
+                Some(("X", "Cut"))
+            }
+            _ => None,
+        };
+        if let Some((key, action)) = reserved_shortcut {
+            return Err(format!(
+                "Invalid hotkey '{value}': Command+{key} is reserved for {action} on macOS. \
+                 Choose a different shortcut, such as 'Control+Shift+Space'."
+            ));
+        }
     }
 
     Ok(())
@@ -342,8 +354,33 @@ mod tests {
     }
 
     #[test]
+    fn macos_cut_shortcut_is_reserved_for_every_command_alias() {
+        for shortcut in [
+            "Command+X",
+            "Cmd+KeyX",
+            "Super+X",
+            "CmdOrCtrl+X",
+            "CommandOrControl+x",
+            "  cOmMaNd + keyX  ",
+        ] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).unwrap_err();
+            assert!(
+                error.contains("reserved for Cut on macOS"),
+                "unexpected error for {shortcut}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn macos_non_quit_shortcuts_remain_valid() {
-        for shortcut in ["Control+Q", "Shift+Q", "Command+A", "Super+Shift+X"] {
+        for shortcut in [
+            "Control+Q",
+            "Shift+Q",
+            "Command+A",
+            "Super+Shift+X",
+            "Command+Shift+X",
+            "Control+Super+X",
+        ] {
             assert!(
                 validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).is_ok(),
                 "should remain valid: {shortcut}"
