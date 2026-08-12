@@ -155,14 +155,25 @@ fn set_language_for_controller(
     language: Language,
 ) -> Result<(), String> {
     let persisted = sagascript_core::settings::store::update(|settings| {
-        settings.language = language;
+        apply_language_selection(settings, language);
     })?;
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().language = persisted.language;
+    ctrl.settings_mut().whisper_model = persisted.whisper_model;
+    ctrl.settings_mut().auto_select_model = persisted.auto_select_model;
     drop(ctrl);
     crate::update_language_menu(app, persisted.language);
     info!("Language set to {:?}", language);
     Ok(())
+}
+
+/// A language is a complete dictation preset, not just a decoder hint. It
+/// therefore returns to the recommended model for that language even after
+/// the user previously chose a manual model size for another language.
+fn apply_language_selection(settings: &mut Settings, language: Language) {
+    settings.language = language;
+    settings.whisper_model = WhisperModel::recommended(language);
+    settings.auto_select_model = true;
 }
 
 #[tauri::command]
@@ -471,6 +482,45 @@ mod gui_recording_tests {
 
         assert!(error.contains("busy"));
         assert!(error.contains("current recording"));
+    }
+}
+
+#[cfg(test)]
+mod language_selection_tests {
+    use super::apply_language_selection;
+    use sagascript_core::settings::{Language, Settings, WhisperModel};
+
+    #[test]
+    fn changing_language_restores_the_recommended_language_model() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            whisper_model: WhisperModel::KbWhisperSmall,
+            auto_select_model: false,
+            ..Default::default()
+        };
+
+        apply_language_selection(&mut settings, Language::English);
+
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.whisper_model, WhisperModel::BaseEn);
+        assert!(settings.auto_select_model);
+        assert_eq!(settings.effective_model(), WhisperModel::BaseEn);
+    }
+
+    #[test]
+    fn every_language_selection_uses_its_own_recommended_model() {
+        let expected = [
+            (Language::English, WhisperModel::BaseEn),
+            (Language::Swedish, WhisperModel::KbWhisperBase),
+            (Language::Norwegian, WhisperModel::NbWhisperBase),
+            (Language::Auto, WhisperModel::Base),
+        ];
+        let mut settings = Settings::default();
+
+        for (language, model) in expected {
+            apply_language_selection(&mut settings, language);
+            assert_eq!(settings.effective_model(), model);
+        }
     }
 }
 
