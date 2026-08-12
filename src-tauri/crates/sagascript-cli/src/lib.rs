@@ -749,6 +749,7 @@ mod tests {
             "--json",
             "--clipboard",
             "--prompt", "Notre Dame, Sara",
+            "--correct-hints",
         ]).unwrap();
         match cli.command.unwrap() {
             Command::Transcribe(args) => {
@@ -759,6 +760,7 @@ mod tests {
                 assert!(args.clipboard);
                 assert_eq!(args.prompt.as_deref(), Some("Notre Dame, Sara"));
                 assert!(args.prompt_file.is_none());
+                assert!(args.correct_hints);
             }
             _ => panic!("expected Transcribe"),
         }
@@ -801,6 +803,14 @@ mod tests {
             "--prompt", "inline", "--prompt-file", "vocab.txt",
         ]);
         assert!(result.is_err(), "expected --prompt + --prompt-file to conflict");
+    }
+
+    #[test]
+    fn parse_transcribe_correct_hints_requires_json() {
+        let result = Cli::try_parse_from([
+            "sagascript", "transcribe", "f.wav", "--correct-hints",
+        ]);
+        assert!(result.is_err(), "expected --correct-hints to require --json");
     }
 
     #[test]
