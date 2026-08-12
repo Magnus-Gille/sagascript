@@ -307,10 +307,16 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
         )
     });
 
-    if platform == HotkeyPlatform::MacOS && uses_command {
+    if platform == HotkeyPlatform::MacOS {
         let reserved_shortcut = match key.as_str() {
-            "q" | "keyq" => Some(("Q", "Quit")),
-            "x" | "keyx" => Some(("X", "Cut")),
+            // Keep the existing stricter Quit guard: any shortcut containing a
+            // Command alias and Q is unsafe to expose as a global hotkey.
+            "q" | "keyq" if uses_command => Some(("Q", "Quit")),
+            // Cut is only Command+X itself. Modified variants such as
+            // Command+Shift+X are distinct macOS shortcuts and remain valid.
+            "x" | "keyx" if uses_command && modifier_tokens.len() == 1 => {
+                Some(("X", "Cut"))
+            }
             _ => None,
         };
         if let Some((key, action)) = reserved_shortcut {
@@ -355,7 +361,6 @@ mod tests {
             "Super+X",
             "CmdOrCtrl+X",
             "CommandOrControl+x",
-            "Control+Super+X",
             "  cOmMaNd + keyX  ",
         ] {
             let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).unwrap_err();
@@ -374,6 +379,7 @@ mod tests {
             "Command+A",
             "Super+Shift+X",
             "Command+Shift+X",
+            "Control+Super+X",
         ] {
             assert!(
                 validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).is_ok(),
