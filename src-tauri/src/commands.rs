@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::State;
+use tauri::{Manager, State};
 use tracing::{error, info, warn};
 
 /// Maximum time to wait for whisper inference before aborting (seconds)
@@ -137,7 +137,21 @@ pub async fn get_loaded_model(
 
 #[tauri::command]
 pub async fn set_language(
+    app: tauri::AppHandle,
     controller: State<'_, SharedController>,
+    language: Language,
+) -> Result<(), String> {
+    set_language_for_controller(&controller, &app, language)
+}
+
+pub fn set_language_for_app(app: &tauri::AppHandle, language: Language) -> Result<(), String> {
+    let controller: tauri::State<'_, SharedController> = app.state();
+    set_language_for_controller(&controller, app, language)
+}
+
+fn set_language_for_controller(
+    controller: &State<'_, SharedController>,
+    app: &tauri::AppHandle,
     language: Language,
 ) -> Result<(), String> {
     let persisted = sagascript_core::settings::store::update(|settings| {
@@ -145,6 +159,8 @@ pub async fn set_language(
     })?;
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().language = persisted.language;
+    drop(ctrl);
+    crate::update_language_menu(app, persisted.language);
     info!("Language set to {:?}", language);
     Ok(())
 }

@@ -35,7 +35,7 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 const ABORT_GRACE_SECS: u64 = 5;
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
@@ -44,7 +44,7 @@ use tracing::{error, info, warn};
 
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
-use sagascript_core::settings::validate_hotkey;
+use sagascript_core::settings::{validate_hotkey, Language};
 use sagascript_core::transcription::WhisperBackend;
 
 /// Minimum recording duration before we allow stop (300ms)
@@ -52,6 +52,48 @@ const MIN_RECORDING_MS: u64 = 300;
 
 /// Shared tray status menu item for updating from anywhere
 type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
+
+#[derive(Clone)]
+struct LanguageMenuItems {
+    auto: CheckMenuItem<tauri::Wry>,
+    swedish: CheckMenuItem<tauri::Wry>,
+    english: CheckMenuItem<tauri::Wry>,
+    norwegian: CheckMenuItem<tauri::Wry>,
+}
+
+type SharedLanguageMenuItems = Mutex<Option<LanguageMenuItems>>;
+
+fn language_from_menu_id(id: &str) -> Option<Language> {
+    match id {
+        "language_auto" => Some(Language::Auto),
+        "language_swedish" => Some(Language::Swedish),
+        "language_english" => Some(Language::English),
+        "language_norwegian" => Some(Language::Norwegian),
+        _ => None,
+    }
+}
+
+pub(crate) fn update_language_menu(app: &tauri::AppHandle, language: Language) {
+    let items = {
+        let state: tauri::State<'_, SharedLanguageMenuItems> = app.state();
+        let items = state.lock().unwrap().clone();
+        items
+    };
+    let Some(items) = items else {
+        return;
+    };
+
+    for (item, selected) in [
+        (&items.auto, language == Language::Auto),
+        (&items.swedish, language == Language::Swedish),
+        (&items.english, language == Language::English),
+        (&items.norwegian, language == Language::Norwegian),
+    ] {
+        if let Err(error) = item.set_checked(selected) {
+            error!("Failed to update tray language menu: {error}");
+        }
+    }
+}
 
 #[cfg(any(target_os = "macos", test))]
 fn auto_paste_permitted(requested: bool, accessibility_trusted: bool) -> bool {
@@ -191,6 +233,7 @@ fn main() {
         .manage(whisper)
         .manage(hotkey_health)
         .manage(Mutex::new(None::<MenuItem<tauri::Wry>>) as SharedStatusItem)
+        .manage(Mutex::new(None::<LanguageMenuItems>) as SharedLanguageMenuItems)
         .setup(|app| {
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
@@ -262,14 +305,80 @@ fn main() {
                 MenuItem::with_id(app, "transcribe_file", "Transcribe File...", true, None::<&str>)?;
             let status =
                 MenuItem::with_id(app, "status", "Sagascript - Idle", false, None::<&str>)?;
+            let language = {
+                let ctrl: tauri::State<'_, SharedController> = app.state();
+                let language = ctrl.lock().unwrap().language();
+                language
+            };
+            let language_auto = CheckMenuItem::with_id(
+                app,
+                "language_auto",
+                "Auto-detect",
+                true,
+                language == Language::Auto,
+                None::<&str>,
+            )?;
+            let language_swedish = CheckMenuItem::with_id(
+                app,
+                "language_swedish",
+                "Swedish",
+                true,
+                language == Language::Swedish,
+                None::<&str>,
+            )?;
+            let language_english = CheckMenuItem::with_id(
+                app,
+                "language_english",
+                "English",
+                true,
+                language == Language::English,
+                None::<&str>,
+            )?;
+            let language_norwegian = CheckMenuItem::with_id(
+                app,
+                "language_norwegian",
+                "Norwegian",
+                true,
+                language == Language::Norwegian,
+                None::<&str>,
+            )?;
+            let language_menu = Submenu::with_items(
+                app,
+                "Language",
+                true,
+                &[
+                    &language_auto,
+                    &language_swedish,
+                    &language_english,
+                    &language_norwegian,
+                ],
+            )?;
 
             // Store status item so we can update it after transcription
             {
                 let status_state: tauri::State<'_, SharedStatusItem> = app.state();
                 *status_state.lock().unwrap() = Some(status.clone());
             }
+            {
+                let language_state: tauri::State<'_, SharedLanguageMenuItems> = app.state();
+                *language_state.lock().unwrap() = Some(LanguageMenuItems {
+                    auto: language_auto,
+                    swedish: language_swedish,
+                    english: language_english,
+                    norwegian: language_norwegian,
+                });
+            }
 
-            let menu = Menu::with_items(app, &[&status, &settings_item, &transcribe_file_item, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &status,
+                    &language_menu,
+                    &settings_item,
+                    &transcribe_file_item,
+                    &quit,
+                ],
+            )?;
 
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
@@ -278,7 +387,15 @@ fn main() {
                 .tooltip("Sagascript")
                 .icon(tray_icon)
                 .icon_as_template(true)
-                .on_menu_event(move |app, event| match event.id().as_ref() {
+                .on_menu_event(move |app, event| {
+                    if let Some(language) = language_from_menu_id(event.id().as_ref()) {
+                        if let Err(error) = commands::set_language_for_app(app, language) {
+                            error!("Failed to change language from tray menu: {error}");
+                        }
+                        return;
+                    }
+
+                    match event.id().as_ref() {
                     "quit" => {
                         info!("Quit requested");
                         app.exit(0);
@@ -290,6 +407,7 @@ fn main() {
                         open_settings_window(app, Some("transcribe"));
                     }
                     _ => {}
+                }
                 })
                 .build(app)?;
 
@@ -1088,10 +1206,12 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             }
 
             // Update controller with all new settings
+            let selected_language = new_settings.language;
             {
                 let mut c = ctrl.lock().unwrap();
                 c.update_settings(new_settings);
             }
+            update_language_menu(&app, selected_language);
 
             // Notify frontend so UI reflects external changes
             let _ = app.emit(events::event::STATE_CHANGED, "settings_reloaded");
@@ -1104,6 +1224,24 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn language_menu_ids_resolve_to_persisted_language_values() {
+        assert_eq!(language_from_menu_id("language_auto"), Some(Language::Auto));
+        assert_eq!(
+            language_from_menu_id("language_swedish"),
+            Some(Language::Swedish)
+        );
+        assert_eq!(
+            language_from_menu_id("language_english"),
+            Some(Language::English)
+        );
+        assert_eq!(
+            language_from_menu_id("language_norwegian"),
+            Some(Language::Norwegian)
+        );
+        assert_eq!(language_from_menu_id("other"), None);
+    }
 
     #[derive(Default)]
     struct MockMainWindow {
