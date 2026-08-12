@@ -85,8 +85,8 @@ pub struct TranscriptSegment {
     pub start: f64,
     /// Segment end in seconds.
     pub end: f64,
-    /// Raw segment text as whisper emitted it (leading space preserved, so
-    /// concatenating all segments reproduces the plain transcript exactly).
+    /// Raw segment text as Whisper emitted it. Leading space is preserved; the
+    /// plain transcript may add a missing sentence-boundary separator at join time.
     pub text: String,
     /// Mean log-probability of the segment's text tokens.
     pub avg_logprob: Option<f32>,
@@ -100,6 +100,42 @@ fn mean_logprob(plogs: &[f32]) -> Option<f32> {
         return None;
     }
     Some(plogs.iter().sum::<f32>() / plogs.len() as f32)
+}
+
+/// Assemble the plain transcript from Whisper's raw segments.
+///
+/// Whisper normally includes a leading space on each new segment. When it does
+/// not, preserve the expected sentence boundary in the user-facing transcript
+/// without changing the raw, timestamped segment text.
+fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
+    let mut transcript = String::new();
+
+    for segment in segments {
+        let previous_ends_with_whitespace = transcript
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace);
+        let next_starts_with_whitespace =
+            segment.text.chars().next().is_some_and(char::is_whitespace);
+        let previous_ends_sentence = transcript
+            .trim_end()
+            .chars()
+            .next_back()
+            .is_some_and(|c| matches!(c, '.' | '?' | '!'));
+
+        if !transcript.is_empty()
+            && !segment.text.is_empty()
+            && !previous_ends_with_whitespace
+            && !next_starts_with_whitespace
+            && previous_ends_sentence
+        {
+            transcript.push(' ');
+        }
+
+        transcript.push_str(&segment.text);
+    }
+
+    transcript
 }
 
 /// Bound whisper's segment timestamps to the source audio and preserve output
@@ -574,10 +610,7 @@ impl WhisperBackend {
     ) -> Result<String, DictationError> {
         let segments =
             self.transcribe_sync_with_options_segments(audio, language, opts, on_progress)?;
-        let mut transcript = String::new();
-        for seg in &segments {
-            transcript.push_str(&seg.text);
-        }
+        let transcript = assemble_transcript(&segments);
         Ok(super::normalize_nonspeech_markers(transcript.trim(), language))
     }
 
@@ -1470,6 +1503,64 @@ mod progress_callback_tests {
 #[cfg(test)]
 mod segment_confidence_tests {
     use super::*;
+
+    #[test]
+    fn assembled_transcript_separates_sentence_ending_segments() {
+        let segments = [
+            TranscriptSegment {
+                start: 0.0,
+                end: 1.0,
+                text: "First.".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            },
+            TranscriptSegment {
+                start: 1.0,
+                end: 2.0,
+                text: "Second?".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            },
+            TranscriptSegment {
+                start: 2.0,
+                end: 3.0,
+                text: "Third!".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            },
+            TranscriptSegment {
+                start: 3.0,
+                end: 4.0,
+                text: "Fourth".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            },
+        ];
+
+        assert_eq!(assemble_transcript(&segments), "First. Second? Third! Fourth");
+    }
+
+    #[test]
+    fn assembled_transcript_preserves_existing_separator_without_double_space() {
+        let segments = [
+            TranscriptSegment {
+                start: 0.0,
+                end: 1.0,
+                text: "First.".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            },
+            TranscriptSegment {
+                start: 1.0,
+                end: 2.0,
+                text: " Second".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            },
+        ];
+
+        assert_eq!(assemble_transcript(&segments), "First. Second");
+    }
 
     #[test]
     fn mean_logprob_empty_is_none() {
