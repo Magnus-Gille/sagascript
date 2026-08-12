@@ -388,7 +388,7 @@ mod tests {
             "Command+A",
             "CmdOrCtrl+Space",
             "Ctrl+Shift+Alt+F1",
-            "Super+KeyX",
+            "Super+Shift+KeyX",
             "Shift+Enter",
             "Control+Tab",
             "CommandOrControl+Z",
