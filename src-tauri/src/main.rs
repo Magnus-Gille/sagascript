@@ -21,6 +21,7 @@ mod hotkey;
 mod overlay;
 mod paste;
 mod platform;
+mod updates;
 
 use tracing_subscriber::EnvFilter;
 
@@ -93,6 +94,79 @@ pub(crate) fn update_language_menu(app: &tauri::AppHandle, language: Language) {
             error!("Failed to update tray language menu: {error}");
         }
     }
+}
+
+#[derive(Clone)]
+struct UpdateMenuItems {
+    status: MenuItem<tauri::Wry>,
+    check: MenuItem<tauri::Wry>,
+}
+
+struct UpdateMenuState {
+    items: Option<UpdateMenuItems>,
+    checking: bool,
+}
+
+type SharedUpdateMenuState = Mutex<UpdateMenuState>;
+
+const UPDATE_CHECK_ACTION: &str = "Check for Updates…";
+
+fn update_status_text(result: &updates::UpdateCheck) -> String {
+    match result {
+        updates::UpdateCheck::Available { version } => {
+            format!("Update Available — v{version}")
+        }
+        updates::UpdateCheck::UpToDate => "Sagascript is up to date".to_string(),
+    }
+}
+
+fn check_for_updates(app: tauri::AppHandle) {
+    let items = {
+        let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+        let mut state = state.lock().unwrap();
+        if state.checking {
+            return;
+        }
+        let Some(items) = state.items.clone() else {
+            return;
+        };
+        state.checking = true;
+        items
+    };
+
+    if let Err(error) = items.status.set_text("Checking for updates…") {
+        error!("Failed to update tray update status: {error}");
+    }
+    if let Err(error) = items.check.set_enabled(false) {
+        error!("Failed to disable update action: {error}");
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let result = updates::check_for_update(env!("CARGO_PKG_VERSION")).await;
+        let (status_text, check_error) = match result {
+            Ok(result) => (update_status_text(&result), None),
+            Err(error) => ("Update check failed — try again".to_string(), Some(error)),
+        };
+        if let Some(error) = check_error {
+            warn!("Update check failed: {error}");
+        }
+
+        let items = {
+            let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+            let mut state = state.lock().unwrap();
+            state.checking = false;
+            state.items.clone()
+        };
+        let Some(items) = items else {
+            return;
+        };
+        if let Err(error) = items.status.set_text(status_text) {
+            error!("Failed to set tray update status: {error}");
+        }
+        if let Err(error) = items.check.set_enabled(true) {
+            error!("Failed to re-enable update action: {error}");
+        }
+    });
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -234,6 +308,10 @@ fn main() {
         .manage(hotkey_health)
         .manage(Mutex::new(None::<MenuItem<tauri::Wry>>) as SharedStatusItem)
         .manage(Mutex::new(None::<LanguageMenuItems>) as SharedLanguageMenuItems)
+        .manage(Mutex::new(UpdateMenuState {
+            items: None,
+            checking: false,
+        }) as SharedUpdateMenuState)
         .setup(|app| {
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
@@ -353,6 +431,20 @@ fn main() {
                     &language_norwegian,
                 ],
             )?;
+            let update_status = MenuItem::with_id(
+                app,
+                "update_status",
+                "Updates: not checked",
+                false,
+                None::<&str>,
+            )?;
+            let check_for_updates_item = MenuItem::with_id(
+                app,
+                "check_for_updates",
+                UPDATE_CHECK_ACTION,
+                true,
+                None::<&str>,
+            )?;
 
             // Store status item so we can update it after transcription
             {
@@ -368,12 +460,21 @@ fn main() {
                     norwegian: language_norwegian,
                 });
             }
+            {
+                let update_state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+                update_state.lock().unwrap().items = Some(UpdateMenuItems {
+                    status: update_status.clone(),
+                    check: check_for_updates_item.clone(),
+                });
+            }
 
             let menu = Menu::with_items(
                 app,
                 &[
                     &status,
                     &language_menu,
+                    &update_status,
+                    &check_for_updates_item,
                     &settings_item,
                     &transcribe_file_item,
                     &quit,
@@ -405,6 +506,9 @@ fn main() {
                     }
                     "transcribe_file" => {
                         open_settings_window(app, Some("transcribe"));
+                    }
+                    "check_for_updates" => {
+                        check_for_updates(app.clone());
                     }
                     _ => {}
                 }
@@ -1241,6 +1345,20 @@ mod tests {
             Some(Language::Norwegian)
         );
         assert_eq!(language_from_menu_id("other"), None);
+    }
+
+    #[test]
+    fn update_status_describes_available_and_current_releases() {
+        assert_eq!(
+            update_status_text(&updates::UpdateCheck::Available {
+                version: semver::Version::new(1, 2, 3)
+            }),
+            "Update Available — v1.2.3"
+        );
+        assert_eq!(
+            update_status_text(&updates::UpdateCheck::UpToDate),
+            "Sagascript is up to date"
+        );
     }
 
     #[derive(Default)]

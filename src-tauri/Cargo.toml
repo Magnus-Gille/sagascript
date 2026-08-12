@@ -52,6 +52,8 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 arboard = "3"
 dirs = "6"
 notify = { version = "7", default-features = false }
+reqwest = { version = "0.12", features = ["json"] }
+semver = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # notify 7 requires one native macOS backend feature even when this app uses
