@@ -112,8 +112,18 @@ jobs:
       - name: Svelte check
         run: npx svelte-check --tsconfig ./tsconfig.json
 
-      - name: Build Tauri app
-        run: npx tauri build
+      # PR validation needs the native release binary for the smoke tests, not
+      # an installer. Full packaging, signing and notarization remain gated in
+      # release.yml, so skipping bundling here removes duplicate work without
+      # weakening native macOS coverage.
+      - name: Build native release binary (no installer)
+        run: npx tauri build --no-bundle
+
+      - name: Verify native release binary
+        run: |
+          BINARY=src-tauri/target/release/sagascript
+          [[ -x "$BINARY" ]]
+          file "$BINARY"
 
       # --- Tier 1: CLI smoke tests (no model needed) ---
 
@@ -331,8 +341,19 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
 
-      - name: Build Tauri app
-        run: npx tauri build
+      # PR validation needs the native release binary for the smoke tests, not
+      # an installer. Full packaging, signing and notarization remain gated in
+      # release.yml, so skipping bundling here removes duplicate work without
+      # weakening native Windows coverage.
+      - name: Build native release binary (no installer)
+        run: npx tauri build --no-bundle
+
+      - name: Verify native release binary
+        run: |
+          $binary = "src-tauri\target\release\sagascript.exe"
+          if (-not (Test-Path -PathType Leaf $binary)) {
+            throw "Missing native release binary: $binary"
+          }
 
       # --- CLI smoke tests (Windows / PowerShell) ---
 
