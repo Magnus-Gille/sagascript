@@ -8,3 +8,8 @@ failure shape without including private source audio or transcript content.
 The repetition diagnostic test loads this file directly. Keep its timestamps
 long enough to exercise the sustained-loop threshold; short rhetorical
 repetition belongs in the separate false-positive unit test.
+
+`mixed-language-windows.json` represents two sustained, high-confidence
+language regions separated by one omitted (silent) 20-second window. It is a
+detector-output fixture rather than private source audio, so it remains small,
+deterministic, and shareable across platforms.

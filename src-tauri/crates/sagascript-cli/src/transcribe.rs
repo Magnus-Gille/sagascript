@@ -8,8 +8,9 @@ use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
-    CoverageDiagnostics, LanguageDetection, TranscriptionWarning, analyze_coverage,
-    analyze_repetition, language_mismatch_warning,
+    CoverageDiagnostics, LanguageDetection, LanguageRegionDiagnostics, LanguageWindow,
+    TranscriptionWarning, analyze_coverage, analyze_language_windows, analyze_repetition,
+    language_mismatch_warning,
 };
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::{
@@ -32,7 +33,8 @@ pub struct TranscribeArgs {
     /// Output result as JSON: text, language, model, duration, and a
     /// `segments` array with per-segment timing/confidence plus
     /// `coverage_ratio`, `uncovered_spans`, repetition quarantine spans,
-    /// detected language, and warnings. Raw segments include `quarantined`.
+    /// sampled language regions/probabilities, and warnings. Raw segments
+    /// include `quarantined`.
     #[arg(long)]
     pub json: bool,
 
@@ -154,6 +156,13 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             None
         }
     };
+    let language_regions = match detect_file_language_regions(&backend, &audio, language) {
+        Ok(diagnostics) => diagnostics,
+        Err(error) => {
+            eprintln!("Warning: language region detection was unavailable: {error}");
+            None
+        }
+    };
 
     // Diarization branch
     #[cfg(feature = "diarization")]
@@ -233,7 +242,10 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             })
             .collect();
         let coverage = analyze_coverage(&audio, &diagnostic_segments);
-        let warnings = combined_warnings(&coverage, language, detected_language.as_ref());
+        let mut warnings = combined_warnings(&coverage, language, detected_language.as_ref());
+        if let Some(diagnostics) = &language_regions {
+            warnings.extend(diagnostics.warnings.clone());
+        }
         emit_warnings(&warnings);
 
         if args.json {
@@ -251,6 +263,8 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
                 "coverage_ratio": coverage.coverage_ratio,
                 "uncovered_spans": coverage.uncovered_spans,
                 "detected_language": detected_language,
+                "language_redetection_enabled": language_regions.is_some(),
+                "language_regions": language_regions.as_ref().map(|diagnostics| &diagnostics.regions),
                 "warnings": warnings,
             });
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
@@ -360,6 +374,9 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     let text = normalize_nonspeech_markers(&raw_text, language);
     let coverage = analyze_coverage(&audio, &trusted_segments);
     let mut warnings = combined_warnings(&coverage, language, detected_language.as_ref());
+    if let Some(diagnostics) = &language_regions {
+        warnings.extend(diagnostics.warnings.clone());
+    }
     warnings.extend(repetition.warnings.clone());
     emit_warnings(&warnings);
 
@@ -395,6 +412,8 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             "uncovered_spans": coverage.uncovered_spans,
             "repetition_spans": repetition.spans,
             "detected_language": detected_language,
+            "language_redetection_enabled": language_regions.is_some(),
+            "language_regions": language_regions.as_ref().map(|diagnostics| &diagnostics.regions),
             "warnings": warnings,
             "vocabulary_corrections": corrections,
         });
@@ -579,6 +598,107 @@ fn emit_warnings(warnings: &[TranscriptionWarning]) {
     for warning in warnings {
         eprintln!("Warning [{}]: {}", warning.code, warning.message);
     }
+}
+
+const LANGUAGE_WINDOW_SECONDS: usize = 20;
+const LANGUAGE_WINDOW_SAMPLES: usize = LANGUAGE_WINDOW_SECONDS * 16_000;
+const LANGUAGE_REDETECTION_MIN_SECONDS: usize = 60;
+const LANGUAGE_REDETECTION_MAX_WINDOWS: usize = 60;
+const LANGUAGE_WINDOW_MIN_RMS: f64 = 0.0015;
+
+/// Re-evaluate only long auto-language files. The sampling cap keeps detection
+/// bounded for multi-hour sources; this function is called independently for
+/// each source when native batch mode invokes the single-file pipeline.
+fn detect_file_language_regions(
+    backend: &WhisperBackend,
+    audio: &[f32],
+    configured_language: Language,
+) -> Result<Option<LanguageRegionDiagnostics>, DictationError> {
+    detect_language_regions_with(audio, configured_language, |window| {
+        backend.detect_language(window)
+    })
+}
+
+fn detect_language_regions_with(
+    audio: &[f32],
+    configured_language: Language,
+    mut detect: impl FnMut(&[f32]) -> Result<Option<LanguageDetection>, DictationError>,
+) -> Result<Option<LanguageRegionDiagnostics>, DictationError> {
+    let windows = language_window_plan(audio.len(), configured_language);
+    if windows.is_empty() {
+        return Ok(None);
+    }
+
+    eprintln!(
+        "Checking {} sampled window(s) for sustained language changes...",
+        windows.len()
+    );
+    let mut detections = Vec::new();
+    for window in windows {
+        let samples = &audio[window.start_sample..window.end_sample];
+        if samples.len() < LANGUAGE_WINDOW_SAMPLES / 2
+            || root_mean_square(samples) < LANGUAGE_WINDOW_MIN_RMS
+        {
+            continue;
+        }
+        let Some(detection) = detect(samples)? else {
+            continue;
+        };
+        detections.push(LanguageWindow {
+            sequence: window.sequence,
+            start: window.start_sample as f64 / 16_000.0,
+            end: window.end_sample as f64 / 16_000.0,
+            language: detection.language,
+            probability: detection.probability,
+        });
+    }
+
+    Ok(Some(analyze_language_windows(&detections)))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PlannedLanguageWindow {
+    sequence: usize,
+    start_sample: usize,
+    end_sample: usize,
+}
+
+fn language_window_plan(
+    audio_samples: usize,
+    configured_language: Language,
+) -> Vec<PlannedLanguageWindow> {
+    if configured_language != Language::Auto
+        || audio_samples < LANGUAGE_REDETECTION_MIN_SECONDS * 16_000
+    {
+        return Vec::new();
+    }
+
+    let total_windows = audio_samples.div_ceil(LANGUAGE_WINDOW_SAMPLES);
+    let step = total_windows.div_ceil(LANGUAGE_REDETECTION_MAX_WINDOWS);
+    (0..total_windows)
+        .step_by(step.max(1))
+        .enumerate()
+        .map(|(sequence, source_window)| {
+            let start_sample = source_window * LANGUAGE_WINDOW_SAMPLES;
+            PlannedLanguageWindow {
+                sequence,
+                start_sample,
+                end_sample: (start_sample + LANGUAGE_WINDOW_SAMPLES).min(audio_samples),
+            }
+        })
+        .collect()
+}
+
+fn root_mean_square(samples: &[f32]) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    (samples
+        .iter()
+        .map(|&sample| f64::from(sample) * f64::from(sample))
+        .sum::<f64>()
+        / samples.len() as f64)
+        .sqrt()
 }
 
 fn detect_file_language(
@@ -829,6 +949,47 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_language_keeps_region_redetection_fast_path_disabled() {
+        let one_hour = 60 * 60 * 16_000;
+        for language in [Language::English, Language::Swedish, Language::Norwegian] {
+            assert!(language_window_plan(one_hour, language).is_empty());
+            let result = detect_language_regions_with(&vec![0.1; 60 * 16_000], language, |_| {
+                panic!("explicit language must not invoke region detection")
+            })
+            .unwrap();
+            assert!(result.is_none());
+        }
+    }
+
+    #[test]
+    fn auto_language_region_detection_is_bounded_and_skips_silence() {
+        let nine_hours = 9 * 60 * 60 * 16_000;
+        assert!(
+            language_window_plan(nine_hours, Language::Auto).len()
+                <= LANGUAGE_REDETECTION_MAX_WINDOWS
+        );
+
+        let mut audio = vec![0.05; 100 * 16_000];
+        audio[40 * 16_000..60 * 16_000].fill(0.0);
+        let detections = ["en", "en", "sv", "sv"];
+        let mut call_index = 0usize;
+        let diagnostics = detect_language_regions_with(&audio, Language::Auto, |_| {
+            let language = detections[call_index];
+            call_index += 1;
+            Ok(Some(LanguageDetection {
+                language: language.to_string(),
+                probability: 0.97,
+            }))
+        })
+        .unwrap()
+        .expect("long auto-language audio enables region detection");
+
+        assert_eq!(call_index, 4, "silent window must not be classified");
+        assert_eq!(diagnostics.regions.len(), 2);
+        assert_eq!(diagnostics.warnings[0].code, "mixed_language_audio");
+    }
 
     fn segment(text: &str, avg_logprob: Option<f32>, no_speech_prob: f32) -> TranscriptSegment {
         TranscriptSegment {

@@ -89,6 +89,15 @@ routine native Whisper/GGML chatter, so machine-readable stdout (including
 troubleshooting, set an explicit filter, for example
 `RUST_LOG=whisper_rs=info sagascript transcribe recording.mp3`.
 
+For files of at least one minute, `--language auto` samples up to 60
+speech-rich windows for sustained language changes. JSON includes
+`language_regions` with language probabilities and a `mixed_language_audio`
+warning when two supported languages remain stable across multiple windows.
+The v1 behavior warns instead of silently switching the decoder; split the
+recording or transcribe each part with an explicit language for best accuracy.
+Explicit `en`, `sv`, and `no` keep the single-language fast path. Future batch
+mode must run this detection independently for every source file.
+
 ## Permissions
 
 ### macOS
