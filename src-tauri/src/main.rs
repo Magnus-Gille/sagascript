@@ -151,21 +151,26 @@ fn check_for_updates(app: tauri::AppHandle) {
             warn!("Update check failed: {error}");
         }
 
-        let items = {
-            let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-            let mut state = state.lock().unwrap();
-            state.checking = false;
-            state.items.clone()
-        };
-        let Some(items) = items else {
-            return;
-        };
-        if let Err(error) = items.status.set_text(status_text) {
-            error!("Failed to set tray update status: {error}");
-        }
-        if let Err(error) = items.check.set_enabled(true) {
-            error!("Failed to re-enable update action: {error}");
-        }
+        // MenuItem is backed by AppKit on macOS. The HTTP request correctly
+        // runs off the UI thread, but its visible completion must come back to
+        // the main thread or the menu can remain stuck at its old text.
+        dispatch_to_main(&app, move |app| {
+            let items = {
+                let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+                let mut state = state.lock().unwrap();
+                state.checking = false;
+                state.items.clone()
+            };
+            let Some(items) = items else {
+                return;
+            };
+            if let Err(error) = items.status.set_text(status_text) {
+                error!("Failed to set tray update status: {error}");
+            }
+            if let Err(error) = items.check.set_enabled(true) {
+                error!("Failed to re-enable update action: {error}");
+            }
+        });
     });
 }
 
@@ -1570,6 +1575,19 @@ mod tests {
         assert!(error
             .as_deref()
             .is_some_and(|message| message.contains("reserved for Cut on macOS")));
+    }
+
+    #[test]
+    fn startup_replaces_saved_bold_hotkey_with_safe_operational_fallback() {
+        let (candidate, error) = startup_hotkey_candidate("Super+B");
+
+        assert_eq!(
+            candidate,
+            sagascript_core::settings::Settings::default().hotkey
+        );
+        assert!(error
+            .as_deref()
+            .is_some_and(|message| message.contains("reserved for Bold Text on macOS")));
     }
 
     // -- tray_label --

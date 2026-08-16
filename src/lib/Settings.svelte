@@ -32,6 +32,7 @@
     type LoadedModelInfo,
     type HotkeyStatus,
   } from "./api";
+  import { dictationTestStateForEvent } from "./dictation-test-state.js";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -126,10 +127,32 @@
     // another process. Backend commands are field-granular, so this refresh is
     // display-only and never writes a stale snapshot back.
     listen("state-changed", async (event: any) => {
-      if (event.payload !== "settings_reloaded") return;
-      settings = await getSettings();
-      models = await getModelInfo();
-      loadedModel = await getLoadedModel();
+      switch (event.payload) {
+        case "settings_reloaded":
+          settings = await getSettings();
+          models = await getModelInfo();
+          loadedModel = await getLoadedModel();
+          break;
+        case "recording":
+        case "transcribing":
+        case "loading_model":
+        case "idle":
+          // A global hotkey can change the recorder while this window is open.
+          // Keep the test control honest: a recording must show "Stop", not
+          // invite a second start that only reports a misleading busy error.
+          const next = dictationTestStateForEvent(
+            {
+              recording: testRecording,
+              transcribing: testTranscribing,
+              error: testError,
+            },
+            event.payload,
+          );
+          testRecording = next.recording;
+          testTranscribing = next.transcribing;
+          testError = next.error;
+          break;
+      }
     });
 
     // Listen for tab navigation from tray menu
