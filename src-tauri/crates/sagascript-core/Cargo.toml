@@ -34,13 +34,13 @@ ndarray = { version = "0.17", optional = true }
 # whisper-rs is declared per-target because macOS enables Metal/CoreML;
 # Windows and Linux use the CPU backend (Vulkan is a separate, currently-broken opt-in).
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.15", features = ["coreml", "metal"] }
+whisper-rs = { version = "0.15", features = ["coreml", "metal", "tracing_backend"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-whisper-rs = { version = "0.15" }
+whisper-rs = { version = "0.15", features = ["tracing_backend"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-whisper-rs = { version = "0.15" }
+whisper-rs = { version = "0.15", features = ["tracing_backend"] }
 
 [features]
 default = []

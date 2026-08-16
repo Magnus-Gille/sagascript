@@ -222,10 +222,12 @@ fn main() {
     // bare invocation.
     if let Some(parsed) = sagascript_cli::try_parse() {
         // CLI mode uses warn-level logging to keep stdout clean
+        let configured_filter = std::env::var("RUST_LOG").ok();
         tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
-            )
+            .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
+                configured_filter.as_deref(),
+                "warn",
+            )))
             .with_writer(std::io::stderr)
             .init();
         sagascript_cli::run(parsed);
@@ -233,10 +235,12 @@ fn main() {
     }
 
     // GUI mode: initialize tracing (console logging)
+    let configured_filter = std::env::var("RUST_LOG").ok();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
+            configured_filter.as_deref(),
+            "info",
+        )))
         .init();
 
     info!("Sagascript starting...");

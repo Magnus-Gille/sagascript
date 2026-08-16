@@ -204,6 +204,15 @@ impl Default for WhisperBackend {
 
 impl WhisperBackend {
     pub fn new() -> Self {
+        // whisper.cpp and GGML otherwise write their native diagnostics directly
+        // to stderr, bypassing Rust's UTF-8 and log-level guarantees. Route them
+        // through tracing before any context is created: the CLI suppresses
+        // routine native model/kernel/token chatter, while the hook's lossy
+        // C-string conversion preserves emitted errors as valid UTF-8. Application
+        // warnings remain visible. whisper-rs guards installation with `Once`, so
+        // concurrent backend construction remains safe.
+        whisper_rs::install_logging_hooks();
+
         Self {
             context: Mutex::new(None),
             state: Mutex::new(None),

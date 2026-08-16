@@ -11,6 +11,28 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
+
+/// Default CLI logging keeps application warnings/errors but suppresses native
+/// Whisper/GGML messages below error. Those libraries classify routine Metal
+/// capability probes as warnings, so a plain `warn` filter still produces
+/// thousands of non-actionable lines on long machine-readable runs.
+pub const NATIVE_LOG_SUPPRESSION: &str =
+    "whisper_rs::whisper_logging_hook=error,whisper_rs::ggml_logging_hook=error";
+pub const DEFAULT_CLI_LOG_FILTER: &str =
+    "warn,whisper_rs::whisper_logging_hook=error,whisper_rs::ggml_logging_hook=error";
+
+/// Preserve an application's requested log level without accidentally opting
+/// into noisy native Whisper/GGML diagnostics. Native logging is enabled only
+/// when the filter names `whisper_rs` explicitly.
+pub fn effective_log_filter(configured: Option<&str>, default_level: &str) -> String {
+    let configured = configured.map(str::trim).filter(|value| !value.is_empty());
+    match configured {
+        Some(filter) if filter.contains("whisper_rs") => filter.to_owned(),
+        Some(filter) => format!("{filter},{NATIVE_LOG_SUPPRESSION}"),
+        None if default_level == "warn" => DEFAULT_CLI_LOG_FILTER.to_owned(),
+        None => format!("{default_level},{NATIVE_LOG_SUPPRESSION}"),
+    }
+}
 use clap_complete::{Generator, Shell};
 
 pub(crate) fn set_transcription_progress(progress: &indicatif::ProgressBar, percentage: i32) {
@@ -508,6 +530,28 @@ fn render_manpage_tree(cmd: &clap::Command, dir: &PathBuf) -> Result<(), io::Err
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_filter_suppresses_native_diagnostics_by_default() {
+        assert_eq!(effective_log_filter(None, "warn"), DEFAULT_CLI_LOG_FILTER);
+        assert_eq!(
+            effective_log_filter(Some("info"), "warn"),
+            format!("info,{NATIVE_LOG_SUPPRESSION}")
+        );
+        assert_eq!(
+            effective_log_filter(Some("  "), "info"),
+            format!("info,{NATIVE_LOG_SUPPRESSION}")
+        );
+    }
+
+    #[test]
+    fn log_filter_preserves_explicit_native_diagnostics_opt_in() {
+        let configured = "warn,whisper_rs=info";
+        assert_eq!(
+            effective_log_filter(Some(configured), "warn"),
+            configured
+        );
+    }
 
     #[test]
     fn transcription_progress_bar_never_renders_outside_zero_to_one_hundred() {
