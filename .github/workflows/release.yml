@@ -76,14 +76,17 @@ jobs:
       - name: Gate real transcription
         run: |
           binary=src-tauri/target/release/sagascript
+          stdout="$RUNNER_TEMP/transcription-smoke.json"
+          stderr="$RUNNER_TEMP/transcription-smoke.stderr"
           "$binary" download-model nb-whisper-tiny
           "$binary" transcribe \
             --language no \
             --model nb-whisper-tiny \
             --beam 0 \
             --json \
-            test-audio/norwegian-short-3s.mp3 > "$RUNNER_TEMP/transcription-smoke.json"
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "storting" in d["text"].lower(); assert d["language"] == "no"; assert d["segments"]' "$RUNNER_TEMP/transcription-smoke.json"
+            test-audio/norwegian-short-3s.mp3 > "$stdout" 2> "$stderr"
+          python3 scripts/verify-json-cli-streams.py "$stdout" "$stderr"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "storting" in d["text"].lower(); assert d["language"] == "no"; assert d["segments"]' "$stdout"
 
       - name: Gate real two-speaker diarization
         run: |

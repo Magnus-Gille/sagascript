@@ -170,9 +170,11 @@ jobs:
       - name: Smoke test — transcribe with JSON output
         run: |
           BINARY=src-tauri/target/release/sagascript
-          RESULT=$($BINARY transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3)
-          echo "JSON: $RESULT"
-          echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['text']; assert d['language']=='no'; assert d['duration_seconds']>0"
+          STDOUT="$RUNNER_TEMP/transcription-smoke.json"
+          STDERR="$RUNNER_TEMP/transcription-smoke.stderr"
+          $BINARY transcribe --json --language no --model nb-whisper-tiny \
+            test-audio/norwegian-short-3s.mp3 > "$STDOUT" 2> "$STDERR"
+          python3 scripts/verify-json-cli-streams.py "$STDOUT" "$STDERR"
 
   check-linux:
     runs-on: ubuntu-24.04

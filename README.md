@@ -83,6 +83,12 @@ sagascript manpages --dir /usr/local/share/man/man1
 
 Run `sagascript --help` for the full list of commands.
 
+Default CLI diagnostics retain Sagascript warnings and errors while suppressing
+routine native Whisper/GGML chatter, so machine-readable stdout (including
+`--json`) remains safe to capture. To opt in to verbose native diagnostics for
+troubleshooting, set an explicit filter, for example
+`RUST_LOG=whisper_rs=info sagascript transcribe recording.mp3`.
+
 ## Permissions
 
 ### macOS
