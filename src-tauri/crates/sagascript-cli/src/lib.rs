@@ -163,13 +163,18 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Transcribe an audio/video file
+    /// Transcribe audio/video files or directories
     #[command(
         long_about = "\
-Transcribe an audio or video file to text using a local Whisper model.
+Transcribe audio/video files or directories using one shared local Whisper model.
 
-The file is decoded to 16 kHz mono PCM, then processed by the selected \
-Whisper model. Supports WAV, MP3, M4A, AAC, MP4, MOV, QTA, OGG, WebM, and FLAC.
+Each file is decoded independently to 16 kHz mono PCM. Directories include \
+WAV, MP3, M4A, AAC, MP4, MOV, QTA, OGG, WebM, and FLAC files in deterministic \
+path order; use --recursive to include subdirectories.
+
+With more than one input, --json emits an array and --jsonl emits one compact \
+{source,status,result|error} object per line. Item failures do not hide later \
+results, but the command exits non-zero after the batch; --fail-fast stops early.
 
 By default, uses the language and model from your persisted settings \
 (see 'sagascript config list'). Override with --language and --model.
@@ -192,7 +197,10 @@ EXAMPLES:
   sagascript transcribe note.wav --clipboard
 
   # Pipe-friendly: JSON to jq
-  sagascript transcribe call.wav --json | jq -r .text"
+  sagascript transcribe call.wav --json | jq -r .text
+
+  # Batch a directory with streaming machine-readable output
+  sagascript transcribe recordings/ --recursive --jsonl"
     )]
     Transcribe(transcribe::TranscribeArgs),
 
@@ -774,10 +782,13 @@ mod tests {
         let cli = Cli::try_parse_from(["sagascript", "transcribe", "file.wav"]).unwrap();
         match cli.command.unwrap() {
             Command::Transcribe(args) => {
-                assert_eq!(args.file, PathBuf::from("file.wav"));
+                assert_eq!(args.files, vec![PathBuf::from("file.wav")]);
                 assert!(args.language.is_none());
                 assert!(args.model.is_none());
                 assert!(!args.json);
+                assert!(!args.jsonl);
+                assert!(!args.recursive);
+                assert!(!args.fail_fast);
                 assert!(!args.clipboard);
             }
             other => panic!("expected Transcribe, got {:?}", std::mem::discriminant(&other)),
@@ -797,7 +808,7 @@ mod tests {
         ]).unwrap();
         match cli.command.unwrap() {
             Command::Transcribe(args) => {
-                assert_eq!(args.file, PathBuf::from("meeting.mp3"));
+                assert_eq!(args.files, vec![PathBuf::from("meeting.mp3")]);
                 assert_eq!(args.language.as_deref(), Some("sv"));
                 assert_eq!(args.model.as_deref(), Some("kb-whisper-base"));
                 assert!(args.json);
@@ -805,6 +816,32 @@ mod tests {
                 assert_eq!(args.prompt.as_deref(), Some("Notre Dame, Sara"));
                 assert!(args.prompt_file.is_none());
                 assert!(args.correct_hints);
+            }
+            _ => panic!("expected Transcribe"),
+        }
+    }
+
+    #[test]
+    fn parse_transcribe_batch_flags_and_inputs() {
+        let cli = Cli::try_parse_from([
+            "sagascript",
+            "transcribe",
+            "one.wav",
+            "recordings",
+            "--recursive",
+            "--jsonl",
+            "--fail-fast",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Command::Transcribe(args) => {
+                assert_eq!(
+                    args.files,
+                    vec![PathBuf::from("one.wav"), PathBuf::from("recordings")]
+                );
+                assert!(args.recursive);
+                assert!(args.jsonl);
+                assert!(args.fail_fast);
             }
             _ => panic!("expected Transcribe"),
         }

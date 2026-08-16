@@ -60,6 +60,12 @@ Sagascript includes a full CLI. The desktop binary itself accepts every CLI subc
 # Transcribe an audio/video file
 sagascript transcribe recording.mp3
 
+# Load the model once and transcribe several files or a directory
+sagascript transcribe one.wav two.mp3 recordings/ --recursive
+
+# Stream one result or error per source (JSON Lines)
+sagascript transcribe recordings/ --recursive --jsonl
+
 # Record from microphone and transcribe
 sagascript record
 
@@ -95,8 +101,18 @@ speech-rich windows for sustained language changes. JSON includes
 warning when two supported languages remain stable across multiple windows.
 The v1 behavior warns instead of silently switching the decoder; split the
 recording or transcribe each part with an explicit language for best accuracy.
-Explicit `en`, `sv`, and `no` keep the single-language fast path. Future batch
-mode must run this detection independently for every source file.
+Explicit `en`, `sv`, and `no` keep the single-language fast path. Batch mode
+runs language detection, VAD, repetition checks, and diagnostics
+independently for every source file while loading the selected model only once.
+
+Batch directory discovery accepts WAV, MP3, M4A, AAC, MP4, MOV, QTA, OGG,
+WebM, and FLAC (case-insensitive), sorted by path. Explicit inputs retain their
+given order and duplicates are processed once. By default an invalid or corrupt
+item is reported while later items continue; the command still exits non-zero.
+Use `--fail-fast` to stop immediately. For machine consumers, multi-input
+`--json` returns an array of `{source,status,result|error}` objects and
+`--jsonl` emits the same objects one per line. Single-file `--json` retains its
+existing object shape.
 
 ## Permissions
 
