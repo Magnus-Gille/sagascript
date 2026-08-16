@@ -2,7 +2,7 @@ use clap::{Args, Subcommand};
 
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{
-    self, validate_hotkey, HotkeyMode, Language, Settings, WhisperModel,
+    self, validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
 };
 
 #[derive(Args)]
@@ -101,6 +101,40 @@ EXAMPLES:
 Print the absolute path to the settings JSON file. Useful for manual \
 editing or backup.")]
     Path,
+
+    /// Manage per-shortcut dictation language profiles
+    Profiles {
+        #[command(subcommand)]
+        action: ProfileAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ProfileAction {
+    /// List all dictation profiles
+    List,
+    /// Create a dictation profile
+    Create {
+        id: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        hotkey: String,
+        #[arg(long)]
+        language: String,
+    },
+    /// Update a dictation profile
+    Update {
+        id: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        hotkey: Option<String>,
+        #[arg(long)]
+        language: Option<String>,
+    },
+    /// Remove a dictation profile (at least one must remain)
+    Remove { id: String },
 }
 
 const VALID_KEYS: &[&str] = &[
@@ -124,7 +158,66 @@ pub fn run(args: ConfigArgs) -> Result<(), DictationError> {
         ConfigAction::Set { key, value } => cmd_set(&key, &value),
         ConfigAction::Reset { key } => cmd_reset(key.as_deref()),
         ConfigAction::Path => cmd_path(),
+        ConfigAction::Profiles { action } => cmd_profiles(action),
     }
+}
+
+fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
+    match action {
+        ProfileAction::List => {
+            println!("{:<16} {:<20} {:<28} LANGUAGE", "ID", "NAME", "HOTKEY");
+            for profile in settings::store::load().resolved_hotkey_profiles() {
+                println!("{:<16} {:<20} {:<28} {}", profile.id, profile.name, profile.shortcut, format_language(profile.language));
+            }
+            Ok(())
+        }
+        ProfileAction::Create { id, name, hotkey, language } => {
+            let language = parse_enum_value::<Language>(&language, "language")?;
+            let mut profiles = settings::store::load().resolved_hotkey_profiles();
+            if profiles.iter().any(|profile| profile.id == id) {
+                return Err(DictationError::SettingsError(format!("Profile '{id}' already exists")));
+            }
+            profiles.push(HotkeyProfile { id: id.clone(), name, shortcut: hotkey, language });
+            persist_profiles(profiles)?;
+            eprintln!("Created profile {id}");
+            Ok(())
+        }
+        ProfileAction::Update { id, name, hotkey, language } => {
+            if name.is_none() && hotkey.is_none() && language.is_none() {
+                return Err(DictationError::SettingsError("Specify at least one of --name, --hotkey, or --language".to_string()));
+            }
+            let language = language.as_deref().map(|value| parse_enum_value::<Language>(value, "language")).transpose()?;
+            let mut profiles = settings::store::load().resolved_hotkey_profiles();
+            let profile = profiles.iter_mut().find(|profile| profile.id == id).ok_or_else(|| DictationError::SettingsError(format!("Unknown profile '{id}'")))?;
+            if let Some(name) = name { profile.name = name; }
+            if let Some(hotkey) = hotkey { profile.shortcut = hotkey; }
+            if let Some(language) = language { profile.language = language; }
+            persist_profiles(profiles)?;
+            eprintln!("Updated profile {id}");
+            Ok(())
+        }
+        ProfileAction::Remove { id } => {
+            let mut profiles = settings::store::load().resolved_hotkey_profiles();
+            let original_len = profiles.len();
+            profiles.retain(|profile| profile.id != id);
+            if profiles.len() == original_len {
+                return Err(DictationError::SettingsError(format!("Unknown profile '{id}'")));
+            }
+            persist_profiles(profiles)?;
+            eprintln!("Removed profile {id}");
+            Ok(())
+        }
+    }
+}
+
+fn persist_profiles(profiles: Vec<HotkeyProfile>) -> Result<(), DictationError> {
+    Settings::validate_hotkey_profiles(&profiles).map_err(DictationError::SettingsError)?;
+    settings::store::try_update(|settings| {
+        settings.replace_hotkey_profiles(profiles)?;
+        Ok(())
+    })
+    .map_err(DictationError::SettingsError)?;
+    Ok(())
 }
 
 fn cmd_list() -> Result<(), DictationError> {
@@ -203,11 +296,18 @@ fn cmd_get(key: &str) -> Result<(), DictationError> {
 fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
     validate_key(key)?;
     // Parse before acquiring the settings lock so invalid input never writes.
-    let mut validation_target = Settings::default();
+    let mut validation_target = settings::store::load();
     apply_setting_value(&mut validation_target, key, value)?;
-    let settings = settings::store::update(|settings| {
-        apply_setting_value(settings, key, value)
-            .expect("setting value was validated before acquiring the lock");
+    if key == "hotkey" {
+        Settings::validate_hotkey_profiles(&validation_target.resolved_hotkey_profiles())
+            .map_err(DictationError::SettingsError)?;
+    }
+    let settings = settings::store::try_update(|settings| {
+        apply_setting_value(settings, key, value).map_err(|error| error.to_string())?;
+        if key == "hotkey" {
+            Settings::validate_hotkey_profiles(&settings.resolved_hotkey_profiles())?;
+        }
+        Ok(())
     })
     .map_err(DictationError::SettingsError)?;
 
@@ -232,7 +332,7 @@ fn apply_setting_value(
 ) -> Result<(), DictationError> {
     match key {
         "language" => {
-            settings.language = parse_enum_value::<Language>(value, "language")?;
+            settings.set_legacy_language(parse_enum_value::<Language>(value, "language")?);
         }
         "whisper_model" => {
             settings.whisper_model = parse_enum_value::<WhisperModel>(value, "whisper_model")?;
@@ -251,7 +351,7 @@ fn apply_setting_value(
         }
         "hotkey" => {
             validate_hotkey(value).map_err(DictationError::SettingsError)?;
-            settings.hotkey = value.to_string();
+            settings.set_legacy_hotkey(value.to_string());
         }
         "initial_prompt" => settings.initial_prompt = value.to_string(),
         "beam_size" => {
@@ -276,14 +376,22 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
     if let Some(key) = key {
         validate_key(key)?;
         let defaults = Settings::default();
+        if key == "hotkey" {
+            let mut profiles = settings::store::load().resolved_hotkey_profiles();
+            let index = profiles.iter().position(|profile| profile.id == "default").unwrap_or(0);
+            profiles[index].shortcut = defaults.hotkey;
+            persist_profiles(profiles)?;
+            eprintln!("Reset hotkey to {}", settings::store::load().hotkey);
+            return Ok(());
+        }
         let settings = settings::store::update(|settings| match key {
-            "language" => settings.language = defaults.language,
+            "language" => settings.set_legacy_language(defaults.language),
             "whisper_model" => settings.whisper_model = defaults.whisper_model,
             "hotkey_mode" => settings.hotkey_mode = defaults.hotkey_mode,
             "show_overlay" => settings.show_overlay = defaults.show_overlay,
             "auto_paste" => settings.auto_paste = defaults.auto_paste,
             "auto_select_model" => settings.auto_select_model = defaults.auto_select_model,
-            "hotkey" => settings.hotkey = defaults.hotkey,
+            "hotkey" => unreachable!("hotkey reset handled transactionally above"),
             "initial_prompt" => settings.initial_prompt = defaults.initial_prompt,
             "beam_size" => settings.beam_size = defaults.beam_size,
             "temperature_fallback" => settings.temperature_fallback = defaults.temperature_fallback,
@@ -525,7 +633,7 @@ mod tests {
     fn valid_keys_count_matches_settings_struct() {
         // Internal fields that are serialized but not user-configurable via `config`.
         // These have dedicated CLI commands instead (e.g. `reset-onboarding`).
-        const INTERNAL_FIELDS: &[&str] = &["has_completed_onboarding"];
+        const INTERNAL_FIELDS: &[&str] = &["has_completed_onboarding", "hotkey_profiles"];
 
         let settings = Settings::default();
         let json = serde_json::to_value(&settings).unwrap();

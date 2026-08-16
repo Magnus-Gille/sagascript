@@ -1007,6 +1007,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_config_profile_create() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "config", "profiles", "create", "swedish",
+            "--name", "Swedish", "--hotkey", "Option+Space", "--language", "sv",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Config(args) => match args.action {
+                config::ConfigAction::Profiles { action: config::ProfileAction::Create { id, name, hotkey, language } } => {
+                    assert_eq!(id, "swedish");
+                    assert_eq!(name, "Swedish");
+                    assert_eq!(hotkey, "Option+Space");
+                    assert_eq!(language, "sv");
+                }
+                _ => panic!("expected profile create"),
+            },
+            _ => panic!("expected Config"),
+        }
+    }
+
+    #[test]
     fn parse_completions() {
         let cli = Cli::try_parse_from(["sagascript", "completions", "zsh"]).unwrap();
         match cli.command.unwrap() {

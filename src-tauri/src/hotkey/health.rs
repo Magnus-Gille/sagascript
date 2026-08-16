@@ -9,6 +9,7 @@ pub struct HotkeyStatus {
     pub ok: bool,
     pub error: Option<String>,
     pub shortcut: String,
+    pub shortcuts: Vec<String>,
 }
 
 /// Result of recording a registration attempt: the resulting status, plus
@@ -27,13 +28,18 @@ pub struct HotkeyStatusChange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OperationalHotkey {
     Inactive,
-    Registered(String),
+    Registered(Vec<String>),
     Unknown,
 }
 
 impl OperationalHotkey {
+    #[cfg(test)]
     pub fn registered(shortcut: &str) -> Self {
-        Self::Registered(shortcut.to_string())
+        Self::Registered(vec![shortcut.to_string()])
+    }
+
+    pub fn registered_many(shortcuts: &[String]) -> Self {
+        Self::Registered(shortcuts.to_vec())
     }
 }
 
@@ -94,6 +100,7 @@ impl HotkeyHealth {
             ok: state.error.is_none(),
             error: state.error.clone(),
             shortcut: state.shortcut.clone(),
+            shortcuts: requested_shortcuts(&state.shortcut, &state.operational_hotkey),
         }
     }
 
@@ -113,19 +120,28 @@ impl HotkeyHealth {
             ok: state.error.is_none(),
             error: state.error.clone(),
             shortcut: state.shortcut.clone(),
+            shortcuts: requested_shortcuts(&state.shortcut, &state.operational_hotkey),
         };
         state.error = error.clone();
         state.shortcut = shortcut.to_string();
-        state.operational_hotkey = operational_hotkey;
+        state.operational_hotkey = operational_hotkey.clone();
         let status = HotkeyStatus {
             ok: error.is_none(),
             error,
             shortcut: shortcut.to_string(),
+            shortcuts: requested_shortcuts(shortcut, &operational_hotkey),
         };
         HotkeyStatusChange {
             changed: status != prev,
             status,
         }
+    }
+}
+
+fn requested_shortcuts(primary: &str, operational: &OperationalHotkey) -> Vec<String> {
+    match operational {
+        OperationalHotkey::Registered(shortcuts) => shortcuts.clone(),
+        OperationalHotkey::Inactive | OperationalHotkey::Unknown => vec![primary.to_string()],
     }
 }
 
@@ -212,6 +228,20 @@ mod tests {
         let h = HotkeyHealth::new("Control+Shift+Space");
         h.record("Alt+D", None, OperationalHotkey::registered("Alt+D"));
         assert_eq!(h.status().shortcut, "Alt+D");
+    }
+
+    #[test]
+    fn status_reports_every_registered_profile_shortcut() {
+        let h = HotkeyHealth::new("Control+Shift+Space");
+        let shortcuts = vec!["Control+Shift+Space".to_string(), "Option+Space".to_string()];
+        h.record(
+            &shortcuts[0],
+            None,
+            OperationalHotkey::registered_many(&shortcuts),
+        );
+
+        assert_eq!(h.status().shortcuts, shortcuts);
+        assert_eq!(h.operational_hotkey(), OperationalHotkey::Registered(shortcuts));
     }
 
     #[test]

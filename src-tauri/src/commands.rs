@@ -17,7 +17,7 @@ use crate::app_controller::{AppController, AppState, StopRecordingOutcome};
 use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 use sagascript_core::audio::decoder;
 use sagascript_core::settings::{
-    validate_hotkey, HotkeyMode, Language, Settings, WhisperModel,
+    validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
 };
 use sagascript_core::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
 
@@ -77,6 +77,13 @@ pub type SharedController = Mutex<AppController>;
 /// the controller lock during blocking transcription
 pub type SharedWhisper = Arc<WhisperBackend>;
 
+#[tauri::command]
+pub async fn get_active_hotkey_profile(
+    controller: State<'_, SharedController>,
+) -> Result<Option<HotkeyProfile>, String> {
+    Ok(controller.lock().unwrap().active_hotkey_profile().cloned())
+}
+
 // -- State queries --
 
 #[tauri::command]
@@ -88,7 +95,11 @@ pub async fn get_state(controller: State<'_, SharedController>) -> Result<AppSta
 #[tauri::command]
 pub async fn get_settings(controller: State<'_, SharedController>) -> Result<Settings, String> {
     let ctrl = controller.lock().unwrap();
-    Ok(ctrl.settings().clone())
+    let mut settings = ctrl.settings().clone();
+    if settings.hotkey_profiles.is_empty() {
+        settings.hotkey_profiles = settings.resolved_hotkey_profiles();
+    }
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -155,10 +166,10 @@ fn set_language_for_controller(
     language: Language,
 ) -> Result<(), String> {
     let persisted = sagascript_core::settings::store::update(|settings| {
-        settings.language = language;
+        settings.set_legacy_language(language);
     })?;
     let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().language = persisted.language;
+    ctrl.update_settings(persisted.clone());
     drop(ctrl);
     crate::update_language_menu(app, persisted.language);
     info!("Language set to {:?}", language);
@@ -229,36 +240,68 @@ pub async fn set_hotkey(
     health: State<'_, HotkeyHealth>,
     shortcut: String,
 ) -> Result<(), String> {
+    validate_hotkey(&shortcut)?;
+    let mut profiles = controller.lock().unwrap().settings().resolved_hotkey_profiles();
+    let profile_index = profiles.iter().position(|profile| profile.id == "default").unwrap_or(0);
+    profiles[profile_index].shortcut = shortcut;
+    set_hotkey_profiles(app, controller, health, profiles).await
+}
+
+#[tauri::command]
+pub async fn set_hotkey_profiles(
+    app: tauri::AppHandle,
+    controller: State<'_, SharedController>,
+    health: State<'_, HotkeyHealth>,
+    profiles: Vec<HotkeyProfile>,
+) -> Result<(), String> {
     use tauri::Emitter;
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-    // Reject malformed or platform-reserved shortcuts before touching the
-    // currently working OS registration.
-    validate_hotkey(&shortcut)?;
+    Settings::validate_hotkey_profiles(&profiles)?;
+    let new_shortcuts: Vec<String> = profiles.iter().map(|profile| profile.shortcut.clone()).collect();
+    let new_primary = profiles
+        .iter()
+        .find(|profile| profile.id == "default")
+        .unwrap_or(&profiles[0])
+        .shortcut
+        .clone();
 
     let _transition = health.transition_guard();
-    let old_shortcut = {
-        let ctrl = controller.lock().unwrap();
-        ctrl.settings().hotkey.clone()
-    };
-
+    let old_settings = controller.lock().unwrap().settings().clone();
+    let old_shortcut = old_settings.hotkey.clone();
     let old_operational = health.operational_hotkey();
-
-    // The saved shortcut can differ from the operational fallback after an
-    // external hot-reload failure. Always unregister what is actually active.
     if old_operational == OperationalHotkey::Unknown {
         return Err(
-            "Hotkey registration state is unknown after an earlier OS error; restart Sagascript before changing the shortcut"
+            "Hotkey registration state is unknown after an earlier OS error; restart Sagascript before changing profiles"
                 .to_string(),
         );
     }
-    if let OperationalHotkey::Registered(old_operational) = &old_operational {
-        if let Err(error) = app.global_shortcut().unregister(old_operational.as_str()) {
-            error!("Failed to unregister operational hotkey '{old_operational}': {error}");
+
+    let old_shortcuts: Vec<String> = old_settings
+        .resolved_hotkey_profiles()
+        .into_iter()
+        .map(|profile| profile.shortcut)
+        .collect();
+    if new_shortcuts == old_shortcuts {
+        let persisted = sagascript_core::settings::store::try_update(|settings| {
+            settings.replace_hotkey_profiles(profiles.clone())?;
+            Ok(())
+        })?;
+        controller.lock().unwrap().update_settings(persisted);
+        let change = health.record(&new_primary, None, old_operational);
+        if change.changed {
+            let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+        }
+        return Ok(());
+    }
+
+    if let OperationalHotkey::Registered(old_shortcuts) = &old_operational {
+        if let Err(error) = app.global_shortcut().unregister_multiple(old_shortcuts.iter().map(String::as_str)) {
+            error!("Failed to unregister operational hotkeys: {error}");
             let change = health.record(
                 &old_shortcut,
                 Some(format!(
-                    "failed to unregister active hotkey '{old_operational}': {error}; operational state is unknown"
+                    "failed to unregister active hotkeys: {error}; operational state is unknown"
                 )),
                 OperationalHotkey::Unknown,
             );
@@ -268,43 +311,32 @@ pub async fn set_hotkey(
                     &change.status,
                 );
             }
-            return Err(format!(
-                "Failed to unregister active hotkey '{old_operational}': {error}"
-            ));
+            return Err(format!("Failed to unregister active hotkeys: {error}"));
         }
     }
 
-    // Register new shortcut
-    if let Err(e) = app.global_shortcut().register(shortcut.as_str()) {
-        error!("Failed to register new hotkey '{}': {}", shortcut, e);
-        // Try to re-register the old one so the app isn't left with no
-        // hotkey bound at all. If that succeeds, the app is still healthy
-        // (the *requested* change failed, which is already surfaced to the
-        // caller via the returned Err below) — only record a health failure
-        // if even the fallback re-registration fails.
+    if let Err(error) = app.global_shortcut().register_multiple(new_shortcuts.iter().map(String::as_str)) {
+        if let Err(cleanup_error) = app.global_shortcut().unregister_multiple(new_shortcuts.iter().map(String::as_str)) {
+            let change = health.record(
+                &old_shortcut,
+                Some(format!("new registration failed: {error}; partial registration cleanup failed: {cleanup_error}; operational state is unknown")),
+                OperationalHotkey::Unknown,
+            );
+            if change.changed {
+                let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+            }
+            return Err(format!("Failed to register hotkey profiles: {error}; cleanup failed: {cleanup_error}"));
+        }
         let change = match &old_operational {
-            OperationalHotkey::Registered(old_operational) => match app
+            OperationalHotkey::Registered(old_shortcuts) => match app
                 .global_shortcut()
-                .register(old_operational.as_str())
+                .register_multiple(old_shortcuts.iter().map(String::as_str))
             {
-                Ok(()) => {
-                    info!("Re-registered old hotkey '{old_operational}' after failed change");
-                    let error = (old_shortcut.as_str() != old_operational.as_str()).then(|| {
-                        format!(
-                            "saved shortcut '{old_shortcut}' is not active; still using fallback '{old_operational}'"
-                        )
-                    });
+                Ok(()) => health.record(&old_shortcut, None, old_operational.clone()),
+                Err(rollback_error) => {
                     health.record(
                         &old_shortcut,
-                        error,
-                        OperationalHotkey::Registered(old_operational.clone()),
-                    )
-                }
-                Err(e2) => {
-                    error!("Failed to re-register old hotkey '{old_operational}': {e2}");
-                    health.record(
-                        &old_shortcut,
-                        Some(e2.to_string()),
+                        Some(format!("new registration failed: {error}; restoring previous hotkeys also failed: {rollback_error}")),
                         OperationalHotkey::Inactive,
                     )
                 }
@@ -319,113 +351,62 @@ pub async fn set_hotkey(
         if change.changed {
             let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
         }
-        return Err(format!("Failed to register hotkey '{}': {}", shortcut, e));
+        return Err(format!("Failed to register hotkey profiles: {error}"));
     }
 
-    // Registration changes before persistence; keep concurrent status reads
-    // truthful during that short synchronous window.
     health.record(
         &old_shortcut,
-        Some("hotkey change is pending persistence".to_string()),
-        OperationalHotkey::registered(&shortcut),
+        Some("hotkey profile change is pending persistence".to_string()),
+        OperationalHotkey::registered_many(&new_shortcuts),
     );
 
-    let persisted = match sagascript_core::settings::store::update(|settings| {
-        settings.hotkey = shortcut.clone();
+    let persisted = match sagascript_core::settings::store::try_update(|settings| {
+        settings.replace_hotkey_profiles(profiles.clone())?;
+        Ok(())
     }) {
         Ok(settings) => settings,
         Err(save_error) => {
-            // Registration already changed process-global state. If the disk
-            // write fails, restore the operational shortcut so controller,
-            // disk, and registration cannot diverge.
-            if let Err(unregister_error) = app.global_shortcut().unregister(shortcut.as_str()) {
-                error!(
-                    "Failed to unregister unpersisted hotkey '{shortcut}': {unregister_error}"
-                );
-                let change = health.record(
-                    &old_shortcut,
-                    Some(format!(
-                        "failed to persist requested hotkey and could not unregister it: {unregister_error}; operational state is unknown"
-                    )),
-                    OperationalHotkey::Unknown,
-                );
-                if change.changed {
-                    let _ = app.emit(
-                        crate::events::event::HOTKEY_REGISTRATION_CHANGED,
-                        &change.status,
-                    );
+            let unregister_error = app.global_shortcut().unregister_multiple(new_shortcuts.iter().map(String::as_str)).err();
+            let rollback_error = if unregister_error.is_none() {
+                match &old_operational {
+                    OperationalHotkey::Registered(old_shortcuts) => app
+                        .global_shortcut()
+                        .register_multiple(old_shortcuts.iter().map(String::as_str))
+                        .err(),
+                    OperationalHotkey::Inactive => None,
+                    OperationalHotkey::Unknown => unreachable!("unknown state returned above"),
                 }
-                return Err(format!(
-                    "Failed to persist hotkey: {save_error}; failed to unregister unpersisted hotkey '{shortcut}': {unregister_error}"
-                ));
-            }
-            let rollback_error = match &old_operational {
-                OperationalHotkey::Registered(old_operational) => app
-                    .global_shortcut()
-                    .register(old_operational.as_str())
-                    .err()
-                    .map(|e| e.to_string()),
-                OperationalHotkey::Inactive => None,
-                OperationalHotkey::Unknown => unreachable!("unknown state returned above"),
+            } else {
+                None
             };
-            let (health_error, restored_operational) =
-                match (&old_operational, rollback_error.as_deref()) {
-                (OperationalHotkey::Registered(old_operational), None) => {
-                    let error = (old_shortcut.as_str() != old_operational.as_str()).then(|| {
-                        format!(
-                            "saved shortcut '{old_shortcut}' is not active; still using fallback '{old_operational}'"
-                        )
-                    });
-                    (
-                        error,
-                        OperationalHotkey::Registered(old_operational.clone()),
-                    )
-                }
-                (OperationalHotkey::Registered(_), Some(error)) => {
-                    (Some(error.to_string()), OperationalHotkey::Inactive)
-                }
-                (OperationalHotkey::Inactive, _) => (
-                    Some("no previous hotkey was active".to_string()),
-                    OperationalHotkey::Inactive,
-                ),
-                (OperationalHotkey::Unknown, _) => unreachable!("unknown state returned above"),
-            };
+            let unknown = unregister_error.is_some();
+            let restored_operational = if unknown { OperationalHotkey::Unknown } else if rollback_error.is_some() { OperationalHotkey::Inactive } else { old_operational.clone() };
+            let health_error = unknown.then(|| "failed to unregister unpersisted hotkeys; operational state is unknown".to_string())
+                .or_else(|| rollback_error.as_ref().map(|error| format!("failed to restore previous hotkeys: {error}")));
             let change = health.record(&old_shortcut, health_error, restored_operational);
             if change.changed {
                 let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
             }
-            return match (old_operational, rollback_error) {
-                (OperationalHotkey::Registered(_), Some(error)) => Err(format!(
-                    "Failed to persist hotkey: {save_error}; restoring the previous operational hotkey also failed: {error}"
-                )),
-                (OperationalHotkey::Registered(_), None) => Err(format!(
-                    "Failed to persist hotkey: {save_error}; restored the previous operational hotkey"
-                )),
-                (OperationalHotkey::Inactive, _) => Err(format!(
-                    "Failed to persist hotkey: {save_error}; no previous hotkey was active"
-                )),
-                (OperationalHotkey::Unknown, _) => unreachable!("unknown state returned above"),
-            };
+            return Err(format!("Failed to persist hotkey profiles: {save_error}"));
         }
     };
 
-    // Update controller state after persistence succeeds.
     {
         let mut ctrl = controller.lock().unwrap();
-        ctrl.settings_mut().hotkey = persisted.hotkey.clone();
+        ctrl.update_settings(persisted.clone());
         ctrl.hotkey_service_mut().set_shortcut(&persisted.hotkey);
     }
 
     let change = health.record(
-        &shortcut,
+        &new_primary,
         None,
-        OperationalHotkey::registered(&shortcut),
+        OperationalHotkey::registered_many(&new_shortcuts),
     );
     if change.changed {
         let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
     }
 
-    info!("Hotkey changed to: {shortcut}");
+    info!("Hotkey profiles changed: {} registered", new_shortcuts.len());
     Ok(())
 }
 

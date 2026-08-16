@@ -9,7 +9,7 @@ use crate::hotkey::HotkeyService;
 use crate::logging::LoggingService;
 use crate::logging::log_events;
 use crate::paste::PasteService;
-use sagascript_core::settings::{HotkeyMode, Settings};
+use sagascript_core::settings::{canonical_hotkey, HotkeyMode, HotkeyProfile, Settings};
 
 /// Result of handling a hotkey-down event
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +74,7 @@ pub struct AppController {
     last_transcription: Option<String>,
     last_error: Option<String>,
     model_ready: bool,
+    active_hotkey_profile: Option<HotkeyProfile>,
 }
 
 impl AppController {
@@ -99,6 +100,7 @@ impl AppController {
             last_transcription: None,
             last_error: None,
             model_ready: false,
+            active_hotkey_profile: None,
         }
     }
 
@@ -131,11 +133,33 @@ impl AppController {
     }
 
     pub fn language(&self) -> sagascript_core::settings::Language {
-        self.settings.language
+        self.active_hotkey_profile
+            .as_ref()
+            .map(|profile| profile.language)
+            .unwrap_or(self.settings.language)
+    }
+
+    pub fn active_hotkey_profile(&self) -> Option<&HotkeyProfile> {
+        self.active_hotkey_profile.as_ref()
     }
 
     /// Handle hotkey down event
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn handle_hotkey_down(&mut self) -> Result<HotkeyDownResult, DictationError> {
+        let profile = self
+            .settings
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .find(|profile| profile.id == "default")
+            .or_else(|| self.settings.resolved_hotkey_profiles().into_iter().next())
+            .expect("resolved profiles always contains at least one profile");
+        self.handle_hotkey_down_for_profile(profile)
+    }
+
+    pub fn handle_hotkey_down_for_profile(
+        &mut self,
+        profile: HotkeyProfile,
+    ) -> Result<HotkeyDownResult, DictationError> {
         info!("Hotkey DOWN");
 
         match self.settings.hotkey_mode {
@@ -144,17 +168,23 @@ impl AppController {
                 // PTT while a prior utterance is still Transcribing must be a
                 // no-op — otherwise the overlay/tray shows a recording that
                 // never happened and never hides (finding 1).
-                if self.start_recording()? {
+                if self.start_recording_for_profile(profile)? {
                     Ok(HotkeyDownResult::StartedRecording)
                 } else {
                     Ok(HotkeyDownResult::NoOp)
                 }
             }
             HotkeyMode::Toggle => {
-                if self.state.is_recording() {
+                if self.state.is_recording()
+                    && self
+                        .active_hotkey_profile
+                        .as_ref()
+                        .map(|active| active.id == profile.id)
+                        .unwrap_or(true)
+                {
                     Ok(HotkeyDownResult::StopRecording)
                 } else if self.state == AppState::Idle {
-                    self.start_recording()?;
+                    self.start_recording_for_profile(profile)?;
                     Ok(HotkeyDownResult::StartedRecording)
                 } else {
                     Ok(HotkeyDownResult::NoOp)
@@ -168,6 +198,17 @@ impl AppController {
         self.settings.hotkey_mode == HotkeyMode::PushToTalk && self.state.is_recording()
     }
 
+    pub fn should_stop_profile_on_key_up(&self, shortcut: &str) -> bool {
+        self.should_stop_on_key_up()
+            && self
+                .active_hotkey_profile
+                .as_ref()
+                .and_then(|active| {
+                    Some(canonical_hotkey(&active.shortcut).ok()? == canonical_hotkey(shortcut).ok()?)
+                })
+                .unwrap_or(false)
+    }
+
     /// Start audio recording.
     ///
     /// Returns `Ok(true)` if recording actually started, `Ok(false)` if it was
@@ -175,6 +216,20 @@ impl AppController {
     /// still transcribing). Callers use this to avoid reporting a recording that
     /// never happened (finding 1).
     pub fn start_recording(&mut self) -> Result<bool, DictationError> {
+        let profile = self
+            .settings
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .find(|profile| profile.id == "default")
+            .or_else(|| self.settings.resolved_hotkey_profiles().into_iter().next())
+            .expect("resolved profiles always contains at least one profile");
+        self.start_recording_for_profile(profile)
+    }
+
+    pub fn start_recording_for_profile(
+        &mut self,
+        profile: HotkeyProfile,
+    ) -> Result<bool, DictationError> {
         if self.state != AppState::Idle {
             warn!("Cannot start recording: state is {:?}", self.state);
             return Ok(false);
@@ -189,6 +244,13 @@ impl AppController {
         );
 
         self.audio.start_capture()?;
+        info!(
+            profile_id = %profile.id,
+            profile_name = %profile.name,
+            language = %profile.language.display_name(),
+            "Recording profile selected"
+        );
+        self.active_hotkey_profile = Some(profile);
         self.state = AppState::Recording;
         self.recording_start = Some(Instant::now());
         self.last_error = None;
@@ -246,6 +308,7 @@ impl AppController {
         self.last_transcription = Some(text.to_string());
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
+        self.active_hotkey_profile = None;
         self.logging.end_dictation_session();
     }
 
@@ -253,6 +316,7 @@ impl AppController {
     pub fn on_transcription_error(&mut self, error: &str) {
         self.last_error = Some(error.to_string());
         self.state = AppState::Idle;
+        self.active_hotkey_profile = None;
         self.logging.end_dictation_session();
     }
 
@@ -291,6 +355,7 @@ impl AppController {
         if self.state.is_recording() {
             let _ = self.audio.stop_capture();
             self.state = AppState::Idle;
+            self.active_hotkey_profile = None;
             self.logging.end_dictation_session();
             info!("Recording cancelled");
         }
@@ -506,6 +571,34 @@ mod tests {
         ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
         ctrl.state = AppState::Recording;
         assert!(!ctrl.should_stop_on_key_up());
+    }
+
+    #[test]
+    fn active_profile_freezes_language_and_release_identity() {
+        let mut ctrl = default_controller();
+        let profiles = vec![
+            HotkeyProfile { id: "default".into(), name: "English".into(), shortcut: "Control+Shift+E".into(), language: sagascript_core::settings::Language::English },
+            HotkeyProfile { id: "swedish".into(), name: "Swedish".into(), shortcut: "Option+Space".into(), language: sagascript_core::settings::Language::Swedish },
+        ];
+        ctrl.settings_mut().replace_hotkey_profiles(profiles.clone()).unwrap();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_profile = Some(profiles[1].clone());
+
+        assert_eq!(ctrl.language(), sagascript_core::settings::Language::Swedish);
+        assert!(ctrl.should_stop_profile_on_key_up("Alt+Space"));
+        assert!(!ctrl.should_stop_profile_on_key_up("Control+Shift+E"));
+    }
+
+    #[test]
+    fn toggle_press_from_different_profile_does_not_stop_active_recording() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_profile = Some(HotkeyProfile { id: "english".into(), name: "English".into(), shortcut: "Control+Shift+E".into(), language: sagascript_core::settings::Language::English });
+        let swedish = HotkeyProfile { id: "swedish".into(), name: "Swedish".into(), shortcut: "Option+Space".into(), language: sagascript_core::settings::Language::Swedish };
+
+        assert_eq!(ctrl.handle_hotkey_down_for_profile(swedish).unwrap(), HotkeyDownResult::NoOp);
     }
 
     // -- handle_hotkey_down --
