@@ -18,6 +18,22 @@ function compareCodeUnits(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+function npmInstallationError(pkg, installedVersion, directoryExists) {
+  const path = relative(root, pkg.directory);
+  if (!directoryExists) {
+    return pkg.optional
+      ? null
+      : `npm dependency directory is missing: ${path} (run npm ci)`;
+  }
+  if (typeof installedVersion !== "string") {
+    return `npm dependency manifest has no version: ${path}/package.json (run npm ci)`;
+  }
+  if (installedVersion !== pkg.version) {
+    return `npm dependency version mismatch for ${pkg.name}: lockfile requires ${pkg.version}, installed ${installedVersion} in ${path} (run npm ci)`;
+  }
+  return null;
+}
+
 if (mode === "--test-sort") {
   const fixture = ["z", "ä", "a", "å", "A"].sort(compareCodeUnits);
   const expected = ["A", "a", "z", "ä", "å"];
@@ -28,8 +44,42 @@ if (mode === "--test-sort") {
   process.exit(0);
 }
 
+if (mode === "--test-npm-installation") {
+  const pkg = {
+    name: "example",
+    version: "2.0.0",
+    optional: false,
+    directory: join(root, "node_modules/example"),
+  };
+  const cases = [
+    [npmInstallationError(pkg, "2.0.0", true), null],
+    [
+      npmInstallationError(pkg, "1.0.0", true),
+      "npm dependency version mismatch for example: lockfile requires 2.0.0, installed 1.0.0 in node_modules/example (run npm ci)",
+    ],
+    [
+      npmInstallationError(pkg, undefined, false),
+      "npm dependency directory is missing: node_modules/example (run npm ci)",
+    ],
+    [npmInstallationError({ ...pkg, optional: true }, undefined, false), null],
+    [
+      npmInstallationError(pkg, undefined, true),
+      "npm dependency manifest has no version: node_modules/example/package.json (run npm ci)",
+    ],
+  ];
+  for (const [actual, expected] of cases) {
+    if (actual !== expected) {
+      throw new Error(`Unexpected npm installation validation result: ${actual}`);
+    }
+  }
+  console.log("npm installation validation passed");
+  process.exit(0);
+}
+
 if (!new Set(["--check", "--write"]).has(mode)) {
-  console.error("Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort");
+  console.error(
+    "Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort|--test-npm-installation",
+  );
   process.exit(2);
 }
 
@@ -189,8 +239,17 @@ for (const pkg of lockedNpmPackages) {
   else if (!reviewedNpmLicenses.has(pkg.license)) {
     errors.push(`npm ${pkg.name}@${pkg.version} has unreviewed license: ${pkg.license}`);
   }
-  if (!existsSync(pkg.directory) && !pkg.optional) {
-    errors.push(`npm dependency directory is missing: ${relative(root, pkg.directory)} (run npm ci)`);
+  const directoryExists = existsSync(pkg.directory);
+  let installedVersion;
+  if (directoryExists) {
+    const manifestPath = join(pkg.directory, "package.json");
+    if (existsSync(manifestPath)) {
+      installedVersion = JSON.parse(readFileSync(manifestPath, "utf8")).version;
+    }
+  }
+  const installationError = npmInstallationError(pkg, installedVersion, directoryExists);
+  if (installationError) {
+    errors.push(installationError);
   }
 }
 

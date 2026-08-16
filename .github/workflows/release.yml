@@ -51,6 +51,7 @@ jobs:
           en_sort=$(LC_ALL=en_US.UTF-8 node scripts/generate-third-party-notices.mjs --test-sort)
           sv_sort=$(LC_ALL=sv_SE.UTF-8 node scripts/generate-third-party-notices.mjs --test-sort)
           [[ "$en_sort" == "$sv_sort" ]]
+          node scripts/generate-third-party-notices.mjs --test-npm-installation
 
       - name: Verify third-party notices
         run: npm run licenses:check
