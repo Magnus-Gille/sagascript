@@ -1,12 +1,14 @@
+use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use sagascript_core::audio::decoder::decode_audio_file;
+use sagascript_core::audio::decoder::{SUPPORTED_EXTENSIONS, decode_audio_file};
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::settings::{Language, Settings, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
     CoverageDiagnostics, LanguageDetection, LanguageRegionDiagnostics, LanguageWindow,
     TranscriptionWarning, analyze_coverage, analyze_language_windows, analyze_repetition,
@@ -19,8 +21,14 @@ use sagascript_core::transcription::{
 
 #[derive(Args)]
 pub struct TranscribeArgs {
-    /// Path to the audio/video file to transcribe
-    pub file: PathBuf,
+    /// Audio/video files or directories to transcribe. Directories include
+    /// supported files in deterministic filename order.
+    #[arg(required = true, value_name = "INPUT")]
+    pub files: Vec<PathBuf>,
+
+    /// Recurse into input directories. Has no effect on explicit files.
+    #[arg(long)]
+    pub recursive: bool,
 
     /// Language for transcription [possible values: en, sv, no, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
@@ -37,6 +45,15 @@ pub struct TranscribeArgs {
     /// include `quarantined`.
     #[arg(long)]
     pub json: bool,
+
+    /// Emit one compact {source,status,result|error} JSON object per input.
+    #[arg(long, conflicts_with = "json")]
+    pub jsonl: bool,
+
+    /// Stop after the first item-level failure. The default continues and
+    /// exits non-zero after emitting every successful/failed item.
+    #[arg(long)]
+    pub fail_fast: bool,
 
     /// Copy transcription result to clipboard
     #[arg(long)]
@@ -91,7 +108,50 @@ pub struct TranscribeArgs {
     pub beam_size: Option<u32>,
 }
 
+#[derive(Debug)]
+struct FileTranscription {
+    json: serde_json::Value,
+    plain: String,
+}
+
+#[derive(Debug)]
+struct BatchExecution {
+    source: PathBuf,
+    output: Result<FileTranscription, String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+enum BatchItem {
+    Ok {
+        source: String,
+        result: serde_json::Value,
+    },
+    Error {
+        source: String,
+        error: String,
+    },
+}
+
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
+    let files = expand_inputs(&args.files, args.recursive)?;
+    if files.is_empty() {
+        return Err(DictationError::FileDecodeError(
+            "No supported audio/video files were found in the supplied inputs".to_string(),
+        ));
+    }
+    if files.len() > 1 && args.clipboard {
+        return Err(DictationError::SettingsError(
+            "--clipboard is only available when transcribing one file".to_string(),
+        ));
+    }
+    #[cfg(feature = "diarization")]
+    if files.len() > 1 && args.diarize {
+        return Err(DictationError::SettingsError(
+            "--diarize is only available when transcribing one file".to_string(),
+        ));
+    }
+
     let stored = sagascript_core::settings::store::load();
     let language = match &args.language {
         Some(l) => parse_language(l)?,
@@ -139,24 +199,151 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         )));
     }
 
+    eprintln!("Loading model once for {} input(s): {}...", files.len(), model.display_name());
+    let backend = WhisperBackend::new();
+    backend.load_model(model)?;
+
+    let mut items = Vec::with_capacity(if args.json { files.len() } else { 0 });
+    let (processed, failures) = process_batch(
+        &files,
+        args.fail_fast,
+        |index, file| {
+            eprintln!("[{}/{}] {}", index + 1, files.len(), file.display());
+            transcribe_file(
+                &args,
+                file,
+                &backend,
+                &stored,
+                language,
+                model,
+                effective_prompt.clone(),
+                &correction_vocabulary,
+            )
+        },
+        |execution| {
+            let file = execution.source;
+            match execution.output {
+                Ok(output) => {
+                    if args.clipboard {
+                        copy_to_clipboard(&output.plain)?;
+                        eprintln!("Copied to clipboard.");
+                    }
+                    let item = BatchItem::Ok {
+                        source: file.display().to_string(),
+                        result: output.json,
+                    };
+                    if args.jsonl {
+                        emit_jsonl_item(&item)?;
+                    } else if args.json {
+                        items.push(item);
+                    } else {
+                        if files.len() > 1 {
+                            println!("==> {} <==", file.display());
+                        }
+                        println!("{}", output.plain);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Error transcribing {}: {error}", file.display());
+                    let item = BatchItem::Error {
+                        source: file.display().to_string(),
+                        error,
+                    };
+                    if args.jsonl {
+                        emit_jsonl_item(&item)?;
+                    } else if args.json {
+                        items.push(item);
+                    }
+                }
+            }
+            Ok(())
+        },
+    )?;
+
+    if args.json {
+        if files.len() == 1 && failures == 0 {
+            let BatchItem::Ok { result, .. } = &items[0] else {
+                unreachable!("successful single item")
+            };
+            println!("{}", serde_json::to_string_pretty(result).expect("result serializes"));
+        } else {
+            println!("{}", serde_json::to_string_pretty(&items).expect("batch serializes"));
+        }
+    }
+
+    if failures > 0 {
+        return Err(DictationError::TranscriptionFailed(format!(
+            "{failures} of {} batch item(s) failed",
+            processed
+        )));
+    }
+    Ok(())
+}
+
+fn emit_jsonl_item(item: &BatchItem) -> Result<(), DictationError> {
+    println!(
+        "{}",
+        serde_json::to_string(item).expect("batch item serializes")
+    );
+    std::io::stdout().flush().map_err(|error| {
+        DictationError::TranscriptionFailed(format!("Failed to flush JSONL output: {error}"))
+    })
+}
+
+fn process_batch<F, E>(
+    files: &[PathBuf],
+    fail_fast: bool,
+    mut process: F,
+    mut emit: E,
+) -> Result<(usize, usize), DictationError>
+where
+    F: FnMut(usize, &Path) -> Result<FileTranscription, DictationError>,
+    E: FnMut(BatchExecution) -> Result<(), DictationError>,
+{
+    let mut processed = 0usize;
+    let mut failures = 0usize;
+    for (index, file) in files.iter().enumerate() {
+        let output = process(index, file).map_err(|error| error.to_string());
+        let failed = output.is_err();
+        processed += 1;
+        failures += usize::from(failed);
+        emit(BatchExecution {
+            source: file.clone(),
+            output,
+        })?;
+        if failed && fail_fast {
+            break;
+        }
+    }
+    Ok((processed, failures))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn transcribe_file(
+    args: &TranscribeArgs,
+    file: &Path,
+    backend: &WhisperBackend,
+    stored: &Settings,
+    language: Language,
+    model: WhisperModel,
+    effective_prompt: Option<String>,
+    correction_vocabulary: &[String],
+) -> Result<FileTranscription, DictationError> {
+
     // Decode audio file
-    eprintln!("Decoding {}...", args.file.display());
-    let audio = decode_audio_file(&args.file)?;
+    eprintln!("Decoding {}...", file.display());
+    let audio = decode_audio_file(file)?;
     let duration = audio.len() as f64 / 16_000.0;
     eprintln!("Audio: {:.1}s, {} samples", duration, audio.len());
 
-    // Load model
-    eprintln!("Loading model: {}...", model.display_name());
-    let backend = WhisperBackend::new();
-    backend.load_model(model)?;
-    let detected_language = match detect_file_language(&backend, &audio, model) {
+    let detected_language = match detect_file_language(backend, &audio, model) {
         Ok(detection) => detection,
         Err(error) => {
             eprintln!("Warning: local language detection was unavailable: {error}");
             None
         }
     };
-    let language_regions = match detect_file_language_regions(&backend, &audio, language) {
+    let language_regions = match detect_file_language_regions(backend, &audio, language) {
         Ok(diagnostics) => diagnostics,
         Err(error) => {
             eprintln!("Warning: language region detection was unavailable: {error}");
@@ -248,43 +435,34 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         }
         emit_warnings(&warnings);
 
-        if args.json {
-            let speakers: Vec<String> = {
-                let mut seen = std::collections::HashSet::new();
-                consolidated.iter().map(|s| s.speaker.clone()).filter(|s| seen.insert(s.clone())).collect()
-            };
-            let json = serde_json::json!({
-                "segments": consolidated,
-                "speakers": speakers,
-                "language": language,
-                "model": model_id_string(model),
-                "file": args.file.display().to_string(),
-                "duration_seconds": duration,
-                "coverage_ratio": coverage.coverage_ratio,
-                "uncovered_spans": coverage.uncovered_spans,
-                "detected_language": detected_language,
-                "language_redetection_enabled": language_regions.is_some(),
-                "language_regions": language_regions.as_ref().map(|diagnostics| &diagnostics.regions),
-                "warnings": warnings,
-            });
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
-        } else {
-            for seg in &consolidated {
-                println!("[{}] {}", seg.speaker, seg.text.trim());
-            }
-        }
-
-        if args.clipboard {
-            let text: String = consolidated
+        let speakers: Vec<String> = {
+            let mut seen = HashSet::new();
+            consolidated
                 .iter()
-                .map(|s| format!("[{}] {}", s.speaker, s.text.trim()))
-                .collect::<Vec<_>>()
-                .join("\n");
-            copy_to_clipboard(&text)?;
-            eprintln!("Copied to clipboard.");
-        }
-
-        return Ok(());
+                .map(|segment| segment.speaker.clone())
+                .filter(|speaker| seen.insert(speaker.clone()))
+                .collect()
+        };
+        let plain = consolidated
+            .iter()
+            .map(|segment| format!("[{}] {}", segment.speaker, segment.text.trim()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let json = serde_json::json!({
+            "segments": consolidated,
+            "speakers": speakers,
+            "language": language,
+            "model": model_id_string(model),
+            "file": file.display().to_string(),
+            "duration_seconds": duration,
+            "coverage_ratio": coverage.coverage_ratio,
+            "uncovered_spans": coverage.uncovered_spans,
+            "detected_language": detected_language,
+            "language_redetection_enabled": language_regions.is_some(),
+            "language_regions": language_regions.as_ref().map(|diagnostics| &diagnostics.regions),
+            "warnings": warnings,
+        });
+        return Ok(FileTranscription { json, plain });
     }
 
     // Standard (non-diarized) transcription. Build options from the saved
@@ -349,7 +527,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         backend.transcribe_sync_with_options_segments(&audio, language, &opts, |_| {})?
     };
     let corrections = if args.correct_hints {
-        apply_hint_corrections(&mut segments, &correction_vocabulary)
+        apply_hint_corrections(&mut segments, correction_vocabulary)
     } else {
         Vec::new()
     };
@@ -380,55 +558,112 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     warnings.extend(repetition.warnings.clone());
     emit_warnings(&warnings);
 
-    // Output
-    if args.json {
-        // Per-segment confidence (#81): avg_logprob is the mean token
-        // log-probability (null when a segment has no scoreable tokens);
-        // no_speech_prob near 1.0 flags likely-hallucinated segments.
-        // Segment text is trimmed but otherwise raw for confidence/timing
-        // consumers; top-level `text` is the display-normalized rendering.
-        let json_segments: Vec<serde_json::Value> = segments
-            .iter()
-            .enumerate()
-            .map(|(index, s)| {
-                serde_json::json!({
-                    "start": s.start,
-                    "end": s.end,
-                    "text": s.text.trim(),
-                    "avg_logprob": s.avg_logprob,
-                    "no_speech_prob": s.no_speech_prob,
-                    "quarantined": repetition.quarantines_segment(index),
-                })
+    // Per-segment confidence (#81): avg_logprob is the mean token
+    // log-probability (null when a segment has no scoreable tokens);
+    // no_speech_prob near 1.0 flags likely-hallucinated segments.
+    let json_segments: Vec<serde_json::Value> = segments
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| {
+            serde_json::json!({
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text.trim(),
+                "avg_logprob": segment.avg_logprob,
+                "no_speech_prob": segment.no_speech_prob,
+                "quarantined": repetition.quarantines_segment(index),
             })
-            .collect();
-        let json = serde_json::json!({
-            "text": text,
-            "segments": json_segments,
-            "language": language,
-            "model": model_id_string(model),
-            "file": args.file.display().to_string(),
-            "duration_seconds": duration,
-            "coverage_ratio": coverage.coverage_ratio,
-            "uncovered_spans": coverage.uncovered_spans,
-            "repetition_spans": repetition.spans,
-            "detected_language": detected_language,
-            "language_redetection_enabled": language_regions.is_some(),
-            "language_regions": language_regions.as_ref().map(|diagnostics| &diagnostics.regions),
-            "warnings": warnings,
-            "vocabulary_corrections": corrections,
-        });
-        println!("{}", serde_json::to_string_pretty(&json).unwrap());
-    } else {
-        println!("{text}");
+        })
+        .collect();
+    let json = serde_json::json!({
+        "text": text,
+        "segments": json_segments,
+        "language": language,
+        "model": model_id_string(model),
+        "file": file.display().to_string(),
+        "duration_seconds": duration,
+        "coverage_ratio": coverage.coverage_ratio,
+        "uncovered_spans": coverage.uncovered_spans,
+        "repetition_spans": repetition.spans,
+        "detected_language": detected_language,
+        "language_redetection_enabled": language_regions.is_some(),
+        "language_regions": language_regions.as_ref().map(|diagnostics| &diagnostics.regions),
+        "warnings": warnings,
+        "vocabulary_corrections": corrections,
+    });
+
+    Ok(FileTranscription { json, plain: text })
+}
+
+fn expand_inputs(inputs: &[PathBuf], recursive: bool) -> Result<Vec<PathBuf>, DictationError> {
+    let mut expanded = Vec::new();
+    let mut seen = HashSet::new();
+
+    for input in inputs {
+        if input.is_dir() {
+            let mut directory_files = Vec::new();
+            collect_directory_files(input, recursive, &mut directory_files)?;
+            directory_files.sort();
+            for file in directory_files {
+                if seen.insert(file.clone()) {
+                    expanded.push(file);
+                }
+            }
+        } else if seen.insert(input.clone()) {
+            // Keep explicit unsupported, missing, or corrupt files in the work
+            // list so they produce an item-level error without hiding later
+            // valid inputs.
+            expanded.push(input.clone());
+        }
     }
 
-    // Clipboard
-    if args.clipboard {
-        copy_to_clipboard(&text)?;
-        eprintln!("Copied to clipboard.");
+    Ok(expanded)
+}
+
+fn collect_directory_files(
+    directory: &Path,
+    recursive: bool,
+    output: &mut Vec<PathBuf>,
+) -> Result<(), DictationError> {
+    let entries = std::fs::read_dir(directory).map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Failed to read directory '{}': {error}",
+            directory.display()
+        ))
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            DictationError::FileDecodeError(format!(
+                "Failed to read an entry in '{}': {error}",
+                directory.display()
+            ))
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            DictationError::FileDecodeError(format!(
+                "Failed to inspect '{}': {error}",
+                entry.path().display()
+            ))
+        })?;
+        let path = entry.path();
+        if file_type.is_file() && has_supported_extension(&path) {
+            output.push(path);
+        } else if recursive && file_type.is_dir() {
+            collect_directory_files(&path, true, output)?;
+        }
     }
 
     Ok(())
+}
+
+fn has_supported_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            SUPPORTED_EXTENSIONS
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
 }
 
 /// Segment scores in this band are uncertain enough to consider an explicit
@@ -949,6 +1184,109 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directory_expansion_filters_sorts_recurses_and_deduplicates() {
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-batch-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let nested = root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let a = root.join("a.WAV");
+        let b = root.join("b.mp3");
+        let ignored = root.join("notes.txt");
+        let c = nested.join("c.m4a");
+        for path in [&a, &b, &ignored, &c] {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+
+        assert_eq!(
+            expand_inputs(std::slice::from_ref(&root), false).unwrap(),
+            vec![a.clone(), b.clone()]
+        );
+        assert_eq!(
+            expand_inputs(&[root.clone(), a.clone()], true).unwrap(),
+            vec![a, b, c]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_unsupported_or_missing_inputs_remain_item_level_work() {
+        let inputs = vec![PathBuf::from("bad.txt"), PathBuf::from("missing.wav")];
+        assert_eq!(expand_inputs(&inputs, false).unwrap(), inputs);
+    }
+
+    #[test]
+    fn batch_continues_after_item_failure_by_default() {
+        let files = vec![
+            PathBuf::from("one.wav"),
+            PathBuf::from("bad.wav"),
+            PathBuf::from("three.wav"),
+        ];
+        let mut visited = Vec::new();
+        let mut executions = Vec::new();
+        let counts = process_batch(
+            &files,
+            false,
+            |_, file| {
+                visited.push(file.to_path_buf());
+                if file == Path::new("bad.wav") {
+                    Err(DictationError::FileDecodeError("corrupt fixture".to_string()))
+                } else {
+                    Ok(FileTranscription {
+                        json: serde_json::json!({"text": file.display().to_string()}),
+                        plain: file.display().to_string(),
+                    })
+                }
+            },
+            |execution| {
+                executions.push(execution);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(visited, files);
+        assert_eq!(counts, (3, 1));
+        assert_eq!(executions.len(), 3);
+        assert!(executions[0].output.is_ok());
+        assert!(executions[1].output.is_err());
+        assert!(executions[2].output.is_ok());
+    }
+
+    #[test]
+    fn batch_fail_fast_stops_after_first_failure() {
+        let files = vec![PathBuf::from("bad.wav"), PathBuf::from("never.wav")];
+        let mut executions = Vec::new();
+        let counts = process_batch(
+            &files,
+            true,
+            |_, file| {
+                Err(DictationError::FileDecodeError(format!(
+                    "cannot decode {}",
+                    file.display()
+                )))
+            },
+            |execution| {
+                executions.push(execution);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(counts, (1, 1));
+        assert_eq!(executions.len(), 1);
+        assert_eq!(executions[0].source, PathBuf::from("bad.wav"));
+    }
+
+    #[test]
+    fn supported_extensions_are_case_insensitive() {
+        assert!(has_supported_extension(Path::new("AUDIO.FLAC")));
+        assert!(has_supported_extension(Path::new("video.mov")));
+        assert!(!has_supported_extension(Path::new("transcript.json")));
+    }
 
     #[test]
     fn explicit_language_keeps_region_redetection_fast_path_disabled() {
