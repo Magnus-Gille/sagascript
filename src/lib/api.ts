@@ -3,6 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 export type Language = "en" | "sv" | "no" | "auto";
 export type HotkeyMode = "push" | "toggle";
 
+export interface HotkeyProfile {
+  id: string;
+  name: string;
+  shortcut: string;
+  language: Language;
+}
+
 export interface WhisperModel {
   id: string;
   display_name: string;
@@ -20,6 +27,7 @@ export interface Settings {
   auto_paste: boolean;
   auto_select_model: boolean;
   hotkey: string;
+  hotkey_profiles: HotkeyProfile[];
   initial_prompt: string;
   beam_size: number;
   temperature_fallback: boolean;
@@ -47,6 +55,7 @@ export interface HotkeyStatus {
   ok: boolean;
   error: string | null;
   shortcut: string;
+  shortcuts: string[];
 }
 
 export async function getState(): Promise<AppState> {
@@ -75,6 +84,14 @@ export async function setHotkeyMode(mode: HotkeyMode): Promise<void> {
 
 export async function setHotkey(shortcut: string): Promise<void> {
   return invoke("set_hotkey", { shortcut });
+}
+
+export async function setHotkeyProfiles(profiles: HotkeyProfile[]): Promise<void> {
+  return invoke("set_hotkey_profiles", { profiles });
+}
+
+export async function getActiveHotkeyProfile(): Promise<HotkeyProfile | null> {
+  return invoke("get_active_hotkey_profile");
 }
 
 /** Whether the hotkey is actually registered right now (not just the saved

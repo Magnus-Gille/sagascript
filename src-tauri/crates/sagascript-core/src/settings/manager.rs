@@ -1,4 +1,8 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
+
+use super::{canonical_hotkey, validate_hotkey};
 
 use crate::download::DownloadIntegrity;
 
@@ -452,6 +456,26 @@ impl HotkeyMode {
     }
 }
 
+/// One global shortcut and the transcription language selected when it fires.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HotkeyProfile {
+    pub id: String,
+    pub name: String,
+    pub shortcut: String,
+    pub language: Language,
+}
+
+impl HotkeyProfile {
+    pub fn legacy_default(shortcut: String, language: Language) -> Self {
+        Self {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+            shortcut,
+            language,
+        }
+    }
+}
+
 /// All user-configurable settings, persisted as JSON
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -464,6 +488,9 @@ pub struct Settings {
     pub auto_select_model: bool,
     /// Hotkey shortcut string (e.g. "Control+Shift+Space")
     pub hotkey: String,
+    /// Explicit dictation profiles. Empty means a legacy settings file; callers
+    /// use `resolved_hotkey_profiles()` to synthesize its default profile.
+    pub hotkey_profiles: Vec<HotkeyProfile>,
     /// Optional initial prompt that primes the decoder with domain vocabulary
     /// (names, jargon, spellings) for more accurate transcription. Empty = none.
     pub initial_prompt: String,
@@ -491,6 +518,7 @@ impl Default for Settings {
             auto_paste: true,
             auto_select_model: true,
             hotkey: "Control+Shift+Space".to_string(),
+            hotkey_profiles: Vec::new(),
             initial_prompt: String::new(),
             beam_size: 0,
             temperature_fallback: true,
@@ -503,10 +531,80 @@ impl Default for Settings {
 impl Settings {
     /// Returns the effective model considering auto-selection
     pub fn effective_model(&self) -> WhisperModel {
-        if self.auto_select_model {
-            WhisperModel::recommended(self.language)
+        self.effective_model_for(self.language)
+    }
+
+    pub fn effective_model_for(&self, language: Language) -> WhisperModel {
+        if self.auto_select_model { WhisperModel::recommended(language) } else { self.whisper_model }
+    }
+
+    pub fn resolved_hotkey_profiles(&self) -> Vec<HotkeyProfile> {
+        if self.hotkey_profiles.is_empty() {
+            vec![HotkeyProfile::legacy_default(self.hotkey.clone(), self.language)]
         } else {
-            self.whisper_model
+            self.hotkey_profiles.clone()
+        }
+    }
+
+    pub fn validate_hotkey_profiles(profiles: &[HotkeyProfile]) -> Result<(), String> {
+        if profiles.is_empty() {
+            return Err("At least one hotkey profile is required".to_string());
+        }
+        let mut ids = HashSet::new();
+        let mut shortcuts = HashSet::new();
+        for profile in profiles {
+            if profile.id.is_empty()
+                || profile.id.len() > 32
+                || !profile.id.starts_with(|c: char| c.is_ascii_alphanumeric())
+                || !profile.id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            {
+                return Err(format!("Invalid profile id '{}': use lowercase letters, numbers, '-' or '_'", profile.id));
+            }
+            if !ids.insert(profile.id.clone()) {
+                return Err(format!("Duplicate profile id '{}'", profile.id));
+            }
+            if profile.name.trim().is_empty() {
+                return Err(format!("Profile '{}' must have a name", profile.id));
+            }
+            if profile.name.chars().count() > 40 {
+                return Err(format!("Profile '{}' name must be 40 characters or fewer", profile.id));
+            }
+            validate_hotkey(&profile.shortcut)?;
+            let canonical = canonical_hotkey(&profile.shortcut)?;
+            if !shortcuts.insert(canonical) {
+                return Err(format!("Duplicate hotkey '{}'", profile.shortcut));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn replace_hotkey_profiles(&mut self, profiles: Vec<HotkeyProfile>) -> Result<(), String> {
+        Self::validate_hotkey_profiles(&profiles)?;
+        let legacy = profiles.iter().find(|profile| profile.id == "default").unwrap_or(&profiles[0]);
+        self.hotkey = legacy.shortcut.clone();
+        self.language = legacy.language;
+        self.hotkey_profiles = profiles;
+        Ok(())
+    }
+
+    pub fn hotkey_profile_for_shortcut(&self, shortcut: &str) -> Option<HotkeyProfile> {
+        let target = canonical_hotkey(shortcut).ok()?;
+        self.resolved_hotkey_profiles()
+            .into_iter()
+            .find(|profile| canonical_hotkey(&profile.shortcut).ok().as_deref() == Some(target.as_str()))
+    }
+
+    pub fn set_legacy_language(&mut self, language: Language) {
+        self.language = language;
+        if let Some(profile) = self.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
+            profile.language = language;
+        }
+    }
+
+    pub fn set_legacy_hotkey(&mut self, shortcut: String) {
+        self.hotkey = shortcut.clone();
+        if let Some(profile) = self.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
+            profile.shortcut = shortcut;
         }
     }
 }
@@ -926,6 +1024,89 @@ mod tests {
         let s = Settings { auto_select_model: false, whisper_model: WhisperModel::KbWhisperSmall, language: Language::English, ..Default::default() }; // language shouldn't matter
 
         assert_eq!(s.effective_model(), WhisperModel::KbWhisperSmall);
+    }
+
+    fn profile(id: &str, shortcut: &str, language: Language) -> HotkeyProfile {
+        HotkeyProfile {
+            id: id.to_string(),
+            name: id.to_string(),
+            shortcut: shortcut.to_string(),
+            language,
+        }
+    }
+
+    #[test]
+    fn legacy_settings_resolve_to_one_default_hotkey_profile() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"language":"sv","hotkey":"Option+Space"}"#,
+        )
+        .unwrap();
+        let profiles = settings.resolved_hotkey_profiles();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, "default");
+        assert_eq!(profiles[0].shortcut, "Option+Space");
+        assert_eq!(profiles[0].language, Language::Swedish);
+    }
+
+    #[test]
+    fn hotkey_profiles_roundtrip_and_lookup_aliases() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("default", "Control+Shift+A", Language::English),
+                profile("swedish", "Option+Space", Language::Swedish),
+            ])
+            .unwrap();
+        let json = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.hotkey_profiles, settings.hotkey_profiles);
+        assert_eq!(
+            loaded.hotkey_profile_for_shortcut("Alt+Space").unwrap().id,
+            "swedish"
+        );
+    }
+
+    #[test]
+    fn replacing_profiles_syncs_legacy_fields_from_default() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("swedish", "Option+Space", Language::Swedish),
+                profile("default", "Control+Shift+E", Language::English),
+            ])
+            .unwrap();
+        assert_eq!(settings.hotkey, "Control+Shift+E");
+        assert_eq!(settings.language, Language::English);
+    }
+
+    #[test]
+    fn profile_validation_rejects_invalid_and_duplicate_values() {
+        assert!(Settings::validate_hotkey_profiles(&[]).is_err());
+        assert!(Settings::validate_hotkey_profiles(&[profile("Bad ID", "Option+A", Language::English)]).is_err());
+        assert!(Settings::validate_hotkey_profiles(&[profile("default", "Space", Language::English)]).is_err());
+
+        let mut blank = profile("default", "Option+A", Language::English);
+        blank.name = "  ".to_string();
+        assert!(Settings::validate_hotkey_profiles(&[blank]).is_err());
+
+        let duplicate_ids = vec![
+            profile("same", "Option+A", Language::English),
+            profile("same", "Option+B", Language::Swedish),
+        ];
+        assert!(Settings::validate_hotkey_profiles(&duplicate_ids).is_err());
+
+        let duplicate_aliases = vec![
+            profile("one", "Option+Shift+A", Language::English),
+            profile("two", "shift+alt+KeyA", Language::Swedish),
+        ];
+        assert!(Settings::validate_hotkey_profiles(&duplicate_aliases).is_err());
+    }
+
+    #[test]
+    fn effective_model_can_be_selected_for_profile_language() {
+        let settings = Settings { auto_select_model: true, ..Default::default() };
+        assert_eq!(settings.effective_model_for(Language::Swedish), WhisperModel::KbWhisperBase);
+        assert_eq!(settings.effective_model_for(Language::Norwegian), WhisperModel::NbWhisperBase);
     }
 
     #[test]

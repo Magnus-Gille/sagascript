@@ -1,11 +1,27 @@
 <script lang="ts">
-  // Minimal overlay — just a pulsing red dot and "Recording..." text.
-  // Rendered in a transparent, click-through WebviewWindow.
+  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import { getActiveHotkeyProfile, type HotkeyProfile } from "./api";
+
+  let profile: HotkeyProfile | null = $state(null);
+
+  onMount(() => {
+    let unlisten = () => {};
+    getActiveHotkeyProfile().then((active) => { profile = active; });
+    listen<HotkeyProfile>("active-hotkey-profile-changed", (event) => {
+      profile = event.payload;
+    }).then((stop) => { unlisten = stop; });
+    return () => unlisten();
+  });
+
+  function languageLabel(language: HotkeyProfile["language"]): string {
+    return ({ en: "English", sv: "Swedish", no: "Norwegian", auto: "Auto" })[language];
+  }
 </script>
 
 <div class="pill">
   <span class="dot"></span>
-  <span class="label">Recording...</span>
+  <span class="label">{profile ? `${profile.name} · ${languageLabel(profile.language)}` : "Recording..."}</span>
 </div>
 
 <style>
@@ -52,5 +68,8 @@
     font-weight: 500;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     white-space: nowrap;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>

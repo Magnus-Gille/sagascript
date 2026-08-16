@@ -179,6 +179,41 @@ where
     update_at_with_legacy_sources(&path, legacy_settings_paths(), mutate)
 }
 
+/// Like [`update`], but lets validation fail while the cross-process lock is
+/// held so read/validate/write profile mutations cannot race another writer.
+pub fn try_update<F>(mutate: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings) -> Result<(), String>,
+{
+    let path = settings_path();
+    try_update_at_with_legacy_sources(&path, legacy_settings_paths(), mutate)
+}
+
+#[cfg(test)]
+fn try_update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings) -> Result<(), String>,
+{
+    try_update_at_with_legacy_sources(path, std::iter::empty(), mutate)
+}
+
+fn try_update_at_with_legacy_sources<F>(
+    path: &Path,
+    sources: impl IntoIterator<Item = PathBuf>,
+    mutate: F,
+) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings) -> Result<(), String>,
+{
+    with_settings_lock(path, || {
+        migrate_legacy_identifier_settings_locked(path, sources);
+        let mut settings = load_from(path);
+        mutate(&mut settings)?;
+        save_to(path, &settings)?;
+        Ok(settings)
+    })
+}
+
 #[cfg(test)]
 fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
 where
@@ -505,6 +540,19 @@ mod tests {
             assert_eq!(persisted.hotkey, "Super+Q");
             let reloaded = load_from(&path);
             assert_eq!(reloaded.hotkey, "Super+Q");
+        });
+    }
+
+    #[test]
+    fn fallible_update_does_not_persist_a_rejected_mutation() {
+        with_temp_settings(|path| {
+            save_to(&path, &Settings::default()).unwrap();
+            let result = try_update_at(&path, |settings| {
+                settings.hotkey = "invalid".to_string();
+                Err("rejected".to_string())
+            });
+            assert_eq!(result.unwrap_err(), "rejected");
+            assert_eq!(load_from(&path).hotkey, Settings::default().hotkey);
         });
     }
 

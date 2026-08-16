@@ -6,6 +6,15 @@ pub fn validate_hotkey(value: &str) -> Result<(), String> {
     validate_hotkey_for_platform(value, CURRENT_PLATFORM)
 }
 
+/// Canonical representation used for equality and duplicate detection.
+/// Tauri accepts several aliases for the same physical shortcut; storing the
+/// user's spelling is useful for display, but comparisons must collapse those
+/// aliases so two profiles cannot claim the same key combination.
+pub fn canonical_hotkey(value: &str) -> Result<String, String> {
+    validate_hotkey(value)?;
+    Ok(canonical_hotkey_for_platform(value, CURRENT_PLATFORM))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HotkeyPlatform {
     MacOS,
@@ -17,6 +26,48 @@ const CURRENT_PLATFORM: HotkeyPlatform = if cfg!(target_os = "macos") {
 } else {
     HotkeyPlatform::Other
 };
+
+fn canonical_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> String {
+    let tokens: Vec<String> = value
+        .split('+')
+        .map(|token| token.trim().to_ascii_lowercase())
+        .collect();
+    let (modifiers, key) = tokens.split_at(tokens.len() - 1);
+    let mut modifiers: Vec<&str> = modifiers
+        .iter()
+        .map(|modifier| match modifier.as_str() {
+            "control" | "ctrl" => "control",
+            "alt" | "option" => "alt",
+            "super" | "command" | "cmd" => "super",
+            "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" => {
+                if platform == HotkeyPlatform::MacOS { "super" } else { "control" }
+            }
+            "shift" => "shift",
+            _ => unreachable!("validated modifier"),
+        })
+        .collect();
+    modifiers.sort_unstable();
+    modifiers.dedup();
+
+    let raw_key = key[0].as_str();
+    let key = match raw_key {
+        "up" => "arrowup".to_string(),
+        "down" => "arrowdown".to_string(),
+        "left" => "arrowleft".to_string(),
+        "right" => "arrowright".to_string(),
+        "esc" => "escape".to_string(),
+        other if other.len() == 1 && other.as_bytes()[0].is_ascii_lowercase() => {
+            format!("key{other}")
+        }
+        other if other.len() == 1 && other.as_bytes()[0].is_ascii_digit() => {
+            format!("digit{other}")
+        }
+        other => other.to_string(),
+    };
+    let mut parts: Vec<String> = modifiers.into_iter().map(str::to_string).collect();
+    parts.push(key);
+    parts.join("+")
+}
 
 fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result<(), String> {
     const MODIFIERS: &[&str] = &[
@@ -391,5 +442,17 @@ mod tests {
     #[test]
     fn command_q_policy_is_platform_specific() {
         assert!(validate_hotkey_for_platform("Command+Q", HotkeyPlatform::Other).is_ok());
+    }
+
+    #[test]
+    fn canonical_hotkey_collapses_aliases_order_case_and_key_names() {
+        assert_eq!(
+            canonical_hotkey_for_platform("Shift+OPTION+A", HotkeyPlatform::MacOS),
+            canonical_hotkey_for_platform("Alt + Shift + KeyA", HotkeyPlatform::MacOS)
+        );
+        assert_eq!(
+            canonical_hotkey_for_platform("CmdOrCtrl+Space", HotkeyPlatform::MacOS),
+            canonical_hotkey_for_platform("Command+Space", HotkeyPlatform::MacOS)
+        );
     }
 }

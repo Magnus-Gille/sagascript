@@ -16,6 +16,7 @@ speech or diarization model.
 - **Privacy by default** -- no telemetry, cloud transcription, or transcript upload; network access is limited to model downloads you initiate
 - **No telemetry or tracking** -- no analytics, no usage sharing, no data collection of any kind
 - **Multi-language** -- English, Swedish, and Norwegian with dedicated models; additional languages supported via generic Whisper models
+- **Language shortcuts** -- assign different global hotkeys to different languages and switch without opening Settings
 - **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
 - **Configurable** -- choose your model, language, hotkey, and output behavior
@@ -79,6 +80,10 @@ sagascript download-model ggml-base.en
 sagascript config list
 sagascript config set language sv
 sagascript config get hotkey
+
+# Use one shortcut for English and another for Swedish
+sagascript config profiles create swedish --name Swedish --hotkey 'Option+Space' --language sv
+sagascript config profiles list
 
 # Generate shell completions
 sagascript completions zsh > ~/.zfunc/_sagascript

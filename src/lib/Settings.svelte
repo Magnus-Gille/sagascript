@@ -4,7 +4,7 @@
     getSettings,
     setLanguage,
     setHotkeyMode,
-    setHotkey,
+    setHotkeyProfiles,
     setAutoPaste,
     setInitialPrompt,
     setShowOverlay,
@@ -31,6 +31,7 @@
     type WhisperModel,
     type LoadedModelInfo,
     type HotkeyStatus,
+    type HotkeyProfile,
   } from "./api";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -60,7 +61,8 @@
   let accessibilityRequested: boolean = $state(false);
 
   // Hotkey recorder state
-  let recordingHotkey: boolean = $state(false);
+  let recordingProfileId: string | null = $state(null);
+  let draftProfileId: string | null = $state(null);
   let hotkeyError: string = $state("");
   let hotkeyRecorderEl: HTMLButtonElement | undefined = $state();
 
@@ -73,9 +75,7 @@
   let hotkeyStatusError: string = $state("");
 
   $effect(() => {
-    if (recordingHotkey && hotkeyRecorderEl) {
-      hotkeyRecorderEl.focus();
-    }
+    if (recordingProfileId && hotkeyRecorderEl) hotkeyRecorderEl.focus();
   });
 
   // Dictate test state
@@ -423,13 +423,13 @@
       .join(" + ");
   }
 
-  function onHotkeyKeydown(e: KeyboardEvent) {
+  function onHotkeyKeydown(e: KeyboardEvent, profileId: string) {
     e.preventDefault();
     e.stopPropagation();
 
     // Escape cancels recording
     if (e.key === "Escape") {
-      recordingHotkey = false;
+      recordingProfileId = null;
       hotkeyError = "";
       return;
     }
@@ -463,14 +463,57 @@
     const shortcut = parts.join("+");
     hotkeyError = "";
 
-    setHotkey(shortcut)
+    if (!settings) return;
+    const profiles = settings.hotkey_profiles.map((profile) =>
+      profile.id === profileId ? { ...profile, shortcut } : profile
+    );
+    setHotkeyProfiles(profiles)
       .then(async () => {
-        recordingHotkey = false;
+        recordingProfileId = null;
+        draftProfileId = null;
         settings = await getSettings();
       })
       .catch((err: any) => {
         hotkeyError = typeof err === "string" ? err : err.message || "Failed to set hotkey";
       });
+  }
+
+  async function updateProfile(profileId: string, changes: Partial<HotkeyProfile>) {
+    if (!settings) return;
+    const profiles = settings.hotkey_profiles.map((profile) =>
+      profile.id === profileId ? { ...profile, ...changes } : profile
+    );
+    if (profileId === draftProfileId) {
+      settings = { ...settings, hotkey_profiles: profiles };
+      return;
+    }
+    await applySetting(() => setHotkeyProfiles(profiles));
+  }
+
+  function addProfile() {
+    if (!settings) return;
+    let suffix = settings.hotkey_profiles.length + 1;
+    while (settings.hotkey_profiles.some((profile) => profile.id === `profile-${suffix}`)) suffix += 1;
+    const profile: HotkeyProfile = {
+      id: `profile-${suffix}`,
+      name: `Profile ${suffix}`,
+      shortcut: "Control+Option+Shift+F12",
+      language: settings.language === "sv" ? "en" : "sv",
+    };
+    settings = { ...settings, hotkey_profiles: [...settings.hotkey_profiles, profile] };
+    draftProfileId = profile.id;
+    recordingProfileId = profile.id;
+  }
+
+  async function removeProfile(profileId: string) {
+    if (!settings || settings.hotkey_profiles.length <= 1) return;
+    if (profileId === draftProfileId) {
+      settings = { ...settings, hotkey_profiles: settings.hotkey_profiles.filter((profile) => profile.id !== profileId) };
+      draftProfileId = null;
+      recordingProfileId = null;
+      return;
+    }
+    await applySetting(() => setHotkeyProfiles(settings!.hotkey_profiles.filter((profile) => profile.id !== profileId)));
   }
 
   function languageLabel(lang: Language): string {
@@ -521,8 +564,8 @@
       {#if activeTab === "dictate"}
         <button class="active-config-bar" onclick={() => (activeTab = "settings")}>
           <div class="active-config-row">
-            <span class="active-config-label">Language</span>
-            <span class="active-config-value">{languageLabel(settings.language)}</span>
+            <span class="active-config-label">Dictation profiles</span>
+            <span class="active-config-value">{settings.hotkey_profiles.map((profile) => languageLabel(profile.language)).join(" · ")}</span>
           </div>
           <div class="active-config-row">
             <span class="active-config-label">Model</span>
@@ -534,25 +577,51 @@
           <span class="active-config-link">Change</span>
         </button>
 
-        <div class="field">
-          <span class="field-label">Hotkey</span>
-          {#if recordingHotkey}
-            <button
-              class="hotkey-recorder recording"
-              bind:this={hotkeyRecorderEl}
-              onkeydown={onHotkeyKeydown}
-              onblur={() => { recordingHotkey = false; hotkeyError = ""; }}
-            >
-              Press shortcut...
-            </button>
-          {:else}
-            <button
-              class="hotkey-recorder"
-              onclick={() => { recordingHotkey = true; hotkeyError = ""; }}
-            >
-              {formatHotkeyDisplay(settings.hotkey)}
-            </button>
-          {/if}
+        <div class="field profile-field">
+          <div class="profile-heading">
+            <span class="field-label">Dictation shortcuts</span>
+            <button class="link-btn" onclick={addProfile}>+ Add language</button>
+          </div>
+          {#each settings.hotkey_profiles as profile (profile.id)}
+            <div class="profile-card">
+              <div class="profile-row">
+                <input
+                  class="profile-name"
+                  aria-label="Profile name"
+                  value={profile.name}
+                  onblur={(event) => updateProfile(profile.id, { name: (event.target as HTMLInputElement).value })}
+                />
+                <select
+                  aria-label={`${profile.name} language`}
+                  value={profile.language}
+                  onchange={(event) => updateProfile(profile.id, { language: (event.target as HTMLSelectElement).value as Language })}
+                >
+                  <option value="en">English</option>
+                  <option value="sv">Swedish</option>
+                  <option value="no">Norwegian</option>
+                  <option value="auto">Auto-detect</option>
+                </select>
+              </div>
+              <div class="profile-row">
+                {#if recordingProfileId === profile.id}
+                  <button
+                    class="hotkey-recorder recording"
+                    bind:this={hotkeyRecorderEl}
+                    onkeydown={(event) => onHotkeyKeydown(event, profile.id)}
+                    onblur={() => { recordingProfileId = null; hotkeyError = ""; }}
+                  >Press shortcut...</button>
+                {:else}
+                  <button
+                    class="hotkey-recorder"
+                    onclick={() => { recordingProfileId = profile.id; hotkeyError = ""; }}
+                  >{formatHotkeyDisplay(profile.shortcut)}</button>
+                {/if}
+                {#if settings.hotkey_profiles.length > 1}
+                  <button class="profile-remove" aria-label={`Remove ${profile.name}`} onclick={() => removeProfile(profile.id)}>Remove</button>
+                {/if}
+              </div>
+            </div>
+          {/each}
           {#if hotkeyError}
             <div class="hotkey-error">{hotkeyError}</div>
           {:else if !hotkeyStatusOk}
@@ -560,7 +629,7 @@
               ⚠ Not registered{hotkeyStatusError ? `: ${hotkeyStatusError}` : ""} — this shortcut may already be in use by another app. Try a different combination.
             </div>
           {/if}
-          <div class="hotkey-hint">Modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key (A–Z, 0–9, F1–F12, Space, arrows)</div>
+          <div class="hotkey-hint">Each shortcut selects its language. Modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key.</div>
         </div>
 
         <div class="field">
@@ -952,6 +1021,47 @@
     border-color: var(--accent);
     animation: pulse-border 1.2s ease-in-out infinite;
     color: var(--text-muted);
+  }
+
+  .profile-heading,
+  .profile-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .profile-heading {
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .profile-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    margin-bottom: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .profile-name {
+    min-width: 0;
+    flex: 1;
+    font-weight: 600;
+  }
+
+  .profile-row .hotkey-recorder {
+    flex: 1;
+  }
+
+  .profile-remove {
+    border: none;
+    background: none;
+    color: var(--danger);
+    cursor: pointer;
+    font-size: 11px;
   }
 
   @keyframes pulse-border {
