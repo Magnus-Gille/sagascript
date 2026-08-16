@@ -79,7 +79,7 @@ impl Default for TranscribeOptions {
 /// Typical values: > -0.3 confident, -0.3..-0.8 shaky, < -0.8 suspect.
 /// `no_speech_prob` is whisper's own per-segment estimate that the window
 /// contains no speech (near 1.0 ⇒ likely hallucinated text).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TranscriptSegment {
     /// Segment start in seconds.
     pub start: f64,

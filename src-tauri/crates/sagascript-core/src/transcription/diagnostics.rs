@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::Serialize;
 
 use crate::settings::Language;
@@ -11,6 +13,11 @@ const MIN_SPEECH_RMS: f64 = 0.0015;
 const MIN_UNCOVERED_SPEECH_SECONDS: f64 = 1.0;
 const MIN_UNCOVERED_SPEECH_RATIO: f64 = 0.10;
 const STRONG_LANGUAGE_PROBABILITY: f32 = 0.90;
+const REPETITION_MAX_NGRAM_TOKENS: usize = 4;
+const REPETITION_MIN_OCCURRENCES: usize = 8;
+const REPETITION_MIN_TOKENS: usize = 16;
+const REPETITION_MIN_DURATION_SECONDS: f64 = 20.0;
+const REPETITION_MAX_UNIQUE_TOKEN_RATIO: f64 = 0.25;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UncoveredSpan {
@@ -36,6 +43,34 @@ pub struct CoverageDiagnostics {
     pub coverage_ratio: f64,
     pub uncovered_spans: Vec<UncoveredSpan>,
     pub warnings: Vec<TranscriptionWarning>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RepetitionSpan {
+    pub start: f64,
+    pub end: f64,
+    pub duration: f64,
+    pub pattern: String,
+    pub repetitions: usize,
+    pub token_count: usize,
+    pub unique_token_ratio: f64,
+    pub min_no_speech_prob: f32,
+    pub max_no_speech_prob: f32,
+    pub segment_indices: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RepetitionDiagnostics {
+    pub spans: Vec<RepetitionSpan>,
+    pub warnings: Vec<TranscriptionWarning>,
+}
+
+impl RepetitionDiagnostics {
+    pub fn quarantines_segment(&self, segment_index: usize) -> bool {
+        self.spans
+            .iter()
+            .any(|span| span.segment_indices.contains(&segment_index))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -125,6 +160,182 @@ pub fn analyze_coverage(audio: &[f32], segments: &[TranscriptSegment]) -> Covera
         uncovered_spans,
         warnings,
     }
+}
+
+/// Detect exact, sustained ordinary-word loops across Whisper segments.
+///
+/// The thresholds deliberately require both many repetitions and a long time
+/// span. Short rhetorical repetition remains trusted, while a long loop is
+/// quarantined even when Whisper reports a contradictory low `no_speech_prob`.
+pub fn analyze_repetition(segments: &[TranscriptSegment]) -> RepetitionDiagnostics {
+    let tokens = transcript_tokens(segments);
+    let mut spans = Vec::new();
+    let mut token_index = 0usize;
+
+    while token_index < tokens.len() {
+        let mut best: Option<RepetitionCandidate> = None;
+        let remaining = tokens.len() - token_index;
+        let max_ngram = REPETITION_MAX_NGRAM_TOKENS.min(remaining / REPETITION_MIN_OCCURRENCES);
+
+        for ngram_len in 1..=max_ngram {
+            let pattern = &tokens[token_index..token_index + ngram_len];
+            let mut repetitions = 1usize;
+            while token_index + (repetitions + 1) * ngram_len <= tokens.len() {
+                let next_start = token_index + repetitions * ngram_len;
+                let next_end = next_start + ngram_len;
+                if tokens[next_start..next_end]
+                    .iter()
+                    .map(|token| token.word.as_str())
+                    .eq(pattern.iter().map(|token| token.word.as_str()))
+                {
+                    repetitions += 1;
+                } else {
+                    break;
+                }
+            }
+
+            let repeated_tokens = repetitions * ngram_len;
+            if repetitions < REPETITION_MIN_OCCURRENCES || repeated_tokens < REPETITION_MIN_TOKENS {
+                continue;
+            }
+
+            let candidate_tokens = &tokens[token_index..token_index + repeated_tokens];
+            let unique_tokens = candidate_tokens
+                .iter()
+                .map(|token| token.word.as_str())
+                .collect::<HashSet<_>>()
+                .len();
+            let unique_token_ratio = unique_tokens as f64 / repeated_tokens as f64;
+            if unique_token_ratio > REPETITION_MAX_UNIQUE_TOKEN_RATIO {
+                continue;
+            }
+
+            let first_segment = candidate_tokens[0].segment_index;
+            let last_segment = candidate_tokens[repeated_tokens - 1].segment_index;
+            let start = segments[first_segment].start;
+            let end = segments[last_segment].end;
+            if !start.is_finite()
+                || !end.is_finite()
+                || end - start < REPETITION_MIN_DURATION_SECONDS
+            {
+                continue;
+            }
+
+            let candidate = RepetitionCandidate {
+                ngram_len,
+                repetitions,
+                repeated_tokens,
+                unique_token_ratio,
+            };
+            if best.as_ref().is_none_or(|current| {
+                candidate.repeated_tokens > current.repeated_tokens
+                    || (candidate.repeated_tokens == current.repeated_tokens
+                        && candidate.ngram_len < current.ngram_len)
+            }) {
+                best = Some(candidate);
+            }
+        }
+
+        let Some(candidate) = best else {
+            token_index += 1;
+            continue;
+        };
+        let candidate_tokens = &tokens[token_index..token_index + candidate.repeated_tokens];
+        let mut segment_indices = Vec::new();
+        for token in candidate_tokens {
+            if segment_indices.last() != Some(&token.segment_index) {
+                segment_indices.push(token.segment_index);
+            }
+        }
+        let start = segments[segment_indices[0]].start;
+        let end = segments[*segment_indices.last().expect("candidate has a segment")].end;
+        let min_no_speech_prob = segment_indices
+            .iter()
+            .map(|&index| segments[index].no_speech_prob)
+            .min_by(f32::total_cmp)
+            .unwrap_or(0.0);
+        let max_no_speech_prob = segment_indices
+            .iter()
+            .map(|&index| segments[index].no_speech_prob)
+            .max_by(f32::total_cmp)
+            .unwrap_or(0.0);
+        let pattern = candidate_tokens[..candidate.ngram_len]
+            .iter()
+            .map(|token| token.word.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        spans.push(RepetitionSpan {
+            start,
+            end,
+            duration: end - start,
+            pattern,
+            repetitions: candidate.repetitions,
+            token_count: candidate.repeated_tokens,
+            unique_token_ratio: candidate.unique_token_ratio,
+            min_no_speech_prob,
+            max_no_speech_prob,
+            segment_indices,
+        });
+        token_index += candidate.repeated_tokens;
+    }
+
+    let warnings = spans
+        .iter()
+        .map(|span| TranscriptionWarning {
+            code: "repetitive_hallucination".to_string(),
+            message: format!(
+                "Quarantined suspected degenerate output from {:.2}s to {:.2}s: pattern {:?} repeated {} times across {} tokens (unique-token ratio {:.3}). Repetition evidence overrides contradictory no_speech_prob {:.3}..{:.3}.",
+                span.start,
+                span.end,
+                span.pattern,
+                span.repetitions,
+                span.token_count,
+                span.unique_token_ratio,
+                span.min_no_speech_prob,
+                span.max_no_speech_prob
+            ),
+            start: Some(span.start),
+            end: Some(span.end),
+        })
+        .collect();
+
+    RepetitionDiagnostics { spans, warnings }
+}
+
+#[derive(Debug)]
+struct TranscriptToken {
+    word: String,
+    segment_index: usize,
+}
+
+#[derive(Debug)]
+struct RepetitionCandidate {
+    ngram_len: usize,
+    repetitions: usize,
+    repeated_tokens: usize,
+    unique_token_ratio: f64,
+}
+
+fn transcript_tokens(segments: &[TranscriptSegment]) -> Vec<TranscriptToken> {
+    let mut tokens = Vec::new();
+    for (segment_index, segment) in segments.iter().enumerate() {
+        for raw_word in segment
+            .text
+            .split(|character: char| {
+                !character.is_alphanumeric() && character != '\'' && character != '’'
+            })
+            .filter(|word| !word.is_empty())
+        {
+            let word = raw_word.trim_matches(['\'', '’']).to_lowercase();
+            if !word.is_empty() {
+                tokens.push(TranscriptToken {
+                    word,
+                    segment_index,
+                });
+            }
+        }
+    }
+    tokens
 }
 
 pub fn language_mismatch_warning(
@@ -359,5 +570,52 @@ mod tests {
             },
         )
         .is_none());
+    }
+
+    #[test]
+    fn quarantines_long_ordinary_word_loop_despite_confident_no_speech_scores() {
+        let segments: Vec<TranscriptSegment> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/ordinary-word-loop.json"
+        ))
+        .expect("shareable repetition fixture should parse");
+
+        let diagnostics = analyze_repetition(&segments);
+
+        assert_eq!(diagnostics.spans.len(), 1);
+        let span = &diagnostics.spans[0];
+        assert_eq!((span.start, span.end), (120.0, 160.0));
+        assert_eq!(span.pattern, "thank you");
+        assert_eq!(span.repetitions, 16);
+        assert_eq!(span.segment_indices, (0..8).collect::<Vec<_>>());
+        assert_eq!(diagnostics.warnings[0].code, "repetitive_hallucination");
+        assert!(diagnostics.warnings[0].message.contains("no_speech_prob"));
+        let machine_output = serde_json::to_value(&diagnostics).unwrap();
+        assert_eq!(machine_output["spans"][0]["start"], 120.0);
+        assert_eq!(machine_output["spans"][0]["end"], 160.0);
+        assert_eq!(
+            machine_output["warnings"][0]["code"],
+            "repetitive_hallucination"
+        );
+    }
+
+    #[test]
+    fn preserves_short_or_rhetorical_repetition() {
+        let rhetorical = TranscriptSegment {
+            start: 0.0,
+            end: 18.0,
+            text: " Thank you, thank you, thank you.".to_string(),
+            avg_logprob: Some(-0.1),
+            no_speech_prob: 0.01,
+        };
+        let fast_repetition = TranscriptSegment {
+            start: 20.0,
+            end: 28.0,
+            text: " yes yes yes yes yes yes yes yes".to_string(),
+            avg_logprob: Some(-0.1),
+            no_speech_prob: 0.01,
+        };
+
+        assert!(analyze_repetition(&[rhetorical]).spans.is_empty());
+        assert!(analyze_repetition(&[fast_repetition]).spans.is_empty());
     }
 }

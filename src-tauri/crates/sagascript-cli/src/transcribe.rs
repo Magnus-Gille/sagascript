@@ -9,7 +9,7 @@ use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
     CoverageDiagnostics, LanguageDetection, TranscriptionWarning, analyze_coverage,
-    language_mismatch_warning,
+    analyze_repetition, language_mismatch_warning,
 };
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::{
@@ -31,7 +31,8 @@ pub struct TranscribeArgs {
 
     /// Output result as JSON: text, language, model, duration, and a
     /// `segments` array with per-segment timing/confidence plus
-    /// `coverage_ratio`, `uncovered_spans`, detected language, and warnings.
+    /// `coverage_ratio`, `uncovered_spans`, repetition quarantine spans,
+    /// detected language, and warnings. Raw segments include `quarantined`.
     #[arg(long)]
     pub json: bool,
 
@@ -338,17 +339,28 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     } else {
         Vec::new()
     };
+    let repetition = analyze_repetition(&segments);
+    let trusted_segments: Vec<TranscriptSegment> = segments
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !repetition.quarantines_segment(*index))
+        .map(|(_, segment)| segment.clone())
+        .collect();
     // Keep timestamped segment text source-faithful, while the rendered
-    // top-level text uses the same display normalization as live dictation.
+    // top-level text excludes quarantined loops and uses the same display
+    // normalization as live dictation.
     let raw_text = segments
         .iter()
-        .map(|s| s.text.as_str())
+        .enumerate()
+        .filter(|(index, _)| !repetition.quarantines_segment(*index))
+        .map(|(_, segment)| segment.text.as_str())
         .collect::<String>()
         .trim()
         .to_string();
     let text = normalize_nonspeech_markers(&raw_text, language);
-    let coverage = analyze_coverage(&audio, &segments);
-    let warnings = combined_warnings(&coverage, language, detected_language.as_ref());
+    let coverage = analyze_coverage(&audio, &trusted_segments);
+    let mut warnings = combined_warnings(&coverage, language, detected_language.as_ref());
+    warnings.extend(repetition.warnings.clone());
     emit_warnings(&warnings);
 
     // Output
@@ -360,13 +372,15 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         // consumers; top-level `text` is the display-normalized rendering.
         let json_segments: Vec<serde_json::Value> = segments
             .iter()
-            .map(|s| {
+            .enumerate()
+            .map(|(index, s)| {
                 serde_json::json!({
                     "start": s.start,
                     "end": s.end,
                     "text": s.text.trim(),
                     "avg_logprob": s.avg_logprob,
                     "no_speech_prob": s.no_speech_prob,
+                    "quarantined": repetition.quarantines_segment(index),
                 })
             })
             .collect();
@@ -379,6 +393,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             "duration_seconds": duration,
             "coverage_ratio": coverage.coverage_ratio,
             "uncovered_spans": coverage.uncovered_spans,
+            "repetition_spans": repetition.spans,
             "detected_language": detected_language,
             "warnings": warnings,
             "vocabulary_corrections": corrections,
