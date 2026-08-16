@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::settings::Language;
 
@@ -18,6 +18,9 @@ const REPETITION_MIN_OCCURRENCES: usize = 8;
 const REPETITION_MIN_TOKENS: usize = 16;
 const REPETITION_MIN_DURATION_SECONDS: f64 = 20.0;
 const REPETITION_MAX_UNIQUE_TOKEN_RATIO: f64 = 0.25;
+const LANGUAGE_REGION_MIN_WINDOWS: usize = 2;
+const LANGUAGE_REGION_MIN_DURATION_SECONDS: f64 = 40.0;
+const LANGUAGE_REGION_MIN_PROBABILITY: f32 = 0.90;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct UncoveredSpan {
@@ -77,6 +80,33 @@ impl RepetitionDiagnostics {
 pub struct LanguageDetection {
     pub language: String,
     pub probability: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LanguageWindow {
+    pub sequence: usize,
+    pub start: f64,
+    pub end: f64,
+    pub language: String,
+    pub probability: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LanguageRegion {
+    pub start: f64,
+    pub end: f64,
+    pub language: String,
+    pub probability: f32,
+    pub window_count: usize,
+    pub stable: bool,
+    pub first_sequence: usize,
+    pub last_sequence: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LanguageRegionDiagnostics {
+    pub regions: Vec<LanguageRegion>,
+    pub warnings: Vec<TranscriptionWarning>,
 }
 
 pub fn analyze_coverage(audio: &[f32], segments: &[TranscriptSegment]) -> CoverageDiagnostics {
@@ -300,6 +330,93 @@ pub fn analyze_repetition(segments: &[TranscriptSegment]) -> RepetitionDiagnosti
         .collect();
 
     RepetitionDiagnostics { spans, warnings }
+}
+
+/// Consolidate sampled language detections into conservative sustained regions.
+/// Missing sequence numbers (for example, a skipped silent window) break a
+/// region. A single foreign-language sample remains visible but unstable and
+/// cannot trigger a mixed-language warning.
+pub fn analyze_language_windows(windows: &[LanguageWindow]) -> LanguageRegionDiagnostics {
+    let mut sorted = windows.to_vec();
+    sorted.sort_by(|left, right| {
+        left.sequence
+            .cmp(&right.sequence)
+            .then_with(|| left.start.total_cmp(&right.start))
+    });
+
+    let mut regions: Vec<LanguageRegion> = Vec::new();
+    for window in sorted {
+        if !window.start.is_finite()
+            || !window.end.is_finite()
+            || window.end <= window.start
+            || !window.probability.is_finite()
+        {
+            continue;
+        }
+        if let Some(region) = regions.last_mut() {
+            if region.language.eq_ignore_ascii_case(&window.language)
+                && window.sequence == region.last_sequence + 1
+            {
+                let probability_sum = region.probability * region.window_count as f32;
+                region.end = region.end.max(window.end);
+                region.window_count += 1;
+                region.last_sequence = window.sequence;
+                region.probability =
+                    (probability_sum + window.probability) / region.window_count as f32;
+                continue;
+            }
+        }
+        regions.push(LanguageRegion {
+            start: window.start,
+            end: window.end,
+            language: window.language.to_lowercase(),
+            probability: window.probability,
+            window_count: 1,
+            stable: false,
+            first_sequence: window.sequence,
+            last_sequence: window.sequence,
+        });
+    }
+
+    for region in &mut regions {
+        region.stable = is_supported_language(&region.language)
+            && region.window_count >= LANGUAGE_REGION_MIN_WINDOWS
+            && region.end - region.start >= LANGUAGE_REGION_MIN_DURATION_SECONDS
+            && region.probability >= LANGUAGE_REGION_MIN_PROBABILITY;
+    }
+
+    let stable_regions: Vec<&LanguageRegion> =
+        regions.iter().filter(|region| region.stable).collect();
+    let warnings = stable_regions
+        .first()
+        .map(|initial| {
+            stable_regions
+                .iter()
+                .skip(1)
+                .filter(|region| !region.language.eq_ignore_ascii_case(&initial.language))
+                .map(|region| TranscriptionWarning {
+                    code: "mixed_language_audio".to_string(),
+                    message: format!(
+                        "Auto language detection found a sustained change from {} to {} between {:.2}s and {:.2}s (p={:.3}, {} windows). Mixed-language transcription uses one global decoder language; split the recording or transcribe each part with an explicit --language.",
+                        initial.language,
+                        region.language,
+                        region.start,
+                        region.end,
+                        region.probability,
+                        region.window_count
+                    ),
+                    start: Some(region.start),
+                    end: Some(region.end),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    LanguageRegionDiagnostics { regions, warnings }
+}
+
+fn is_supported_language(language: &str) -> bool {
+    matches!(language, "en" | "sv" | "no")
 }
 
 #[derive(Debug)]
@@ -617,5 +734,72 @@ mod tests {
 
         assert!(analyze_repetition(&[rhetorical]).spans.is_empty());
         assert!(analyze_repetition(&[fast_repetition]).spans.is_empty());
+    }
+
+    #[test]
+    fn warns_for_two_stable_languages_separated_by_silence() {
+        let windows: Vec<LanguageWindow> = serde_json::from_str(include_str!(
+            "../../tests/fixtures/mixed-language-windows.json"
+        ))
+        .expect("shareable mixed-language fixture should parse");
+
+        let diagnostics = analyze_language_windows(&windows);
+
+        assert_eq!(diagnostics.regions.len(), 2);
+        assert!(diagnostics.regions.iter().all(|region| region.stable));
+        assert_eq!(diagnostics.regions[0].language, "en");
+        assert_eq!(diagnostics.regions[1].language, "sv");
+        assert_eq!(diagnostics.warnings.len(), 1);
+        assert_eq!(diagnostics.warnings[0].code, "mixed_language_audio");
+        assert_eq!(
+            (diagnostics.warnings[0].start, diagnostics.warnings[0].end),
+            (Some(60.0), Some(100.0))
+        );
+    }
+
+    #[test]
+    fn isolated_foreign_window_does_not_flap_or_warn() {
+        let windows = vec![
+            language_window(0, 0.0, "en", 0.98),
+            language_window(1, 20.0, "en", 0.97),
+            language_window(2, 40.0, "sv", 0.99),
+            language_window(3, 60.0, "en", 0.96),
+            language_window(4, 80.0, "en", 0.95),
+        ];
+
+        let diagnostics = analyze_language_windows(&windows);
+
+        assert!(diagnostics.warnings.is_empty());
+        assert!(!diagnostics.regions[1].stable);
+    }
+
+    #[test]
+    fn language_diagnostics_are_independent_per_source_file() {
+        let english_source = vec![
+            language_window(0, 0.0, "en", 0.98),
+            language_window(1, 20.0, "en", 0.97),
+        ];
+        let swedish_source = vec![
+            language_window(0, 0.0, "sv", 0.98),
+            language_window(1, 20.0, "sv", 0.97),
+        ];
+
+        assert!(analyze_language_windows(&english_source).warnings.is_empty());
+        assert!(analyze_language_windows(&swedish_source).warnings.is_empty());
+    }
+
+    fn language_window(
+        sequence: usize,
+        start: f64,
+        language: &str,
+        probability: f32,
+    ) -> LanguageWindow {
+        LanguageWindow {
+            sequence,
+            start,
+            end: start + 20.0,
+            language: language.to_string(),
+            probability,
+        }
     }
 }
