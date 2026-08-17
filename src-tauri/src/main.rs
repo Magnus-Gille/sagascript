@@ -25,6 +25,9 @@ mod updates;
 
 use tracing_subscriber::EnvFilter;
 
+use fs2::FileExt;
+use std::fs::{File, OpenOptions};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -220,6 +223,59 @@ fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
     settings
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum GuiInstanceLockError {
+    AlreadyRunning,
+    Unavailable(String),
+}
+
+/// Process-lifetime OS lock for the bare GUI launch path. The lock file may
+/// remain on disk, but the kernel-owned lock is released automatically on
+/// clean exit or crash, so stale files cannot strand a later launch.
+#[derive(Debug)]
+struct GuiInstanceGuard {
+    _file: File,
+}
+
+fn acquire_gui_instance_guard() -> Result<GuiInstanceGuard, GuiInstanceLockError> {
+    let app_data_dir = sagascript_core::settings::store::app_data_dir();
+    std::fs::create_dir_all(&app_data_dir).map_err(|error| {
+        GuiInstanceLockError::Unavailable(format!(
+            "failed to create app data directory {}: {error}",
+            app_data_dir.display()
+        ))
+    })?;
+    acquire_gui_instance_guard_at(&app_data_dir.join("gui-instance.lock"))
+}
+
+fn acquire_gui_instance_guard_at(path: &Path) -> Result<GuiInstanceGuard, GuiInstanceLockError> {
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    let file = options.open(path).map_err(|error| {
+        GuiInstanceLockError::Unavailable(format!(
+            "failed to open GUI instance lock {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    match file.try_lock_exclusive() {
+        Ok(()) => Ok(GuiInstanceGuard { _file: file }),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(GuiInstanceLockError::AlreadyRunning)
+        }
+        Err(error) => Err(GuiInstanceLockError::Unavailable(format!(
+            "failed to lock GUI instance file {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
 fn main() {
     // CLI mode: if a subcommand is given, run CLI and exit. The desktop
     // binary is a full CLI (CLI-first design) — the GUI only launches on a
@@ -248,6 +304,20 @@ fn main() {
         .init();
 
     info!("Sagascript starting...");
+
+    // CLI subcommands returned above, so this lock covers GUI processes only.
+    // Acquire it before TCC checks, state construction, or desktop services.
+    let _gui_instance_guard = match acquire_gui_instance_guard() {
+        Ok(guard) => guard,
+        Err(GuiInstanceLockError::AlreadyRunning) => {
+            info!("Another Sagascript GUI instance is already running; exiting");
+            return;
+        }
+        Err(GuiInstanceLockError::Unavailable(error)) => {
+            error!("Cannot establish single-instance GUI ownership: {error}");
+            return;
+        }
+    };
 
     let settings = load_settings_with_permission_gate();
     info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
@@ -1327,6 +1397,26 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gui_instance_lock_rejects_a_concurrent_owner_and_recovers_after_drop() {
+        let dir = std::env::temp_dir().join(format!(
+            "sagascript-instance-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("gui-instance.lock");
+
+        let first = acquire_gui_instance_guard_at(&path).unwrap();
+        assert_eq!(
+            acquire_gui_instance_guard_at(&path).unwrap_err(),
+            GuiInstanceLockError::AlreadyRunning
+        );
+
+        drop(first);
+        acquire_gui_instance_guard_at(&path).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn language_menu_ids_resolve_to_persisted_language_values() {
