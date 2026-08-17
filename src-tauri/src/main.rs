@@ -248,6 +248,21 @@ fn acquire_gui_instance_guard() -> Result<GuiInstanceGuard, GuiInstanceLockError
     acquire_gui_instance_guard_at(&app_data_dir.join("gui-instance.lock"))
 }
 
+fn is_gui_instance_lock_contention(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+
+    // LockFileEx reports contention as ERROR_LOCK_VIOLATION. Rust does not
+    // currently normalize that code to WouldBlock on Windows.
+    #[cfg(windows)]
+    if error.raw_os_error() == Some(33) {
+        return true;
+    }
+
+    false
+}
+
 fn acquire_gui_instance_guard_at(path: &Path) -> Result<GuiInstanceGuard, GuiInstanceLockError> {
     let mut options = OpenOptions::new();
     options.create(true).read(true).write(true);
@@ -266,7 +281,7 @@ fn acquire_gui_instance_guard_at(path: &Path) -> Result<GuiInstanceGuard, GuiIns
 
     match file.try_lock_exclusive() {
         Ok(()) => Ok(GuiInstanceGuard { _file: file }),
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+        Err(error) if is_gui_instance_lock_contention(&error) => {
             Err(GuiInstanceLockError::AlreadyRunning)
         }
         Err(error) => Err(GuiInstanceLockError::Unavailable(format!(
