@@ -210,6 +210,25 @@ impl WhisperModel {
         self.is_swedish_optimized() || self.is_norwegian_optimized()
     }
 
+    /// Whether this model can honor an explicitly selected language without
+    /// being biased toward a different language. Multilingual models support
+    /// every explicit language and auto-detection; language-specific models
+    /// support only their own language.
+    pub fn is_compatible_with(&self, language: Language) -> bool {
+        match language {
+            Language::English => {
+                !self.is_swedish_optimized() && !self.is_norwegian_optimized()
+            }
+            Language::Swedish => {
+                !self.is_english_only() && !self.is_norwegian_optimized()
+            }
+            Language::Norwegian => {
+                !self.is_english_only() && !self.is_swedish_optimized()
+            }
+            Language::Auto => !self.is_english_only() && !self.is_language_optimized(),
+        }
+    }
+
     /// GGML model filename
     pub fn ggml_filename(&self) -> &'static str {
         match self {
@@ -535,7 +554,11 @@ impl Settings {
     }
 
     pub fn effective_model_for(&self, language: Language) -> WhisperModel {
-        if self.auto_select_model { WhisperModel::recommended(language) } else { self.whisper_model }
+        if self.auto_select_model || !self.whisper_model.is_compatible_with(language) {
+            WhisperModel::recommended(language)
+        } else {
+            self.whisper_model
+        }
     }
 
     pub fn resolved_hotkey_profiles(&self) -> Vec<HotkeyProfile> {
@@ -1020,8 +1043,13 @@ mod tests {
     }
 
     #[test]
-    fn settings_effective_model_without_auto_select() {
-        let s = Settings { auto_select_model: false, whisper_model: WhisperModel::KbWhisperSmall, language: Language::English, ..Default::default() }; // language shouldn't matter
+    fn settings_effective_model_without_auto_select_uses_compatible_manual_model() {
+        let s = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::KbWhisperSmall,
+            language: Language::Swedish,
+            ..Default::default()
+        };
 
         assert_eq!(s.effective_model(), WhisperModel::KbWhisperSmall);
     }
@@ -1107,6 +1135,67 @@ mod tests {
         let settings = Settings { auto_select_model: true, ..Default::default() };
         assert_eq!(settings.effective_model_for(Language::Swedish), WhisperModel::KbWhisperBase);
         assert_eq!(settings.effective_model_for(Language::Norwegian), WhisperModel::NbWhisperBase);
+    }
+
+    #[test]
+    fn incompatible_manual_model_falls_back_for_profile_language() {
+        let settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::KbWhisperBase,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            settings.effective_model_for(Language::Swedish),
+            WhisperModel::KbWhisperBase
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::English),
+            WhisperModel::BaseEn
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::Norwegian),
+            WhisperModel::NbWhisperBase
+        );
+    }
+
+    #[test]
+    fn compatible_manual_multilingual_model_is_shared_across_profiles() {
+        let settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::Medium,
+            ..Default::default()
+        };
+
+        for language in [Language::English, Language::Swedish, Language::Norwegian, Language::Auto] {
+            assert_eq!(settings.effective_model_for(language), WhisperModel::Medium);
+        }
+    }
+
+    #[test]
+    fn english_only_manual_model_is_not_reused_for_other_languages() {
+        let settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::MediumEn,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            settings.effective_model_for(Language::English),
+            WhisperModel::MediumEn
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::Swedish),
+            WhisperModel::KbWhisperBase
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::Norwegian),
+            WhisperModel::NbWhisperBase
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::Auto),
+            WhisperModel::Base
+        );
     }
 
     #[test]

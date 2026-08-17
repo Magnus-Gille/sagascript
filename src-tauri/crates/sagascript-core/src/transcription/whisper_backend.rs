@@ -135,7 +135,45 @@ fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
         transcript.push_str(&segment.text);
     }
 
-    transcript
+    separate_sentence_boundaries(&transcript)
+}
+
+/// Insert a missing word boundary after sentence-ending punctuation when the
+/// following character clearly begins a new sentence. Whisper can omit this
+/// separator inside a single raw segment, so repairing only segment joins is
+/// insufficient. Requiring an uppercase letter keeps decimals such as `1.2`
+/// unchanged, while a one-character lookahead preserves the internal dots in
+/// initialisms such as `U.S.A.`.
+fn separate_sentence_boundaries(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut word_len = 0usize;
+    let mut word_is_single_uppercase = false;
+
+    while let Some(current) = chars.next() {
+        let previous_word_is_initial = word_len == 1 && word_is_single_uppercase;
+        let continues_initialism = current == '.'
+            && previous_word_is_initial
+            && chars.peek().is_some_and(|next| next.is_uppercase())
+            && chars.clone().nth(1) == Some('.');
+        result.push(current);
+        if matches!(current, '.' | '?' | '!')
+            && chars.peek().is_some_and(|next| next.is_uppercase())
+            && !continues_initialism
+        {
+            result.push(' ');
+        }
+
+        if current.is_alphanumeric() {
+            word_len += 1;
+            word_is_single_uppercase = word_len == 1 && current.is_uppercase();
+        } else if !matches!(current, '\'' | '’') {
+            word_len = 0;
+            word_is_single_uppercase = false;
+        }
+    }
+
+    result
 }
 
 /// Bound whisper's segment timestamps to the source audio and preserve output
@@ -1569,6 +1607,56 @@ mod segment_confidence_tests {
         ];
 
         assert_eq!(assemble_transcript(&segments), "First. Second");
+    }
+
+    #[test]
+    fn assembled_transcript_separates_sentences_inside_one_segment() {
+        let segments = [TranscriptSegment {
+            start: 0.0,
+            end: 4.0,
+            text: "Ja.Jag kastar att prata svenska.Jag testar att prata svenska.Jag."
+                .to_string(),
+            avg_logprob: None,
+            no_speech_prob: 0.0,
+        }];
+
+        assert_eq!(
+            assemble_transcript(&segments),
+            "Ja. Jag kastar att prata svenska. Jag testar att prata svenska. Jag."
+        );
+    }
+
+    #[test]
+    fn assembled_transcript_does_not_split_decimal_numbers() {
+        let segments = [TranscriptSegment {
+            start: 0.0,
+            end: 1.0,
+            text: "Version 1.2 är klar. Nästa steg."
+                .to_string(),
+            avg_logprob: None,
+            no_speech_prob: 0.0,
+        }];
+
+        assert_eq!(
+            assemble_transcript(&segments),
+            "Version 1.2 är klar. Nästa steg."
+        );
+    }
+
+    #[test]
+    fn assembled_transcript_does_not_split_initialisms() {
+        let segments = [TranscriptSegment {
+            start: 0.0,
+            end: 1.0,
+            text: "Jag bor i U.S.A.Nästa mening.".to_string(),
+            avg_logprob: None,
+            no_speech_prob: 0.0,
+        }];
+
+        assert_eq!(
+            assemble_transcript(&segments),
+            "Jag bor i U.S.A. Nästa mening."
+        );
     }
 
     #[test]
