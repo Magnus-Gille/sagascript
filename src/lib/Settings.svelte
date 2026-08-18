@@ -734,10 +734,12 @@
           </label>
           <textarea
             class="prompt-input"
-            placeholder="Context / vocabulary hint (optional) — e.g. names, technical terms"
+            aria-label="Extra context for this file"
+            placeholder="Extra context for this file only (optional)"
             bind:value={transcribePrompt}
             rows="2"
           ></textarea>
+          <div class="hotkey-hint">Temporary context for this import. Your personal dictionary is managed in Settings.</div>
         </div>
 
         {#if transcribeError}
@@ -818,16 +820,19 @@
         </div>
 
         <div class="field">
-          <label for="initial-prompt">Initial prompt</label>
+          <label for="initial-prompt">Personal dictionary</label>
           <textarea
             id="initial-prompt"
             class="initial-prompt-input"
-            rows="3"
+            rows="5"
             value={settings.initial_prompt}
             onblur={onInitialPromptBlur}
-            placeholder="Prime the transcriber with names, jargon, or preferred spellings."
+            placeholder="OpenRouter = open router | open vrouter&#10;merge = merch&#10;Cloudflare = cloud flare"
           ></textarea>
-          <div class="hotkey-hint">Prime the transcriber with names, jargon, or preferred spellings.</div>
+          <div class="hotkey-hint">
+            One preferred spelling per line. Add exact mishearings after <code>=</code>, separated by <code>|</code>.
+            Plain terms still guide Whisper. Saved automatically when you leave the field and used for live dictation and batch jobs.
+          </div>
         </div>
 
         <div class="field">

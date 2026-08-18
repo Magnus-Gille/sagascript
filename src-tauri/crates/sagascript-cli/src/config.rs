@@ -57,7 +57,7 @@ Valid values per key:
   auto_paste           true, false (enabling requires Accessibility approval for the installed GUI)
   auto_select_model    true, false
   hotkey               Modifier+Key (e.g. Control+Shift+Space, Option+Space)
-  initial_prompt       Any string (e.g. names, jargon, preferred spellings)
+  initial_prompt       Personal dictionary text; aliases use TERM = ALIAS | ALIAS
   beam_size            Integer >= 0 (0 = greedy/fast, 5 = beam search/accurate)
   temperature_fallback true, false
   vad_enabled          true, false",
@@ -67,7 +67,7 @@ EXAMPLES:
   sagascript config set whisper_model kb-whisper-base
   sagascript config set hotkey 'Option+Space'
   sagascript config set auto_paste false
-  sagascript config set initial_prompt 'Sagascript, Tauri, whisper-rs'"
+  sagascript config set initial_prompt $'OpenRouter = open router | open vrouter\\nmerge = merch'"
     )]
     Set {
         /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]

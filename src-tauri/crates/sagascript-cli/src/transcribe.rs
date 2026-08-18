@@ -16,7 +16,7 @@ use sagascript_core::transcription::diagnostics::{
 };
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::{
-    TranscriptSegment, TranscribeOptions, WhisperBackend, normalize_nonspeech_markers,
+    Glossary, TranscriptSegment, TranscribeOptions, WhisperBackend, normalize_nonspeech_markers,
 };
 
 #[derive(Args)]
@@ -171,14 +171,15 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         args.prompt_file.as_deref(),
         &stored.initial_prompt,
     )?;
+    let glossary = Glossary::parse(effective_prompt.as_deref().unwrap_or_default());
     let correction_vocabulary = if args.correct_hints {
-        let prompt = effective_prompt.as_deref().ok_or_else(|| {
+        effective_prompt.as_deref().ok_or_else(|| {
             DictationError::SettingsError(
                 "--correct-hints requires a non-empty --hint/--prompt (or saved initial_prompt)"
                     .to_string(),
             )
         })?;
-        let vocabulary = correction_vocabulary_from_hint(prompt);
+        let vocabulary = glossary.single_word_terms();
         if vocabulary.is_empty() {
             return Err(DictationError::SettingsError(
                 "--correct-hints requires at least one single-word vocabulary item in the hint"
@@ -216,7 +217,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
                 &stored,
                 language,
                 model,
-                effective_prompt.clone(),
+                &glossary,
                 &correction_vocabulary,
             )
         },
@@ -326,7 +327,7 @@ fn transcribe_file(
     stored: &Settings,
     language: Language,
     model: WhisperModel,
-    effective_prompt: Option<String>,
+    glossary: &Glossary,
     correction_vocabulary: &[String],
 ) -> Result<FileTranscription, DictationError> {
 
@@ -399,7 +400,7 @@ fn transcribe_file(
         let raw_segments = backend.transcribe_sync_for_diarization(
             &audio,
             language,
-            effective_prompt.as_deref(),
+            glossary.decoder_prompt().as_deref(),
         )?;
         eprintln!("Got {} word/segment(s) for merging", raw_segments.len());
         if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
@@ -415,8 +416,12 @@ fn transcribe_file(
 
         let diarized = merge_with_transcript(&speaker_segments, &transcript);
         let mut consolidated = consolidate(&diarized);
+        let mut glossary_corrections = Vec::new();
         for segment in &mut consolidated {
             segment.text = normalize_nonspeech_markers(&segment.text, language);
+            let (corrected, corrections) = glossary.correct_text(&segment.text);
+            segment.text = corrected;
+            glossary_corrections.extend(corrections);
         }
         let diagnostic_segments: Vec<TranscriptSegment> = consolidated
             .iter()
@@ -461,6 +466,7 @@ fn transcribe_file(
             "language_redetection_enabled": language_regions.is_some(),
             "language_regions": language_regions.as_ref().map(|diagnostics| &diagnostics.regions),
             "warnings": warnings,
+            "vocabulary_corrections": glossary_corrections,
         });
         return Ok(FileTranscription { json, plain });
     }
@@ -485,7 +491,7 @@ fn transcribe_file(
         None
     };
     let opts = TranscribeOptions {
-        prompt: effective_prompt,
+        prompt: glossary.decoder_prompt(),
         // File transcription isn't latency-sensitive, so default to beam search
         // (fewer repetition loops). Honor an explicit beam setting/flag.
         beam_size: args.beam_size.unwrap_or(if stored.beam_size >= 2 {
@@ -526,11 +532,10 @@ fn transcribe_file(
         eprintln!("Transcribing...");
         backend.transcribe_sync_with_options_segments(&audio, language, &opts, |_| {})?
     };
-    let corrections = if args.correct_hints {
-        apply_hint_corrections(&mut segments, correction_vocabulary)
-    } else {
-        Vec::new()
-    };
+    let mut corrections = apply_glossary_corrections(&mut segments, glossary);
+    if args.correct_hints {
+        corrections.extend(apply_hint_corrections(&mut segments, correction_vocabulary));
+    }
     let repetition = analyze_repetition(&segments);
     let trusted_segments: Vec<TranscriptSegment> = segments
         .iter()
@@ -677,23 +682,9 @@ struct VocabularyCorrection {
     segment_index: usize,
     original: String,
     replacement: String,
-    avg_logprob: f32,
+    method: &'static str,
+    avg_logprob: Option<f32>,
     no_speech_prob: f32,
-}
-
-/// Extract the deliberately narrow v1 correction vocabulary from an existing
-/// decoder hint. Hints are comma- or newline-separated; phrases, numbers and
-/// punctuation are intentionally ignored so ordinary prose cannot become a
-/// correction target.
-fn correction_vocabulary_from_hint(hint: &str) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    hint
-        .split([',', '\n'])
-        .map(str::trim)
-        .filter(|candidate| !candidate.is_empty() && candidate.chars().all(char::is_alphabetic))
-        .filter(|candidate| seen.insert(candidate.to_lowercase()))
-        .map(str::to_string)
-        .collect()
 }
 
 fn apply_hint_corrections(
@@ -721,6 +712,26 @@ fn apply_hint_corrections(
         );
         segment.text = corrected;
         corrections.extend(segment_corrections);
+    }
+    corrections
+}
+
+fn apply_glossary_corrections(
+    segments: &mut [TranscriptSegment],
+    glossary: &Glossary,
+) -> Vec<VocabularyCorrection> {
+    let mut corrections = Vec::new();
+    for (segment_index, segment) in segments.iter_mut().enumerate() {
+        let (corrected, applied) = glossary.correct_text(&segment.text);
+        segment.text = corrected;
+        corrections.extend(applied.into_iter().map(|correction| VocabularyCorrection {
+            segment_index,
+            original: correction.original,
+            replacement: correction.replacement,
+            method: "explicit_alias",
+            avg_logprob: segment.avg_logprob,
+            no_speech_prob: segment.no_speech_prob,
+        }));
     }
     corrections
 }
@@ -759,7 +770,8 @@ fn correct_segment_text(
                 segment_index,
                 original: word.clone(),
                 replacement: replacement.clone(),
-                avg_logprob,
+                method: "fuzzy_one_edit",
+                avg_logprob: Some(avg_logprob),
                 no_speech_prob,
             });
             corrected.push_str(&replacement);
@@ -1340,9 +1352,22 @@ mod tests {
     }
 
     #[test]
+    fn explicit_aliases_correct_without_confidence_guessing() {
+        let glossary = Glossary::parse("OpenRouter = open router\nmerge = merch");
+        let mut segments = vec![segment(" Open router och Merch.", None, 0.0)];
+        let corrections = apply_glossary_corrections(&mut segments, &glossary);
+
+        assert_eq!(segments[0].text, " OpenRouter och merge.");
+        assert_eq!(corrections.len(), 2);
+        assert_eq!(corrections[0].method, "explicit_alias");
+        assert_eq!(corrections[0].avg_logprob, None);
+    }
+
+    #[test]
     fn correction_vocabulary_accepts_only_single_word_hint_items() {
         assert_eq!(
-            correction_vocabulary_from_hint("Grimnir, grimnir, Erik Fredlund\nHugin, M5, AI-agent"),
+            Glossary::parse("Grimnir, grimnir, Erik Fredlund\nHugin, M5, AI-agent")
+                .single_word_terms(),
             vec!["Grimnir", "Hugin"]
         );
     }
@@ -1357,7 +1382,8 @@ mod tests {
         assert_eq!(corrections[0].original, "Grimner");
         assert_eq!(corrections[0].replacement, "Grimnir");
         assert_eq!(corrections[0].segment_index, 0);
-        assert_eq!(corrections[0].avg_logprob, -0.313);
+        assert_eq!(corrections[0].method, "fuzzy_one_edit");
+        assert_eq!(corrections[0].avg_logprob, Some(-0.313));
     }
 
     #[test]

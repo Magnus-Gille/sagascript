@@ -1156,12 +1156,13 @@ fn stop_recording_and_transcribe(
         let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 
         // Extract what we need for transcription (lock briefly)
-        let (language, effective_model, opts) = {
+        let (language, effective_model, opts, glossary) = {
             let c = ctrl.lock().unwrap();
             (
                 c.language(),
                 c.settings().effective_model_for(c.language()),
                 commands::build_transcribe_options(c.settings()),
+                sagascript_core::transcription::Glossary::parse(&c.settings().initial_prompt),
             )
         };
 
@@ -1216,6 +1217,7 @@ fn stop_recording_and_transcribe(
 
         match result {
             Ok(text) => {
+                let text = commands::apply_glossary(text, &glossary);
                 info!("Transcription complete: {} chars", text.len());
 
                 // Check if auto-paste is enabled (lock briefly)

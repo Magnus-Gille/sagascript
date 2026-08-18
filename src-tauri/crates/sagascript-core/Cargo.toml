@@ -20,6 +20,7 @@ sha2 = "0.10"
 num_cpus = "1"
 symphonia = { version = "0.5", features = ["aac", "alac", "flac", "mp3", "pcm", "vorbis", "isomp4", "mkv", "ogg"] }
 rubato = "0.14"
+regex = "1"
 
 # Live audio capture (optional): a pure batch-transcribe build
 # (`--no-default-features` on sagascript-cli) needs no cpal — and on Linux, no ALSA.

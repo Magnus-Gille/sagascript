@@ -1,4 +1,5 @@
 pub mod config;
+pub mod glossary;
 pub mod models;
 // Live recording is optional (`record` feature, on by default) so a pure
 // batch-transcribe build (`--no-default-features`) carries no audio-capture
@@ -360,6 +361,13 @@ EXAMPLES:
     )]
     Config(config::ConfigArgs),
 
+    /// Manage the persistent personal dictionary used by live and batch transcription
+    #[command(
+        long_about = "Add preferred spellings and optional exact mishearings. Plain terms prime Whisper; aliases also authorize deterministic local corrections before output.",
+        after_long_help = "EXAMPLES:\n  sagascript glossary list\n  sagascript glossary add OpenRouter --alias 'open router' --alias 'open vrouter'\n  sagascript glossary add merge --alias merch\n  sagascript glossary remove OpenRouter\n  sagascript glossary clear --yes"
+    )]
+    Glossary(glossary::GlossaryArgs),
+
     /// List supported audio/video file formats
     #[command(
         long_about = "\
@@ -452,6 +460,7 @@ pub fn run(cli: Cli) {
                 })
         }
         Command::Config(args) => config::run(args),
+        Command::Glossary(args) => glossary::run(args),
         Command::Formats => {
             formats();
             Ok(())
@@ -952,6 +961,31 @@ mod tests {
                 assert_eq!(args.prompt.as_deref(), Some("Notre Dame, Sara"));
             }
             _ => panic!("expected Record"),
+        }
+    }
+
+    #[test]
+    fn parse_glossary_add_with_repeated_aliases() {
+        let cli = Cli::try_parse_from([
+            "sagascript",
+            "glossary",
+            "add",
+            "OpenRouter",
+            "--alias",
+            "open router",
+            "--alias",
+            "open vrouter",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Command::Glossary(args) => match args.action {
+                glossary::GlossaryAction::Add { term, aliases } => {
+                    assert_eq!(term, "OpenRouter");
+                    assert_eq!(aliases, vec!["open router", "open vrouter"]);
+                }
+                _ => panic!("expected glossary add"),
+            },
+            _ => panic!("expected Glossary"),
         }
     }
 
