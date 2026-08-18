@@ -83,11 +83,7 @@ impl Glossary {
             }
         }
 
-        let mut glossary = Self {
-            source,
-            entries,
-            matchers: Vec::new(),
-        };
+        let mut glossary = Self { source, entries, matchers: Vec::new() };
         glossary.rebuild_matchers();
         glossary
     }
@@ -157,7 +153,7 @@ impl Glossary {
         let mut candidates = Vec::new();
         for matcher in &self.matchers {
             for matched in matcher.pattern.find_iter(text) {
-                if &text[matched.start()..matched.end()] != matcher.canonical {
+                if text[matched.start()..matched.end()] != matcher.canonical {
                     candidates.push(Candidate {
                         start: matched.start(),
                         end: matched.end(),
@@ -184,10 +180,7 @@ impl Glossary {
         let mut candidates = candidates.into_iter().peekable();
         while let Some(candidate) = candidates.next() {
             let mut ambiguous = false;
-            while candidates
-                .peek()
-                .is_some_and(|next| next.start == candidate.start && next.end == candidate.end)
-            {
+            while candidates.peek().is_some_and(|next| next.start == candidate.start && next.end == candidate.end) {
                 let duplicate = candidates.next().expect("peeked candidate");
                 ambiguous |= duplicate.canonical != candidate.canonical;
             }
@@ -195,7 +188,6 @@ impl Glossary {
                 unambiguous.push(candidate);
             }
         }
-
         let mut selected = Vec::new();
         let mut cursor = 0;
         for candidate in unambiguous {
@@ -251,20 +243,16 @@ impl Glossary {
     }
 
     fn rebuild_matchers(&mut self) {
-        self.matchers = self
-            .entries
-            .iter()
+        self.matchers = self.entries.iter()
             .filter(|entry| !entry.aliases.is_empty())
             .flat_map(|entry| {
                 std::iter::once(entry.canonical.as_str())
                     .chain(entry.aliases.iter().map(String::as_str))
                     .filter(|alias| has_word_edges(alias))
-                    .filter_map(|alias| {
-                        whole_alias_regex(alias).map(|pattern| AliasMatcher {
-                            canonical: entry.canonical.clone(),
-                            pattern,
-                        })
-                    })
+                    .filter_map(|alias| whole_alias_regex(alias).map(|pattern| AliasMatcher {
+                        canonical: entry.canonical.clone(),
+                        pattern,
+                    }))
             })
             .collect();
     }
