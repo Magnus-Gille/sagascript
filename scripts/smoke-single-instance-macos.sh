@@ -13,8 +13,8 @@ executable="$app_bundle/Contents/MacOS/sagascript"
   exit 2
 }
 
-# The plugin key is the bundle identifier, not the executable path. Refuse to
-# disturb or accidentally test against an already-running installed instance.
+# Refuse to disturb or accidentally test against an already-running installed
+# instance (or a concurrent CLI process with the same executable name).
 if pgrep -x sagascript >/dev/null 2>&1; then
   echo "refusing to run while another sagascript process is active" >&2
   exit 2
