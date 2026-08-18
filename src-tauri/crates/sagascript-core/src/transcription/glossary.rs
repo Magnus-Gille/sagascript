@@ -300,7 +300,8 @@ impl Glossary {
 }
 
 fn same_term(left: &str, right: &str) -> bool {
-    left.to_lowercase() == right.to_lowercase()
+    Regex::new(&format!(r"(?iu)^{}$", escaped_alias_pattern(left)))
+        .is_ok_and(|pattern| pattern.is_match(right))
 }
 
 fn append_original_range(
@@ -329,6 +330,10 @@ fn has_word_edges(alias: &str) -> bool {
 }
 
 fn whole_alias_regex(alias: &str) -> Option<Regex> {
+    Regex::new(&format!(r"(?iu)\b{}\b", escaped_alias_pattern(alias))).ok()
+}
+
+fn escaped_alias_pattern(alias: &str) -> String {
     let mut escaped = String::new();
     let mut in_whitespace = false;
     for character in alias.chars() {
@@ -342,7 +347,7 @@ fn whole_alias_regex(alias: &str) -> Option<Regex> {
             in_whitespace = false;
         }
     }
-    Regex::new(&format!(r"(?iu)\b{escaped}\b")).ok()
+    escaped
 }
 
 #[cfg(test)]
@@ -439,6 +444,18 @@ mod tests {
         glossary.upsert("ångström".to_string(), vec!["ång stroem".to_string()]);
         assert_eq!(glossary.entries().len(), 1);
         assert!(glossary.remove("åNGSTRÖM"));
+        assert!(glossary.entries().is_empty());
+    }
+
+    #[test]
+    fn management_uses_the_matchers_unicode_case_equivalents() {
+        let mut glossary = Glossary::parse("s, ſ, k, K");
+        assert_eq!(glossary.entries().len(), 2);
+        glossary.upsert("ſ".to_string(), vec!["long ess".to_string()]);
+        assert_eq!(glossary.entries().len(), 2);
+        assert!(glossary.remove("K"));
+        assert_eq!(glossary.entries().len(), 1);
+        assert!(glossary.remove("ſ"));
         assert!(glossary.entries().is_empty());
     }
 
