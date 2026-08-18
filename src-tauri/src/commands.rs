@@ -19,13 +19,14 @@ use sagascript_core::audio::decoder;
 use sagascript_core::settings::{
     validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
 };
+use sagascript_core::transcription::Glossary;
 use sagascript_core::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
 
 /// Build the per-transcription options from the current settings. Resolves the
 /// VAD model path only when VAD is enabled and the model is present (otherwise
 /// VAD is silently skipped — whisper would fail on a missing model).
 pub(crate) fn build_transcribe_options(settings: &Settings) -> TranscribeOptions {
-    let prompt = settings.initial_prompt.trim();
+    let prompt = Glossary::parse(&settings.initial_prompt).decoder_prompt();
     let vad_model_path = if settings.vad_enabled {
         let p = model::vad_model_path();
         if p.exists() {
@@ -38,11 +39,7 @@ pub(crate) fn build_transcribe_options(settings: &Settings) -> TranscribeOptions
         None
     };
     TranscribeOptions {
-        prompt: if prompt.is_empty() {
-            None
-        } else {
-            Some(prompt.to_string())
-        },
+        prompt,
         beam_size: settings.beam_size,
         temperature_fallback: settings.temperature_fallback,
         vad_model_path,
@@ -61,12 +58,54 @@ pub(crate) fn build_file_transcribe_options(
     if opts.beam_size < 2 {
         opts.beam_size = FILE_TRANSCRIBE_BEAM;
     }
-    if let Some(p) = prompt {
-        if !p.trim().is_empty() {
-            opts.prompt = Some(p.trim().to_string());
-        }
-    }
+    opts.prompt = effective_file_glossary(settings, prompt.as_deref()).decoder_prompt();
     opts
+}
+
+pub(crate) fn effective_file_glossary(settings: &Settings, prompt: Option<&str>) -> Glossary {
+    let source = prompt
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .unwrap_or(settings.initial_prompt.trim());
+    Glossary::parse(source)
+}
+
+pub(crate) fn apply_glossary(text: String, glossary: &Glossary) -> String {
+    let (corrected, corrections) = glossary.correct_text(&text);
+    if !corrections.is_empty() {
+        info!(correction_count = corrections.len(), "Applied personal glossary corrections");
+    }
+    corrected
+}
+
+#[cfg(test)]
+mod glossary_options_tests {
+    use super::*;
+
+    #[test]
+    fn live_options_prime_with_canonical_terms_only() {
+        let settings = Settings {
+            initial_prompt: "OpenRouter = open router | open vrouter\nmerge = merch".to_string(),
+            ..Settings::default()
+        };
+        assert_eq!(build_transcribe_options(&settings).prompt.as_deref(), Some("OpenRouter, merge"));
+    }
+
+    #[test]
+    fn file_context_overrides_the_saved_dictionary_for_one_run() {
+        let settings = Settings {
+            initial_prompt: "OpenRouter = open router".to_string(),
+            ..Settings::default()
+        };
+        let prompt = Some("Cloudflare = cloud flare".to_string());
+        assert_eq!(build_file_transcribe_options(&settings, prompt).prompt.as_deref(), Some("Cloudflare"));
+    }
+
+    #[test]
+    fn correction_helper_applies_explicit_aliases() {
+        let glossary = Glossary::parse("merge = merch");
+        assert_eq!(apply_glossary("Merch it".to_string(), &glossary), "merge it");
+    }
 }
 
 /// Shared app state type — uses std::sync::Mutex (not tokio) because
@@ -460,7 +499,7 @@ pub async fn stop_and_transcribe(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
 ) -> Result<String, String> {
-    let (audio, language, effective_model, opts) = {
+    let (audio, language, effective_model, opts, glossary) = {
         let mut ctrl = controller.lock().unwrap();
         // Guard against a late/duplicate invoke racing the hotkey stop path
         // (finding 3): if we're not recording, do nothing and return Ok-empty
@@ -476,7 +515,8 @@ pub async fn stop_and_transcribe(
         let language = ctrl.language();
         let effective_model = ctrl.settings().effective_model();
         let opts = build_transcribe_options(ctrl.settings());
-        (audio, language, effective_model, opts)
+        let glossary = Glossary::parse(&ctrl.settings().initial_prompt);
+        (audio, language, effective_model, opts, glossary)
     };
 
     if audio.is_empty() {
@@ -528,7 +568,8 @@ pub async fn stop_and_transcribe(
                 ))
             }
         }
-    };
+    }
+    .map(|text| apply_glossary(text, &glossary));
 
     // NOTE: auto-paste is NOT done here — enigo's macOS TIS APIs crash if
     // called from a tokio worker thread (SIGTRAP in dispatch_assert_queue).
@@ -771,9 +812,13 @@ pub async fn transcribe_file(
     let _ = &diarize;
 
     // Get transcription settings
-    let (language, effective_model) = {
+    let (language, effective_model, glossary) = {
         let ctrl = controller.lock().unwrap();
-        (ctrl.language(), ctrl.settings().effective_model())
+        (
+            ctrl.language(),
+            ctrl.settings().effective_model(),
+            effective_file_glossary(ctrl.settings(), prompt.as_deref()),
+        )
     };
 
     // Show model loading status if needed
@@ -814,10 +859,7 @@ pub async fn transcribe_file(
         let whisper_ref = whisper.inner().clone();
         // Fall back to the saved initial_prompt when the file-dialog prompt is
         // empty (matches the standard file path).
-        let prompt_ref: Option<String> = prompt.clone().filter(|p| !p.trim().is_empty()).or_else(|| {
-            let saved = controller.lock().unwrap().settings().initial_prompt.trim().to_string();
-            (!saved.is_empty()).then_some(saved)
-        });
+        let prompt_ref = glossary.decoder_prompt();
         let audio_for_diarize = audio.clone();
         let audio_for_transcribe = audio.clone();
 
@@ -905,6 +947,7 @@ pub async fn transcribe_file(
             .map(|s| format!("[{}] {}", s.speaker, s.text.trim()))
             .collect::<Vec<_>>()
             .join("\n");
+        let text = apply_glossary(text, &glossary);
 
         info!("Diarized file transcription complete: {} chars", text.len());
 
@@ -981,6 +1024,7 @@ pub async fn transcribe_file(
 
     match result {
         Ok(text) => {
+            let text = apply_glossary(text, &glossary);
             info!("File transcription complete: {} chars", text.len());
 
             // Auto-paste if enabled

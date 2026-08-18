@@ -9,7 +9,7 @@ use sagascript_core::audio::AudioCaptureService;
 use sagascript_core::audio::resample::TARGET_SAMPLE_RATE;
 use sagascript_core::error::DictationError;
 use sagascript_core::transcription::model;
-use sagascript_core::transcription::WhisperBackend;
+use sagascript_core::transcription::{Glossary, WhisperBackend};
 
 use super::transcribe::{
     copy_to_clipboard, model_id_string, parse_language, resolve_effective_model,
@@ -148,7 +148,9 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let backend = WhisperBackend::new();
     backend.load_model(model)?;
 
-    let prompt = effective_prompt.as_deref();
+    let glossary = Glossary::parse(effective_prompt.as_deref().unwrap_or_default());
+    let decoder_prompt = glossary.decoder_prompt();
+    let prompt = decoder_prompt.as_deref();
     let text = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(
@@ -171,6 +173,8 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         backend.transcribe_sync_with_progress_and_prompt(&audio, language, prompt, |_| {})?
     };
 
+    let (text, vocabulary_corrections) = glossary.correct_text(&text);
+
     // Output
     if args.json {
         let json = serde_json::json!({
@@ -178,6 +182,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
             "language": language,
             "model": model_id_string(model),
             "duration_seconds": duration,
+            "vocabulary_corrections": vocabulary_corrections,
         });
         println!("{}", serde_json::to_string_pretty(&json).unwrap());
     } else {

@@ -4109,6 +4109,7 @@ dependencies = [
  "ndarray",
  "num_cpus",
  "ort",
+ "regex",
  "reqwest 0.12.28",
  "rubato",
  "rustfft",
