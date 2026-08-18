@@ -6,17 +6,17 @@ use clap::Args;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use sagascript_core::audio::decoder::{SUPPORTED_EXTENSIONS, decode_audio_file};
+use sagascript_core::audio::decoder::{decode_audio_file, SUPPORTED_EXTENSIONS};
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Language, Settings, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
+    analyze_coverage, analyze_language_windows, analyze_repetition, language_mismatch_warning,
     CoverageDiagnostics, LanguageDetection, LanguageRegionDiagnostics, LanguageWindow,
-    TranscriptionWarning, analyze_coverage, analyze_language_windows, analyze_repetition,
-    language_mismatch_warning,
+    TranscriptionWarning,
 };
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::{
-    Glossary, TranscriptSegment, TranscribeOptions, WhisperBackend, normalize_nonspeech_markers,
+    normalize_nonspeech_markers, Glossary, TranscribeOptions, TranscriptSegment, WhisperBackend,
 };
 
 #[derive(Args)]
@@ -81,7 +81,12 @@ pub struct TranscribeArgs {
     /// Read the hint/initial prompt from a file instead of the command line
     /// (handy for longer vocabulary lists). Mutually exclusive with --hint/--prompt.
     /// Leading/trailing whitespace is trimmed; an empty file means no hint.
-    #[arg(long, visible_alias = "hint-file", value_name = "PATH", conflicts_with = "prompt")]
+    #[arg(
+        long,
+        visible_alias = "hint-file",
+        value_name = "PATH",
+        conflicts_with = "prompt"
+    )]
     pub prompt_file: Option<PathBuf>,
 
     /// Opt in to strict one-edit vocabulary correction from the selected hint.
@@ -200,7 +205,11 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         )));
     }
 
-    eprintln!("Loading model once for {} input(s): {}...", files.len(), model.display_name());
+    eprintln!(
+        "Loading model once for {} input(s): {}...",
+        files.len(),
+        model.display_name()
+    );
     let backend = WhisperBackend::new();
     backend.load_model(model)?;
 
@@ -266,9 +275,15 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             let BatchItem::Ok { result, .. } = &items[0] else {
                 unreachable!("successful single item")
             };
-            println!("{}", serde_json::to_string_pretty(result).expect("result serializes"));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(result).expect("result serializes")
+            );
         } else {
-            println!("{}", serde_json::to_string_pretty(&items).expect("batch serializes"));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&items).expect("batch serializes")
+            );
         }
     }
 
@@ -330,7 +345,6 @@ fn transcribe_file(
     glossary: &Glossary,
     correction_vocabulary: &[String],
 ) -> Result<FileTranscription, DictationError> {
-
     // Decode audio file
     eprintln!("Decoding {}...", file.display());
     let audio = decode_audio_file(file)?;
@@ -367,25 +381,29 @@ fn transcribe_file(
             eprintln!("Note: --beam / --vad have no effect with --diarize.");
         }
         use sagascript_core::diarization::{
-            DiarizeConfig, TimestampedSegment,
             diarize,
             merge::{consolidate, merge_with_transcript},
             model::all_models_downloaded,
+            DiarizeConfig, TimestampedSegment,
         };
 
         if !all_models_downloaded() {
             return Err(DictationError::DiarizationError(
-                "Diarization models not found. Run: sagascript download-model diarization".to_string(),
+                "Diarization models not found. Run: sagascript download-model diarization"
+                    .to_string(),
             ));
         }
 
         // Run diarization and timestamped transcription in parallel isn't possible
         // with a single-threaded whisper context, so we run sequentially.
         eprintln!("Running speaker diarization...");
-        let speaker_segments = diarize(&audio, &DiarizeConfig {
-            threshold: args.diarize_threshold,
-            ..DiarizeConfig::default()
-        })?;
+        let speaker_segments = diarize(
+            &audio,
+            &DiarizeConfig {
+                threshold: args.diarize_threshold,
+                ..DiarizeConfig::default()
+            },
+        )?;
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
         if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
             for s in &speaker_segments {
@@ -514,18 +532,12 @@ fn transcribe_file(
 
     let mut segments = if duration > 10.0 {
         let pb = ProgressBar::new(100);
-        pb.set_style(
-            ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap(),
-        );
+        pb.set_style(ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap());
         let pb_cb = pb.clone();
-        let segments = backend.transcribe_sync_with_options_segments(
-            &audio,
-            language,
-            &opts,
-            move |pct| {
+        let segments =
+            backend.transcribe_sync_with_options_segments(&audio, language, &opts, move |pct| {
                 crate::set_transcription_progress(&pb_cb, pct);
-            },
-        )?;
+            })?;
         pb.finish_and_clear();
         segments
     } else {
@@ -696,8 +708,7 @@ fn apply_hint_corrections(
         let Some(avg_logprob) = segment.avg_logprob else {
             continue;
         };
-        if !(VOCAB_CORRECTION_MIN_LOGPROB..=VOCAB_CORRECTION_MAX_LOGPROB)
-            .contains(&avg_logprob)
+        if !(VOCAB_CORRECTION_MIN_LOGPROB..=VOCAB_CORRECTION_MAX_LOGPROB).contains(&avg_logprob)
             || segment.no_speech_prob > VOCAB_CORRECTION_MAX_NO_SPEECH_PROB
         {
             continue;
@@ -720,20 +731,72 @@ fn apply_glossary_corrections(
     segments: &mut [TranscriptSegment],
     glossary: &Glossary,
 ) -> Vec<VocabularyCorrection> {
-    let mut corrections = Vec::new();
-    for (segment_index, segment) in segments.iter_mut().enumerate() {
-        let (corrected, applied) = glossary.correct_text(&segment.text);
-        segment.text = corrected;
-        corrections.extend(applied.into_iter().map(|correction| VocabularyCorrection {
+    let original = segments
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect::<String>();
+    let (corrected, applied) = glossary.correct_text(&original);
+    if applied.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::with_capacity(segments.len());
+    let mut offset = 0;
+    for segment in segments.iter() {
+        let end = offset + segment.text.len();
+        ranges.push((offset, end));
+        offset = end;
+    }
+
+    let mut rebuilt = vec![String::new(); segments.len()];
+    let mut corrections = Vec::with_capacity(applied.len());
+    let mut cursor = 0;
+    for correction in applied {
+        append_original_range(&original, cursor, correction.start, &ranges, &mut rebuilt);
+        let segment_index = ranges
+            .iter()
+            .position(|(start, end)| *start <= correction.start && correction.start < *end)
+            .unwrap_or_else(|| segments.len().saturating_sub(1));
+        rebuilt[segment_index].push_str(&correction.replacement);
+        corrections.push(VocabularyCorrection {
             segment_index,
             original: correction.original,
             replacement: correction.replacement,
             method: "explicit_alias",
-            avg_logprob: segment.avg_logprob,
-            no_speech_prob: segment.no_speech_prob,
-        }));
+            avg_logprob: segments[segment_index].avg_logprob,
+            no_speech_prob: segments[segment_index].no_speech_prob,
+        });
+        cursor = correction.end;
     }
+    append_original_range(&original, cursor, original.len(), &ranges, &mut rebuilt);
+
+    for (segment, text) in segments.iter_mut().zip(rebuilt) {
+        segment.text = text;
+    }
+    debug_assert_eq!(
+        segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<String>(),
+        corrected
+    );
     corrections
+}
+
+fn append_original_range(
+    original: &str,
+    start: usize,
+    end: usize,
+    segment_ranges: &[(usize, usize)],
+    output: &mut [String],
+) {
+    for (segment_index, (segment_start, segment_end)) in segment_ranges.iter().enumerate() {
+        let slice_start = start.max(*segment_start);
+        let slice_end = end.min(*segment_end);
+        if slice_start < slice_end {
+            output[segment_index].push_str(&original[slice_start..slice_end]);
+        }
+    }
 }
 
 fn correct_segment_text(
@@ -960,8 +1023,7 @@ fn detect_file_language(
         return transcription_backend.detect_language(audio);
     }
 
-    let Some(detection_model) = neutral_language_detection_model(model::is_model_downloaded)
-    else {
+    let Some(detection_model) = neutral_language_detection_model(model::is_model_downloaded) else {
         eprintln!(
             "Warning: language mismatch check skipped because no neutral multilingual model is downloaded."
         );
@@ -1185,8 +1247,8 @@ pub fn model_id_string(model: WhisperModel) -> &'static str {
 
 pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
     use arboard::Clipboard;
-    let mut clipboard =
-        Clipboard::new().map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
+    let mut clipboard = Clipboard::new()
+        .map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
     clipboard
         .set_text(text)
         .map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
@@ -1199,10 +1261,8 @@ mod tests {
 
     #[test]
     fn directory_expansion_filters_sorts_recurses_and_deduplicates() {
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-batch-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("sagascript-batch-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let nested = root.join("nested");
         std::fs::create_dir(&nested).unwrap();
@@ -1246,7 +1306,9 @@ mod tests {
             |_, file| {
                 visited.push(file.to_path_buf());
                 if file == Path::new("bad.wav") {
-                    Err(DictationError::FileDecodeError("corrupt fixture".to_string()))
+                    Err(DictationError::FileDecodeError(
+                        "corrupt fixture".to_string(),
+                    ))
                 } else {
                     Ok(FileTranscription {
                         json: serde_json::json!({"text": file.display().to_string()}),
@@ -1364,6 +1426,22 @@ mod tests {
     }
 
     #[test]
+    fn explicit_phrase_aliases_cross_whisper_segment_boundaries() {
+        let glossary = Glossary::parse("OpenRouter = open router");
+        let mut segments = vec![
+            segment("Jag använder open", Some(-0.2), 0.0),
+            segment(" router varje dag.", Some(-0.4), 0.0),
+        ];
+        let corrections = apply_glossary_corrections(&mut segments, &glossary);
+
+        assert_eq!(segments[0].text, "Jag använder OpenRouter");
+        assert_eq!(segments[1].text, " varje dag.");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].segment_index, 0);
+        assert_eq!(corrections[0].avg_logprob, Some(-0.2));
+    }
+
+    #[test]
     fn correction_vocabulary_accepts_only_single_word_hint_items() {
         assert_eq!(
             Glossary::parse("Grimnir, grimnir, Erik Fredlund\nHugin, M5, AI-agent")
@@ -1389,7 +1467,12 @@ mod tests {
     #[test]
     fn does_not_correct_confident_suspect_or_non_speech_segments() {
         let vocabulary = ["Grimnir".to_string()];
-        for (avg_logprob, no_speech_prob) in [(Some(-0.2), 0.0), (Some(-0.9), 0.0), (None, 0.0), (Some(-0.313), 0.6)] {
+        for (avg_logprob, no_speech_prob) in [
+            (Some(-0.2), 0.0),
+            (Some(-0.9), 0.0),
+            (None, 0.0),
+            (Some(-0.313), 0.6),
+        ] {
             let mut segments = vec![segment(" Grimner", avg_logprob, no_speech_prob)];
             assert!(apply_hint_corrections(&mut segments, &vocabulary).is_empty());
             assert_eq!(segments[0].text, " Grimner");
@@ -1438,7 +1521,9 @@ mod tests {
     #[test]
     fn effective_prompt_none_when_all_empty() {
         assert!(resolve_effective_prompt(None, None, "").unwrap().is_none());
-        assert!(resolve_effective_prompt(None, None, "   ").unwrap().is_none());
+        assert!(resolve_effective_prompt(None, None, "   ")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1635,25 +1720,17 @@ mod tests {
 
     #[test]
     fn resolve_effective_model_none_no_auto_uses_fallback_ignoring_language() {
-        let result = resolve_effective_model(
-            None,
-            Language::Swedish,
-            false,
-            WhisperModel::LargeV3Turbo,
-        )
-        .unwrap();
+        let result =
+            resolve_effective_model(None, Language::Swedish, false, WhisperModel::LargeV3Turbo)
+                .unwrap();
         assert_eq!(result, WhisperModel::LargeV3Turbo);
     }
 
     #[test]
     fn resolve_effective_model_explicit_arg_wins_over_auto_select() {
-        let result = resolve_effective_model(
-            Some("tiny.en"),
-            Language::Swedish,
-            true,
-            WhisperModel::Base,
-        )
-        .unwrap();
+        let result =
+            resolve_effective_model(Some("tiny.en"), Language::Swedish, true, WhisperModel::Base)
+                .unwrap();
         assert_eq!(result, WhisperModel::TinyEn);
     }
 
@@ -1684,7 +1761,12 @@ mod tests {
     #[test]
     fn uncertain_language_detector_escalates_to_downloaded_turbo() {
         let selected = accurate_language_detection_model(
-            |model| matches!(model, WhisperModel::LargeV3TurboQ8 | WhisperModel::LargeV3Turbo),
+            |model| {
+                matches!(
+                    model,
+                    WhisperModel::LargeV3TurboQ8 | WhisperModel::LargeV3Turbo
+                )
+            },
             WhisperModel::Base,
         );
         assert_eq!(selected, Some(WhisperModel::LargeV3TurboQ8));

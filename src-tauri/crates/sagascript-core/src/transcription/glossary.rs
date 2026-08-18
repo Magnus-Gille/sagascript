@@ -4,8 +4,6 @@
 //! continue to act only as Whisper hints; `canonical = alias | alias` entries
 //! additionally authorize exact, whole-word/phrase replacements.
 
-use std::collections::{HashMap, HashSet};
-
 use regex::Regex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,12 +16,23 @@ pub struct GlossaryEntry {
 pub struct GlossaryCorrection {
     pub original: String,
     pub replacement: String,
+    #[serde(skip)]
+    pub start: usize,
+    #[serde(skip)]
+    pub end: usize,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+struct AliasMatcher {
+    canonical: String,
+    pattern: Regex,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct Glossary {
     source: String,
     entries: Vec<GlossaryEntry>,
+    matchers: Vec<AliasMatcher>,
 }
 
 impl Glossary {
@@ -74,7 +83,13 @@ impl Glossary {
             }
         }
 
-        Self { source, entries }
+        let mut glossary = Self {
+            source,
+            entries,
+            matchers: Vec::new(),
+        };
+        glossary.rebuild_matchers();
+        glossary
     }
 
     pub fn entries(&self) -> &[GlossaryEntry] {
@@ -100,6 +115,7 @@ impl Glossary {
             self.entries.push(GlossaryEntry { canonical, aliases });
         }
         self.source = self.render();
+        self.rebuild_matchers();
     }
 
     pub fn remove(&mut self, canonical: &str) -> bool {
@@ -109,6 +125,7 @@ impl Glossary {
         let removed = self.entries.len() != previous_len;
         if removed {
             self.source = self.render();
+            self.rebuild_matchers();
         }
         removed
     }
@@ -131,65 +148,20 @@ impl Glossary {
 
     pub fn correct_text(&self, text: &str) -> (String, Vec<GlossaryCorrection>) {
         #[derive(Debug)]
-        struct Binding<'a> {
-            alias: String,
-            canonical: &'a str,
-        }
-
-        #[derive(Debug)]
         struct Candidate<'a> {
             start: usize,
             end: usize,
             canonical: &'a str,
         }
 
-        // One alias may appear only once in the effective map. If it points to
-        // different canonical terms, fail closed instead of guessing.
-        let mut bindings_by_key: HashMap<String, Vec<Binding<'_>>> = HashMap::new();
-        for entry in self
-            .entries
-            .iter()
-            .filter(|entry| !entry.aliases.is_empty())
-        {
-            for alias in std::iter::once(entry.canonical.as_str())
-                .chain(entry.aliases.iter().map(String::as_str))
-            {
-                if !has_word_edges(alias) {
-                    continue;
-                }
-                let key = alias_key(alias);
-                let bindings = bindings_by_key.entry(key).or_default();
-                if !bindings.iter().any(|binding| {
-                    binding.canonical.eq_ignore_ascii_case(&entry.canonical)
-                        && binding.alias.eq_ignore_ascii_case(alias)
-                }) {
-                    bindings.push(Binding {
-                        alias: alias.to_string(),
-                        canonical: &entry.canonical,
-                    });
-                }
-            }
-        }
-
         let mut candidates = Vec::new();
-        for bindings in bindings_by_key.values() {
-            let canonical_keys: HashSet<String> = bindings
-                .iter()
-                .map(|binding| binding.canonical.to_lowercase())
-                .collect();
-            if canonical_keys.len() != 1 {
-                continue;
-            }
-            let binding = &bindings[0];
-            let Some(pattern) = whole_alias_regex(&binding.alias) else {
-                continue;
-            };
-            for matched in pattern.find_iter(text) {
-                if &text[matched.start()..matched.end()] != binding.canonical {
+        for matcher in &self.matchers {
+            for matched in matcher.pattern.find_iter(text) {
+                if &text[matched.start()..matched.end()] != matcher.canonical {
                     candidates.push(Candidate {
                         start: matched.start(),
                         end: matched.end(),
-                        canonical: binding.canonical,
+                        canonical: &matcher.canonical,
                     });
                 }
             }
@@ -204,9 +176,29 @@ impl Glossary {
                 .then_with(|| (right.end - right.start).cmp(&(left.end - left.start)))
                 .then_with(|| left.canonical.cmp(right.canonical))
         });
+        // Regex Unicode case folding has equivalence classes that are not
+        // reproduced by lowercasing (for example s/long-s and k/Kelvin sign).
+        // Detect ambiguity by the actual matched byte span so those aliases
+        // fail closed just like identical spellings do.
+        let mut unambiguous = Vec::new();
+        let mut candidates = candidates.into_iter().peekable();
+        while let Some(candidate) = candidates.next() {
+            let mut ambiguous = false;
+            while candidates
+                .peek()
+                .is_some_and(|next| next.start == candidate.start && next.end == candidate.end)
+            {
+                let duplicate = candidates.next().expect("peeked candidate");
+                ambiguous |= duplicate.canonical != candidate.canonical;
+            }
+            if !ambiguous {
+                unambiguous.push(candidate);
+            }
+        }
+
         let mut selected = Vec::new();
         let mut cursor = 0;
-        for candidate in candidates {
+        for candidate in unambiguous {
             if candidate.start >= cursor {
                 cursor = candidate.end;
                 selected.push(candidate);
@@ -227,6 +219,8 @@ impl Glossary {
             corrections.push(GlossaryCorrection {
                 original: original.to_string(),
                 replacement: candidate.canonical.to_string(),
+                start: candidate.start,
+                end: candidate.end,
             });
             last = candidate.end;
         }
@@ -255,14 +249,25 @@ impl Glossary {
             .map(|entry| entry.canonical.clone())
             .collect()
     }
-}
 
-fn alias_key(alias: &str) -> String {
-    alias
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    fn rebuild_matchers(&mut self) {
+        self.matchers = self
+            .entries
+            .iter()
+            .filter(|entry| !entry.aliases.is_empty())
+            .flat_map(|entry| {
+                std::iter::once(entry.canonical.as_str())
+                    .chain(entry.aliases.iter().map(String::as_str))
+                    .filter(|alias| has_word_edges(alias))
+                    .filter_map(|alias| {
+                        whole_alias_regex(alias).map(|pattern| AliasMatcher {
+                            canonical: entry.canonical.clone(),
+                            pattern,
+                        })
+                    })
+            })
+            .collect();
+    }
 }
 
 fn has_word_edges(alias: &str) -> bool {
@@ -350,6 +355,23 @@ mod tests {
         let (text, corrections) = glossary.correct_text("grimner");
         assert_eq!(text, "grimner");
         assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn unicode_case_equivalents_fail_closed_by_actual_match_span() {
+        let glossary = Glossary::parse("LetterS = s\nLongS = ſ\nLetterK = k\nKelvin = K");
+        let (text, corrections) = glossary.correct_text("s ſ k K");
+        assert_eq!(text, "s ſ k K");
+        assert!(corrections.is_empty());
+    }
+
+    #[test]
+    fn corrections_report_original_byte_spans() {
+        let glossary = Glossary::parse("OpenRouter = open router");
+        let (_, corrections) = glossary.correct_text("Hej, open router!");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].start, 5);
+        assert_eq!(corrections[0].end, 16);
     }
 
     #[test]
