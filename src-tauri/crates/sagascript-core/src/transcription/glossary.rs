@@ -64,13 +64,13 @@ impl Glossary {
 
             if let Some(existing) = entries
                 .iter_mut()
-                .find(|entry| entry.canonical.eq_ignore_ascii_case(canonical))
+                .find(|entry| same_term(&entry.canonical, canonical))
             {
                 for alias in aliases {
                     if !existing
                         .aliases
                         .iter()
-                        .any(|known| known.eq_ignore_ascii_case(&alias))
+                        .any(|known| same_term(known, &alias))
                     {
                         existing.aliases.push(alias);
                     }
@@ -96,13 +96,13 @@ impl Glossary {
         if let Some(existing) = self
             .entries
             .iter_mut()
-            .find(|entry| entry.canonical.eq_ignore_ascii_case(&canonical))
+            .find(|entry| same_term(&entry.canonical, &canonical))
         {
             for alias in aliases {
                 if !existing
                     .aliases
                     .iter()
-                    .any(|known| known.eq_ignore_ascii_case(&alias))
+                    .any(|known| same_term(known, &alias))
                 {
                     existing.aliases.push(alias);
                 }
@@ -117,7 +117,7 @@ impl Glossary {
     pub fn remove(&mut self, canonical: &str) -> bool {
         let previous_len = self.entries.len();
         self.entries
-            .retain(|entry| !entry.canonical.eq_ignore_ascii_case(canonical));
+            .retain(|entry| !same_term(&entry.canonical, canonical));
         let removed = self.entries.len() != previous_len;
         if removed {
             self.source = self.render();
@@ -220,6 +220,47 @@ impl Glossary {
         (corrected, corrections)
     }
 
+    /// Correct one logical transcript while preserving its original fragment
+    /// boundaries. This lets timestamped and diarized callers match phrases
+    /// that Whisper split across adjacent segments.
+    pub fn correct_fragments(
+        &self,
+        fragments: &[&str],
+    ) -> (Vec<String>, Vec<(usize, GlossaryCorrection)>) {
+        let original = fragments.concat();
+        let (corrected, corrections) = self.correct_text(&original);
+        if corrections.is_empty() {
+            return (
+                fragments.iter().map(|fragment| (*fragment).to_string()).collect(),
+                Vec::new(),
+            );
+        }
+
+        let mut ranges = Vec::with_capacity(fragments.len());
+        let mut offset = 0;
+        for fragment in fragments {
+            let end = offset + fragment.len();
+            ranges.push((offset, end));
+            offset = end;
+        }
+
+        let mut rebuilt = vec![String::new(); fragments.len()];
+        let mut projected = Vec::with_capacity(corrections.len());
+        let mut cursor = 0;
+        for correction in corrections {
+            append_original_range(&original, cursor, correction.start, &ranges, &mut rebuilt);
+            let fragment_index = ranges.iter()
+                .position(|(start, end)| *start <= correction.start && correction.start < *end)
+                .unwrap_or_else(|| fragments.len().saturating_sub(1));
+            rebuilt[fragment_index].push_str(&correction.replacement);
+            cursor = correction.end;
+            projected.push((fragment_index, correction));
+        }
+        append_original_range(&original, cursor, original.len(), &ranges, &mut rebuilt);
+        debug_assert_eq!(rebuilt.concat(), corrected);
+        (rebuilt, projected)
+    }
+
     pub fn render(&self) -> String {
         self.entries
             .iter()
@@ -255,6 +296,26 @@ impl Glossary {
                     }))
             })
             .collect();
+    }
+}
+
+fn same_term(left: &str, right: &str) -> bool {
+    left.to_lowercase() == right.to_lowercase()
+}
+
+fn append_original_range(
+    original: &str,
+    start: usize,
+    end: usize,
+    fragment_ranges: &[(usize, usize)],
+    output: &mut [String],
+) {
+    for (fragment_index, (fragment_start, fragment_end)) in fragment_ranges.iter().enumerate() {
+        let slice_start = start.max(*fragment_start);
+        let slice_end = end.min(*fragment_end);
+        if slice_start < slice_end {
+            output[fragment_index].push_str(&original[slice_start..slice_end]);
+        }
     }
 }
 
@@ -360,6 +421,25 @@ mod tests {
         assert_eq!(corrections.len(), 1);
         assert_eq!(corrections[0].start, 5);
         assert_eq!(corrections[0].end, 16);
+    }
+
+    #[test]
+    fn corrects_phrases_across_fragment_boundaries() {
+        let glossary = Glossary::parse("OpenRouter = open router");
+        let (fragments, corrections) = glossary.correct_fragments(&["open", " router!"]);
+        assert_eq!(fragments, vec!["OpenRouter", "!"]);
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].0, 0);
+    }
+
+    #[test]
+    fn unicode_case_is_consistent_for_parse_upsert_and_remove() {
+        let mut glossary = Glossary::parse("Ångström = ångstrom\nåNGSTRÖM = angstrom");
+        assert_eq!(glossary.entries().len(), 1);
+        glossary.upsert("ångström".to_string(), vec!["ång stroem".to_string()]);
+        assert_eq!(glossary.entries().len(), 1);
+        assert!(glossary.remove("åNGSTRÖM"));
+        assert!(glossary.entries().is_empty());
     }
 
     #[test]

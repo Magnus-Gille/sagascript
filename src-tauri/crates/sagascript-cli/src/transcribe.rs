@@ -416,13 +416,18 @@ fn transcribe_file(
 
         let diarized = merge_with_transcript(&speaker_segments, &transcript);
         let mut consolidated = consolidate(&diarized);
-        let mut glossary_corrections = Vec::new();
         for segment in &mut consolidated {
             segment.text = normalize_nonspeech_markers(&segment.text, language);
-            let (corrected, corrections) = glossary.correct_text(&segment.text);
-            segment.text = corrected;
-            glossary_corrections.extend(corrections);
         }
+        let fragments = consolidated.iter().map(|segment| segment.text.as_str()).collect::<Vec<_>>();
+        let (corrected_fragments, projected_corrections) = glossary.correct_fragments(&fragments);
+        for (segment, text) in consolidated.iter_mut().zip(corrected_fragments) {
+            segment.text = text;
+        }
+        let glossary_corrections = projected_corrections
+            .into_iter()
+            .map(|(_, correction)| correction)
+            .collect::<Vec<_>>();
         let diagnostic_segments: Vec<TranscriptSegment> = consolidated
             .iter()
             .map(|segment| TranscriptSegment {
@@ -720,29 +725,10 @@ fn apply_glossary_corrections(
     segments: &mut [TranscriptSegment],
     glossary: &Glossary,
 ) -> Vec<VocabularyCorrection> {
-    let original = segments.iter().map(|segment| segment.text.as_str()).collect::<String>();
-    let (corrected, applied) = glossary.correct_text(&original);
-    if applied.is_empty() {
-        return Vec::new();
-    }
-
-    let mut ranges = Vec::with_capacity(segments.len());
-    let mut offset = 0;
-    for segment in segments.iter() {
-        let end = offset + segment.text.len();
-        ranges.push((offset, end));
-        offset = end;
-    }
-
-    let mut rebuilt = vec![String::new(); segments.len()];
+    let fragments = segments.iter().map(|segment| segment.text.as_str()).collect::<Vec<_>>();
+    let (corrected_fragments, applied) = glossary.correct_fragments(&fragments);
     let mut corrections = Vec::with_capacity(applied.len());
-    let mut cursor = 0;
-    for correction in applied {
-        append_original_range(&original, cursor, correction.start, &ranges, &mut rebuilt);
-        let segment_index = ranges.iter()
-            .position(|(start, end)| *start <= correction.start && correction.start < *end)
-            .unwrap_or_else(|| segments.len().saturating_sub(1));
-        rebuilt[segment_index].push_str(&correction.replacement);
+    for (segment_index, correction) in applied {
         corrections.push(VocabularyCorrection {
             segment_index,
             original: correction.original,
@@ -751,31 +737,11 @@ fn apply_glossary_corrections(
             avg_logprob: segments[segment_index].avg_logprob,
             no_speech_prob: segments[segment_index].no_speech_prob,
         });
-        cursor = correction.end;
     }
-    append_original_range(&original, cursor, original.len(), &ranges, &mut rebuilt);
-
-    for (segment, text) in segments.iter_mut().zip(rebuilt) {
+    for (segment, text) in segments.iter_mut().zip(corrected_fragments) {
         segment.text = text;
     }
-    debug_assert_eq!(segments.iter().map(|segment| segment.text.as_str()).collect::<String>(), corrected);
     corrections
-}
-
-fn append_original_range(
-    original: &str,
-    start: usize,
-    end: usize,
-    segment_ranges: &[(usize, usize)],
-    output: &mut [String],
-) {
-    for (segment_index, (segment_start, segment_end)) in segment_ranges.iter().enumerate() {
-        let slice_start = start.max(*segment_start);
-        let slice_end = end.min(*segment_end);
-        if slice_start < slice_end {
-            output[segment_index].push_str(&original[slice_start..slice_end]);
-        }
-    }
 }
 
 fn correct_segment_text(
