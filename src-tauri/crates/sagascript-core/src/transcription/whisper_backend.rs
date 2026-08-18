@@ -36,6 +36,75 @@ const WARM_STATE_GRACE: Duration = Duration::from_secs(3);
 /// Poll interval while waiting for the state mutex during the grace budget.
 const WARM_STATE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+/// Maximum number of resident language models, including the active model.
+/// Two covers the common bilingual hotkey setup without turning the app into an
+/// unbounded model server.
+pub const WARM_MODEL_CACHE_MAX_MODELS: usize = 2;
+
+/// Maximum combined advertised model size retained across the active and warm
+/// secondary model. This admits the Swedish/English base pair (60 + 142 MB)
+/// and rejects combinations whose steady-state footprint would be surprising.
+pub const WARM_MODEL_CACHE_BUDGET_MB: u32 = 384;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelAvailability {
+    Active,
+    Cached,
+    Missing,
+}
+
+fn model_availability(
+    active: Option<WhisperModel>,
+    cached: Option<WhisperModel>,
+    desired: WhisperModel,
+) -> ModelAvailability {
+    if active == Some(desired) {
+        ModelAvailability::Active
+    } else if cached == Some(desired) {
+        ModelAvailability::Cached
+    } else {
+        ModelAvailability::Missing
+    }
+}
+
+fn can_cache_pair(active: WhisperModel, secondary: WhisperModel) -> bool {
+    active != secondary
+        && active
+            .size_mb()
+            .saturating_add(secondary.size_mb())
+            <= WARM_MODEL_CACHE_BUDGET_MB
+}
+
+fn activate_cached_runtime<C, S>(
+    desired_model: WhisperModel,
+    active_model: &mut Option<WhisperModel>,
+    active_context: &mut Option<C>,
+    active_state: &mut Option<S>,
+    cached: &mut Option<CachedWhisperRuntime<C, S>>,
+) -> bool {
+    let Some(cached_runtime) = cached.take() else {
+        return false;
+    };
+    if cached_runtime.model != desired_model
+        || active_model.is_none()
+        || active_context.is_none()
+    {
+        *cached = Some(cached_runtime);
+        return false;
+    }
+
+    let active_runtime = CachedWhisperRuntime {
+        model: active_model.take().unwrap(),
+        context: active_context.take().unwrap(),
+        state: active_state.take(),
+    };
+    *active_model = Some(cached_runtime.model);
+    *active_context = Some(cached_runtime.context);
+    *active_state = cached_runtime.state;
+    *cached = Some(active_runtime);
+    true
+}
+
 /// Per-transcription tuning knobs (opt-in modes). `Default` reproduces the
 /// fast, robust dictation defaults: greedy decoding, temperature fallback on,
 /// no VAD, no prompt.
@@ -221,12 +290,22 @@ pub struct WhisperBackend {
     state: Mutex<Option<WhisperState>>,
     /// Currently loaded model
     loaded_model: Mutex<Option<WhisperModel>>,
+    /// One bounded secondary runtime. Its context and reusable state stay warm
+    /// so a bilingual hotkey switch can swap runtimes without reopening model
+    /// weights or recompiling inference state.
+    cached_runtime: Mutex<Option<CachedWhisperRuntime>>,
     /// Abort flag — set to true to cancel in-progress transcription
     abort_flag: Arc<AtomicBool>,
     /// Serializes model (re)loads so concurrent `ensure_model()` callers — e.g.
     /// the startup warmup thread and the first dictation — don't load the same
     /// model twice or race the warm-state reset.
     load_lock: Mutex<()>,
+}
+
+struct CachedWhisperRuntime<C = WhisperContext, S = WhisperState> {
+    model: WhisperModel,
+    context: C,
+    state: Option<S>,
 }
 
 // WhisperContext is Send+Sync (it wraps a C pointer that's thread-safe)
@@ -255,6 +334,7 @@ impl WhisperBackend {
             context: Mutex::new(None),
             state: Mutex::new(None),
             loaded_model: Mutex::new(None),
+            cached_runtime: Mutex::new(None),
             abort_flag: Arc::new(AtomicBool::new(false)),
             load_lock: Mutex::new(()),
         }
@@ -424,6 +504,12 @@ impl WhisperBackend {
         #[cfg(target_os = "macos")]
         super::metal_preflight::ensure_available()?;
 
+        // A third model must never overlap two already-resident runtimes while
+        // its weights are being opened. Keep the active runtime available for
+        // rollback, but discard the secondary before allocating the new
+        // context so transient memory remains bounded to two model contexts.
+        self.cached_runtime.lock().unwrap().take();
+
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().ok_or_else(|| {
                 DictationError::TranscriptionFailed("Invalid model path".to_string())
@@ -434,11 +520,12 @@ impl WhisperBackend {
             DictationError::TranscriptionFailed(format!("Failed to load model: {e}"))
         })?;
 
-        // Publish the new context atomically with respect to warm-state users:
-        // hold the state lock across the swap so no in-flight transcription can
-        // observe the new context (via loaded_model) while still holding the old
-        // warm state. The next transcription lazily recreates the state. Lock
-        // order is state -> context, matching with_warm_state().
+        // Publish the new context atomically with respect to warm-state users.
+        // When the old/new pair fits the explicit cache budget, move the old
+        // context and its reusable warm state into the secondary slot. The next
+        // switch can then restore both without touching disk or rebuilding the
+        // state. Lock order is state -> context -> loaded_model -> cache,
+        // matching activate_cached_model().
         //
         // The state lock is acquired with the same bounded policy as
         // with_warm_state: if a stuck inference pins it past the grace budget,
@@ -447,9 +534,24 @@ impl WhisperBackend {
         // switch forever behind a wedged transcription.
         {
             let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
-            *self.context.lock().unwrap() = Some(ctx);
-            *self.loaded_model.lock().unwrap() = Some(whisper_model);
+            let mut context = self.context.lock().unwrap();
+            let mut loaded_model = self.loaded_model.lock().unwrap();
+            let previous = match (loaded_model.take(), context.take()) {
+                (Some(model), Some(context)) => Some(CachedWhisperRuntime {
+                    model,
+                    context,
+                    state: state.take(),
+                }),
+                (None, None) => None,
+                _ => panic!("whisper model/context invariant violated"),
+            };
+
+            *context = Some(ctx);
+            *loaded_model = Some(whisper_model);
             *state = None;
+
+            let mut cached = self.cached_runtime.lock().unwrap();
+            *cached = previous.filter(|runtime| can_cache_pair(whisper_model, runtime.model));
         }
 
         info!("Model loaded: {}", whisper_model.display_name());
@@ -461,20 +563,74 @@ impl WhisperBackend {
         *self.loaded_model.lock().unwrap()
     }
 
-    /// Check if the correct model is loaded for the given settings
-    pub fn needs_reload(&self, desired_model: WhisperModel) -> bool {
-        self.loaded_model() != Some(desired_model)
+    /// Models currently resident in memory, active first.
+    pub fn resident_models(&self) -> Vec<WhisperModel> {
+        let active = self.loaded_model();
+        let cached = self
+            .cached_runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|runtime| runtime.model);
+        active.into_iter().chain(cached).collect()
     }
 
-    /// Ensure the correct model is loaded. Serialized via `load_lock` so two
-    /// concurrent callers don't both load the same model; the loser re-checks
-    /// after acquiring the lock and finds the model already loaded.
+    /// Check whether selecting this model requires opening model weights. A
+    /// warm cached model returns false even when it is not currently active.
+    pub fn needs_reload(&self, desired_model: WhisperModel) -> bool {
+        let cached = self
+            .cached_runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|runtime| runtime.model);
+        model_availability(self.loaded_model(), cached, desired_model)
+            == ModelAvailability::Missing
+    }
+
+    /// Ensure the correct model is active. Serialized via `load_lock` so two
+    /// concurrent callers don't both load or switch the same model.
     pub fn ensure_model(&self, desired_model: WhisperModel) -> Result<(), DictationError> {
         let _load = self.load_lock.lock().unwrap();
-        if self.needs_reload(desired_model) {
-            info!("Loading model: {:?}", desired_model);
-            self.load_model(desired_model)?;
+        let cached = self
+            .cached_runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|runtime| runtime.model);
+        match model_availability(self.loaded_model(), cached, desired_model) {
+            ModelAvailability::Active => {}
+            ModelAvailability::Cached => {
+                self.activate_cached_model(desired_model)?;
+            }
+            ModelAvailability::Missing => {
+                info!("Loading model: {:?}", desired_model);
+                self.load_model(desired_model)?;
+            }
         }
+        Ok(())
+    }
+
+    /// Swap the active and secondary runtimes while preserving both warm
+    /// states. The caller holds load_lock, so cache membership cannot change
+    /// concurrently with this operation.
+    fn activate_cached_model(&self, desired_model: WhisperModel) -> Result<(), DictationError> {
+        let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
+        let mut context = self.context.lock().unwrap();
+        let mut loaded_model = self.loaded_model.lock().unwrap();
+        let mut cached = self.cached_runtime.lock().unwrap();
+
+        if !activate_cached_runtime(
+            desired_model,
+            &mut loaded_model,
+            &mut context,
+            &mut state,
+            &mut cached,
+        ) {
+            return Err(DictationError::ModelNotLoaded);
+        }
+
+        info!("Activated cached whisper model: {}", desired_model.display_name());
         Ok(())
     }
 
@@ -1083,6 +1239,111 @@ mod language_detection_preview_tests {
 
         assert_eq!(preview.len(), window);
         assert!(preview.iter().all(|&sample| sample == 0.1));
+    }
+}
+
+#[cfg(test)]
+mod warm_model_cache_tests {
+    use super::*;
+
+    #[test]
+    fn distinguishes_active_cached_and_missing_models() {
+        assert_eq!(
+            model_availability(
+                Some(WhisperModel::KbWhisperBase),
+                Some(WhisperModel::BaseEn),
+                WhisperModel::KbWhisperBase,
+            ),
+            ModelAvailability::Active
+        );
+        assert_eq!(
+            model_availability(
+                Some(WhisperModel::KbWhisperBase),
+                Some(WhisperModel::BaseEn),
+                WhisperModel::BaseEn,
+            ),
+            ModelAvailability::Cached
+        );
+        assert_eq!(
+            model_availability(
+                Some(WhisperModel::KbWhisperBase),
+                Some(WhisperModel::BaseEn),
+                WhisperModel::NbWhisperBase,
+            ),
+            ModelAvailability::Missing
+        );
+    }
+
+    #[test]
+    fn caches_two_base_models_within_budget() {
+        assert!(can_cache_pair(
+            WhisperModel::KbWhisperBase,
+            WhisperModel::BaseEn
+        ));
+    }
+
+    #[test]
+    fn refuses_duplicate_or_oversized_cache_pairs() {
+        assert!(!can_cache_pair(
+            WhisperModel::BaseEn,
+            WhisperModel::BaseEn
+        ));
+        assert!(!can_cache_pair(
+            WhisperModel::KbWhisperMedium,
+            WhisperModel::BaseEn
+        ));
+    }
+
+    #[test]
+    fn cached_runtime_switch_preserves_both_warm_payloads() {
+        let mut active_model = Some(WhisperModel::KbWhisperBase);
+        let mut active_context = Some("swedish-context");
+        let mut active_state = Some("swedish-state");
+        let mut cached = Some(CachedWhisperRuntime {
+            model: WhisperModel::BaseEn,
+            context: "english-context",
+            state: Some("english-state"),
+        });
+
+        assert!(activate_cached_runtime(
+            WhisperModel::BaseEn,
+            &mut active_model,
+            &mut active_context,
+            &mut active_state,
+            &mut cached,
+        ));
+        assert_eq!(active_model, Some(WhisperModel::BaseEn));
+        assert_eq!(active_context, Some("english-context"));
+        assert_eq!(active_state, Some("english-state"));
+
+        let cached = cached.unwrap();
+        assert_eq!(cached.model, WhisperModel::KbWhisperBase);
+        assert_eq!(cached.context, "swedish-context");
+        assert_eq!(cached.state, Some("swedish-state"));
+    }
+
+    #[test]
+    fn cache_miss_leaves_active_and_secondary_unchanged() {
+        let mut active_model = Some(WhisperModel::KbWhisperBase);
+        let mut active_context = Some("swedish-context");
+        let mut active_state = Some("swedish-state");
+        let mut cached = Some(CachedWhisperRuntime {
+            model: WhisperModel::BaseEn,
+            context: "english-context",
+            state: Some("english-state"),
+        });
+
+        assert!(!activate_cached_runtime(
+            WhisperModel::NbWhisperBase,
+            &mut active_model,
+            &mut active_context,
+            &mut active_state,
+            &mut cached,
+        ));
+        assert_eq!(active_model, Some(WhisperModel::KbWhisperBase));
+        assert_eq!(active_context, Some("swedish-context"));
+        assert_eq!(active_state, Some("swedish-state"));
+        assert_eq!(cached.as_ref().unwrap().model, WhisperModel::BaseEn);
     }
 }
 

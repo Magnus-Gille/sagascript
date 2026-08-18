@@ -630,6 +630,50 @@ impl Settings {
             profile.shortcut = shortcut;
         }
     }
+
+    /// Build the ordered set of profile models worth loading during GUI
+    /// startup. The primary profile is always first and always included because
+    /// normal dictation requires it. Additional distinct models must fit both
+    /// the resident-entry limit and advertised model-size budget.
+    pub fn warm_model_plan(
+        &self,
+        max_models: usize,
+        max_total_mb: u32,
+    ) -> Vec<(WhisperModel, Language)> {
+        let profiles = self.resolved_hotkey_profiles();
+        let Some(primary_index) = profiles
+            .iter()
+            .position(|profile| profile.id == "default")
+            .or_else(|| (!profiles.is_empty()).then_some(0))
+        else {
+            return Vec::new();
+        };
+
+        let capacity = max_models.max(1);
+        let ordered_indices = std::iter::once(primary_index)
+            .chain((0..profiles.len()).filter(|index| *index != primary_index));
+        let mut plan = Vec::with_capacity(capacity.min(profiles.len()));
+        let mut total_mb = 0u32;
+
+        for index in ordered_indices {
+            let profile = &profiles[index];
+            let model = self.effective_model_for(profile.language);
+            if plan.iter().any(|(resident, _)| *resident == model) {
+                continue;
+            }
+
+            let is_primary = plan.is_empty();
+            let next_total = total_mb.saturating_add(model.size_mb());
+            if !is_primary && (plan.len() >= capacity || next_total > max_total_mb) {
+                continue;
+            }
+
+            plan.push((model, profile.language));
+            total_mb = next_total;
+        }
+
+        plan
+    }
 }
 
 #[cfg(test)]
@@ -1170,6 +1214,83 @@ mod tests {
         for language in [Language::English, Language::Swedish, Language::Norwegian, Language::Auto] {
             assert_eq!(settings.effective_model_for(language), WhisperModel::Medium);
         }
+    }
+
+    #[test]
+    fn warm_model_plan_includes_swedish_and_english_base_models() {
+        let mut settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::KbWhisperBase,
+            ..Default::default()
+        };
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            settings.warm_model_plan(2, 384),
+            vec![
+                (WhisperModel::KbWhisperBase, Language::Swedish),
+                (WhisperModel::BaseEn, Language::English),
+            ]
+        );
+    }
+
+    #[test]
+    fn warm_model_plan_deduplicates_multilingual_model() {
+        let mut settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::Base,
+            ..Default::default()
+        };
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            settings.warm_model_plan(2, 384),
+            vec![(WhisperModel::Base, Language::Swedish)]
+        );
+    }
+
+    #[test]
+    fn warm_model_plan_moves_default_profile_to_front() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("english", "Super+E", Language::English),
+                profile("default", "Super+S", Language::Swedish),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            settings.warm_model_plan(2, 384),
+            vec![
+                (WhisperModel::KbWhisperBase, Language::Swedish),
+                (WhisperModel::BaseEn, Language::English),
+            ]
+        );
+    }
+
+    #[test]
+    fn warm_model_plan_budget_and_zero_capacity_keep_primary() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ])
+            .unwrap();
+
+        let primary = vec![(WhisperModel::KbWhisperBase, Language::Swedish)];
+        assert_eq!(settings.warm_model_plan(2, 100), primary);
+        assert_eq!(settings.warm_model_plan(0, 1_000), primary);
     }
 
     #[test]

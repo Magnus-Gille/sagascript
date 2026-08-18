@@ -7,6 +7,7 @@ pub mod whisper_backend;
 mod metal_preflight;
 
 pub use whisper_backend::{
-    FILE_TRANSCRIBE_BEAM, TranscribeOptions, TranscriptSegment, WhisperBackend,
+    FILE_TRANSCRIBE_BEAM, TranscribeOptions, TranscriptSegment, WARM_MODEL_CACHE_BUDGET_MB,
+    WARM_MODEL_CACHE_MAX_MODELS, WhisperBackend,
 };
 pub use postprocess::normalize_nonspeech_markers;

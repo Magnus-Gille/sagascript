@@ -51,7 +51,9 @@ use commands::{SharedController, SharedWhisper};
 #[cfg(test)]
 use sagascript_core::settings::validate_hotkey;
 use sagascript_core::settings::Language;
-use sagascript_core::transcription::WhisperBackend;
+use sagascript_core::transcription::{
+    WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS, WhisperBackend,
+};
 
 /// Minimum recording duration before we allow stop (300ms)
 const MIN_RECORDING_MS: u64 = 300;
@@ -679,32 +681,67 @@ fn main() {
                 open_settings_window(app.handle(), initial_tab);
             }
 
-            // Preload + warm the whisper model in the background so the first
-            // dictation of the session doesn't pay model-load and Metal/CoreML
-            // kernel-compile latency. Best-effort: if the model isn't downloaded
-            // yet (fresh install) we just skip and load lazily on first use.
+            // Preload + warm the bounded set of models selected by the hotkey
+            // profiles. The primary profile is restored as active after warmup,
+            // while one distinct secondary stays resident for instant bilingual
+            // switching. Missing models are never downloaded implicitly.
             {
                 let whisper: tauri::State<'_, SharedWhisper> = app.state();
                 let whisper = whisper.inner().clone();
-                let (model, language, vad_enabled) = {
+                let (warm_plan, vad_enabled) = {
                     let ctrl: tauri::State<'_, SharedController> = app.state();
                     let c = ctrl.lock().unwrap();
                     (
-                        c.settings().effective_model(),
-                        c.language(),
+                        c.settings().warm_model_plan(
+                            WARM_MODEL_CACHE_MAX_MODELS,
+                            WARM_MODEL_CACHE_BUDGET_MB,
+                        ),
                         c.settings().vad_enabled,
                     )
                 };
                 std::thread::spawn(move || {
-                    if let Err(e) = whisper.ensure_model(model) {
-                        warn!("Model preload skipped: {e}");
+                    let Some(&(primary_model, primary_language)) = warm_plan.first() else {
+                        return;
+                    };
+
+                    if let Err(e) = whisper.ensure_model(primary_model) {
+                        warn!("Primary model preload skipped: {e}");
                         return;
                     }
-                    if let Err(e) = whisper.warmup(language) {
-                        warn!("Model warmup failed: {e}");
+                    if let Err(e) = whisper.warmup(primary_language) {
+                        warn!("Primary model warmup failed: {e}");
                     } else {
-                        info!("Model preloaded and warmed: {}", model.display_name());
+                        info!(
+                            "Primary model preloaded and warmed: {}",
+                            primary_model.display_name()
+                        );
                     }
+
+                    for &(model, language) in warm_plan.iter().skip(1) {
+                        if let Err(e) = whisper.ensure_model(model) {
+                            warn!("Secondary model preload skipped: {e}");
+                            continue;
+                        }
+                        if let Err(e) = whisper.warmup(language) {
+                            warn!("Secondary model warmup failed: {e}");
+                        } else {
+                            info!(
+                                "Secondary model preloaded and warmed: {}",
+                                model.display_name()
+                            );
+                        }
+                    }
+
+                    if whisper.loaded_model() != Some(primary_model) {
+                        if let Err(e) = whisper.ensure_model(primary_model) {
+                            warn!("Could not restore primary model after warmup: {e}");
+                        }
+                    }
+
+                    info!(
+                        "Warm resident models ready: {:?}",
+                        whisper.resident_models()
+                    );
                 });
 
                 // Startup is verification-only: model repair/download remains
