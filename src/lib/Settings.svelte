@@ -983,11 +983,16 @@
               id="teach-correction"
               class="transcribe-result"
               bind:value={teachCorrectedText}
+              disabled={teachRecording || teachTranscribing}
               rows="6"
             ></textarea>
             <div class="hotkey-hint">Fix only the words you want Sagascript to learn. Punctuation, deletions and broad rewrites are ignored.</div>
           </div>
-          <button class="primary teach-action" onclick={findTeachSuggestions}>
+          <button
+            class="primary teach-action"
+            onclick={findTeachSuggestions}
+            disabled={teachRecording || teachTranscribing}
+          >
             Find likely dictionary entries
           </button>
         {/if}
@@ -1003,6 +1008,7 @@
                   checked={teachSelected[index] ?? false}
                   onchange={(event) => setTeachSuggestionSelected(index, (event.target as HTMLInputElement).checked)}
                   aria-label={`Include ${suggestion.canonical}`}
+                  disabled={teachRecording || teachTranscribing}
                 />
                 <div class="teach-suggestion-body">
                   <input
@@ -1010,6 +1016,7 @@
                     value={suggestion.canonical}
                     oninput={(event) => editTeachSuggestionCanonical(index, (event.target as HTMLInputElement).value)}
                     aria-label="Preferred spelling"
+                    disabled={teachRecording || teachTranscribing}
                   />
                   {#if suggestion.kind === "alias"}
                     <span class="teach-alias"> heard as “{suggestion.observed}”</span>
@@ -1022,6 +1029,7 @@
                       value={suggestion.kind}
                       onchange={(event) => editTeachSuggestionKind(index, (event.target as HTMLSelectElement).value as GlossarySuggestion["kind"])}
                       aria-label="Dictionary entry type"
+                      disabled={teachRecording || teachTranscribing}
                     >
                       <option value="alias">Replace exact mishearing</option>
                       <option value="hint_only">Decoder hint only</option>
@@ -1035,7 +1043,7 @@
           <button
             class="primary teach-action"
             onclick={addTeachSuggestions}
-            disabled={!teachSuggestions.some((_, index) => teachSelected[index])}
+            disabled={teachRecording || teachTranscribing || !teachSuggestions.some((_, index) => teachSelected[index])}
           >
             Add selected to personal dictionary
           </button>
