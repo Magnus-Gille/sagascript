@@ -39,6 +39,11 @@ pub fn settings_path() -> PathBuf {
     configured_settings_location().0
 }
 
+/// Returns whether this process is using an explicit settings file.
+pub fn settings_path_is_overridden() -> bool {
+    settings_override_path(std::env::var_os(SETTINGS_PATH_ENV)).is_some()
+}
+
 fn legacy_settings_paths() -> impl Iterator<Item = PathBuf> {
     configured_settings_location().1.into_iter()
 }
@@ -54,8 +59,8 @@ fn settings_location(
     override_path: Option<OsString>,
     data_dir: PathBuf,
 ) -> (PathBuf, Vec<PathBuf>) {
-    if let Some(override_path) = override_path.filter(|value| !value.is_empty()) {
-        return (PathBuf::from(override_path), Vec::new());
+    if let Some(override_path) = settings_override_path(override_path) {
+        return (override_path, Vec::new());
     }
 
     let settings_path = data_dir.join(APP_IDENTIFIER).join(SETTINGS_FILENAME);
@@ -64,6 +69,12 @@ fn settings_location(
         .map(|identifier| data_dir.join(identifier).join(SETTINGS_FILENAME))
         .collect();
     (settings_path, legacy_paths)
+}
+
+fn settings_override_path(value: Option<OsString>) -> Option<PathBuf> {
+    value
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 /// Caller must hold the destination's settings lock.

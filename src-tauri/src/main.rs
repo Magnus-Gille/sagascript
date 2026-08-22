@@ -661,7 +661,11 @@ fn main() {
                 if let Some(dir) = app_dir {
                     let legacy = dir.join("flowdictate-settings.json");
                     let new_path = dir.join("sagascript-settings.json");
-                    migrate_legacy_settings(&legacy, &new_path);
+                    migrate_legacy_settings_unless_overridden(
+                        &legacy,
+                        &new_path,
+                        sagascript_core::settings::store::settings_path_is_overridden(),
+                    );
                 }
             }
 
@@ -906,6 +910,17 @@ fn migrate_legacy_settings(legacy: &std::path::Path, new_path: &std::path::Path)
             new_path.display()
         ),
     }
+}
+
+fn migrate_legacy_settings_unless_overridden(
+    legacy: &std::path::Path,
+    new_path: &std::path::Path,
+    settings_path_is_overridden: bool,
+) {
+    if settings_path_is_overridden {
+        return;
+    }
+    migrate_legacy_settings(legacy, new_path);
 }
 
 /// Truncate transcription text for tray display, cutting on a char boundary.
@@ -1813,6 +1828,21 @@ mod tests {
         assert!(new_path.exists(), "new path should now hold the migrated settings");
         assert_eq!(std::fs::read_to_string(&new_path).unwrap(), r#"{"language":"sv"}"#);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overridden_settings_path_disables_flowdictate_migration() {
+        let dir = migrate_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("flowdictate-settings.json");
+        let new_path = dir.join("sagascript-settings.json");
+        std::fs::write(&legacy, r#"{"language":"sv"}"#).unwrap();
+
+        migrate_legacy_settings_unless_overridden(&legacy, &new_path, true);
+
+        assert!(legacy.exists(), "override mode must not inspect or move legacy settings");
+        assert!(!new_path.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
