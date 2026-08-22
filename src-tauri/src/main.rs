@@ -794,7 +794,10 @@ fn main() {
             commands::set_hotkey_profiles,
             commands::hotkey_status,
             commands::start_recording,
+            commands::start_training_recording,
             commands::stop_and_transcribe,
+            commands::stop_and_transcribe_training,
+            commands::transcribe_training_file,
             commands::cancel_recording,
             commands::is_model_downloaded,
             commands::get_model_info,
@@ -802,6 +805,8 @@ fn main() {
             commands::set_auto_paste,
             commands::set_show_overlay,
             commands::set_initial_prompt,
+            commands::suggest_training_glossary,
+            commands::apply_training_glossary,
             commands::set_beam_size,
             commands::set_temperature_fallback,
             commands::set_vad_enabled,
@@ -1158,11 +1163,14 @@ fn stop_recording_and_transcribe(
         // Extract what we need for transcription (lock briefly)
         let (language, effective_model, opts, glossary) = {
             let c = ctrl.lock().unwrap();
+            let profile_id = c.active_hotkey_profile().map(|profile| profile.id.as_str());
             (
                 c.language(),
                 c.settings().effective_model_for(c.language()),
-                commands::build_transcribe_options(c.settings()),
-                sagascript_core::transcription::Glossary::parse(&c.settings().initial_prompt),
+                commands::build_transcribe_options_for_profile(c.settings(), profile_id),
+                sagascript_core::transcription::Glossary::parse(
+                    &c.settings().effective_glossary_source(profile_id),
+                ),
             )
         };
 

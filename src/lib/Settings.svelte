@@ -22,7 +22,12 @@
     checkAccessibilityPermission,
     requestAccessibilityPermission,
     startRecording,
+    startTrainingRecording,
     stopAndTranscribe,
+    stopAndTranscribeTraining,
+    transcribeTrainingFile,
+    suggestTrainingGlossary,
+    applyTrainingGlossary,
     hotkeyStatus,
     type Settings,
     type BuildInfo,
@@ -32,6 +37,7 @@
     type LoadedModelInfo,
     type HotkeyStatus,
     type HotkeyProfile,
+    type GlossarySuggestion,
   } from "./api";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -41,7 +47,7 @@
   let buildInfo: BuildInfo | null = $state(null);
   let models: WhisperModel[] = $state([]);
   let loadedModel: LoadedModelInfo | null = $state(null);
-  let activeTab: "dictate" | "transcribe" | "settings" = $state("dictate");
+  let activeTab: "dictate" | "transcribe" | "teach" | "settings" = $state("dictate");
   let downloading: string | null = $state(null);
   let downloadingName: string = $state("");
   let downloadProgress: number = $state(0);
@@ -83,6 +89,30 @@
   let testTranscribing: boolean = $state(false);
   let testResult: string = $state("");
   let testError: string = $state("");
+
+  // Local, review-first personal dictionary training state
+  let teachProfileId: string = $state("default");
+  let teachRecording: boolean = $state(false);
+  let teachTranscribing: boolean = $state(false);
+  let teachRawText: string = $state("");
+  let teachEffectiveText: string = $state("");
+  let teachCorrectedText: string = $state("");
+  let teachSuggestions: GlossarySuggestion[] = $state([]);
+  let teachSelected: Record<number, boolean> = $state({});
+  let teachError: string = $state("");
+  let teachMessage: string = $state("");
+
+  function explicitTeachProfiles(current: Settings | null = settings): HotkeyProfile[] {
+    return current?.hotkey_profiles.filter((profile) => profile.language !== "auto") ?? [];
+  }
+
+  function chooseTeachProfile(current: Settings, preferred?: string): string {
+    const profiles = explicitTeachProfiles(current);
+    return profiles.find((profile) => profile.id === preferred)?.id
+      ?? profiles.find((profile) => profile.id === "default")?.id
+      ?? profiles[0]?.id
+      ?? "";
+  }
 
   // Transcribe tab state
   let supportedFormats: string[] = $state([]);
@@ -128,6 +158,7 @@
     listen("state-changed", async (event: any) => {
       if (event.payload !== "settings_reloaded") return;
       settings = await getSettings();
+      teachProfileId = chooseTeachProfile(settings, teachProfileId);
       models = await getModelInfo();
       loadedModel = await getLoadedModel();
     });
@@ -135,7 +166,7 @@
     // Listen for tab navigation from tray menu
     listen("navigate_tab", (event: any) => {
       const t = event.payload;
-      if (t === "dictate" || t === "transcribe" || t === "settings") {
+      if (t === "dictate" || t === "transcribe" || t === "teach" || t === "settings") {
         activeTab = t;
       }
     });
@@ -163,6 +194,7 @@
       initError = "";
       try {
         settings = await getSettings();
+        teachProfileId = chooseTeachProfile(settings);
         platform = await getPlatform();
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
@@ -178,7 +210,7 @@
         // Check URL params for initial tab
         const params = new URLSearchParams(window.location.search);
         const tab = params.get("tab");
-        if (tab === "dictate" || tab === "transcribe" || tab === "settings") {
+        if (tab === "dictate" || tab === "transcribe" || tab === "teach" || tab === "settings") {
           activeTab = tab;
         }
       } catch (e: any) {
@@ -345,6 +377,124 @@
     }
   }
 
+  async function onTeachRecord() {
+    teachError = "";
+    teachMessage = "";
+    if (teachRecording) {
+      teachRecording = false;
+      teachTranscribing = true;
+      try {
+        const transcript = await stopAndTranscribeTraining();
+        setTeachTranscript(transcript.raw_text, transcript.effective_text);
+      } catch (e: any) {
+        teachError = typeof e === "string" ? e : e?.message || "Transcription failed";
+      } finally {
+        teachTranscribing = false;
+      }
+    } else {
+      try {
+        await startTrainingRecording(teachProfileId);
+        teachRecording = true;
+        teachRawText = "";
+        teachEffectiveText = "";
+        teachCorrectedText = "";
+        teachSuggestions = [];
+        teachSelected = {};
+      } catch (e: any) {
+        teachError = typeof e === "string" ? e : e?.message || "Failed to start recording";
+      }
+    }
+  }
+
+  function setTeachTranscript(rawText: string, effectiveText: string) {
+    teachRawText = rawText;
+    teachEffectiveText = effectiveText;
+    teachCorrectedText = effectiveText;
+    teachSuggestions = [];
+    teachSelected = {};
+  }
+
+  async function onTeachPickFile() {
+    const extensions = supportedFormats.length > 0
+      ? supportedFormats
+      : ["wav", "mp3", "m4a", "mp4", "ogg", "flac"];
+    const file = await open({
+      multiple: false,
+      filters: [{ name: "Audio/Video", extensions }],
+    });
+    if (!file) return;
+
+    teachError = "";
+    teachMessage = "";
+    teachTranscribing = true;
+    try {
+      const transcript = await transcribeTrainingFile(file, teachProfileId);
+      setTeachTranscript(transcript.raw_text, transcript.effective_text);
+    } catch (e: any) {
+      teachError = typeof e === "string" ? e : e?.message || "Training import failed";
+    } finally {
+      teachTranscribing = false;
+    }
+  }
+
+  async function findTeachSuggestions() {
+    teachError = "";
+    teachMessage = "";
+    if (!teachEffectiveText.trim() || !teachCorrectedText.trim()) {
+      teachError = "Record and correct a transcript first.";
+      return;
+    }
+    try {
+      teachSuggestions = await suggestTrainingGlossary(
+        teachEffectiveText,
+        teachCorrectedText,
+        teachProfileId,
+      );
+      teachSelected = Object.fromEntries(teachSuggestions.map((_, index) => [index, true]));
+      if (teachSuggestions.length === 0) {
+        teachMessage = "No safe dictionary changes found. Broad or ambiguous edits are ignored.";
+      }
+    } catch (e: any) {
+      teachError = typeof e === "string" ? e : e?.message || "Could not analyze corrections";
+    }
+  }
+
+  function setTeachSuggestionSelected(index: number, selected: boolean) {
+    teachSelected = { ...teachSelected, [index]: selected };
+  }
+
+  function editTeachSuggestionCanonical(index: number, canonical: string) {
+    teachSuggestions = teachSuggestions.map((suggestion, candidateIndex) =>
+      candidateIndex === index ? { ...suggestion, canonical } : suggestion,
+    );
+  }
+
+  function editTeachSuggestionKind(index: number, kind: GlossarySuggestion["kind"]) {
+    teachSuggestions = teachSuggestions.map((suggestion, candidateIndex) =>
+      candidateIndex === index ? { ...suggestion, kind } : suggestion,
+    );
+  }
+
+  async function addTeachSuggestions() {
+    const accepted = teachSuggestions.filter((_, index) => teachSelected[index]);
+    teachError = "";
+    teachMessage = "";
+    try {
+      await applyTrainingGlossary(
+        teachEffectiveText,
+        teachCorrectedText,
+        teachProfileId,
+        accepted,
+      );
+      settings = await getSettings();
+      teachSuggestions = [];
+      teachSelected = {};
+      teachMessage = `Added ${accepted.length} reviewed ${accepted.length === 1 ? "entry" : "entries"} to this profile.`;
+    } catch (e: any) {
+      teachError = typeof e === "string" ? e : e?.message || "Could not save dictionary entries";
+    }
+  }
+
   async function handleFileTranscription(filePath: string) {
     if (transcribing) return;
     transcribing = true;
@@ -485,15 +635,21 @@
     );
     if (profileId === draftProfileId) {
       settings = { ...settings, hotkey_profiles: profiles };
+      teachProfileId = chooseTeachProfile(settings, teachProfileId);
       return;
     }
-    await applySetting(() => setHotkeyProfiles(profiles));
+    if (await applySetting(() => setHotkeyProfiles(profiles)) && settings) {
+      teachProfileId = chooseTeachProfile(settings, teachProfileId);
+    }
   }
 
   function addProfile() {
     if (!settings) return;
     let suffix = settings.hotkey_profiles.length + 1;
-    while (settings.hotkey_profiles.some((profile) => profile.id === `profile-${suffix}`)) suffix += 1;
+    while (
+      settings.hotkey_profiles.some((profile) => profile.id === `profile-${suffix}`)
+      || Object.hasOwn(settings.profile_glossaries, `profile-${suffix}`)
+    ) suffix += 1;
     const profile: HotkeyProfile = {
       id: `profile-${suffix}`,
       name: `Profile ${suffix}`,
@@ -501,6 +657,7 @@
       language: settings.language === "sv" ? "en" : "sv",
     };
     settings = { ...settings, hotkey_profiles: [...settings.hotkey_profiles, profile] };
+    teachProfileId = chooseTeachProfile(settings, teachProfileId);
     draftProfileId = profile.id;
     recordingProfileId = profile.id;
   }
@@ -509,11 +666,18 @@
     if (!settings || settings.hotkey_profiles.length <= 1) return;
     if (profileId === draftProfileId) {
       settings = { ...settings, hotkey_profiles: settings.hotkey_profiles.filter((profile) => profile.id !== profileId) };
+      teachProfileId = chooseTeachProfile(settings, teachProfileId);
       draftProfileId = null;
       recordingProfileId = null;
       return;
     }
-    await applySetting(() => setHotkeyProfiles(settings!.hotkey_profiles.filter((profile) => profile.id !== profileId)));
+    if (
+      await applySetting(() =>
+        setHotkeyProfiles(settings!.hotkey_profiles.filter((profile) => profile.id !== profileId)),
+      ) && settings
+    ) {
+      teachProfileId = chooseTeachProfile(settings, teachProfileId);
+    }
   }
 
   function languageLabel(lang: Language): string {
@@ -547,6 +711,9 @@
     </button>
     <button class="tab" class:active={activeTab === "transcribe"} onclick={() => (activeTab = "transcribe")}>
       Transcribe
+    </button>
+    <button class="tab" class:active={activeTab === "teach"} onclick={() => (activeTab = "teach")}>
+      Teach
     </button>
     <button class="tab" class:active={activeTab === "settings"} onclick={() => (activeTab = "settings")}>
       Language & Model
@@ -749,6 +916,129 @@
         {#if transcriptionResult}
           <div class="result-label">Result</div>
           <textarea class="transcribe-result" readonly>{transcriptionResult}</textarea>
+        {/if}
+
+      {:else if activeTab === "teach"}
+        <div class="teach-intro">
+          <div class="teach-title">Teach Sagascript your vocabulary</div>
+          <div class="hotkey-hint">
+            Speak naturally, correct the transcript, then review the safe local dictionary changes. This never changes model weights or sends audio to a cloud service.
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="teach-profile">Save for profile</label>
+          <select id="teach-profile" bind:value={teachProfileId} disabled={teachRecording || teachTranscribing}>
+            {#if explicitTeachProfiles().length === 0}
+              <option value="">Create a profile with an explicit language first</option>
+            {/if}
+            {#each explicitTeachProfiles() as profile (profile.id)}
+              <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
+            {/each}
+          </select>
+          <div class="hotkey-hint">Learned entries apply only when this dictation profile is active. Auto-detect profiles are excluded to avoid cross-language aliases.</div>
+        </div>
+
+        <button
+          class="test-record-btn"
+          class:recording={teachRecording}
+          class:transcribing={teachTranscribing}
+          onclick={onTeachRecord}
+          disabled={teachTranscribing || testRecording || !teachProfileId}
+        >
+          {#if teachTranscribing}
+            <div class="spinner small"></div>
+            Transcribing locally...
+          {:else if teachRecording}
+            <div class="recording-dot"></div>
+            Stop training recording
+          {:else}
+            Start training recording
+          {/if}
+        </button>
+        <button
+          class="teach-import-btn"
+          onclick={onTeachPickFile}
+          disabled={teachRecording || teachTranscribing || testRecording || !teachProfileId}
+        >
+          Import audio or video...
+        </button>
+
+        {#if teachError}
+          <div class="transcribe-error">{teachError}</div>
+        {/if}
+        {#if teachMessage}
+          <div class="teach-message">{teachMessage}</div>
+        {/if}
+
+        {#if teachEffectiveText}
+          <details class="teach-raw">
+            <summary>Show raw recognizer transcript</summary>
+            <div>{teachRawText}</div>
+          </details>
+
+          <div class="field teach-editor">
+            <label for="teach-correction">Correct the transcript</label>
+            <textarea
+              id="teach-correction"
+              class="transcribe-result"
+              bind:value={teachCorrectedText}
+              rows="6"
+            ></textarea>
+            <div class="hotkey-hint">Fix only the words you want Sagascript to learn. Punctuation, deletions and broad rewrites are ignored.</div>
+          </div>
+          <button class="primary teach-action" onclick={findTeachSuggestions}>
+            Find likely dictionary entries
+          </button>
+        {/if}
+
+        {#if teachSuggestions.length > 0}
+          <div class="result-label">Review suggestions</div>
+          <div class="hotkey-hint">Edit a preferred spelling here, or switch a replacement to a decoder-only hint. To change what was heard, edit the transcript above and analyze again.</div>
+          <div class="teach-suggestions">
+            {#each teachSuggestions as suggestion, index}
+              <div class="teach-suggestion">
+                <input
+                  type="checkbox"
+                  checked={teachSelected[index] ?? false}
+                  onchange={(event) => setTeachSuggestionSelected(index, (event.target as HTMLInputElement).checked)}
+                  aria-label={`Include ${suggestion.canonical}`}
+                />
+                <div class="teach-suggestion-body">
+                  <input
+                    class="teach-canonical"
+                    value={suggestion.canonical}
+                    oninput={(event) => editTeachSuggestionCanonical(index, (event.target as HTMLInputElement).value)}
+                    aria-label="Preferred spelling"
+                  />
+                  {#if suggestion.kind === "alias"}
+                    <span class="teach-alias"> heard as “{suggestion.observed}”</span>
+                  {:else}
+                    <span class="teach-alias"> decoder hint only</span>
+                  {/if}
+                  {#if suggestion.observed}
+                    <select
+                      class="teach-kind"
+                      value={suggestion.kind}
+                      onchange={(event) => editTeachSuggestionKind(index, (event.target as HTMLSelectElement).value as GlossarySuggestion["kind"])}
+                      aria-label="Dictionary entry type"
+                    >
+                      <option value="alias">Replace exact mishearing</option>
+                      <option value="hint_only">Decoder hint only</option>
+                    </select>
+                  {/if}
+                  <span class="teach-context">{suggestion.context}</span>
+                </div>
+              </div>
+            {/each}
+          </div>
+          <button
+            class="primary teach-action"
+            onclick={addTeachSuggestions}
+            disabled={!teachSuggestions.some((_, index) => teachSelected[index])}
+          >
+            Add selected to personal dictionary
+          </button>
         {/if}
 
       {:else if activeTab === "settings"}
@@ -1424,6 +1714,131 @@
 
   .transcribe-result:focus {
     border-color: var(--accent);
+  }
+
+  /* Teach tab */
+
+  .teach-intro {
+    margin-bottom: 18px;
+  }
+
+  .teach-title {
+    margin-bottom: 6px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .teach-message {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .teach-raw {
+    margin-top: 14px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .teach-raw div {
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    background: var(--bg-secondary);
+    white-space: pre-wrap;
+  }
+
+  .teach-editor {
+    margin-top: 14px;
+  }
+
+  .teach-editor .transcribe-result {
+    box-sizing: border-box;
+    max-height: 240px;
+  }
+
+  .teach-action {
+    width: 100%;
+    margin-top: 10px;
+  }
+
+  .teach-import-btn {
+    width: 100%;
+    margin-top: 8px;
+    padding: 9px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text-muted);
+  }
+
+  .teach-suggestions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .teach-suggestion {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-secondary);
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .teach-suggestion input {
+    margin-top: 2px;
+    accent-color: var(--accent);
+  }
+
+  .teach-suggestion-body {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .teach-canonical,
+  .teach-kind {
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+  }
+
+  .teach-canonical {
+    width: 100%;
+    margin-bottom: 5px;
+    padding: 5px 7px;
+    font-weight: 600;
+  }
+
+  .teach-kind {
+    display: block;
+    width: 100%;
+    margin-top: 7px;
+    padding: 5px 7px;
+    font-size: 12px;
+  }
+
+  .teach-alias {
+    color: var(--text-muted);
+  }
+
+  .teach-context {
+    display: block;
+    margin-top: 3px;
+    color: var(--text-muted);
+    font-size: 11px;
   }
 
   /* Test dictation section */

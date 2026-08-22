@@ -633,7 +633,11 @@ mod tests {
     fn valid_keys_count_matches_settings_struct() {
         // Internal fields that are serialized but not user-configurable via `config`.
         // These have dedicated CLI commands instead (e.g. `reset-onboarding`).
-        const INTERNAL_FIELDS: &[&str] = &["has_completed_onboarding", "hotkey_profiles"];
+        const INTERNAL_FIELDS: &[&str] = &[
+            "has_completed_onboarding",
+            "hotkey_profiles",
+            "profile_glossaries",
+        ];
 
         let settings = Settings::default();
         let json = serde_json::to_value(&settings).unwrap();

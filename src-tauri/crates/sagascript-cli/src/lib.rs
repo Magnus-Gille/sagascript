@@ -364,7 +364,7 @@ EXAMPLES:
     /// Manage the persistent personal dictionary used by live and batch transcription
     #[command(
         long_about = "Add preferred spellings and optional exact mishearings. Plain terms prime Whisper; aliases also authorize deterministic local corrections before output.",
-        after_long_help = "EXAMPLES:\n  sagascript glossary list\n  sagascript glossary add OpenRouter --alias 'open router' --alias 'open vrouter'\n  sagascript glossary add merge --alias merch\n  sagascript glossary remove OpenRouter\n  sagascript glossary clear --yes"
+        after_long_help = "EXAMPLES:\n  sagascript glossary list\n  sagascript glossary add OpenRouter --alias 'open router' --alias 'open vrouter'\n  sagascript glossary add merge --alias merch --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish --apply\n  sagascript glossary remove OpenRouter\n  sagascript glossary clear --yes"
     )]
     Glossary(glossary::GlossaryArgs),
 
@@ -979,11 +979,47 @@ mod tests {
         .unwrap();
         match cli.command.unwrap() {
             Command::Glossary(args) => match args.action {
-                glossary::GlossaryAction::Add { term, aliases } => {
+                glossary::GlossaryAction::Add { term, aliases, profile } => {
                     assert_eq!(term, "OpenRouter");
                     assert_eq!(aliases, vec!["open router", "open vrouter"]);
+                    assert!(profile.is_none());
                 }
                 _ => panic!("expected glossary add"),
+            },
+            _ => panic!("expected Glossary"),
+        }
+    }
+
+    #[test]
+    fn parse_glossary_suggest_is_dry_run_by_default_and_profile_scoped() {
+        let cli = Cli::try_parse_from([
+            "sagascript",
+            "glossary",
+            "suggest",
+            "heard.txt",
+            "--corrected",
+            "corrected.txt",
+            "--profile",
+            "swedish",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Command::Glossary(args) => match args.action {
+                glossary::GlossaryAction::Suggest {
+                    heard,
+                    corrected,
+                    profile,
+                    json,
+                    apply,
+                } => {
+                    assert_eq!(heard, PathBuf::from("heard.txt"));
+                    assert_eq!(corrected, PathBuf::from("corrected.txt"));
+                    assert_eq!(profile, "swedish");
+                    assert!(json);
+                    assert!(!apply);
+                }
+                _ => panic!("expected glossary suggest"),
             },
             _ => panic!("expected Glossary"),
         }

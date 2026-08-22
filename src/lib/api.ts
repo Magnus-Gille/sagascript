@@ -29,6 +29,7 @@ export interface Settings {
   hotkey: string;
   hotkey_profiles: HotkeyProfile[];
   initial_prompt: string;
+  profile_glossaries: Record<string, string>;
   beam_size: number;
   temperature_fallback: boolean;
   vad_enabled: boolean;
@@ -56,6 +57,18 @@ export interface HotkeyStatus {
   error: string | null;
   shortcut: string;
   shortcuts: string[];
+}
+
+export interface TrainingTranscript {
+  raw_text: string;
+  effective_text: string;
+}
+
+export interface GlossarySuggestion {
+  observed: string;
+  canonical: string;
+  kind: "alias" | "hint_only";
+  context: string;
 }
 
 export async function getState(): Promise<AppState> {
@@ -167,8 +180,40 @@ export async function startRecording(): Promise<void> {
   return invoke("start_recording");
 }
 
+export async function startTrainingRecording(profileId: string): Promise<void> {
+  return invoke("start_training_recording", { profileId });
+}
+
 export async function stopAndTranscribe(): Promise<string> {
   return invoke("stop_and_transcribe");
+}
+
+export async function stopAndTranscribeTraining(): Promise<TrainingTranscript> {
+  return invoke("stop_and_transcribe_training");
+}
+
+export async function transcribeTrainingFile(
+  filePath: string,
+  profileId: string
+): Promise<TrainingTranscript> {
+  return invoke("transcribe_training_file", { filePath, profileId });
+}
+
+export async function suggestTrainingGlossary(
+  heard: string,
+  corrected: string,
+  profileId: string
+): Promise<GlossarySuggestion[]> {
+  return invoke("suggest_training_glossary", { heard, corrected, profileId });
+}
+
+export async function applyTrainingGlossary(
+  heard: string,
+  corrected: string,
+  profileId: string,
+  accepted: GlossarySuggestion[]
+): Promise<void> {
+  return invoke("apply_training_glossary", { heard, corrected, profileId, accepted });
 }
 
 // -- Permission / platform queries (for onboarding) --

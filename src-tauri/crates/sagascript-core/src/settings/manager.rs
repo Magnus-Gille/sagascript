@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -513,6 +513,9 @@ pub struct Settings {
     /// Optional initial prompt that primes the decoder with domain vocabulary
     /// (names, jargon, spellings) for more accurate transcription. Empty = none.
     pub initial_prompt: String,
+    /// Additional personal dictionary entries scoped to a dictation profile.
+    /// The legacy `initial_prompt` remains the global compatibility layer.
+    pub profile_glossaries: BTreeMap<String, String>,
     /// Beam search width. 0 = greedy decoding (fastest); >=2 enables beam search
     /// (more accurate on hard audio, several times slower).
     pub beam_size: u32,
@@ -539,6 +542,7 @@ impl Default for Settings {
             hotkey: "Control+Shift+Space".to_string(),
             hotkey_profiles: Vec::new(),
             initial_prompt: String::new(),
+            profile_glossaries: BTreeMap::new(),
             beam_size: 0,
             temperature_fallback: true,
             vad_enabled: false,
@@ -548,6 +552,30 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Combine the legacy global dictionary with the selected profile's
+    /// private additions. Keeping the legacy value first preserves existing
+    /// decoder hints while the glossary matcher fails closed on conflicts.
+    pub fn effective_glossary_source(&self, profile_id: Option<&str>) -> String {
+        let global = self.initial_prompt.trim();
+        let scoped_profile_id = profile_id.filter(|requested_id| {
+            self.resolved_hotkey_profiles().iter().any(|profile| {
+                profile.id == **requested_id && profile.language != Language::Auto
+            })
+        });
+        let scoped = scoped_profile_id
+            .and_then(|id| self.profile_glossaries.get(id))
+            .map(String::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+
+        match (global.is_empty(), scoped.is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => global.to_string(),
+            (true, false) => scoped.to_string(),
+            (false, false) => format!("{global}\n{scoped}"),
+        }
+    }
+
     /// Returns the effective model considering auto-selection
     pub fn effective_model(&self) -> WhisperModel {
         self.effective_model_for(self.language)
@@ -603,6 +631,20 @@ impl Settings {
 
     pub fn replace_hotkey_profiles(&mut self, profiles: Vec<HotkeyProfile>) -> Result<(), String> {
         Self::validate_hotkey_profiles(&profiles)?;
+        let current_ids: HashSet<String> = self
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .map(|profile| profile.id)
+            .collect();
+        if let Some(profile) = profiles.iter().find(|profile| {
+            !current_ids.contains(&profile.id)
+                && self.profile_glossaries.contains_key(&profile.id)
+        }) {
+            return Err(format!(
+                "Profile id '{}' has an inactive personal dictionary; choose a new id to avoid reactivating old aliases",
+                profile.id
+            ));
+        }
         let legacy = profiles.iter().find(|profile| profile.id == "default").unwrap_or(&profiles[0]);
         self.hotkey = legacy.shortcut.clone();
         self.language = legacy.language;
@@ -1064,9 +1106,114 @@ mod tests {
         assert!(s.auto_select_model);
         assert_eq!(s.hotkey, "Control+Shift+Space");
         assert_eq!(s.initial_prompt, "");
+        assert!(s.profile_glossaries.is_empty());
         assert_eq!(s.beam_size, 0);
         assert!(s.temperature_fallback);
         assert!(!s.vad_enabled);
+    }
+
+    #[test]
+    fn effective_glossary_combines_global_and_selected_profile_only() {
+        let mut settings = Settings {
+            initial_prompt: "Codex = code x".to_string(),
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "swedish".to_string(),
+                    name: "Swedish".to_string(),
+                    shortcut: "Control+Shift+Space".to_string(),
+                    language: Language::Swedish,
+                },
+                HotkeyProfile {
+                    id: "english".to_string(),
+                    name: "English".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                },
+            ],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "mergea = mördsa".to_string());
+        settings
+            .profile_glossaries
+            .insert("english".to_string(), "Lovable = love a ball".to_string());
+
+        assert_eq!(
+            settings.effective_glossary_source(Some("swedish")),
+            "Codex = code x\nmergea = mördsa"
+        );
+        assert_eq!(
+            settings.effective_glossary_source(Some("english")),
+            "Codex = code x\nLovable = love a ball"
+        );
+        assert_eq!(settings.effective_glossary_source(None), "Codex = code x");
+    }
+
+    #[test]
+    fn effective_glossary_uses_scoped_source_without_legacy_global_entries() {
+        let mut settings = Settings::default();
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "Magnus Gille = Magnus Jille".to_string());
+
+        assert_eq!(
+            settings.effective_glossary_source(Some("default")),
+            "Magnus Gille = Magnus Jille"
+        );
+    }
+
+    #[test]
+    fn effective_glossary_ignores_unknown_and_auto_profile_entries() {
+        let mut settings = Settings {
+            language: Language::Auto,
+            initial_prompt: "Codex = code x".to_string(),
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+        settings
+            .profile_glossaries
+            .insert("removed".to_string(), "Lovable = love a ball".to_string());
+
+        assert_eq!(
+            settings.effective_glossary_source(Some("default")),
+            "Codex = code x"
+        );
+        assert_eq!(
+            settings.effective_glossary_source(Some("removed")),
+            "Codex = code x"
+        );
+    }
+
+    #[test]
+    fn removed_profile_glossary_stays_inert_and_reserves_its_old_id() {
+        let mut settings = Settings::default();
+        settings
+            .profile_glossaries
+            .insert("removed".to_string(), "Lovable = love a ball".to_string());
+
+        let error = settings
+            .replace_hotkey_profiles(vec![
+                HotkeyProfile::legacy_default(
+                    "Control+Shift+Space".to_string(),
+                    Language::Swedish,
+                ),
+                HotkeyProfile {
+                    id: "removed".to_string(),
+                    name: "Reused".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                },
+            ])
+            .unwrap_err();
+
+        assert!(error.contains("inactive personal dictionary"));
+        assert_eq!(
+            settings.profile_glossaries.get("removed").map(String::as_str),
+            Some("Lovable = love a ball")
+        );
     }
 
     #[test]

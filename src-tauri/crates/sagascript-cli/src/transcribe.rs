@@ -8,7 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use sagascript_core::audio::decoder::{SUPPORTED_EXTENSIONS, decode_audio_file};
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, Settings, WhisperModel};
+use sagascript_core::settings::{HotkeyProfile, Language, Settings, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
     CoverageDiagnostics, LanguageDetection, LanguageRegionDiagnostics, LanguageWindow,
     TranscriptionWarning, analyze_coverage, analyze_language_windows, analyze_repetition,
@@ -33,6 +33,10 @@ pub struct TranscribeArgs {
     /// Language for transcription [possible values: en, sv, no, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
+
+    /// Use this dictation profile's language and personal dictionary
+    #[arg(long, value_name = "ID", conflicts_with = "language")]
+    pub profile: Option<String>,
 
     /// Whisper model ID to use [see: sagascript list-models]
     #[arg(short, long, value_name = "MODEL_ID")]
@@ -153,9 +157,15 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     }
 
     let stored = sagascript_core::settings::store::load();
-    let language = match &args.language {
-        Some(l) => parse_language(l)?,
-        None => stored.language,
+    let profile = args
+        .profile
+        .as_deref()
+        .map(|profile_id| resolve_profile(&stored, profile_id))
+        .transpose()?;
+    let language = match (&profile, &args.language) {
+        (Some(profile), _) => profile.language,
+        (None, Some(language)) => parse_language(language)?,
+        (None, None) => stored.language,
     };
     let model = resolve_effective_model(
         args.model.as_deref(),
@@ -166,10 +176,11 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
 
     // Resolve and validate this before decoding or loading a model: an invalid
     // opt-in correction request should not spend time on transcription first.
+    let stored_prompt = stored.effective_glossary_source(args.profile.as_deref());
     let effective_prompt = resolve_effective_prompt(
         args.prompt.as_deref(),
         args.prompt_file.as_deref(),
-        &stored.initial_prompt,
+        &stored_prompt,
     )?;
     let glossary = Glossary::parse(effective_prompt.as_deref().unwrap_or_default());
     let correction_vocabulary = if args.correct_hints {
@@ -1059,6 +1070,25 @@ fn parse_diarize_threshold(s: &str) -> Result<f32, String> {
         ));
     }
     Ok(value)
+}
+
+pub(crate) fn resolve_profile(
+    settings: &Settings,
+    profile_id: &str,
+) -> Result<HotkeyProfile, DictationError> {
+    let profile = settings
+        .resolved_hotkey_profiles()
+        .into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| {
+            DictationError::SettingsError(format!("Unknown dictation profile '{profile_id}'"))
+        })?;
+    if profile.language == Language::Auto {
+        return Err(DictationError::SettingsError(
+            "Profile-scoped dictionaries require an explicit language".to_string(),
+        ));
+    }
+    Ok(profile)
 }
 
 pub fn parse_language(s: &str) -> Result<Language, DictationError> {
