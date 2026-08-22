@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsString,
     fs::OpenOptions,
     path::{Path, PathBuf},
 };
@@ -10,6 +11,11 @@ use crate::settings::Settings;
 const APP_IDENTIFIER: &str = "ai.gille.sagascript";
 const LEGACY_APP_IDENTIFIERS: &[&str] = &["com.sagascript.app"];
 const SETTINGS_FILENAME: &str = "sagascript-settings.json";
+/// Optional exact settings-file location for isolated CLI sessions and tests.
+///
+/// When set, legacy settings migration is disabled so an isolated session can
+/// never import or mutate the user's normal application settings by accident.
+pub const SETTINGS_PATH_ENV: &str = "SAGASCRIPT_SETTINGS_PATH";
 const LEGACY_ONBOARDING_KEY: &str = "hasCompletedOnboarding";
 const ONBOARDING_KEY: &str = "has_completed_onboarding";
 
@@ -30,14 +36,34 @@ pub fn app_data_dir() -> PathBuf {
 
 /// Returns the full path to the settings file.
 pub fn settings_path() -> PathBuf {
-    app_data_dir().join(SETTINGS_FILENAME)
+    configured_settings_location().0
 }
 
 fn legacy_settings_paths() -> impl Iterator<Item = PathBuf> {
-    let base = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    LEGACY_APP_IDENTIFIERS
+    configured_settings_location().1.into_iter()
+}
+
+fn configured_settings_location() -> (PathBuf, Vec<PathBuf>) {
+    settings_location(
+        std::env::var_os(SETTINGS_PATH_ENV),
+        dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")),
+    )
+}
+
+fn settings_location(
+    override_path: Option<OsString>,
+    data_dir: PathBuf,
+) -> (PathBuf, Vec<PathBuf>) {
+    if let Some(override_path) = override_path.filter(|value| !value.is_empty()) {
+        return (PathBuf::from(override_path), Vec::new());
+    }
+
+    let settings_path = data_dir.join(APP_IDENTIFIER).join(SETTINGS_FILENAME);
+    let legacy_paths = LEGACY_APP_IDENTIFIERS
         .iter()
-        .map(move |identifier| base.join(identifier).join(SETTINGS_FILENAME))
+        .map(|identifier| data_dir.join(identifier).join(SETTINGS_FILENAME))
+        .collect();
+    (settings_path, legacy_paths)
 }
 
 /// Caller must hold the destination's settings lock.
@@ -351,10 +377,41 @@ mod tests {
     }
 
     #[test]
-    fn settings_path_is_under_app_data_dir() {
-        let p = settings_path();
+    fn default_settings_path_is_under_app_data_dir() {
+        let data_dir = PathBuf::from("/example/application-support");
+        let (p, legacy) = settings_location(None, data_dir.clone());
         assert!(p.ends_with(SETTINGS_FILENAME));
         assert!(p.parent().unwrap().ends_with(APP_IDENTIFIER));
+        assert_eq!(
+            legacy,
+            vec![data_dir
+                .join(LEGACY_APP_IDENTIFIERS[0])
+                .join(SETTINGS_FILENAME)]
+        );
+    }
+
+    #[test]
+    fn explicit_settings_path_disables_legacy_migration_sources() {
+        let isolated = PathBuf::from("/tmp/sagascript-cli-test/settings.json");
+        let (path, legacy) = settings_location(
+            Some(isolated.clone().into_os_string()),
+            PathBuf::from("/real/application-support"),
+        );
+
+        assert_eq!(path, isolated);
+        assert!(legacy.is_empty());
+    }
+
+    #[test]
+    fn empty_settings_path_override_uses_the_normal_location() {
+        let data_dir = PathBuf::from("/example/application-support");
+        let (path, legacy) = settings_location(Some(OsString::new()), data_dir.clone());
+
+        assert_eq!(
+            path,
+            data_dir.join(APP_IDENTIFIER).join(SETTINGS_FILENAME)
+        );
+        assert_eq!(legacy.len(), LEGACY_APP_IDENTIFIERS.len());
     }
 
     #[test]

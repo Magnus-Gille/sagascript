@@ -56,7 +56,23 @@ additional confidence-gated one-edit correction for plain single-word hints.
   atomically save the displayed candidates, or `--json` for machine-readable
   output. The selected profile must have an explicit language and its model
   must already be downloaded.
+- Set `SAGASCRIPT_SETTINGS_PATH=/absolute/path/to/settings.json` to run an
+  isolated CLI session against that exact settings file. While the override is
+  active, Sagascript does not inspect or migrate legacy settings. This is
+  useful for automation, end-to-end tests, and disposable training profiles.
 - `sagascript config set initial_prompt ...` remains supported for scripts.
+
+The CLI exposes the complete review workflow without requiring an interactive
+prompt. Run `glossary suggest` as a dry run, then either apply every displayed
+candidate with `--apply` or save only selected/edited candidates explicitly:
+
+```console
+sagascript glossary add Quuxmark --alias testar --profile swedish
+sagascript glossary add Loveable --profile swedish
+```
+
+The first command accepts an alias replacement; the second deliberately
+downgrades a candidate to a decoder-only hint. Omitting a candidate rejects it.
 
 Suggestion generation uses a deterministic Unicode-aware word diff. Bounded
 replacements may become aliases, insertions may become hint-only entries, and
