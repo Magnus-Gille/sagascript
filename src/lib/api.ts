@@ -184,6 +184,10 @@ export async function startTrainingRecording(profileId: string): Promise<void> {
   return invoke("start_training_recording", { profileId });
 }
 
+export async function cancelRecording(): Promise<void> {
+  return invoke("cancel_recording");
+}
+
 export async function stopAndTranscribe(): Promise<string> {
   return invoke("stop_and_transcribe");
 }

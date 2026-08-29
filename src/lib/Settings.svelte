@@ -23,6 +23,7 @@
     requestAccessibilityPermission,
     startRecording,
     startTrainingRecording,
+    cancelRecording,
     stopAndTranscribe,
     stopAndTranscribeTraining,
     transcribeTrainingFile,
@@ -403,6 +404,18 @@
       } catch (e: any) {
         teachError = typeof e === "string" ? e : e?.message || "Failed to start recording";
       }
+    }
+  }
+
+  async function onTeachCancel() {
+    teachError = "";
+    teachMessage = "";
+    try {
+      await cancelRecording();
+      teachRecording = false;
+      teachMessage = "Training recording cancelled.";
+    } catch (e: any) {
+      teachError = typeof e === "string" ? e : e?.message || "Failed to cancel recording";
     }
   }
 
@@ -956,6 +969,11 @@
             Start training recording
           {/if}
         </button>
+        {#if teachRecording}
+          <button class="teach-import-btn" onclick={onTeachCancel}>
+            Cancel training recording
+          </button>
+        {/if}
         <button
           class="teach-import-btn"
           onclick={onTeachPickFile}

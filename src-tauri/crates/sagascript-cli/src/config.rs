@@ -197,7 +197,12 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             Ok(())
         }
         ProfileAction::Remove { id } => {
-            let mut profiles = settings::store::load().resolved_hotkey_profiles();
+            let stored = settings::store::load();
+            let dictionary_kept = stored
+                .profile_glossaries
+                .get(&id)
+                .is_some_and(|source| !source.trim().is_empty());
+            let mut profiles = stored.resolved_hotkey_profiles();
             let original_len = profiles.len();
             profiles.retain(|profile| profile.id != id);
             if profiles.len() == original_len {
@@ -205,6 +210,11 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             }
             persist_profiles(profiles)?;
             eprintln!("Removed profile {id}");
+            if dictionary_kept {
+                eprintln!(
+                    "Its personal dictionary was kept. Inspect it with `sagascript glossary list --profile {id}` or remove it with `sagascript glossary clear --profile {id}`."
+                );
+            }
             Ok(())
         }
     }

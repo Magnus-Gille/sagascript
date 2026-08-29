@@ -310,12 +310,11 @@ fn glossary_source<'a>(
 ) -> Result<&'a str, DictationError> {
     match profile {
         Some(profile) => {
+            if let Some(source) = stored.profile_glossaries.get(profile) {
+                return Ok(source);
+            }
             validate_profile(stored, profile)?;
-            Ok(stored
-                .profile_glossaries
-                .get(profile)
-                .map(String::as_str)
-                .unwrap_or_default())
+            Ok("")
         }
         None => Ok(&stored.initial_prompt),
     }
@@ -327,7 +326,9 @@ fn glossary_source_mut<'a>(
 ) -> Result<&'a mut String, String> {
     match profile {
         Some(profile) => {
-            validate_profile(stored, profile).map_err(|error| error.to_string())?;
+            if !stored.profile_glossaries.contains_key(profile) {
+                validate_profile(stored, profile).map_err(|error| error.to_string())?;
+            }
             Ok(stored.profile_glossaries.entry(profile.to_string()).or_default())
         }
         None => Ok(&mut stored.initial_prompt),
@@ -391,5 +392,22 @@ mod tests {
         assert!(validate_component("term", "OpenRouter").is_ok());
         assert!(validate_component("alias", "open router").is_ok());
         assert!(validate_component("alias", "open router | router").is_err());
+    }
+
+    #[test]
+    fn orphaned_profile_dictionary_remains_listable_and_clearable() {
+        let mut stored = settings::Settings::default();
+        stored
+            .profile_glossaries
+            .insert("removed".to_string(), "Lovable = love a ball".to_string());
+
+        assert_eq!(
+            glossary_source(&stored, Some("removed")).unwrap(),
+            "Lovable = love a ball"
+        );
+        glossary_source_mut(&mut stored, Some("removed"))
+            .unwrap()
+            .clear();
+        assert_eq!(stored.profile_glossaries.get("removed").unwrap(), "");
     }
 }

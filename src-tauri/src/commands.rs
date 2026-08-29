@@ -525,7 +525,7 @@ pub async fn start_training_recording(
         .into_iter()
         .find(|profile| profile.id == profile_id)
         .ok_or_else(|| format!("Unknown dictation profile '{profile_id}'"))?;
-    gui_start_recording_result(ctrl.start_recording_for_profile(profile))
+    gui_start_recording_result(ctrl.start_training_recording_for_profile(profile))
 }
 
 fn gui_start_recording_result(
@@ -559,7 +559,7 @@ pub async fn stop_and_transcribe(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
 ) -> Result<String, String> {
-    stop_and_transcribe_training(controller, whisper)
+    stop_and_transcribe_impl(controller, whisper, true)
         .await
         .map(|transcript| transcript.effective_text)
 }
@@ -575,18 +575,34 @@ pub async fn stop_and_transcribe_training(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
 ) -> Result<TrainingTranscript, String> {
+    stop_and_transcribe_impl(controller, whisper, false).await
+}
+
+fn not_recording_result(allow_empty: bool) -> Result<TrainingTranscript, String> {
+    if allow_empty {
+        Ok(TrainingTranscript {
+            raw_text: String::new(),
+            effective_text: String::new(),
+        })
+    } else {
+        Err("No training recording is active".to_string())
+    }
+}
+
+async fn stop_and_transcribe_impl(
+    controller: State<'_, SharedController>,
+    whisper: State<'_, SharedWhisper>,
+    allow_empty_not_recording: bool,
+) -> Result<TrainingTranscript, String> {
     let (audio, language, effective_model, opts, glossary) = {
         let mut ctrl = controller.lock().unwrap();
-        // Guard against a late/duplicate invoke racing the hotkey stop path
-        // (finding 3): if we're not recording, do nothing and return Ok-empty
-        // (NOT Err — an error would surface a misleading toast in the UI) so an
-        // in-flight transcription's state/last_error is not clobbered.
+        // A late/duplicate normal stop racing the hotkey path remains an
+        // Ok-empty no-op so it cannot clobber an in-flight transcription.
+        // Teach owns its recording lifecycle, so a missing recording there is
+        // an actionable UI error instead of a silently accepted empty result.
         let audio = match ctrl.stop_recording_guarded() {
             StopRecordingOutcome::NotRecording => {
-                return Ok(TrainingTranscript {
-                    raw_text: String::new(),
-                    effective_text: String::new(),
-                });
+                return not_recording_result(allow_empty_not_recording)
             }
             // Capture/resample failure (finding 4): the controller already
             // recorded the error and returned to Idle; surface the real error.
@@ -748,6 +764,24 @@ pub async fn transcribe_training_file(
         effective_text: apply_glossary(raw_text.clone(), &glossary),
         raw_text,
     })
+}
+
+#[cfg(test)]
+mod training_stop_tests {
+    use super::not_recording_result;
+
+    #[test]
+    fn duplicate_normal_stop_remains_a_noop() {
+        let result = not_recording_result(true).unwrap();
+        assert!(result.raw_text.is_empty());
+        assert!(result.effective_text.is_empty());
+    }
+
+    #[test]
+    fn training_stop_without_active_recording_is_an_error() {
+        let error = not_recording_result(false).unwrap_err();
+        assert!(error.contains("No training recording"));
+    }
 }
 
 #[tauri::command]

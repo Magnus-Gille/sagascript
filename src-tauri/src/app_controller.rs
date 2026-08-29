@@ -75,6 +75,7 @@ pub struct AppController {
     last_error: Option<String>,
     model_ready: bool,
     active_hotkey_profile: Option<HotkeyProfile>,
+    training_recording: bool,
 }
 
 impl AppController {
@@ -101,6 +102,7 @@ impl AppController {
             last_error: None,
             model_ready: false,
             active_hotkey_profile: None,
+            training_recording: false,
         }
     }
 
@@ -176,6 +178,7 @@ impl AppController {
             }
             HotkeyMode::Toggle => {
                 if self.state.is_recording()
+                    && !self.training_recording
                     && self
                         .active_hotkey_profile
                         .as_ref()
@@ -195,7 +198,9 @@ impl AppController {
 
     /// Handle hotkey up event
     pub fn should_stop_on_key_up(&self) -> bool {
-        self.settings.hotkey_mode == HotkeyMode::PushToTalk && self.state.is_recording()
+        self.settings.hotkey_mode == HotkeyMode::PushToTalk
+            && self.state.is_recording()
+            && !self.training_recording
     }
 
     pub fn should_stop_profile_on_key_up(&self, shortcut: &str) -> bool {
@@ -251,12 +256,27 @@ impl AppController {
             "Recording profile selected"
         );
         self.active_hotkey_profile = Some(profile);
+        self.training_recording = false;
         self.state = AppState::Recording;
         self.recording_start = Some(Instant::now());
         self.last_error = None;
 
         info!("Recording started");
         Ok(true)
+    }
+
+    /// Start a Teach Sagascript recording that only the Teach UI may stop.
+    /// Global hotkey releases and toggle presses must not route this audio
+    /// through the normal dictation/auto-paste path.
+    pub fn start_training_recording_for_profile(
+        &mut self,
+        profile: HotkeyProfile,
+    ) -> Result<bool, DictationError> {
+        let started = self.start_recording_for_profile(profile)?;
+        if started {
+            self.training_recording = true;
+        }
+        Ok(started)
     }
 
     /// Stop recording and return the captured 16 kHz samples.
@@ -309,6 +329,7 @@ impl AppController {
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
         self.active_hotkey_profile = None;
+        self.training_recording = false;
         self.logging.end_dictation_session();
     }
 
@@ -317,6 +338,7 @@ impl AppController {
         self.last_error = Some(error.to_string());
         self.state = AppState::Idle;
         self.active_hotkey_profile = None;
+        self.training_recording = false;
         self.logging.end_dictation_session();
     }
 
@@ -356,6 +378,7 @@ impl AppController {
             let _ = self.audio.stop_capture();
             self.state = AppState::Idle;
             self.active_hotkey_profile = None;
+            self.training_recording = false;
             self.logging.end_dictation_session();
             info!("Recording cancelled");
         }
@@ -610,6 +633,42 @@ mod tests {
         ctrl.state = AppState::Recording;
         let result = ctrl.handle_hotkey_down().unwrap();
         assert_eq!(result, HotkeyDownResult::StopRecording);
+    }
+
+    #[test]
+    fn training_recording_ignores_toggle_hotkey_stop() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        ctrl.state = AppState::Recording;
+        ctrl.training_recording = true;
+
+        assert_eq!(
+            ctrl.handle_hotkey_down().unwrap(),
+            HotkeyDownResult::NoOp
+        );
+    }
+
+    #[test]
+    fn training_recording_ignores_push_to_talk_release() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        ctrl.state = AppState::Recording;
+        ctrl.training_recording = true;
+
+        assert!(!ctrl.should_stop_on_key_up());
+    }
+
+    #[test]
+    fn cancelling_training_recording_restores_normal_hotkey_lifecycle() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        ctrl.state = AppState::Recording;
+        ctrl.training_recording = true;
+
+        ctrl.cancel_recording();
+
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert!(!ctrl.training_recording);
     }
 
     #[test]

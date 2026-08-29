@@ -631,14 +631,32 @@ impl Settings {
 
     pub fn replace_hotkey_profiles(&mut self, profiles: Vec<HotkeyProfile>) -> Result<(), String> {
         Self::validate_hotkey_profiles(&profiles)?;
-        let current_ids: HashSet<String> = self
-            .resolved_hotkey_profiles()
-            .into_iter()
-            .map(|profile| profile.id)
+        let current_profiles = self.resolved_hotkey_profiles();
+        if let Some(profile) = profiles.iter().find(|profile| {
+            current_profiles.iter().any(|current| {
+                current.id == profile.id
+                    && current.language != profile.language
+                    && self
+                        .profile_glossaries
+                        .get(&profile.id)
+                        .is_some_and(|source| !source.trim().is_empty())
+            })
+        }) {
+            return Err(format!(
+                "Profile '{}' has a personal dictionary; clear it before changing the profile language",
+                profile.id
+            ));
+        }
+        let current_ids: HashSet<&str> = current_profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
             .collect();
         if let Some(profile) = profiles.iter().find(|profile| {
-            !current_ids.contains(&profile.id)
-                && self.profile_glossaries.contains_key(&profile.id)
+            !current_ids.contains(profile.id.as_str())
+                && self
+                    .profile_glossaries
+                    .get(&profile.id)
+                    .is_some_and(|source| !source.trim().is_empty())
         }) {
             return Err(format!(
                 "Profile id '{}' has an inactive personal dictionary; choose a new id to avoid reactivating old aliases",
@@ -1214,6 +1232,51 @@ mod tests {
             settings.profile_glossaries.get("removed").map(String::as_str),
             Some("Lovable = love a ball")
         );
+    }
+
+    #[test]
+    fn empty_removed_profile_glossary_does_not_reserve_its_old_id() {
+        let mut settings = Settings::default();
+        settings
+            .profile_glossaries
+            .insert("removed".to_string(), "  \n".to_string());
+
+        settings
+            .replace_hotkey_profiles(vec![
+                HotkeyProfile::legacy_default(
+                    "Control+Shift+Space".to_string(),
+                    Language::Swedish,
+                ),
+                HotkeyProfile {
+                    id: "removed".to_string(),
+                    name: "Reused".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                },
+            ])
+            .unwrap();
+    }
+
+    #[test]
+    fn profile_with_dictionary_cannot_change_language_in_place() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "mergea = mördsa".to_string());
+
+        let error = settings
+            .replace_hotkey_profiles(vec![HotkeyProfile::legacy_default(
+                "Control+Shift+Space".to_string(),
+                Language::English,
+            )])
+            .unwrap_err();
+
+        assert!(error.contains("personal dictionary"));
+        assert!(error.contains("language"));
+        assert_eq!(settings.language, Language::Swedish);
     }
 
     #[test]
