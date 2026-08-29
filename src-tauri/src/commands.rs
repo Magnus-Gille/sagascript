@@ -19,14 +19,23 @@ use sagascript_core::audio::decoder;
 use sagascript_core::settings::{
     validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
 };
-use sagascript_core::transcription::Glossary;
+use sagascript_core::transcription::{
+    suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
+};
 use sagascript_core::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
 
 /// Build the per-transcription options from the current settings. Resolves the
 /// VAD model path only when VAD is enabled and the model is present (otherwise
 /// VAD is silently skipped — whisper would fail on a missing model).
 pub(crate) fn build_transcribe_options(settings: &Settings) -> TranscribeOptions {
-    let prompt = Glossary::parse(&settings.initial_prompt).decoder_prompt();
+    build_transcribe_options_for_profile(settings, None)
+}
+
+pub(crate) fn build_transcribe_options_for_profile(
+    settings: &Settings,
+    profile_id: Option<&str>,
+) -> TranscribeOptions {
+    let prompt = Glossary::parse(&settings.effective_glossary_source(profile_id)).decoder_prompt();
     let vad_model_path = if settings.vad_enabled {
         let p = model::vad_model_path();
         if p.exists() {
@@ -89,6 +98,41 @@ mod glossary_options_tests {
             ..Settings::default()
         };
         assert_eq!(build_transcribe_options(&settings).prompt.as_deref(), Some("OpenRouter, merge"));
+    }
+
+    #[test]
+    fn live_options_include_only_the_selected_profile_glossary() {
+        let mut settings = Settings {
+            initial_prompt: "Codex = code x".to_string(),
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "svenska".to_string(),
+                    name: "Svenska".to_string(),
+                    shortcut: "Control+Shift+Space".to_string(),
+                    language: Language::Swedish,
+                },
+                HotkeyProfile {
+                    id: "english".to_string(),
+                    name: "English".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                },
+            ],
+            ..Settings::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("svenska".to_string(), "mergea = mördsa".to_string());
+        settings
+            .profile_glossaries
+            .insert("english".to_string(), "Lovable = love a ball".to_string());
+
+        assert_eq!(
+            build_transcribe_options_for_profile(&settings, Some("svenska"))
+                .prompt
+                .as_deref(),
+            Some("Codex, mergea")
+        );
     }
 
     #[test]
@@ -468,6 +512,22 @@ pub async fn start_recording(controller: State<'_, SharedController>) -> Result<
     gui_start_recording_result(ctrl.start_recording())
 }
 
+#[tauri::command]
+pub async fn start_training_recording(
+    controller: State<'_, SharedController>,
+    profile_id: String,
+) -> Result<(), String> {
+    let mut ctrl = controller.lock().unwrap();
+    ensure_known_profile(ctrl.settings(), &profile_id)?;
+    let profile = ctrl
+        .settings()
+        .resolved_hotkey_profiles()
+        .into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| format!("Unknown dictation profile '{profile_id}'"))?;
+    gui_start_recording_result(ctrl.start_training_recording_for_profile(profile))
+}
+
 fn gui_start_recording_result(
     result: Result<bool, sagascript_core::error::DictationError>,
 ) -> Result<(), String> {
@@ -499,31 +559,71 @@ pub async fn stop_and_transcribe(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
 ) -> Result<String, String> {
+    stop_and_transcribe_impl(controller, whisper, true)
+        .await
+        .map(|transcript| transcript.effective_text)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TrainingTranscript {
+    pub raw_text: String,
+    pub effective_text: String,
+}
+
+#[tauri::command]
+pub async fn stop_and_transcribe_training(
+    controller: State<'_, SharedController>,
+    whisper: State<'_, SharedWhisper>,
+) -> Result<TrainingTranscript, String> {
+    stop_and_transcribe_impl(controller, whisper, false).await
+}
+
+fn not_recording_result(allow_empty: bool) -> Result<TrainingTranscript, String> {
+    if allow_empty {
+        Ok(TrainingTranscript {
+            raw_text: String::new(),
+            effective_text: String::new(),
+        })
+    } else {
+        Err("No training recording is active".to_string())
+    }
+}
+
+async fn stop_and_transcribe_impl(
+    controller: State<'_, SharedController>,
+    whisper: State<'_, SharedWhisper>,
+    allow_empty_not_recording: bool,
+) -> Result<TrainingTranscript, String> {
     let (audio, language, effective_model, opts, glossary) = {
         let mut ctrl = controller.lock().unwrap();
-        // Guard against a late/duplicate invoke racing the hotkey stop path
-        // (finding 3): if we're not recording, do nothing and return Ok-empty
-        // (NOT Err — an error would surface a misleading toast in the UI) so an
-        // in-flight transcription's state/last_error is not clobbered.
+        // A late/duplicate normal stop racing the hotkey path remains an
+        // Ok-empty no-op so it cannot clobber an in-flight transcription.
+        // Teach owns its recording lifecycle, so a missing recording there is
+        // an actionable UI error instead of a silently accepted empty result.
         let audio = match ctrl.stop_recording_guarded() {
-            StopRecordingOutcome::NotRecording => return Ok(String::new()),
+            StopRecordingOutcome::NotRecording => {
+                return not_recording_result(allow_empty_not_recording)
+            }
             // Capture/resample failure (finding 4): the controller already
             // recorded the error and returned to Idle; surface the real error.
             StopRecordingOutcome::Failed(msg) => return Err(msg),
             StopRecordingOutcome::Stopped(audio) => audio,
         };
         let language = ctrl.language();
-        let effective_model = ctrl.settings().effective_model();
-        let opts = build_transcribe_options(ctrl.settings());
-        let glossary = Glossary::parse(&ctrl.settings().initial_prompt);
+        let effective_model = ctrl.settings().effective_model_for(language);
+        let profile_id = ctrl.active_hotkey_profile().map(|profile| profile.id.as_str());
+        let opts = build_transcribe_options_for_profile(ctrl.settings(), profile_id);
+        let glossary = Glossary::parse(&ctrl.settings().effective_glossary_source(profile_id));
         (audio, language, effective_model, opts, glossary)
     };
 
     if audio.is_empty() {
-        return controller
+        let error = "No audio captured".to_string();
+        let completion = controller
             .lock()
             .unwrap()
-            .finish_transcription(Err("No audio captured".to_string()));
+            .finish_transcription(Err(error.clone()));
+        return Err(completion.err().unwrap_or(error));
     }
 
     // Every outcome after recording stops must flow through
@@ -568,14 +668,120 @@ pub async fn stop_and_transcribe(
                 ))
             }
         }
-    }
-    .map(|text| apply_glossary(text, &glossary));
+    };
+
+    let training_result = result.map(|raw_text| TrainingTranscript {
+        effective_text: apply_glossary(raw_text.clone(), &glossary),
+        raw_text,
+    });
 
     // NOTE: auto-paste is NOT done here — enigo's macOS TIS APIs crash if
     // called from a tokio worker thread (SIGTRAP in dispatch_assert_queue).
     // The hotkey path in main.rs handles paste via run_on_main_thread(). This
     // command returns the text to the frontend for display instead.
-    controller.lock().unwrap().finish_transcription(result)
+    let completion = training_result
+        .as_ref()
+        .map(|transcript| transcript.effective_text.clone())
+        .map_err(Clone::clone);
+    controller.lock().unwrap().finish_transcription(completion)?;
+    training_result
+}
+
+#[tauri::command]
+pub async fn transcribe_training_file(
+    app: tauri::AppHandle,
+    controller: State<'_, SharedController>,
+    whisper: State<'_, SharedWhisper>,
+    file_path: String,
+    profile_id: String,
+) -> Result<TrainingTranscript, String> {
+    use tauri::Emitter;
+
+    let path = std::path::PathBuf::from(file_path);
+    let audio = tokio::task::spawn_blocking(move || decoder::decode_audio_file(&path))
+        .await
+        .map_err(|error| format!("Decode task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
+    if audio.is_empty() {
+        return Err("No audio decoded from file".to_string());
+    }
+
+    let (language, effective_model, opts, glossary) = {
+        let ctrl = controller.lock().unwrap();
+        ensure_known_profile(ctrl.settings(), &profile_id)?;
+        let profile = ctrl
+            .settings()
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .find(|profile| profile.id == profile_id)
+            .expect("validated profile must exist");
+        (
+            profile.language,
+            ctrl.settings().effective_model_for(profile.language),
+            build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id)),
+            Glossary::parse(
+                &ctrl
+                    .settings()
+                    .effective_glossary_source(Some(&profile_id)),
+            ),
+        )
+    };
+
+    if whisper.needs_reload(effective_model) {
+        let _ = app.emit(crate::events::event::STATE_CHANGED, "loading_model");
+    }
+    if let Err(error) = whisper.ensure_model(effective_model) {
+        let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+        return Err(error.to_string());
+    }
+    let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
+
+    let whisper_ref = whisper.inner().clone();
+    let progress_app = app.clone();
+    let duration_seconds = (audio.len() / 16_000) as u64;
+    let timeout = Duration::from_secs((duration_seconds * 6).max(TRANSCRIPTION_TIMEOUT_SECS));
+    let mut task = tokio::task::spawn_blocking(move || {
+        whisper_ref.transcribe_sync_with_options(&audio, language, &opts, move |progress| {
+            let _ = progress_app.emit("transcription-progress", progress);
+        })
+    });
+
+    let result = match tokio::time::timeout(timeout, &mut task).await {
+        Ok(Ok(result)) => result.map_err(|error| error.to_string()),
+        Ok(Err(error)) => Err(format!("Transcription task failed: {error}")),
+        Err(_) => {
+            whisper.request_abort();
+            let _ = tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut task).await;
+            Err(format!(
+                "Training transcription timed out after {}s",
+                timeout.as_secs()
+            ))
+        }
+    };
+    let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+
+    result.map(|raw_text| TrainingTranscript {
+        effective_text: apply_glossary(raw_text.clone(), &glossary),
+        raw_text,
+    })
+}
+
+#[cfg(test)]
+mod training_stop_tests {
+    use super::not_recording_result;
+
+    #[test]
+    fn duplicate_normal_stop_remains_a_noop() {
+        let result = not_recording_result(true).unwrap();
+        assert!(result.raw_text.is_empty());
+        assert!(result.effective_text.is_empty());
+    }
+
+    #[test]
+    fn training_stop_without_active_recording_is_an_error() {
+        let error = not_recording_result(false).unwrap_err();
+        assert!(error.contains("No training recording"));
+    }
 }
 
 #[tauri::command]
@@ -721,6 +927,297 @@ pub async fn set_initial_prompt(
     ctrl.settings_mut().initial_prompt = persisted.initial_prompt;
     info!("Initial prompt set ({} chars)", prompt.len());
     Ok(())
+}
+
+fn ensure_known_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
+    let profile = settings
+        .resolved_hotkey_profiles()
+        .into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| format!("Unknown dictation profile '{profile_id}'"))?;
+    if profile.language == Language::Auto {
+        return Err(
+            "Teach Sagascript requires a profile with an explicit language".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn apply_reviewed_training_candidates(
+    settings: &mut Settings,
+    heard: &str,
+    corrected: &str,
+    profile_id: &str,
+    accepted: &[GlossarySuggestion],
+) -> Result<(), String> {
+    ensure_known_profile(settings, profile_id)?;
+    let effective = Glossary::parse(&settings.effective_glossary_source(Some(profile_id)));
+    let allowed = suggest_glossary_candidates(heard, corrected, &effective);
+    let mut matched = vec![false; allowed.len()];
+    for candidate in accepted {
+        validate_edited_training_candidate(candidate)?;
+        let canonical_key = training_term_key(&candidate.canonical);
+        let conflicts_with_existing_alias = effective.entries().iter().any(|entry| {
+            entry
+                .aliases
+                .iter()
+                .any(|alias| training_term_key(alias) == canonical_key)
+        });
+        let conflicts_with_reviewed_alias = accepted.iter().any(|other| {
+            other.kind == GlossarySuggestionKind::Alias
+                && training_term_key(&other.observed) == canonical_key
+        });
+        if conflicts_with_existing_alias || conflicts_with_reviewed_alias {
+            return Err(
+                "Edited preferred spelling conflicts with a personal dictionary alias"
+                    .to_string(),
+            );
+        }
+        let Some((index, _)) = allowed.iter().enumerate().find(|(index, original)| {
+            !matched[*index]
+                && original.observed == candidate.observed
+                && original.context == candidate.context
+                && match (original.kind, candidate.kind) {
+                    (GlossarySuggestionKind::Alias, GlossarySuggestionKind::Alias)
+                    | (GlossarySuggestionKind::Alias, GlossarySuggestionKind::HintOnly)
+                    | (GlossarySuggestionKind::HintOnly, GlossarySuggestionKind::HintOnly) => true,
+                    (GlossarySuggestionKind::HintOnly, GlossarySuggestionKind::Alias) => false,
+                }
+        }) else {
+            return Err(
+                "Dictionary suggestions changed; review the corrected transcript again"
+                    .to_string(),
+            );
+        };
+        matched[index] = true;
+    }
+
+    let source = settings
+        .profile_glossaries
+        .entry(profile_id.to_string())
+        .or_default();
+    let mut scoped = Glossary::parse(source);
+    for candidate in accepted {
+        match candidate.kind {
+            GlossarySuggestionKind::Alias => {
+                scoped.upsert(candidate.canonical.clone(), vec![candidate.observed.clone()]);
+            }
+            GlossarySuggestionKind::HintOnly => {
+                scoped.upsert(candidate.canonical.clone(), Vec::new());
+            }
+        }
+    }
+    *source = scoped.render();
+    Ok(())
+}
+
+fn training_term_key(value: &str) -> String {
+    value.chars().flat_map(char::to_lowercase).collect()
+}
+
+fn validate_edited_training_candidate(candidate: &GlossarySuggestion) -> Result<(), String> {
+    let canonical = candidate.canonical.trim();
+    if canonical.is_empty()
+        || canonical != candidate.canonical
+        || canonical.len() > 96
+        || canonical.split_whitespace().count() > 4
+        || canonical
+            .chars()
+            .any(|character| matches!(character, '\n' | '\r' | ',' | '=' | '|'))
+    {
+        return Err(
+            "Edited dictionary terms must be 1-4 words without glossary delimiters"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn suggest_training_glossary(
+    heard: String,
+    corrected: String,
+    profile_id: String,
+) -> Result<Vec<GlossarySuggestion>, String> {
+    let settings = sagascript_core::settings::store::load();
+    ensure_known_profile(&settings, &profile_id)?;
+    let glossary = Glossary::parse(&settings.effective_glossary_source(Some(&profile_id)));
+    Ok(suggest_glossary_candidates(&heard, &corrected, &glossary))
+}
+
+#[tauri::command]
+pub async fn apply_training_glossary(
+    controller: State<'_, SharedController>,
+    heard: String,
+    corrected: String,
+    profile_id: String,
+    accepted: Vec<GlossarySuggestion>,
+) -> Result<(), String> {
+    if accepted.is_empty() {
+        return Err("Select at least one dictionary suggestion".to_string());
+    }
+
+    let accepted_count = accepted.len();
+    let persisted = sagascript_core::settings::store::try_update(|settings| {
+        apply_reviewed_training_candidates(
+            settings,
+            &heard,
+            &corrected,
+            &profile_id,
+            &accepted,
+        )
+    })?;
+
+    controller.lock().unwrap().settings_mut().profile_glossaries = persisted.profile_glossaries;
+    info!(accepted_count, profile_id = %profile_id, "Applied reviewed training glossary suggestions");
+    Ok(())
+}
+
+#[cfg(test)]
+mod training_glossary_tests {
+    use super::*;
+
+    #[test]
+    fn reviewed_candidates_are_saved_only_to_the_selected_profile() {
+        let mut settings = Settings::default();
+        let heard = "Jag heter Magnus Jille.";
+        let corrected = "Jag heter Magnus Gille.";
+        let candidates = suggest_glossary_candidates(heard, corrected, &Glossary::default());
+
+        apply_reviewed_training_candidates(
+            &mut settings,
+            heard,
+            corrected,
+            "default",
+            &candidates,
+        )
+        .unwrap();
+
+        assert_eq!(settings.initial_prompt, "");
+        assert_eq!(
+            settings.profile_glossaries.get("default").map(String::as_str),
+            Some("Gille = Jille")
+        );
+    }
+
+    #[test]
+    fn fabricated_candidate_fails_without_mutating_settings() {
+        let mut settings = Settings::default();
+        let fabricated = GlossarySuggestion {
+            observed: "anything".to_string(),
+            canonical: "dangerous".to_string(),
+            kind: GlossarySuggestionKind::Alias,
+            context: "Magnus Jille".to_string(),
+        };
+
+        let error = apply_reviewed_training_candidates(
+            &mut settings,
+            "Magnus Jille",
+            "Magnus Gille",
+            "default",
+            &[fabricated],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("review"));
+        assert!(settings.profile_glossaries.is_empty());
+    }
+
+    #[test]
+    fn reviewed_alias_can_be_edited_or_converted_to_a_hint() {
+        let heard = "Jag använder Love a ball idag.";
+        let corrected = "Jag använder Lovable idag.";
+        let original = suggest_glossary_candidates(heard, corrected, &Glossary::default())
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let mut edited = original.clone();
+        edited.canonical = "Lovable.dev".to_string();
+        let mut settings = Settings::default();
+        apply_reviewed_training_candidates(
+            &mut settings,
+            heard,
+            corrected,
+            "default",
+            &[edited],
+        )
+        .unwrap();
+        assert_eq!(
+            settings.profile_glossaries.get("default").map(String::as_str),
+            Some("Lovable.dev = Love a ball")
+        );
+
+        let mut as_hint = original;
+        as_hint.kind = GlossarySuggestionKind::HintOnly;
+        let mut settings = Settings::default();
+        apply_reviewed_training_candidates(
+            &mut settings,
+            heard,
+            corrected,
+            "default",
+            &[as_hint],
+        )
+        .unwrap();
+        assert_eq!(
+            settings.profile_glossaries.get("default").map(String::as_str),
+            Some("Lovable")
+        );
+    }
+
+    #[test]
+    fn auto_language_profile_fails_closed_without_mutation() {
+        let mut settings = Settings {
+            language: Language::Auto,
+            ..Default::default()
+        };
+        let heard = "Magnus Jille";
+        let corrected = "Magnus Gille";
+        let candidates = suggest_glossary_candidates(heard, corrected, &Glossary::default());
+
+        let error = apply_reviewed_training_candidates(
+            &mut settings,
+            heard,
+            corrected,
+            "default",
+            &candidates,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("explicit language"));
+        assert!(settings.profile_glossaries.is_empty());
+    }
+
+    #[test]
+    fn edited_canonical_cannot_shadow_an_existing_alias() {
+        let mut settings = Settings {
+            initial_prompt: "Existing = dangerous".to_string(),
+            ..Default::default()
+        };
+        let heard = "Magnus Jille";
+        let corrected = "Magnus Gille";
+        let mut candidate = suggest_glossary_candidates(
+            heard,
+            corrected,
+            &Glossary::parse(&settings.initial_prompt),
+        )
+        .into_iter()
+        .next()
+        .unwrap();
+        candidate.canonical = "Dangerous".to_string();
+
+        let error = apply_reviewed_training_candidates(
+            &mut settings,
+            heard,
+            corrected,
+            "default",
+            &[candidate],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("conflicts"));
+        assert!(settings.profile_glossaries.is_empty());
+    }
 }
 
 #[tauri::command]

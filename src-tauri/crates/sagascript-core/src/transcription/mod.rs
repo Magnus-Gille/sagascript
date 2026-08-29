@@ -1,5 +1,6 @@
 pub mod diagnostics;
 pub mod glossary;
+pub mod glossary_suggestions;
 pub mod model;
 mod postprocess;
 pub mod whisper_backend;
@@ -12,4 +13,7 @@ pub use whisper_backend::{
     WARM_MODEL_CACHE_MAX_MODELS, WhisperBackend,
 };
 pub use glossary::{Glossary, GlossaryCorrection, GlossaryEntry};
+pub use glossary_suggestions::{
+    suggest_glossary_candidates, GlossarySuggestion, GlossarySuggestionKind,
+};
 pub use postprocess::normalize_nonspeech_markers;

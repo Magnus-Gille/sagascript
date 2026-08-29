@@ -12,7 +12,7 @@ use sagascript_core::transcription::model;
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 
 use super::transcribe::{
-    copy_to_clipboard, model_id_string, parse_language, resolve_effective_model,
+    copy_to_clipboard, model_id_string, parse_language, resolve_effective_model, resolve_profile,
     resolve_effective_prompt,
 };
 
@@ -21,6 +21,10 @@ pub struct RecordArgs {
     /// Language for transcription [possible values: en, sv, no, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
+
+    /// Use this dictation profile's language and personal dictionary
+    #[arg(long, value_name = "ID", conflicts_with = "language")]
+    pub profile: Option<String>,
 
     /// Whisper model ID to use [see: sagascript list-models]
     #[arg(short, long, value_name = "MODEL_ID")]
@@ -56,9 +60,15 @@ pub struct RecordArgs {
 
 pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let stored = sagascript_core::settings::store::load();
-    let language = match &args.language {
-        Some(l) => parse_language(l)?,
-        None => stored.language,
+    let profile = args
+        .profile
+        .as_deref()
+        .map(|profile_id| resolve_profile(&stored, profile_id))
+        .transpose()?;
+    let language = match (&profile, &args.language) {
+        (Some(profile), _) => profile.language,
+        (None, Some(language)) => parse_language(language)?,
+        (None, None) => stored.language,
     };
     let save_only = args.output.is_some();
     // Effective hint/prompt: --prompt-file, else --hint/--prompt, else the saved
@@ -68,10 +78,11 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let effective_prompt = if save_only {
         None
     } else {
+        let stored_prompt = stored.effective_glossary_source(args.profile.as_deref());
         resolve_effective_prompt(
             args.prompt.as_deref(),
             args.prompt_file.as_deref(),
-            &stored.initial_prompt,
+            &stored_prompt,
         )?
     };
 
