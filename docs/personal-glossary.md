@@ -1,13 +1,15 @@
 # Personal glossary architecture
 
-Sagascript keeps the persisted `initial_prompt` string as the backward-compatible
-source of truth for vocabulary guidance. Existing comma- or newline-separated
-terms continue to be passed to Whisper unchanged.
+Sagascript keeps the legacy `initial_prompt` setting as a backward-compatible
+in-memory interface for vocabulary guidance. Its persisted source is the
+human-editable `glossary.txt` file in the XDG configuration directory. Existing
+embedded comma- or newline-separated terms are migrated and continue to be
+passed to Whisper unchanged.
 
-New entries learned through **Teach Sagascript** are stored separately per
-dictation profile. At transcription time, the legacy global dictionary is
-combined with only the active profile's entries. Conflicting aliases still
-fail closed. This prevents a correction learned for one language/profile from
+New entries learned through **Teach Sagascript** are stored in
+`glossaries/<profile-id>.txt`. At transcription time, the global dictionary is
+combined with only the active profile's entries. Conflicting aliases still fail
+closed. This prevents a correction learned for one language/profile from
 silently rewriting another profile's output.
 
 Removing a profile makes its scoped entries inactive but does not silently
@@ -48,6 +50,7 @@ additional confidence-gated one-edit correction for plain single-word hints.
   compares the effective transcript with the user's correction, and applies
   only explicitly reviewed candidates to the selected profile.
 - **Transcribe → Extra context for this file** remains a one-run override.
+- `sagascript glossary path [--profile ID]` prints the exact external file.
 - `sagascript glossary list|add|remove|clear [--profile ID]` manages either the
   legacy global dictionary or one profile.
 - `sagascript glossary suggest training.wav --corrected corrected.txt --profile ID`
@@ -56,10 +59,13 @@ additional confidence-gated one-edit correction for plain single-word hints.
   atomically save the displayed candidates, or `--json` for machine-readable
   output. The selected profile must have an explicit language and its model
   must already be downloaded.
+- See [Configuration files](configuration.md) for the XDG layout, dotfiles,
+  migration, and path precedence.
 - Set `SAGASCRIPT_SETTINGS_PATH=/absolute/path/to/settings.json` to run an
-  isolated CLI session against that exact settings file. While the override is
-  active, Sagascript does not inspect or migrate legacy settings. This is
-  useful for automation, end-to-end tests, and disposable training profiles.
+  isolated CLI session against that exact settings file. Relative values resolve
+  from the process working directory. While the override is active, Sagascript
+  does not inspect or migrate legacy settings. This is useful for automation,
+  end-to-end tests, and disposable training profiles.
 - `sagascript config set initial_prompt ...` remains supported for scripts.
 
 The CLI exposes the complete review workflow without requiring an interactive

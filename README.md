@@ -80,6 +80,11 @@ sagascript download-model ggml-base.en
 sagascript config list
 sagascript config set language sv
 sagascript config get hotkey
+sagascript config path
+
+# Manage the external personal dictionary
+sagascript glossary path
+sagascript glossary add OpenRouter --alias 'open router'
 
 # Use one shortcut for English and another for Swedish
 sagascript config profiles create swedish --name Swedish --hotkey 'Option+Space' --language sv
@@ -140,6 +145,7 @@ for recording audio. Do not install an unsigned binary from an untrusted party.
 - [Installation guide](docs/installation.md) -- detailed install instructions for macOS and Windows
 - [Linux notes](docs/linux-notes.md) -- experimental Linux build, prerequisites, and known limitations
 - [Windows-specific notes](docs/windows-notes.md) -- feature comparison, known limitations, and troubleshooting
+- [Configuration files](docs/configuration.md) -- XDG paths, dotfiles, migration, and personal dictionaries
 - [Third-party notices](THIRD_PARTY_NOTICES.md) -- dependency and downloadable-model licenses
 - [Model sources and integrity manifest](docs/model-sources.md) -- pinned revisions, licenses, sizes, and SHA-256 checksums
 

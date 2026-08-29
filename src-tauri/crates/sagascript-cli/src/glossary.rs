@@ -22,6 +22,12 @@ pub struct GlossaryArgs {
 
 #[derive(Subcommand)]
 pub enum GlossaryAction {
+    /// Print the external personal-dictionary file path
+    Path {
+        /// Print this profile's dictionary path instead of the global path
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// List canonical terms and their explicit aliases
     List {
         /// Show entries saved only for this dictation profile
@@ -46,9 +52,9 @@ pub enum GlossaryAction {
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Remove every personal dictionary entry
+    /// Remove every entry from the selected personal dictionary
     Clear {
-        /// Confirm destructive removal of the complete dictionary
+        /// Confirm destructive removal of the selected dictionary
         #[arg(long)]
         yes: bool,
         /// Clear this profile instead of the legacy global dictionary
@@ -76,6 +82,7 @@ pub enum GlossaryAction {
 
 pub fn run(args: GlossaryArgs) -> Result<(), DictationError> {
     match args.action {
+        GlossaryAction::Path { profile } => path(profile.as_deref()),
         GlossaryAction::List { profile } => list(profile.as_deref()),
         GlossaryAction::Add { term, aliases, profile } => {
             add(&term, &aliases, profile.as_deref())
@@ -86,6 +93,20 @@ pub fn run(args: GlossaryArgs) -> Result<(), DictationError> {
             suggest(&heard, &corrected, &profile, json, apply)
         }
     }
+}
+
+fn path(profile: Option<&str>) -> Result<(), DictationError> {
+    let path = match profile {
+        Some(profile) => {
+            let stored = settings::store::load();
+            validate_profile(&stored, profile)?;
+            settings::store::profile_glossary_path(profile)
+                .map_err(DictationError::SettingsError)?
+        }
+        None => settings::store::global_glossary_path(),
+    };
+    println!("{}", path.display());
+    Ok(())
 }
 
 fn list(profile: Option<&str>) -> Result<(), DictationError> {

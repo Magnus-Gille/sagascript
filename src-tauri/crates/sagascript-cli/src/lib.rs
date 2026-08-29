@@ -364,7 +364,7 @@ EXAMPLES:
     /// Manage the persistent personal dictionary used by live and batch transcription
     #[command(
         long_about = "Add preferred spellings and optional exact mishearings. Plain terms prime Whisper; aliases also authorize deterministic local corrections before output.",
-        after_long_help = "EXAMPLES:\n  sagascript glossary list\n  sagascript glossary add OpenRouter --alias 'open router' --alias 'open vrouter'\n  sagascript glossary add merge --alias merch --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish --apply\n  sagascript glossary remove OpenRouter\n  sagascript glossary clear --yes"
+        after_long_help = "EXAMPLES:\n  sagascript glossary path\n  sagascript glossary path --profile swedish\n  sagascript glossary list\n  sagascript glossary add OpenRouter --alias 'open router' --alias 'open vrouter'\n  sagascript glossary add merge --alias merch --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish --apply\n  sagascript glossary remove OpenRouter\n  sagascript glossary clear --yes"
     )]
     Glossary(glossary::GlossaryArgs),
 
@@ -985,6 +985,27 @@ mod tests {
                     assert!(profile.is_none());
                 }
                 _ => panic!("expected glossary add"),
+            },
+            _ => panic!("expected Glossary"),
+        }
+    }
+
+    #[test]
+    fn parse_profile_glossary_path() {
+        let cli = Cli::try_parse_from([
+            "sagascript",
+            "glossary",
+            "path",
+            "--profile",
+            "swedish",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Command::Glossary(args) => match args.action {
+                glossary::GlossaryAction::Path { profile } => {
+                    assert_eq!(profile.as_deref(), Some("swedish"));
+                }
+                _ => panic!("expected glossary path"),
             },
             _ => panic!("expected Glossary"),
         }

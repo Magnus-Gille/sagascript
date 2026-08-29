@@ -79,10 +79,12 @@ EXAMPLES:
     /// Reset one or all settings to defaults
     #[command(
         long_about = "\
-Reset a single setting or all settings to their default values.
+Reset a single application setting or all application settings to their default values.
 
 If KEY is provided, only that setting is reset. \
-If KEY is omitted, ALL settings are reset.",
+If KEY is omitted, all application settings are reset. External personal \
+dictionaries are preserved. Clear the global dictionary with `sagascript glossary \
+clear --yes`; repeat with `--profile ID` for each profile dictionary.",
         after_long_help = "\
 EXAMPLES:
   # Reset just the language
@@ -98,8 +100,8 @@ EXAMPLES:
 
     /// Print the settings file path
     #[command(long_about = "\
-Print the absolute path to the settings JSON file. Useful for manual \
-editing or backup.")]
+Print the absolute path to the settings JSON file. Use `sagascript glossary \
+path` for the separate personal dictionary.")]
     Path,
 
     /// Manage per-shortcut dictation language profiles
@@ -411,9 +413,17 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
         .map_err(DictationError::SettingsError)?;
         eprintln!("Reset {key} to {}", get_setting_value(&settings, key));
     } else {
-        let defaults = Settings::default();
-        settings::store::save(&defaults).map_err(DictationError::SettingsError)?;
-        eprintln!("All settings reset to defaults");
+        settings::store::update(|current| {
+            let initial_prompt = std::mem::take(&mut current.initial_prompt);
+            let profile_glossaries = std::mem::take(&mut current.profile_glossaries);
+            *current = Settings {
+                initial_prompt,
+                profile_glossaries,
+                ..Default::default()
+            };
+        })
+        .map_err(DictationError::SettingsError)?;
+        eprintln!("All application settings reset to defaults; personal dictionaries preserved");
     }
     Ok(())
 }
