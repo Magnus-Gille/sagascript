@@ -660,7 +660,7 @@ fn main() {
                 let app_dir = app.path().app_data_dir().ok();
                 if let Some(dir) = app_dir {
                     let legacy = dir.join("flowdictate-settings.json");
-                    let new_path = dir.join("sagascript-settings.json");
+                    let new_path = sagascript_core::settings::store::settings_path();
                     migrate_legacy_settings_unless_overridden(
                         &legacy,
                         &new_path,
@@ -1292,25 +1292,34 @@ fn stop_recording_and_transcribe(
     });
 }
 
-/// Whether a filesystem event may reflect creation or replacement of the settings file.
-fn settings_event_may_affect(
+/// Whether a filesystem event may reflect creation or replacement of a user
+/// configuration file.
+fn configuration_event_may_affect(
     event: &notify::Event,
     settings_path: &std::path::Path,
+    global_glossary_path: &std::path::Path,
+    profile_glossary_dir: &std::path::Path,
 ) -> bool {
-    let relevant_kind = matches!(
+    let created_or_modified = matches!(
         event.kind,
         notify::EventKind::Create(_) | notify::EventKind::Modify(_)
     );
+    let glossary_changed =
+        created_or_modified || matches!(event.kind, notify::EventKind::Remove(_));
 
-    relevant_kind
-        && event
-            .paths
-            .iter()
-            .any(|path| path == settings_path)
+    event.paths.iter().any(|path| {
+        (created_or_modified && path == settings_path)
+            || (glossary_changed
+                && (path == global_glossary_path
+                    || (path.parent() == Some(profile_glossary_dir)
+                        && path.extension().and_then(|extension| extension.to_str())
+                            == Some("txt"))))
+    })
 }
 
-/// Watch the settings file for external changes and hot-reload into the running app.
-/// Handles hotkey re-registration and emits a settings-changed event to the frontend.
+/// Watch settings and personal dictionaries for external changes and hot-reload
+/// them into the running app. Handles hotkey re-registration and emits a
+/// settings-changed event to the frontend.
 fn start_settings_watcher(app: tauri::AppHandle) {
     use notify::{Config, RecursiveMode, Watcher};
     #[cfg(not(target_os = "macos"))]
@@ -1320,6 +1329,8 @@ fn start_settings_watcher(app: tauri::AppHandle) {
     use std::sync::mpsc;
 
     let settings_path = sagascript_core::settings::store::settings_path();
+    let global_glossary_path = sagascript_core::settings::store::global_glossary_path();
+    let profile_glossary_dir = sagascript_core::settings::store::profile_glossary_dir();
     let watch_dir = match settings_path.parent() {
         Some(d) => d.to_path_buf(),
         None => {
@@ -1354,7 +1365,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             }
         };
 
-        if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
+        if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::Recursive) {
             error!("Failed to watch settings directory: {e}");
             return;
         }
@@ -1370,7 +1381,12 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 }
             };
 
-            if !settings_event_may_affect(&event, &settings_path) {
+            if !configuration_event_may_affect(
+                &event,
+                &settings_path,
+                &global_glossary_path,
+                &profile_glossary_dir,
+            ) {
                 continue;
             }
 
@@ -1603,10 +1619,19 @@ mod tests {
         rx: &std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
         settings_path: &std::path::Path,
     ) -> bool {
+        let global_glossary_path = settings_path.parent().unwrap().join("glossary.txt");
+        let profile_glossary_dir = settings_path.parent().unwrap().join("glossaries");
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
             match rx.recv_timeout(remaining) {
-                Ok(Ok(event)) if settings_event_may_affect(&event, settings_path) => {
+                Ok(Ok(event))
+                    if configuration_event_may_affect(
+                        &event,
+                        settings_path,
+                        &global_glossary_path,
+                        &profile_glossary_dir,
+                    ) =>
+                {
                     return true;
                 }
                 Ok(_) => continue,
@@ -1656,43 +1681,96 @@ mod tests {
     }
 
     #[test]
-    fn settings_event_filter_accepts_target_create_and_modify_events() {
+    fn configuration_event_filter_accepts_settings_and_glossary_changes() {
         use notify::event::{CreateKind, ModifyKind};
         use notify::{Event, EventKind};
 
         let watch_dir = std::path::Path::new("/tmp/sagascript");
         let settings_path = watch_dir.join("sagascript-settings.json");
+        let global_glossary_path = watch_dir.join("glossary.txt");
+        let profile_glossary_dir = watch_dir.join("glossaries");
 
         for kind in [
             EventKind::Create(CreateKind::Any),
             EventKind::Modify(ModifyKind::Any),
         ] {
-            let target_event = Event::new(kind).add_path(settings_path.clone());
-            assert!(settings_event_may_affect(&target_event, &settings_path));
+            for target in [
+                settings_path.clone(),
+                global_glossary_path.clone(),
+                profile_glossary_dir.join("swedish.txt"),
+            ] {
+                let target_event = Event::new(kind).add_path(target);
+                assert!(configuration_event_may_affect(
+                    &target_event,
+                    &settings_path,
+                    &global_glossary_path,
+                    &profile_glossary_dir,
+                ));
+            }
         }
     }
 
     #[test]
-    fn settings_event_filter_rejects_unrelated_and_non_mutating_events() {
+    fn configuration_event_filter_rejects_unrelated_and_non_mutating_events() {
         use notify::event::{AccessKind, ModifyKind, RemoveKind};
         use notify::{Event, EventKind};
 
         let watch_dir = std::path::Path::new("/tmp/sagascript");
         let settings_path = watch_dir.join("sagascript-settings.json");
+        let global_glossary_path = watch_dir.join("glossary.txt");
+        let profile_glossary_dir = watch_dir.join("glossaries");
         let unrelated = Event::new(EventKind::Modify(ModifyKind::Any))
             .add_path(watch_dir.join("settings.tmp"));
-        assert!(!settings_event_may_affect(&unrelated, &settings_path));
+        assert!(!configuration_event_may_affect(
+            &unrelated,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
+
+        let unrelated_profile = Event::new(EventKind::Modify(ModifyKind::Any))
+            .add_path(profile_glossary_dir.join("notes.md"));
+        assert!(!configuration_event_may_affect(
+            &unrelated_profile,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
 
         let remove = Event::new(EventKind::Remove(RemoveKind::Any))
             .add_path(settings_path.clone());
-        assert!(!settings_event_may_affect(&remove, &settings_path));
+        assert!(!configuration_event_may_affect(
+            &remove,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
+
+        let remove_glossary = Event::new(EventKind::Remove(RemoveKind::Any))
+            .add_path(profile_glossary_dir.join("swedish.txt"));
+        assert!(configuration_event_may_affect(
+            &remove_glossary,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
 
         let access = Event::new(EventKind::Access(AccessKind::Any))
             .add_path(settings_path.clone());
-        assert!(!settings_event_may_affect(&access, &settings_path));
+        assert!(!configuration_event_may_affect(
+            &access,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
 
         let other = Event::new(EventKind::Other).add_path(settings_path.clone());
-        assert!(!settings_event_may_affect(&other, &settings_path));
+        assert!(!configuration_event_may_affect(
+            &other,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
     }
 
     #[test]
