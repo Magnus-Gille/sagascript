@@ -684,25 +684,28 @@ mod tests {
     }
 
     #[test]
-    fn default_settings_path_uses_the_xdg_config_directory() {
-        let data_dir = PathBuf::from("/Users/example/Library/Application Support");
-        let home_dir = PathBuf::from("/Users/example");
+    fn default_settings_path_uses_the_platform_config_directory() {
+        let root = std::env::temp_dir().join("sagascript-location-test");
+        let data_dir = root.join("application-support");
+        let home_dir = root.join("home");
+        let expected_base = default_config_base(&home_dir, &data_dir);
         let (p, legacy) = settings_location(None, None, home_dir, data_dir.clone());
         assert_eq!(
             p,
-            PathBuf::from("/Users/example/.config/sagascript").join(SETTINGS_FILENAME)
+            expected_base.join(CONFIG_DIR_NAME).join(SETTINGS_FILENAME)
         );
         assert!(legacy.contains(&data_dir.join(APP_IDENTIFIER).join(SETTINGS_FILENAME)));
     }
 
     #[test]
     fn explicit_settings_path_disables_legacy_migration_sources() {
-        let isolated = PathBuf::from("/tmp/sagascript-cli-test/settings.json");
+        let root = std::env::temp_dir().join("sagascript-location-test");
+        let isolated = root.join("isolated").join("settings.json");
         let (path, legacy) = settings_location(
             Some(isolated.clone().into_os_string()),
             None,
-            PathBuf::from("/Users/example"),
-            PathBuf::from("/real/application-support"),
+            root.join("home"),
+            root.join("application-support"),
         );
 
         assert_eq!(path, isolated);
@@ -711,8 +714,10 @@ mod tests {
 
     #[test]
     fn empty_settings_path_override_uses_the_normal_location() {
-        let data_dir = PathBuf::from("/example/application-support");
-        let home_dir = PathBuf::from("/home/example");
+        let root = std::env::temp_dir().join("sagascript-location-test");
+        let data_dir = root.join("application-support");
+        let home_dir = root.join("home");
+        let expected_base = default_config_base(&home_dir, &data_dir);
         let (path, legacy) = settings_location(
             Some(OsString::new()),
             None,
@@ -722,25 +727,24 @@ mod tests {
 
         assert_eq!(
             path,
-            home_dir
-                .join(".config")
-                .join(CONFIG_DIR_NAME)
-                .join(SETTINGS_FILENAME)
+            expected_base.join(CONFIG_DIR_NAME).join(SETTINGS_FILENAME)
         );
         assert_eq!(legacy.len(), LEGACY_APP_IDENTIFIERS.len() + 2);
     }
 
     #[test]
     fn absolute_xdg_config_home_overrides_the_default() {
+        let root = std::env::temp_dir().join("sagascript-location-test");
+        let xdg_config_home = root.join("dotfiles-config");
         let (path, _) = settings_location(
             None,
-            Some(OsString::from("/dotfiles/config")),
-            PathBuf::from("/home/example"),
-            PathBuf::from("/example/application-support"),
+            Some(xdg_config_home.clone().into_os_string()),
+            root.join("home"),
+            root.join("application-support"),
         );
         assert_eq!(
             path,
-            PathBuf::from("/dotfiles/config")
+            xdg_config_home
                 .join(CONFIG_DIR_NAME)
                 .join(SETTINGS_FILENAME)
         );
