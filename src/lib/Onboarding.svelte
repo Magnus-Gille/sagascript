@@ -49,6 +49,7 @@
   let micStatus: string = $state("checking");
   let accessibilityGranted = $state(false);
   let accessibilityChecking = $state(false);
+  let accessibilityOpening = $state(false);
   let savingManualPaste = $state(false);
   let pollTimer: ReturnType<typeof setTimeout> | null = $state(null);
   let pollGeneration = 0;
@@ -218,6 +219,21 @@
       accessibilityError =
         typeof e === "string" ? e : e?.message ?? "Failed to request Accessibility permission. Please try again.";
       accessibilityChecking = false;
+    }
+  }
+
+  async function reopenAccessibilitySettings() {
+    if (accessibilityOpening) return;
+    accessibilityError = null;
+    accessibilityOpening = true;
+    try {
+      // Reuse the native deep-link without touching the active permission poll.
+      await requestAccessibilityPermission();
+    } catch (e: any) {
+      accessibilityError =
+        typeof e === "string" ? e : e?.message ?? "Failed to open Accessibility settings. Please try again.";
+    } finally {
+      accessibilityOpening = false;
     }
   }
 
@@ -610,7 +626,13 @@
 
         <div class="status-indicator" class:granted={accessibilityGranted}>
           <span class="status-dot"></span>
-          <span>{accessibilityGranted ? "Accessibility granted" : "Accessibility not granted"}</span>
+          <span>
+            {accessibilityGranted
+              ? "Accessibility granted"
+              : accessibilityChecking
+                ? "Waiting for permission in System Settings"
+                : "Accessibility not granted"}
+          </span>
         </div>
 
         <div class="actions">
@@ -618,14 +640,25 @@
             <button class="primary" onclick={continueWithAccessibility} disabled={accessibilityChecking}>
               {accessibilityChecking ? "Saving…" : "Continue"}
             </button>
-          {:else}
-            <button class="primary" onclick={grantAccessibility} disabled={accessibilityChecking}>
-              {#if accessibilityChecking}
+          {:else if accessibilityChecking}
+            <button
+              class="primary"
+              onclick={reopenAccessibilitySettings}
+              disabled={accessibilityOpening}
+            >
+              {#if accessibilityOpening}
                 <span class="button-spinner"></span>
-                Waiting for permission...
+                Opening…
               {:else}
-                Open System Settings
+                Open Accessibility Settings Again
               {/if}
+            </button>
+            <button class="secondary" onclick={skipAccessibility} disabled={savingManualPaste || accessibilityOpening}>
+              I'll paste manually
+            </button>
+          {:else}
+            <button class="primary" onclick={grantAccessibility}>
+              Open System Settings
             </button>
             <button class="secondary" onclick={skipAccessibility} disabled={savingManualPaste}>
               I'll paste manually

@@ -94,6 +94,22 @@ test("onboarding prevents duplicate setup requests and exposes language selectio
   assert.equal((onboardingSource.match(/aria-pressed=\{selectedLanguage ===/g) ?? []).length, 3);
 });
 
+test("Accessibility onboarding can reopen System Settings while polling", () => {
+  const reopenStart = onboardingSource.indexOf("async function reopenAccessibilitySettings");
+  const reopenEnd = onboardingSource.indexOf("\n  }", reopenStart);
+
+  assert.ok(reopenStart >= 0, "Accessibility reopen helper is missing");
+  assert.ok(reopenEnd > reopenStart, "Accessibility reopen helper is not closed");
+
+  const reopenSource = onboardingSource.slice(reopenStart, reopenEnd);
+  assert.match(reopenSource, /await requestAccessibilityPermission\(\)/);
+  assert.doesNotMatch(reopenSource, /beginPollOperation|startPoll/);
+  assert.match(
+    onboardingSource,
+    /\{:else if accessibilityChecking\}[\s\S]*onclick=\{reopenAccessibilitySettings\}[\s\S]*Open Accessibility Settings Again/,
+  );
+});
+
 test("menu bar uses the one monochrome S template without a text marker", () => {
   assert.match(mainSource, /include_bytes!\("\.\.\/icons\/tray-icon@2x\.png"\)/);
   assert.match(mainSource, /\.icon_as_template\(true\)/);
