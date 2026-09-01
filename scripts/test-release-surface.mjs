@@ -116,6 +116,11 @@ test("Accessibility onboarding reopens System Settings without prompting again",
     /export async function openAccessibilitySettings\(\): Promise<void> \{\s*return invoke\("open_accessibility_settings"\);/,
   );
   assert.match(
+    mainSource,
+    /commands::open_accessibility_settings,/,
+    "Accessibility settings command is not registered with Tauri",
+  );
+  assert.match(
     onboardingSource,
     /\{:else if accessibilityChecking\}[\s\S]*onclick=\{reopenAccessibilitySettings\}[\s\S]*Open Accessibility Settings Again/,
   );

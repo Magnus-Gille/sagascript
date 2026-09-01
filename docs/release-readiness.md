@@ -179,7 +179,7 @@ Completed locally on branch `codex/release-readiness`:
 
 Verification completed:
 
-- All frontend checks pass, including 20 release-surface regression tests and
+- All frontend checks pass, including 21 release-surface regression tests and
   Svelte diagnostics with zero errors or warnings.
 - All Rust workspace checks pass: check, Clippy with warnings denied, lean CLI
   build, and 573 tests.
@@ -203,6 +203,10 @@ Verification completed:
   Both app copies pass strict code-signature verification, hardened-runtime and
   audio-input-entitlement checks, stapler validation, and Gatekeeper with Team
   ID `7C6WF6GFZ4`.
+- The signing, notarization, Gatekeeper, upgrade, CLI, hash, and artifact
+  evidence above applies only to the historical `v1.1.0` baseline at
+  `6782e7cdfa32af9a7bd73a4cd7aed18c62cc6493`. It does not cover the 1.1.1
+  Accessibility fixes or authorize publishing 1.1.1.
 - Claude Opus 5 independently reviewed commit
   `40bda7906eff25a5014dd94c313be3f7db91f11e`. Its grounded findings are fixed:
   recoverable onboarding, visible per-profile engine readiness, re-checkable
@@ -217,19 +221,24 @@ Verification completed:
 
 Open release blockers:
 
-- Automated signing, notarization, Gatekeeper, simulated upgrade, and installed
-  CLI acceptance are complete. A manual first-launch pass on a clean Apple
-  Silicon Mac still needs to verify real TCC prompts and persistence for
-  Microphone and Accessibility, live dictation, auto-paste, launch at login,
-  profile switching, and the update link.
+- The exact 1.1.1 release revision has not been tagged, pushed, signed,
+  notarized, stapled, or checked by Gatekeeper. The 1.1.1 CI run must repeat the
+  automated quality gate, simulated upgrade, installed CLI acceptance, artifact
+  hashes, and signature verification before its output can be installed.
+- After that CI run, a manual first-launch pass on a clean Apple Silicon Mac
+  still needs to verify real TCC prompts and persistence for Microphone and
+  Accessibility, live dictation, auto-paste, launch at login, profile switching,
+  and the update link.
 - The selected glyph has been raster-checked at 32, 64, 128, 512, and 1024 px.
   Its current macOS template rendering still needs a visually isolated pass in
   both light and dark menu bars during signed acceptance.
-- Claude Opus 5 completed the base independent review, but its post-fix review
-  reached the account session limit before a verdict. M5's final-review output
-  was deterministically rejected as incorrect, so the conductor performed the
-  disclosed final review and found no grounded defect. This limitation remains
-  recorded rather than treating the base review as a review of the final SHA.
+- Claude Opus 5 completed the historical base review. A separate Opus 5 review
+  of the full 1.1.0-to-1.1.1 candidate correctly reopened stale release-evidence
+  claims and one missing wiring assertion. Those findings were fixed locally; the
+  complete corrected diff still needs an independent pass before the release
+  SHA is approved. M5 remained unavailable for this pass because its connector
+  returned a network failure and the local profile doctor reported a missing
+  credential; no credentials were changed.
 - The product page builds and its authored files lint cleanly, but its pinned
   Sites scaffold currently reports five high-severity and one low-severity
   production dependency advisories. Do not deploy it until an approved scaffold
