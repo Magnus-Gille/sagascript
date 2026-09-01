@@ -15,6 +15,8 @@ use sagascript_core::transcription::diagnostics::{
     CoverageDiagnostics, LanguageDetection, LanguageRegionDiagnostics, LanguageWindow,
     TranscriptionWarning,
 };
+#[cfg(feature = "diarization")]
+use sagascript_core::transcription::diagnostics::{analyze_coverage_profile, CoverageProfile};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::{
     normalize_nonspeech_markers, Glossary, TranscribeOptions, TranscriptSegment, WhisperBackend,
@@ -238,8 +240,11 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         Vec::new()
     };
 
-    // Check model is downloaded
-    if !model::is_model_downloaded(model) {
+    #[cfg(feature = "diarization")]
+    let cache_may_bypass_model = args.diarize && args.diarize_cache.is_some();
+    #[cfg(not(feature = "diarization"))]
+    let cache_may_bypass_model = false;
+    if !cache_may_bypass_model && !model::is_model_downloaded(model) {
         return Err(DictationError::TranscriptionFailed(format!(
             "Model '{}' is not downloaded. Run: sagascript download-model {}",
             model.display_name(),
@@ -247,15 +252,11 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         )));
     }
 
-    eprintln!(
-        "Loading model once for {} input(s): {}...",
-        files.len(),
-        model.display_name()
-    );
+    // Model loading is lazy so a validated diarization-cache hit never maps
+    // several gigabytes of weights that it will not use. Batch processing is
+    // sequential, so this flag safely preserves the load-once behavior.
     let backend = WhisperBackend::new();
-    let model_load_started = Instant::now();
-    backend.load_model(model)?;
-    let model_load_seconds = model_load_started.elapsed().as_secs_f64();
+    let mut model_loaded = false;
 
     let mut items = Vec::with_capacity(if args.json { files.len() } else { 0 });
     let (processed, failures) = process_batch(
@@ -270,7 +271,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
                 &stored,
                 language,
                 model,
-                model_load_seconds,
+                &mut model_loaded,
                 &glossary,
                 &correction_vocabulary,
             )
@@ -379,6 +380,45 @@ where
     Ok((processed, failures))
 }
 
+fn ensure_model_loaded(
+    backend: &WhisperBackend,
+    model: WhisperModel,
+    loaded: &mut bool,
+) -> Result<f64, DictationError> {
+    if *loaded {
+        return Ok(0.0);
+    }
+    if !model::is_model_downloaded(model) {
+        return Err(DictationError::TranscriptionFailed(format!(
+            "Model '{}' is not downloaded. Run: sagascript download-model {}",
+            model.display_name(),
+            model_id_string(model)
+        )));
+    }
+    eprintln!("Loading model: {}...", model.display_name());
+    let started = Instant::now();
+    backend.load_model(model)?;
+    *loaded = true;
+    Ok(started.elapsed().as_secs_f64())
+}
+
+#[cfg(feature = "diarization")]
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
+    if let (Ok(left), Ok(right)) = (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        if left == right {
+            return true;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(left), Ok(right)) = (std::fs::metadata(left), std::fs::metadata(right)) {
+            return left.dev() == right.dev() && left.ino() == right.ino();
+        }
+    }
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn transcribe_file(
     args: &TranscribeArgs,
@@ -387,35 +427,136 @@ fn transcribe_file(
     stored: &Settings,
     language: Language,
     model: WhisperModel,
-    model_load_seconds: f64,
+    model_loaded: &mut bool,
     glossary: &Glossary,
     correction_vocabulary: &[String],
 ) -> Result<FileTranscription, DictationError> {
     let file_started = Instant::now();
-    // Decode audio file
-    eprintln!("Decoding {}...", file.display());
-    let decode_started = Instant::now();
-    let audio = decode_audio_file(file)?;
-    let decode_resample_seconds = decode_started.elapsed().as_secs_f64();
-    let duration = audio.len() as f64 / 16_000.0;
-    eprintln!("Audio: {:.1}s, {} samples", duration, audio.len());
+    #[cfg(feature = "diarization")]
+    let decoder_prompt = glossary.decoder_prompt();
+    #[cfg(feature = "diarization")]
+    if args
+        .diarize_cache
+        .as_deref()
+        .is_some_and(|cache_path| paths_refer_to_same_file(file, cache_path))
+    {
+        return Err(DictationError::SettingsError(
+            "--diarize-cache must not point to the input recording".to_string(),
+        ));
+    }
+    #[cfg(feature = "diarization")]
+    let cache_lookup_started = Instant::now();
+    #[cfg(feature = "diarization")]
+    let cache_identity = if args.diarize && args.diarize_cache.is_some() {
+        Some(crate::diarization_cache::CacheIdentity::for_input(
+            file,
+            language.whisper_code().unwrap_or("auto"),
+            model_id_string(model),
+            decoder_prompt.as_deref(),
+        )?)
+    } else {
+        None
+    };
+    #[cfg(feature = "diarization")]
+    let cached = match (args.diarize_cache.as_deref(), cache_identity.as_ref()) {
+        (Some(path), Some(identity)) => match crate::diarization_cache::load(path, identity)? {
+            crate::diarization_cache::CacheLookup::Hit(cached) => {
+                eprintln!("Reusing diarization cache: {}", path.display());
+                Some(cached)
+            }
+            crate::diarization_cache::CacheLookup::Miss(reason) => {
+                eprintln!("Diarization cache miss ({reason}); computing analysis.");
+                None
+            }
+        },
+        _ => None,
+    };
+    #[cfg(feature = "diarization")]
+    let cache_lookup_seconds = cache_lookup_started.elapsed().as_secs_f64();
+    #[cfg(feature = "diarization")]
+    let cache_hit = args.diarize && cached.is_some();
+    #[cfg(not(feature = "diarization"))]
+    let cache_hit = false;
 
-    let language_detection_started = Instant::now();
-    let detected_language = match detect_file_language(backend, &audio, model) {
-        Ok(detection) => detection,
-        Err(error) => {
-            eprintln!("Warning: local language detection was unavailable: {error}");
-            None
+    #[cfg(feature = "diarization")]
+    if args.diarize && !cache_hit && !sagascript_core::diarization::model::all_models_downloaded() {
+        return Err(DictationError::DiarizationError(
+            "Diarization models not found. Run: sagascript download-model diarization".to_string(),
+        ));
+    }
+
+    let (audio, decode_resample_seconds, duration) = if cache_hit {
+        #[cfg(feature = "diarization")]
+        {
+            let duration = cached
+                .as_ref()
+                .expect("cache_hit requires cached data")
+                .coverage_profile
+                .duration_seconds();
+            eprintln!("Audio (cached): {duration:.1}s");
+            (None, 0.0, duration)
         }
+        #[cfg(not(feature = "diarization"))]
+        unreachable!("cache hits require the diarization feature")
+    } else {
+        eprintln!("Decoding {}...", file.display());
+        let decode_started = Instant::now();
+        let audio = decode_audio_file(file)?;
+        let decode_resample_seconds = decode_started.elapsed().as_secs_f64();
+        let duration = audio.len() as f64 / 16_000.0;
+        eprintln!("Audio: {:.1}s, {} samples", duration, audio.len());
+        (Some(audio), decode_resample_seconds, duration)
     };
-    let language_regions = match detect_file_language_regions(backend, &audio, language) {
-        Ok(diagnostics) => diagnostics,
-        Err(error) => {
-            eprintln!("Warning: language region detection was unavailable: {error}");
-            None
-        }
+    #[cfg(feature = "diarization")]
+    let coverage_profile = if cache_hit {
+        cached
+            .as_ref()
+            .expect("cache_hit requires cached data")
+            .coverage_profile
+            .clone()
+    } else {
+        CoverageProfile::from_audio(audio.as_deref().expect("cache misses decode audio"))
     };
-    let language_detection_seconds = language_detection_started.elapsed().as_secs_f64();
+
+    let (model_load_seconds, detected_language, language_regions, language_detection_seconds) =
+        if cache_hit {
+            #[cfg(feature = "diarization")]
+            {
+                let cached = cached.as_ref().expect("cache_hit requires cached data");
+                (
+                    0.0,
+                    cached.detected_language.clone(),
+                    cached.language_regions.clone(),
+                    0.0,
+                )
+            }
+            #[cfg(not(feature = "diarization"))]
+            unreachable!("cache hits require the diarization feature")
+        } else {
+            let model_load_seconds = ensure_model_loaded(backend, model, model_loaded)?;
+            let language_detection_started = Instant::now();
+            let audio = audio.as_deref().expect("cache misses decode audio");
+            let detected_language = match detect_file_language(backend, audio, model) {
+                Ok(detection) => detection,
+                Err(error) => {
+                    eprintln!("Warning: local language detection was unavailable: {error}");
+                    None
+                }
+            };
+            let language_regions = match detect_file_language_regions(backend, audio, language) {
+                Ok(diagnostics) => diagnostics,
+                Err(error) => {
+                    eprintln!("Warning: language region detection was unavailable: {error}");
+                    None
+                }
+            };
+            (
+                model_load_seconds,
+                detected_language,
+                language_regions,
+                language_detection_started.elapsed().as_secs_f64(),
+            )
+        };
     #[cfg(not(feature = "diarization"))]
     let _ = (
         model_load_seconds,
@@ -441,7 +582,6 @@ fn transcribe_file(
         use sagascript_core::diarization::{
             cluster,
             merge::{consolidate, merge_with_transcript},
-            model::all_models_downloaded,
             DiarizationTimings, DiarizeConfig, TimestampedSegment,
         };
         use sagascript_core::transcription::DiarizationTranscriptionTimings;
@@ -455,54 +595,21 @@ fn transcribe_file(
             language_detection_seconds,
             ..DiarizationPerformance::default()
         };
+        performance.cache_lookup_seconds = cache_lookup_seconds;
         eprintln!(
             "Whisper acceleration: {} (Core ML: {})",
             acceleration.backend, acceleration.coreml_status
         );
 
-        if !all_models_downloaded() {
-            return Err(DictationError::DiarizationError(
-                "Diarization models not found. Run: sagascript download-model diarization"
-                    .to_string(),
-            ));
-        }
-
         let config = DiarizeConfig {
             threshold: args.diarize_threshold,
             ..DiarizeConfig::default()
         };
-        let decoder_prompt = glossary.decoder_prompt();
-        let cache_identity = if args.diarize_cache.is_some() {
-            Some(crate::diarization_cache::CacheIdentity::for_input(
-                file,
-                audio.len(),
-                language.whisper_code().unwrap_or("auto"),
-                model_id_string(model),
-                decoder_prompt.as_deref(),
-            )?)
-        } else {
-            None
-        };
-
-        let cache_lookup_started = Instant::now();
-        let cached = match (args.diarize_cache.as_deref(), cache_identity.as_ref()) {
-            (Some(path), Some(identity)) => match crate::diarization_cache::load(path, identity)? {
-                crate::diarization_cache::CacheLookup::Hit(cached) => {
-                    eprintln!("Reusing diarization cache: {}", path.display());
-                    Some(cached)
-                }
-                crate::diarization_cache::CacheLookup::Miss(reason) => {
-                    eprintln!("Diarization cache miss ({reason}); computing analysis.");
-                    None
-                }
-            },
-            _ => None,
-        };
-        performance.cache_lookup_seconds = cache_lookup_started.elapsed().as_secs_f64();
 
         let (analysis, raw_segments, diarization_timings, transcription_timings) =
             if let Some(cached) = cached {
                 performance.cache_hit = true;
+                let cached = *cached;
                 (
                     cached.analysis,
                     cached.transcript,
@@ -512,8 +619,9 @@ fn transcribe_file(
             } else {
                 eprintln!("Running speaker diarization and Whisper timestamps concurrently...");
                 let parallel_started = Instant::now();
+                let audio = audio.as_deref().expect("cache misses decode audio");
                 let (analysis, diarization_timings, transcription) = run_diarization_analysis(
-                    &audio,
+                    audio,
                     backend,
                     language,
                     decoder_prompt.as_deref(),
@@ -532,6 +640,9 @@ fn transcribe_file(
                             identity,
                             analysis.clone(),
                             transcription.segments.clone(),
+                            coverage_profile.clone(),
+                            detected_language.clone(),
+                            language_regions.clone(),
                         ),
                     )?;
                     performance.cache_write_seconds = cache_write_started.elapsed().as_secs_f64();
@@ -605,7 +716,7 @@ fn transcribe_file(
                 no_speech_prob: 0.0,
             })
             .collect();
-        let coverage = analyze_coverage(&audio, &diagnostic_segments);
+        let coverage = analyze_coverage_profile(&coverage_profile, &diagnostic_segments);
         let mut warnings = combined_warnings(&coverage, language, detected_language.as_ref());
         if let Some(diagnostics) = &language_regions {
             warnings.extend(diagnostics.warnings.clone());
@@ -643,7 +754,7 @@ fn transcribe_file(
             "vocabulary_corrections": glossary_corrections,
         });
         performance.json_assembly_seconds = json_assembly_started.elapsed().as_secs_f64();
-        performance.total_seconds = model_load_seconds + file_started.elapsed().as_secs_f64();
+        performance.total_seconds = file_started.elapsed().as_secs_f64();
         json["performance"] =
             serde_json::to_value(&performance).expect("diarization performance serializes");
         eprintln!(
@@ -656,6 +767,7 @@ fn transcribe_file(
     }
 
     // Standard (non-diarized) transcription. Build options from the saved
+    let audio = audio.expect("standard transcription decodes audio");
     // settings, with CLI flags overriding.
     let vad_enabled = if args.no_vad {
         false
@@ -1439,6 +1551,30 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn cache_path_cannot_alias_the_input_recording() {
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-cache-alias-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let input = root.join("recording.m4a");
+        let other = root.join("cache.json");
+        std::fs::write(&input, b"audio").unwrap();
+        std::fs::write(&other, b"cache").unwrap();
+
+        assert!(paths_refer_to_same_file(&input, &input));
+        assert!(!paths_refer_to_same_file(&input, &other));
+        #[cfg(unix)]
+        {
+            let hard_link = root.join("recording-cache.json");
+            std::fs::hard_link(&input, &hard_link).unwrap();
+            assert!(paths_refer_to_same_file(&input, &hard_link));
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn directory_expansion_filters_sorts_recurses_and_deduplicates() {

@@ -27,7 +27,7 @@ python3 scripts/benchmark-diarized-transcription.py \
   --model kb-whisper-large --threshold 0.75 \
   --cache /private/path/recording.diarization-cache.json
 
-# Threshold-only retry reuses the expensive ONNX analysis and Whisper timestamps
+# Threshold-only retry also skips audio decode, model loading, and language checks
 python3 scripts/benchmark-diarized-transcription.py \
   --input /path/to/20-minute-mono.m4a --language sv \
   --model kb-whisper-large --threshold 0.55 \
@@ -48,15 +48,28 @@ Voice-Memo-shaped, while deliberately not representing natural long-form accurac
 
 | Run | Wall | Realtime | Peak RSS | Speakers / segments |
 |---|---:|---:|---:|---:|
-| Cache population, threshold 0.75 | 289.23s | 4.05x | 4.83 GB | 2 / 177 |
-| Cache hit, threshold 0.55 | 9.90s | 118.31x | 3.38 GB | 2 / 177 |
+| Cache population, threshold 0.75 | 233.44s | 5.02x | 2.77 GB | 2 / 177 |
+| Initial cache implementation, threshold 0.55 | 9.90s | 118.31x | 3.38 GB | 2 / 177 |
+| Decode-free cache hit, threshold 0.55 | 0.19s | 6117.66x | 18.1 MB | 2 / 177 |
+| Decode-free confirmation, threshold 0.65 | 0.18s | 6408.01x | 18.1 MB | 2 / 177 |
 
-The cache retry reduced measured wall time by 96.6%. In the cold run, ONNX model
-load + segmentation + embeddings took 109.98s while Whisper took 274.76s; their
-parallel span was 274.83s. Holding those measured phase costs constant, serializing
-them would project to about 399s end-to-end, so overlap avoided about 110s (27.5%).
-The benchmark emitted the same cached word timestamps and two-speaker analysis for
-the retry; threshold-dependent clustering and merge still ran from scratch.
+The final cache retry reduced measured wall time by 99.92% against its 233.44s
+population run. Compared with the initial cache implementation, the additional
+decode/model/language reuse reduced 9.90s to 0.19s (98.1%, about 52x) and peak RSS
+from 3.38 GB to 18.1 MB (99.5%). Cache lookup, including hashing the 77.6 MB source,
+took 0.15s; clustering and merge took another 0.02s. Decode, model loading, language
+detection, ONNX analysis, and Whisper inference all recorded zero seconds.
+
+The private 0600 cache is 1.4 MB and now includes the decoded duration, a compact
+speech-coverage frame map, language diagnostics, embeddings, and transcript word
+timestamps. This preserves the cold run's exact coverage ratio (0.83265), two
+speakers, 177 output segments, four uncovered spans, and warning codes on both
+measured retries. Older cache schemas miss safely and are rebuilt once.
+
+Cold timings vary with machine load. In the recorded 233.44s run, ONNX segmentation
+and embeddings took 100.24s while Whisper took 219.91s; their parallel span was
+220.03s. Threshold-dependent clustering, merge, coverage, and JSON assembly still
+run from scratch on every retry.
 
 ---
 

@@ -4,16 +4,18 @@ use std::path::{Path, PathBuf};
 
 use sagascript_core::diarization::DiarizationAnalysis;
 use sagascript_core::error::DictationError;
+use sagascript_core::transcription::diagnostics::{
+    CoverageProfile, LanguageDetection, LanguageRegionDiagnostics,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const CACHE_SCHEMA_VERSION: u32 = 1;
+const CACHE_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CacheIdentity {
     schema_version: u32,
     input_sha256: String,
-    audio_samples: usize,
     language: String,
     model: String,
     prompt_sha256: String,
@@ -24,17 +26,22 @@ pub(crate) struct DiarizationCache {
     identity: CacheIdentity,
     pub(crate) analysis: DiarizationAnalysis,
     pub(crate) transcript: Vec<(f64, f64, String)>,
+    #[serde(default)]
+    pub(crate) coverage_profile: CoverageProfile,
+    #[serde(default)]
+    pub(crate) detected_language: Option<LanguageDetection>,
+    #[serde(default)]
+    pub(crate) language_regions: Option<LanguageRegionDiagnostics>,
 }
 
 pub(crate) enum CacheLookup {
-    Hit(DiarizationCache),
+    Hit(Box<DiarizationCache>),
     Miss(&'static str),
 }
 
 impl CacheIdentity {
     pub(crate) fn for_input(
         input: &Path,
-        audio_samples: usize,
         language: &str,
         model: &str,
         prompt: Option<&str>,
@@ -42,7 +49,6 @@ impl CacheIdentity {
         Ok(Self {
             schema_version: CACHE_SCHEMA_VERSION,
             input_sha256: sha256_file(input)?,
-            audio_samples,
             language: language.to_string(),
             model: model.to_string(),
             prompt_sha256: sha256_bytes(prompt.unwrap_or_default().as_bytes()),
@@ -55,11 +61,17 @@ impl DiarizationCache {
         identity: CacheIdentity,
         analysis: DiarizationAnalysis,
         transcript: Vec<(f64, f64, String)>,
+        coverage_profile: CoverageProfile,
+        detected_language: Option<LanguageDetection>,
+        language_regions: Option<LanguageRegionDiagnostics>,
     ) -> Self {
         Self {
             identity,
             analysis,
             transcript,
+            coverage_profile,
+            detected_language,
+            language_regions,
         }
     }
 }
@@ -82,14 +94,24 @@ pub(crate) fn load(path: &Path, expected: &CacheIdentity) -> Result<CacheLookup,
         ));
     }
     cached.analysis.validate()?;
+    if !cached.coverage_profile.validate() {
+        return Err(DictationError::DiarizationError(
+            "Cached diarization contains an invalid coverage profile".to_string(),
+        ));
+    }
+    let duration = cached.coverage_profile.duration_seconds();
     if cached.transcript.iter().any(|(start, end, _)| {
-        !start.is_finite() || !end.is_finite() || *start < 0.0 || end < start
+        !start.is_finite()
+            || !end.is_finite()
+            || *start < 0.0
+            || end < start
+            || *end > duration + 0.001
     }) {
         return Err(DictationError::DiarizationError(
             "Cached diarization contains invalid transcript timestamps".to_string(),
         ));
     }
-    Ok(CacheLookup::Hit(cached))
+    Ok(CacheLookup::Hit(Box::new(cached)))
 }
 
 pub(crate) fn save(path: &Path, cache: &DiarizationCache) -> Result<(), DictationError> {
@@ -174,6 +196,7 @@ fn cache_error(path: &Path, action: &str, error: std::io::Error) -> DictationErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sagascript_core::transcription::diagnostics::{LanguageRegion, TranscriptionWarning};
 
     fn temp_dir() -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -183,7 +206,7 @@ mod tests {
     }
 
     fn identity(input: &Path) -> CacheIdentity {
-        CacheIdentity::for_input(input, 3, "sv", "kb-whisper-large", Some("Grimnir")).unwrap()
+        CacheIdentity::for_input(input, "sv", "kb-whisper-large", Some("Grimnir")).unwrap()
     }
 
     #[test]
@@ -198,7 +221,34 @@ mod tests {
             serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#).unwrap();
         save(
             &cache_path,
-            &DiarizationCache::new(expected.clone(), analysis, vec![(0.0, 1.0, " hej".into())]),
+            &DiarizationCache::new(
+                expected.clone(),
+                analysis,
+                vec![(0.0, 1.0, " hej".into())],
+                CoverageProfile::from_audio(&vec![0.1; 16_000]),
+                Some(LanguageDetection {
+                    language: "sv".into(),
+                    probability: 0.99,
+                }),
+                Some(LanguageRegionDiagnostics {
+                    regions: vec![LanguageRegion {
+                        start: 0.0,
+                        end: 1.0,
+                        language: "sv".into(),
+                        probability: 0.98,
+                        window_count: 1,
+                        stable: true,
+                        first_sequence: 0,
+                        last_sequence: 0,
+                    }],
+                    warnings: vec![TranscriptionWarning {
+                        code: "test".into(),
+                        message: "preserved".into(),
+                        start: None,
+                        end: None,
+                    }],
+                }),
+            ),
         )
         .unwrap();
 
@@ -206,6 +256,10 @@ mod tests {
             panic!("expected cache hit");
         };
         assert_eq!(hit.transcript.len(), 1);
+        assert_eq!(hit.detected_language.unwrap().language, "sv");
+        let regions = hit.language_regions.unwrap();
+        assert_eq!(regions.regions[0].language, "sv");
+        assert_eq!(regions.warnings[0].message, "preserved");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -219,6 +273,42 @@ mod tests {
         let changed = identity(&input);
         assert!(matches!(
             load(&cache_path, &changed).unwrap(),
+            CacheLookup::Miss(_)
+        ));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn prior_schema_is_a_cache_miss() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        std::fs::write(&input, b"audio").unwrap();
+        let cache_path = dir.join("analysis.json");
+        let expected = identity(&input);
+        let mut old_identity = expected.clone();
+        old_identity.schema_version -= 1;
+        let analysis: DiarizationAnalysis =
+            serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#).unwrap();
+        save(
+            &cache_path,
+            &DiarizationCache::new(
+                old_identity,
+                analysis,
+                Vec::new(),
+                CoverageProfile::from_audio(&[]),
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+        let mut old_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&cache_path).unwrap()).unwrap();
+        old_json.as_object_mut().unwrap().remove("coverage_profile");
+        std::fs::write(&cache_path, serde_json::to_vec(&old_json).unwrap()).unwrap();
+
+        assert!(matches!(
+            load(&cache_path, &expected).unwrap(),
             CacheLookup::Miss(_)
         ));
         let _ = std::fs::remove_dir_all(dir);
