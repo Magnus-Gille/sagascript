@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{Manager, State};
+use tauri::State;
 use tracing::{error, info, warn};
 
 /// Maximum time to wait for whisper inference before aborting (seconds)
@@ -238,11 +238,6 @@ pub async fn set_language(
     set_language_for_controller(&controller, &app, language)
 }
 
-pub fn set_language_for_app(app: &tauri::AppHandle, language: Language) -> Result<(), String> {
-    let controller: tauri::State<'_, SharedController> = app.state();
-    set_language_for_controller(&controller, app, language)
-}
-
 fn set_language_for_controller(
     controller: &State<'_, SharedController>,
     app: &tauri::AppHandle,
@@ -254,7 +249,7 @@ fn set_language_for_controller(
     let mut ctrl = controller.lock().unwrap();
     ctrl.update_settings(persisted.clone());
     drop(ctrl);
-    crate::update_language_menu(app, persisted.language);
+    crate::update_profiles_menu(app, &persisted.resolved_hotkey_profiles());
     info!("Language set to {:?}", language);
     Ok(())
 }
@@ -370,11 +365,15 @@ pub async fn set_hotkey_profiles(
             settings.replace_hotkey_profiles(profiles.clone())?;
             Ok(())
         })?;
-        controller.lock().unwrap().update_settings(persisted);
+        controller
+            .lock()
+            .unwrap()
+            .update_settings(persisted.clone());
         let change = health.record(&new_primary, None, old_operational);
         if change.changed {
             let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
         }
+        crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
         return Ok(());
     }
 
@@ -488,6 +487,8 @@ pub async fn set_hotkey_profiles(
     if change.changed {
         let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
     }
+
+    crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
 
     info!("Hotkey profiles changed: {} registered", new_shortcuts.len());
     Ok(())

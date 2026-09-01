@@ -23,10 +23,10 @@
 
   let { oncomplete }: { oncomplete: () => void } = $props();
 
-  type Step = "welcome" | "language" | "download" | "microphone" | "accessibility" | "ready";
+  type Step = "language" | "download" | "microphone" | "accessibility" | "ready";
   type OnboardingLanguage = "en" | "sv" | "no";
 
-  let currentStep: Step = $state("welcome");
+  let currentStep: Step = $state("language");
   let platform = $state("macos");
 
   // Language selection — seeded from existing settings in onMount
@@ -40,6 +40,7 @@
 
   // Language step / final "finish" step errors
   let languageError: string | null = $state(null);
+  let languageSaving = $state(false);
   let finishError: string | null = $state(null);
   let accessibilityError: string | null = $state(null);
 
@@ -60,11 +61,10 @@
   let unlistenReady: (() => void) | null = null;
   let componentDestroyed = false;
 
-  // Model info per onboarding language (no "auto" — onboarding always picks a specific language)
-  const modelInfo: Record<OnboardingLanguage, { name: string; size: string }> = {
-    en: { name: "Base English", size: "142 MB" },
-    sv: { name: "KB-Whisper Base", size: "60 MB" },
-    no: { name: "NB-Whisper Base", size: "55 MB" },
+  const engineSize: Record<OnboardingLanguage, string> = {
+    en: "142 MB",
+    sv: "60 MB",
+    no: "55 MB",
   };
 
   // Recommended model ID per language (must match Rust serde rename)
@@ -76,9 +76,9 @@
 
   function getSteps(): Step[] {
     if (platform === "macos") {
-      return ["welcome", "language", "download", "microphone", "accessibility", "ready"];
+      return ["language", "download", "microphone", "accessibility", "ready"];
     }
-    return ["welcome", "language", "download", "ready"];
+    return ["language", "download", "ready"];
   }
 
   function nextStep() {
@@ -96,12 +96,17 @@
   // -- Language --
 
   async function selectLanguageAndContinue() {
+    if (languageSaving) return;
     languageError = null;
+    languageSaving = true;
     try {
       await setLanguage(selectedLanguage);
       nextStep();
+      void startDownload();
     } catch (e: any) {
       languageError = typeof e === "string" ? e : e?.message ?? "Failed to save language. Please try again.";
+    } finally {
+      languageSaving = false;
     }
   }
 
@@ -132,12 +137,6 @@
       downloading = false;
       downloadError = typeof e === "string" ? e : e?.message ?? "Download failed. Check your internet connection.";
     }
-  }
-
-  function skipDownload() {
-    downloading = false;
-    downloadProgress = 0;
-    nextStep();
   }
 
   // -- Microphone --
@@ -373,34 +372,8 @@
   </div>
 
   <div class="content">
-    <!-- Welcome -->
-    {#if currentStep === "welcome"}
-      <div class="step">
-        <div class="icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect width="48" height="48" rx="12" fill="var(--accent-dim)" />
-            <path
-              d="M24 14v8m0 0v8m0-8h8m-8 0h-8"
-              stroke="var(--accent)"
-              stroke-width="2.5"
-              stroke-linecap="round"
-            />
-            <circle cx="24" cy="24" r="14" stroke="var(--accent)" stroke-width="2" fill="none" />
-          </svg>
-        </div>
-        <h1>Welcome to Sagascript</h1>
-        <p class="description">
-          Turn speech into text — dictate anywhere with a hotkey, or transcribe
-          audio files. All processing happens locally on your device.
-        </p>
-        <p class="subdescription">Let's get you set up in a few quick steps.</p>
-        <div class="actions">
-          <button class="primary" onclick={nextStep}>Get Started</button>
-        </div>
-      </div>
-
     <!-- Language -->
-    {:else if currentStep === "language"}
+    {#if currentStep === "language"}
       <div class="step">
         <div class="icon">
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
@@ -421,15 +394,16 @@
             />
           </svg>
         </div>
-        <h1>What language do you speak?</h1>
+        <h1>Set up Sagascript</h1>
         <p class="description">
-          We'll download a speech engine optimised for your language.
-          You can add more languages later in Settings.
+          Choose your first dictation language. Speech stays on this Mac, and
+          you can add more language profiles later.
         </p>
         <div class="language-options">
           <button
             class="language-option"
             class:selected={selectedLanguage === "en"}
+            aria-pressed={selectedLanguage === "en"}
             onclick={() => selectedLanguage = "en"}
           >
             <span class="lang-flag">EN</span>
@@ -438,6 +412,7 @@
           <button
             class="language-option"
             class:selected={selectedLanguage === "sv"}
+            aria-pressed={selectedLanguage === "sv"}
             onclick={() => selectedLanguage = "sv"}
           >
             <span class="lang-flag">SV</span>
@@ -446,6 +421,7 @@
           <button
             class="language-option"
             class:selected={selectedLanguage === "no"}
+            aria-pressed={selectedLanguage === "no"}
             onclick={() => selectedLanguage = "no"}
           >
             <span class="lang-flag">NO</span>
@@ -459,7 +435,9 @@
           </div>
         {/if}
         <div class="actions">
-          <button class="primary" onclick={selectLanguageAndContinue}>Continue</button>
+          <button class="primary" onclick={selectLanguageAndContinue} disabled={languageSaving}>
+            {languageSaving ? "Saving…" : "Continue"}
+          </button>
         </div>
       </div>
 
@@ -480,8 +458,8 @@
         </div>
         <h1>Setting up speech engine</h1>
         <p class="description">
-          Downloading {modelInfo[selectedLanguage].name} ({modelInfo[selectedLanguage].size}).
-          This runs entirely on your device — no cloud needed.
+          Preparing the local speech engine ({engineSize[selectedLanguage]}).
+          Your recordings are processed on this Mac.
         </p>
 
         {#if downloadError}
@@ -491,7 +469,6 @@
           </div>
           <div class="actions">
             <button class="primary" onclick={startDownload}>Try Again</button>
-            <button class="secondary" onclick={nextStep}>Skip for now</button>
           </div>
         {:else if downloadComplete}
           <div class="status-indicator granted">
@@ -506,13 +483,9 @@
             <div class="progress-bar" style="width: {downloadProgress}%"></div>
           </div>
           <p class="progress-text">{formatProgress(downloadProgress)}</p>
-          <div class="actions">
-            <button class="secondary" onclick={skipDownload}>Skip for now</button>
-          </div>
         {:else}
           <div class="actions">
             <button class="primary" onclick={startDownload}>Download</button>
-            <button class="secondary" onclick={nextStep}>Skip for now</button>
           </div>
         {/if}
       </div>
@@ -700,12 +673,6 @@
           </p>
         {/if}
 
-        {#if !downloadComplete}
-          <p class="subdescription warning">
-            You skipped the speech engine download. Open Settings to download one before dictating.
-          </p>
-        {/if}
-
         <p class="subdescription">You can change any of this in Settings.</p>
 
         {#if finishError}
@@ -817,11 +784,6 @@
     color: var(--text-muted);
     opacity: 0.7;
     margin: 0 0 24px;
-  }
-
-  .subdescription.warning {
-    color: var(--danger);
-    opacity: 1;
   }
 
   /* Language selector */

@@ -39,7 +39,7 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 const ABORT_GRACE_SECS: u64 = 5;
 
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, Submenu},
+    menu::{Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
@@ -48,9 +48,9 @@ use tracing::{error, info, warn};
 
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
+use sagascript_core::settings::HotkeyProfile;
 #[cfg(test)]
-use sagascript_core::settings::validate_hotkey;
-use sagascript_core::settings::Language;
+use sagascript_core::settings::{validate_hotkey, Language};
 use sagascript_core::transcription::{
     WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS, WhisperBackend,
 };
@@ -62,45 +62,103 @@ const SAFE_FALLBACK_HOTKEY: &str = "Control+Shift+Space";
 /// Shared tray status menu item for updating from anywhere
 type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
 
-#[derive(Clone)]
-struct LanguageMenuItems {
-    auto: CheckMenuItem<tauri::Wry>,
-    swedish: CheckMenuItem<tauri::Wry>,
-    english: CheckMenuItem<tauri::Wry>,
-    norwegian: CheckMenuItem<tauri::Wry>,
+struct ProfileMenuState {
+    submenu: Submenu<tauri::Wry>,
+    items: Vec<MenuItem<tauri::Wry>>,
 }
 
-type SharedLanguageMenuItems = Mutex<Option<LanguageMenuItems>>;
+type SharedProfileMenuState = Mutex<Option<ProfileMenuState>>;
 
-fn language_from_menu_id(id: &str) -> Option<Language> {
-    match id {
-        "language_auto" => Some(Language::Auto),
-        "language_swedish" => Some(Language::Swedish),
-        "language_english" => Some(Language::English),
-        "language_norwegian" => Some(Language::Norwegian),
-        _ => None,
+fn format_menu_shortcut(shortcut: &str) -> String {
+    let parts: Vec<(&str, String)> = shortcut
+        .split('+')
+        .map(|part| (part.trim(), part.trim().to_ascii_lowercase()))
+        .collect();
+    let mut label = String::new();
+    for (aliases, symbol) in [
+        (&["control", "ctrl"][..], "⌃"),
+        (&["alt", "option"][..], "⌥"),
+        (&["shift"][..], "⇧"),
+        (&["super", "command", "cmd"][..], "⌘"),
+    ] {
+        if parts
+            .iter()
+            .any(|(_, normalized)| aliases.contains(&normalized.as_str()))
+        {
+            label.push_str(symbol);
+        }
     }
+    for (original, normalized) in parts {
+        if matches!(
+            normalized.as_str(),
+            "control" | "ctrl" | "alt" | "option" | "shift" | "super" | "command" | "cmd"
+        ) {
+            continue;
+        }
+        label.push_str(if normalized == "space" {
+            "Space"
+        } else {
+            original
+        });
+    }
+    label
 }
 
-pub(crate) fn update_language_menu(app: &tauri::AppHandle, language: Language) {
-    let items = {
-        let state: tauri::State<'_, SharedLanguageMenuItems> = app.state();
-        let items = state.lock().unwrap().clone();
-        items
-    };
-    let Some(items) = items else {
+fn profile_menu_label(profile: &HotkeyProfile) -> String {
+    format!(
+        "{} — {} · {}",
+        profile.name,
+        profile.language.display_name(),
+        format_menu_shortcut(&profile.shortcut)
+    )
+}
+
+fn create_profile_menu_items(
+    app: &impl tauri::Manager<tauri::Wry>,
+    profiles: &[HotkeyProfile],
+) -> tauri::Result<Vec<MenuItem<tauri::Wry>>> {
+    let mut items = Vec::with_capacity(profiles.len() + 1);
+    for profile in profiles {
+        items.push(MenuItem::with_id(
+            app,
+            format!("profile_shortcut_{}", profile.id),
+            profile_menu_label(profile),
+            false,
+            None::<&str>,
+        )?);
+    }
+    items.push(MenuItem::with_id(
+        app,
+        "manage_profiles",
+        "Edit Profiles…",
+        true,
+        None::<&str>,
+    )?);
+    Ok(items)
+}
+
+pub(crate) fn update_profiles_menu(app: &tauri::AppHandle, profiles: &[HotkeyProfile]) {
+    let state: tauri::State<'_, SharedProfileMenuState> = app.state();
+    let mut state = state.lock().unwrap();
+    let Some(state) = state.as_mut() else {
         return;
     };
 
-    for (item, selected) in [
-        (&items.auto, language == Language::Auto),
-        (&items.swedish, language == Language::Swedish),
-        (&items.english, language == Language::English),
-        (&items.norwegian, language == Language::Norwegian),
-    ] {
-        if let Err(error) = item.set_checked(selected) {
-            error!("Failed to update tray language menu: {error}");
+    for item in state.items.drain(..) {
+        if let Err(error) = state.submenu.remove(&item) {
+            error!("Failed to remove stale tray profile item: {error}");
         }
+    }
+    match create_profile_menu_items(app, profiles) {
+        Ok(items) => {
+            for item in &items {
+                if let Err(error) = state.submenu.append(item) {
+                    error!("Failed to add tray profile item: {error}");
+                }
+            }
+            state.items = items;
+        }
+        Err(error) => error!("Failed to rebuild tray profiles menu: {error}"),
     }
 }
 
@@ -113,6 +171,7 @@ struct UpdateMenuItems {
 struct UpdateMenuState {
     items: Option<UpdateMenuItems>,
     checking: bool,
+    available_version: Option<semver::Version>,
 }
 
 type SharedUpdateMenuState = Mutex<UpdateMenuState>;
@@ -122,10 +181,44 @@ const UPDATE_CHECK_ACTION: &str = "Check for Updates…";
 fn update_status_text(result: &updates::UpdateCheck) -> String {
     match result {
         updates::UpdateCheck::Available { version } => {
-            format!("Update Available — v{version}")
+            format!("Update available — v{version}")
         }
         updates::UpdateCheck::UpToDate => "Sagascript is up to date".to_string(),
     }
+}
+
+fn update_action_text(result: &updates::UpdateCheck) -> String {
+    match result {
+        updates::UpdateCheck::Available { version } => {
+            format!("Download Sagascript v{version}…")
+        }
+        updates::UpdateCheck::UpToDate => "Check Again…".to_string(),
+    }
+}
+
+fn stable_release_url(version: &semver::Version) -> String {
+    format!("https://github.com/Magnus-Gille/sagascript/releases/tag/v{version}")
+}
+
+fn open_update_release(version: &semver::Version) -> Result<(), String> {
+    let url = stable_release_url(version);
+
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "linux")]
+    let mut command = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    };
+
+    command
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("failed to open {url}: {error}"))
 }
 
 fn check_for_updates(app: tauri::AppHandle) {
@@ -151,9 +244,25 @@ fn check_for_updates(app: tauri::AppHandle) {
 
     tauri::async_runtime::spawn(async move {
         let result = updates::check_for_update(env!("CARGO_PKG_VERSION")).await;
-        let (status_text, check_error) = match result {
-            Ok(result) => (update_status_text(&result), None),
-            Err(error) => ("Update check failed — try again".to_string(), Some(error)),
+        let (status_text, action_text, available_version, check_error) = match result {
+            Ok(result) => {
+                let available_version = match &result {
+                    updates::UpdateCheck::Available { version } => Some(version.clone()),
+                    updates::UpdateCheck::UpToDate => None,
+                };
+                (
+                    update_status_text(&result),
+                    update_action_text(&result),
+                    available_version,
+                    None,
+                )
+            }
+            Err(error) => (
+                "Couldn't check for updates".to_string(),
+                "Try Again…".to_string(),
+                None,
+                Some(error),
+            ),
         };
         if let Some(error) = check_error {
             warn!("Update check failed: {error}");
@@ -163,6 +272,7 @@ fn check_for_updates(app: tauri::AppHandle) {
             let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
             let mut state = state.lock().unwrap();
             state.checking = false;
+            state.available_version = available_version;
             state.items.clone()
         };
         let Some(items) = items else {
@@ -170,6 +280,9 @@ fn check_for_updates(app: tauri::AppHandle) {
         };
         if let Err(error) = items.status.set_text(status_text) {
             error!("Failed to set tray update status: {error}");
+        }
+        if let Err(error) = items.check.set_text(action_text) {
+            error!("Failed to set tray update action: {error}");
         }
         if let Err(error) = items.check.set_enabled(true) {
             error!("Failed to re-enable update action: {error}");
@@ -420,10 +533,11 @@ fn main() {
         .manage(whisper)
         .manage(hotkey_health)
         .manage(Mutex::new(None::<MenuItem<tauri::Wry>>) as SharedStatusItem)
-        .manage(Mutex::new(None::<LanguageMenuItems>) as SharedLanguageMenuItems)
+        .manage(Mutex::new(None::<ProfileMenuState>) as SharedProfileMenuState)
         .manage(Mutex::new(UpdateMenuState {
             items: None,
             checking: false,
+            available_version: None,
         }) as SharedUpdateMenuState)
         .setup(|app| {
             // Hide from dock on macOS (tray-only app)
@@ -515,54 +629,16 @@ fn main() {
                 MenuItem::with_id(app, "transcribe_file", "Transcribe File...", true, None::<&str>)?;
             let status =
                 MenuItem::with_id(app, "status", "Sagascript - Idle", false, None::<&str>)?;
-            let language = {
+            let profiles = {
                 let ctrl: tauri::State<'_, SharedController> = app.state();
-                let language = ctrl.lock().unwrap().language();
-                language
+                let profiles = ctrl.lock().unwrap().settings().resolved_hotkey_profiles();
+                profiles
             };
-            let language_auto = CheckMenuItem::with_id(
-                app,
-                "language_auto",
-                "Auto-detect",
-                true,
-                language == Language::Auto,
-                None::<&str>,
-            )?;
-            let language_swedish = CheckMenuItem::with_id(
-                app,
-                "language_swedish",
-                "Swedish",
-                true,
-                language == Language::Swedish,
-                None::<&str>,
-            )?;
-            let language_english = CheckMenuItem::with_id(
-                app,
-                "language_english",
-                "English",
-                true,
-                language == Language::English,
-                None::<&str>,
-            )?;
-            let language_norwegian = CheckMenuItem::with_id(
-                app,
-                "language_norwegian",
-                "Norwegian",
-                true,
-                language == Language::Norwegian,
-                None::<&str>,
-            )?;
-            let language_menu = Submenu::with_items(
-                app,
-                "Language",
-                true,
-                &[
-                    &language_auto,
-                    &language_swedish,
-                    &language_english,
-                    &language_norwegian,
-                ],
-            )?;
+            let profile_items = create_profile_menu_items(app, &profiles)?;
+            let profiles_menu = Submenu::new(app, "Profiles", true)?;
+            for item in &profile_items {
+                profiles_menu.append(item)?;
+            }
             let update_status = MenuItem::with_id(
                 app,
                 "update_status",
@@ -584,12 +660,10 @@ fn main() {
                 *status_state.lock().unwrap() = Some(status.clone());
             }
             {
-                let language_state: tauri::State<'_, SharedLanguageMenuItems> = app.state();
-                *language_state.lock().unwrap() = Some(LanguageMenuItems {
-                    auto: language_auto,
-                    swedish: language_swedish,
-                    english: language_english,
-                    norwegian: language_norwegian,
+                let profile_state: tauri::State<'_, SharedProfileMenuState> = app.state();
+                *profile_state.lock().unwrap() = Some(ProfileMenuState {
+                    submenu: profiles_menu.clone(),
+                    items: profile_items,
                 });
             }
             {
@@ -604,7 +678,7 @@ fn main() {
                 app,
                 &[
                     &status,
-                    &language_menu,
+                    &profiles_menu,
                     &update_status,
                     &check_for_updates_item,
                     &settings_item,
@@ -613,21 +687,18 @@ fn main() {
                 ],
             )?;
 
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+            let tray_icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
             let _tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .tooltip("Sagascript")
+                // One monochrome S template is used in every state. The former
+                // parchment bitmap and changing text markers are intentionally
+                // gone; status belongs in the tooltip and first menu row.
                 .icon(tray_icon)
                 .icon_as_template(true)
                 .on_menu_event(move |app, event| {
-                    if let Some(language) = language_from_menu_id(event.id().as_ref()) {
-                        if let Err(error) = commands::set_language_for_app(app, language) {
-                            error!("Failed to change language from tray menu: {error}");
-                        }
-                        return;
-                    }
-
                     match event.id().as_ref() {
                     "quit" => {
                         info!("Quit requested");
@@ -639,8 +710,22 @@ fn main() {
                     "transcribe_file" => {
                         open_settings_window(app, Some("transcribe"));
                     }
+                    "manage_profiles" => {
+                        open_settings_window(app, Some("dictate"));
+                    }
                     "check_for_updates" => {
-                        check_for_updates(app.clone());
+                        let available_version = {
+                            let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+                            let version = state.lock().unwrap().available_version.clone();
+                            version
+                        };
+                        if let Some(version) = available_version {
+                            if let Err(error) = open_update_release(&version) {
+                                error!("Failed to open update release: {error}");
+                            }
+                        } else {
+                            check_for_updates(app.clone());
+                        }
                     }
                     _ => {}
                 }
@@ -856,16 +941,12 @@ fn main() {
 /// warning sticky.
 fn tray_label(state: &str, hotkey_failed: bool) -> (&'static str, &'static str, &'static str) {
     if hotkey_failed {
-        return (
-            "Sagascript - Hotkey unavailable",
-            "\u{26A0}",
-            "Hotkey unavailable",
-        );
+        return ("Sagascript - Hotkey unavailable", "", "Hotkey unavailable");
     }
     match state {
-        "recording" => ("Sagascript - Recording...", "Rec", "Recording..."),
-        "loading_model" => ("Sagascript - Loading model...", "Loading...", "Loading model..."),
-        "transcribing" => ("Sagascript - Transcribing...", "...", "Transcribing..."),
+        "recording" => ("Sagascript - Recording...", "", "Recording..."),
+        "loading_model" => ("Sagascript - Loading model...", "", "Loading model..."),
+        "transcribing" => ("Sagascript - Transcribing...", "", "Transcribing..."),
         _ => ("Sagascript", "", "Idle"),
     }
 }
@@ -881,7 +962,7 @@ fn update_tray_status(app: &tauri::AppHandle, state: &str) {
 
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(tooltip));
-        let _ = tray.set_title(Some(title));
+        let _ = tray.set_title((!title.is_empty()).then_some(title));
     }
 
     set_status_menu_text(app, &format!("Sagascript - {menu_text}"));
@@ -1472,12 +1553,12 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             }
 
             // Update controller with all new settings
-            let selected_language = new_settings.language;
+            let profiles = new_settings.resolved_hotkey_profiles();
             {
                 let mut c = ctrl.lock().unwrap();
                 c.update_settings(new_settings);
             }
-            update_language_menu(&app, selected_language);
+            update_profiles_menu(&app, &profiles);
 
             // Notify frontend so UI reflects external changes
             let _ = app.emit(events::event::STATE_CHANGED, "settings_reloaded");
@@ -1512,30 +1593,12 @@ mod tests {
     }
 
     #[test]
-    fn language_menu_ids_resolve_to_persisted_language_values() {
-        assert_eq!(language_from_menu_id("language_auto"), Some(Language::Auto));
-        assert_eq!(
-            language_from_menu_id("language_swedish"),
-            Some(Language::Swedish)
-        );
-        assert_eq!(
-            language_from_menu_id("language_english"),
-            Some(Language::English)
-        );
-        assert_eq!(
-            language_from_menu_id("language_norwegian"),
-            Some(Language::Norwegian)
-        );
-        assert_eq!(language_from_menu_id("other"), None);
-    }
-
-    #[test]
     fn update_status_describes_available_and_current_releases() {
         assert_eq!(
             update_status_text(&updates::UpdateCheck::Available {
                 version: semver::Version::new(1, 2, 3)
             }),
-            "Update Available — v1.2.3"
+            "Update available — v1.2.3"
         );
         assert_eq!(
             update_status_text(&updates::UpdateCheck::UpToDate),
@@ -1815,6 +1878,32 @@ mod tests {
     // -- tray_label --
 
     #[test]
+    fn update_menu_makes_available_release_actionable() {
+        let result = updates::UpdateCheck::Available {
+            version: semver::Version::new(1, 2, 0),
+        };
+
+        assert_eq!(update_status_text(&result), "Update available — v1.2.0");
+        assert_eq!(update_action_text(&result), "Download Sagascript v1.2.0…");
+    }
+
+    #[test]
+    fn update_menu_keeps_a_clear_recheck_action_when_current() {
+        assert_eq!(
+            update_action_text(&updates::UpdateCheck::UpToDate),
+            "Check Again…"
+        );
+    }
+
+    #[test]
+    fn update_action_targets_the_exact_stable_release() {
+        assert_eq!(
+            stable_release_url(&semver::Version::new(1, 2, 0)),
+            "https://github.com/Magnus-Gille/sagascript/releases/tag/v1.2.0"
+        );
+    }
+
+    #[test]
     fn tray_label_idle_not_failed() {
         assert_eq!(tray_label("idle", false), ("Sagascript", "", "Idle"));
     }
@@ -1823,8 +1912,40 @@ mod tests {
     fn tray_label_recording_not_failed() {
         assert_eq!(
             tray_label("recording", false),
-            ("Sagascript - Recording...", "Rec", "Recording...")
+            ("Sagascript - Recording...", "", "Recording...")
         );
+    }
+
+    #[test]
+    fn tray_status_never_adds_text_beside_the_template_icon() {
+        for state in ["idle", "recording", "loading_model", "transcribing"] {
+            assert_eq!(tray_label(state, false).1, "");
+        }
+        assert_eq!(tray_label("idle", true).1, "");
+    }
+
+    #[test]
+    fn profile_menu_label_explains_language_and_shortcut() {
+        let profile = sagascript_core::settings::HotkeyProfile {
+            id: "swedish".to_string(),
+            name: "Svenska".to_string(),
+            shortcut: "Super+Shift+S".to_string(),
+            language: Language::Swedish,
+        };
+
+        assert_eq!(profile_menu_label(&profile), "Svenska — Swedish · ⇧⌘S");
+    }
+
+    #[test]
+    fn profile_menu_label_keeps_non_macos_shortcuts_readable() {
+        let profile = sagascript_core::settings::HotkeyProfile {
+            id: "english".to_string(),
+            name: "English".to_string(),
+            shortcut: "Control+Alt+Space".to_string(),
+            language: Language::English,
+        };
+
+        assert_eq!(profile_menu_label(&profile), "English — English · ⌃⌥Space");
     }
 
     #[test]

@@ -56,6 +56,9 @@ jobs:
       - name: Verify third-party notices
         run: npm run licenses:check
 
+      - name: Test frontend release surface
+        run: npm run test:frontend
+
       - name: Build fresh frontend
         run: npm run build
 
