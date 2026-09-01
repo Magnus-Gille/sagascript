@@ -469,6 +469,7 @@
           </div>
           <div class="actions">
             <button class="primary" onclick={startDownload}>Try Again</button>
+            <button class="secondary" onclick={nextStep}>Continue without speech engine</button>
           </div>
         {:else if downloadComplete}
           <div class="status-indicator granted">
@@ -655,6 +656,13 @@
           </svg>
         </div>
         <h1>You're All Set!</h1>
+
+        {#if !downloadComplete}
+          <div class="status-indicator error" role="alert">
+            <span class="status-dot"></span>
+            <span>Speech engine is not installed yet. Download it from Dictate before your first use.</span>
+          </div>
+        {/if}
 
         {#if micStatus === "authorized" || platform !== "macos"}
           <div class="hotkey-display">

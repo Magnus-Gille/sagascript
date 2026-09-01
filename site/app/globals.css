@@ -64,10 +64,10 @@ h2 { margin-bottom: 0; font-size: clamp(54px, 7vw, 105px); line-height: .92; let
 .terminal { overflow: hidden; border: 1px solid #3a3a38; background: #191917; box-shadow: 25px 25px 0 var(--aqua); }
 .terminal-bar { display: flex; align-items: center; gap: 7px; height: 42px; padding: 0 14px; border-bottom: 1px solid #343431; }
 .terminal-bar span { width: 8px; height: 8px; border-radius: 50%; background: #565650; }
-.terminal-bar b { margin-left: 8px; color: #777770; font-size: 10px; font-weight: 500; }
+.terminal-bar b { margin-left: 8px; color: #8f8f88; font-size: 10px; font-weight: 500; }
 .terminal pre { min-height: 280px; margin: 0; padding: 35px; white-space: pre-wrap; font: 13px/1.8 var(--font-geist-mono); }
 .terminal em { color: var(--aqua); font-style: normal; }
-.terminal code span { color: #777770; }
+.terminal code span { color: #8f8f88; }
 
 .final-cta { width: min(100% - 40px, 1400px); margin: 0 auto; padding: 130px 0; }
 .final-cta h2 { max-width: 900px; margin-bottom: 55px; font-size: clamp(72px, 11vw, 160px); }
@@ -77,7 +77,7 @@ footer p { margin: 0; color: var(--muted); }
 footer > div:last-child { display: flex; gap: 24px; }
 
 @media (max-width: 850px) {
-  .site-header nav { display: none; }
+  .site-header nav { gap: clamp(10px, 3vw, 20px); font-size: 12px; }
   .hero { grid-template-columns: 1fr; padding: 65px 0 75px; }
   .product-shot { width: min(100%, 520px); }
   .shot-frame { margin-left: 0; }
@@ -93,6 +93,10 @@ footer > div:last-child { display: flex; gap: 24px; }
 
 @media (max-width: 520px) {
   .site-header { height: 68px; }
+  .site-header { width: calc(100% - 24px); }
+  .site-header nav { gap: 9px; font-size: 11px; }
+  .wordmark { gap: 7px; font-size: 13px; }
+  .mark { width: 23px; height: 23px; }
   h1 { font-size: 59px; }
   .hero { min-height: auto; gap: 65px; }
   .button { width: 100%; }

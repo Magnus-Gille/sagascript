@@ -141,6 +141,10 @@ export async function getModelInfo(): Promise<WhisperModel[]> {
   return invoke("get_model_info");
 }
 
+export async function getEffectiveModelInfo(language: Language): Promise<WhisperModel> {
+  return invoke("get_effective_model_info", { language });
+}
+
 export async function getLoadedModel(): Promise<LoadedModelInfo> {
   return invoke("get_loaded_model");
 }

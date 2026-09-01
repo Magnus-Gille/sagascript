@@ -30,6 +30,10 @@ const siteMarkSource = await readFile(
   new URL("../site/public/sagascript-mark.svg", import.meta.url),
   "utf8",
 );
+const siteCssSource = await readFile(
+  new URL("../site/app/globals.css", import.meta.url),
+  "utf8",
+);
 
 test("release navigation exposes only Dictate, Transcribe, and Settings", () => {
   for (const label of ["Dictate", "Transcribe", "Settings"]) {
@@ -71,7 +75,17 @@ test("onboarding automatically prepares one hidden recommended engine", () => {
   assert.match(onboardingSource, /nextStep\(\);\s*void startDownload\(\);/s);
   assert.match(onboardingSource, /local speech engine/i);
   assert.doesNotMatch(onboardingSource, /modelInfo\[selectedLanguage\]\.name/);
-  assert.doesNotMatch(onboardingSource, /Skip for now/);
+  assert.match(onboardingSource, /Continue without speech engine/);
+  assert.match(onboardingSource, /Speech engine is not installed yet/);
+});
+
+test("dictation profiles expose missing speech engines without opening Advanced", () => {
+  const advancedStart = settingsSource.indexOf('<details class="advanced-section">');
+  const ordinarySource = settingsSource.slice(0, advancedStart);
+
+  assert.match(ordinarySource, /getEffectiveModelInfo/);
+  assert.match(ordinarySource, /Download speech engine/);
+  assert.match(ordinarySource, /Speech engine ready/);
 });
 
 test("onboarding prevents duplicate setup requests and exposes language selection", () => {
@@ -81,9 +95,22 @@ test("onboarding prevents duplicate setup requests and exposes language selectio
 });
 
 test("menu bar uses the one monochrome S template without a text marker", () => {
-  assert.match(mainSource, /include_bytes!\("\.\.\/icons\/tray-icon\.png"\)/);
+  assert.match(mainSource, /include_bytes!\("\.\.\/icons\/tray-icon@2x\.png"\)/);
   assert.match(mainSource, /\.icon_as_template\(true\)/);
   assert.doesNotMatch(mainSource, /\.title\("S"\)/);
+});
+
+test("profile and update menu states remain explicit after interaction", () => {
+  assert.match(mainSource, /select_profile_menu\(app, &profile\)/);
+  assert.match(mainSource, /if selected \{ "✓ " \} else \{ "" \}/);
+  assert.match(mainSource, /open_update_release\(&version\)[\s\S]*available_version = None;/);
+  assert.match(mainSource, /items\.check\.set_text\("Check Again…"\)/);
+});
+
+test("mobile site keeps navigation and readable terminal text", () => {
+  assert.doesNotMatch(siteCssSource, /\.site-header nav\s*\{\s*display:\s*none/);
+  assert.match(siteCssSource, /\.terminal-bar b[^}]*color:\s*#8f8f88/);
+  assert.match(siteCssSource, /\.terminal code span[^}]*color:\s*#8f8f88/);
 });
 
 test("app and website use the exact canonical single-S geometry", () => {

@@ -152,12 +152,16 @@ Completed locally on branch `codex/release-readiness`:
   and decoder controls are hidden under Advanced, and Teach is absent from the
   first-release UI while its CLI/core implementation remains intact.
 - Onboarding starts with language, immediately prepares the recommended local
-  speech engine, has no model-name decision or skip path, and then guides the
-  user through macOS permissions.
+  speech engine, has no model-name decision, and then guides the user through
+  macOS permissions. A failed download has an error-only escape so an offline
+  first run cannot lock the user out of the application.
 - The menu bar always uses the monochrome S template. The Profiles submenu shows
-  every configured profile with its language and macOS shortcut and links to
-  profile editing; shortcut-triggered profiles remain the authoritative
-  selection mechanism.
+  every configured profile with its language and macOS shortcut, marks the
+  active or most recently used profile, and links to profile editing;
+  shortcut-triggered profiles remain the authoritative selection mechanism.
+- Each Dictate profile reports whether its recommended speech engine is ready
+  and offers a direct download when it is missing. Manual model selection stays
+  hidden under Advanced.
 - Update checks expose checking, current, available, and retry states. An
   available release turns the action into a link to that exact stable GitHub
   release tag.
@@ -175,15 +179,20 @@ Completed locally on branch `codex/release-readiness`:
 
 Verification completed:
 
-- All frontend checks pass, including 17 release-surface regression tests and
+- All frontend checks pass, including 20 release-surface regression tests and
   Svelte diagnostics with zero errors or warnings.
 - All Rust workspace checks pass: check, Clippy with warnings denied, lean CLI
-  build, and 571 tests.
+  build, and 573 tests.
 - Release metadata and license inventory checks pass.
 - A local unsigned debug DMG builds and verifies as a valid disk image:
   `Sagascript_1.1.0_aarch64.dmg`, SHA-256
-  `6c493f84a6f45de3a0099f70b67fa4517b1cf2e5e426e95fa1f086eb93f42a5a`.
+  `14c8b4ed21ec524ca06f65efd7483af270e9b60650957ea189decdefb21fd195`.
   This is a packaging smoke test, not a distributable release artifact.
+- Claude Opus 5 independently reviewed commit
+  `40bda7906eff25a5014dd94c313be3f7db91f11e`. Its grounded findings are fixed:
+  recoverable onboarding, visible per-profile engine readiness, re-checkable
+  update actions, selected-profile indication, shortcut alias formatting,
+  Retina tray source, site contrast/mobile navigation, and dead site scaffold.
 - The onboarding window was launched with isolated first-run settings and
   visually checked on macOS. An isolated QA bundle confirmed that the selected
   single-S template is created at startup without a text label or legacy
@@ -199,15 +208,15 @@ Open release blockers:
 - The selected glyph has been raster-checked at 32, 64, 128, 512, and 1024 px.
   Its current macOS template rendering still needs a visually isolated pass in
   both light and dark menu bars during signed acceptance.
-- The independent Claude Opus 5 review attempt exhausted the configured Claude
-  session limit before returning findings. A conductor review found and fixed
-  duplicate onboarding submission and insufficient small-text color contrast,
-  but the required independent review still needs a clean rerun before release.
+- The post-review fixes need one final independent diff review after they are
+  committed; the original reviewed commit must not be mistaken for the final
+  release revision.
 - The product page builds and its authored files lint cleanly, but its pinned
   Sites scaffold currently reports five high-severity and one low-severity
   production dependency advisories. Do not deploy it until an approved scaffold
-  update resolves that audit. Browser-based rendered-page QA is also pending
-  because the in-app browser runtime was unavailable.
+  update resolves that audit. Browser-based rendered-page QA is also pending:
+  the in-app browser runtime had no connected browser instance during the
+  post-review validation pass.
 - Linking from gille.ai and publishing the GitHub release/site are separate
   production mutations and require an explicit release approval after these
   gates pass.

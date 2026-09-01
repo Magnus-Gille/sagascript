@@ -65,6 +65,7 @@ type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
 struct ProfileMenuState {
     submenu: Submenu<tauri::Wry>,
     items: Vec<MenuItem<tauri::Wry>>,
+    selected_profile_id: Option<String>,
 }
 
 type SharedProfileMenuState = Mutex<Option<ProfileMenuState>>;
@@ -72,7 +73,16 @@ type SharedProfileMenuState = Mutex<Option<ProfileMenuState>>;
 fn format_menu_shortcut(shortcut: &str) -> String {
     let parts: Vec<(&str, String)> = shortcut
         .split('+')
-        .map(|part| (part.trim(), part.trim().to_ascii_lowercase()))
+        .map(|part| {
+            let original = part.trim();
+            let normalized = match original.to_ascii_lowercase().as_str() {
+                "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" => {
+                    if cfg!(target_os = "macos") { "command" } else { "control" }
+                }
+                _ => original,
+            };
+            (original, normalized.to_ascii_lowercase())
+        })
         .collect();
     let mut label = String::new();
     for (aliases, symbol) in [
@@ -95,18 +105,22 @@ fn format_menu_shortcut(shortcut: &str) -> String {
         ) {
             continue;
         }
-        label.push_str(if normalized == "space" {
-            "Space"
-        } else {
-            original
+        label.push_str(match normalized.as_str() {
+            "space" => "Space",
+            "arrowup" | "up" => "↑",
+            "arrowdown" | "down" => "↓",
+            "arrowleft" | "left" => "←",
+            "arrowright" | "right" => "→",
+            _ => original,
         });
     }
     label
 }
 
-fn profile_menu_label(profile: &HotkeyProfile) -> String {
+fn profile_menu_label(profile: &HotkeyProfile, selected: bool) -> String {
     format!(
-        "{} — {} · {}",
+        "{}{} — {} · {}",
+        if selected { "✓ " } else { "" },
         profile.name,
         profile.language.display_name(),
         format_menu_shortcut(&profile.shortcut)
@@ -116,13 +130,14 @@ fn profile_menu_label(profile: &HotkeyProfile) -> String {
 fn create_profile_menu_items(
     app: &impl tauri::Manager<tauri::Wry>,
     profiles: &[HotkeyProfile],
+    selected_profile_id: Option<&str>,
 ) -> tauri::Result<Vec<MenuItem<tauri::Wry>>> {
     let mut items = Vec::with_capacity(profiles.len() + 1);
     for profile in profiles {
         items.push(MenuItem::with_id(
             app,
             format!("profile_shortcut_{}", profile.id),
-            profile_menu_label(profile),
+            profile_menu_label(profile, selected_profile_id == Some(profile.id.as_str())),
             false,
             None::<&str>,
         )?);
@@ -144,12 +159,19 @@ pub(crate) fn update_profiles_menu(app: &tauri::AppHandle, profiles: &[HotkeyPro
         return;
     };
 
+    let selected_profile_id = state
+        .selected_profile_id
+        .as_deref()
+        .filter(|selected| profiles.iter().any(|profile| profile.id == *selected))
+        .map(str::to_string)
+        .or_else(|| profiles.first().map(|profile| profile.id.clone()));
+
     for item in state.items.drain(..) {
         if let Err(error) = state.submenu.remove(&item) {
             error!("Failed to remove stale tray profile item: {error}");
         }
     }
-    match create_profile_menu_items(app, profiles) {
+    match create_profile_menu_items(app, profiles, selected_profile_id.as_deref()) {
         Ok(items) => {
             for item in &items {
                 if let Err(error) = state.submenu.append(item) {
@@ -157,9 +179,26 @@ pub(crate) fn update_profiles_menu(app: &tauri::AppHandle, profiles: &[HotkeyPro
                 }
             }
             state.items = items;
+            state.selected_profile_id = selected_profile_id;
         }
         Err(error) => error!("Failed to rebuild tray profiles menu: {error}"),
     }
+}
+
+fn select_profile_menu(app: &tauri::AppHandle, profile: &HotkeyProfile) {
+    let profiles = {
+        let controller: tauri::State<'_, SharedController> = app.state();
+        let profiles = controller.lock().unwrap().settings().resolved_hotkey_profiles();
+        profiles
+    };
+    {
+        let state: tauri::State<'_, SharedProfileMenuState> = app.state();
+        let mut state = state.lock().unwrap();
+        if let Some(state) = state.as_mut() {
+            state.selected_profile_id = Some(profile.id.clone());
+        }
+    }
+    update_profiles_menu(app, &profiles);
 }
 
 #[derive(Clone)]
@@ -503,6 +542,7 @@ fn main() {
                                     };
                                     let _ = app.emit(events::event::STATE_CHANGED, "recording");
                                     if let Some(profile) = active_profile {
+                                        select_profile_menu(app, &profile);
                                         let _ = app.emit(events::event::ACTIVE_HOTKEY_PROFILE_CHANGED, profile);
                                     }
                                     update_tray_status(app, "recording");
@@ -634,7 +674,9 @@ fn main() {
                 let profiles = ctrl.lock().unwrap().settings().resolved_hotkey_profiles();
                 profiles
             };
-            let profile_items = create_profile_menu_items(app, &profiles)?;
+            let selected_profile_id = profiles.first().map(|profile| profile.id.clone());
+            let profile_items =
+                create_profile_menu_items(app, &profiles, selected_profile_id.as_deref())?;
             let profiles_menu = Submenu::new(app, "Profiles", true)?;
             for item in &profile_items {
                 profiles_menu.append(item)?;
@@ -664,6 +706,7 @@ fn main() {
                 *profile_state.lock().unwrap() = Some(ProfileMenuState {
                     submenu: profiles_menu.clone(),
                     items: profile_items,
+                    selected_profile_id,
                 });
             }
             {
@@ -688,7 +731,7 @@ fn main() {
             )?;
 
             let tray_icon =
-                tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+                tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon@2x.png"))?;
 
             let _tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
@@ -722,6 +765,18 @@ fn main() {
                         if let Some(version) = available_version {
                             if let Err(error) = open_update_release(&version) {
                                 error!("Failed to open update release: {error}");
+                            } else {
+                                let items = {
+                                    let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+                                    let mut state = state.lock().unwrap();
+                                    state.available_version = None;
+                                    state.items.clone()
+                                };
+                                if let Some(items) = items {
+                                    if let Err(error) = items.check.set_text("Check Again…") {
+                                        error!("Failed to reset update action after opening release: {error}");
+                                    }
+                                }
                             }
                         } else {
                             check_for_updates(app.clone());
@@ -890,6 +945,7 @@ fn main() {
             commands::cancel_recording,
             commands::is_model_downloaded,
             commands::get_model_info,
+            commands::get_effective_model_info,
             commands::download_model,
             commands::set_auto_paste,
             commands::set_show_overlay,
@@ -1925,7 +1981,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_menu_label_explains_language_and_shortcut() {
+    fn profile_menu_label_explains_language_shortcut_and_selection() {
         let profile = sagascript_core::settings::HotkeyProfile {
             id: "swedish".to_string(),
             name: "Svenska".to_string(),
@@ -1933,7 +1989,14 @@ mod tests {
             language: Language::Swedish,
         };
 
-        assert_eq!(profile_menu_label(&profile), "Svenska — Swedish · ⇧⌘S");
+        assert_eq!(
+            profile_menu_label(&profile, true),
+            "✓ Svenska — Swedish · ⇧⌘S"
+        );
+        assert_eq!(
+            profile_menu_label(&profile, false),
+            "Svenska — Swedish · ⇧⌘S"
+        );
     }
 
     #[test]
@@ -1945,7 +2008,28 @@ mod tests {
             language: Language::English,
         };
 
-        assert_eq!(profile_menu_label(&profile), "English — English · ⌃⌥Space");
+        assert_eq!(
+            profile_menu_label(&profile, false),
+            "English — English · ⌃⌥Space"
+        );
+    }
+
+    #[test]
+    fn profile_menu_shortcut_formats_command_or_control_aliases() {
+        for shortcut in [
+            "CommandOrControl+Shift+Space",
+            "CommandOrCtrl+Shift+Space",
+            "CmdOrCtrl+Shift+Space",
+            "CmdOrControl+Shift+Space",
+        ] {
+            assert_eq!(format_menu_shortcut(shortcut), "⇧⌘Space");
+        }
+    }
+
+    #[test]
+    fn profile_menu_shortcut_formats_arrow_keys() {
+        assert_eq!(format_menu_shortcut("Control+ArrowUp"), "⌃↑");
+        assert_eq!(format_menu_shortcut("Alt+Left"), "⌥←");
     }
 
     #[test]

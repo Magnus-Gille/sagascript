@@ -14,6 +14,7 @@
     setVadEnabled,
     getBuildInfo,
     getModelInfo,
+    getEffectiveModelInfo,
     downloadModel,
     transcribeFile,
     getSupportedFormats,
@@ -42,6 +43,9 @@
   let downloading: string | null = $state(null);
   let downloadingName: string = $state("");
   let downloadProgress: number = $state(0);
+  let profileModels: Record<string, WhisperModel> = $state({});
+  let profileModelErrors: Record<string, string> = $state({});
+  let profileModelRefresh = 0;
 
   let platform: string = $state("macos");
 
@@ -91,6 +95,25 @@
   let transcribePrompt: string = $state('');
   let transcribeDiarize: boolean = $state(false);
 
+  async function refreshProfileModels(profiles: HotkeyProfile[]) {
+    const generation = ++profileModelRefresh;
+    try {
+      const entries = await Promise.all(
+        profiles.map(async (profile) => [
+          profile.id,
+          await getEffectiveModelInfo(profile.language),
+        ] as const),
+      );
+      if (generation === profileModelRefresh) {
+        profileModels = Object.fromEntries(entries);
+      }
+    } catch (e: any) {
+      if (generation === profileModelRefresh) {
+        settingsError = typeof e === "string" ? e : e?.message || "Failed to check speech engines.";
+      }
+    }
+  }
+
   onMount(() => {
     // Register listeners + drag-drop FIRST — they don't depend on the data
     // fetched below, so a rejected invoke in the fetch sequence must never
@@ -107,6 +130,7 @@
       downloading = null;
       downloadProgress = 0;
       models = await getModelInfo();
+      if (settings) await refreshProfileModels(settings.hotkey_profiles);
     });
 
     // Hotkey registration health can change at any time (settings-file
@@ -125,6 +149,7 @@
       if (event.payload !== "settings_reloaded") return;
       settings = await getSettings();
       models = await getModelInfo();
+      await refreshProfileModels(settings.hotkey_profiles);
     });
 
     // Listen for tab navigation from tray menu
@@ -158,6 +183,7 @@
       initError = "";
       try {
         settings = await getSettings();
+        await refreshProfileModels(settings.hotkey_profiles);
         platform = await getPlatform();
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
@@ -193,6 +219,7 @@
     try {
       await mutate();
       settings = await getSettings();
+      await refreshProfileModels(settings.hotkey_profiles);
       return true;
     } catch (e: any) {
       settingsError = typeof e === "string" ? e : e?.message || "Failed to save setting.";
@@ -308,6 +335,28 @@
       downloading = null;
       downloadProgress = 0;
       selecting = false;
+    }
+  }
+
+  async function downloadProfileModel(profile: HotkeyProfile) {
+    const model = profileModels[profile.id];
+    if (!model || model.downloaded || downloading !== null) return;
+    downloading = model.id;
+    downloadingName = model.display_name;
+    downloadProgress = 0;
+    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
+    try {
+      await downloadModel(model.id);
+      await refreshProfileModels(settings?.hotkey_profiles ?? []);
+      models = await getModelInfo();
+    } catch (e: any) {
+      profileModelErrors = {
+        ...profileModelErrors,
+        [profile.id]: typeof e === "string" ? e : e?.message || "Speech engine download failed.",
+      };
+    } finally {
+      downloading = null;
+      downloadProgress = 0;
     }
   }
 
@@ -477,6 +526,7 @@
     );
     if (profileId === draftProfileId) {
       settings = { ...settings, hotkey_profiles: profiles };
+      await refreshProfileModels(profiles);
       return;
     }
     await applySetting(() => setHotkeyProfiles(profiles));
@@ -498,6 +548,7 @@
     settings = { ...settings, hotkey_profiles: [...settings.hotkey_profiles, profile] };
     draftProfileId = profile.id;
     recordingProfileId = profile.id;
+    void refreshProfileModels(settings.hotkey_profiles);
   }
 
   async function removeProfile(profileId: string) {
@@ -590,6 +641,29 @@
                   <button class="profile-remove" aria-label={`Remove ${profile.name}`} onclick={() => removeProfile(profile.id)}>Remove</button>
                 {/if}
               </div>
+              {#if profileModels[profile.id]}
+                <div class="profile-engine" class:missing={!profileModels[profile.id].downloaded}>
+                  <span>
+                    {profileModels[profile.id].downloaded
+                      ? "Speech engine ready"
+                      : `Speech engine required · ${profileModels[profile.id].size_mb} MB`}
+                  </span>
+                  {#if !profileModels[profile.id].downloaded}
+                    <button
+                      class="link-btn"
+                      onclick={() => downloadProfileModel(profile)}
+                      disabled={downloading !== null}
+                    >
+                      {downloading === profileModels[profile.id].id
+                        ? `Downloading ${Math.round(downloadProgress)}%`
+                        : "Download speech engine"}
+                    </button>
+                  {/if}
+                </div>
+                {#if profileModelErrors[profile.id]}
+                  <div class="hotkey-error">{profileModelErrors[profile.id]}</div>
+                {/if}
+              {/if}
             </div>
           {/each}
           {#if hotkeyError}
@@ -1026,6 +1100,25 @@
 
   .profile-row .hotkey-recorder {
     flex: 1;
+  }
+
+  .profile-engine {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 3px;
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  .profile-engine.missing {
+    color: var(--danger);
+  }
+
+  .profile-engine .link-btn:disabled {
+    cursor: wait;
+    opacity: 0.7;
   }
 
   .profile-remove {

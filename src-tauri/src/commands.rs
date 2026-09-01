@@ -828,6 +828,28 @@ pub async fn get_model_info(
         .collect())
 }
 
+/// Return the effective speech engine for one profile language. This keeps the
+/// normal Dictate surface model-name-free while still giving it enough state to
+/// offer a direct download when an upgraded or newly added profile is not ready.
+#[tauri::command]
+pub async fn get_effective_model_info(
+    controller: State<'_, SharedController>,
+    language: Language,
+) -> Result<ModelInfo, String> {
+    let ctrl = controller.lock().unwrap();
+    let model = ctrl.settings().effective_model_for(language);
+    Ok(ModelInfo {
+        id: serde_json::to_value(model)
+            .and_then(serde_json::from_value::<String>)
+            .unwrap_or_else(|_| format!("{model:?}")),
+        display_name: model.display_name().to_string(),
+        description: model.description().to_string(),
+        size_mb: model.size_mb(),
+        downloaded: model::is_model_downloaded(model),
+        active: true,
+    })
+}
+
 // -- Model download --
 
 #[tauri::command]
