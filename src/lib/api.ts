@@ -234,6 +234,10 @@ export async function requestAccessibilityPermission(): Promise<void> {
   return invoke("request_accessibility_permission");
 }
 
+export async function openAccessibilitySettings(): Promise<void> {
+  return invoke("open_accessibility_settings");
+}
+
 export async function microphoneStatus(): Promise<string> {
   return invoke("microphone_status");
 }

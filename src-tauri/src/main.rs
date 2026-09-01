@@ -960,6 +960,7 @@ fn main() {
             commands::get_supported_formats,
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,
+            commands::open_accessibility_settings,
             commands::microphone_status,
             commands::request_microphone_access,
             commands::open_microphone_settings,

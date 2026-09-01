@@ -1630,6 +1630,15 @@ pub async fn request_accessibility_permission() -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub async fn open_accessibility_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::platform::macos::open_accessibility_settings()?;
+    }
+    Ok(())
+}
+
 /// Returns the microphone authorization status as a string.
 /// Possible values: "authorized", "not_determined", "denied", "restricted", "unsupported".
 /// "unsupported" is returned when the binary is not running from a proper .app bundle

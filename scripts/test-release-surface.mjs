@@ -10,6 +10,10 @@ const onboardingSource = await readFile(
   new URL("../src/lib/Onboarding.svelte", import.meta.url),
   "utf8",
 );
+const apiSource = await readFile(
+  new URL("../src/lib/api.ts", import.meta.url),
+  "utf8",
+);
 const mainSource = await readFile(
   new URL("../src-tauri/src/main.rs", import.meta.url),
   "utf8",
@@ -94,7 +98,7 @@ test("onboarding prevents duplicate setup requests and exposes language selectio
   assert.equal((onboardingSource.match(/aria-pressed=\{selectedLanguage ===/g) ?? []).length, 3);
 });
 
-test("Accessibility onboarding can reopen System Settings while polling", () => {
+test("Accessibility onboarding reopens System Settings without prompting again", () => {
   const reopenStart = onboardingSource.indexOf("async function reopenAccessibilitySettings");
   const reopenEnd = onboardingSource.indexOf("\n  }", reopenStart);
 
@@ -102,8 +106,15 @@ test("Accessibility onboarding can reopen System Settings while polling", () => 
   assert.ok(reopenEnd > reopenStart, "Accessibility reopen helper is not closed");
 
   const reopenSource = onboardingSource.slice(reopenStart, reopenEnd);
-  assert.match(reopenSource, /await requestAccessibilityPermission\(\)/);
-  assert.doesNotMatch(reopenSource, /beginPollOperation|startPoll/);
+  assert.match(reopenSource, /await openAccessibilitySettings\(\)/);
+  assert.doesNotMatch(
+    reopenSource,
+    /requestAccessibilityPermission|beginPollOperation|startPoll/,
+  );
+  assert.match(
+    apiSource,
+    /export async function openAccessibilitySettings\(\): Promise<void> \{\s*return invoke\("open_accessibility_settings"\);/,
+  );
   assert.match(
     onboardingSource,
     /\{:else if accessibilityChecking\}[\s\S]*onclick=\{reopenAccessibilitySettings\}[\s\S]*Open Accessibility Settings Again/,

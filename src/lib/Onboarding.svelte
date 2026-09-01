@@ -17,6 +17,7 @@
     openMicrophoneSettings,
     checkAccessibilityPermission,
     requestAccessibilityPermission,
+    openAccessibilitySettings,
     setAutoPaste,
     setOnboardingCompleted,
   } from "./api";
@@ -227,8 +228,8 @@
     accessibilityError = null;
     accessibilityOpening = true;
     try {
-      // Reuse the native deep-link without touching the active permission poll.
-      await requestAccessibilityPermission();
+      // Reopen the pane without asking macOS to show its modal permission prompt again.
+      await openAccessibilitySettings();
     } catch (e: any) {
       accessibilityError =
         typeof e === "string" ? e : e?.message ?? "Failed to open Accessibility settings. Please try again.";
