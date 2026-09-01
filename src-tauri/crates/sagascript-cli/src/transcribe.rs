@@ -1,22 +1,23 @@
 use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use clap::Args;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use sagascript_core::audio::decoder::{SUPPORTED_EXTENSIONS, decode_audio_file};
+use sagascript_core::audio::decoder::{decode_audio_file, SUPPORTED_EXTENSIONS};
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{HotkeyProfile, Language, Settings, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
+    analyze_coverage, analyze_language_windows, analyze_repetition, language_mismatch_warning,
     CoverageDiagnostics, LanguageDetection, LanguageRegionDiagnostics, LanguageWindow,
-    TranscriptionWarning, analyze_coverage, analyze_language_windows, analyze_repetition,
-    language_mismatch_warning,
+    TranscriptionWarning,
 };
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::{
-    Glossary, TranscriptSegment, TranscribeOptions, WhisperBackend, normalize_nonspeech_markers,
+    normalize_nonspeech_markers, Glossary, TranscribeOptions, TranscriptSegment, WhisperBackend,
 };
 
 #[derive(Args)]
@@ -75,6 +76,12 @@ pub struct TranscribeArgs {
           help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.75). Higher = fewer speakers.")]
     pub diarize_threshold: f32,
 
+    /// Read/write reusable threshold-independent diarization analysis and
+    /// word timestamps. A matching cache makes threshold-only retries fast.
+    #[cfg(feature = "diarization")]
+    #[arg(long, value_name = "PATH", requires = "diarize")]
+    pub diarize_cache: Option<PathBuf>,
+
     /// Hint the decoder with domain-specific vocabulary (Whisper initial prompt).
     /// Reduces mishearings of proper nouns, foreign names, and jargon by priming
     /// the model with likely terms.
@@ -85,7 +92,12 @@ pub struct TranscribeArgs {
     /// Read the hint/initial prompt from a file instead of the command line
     /// (handy for longer vocabulary lists). Mutually exclusive with --hint/--prompt.
     /// Leading/trailing whitespace is trimmed; an empty file means no hint.
-    #[arg(long, visible_alias = "hint-file", value_name = "PATH", conflicts_with = "prompt")]
+    #[arg(
+        long,
+        visible_alias = "hint-file",
+        value_name = "PATH",
+        conflicts_with = "prompt"
+    )]
     pub prompt_file: Option<PathBuf>,
 
     /// Opt in to strict one-edit vocabulary correction from the selected hint.
@@ -116,6 +128,30 @@ pub struct TranscribeArgs {
 struct FileTranscription {
     json: serde_json::Value,
     plain: String,
+}
+
+#[cfg(feature = "diarization")]
+#[derive(Debug, Default, serde::Serialize)]
+struct DiarizationPerformance {
+    acceleration_backend: &'static str,
+    coreml_status: &'static str,
+    cache_hit: bool,
+    model_load_seconds: f64,
+    decode_resample_seconds: f64,
+    language_detection_seconds: f64,
+    cache_lookup_seconds: f64,
+    diarization_model_load_seconds: f64,
+    diarization_segmentation_seconds: f64,
+    diarization_segment_extraction_seconds: f64,
+    diarization_embeddings_seconds: f64,
+    diarization_clustering_seconds: f64,
+    whisper_inference_seconds: f64,
+    word_timestamp_attribution_seconds: f64,
+    parallel_analysis_span_seconds: f64,
+    cache_write_seconds: f64,
+    merge_diagnostics_seconds: f64,
+    json_assembly_seconds: f64,
+    total_seconds: f64,
 }
 
 #[derive(Debug)]
@@ -211,9 +247,15 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         )));
     }
 
-    eprintln!("Loading model once for {} input(s): {}...", files.len(), model.display_name());
+    eprintln!(
+        "Loading model once for {} input(s): {}...",
+        files.len(),
+        model.display_name()
+    );
     let backend = WhisperBackend::new();
+    let model_load_started = Instant::now();
     backend.load_model(model)?;
+    let model_load_seconds = model_load_started.elapsed().as_secs_f64();
 
     let mut items = Vec::with_capacity(if args.json { files.len() } else { 0 });
     let (processed, failures) = process_batch(
@@ -228,6 +270,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
                 &stored,
                 language,
                 model,
+                model_load_seconds,
                 &glossary,
                 &correction_vocabulary,
             )
@@ -277,9 +320,15 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             let BatchItem::Ok { result, .. } = &items[0] else {
                 unreachable!("successful single item")
             };
-            println!("{}", serde_json::to_string_pretty(result).expect("result serializes"));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(result).expect("result serializes")
+            );
         } else {
-            println!("{}", serde_json::to_string_pretty(&items).expect("batch serializes"));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&items).expect("batch serializes")
+            );
         }
     }
 
@@ -338,16 +387,20 @@ fn transcribe_file(
     stored: &Settings,
     language: Language,
     model: WhisperModel,
+    model_load_seconds: f64,
     glossary: &Glossary,
     correction_vocabulary: &[String],
 ) -> Result<FileTranscription, DictationError> {
-
+    let file_started = Instant::now();
     // Decode audio file
     eprintln!("Decoding {}...", file.display());
+    let decode_started = Instant::now();
     let audio = decode_audio_file(file)?;
+    let decode_resample_seconds = decode_started.elapsed().as_secs_f64();
     let duration = audio.len() as f64 / 16_000.0;
     eprintln!("Audio: {:.1}s, {} samples", duration, audio.len());
 
+    let language_detection_started = Instant::now();
     let detected_language = match detect_file_language(backend, &audio, model) {
         Ok(detection) => detection,
         Err(error) => {
@@ -362,6 +415,14 @@ fn transcribe_file(
             None
         }
     };
+    let language_detection_seconds = language_detection_started.elapsed().as_secs_f64();
+    #[cfg(not(feature = "diarization"))]
+    let _ = (
+        model_load_seconds,
+        file_started,
+        decode_resample_seconds,
+        language_detection_seconds,
+    );
 
     // Diarization branch
     #[cfg(feature = "diarization")]
@@ -378,25 +439,125 @@ fn transcribe_file(
             eprintln!("Note: --beam / --vad have no effect with --diarize.");
         }
         use sagascript_core::diarization::{
-            DiarizeConfig, TimestampedSegment,
-            diarize,
+            cluster,
             merge::{consolidate, merge_with_transcript},
             model::all_models_downloaded,
+            DiarizationTimings, DiarizeConfig, TimestampedSegment,
         };
+        use sagascript_core::transcription::DiarizationTranscriptionTimings;
+
+        let acceleration = model::acceleration_profile(model);
+        let mut performance = DiarizationPerformance {
+            acceleration_backend: acceleration.backend,
+            coreml_status: acceleration.coreml_status,
+            model_load_seconds,
+            decode_resample_seconds,
+            language_detection_seconds,
+            ..DiarizationPerformance::default()
+        };
+        eprintln!(
+            "Whisper acceleration: {} (Core ML: {})",
+            acceleration.backend, acceleration.coreml_status
+        );
 
         if !all_models_downloaded() {
             return Err(DictationError::DiarizationError(
-                "Diarization models not found. Run: sagascript download-model diarization".to_string(),
+                "Diarization models not found. Run: sagascript download-model diarization"
+                    .to_string(),
             ));
         }
 
-        // Run diarization and timestamped transcription in parallel isn't possible
-        // with a single-threaded whisper context, so we run sequentially.
-        eprintln!("Running speaker diarization...");
-        let speaker_segments = diarize(&audio, &DiarizeConfig {
+        let config = DiarizeConfig {
             threshold: args.diarize_threshold,
             ..DiarizeConfig::default()
-        })?;
+        };
+        let decoder_prompt = glossary.decoder_prompt();
+        let cache_identity = if args.diarize_cache.is_some() {
+            Some(crate::diarization_cache::CacheIdentity::for_input(
+                file,
+                audio.len(),
+                language.whisper_code().unwrap_or("auto"),
+                model_id_string(model),
+                decoder_prompt.as_deref(),
+            )?)
+        } else {
+            None
+        };
+
+        let cache_lookup_started = Instant::now();
+        let cached = match (args.diarize_cache.as_deref(), cache_identity.as_ref()) {
+            (Some(path), Some(identity)) => match crate::diarization_cache::load(path, identity)? {
+                crate::diarization_cache::CacheLookup::Hit(cached) => {
+                    eprintln!("Reusing diarization cache: {}", path.display());
+                    Some(cached)
+                }
+                crate::diarization_cache::CacheLookup::Miss(reason) => {
+                    eprintln!("Diarization cache miss ({reason}); computing analysis.");
+                    None
+                }
+            },
+            _ => None,
+        };
+        performance.cache_lookup_seconds = cache_lookup_started.elapsed().as_secs_f64();
+
+        let (analysis, raw_segments, diarization_timings, transcription_timings) =
+            if let Some(cached) = cached {
+                performance.cache_hit = true;
+                (
+                    cached.analysis,
+                    cached.transcript,
+                    DiarizationTimings::default(),
+                    DiarizationTranscriptionTimings::default(),
+                )
+            } else {
+                eprintln!("Running speaker diarization and Whisper timestamps concurrently...");
+                let parallel_started = Instant::now();
+                let (analysis, diarization_timings, transcription) = run_diarization_analysis(
+                    &audio,
+                    backend,
+                    language,
+                    decoder_prompt.as_deref(),
+                    &config,
+                )?;
+                performance.parallel_analysis_span_seconds =
+                    parallel_started.elapsed().as_secs_f64();
+
+                if let (Some(path), Some(identity)) =
+                    (args.diarize_cache.as_deref(), cache_identity.clone())
+                {
+                    let cache_write_started = Instant::now();
+                    crate::diarization_cache::save(
+                        path,
+                        &crate::diarization_cache::DiarizationCache::new(
+                            identity,
+                            analysis.clone(),
+                            transcription.segments.clone(),
+                        ),
+                    )?;
+                    performance.cache_write_seconds = cache_write_started.elapsed().as_secs_f64();
+                    eprintln!("Saved reusable diarization cache: {}", path.display());
+                }
+
+                (
+                    analysis,
+                    transcription.segments,
+                    diarization_timings,
+                    transcription.timings,
+                )
+            };
+
+        performance.diarization_model_load_seconds = diarization_timings.model_load_seconds;
+        performance.diarization_segmentation_seconds = diarization_timings.segmentation_seconds;
+        performance.diarization_segment_extraction_seconds =
+            diarization_timings.segment_extraction_seconds;
+        performance.diarization_embeddings_seconds = diarization_timings.embeddings_seconds;
+        performance.whisper_inference_seconds = transcription_timings.whisper_inference_seconds;
+        performance.word_timestamp_attribution_seconds =
+            transcription_timings.word_timestamp_attribution_seconds;
+
+        let clustering_started = Instant::now();
+        let speaker_segments = cluster(&analysis, &config)?;
+        performance.diarization_clustering_seconds = clustering_started.elapsed().as_secs_f64();
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
         if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
             for s in &speaker_segments {
@@ -404,15 +565,6 @@ fn transcribe_file(
             }
         }
 
-        eprintln!("Transcribing with word-level timestamps...");
-        // Prefer word-level timestamps so a long Whisper segment containing
-        // multiple turns is not collapsed to one speaker. The shared helper
-        // retains a segment-level fallback when DTW is unavailable.
-        let raw_segments = backend.transcribe_sync_for_diarization(
-            &audio,
-            language,
-            glossary.decoder_prompt().as_deref(),
-        )?;
         eprintln!("Got {} word/segment(s) for merging", raw_segments.len());
         if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
             for (st, en, tx) in &raw_segments {
@@ -420,6 +572,7 @@ fn transcribe_file(
             }
         }
 
+        let merge_diagnostics_started = Instant::now();
         let transcript: Vec<TimestampedSegment> = raw_segments
             .into_iter()
             .map(|(start, end, text)| TimestampedSegment { start, end, text })
@@ -430,7 +583,10 @@ fn transcribe_file(
         for segment in &mut consolidated {
             segment.text = normalize_nonspeech_markers(&segment.text, language);
         }
-        let fragments = consolidated.iter().map(|segment| segment.text.as_str()).collect::<Vec<_>>();
+        let fragments = consolidated
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<Vec<_>>();
         let (corrected_fragments, projected_corrections) = glossary.correct_fragments(&fragments);
         for (segment, text) in consolidated.iter_mut().zip(corrected_fragments) {
             segment.text = text;
@@ -469,7 +625,9 @@ fn transcribe_file(
             .map(|segment| format!("[{}] {}", segment.speaker, segment.text.trim()))
             .collect::<Vec<_>>()
             .join("\n");
-        let json = serde_json::json!({
+        performance.merge_diagnostics_seconds = merge_diagnostics_started.elapsed().as_secs_f64();
+        let json_assembly_started = Instant::now();
+        let mut json = serde_json::json!({
             "segments": consolidated,
             "speakers": speakers,
             "language": language,
@@ -484,6 +642,16 @@ fn transcribe_file(
             "warnings": warnings,
             "vocabulary_corrections": glossary_corrections,
         });
+        performance.json_assembly_seconds = json_assembly_started.elapsed().as_secs_f64();
+        performance.total_seconds = model_load_seconds + file_started.elapsed().as_secs_f64();
+        json["performance"] =
+            serde_json::to_value(&performance).expect("diarization performance serializes");
+        eprintln!(
+            "Diarized transcription: {:.2}s total ({:.2}x realtime), cache_hit={}",
+            performance.total_seconds,
+            duration / performance.total_seconds.max(f64::EPSILON),
+            performance.cache_hit
+        );
         return Ok(FileTranscription { json, plain });
     }
 
@@ -530,18 +698,12 @@ fn transcribe_file(
 
     let mut segments = if duration > 10.0 {
         let pb = ProgressBar::new(100);
-        pb.set_style(
-            ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap(),
-        );
+        pb.set_style(ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap());
         let pb_cb = pb.clone();
-        let segments = backend.transcribe_sync_with_options_segments(
-            &audio,
-            language,
-            &opts,
-            move |pct| {
+        let segments =
+            backend.transcribe_sync_with_options_segments(&audio, language, &opts, move |pct| {
                 crate::set_transcription_progress(&pb_cb, pct);
-            },
-        )?;
+            })?;
         pb.finish_and_clear();
         segments
     } else {
@@ -614,6 +776,48 @@ fn transcribe_file(
     });
 
     Ok(FileTranscription { json, plain: text })
+}
+
+/// Overlap the CPU/ONNX diarization analysis with Metal Whisper inference on
+/// macOS. These workloads have no shared native context: only the Whisper half
+/// touches `backend`, while the worker owns fresh ONNX sessions. CPU-only
+/// targets remain sequential to avoid two heavy CPU runtimes contending.
+#[cfg(feature = "diarization")]
+fn run_diarization_analysis(
+    audio: &[f32],
+    backend: &WhisperBackend,
+    language: Language,
+    prompt: Option<&str>,
+    config: &sagascript_core::diarization::DiarizeConfig,
+) -> Result<
+    (
+        sagascript_core::diarization::DiarizationAnalysis,
+        sagascript_core::diarization::DiarizationTimings,
+        sagascript_core::transcription::DiarizationTranscription,
+    ),
+    DictationError,
+> {
+    #[cfg(target_os = "macos")]
+    {
+        std::thread::scope(|scope| {
+            let diarization = scope.spawn(|| sagascript_core::diarization::analyze(audio, config));
+            let transcription =
+                backend.transcribe_sync_for_diarization_profiled(audio, language, prompt);
+            let (analysis, timings) = diarization.join().map_err(|_| {
+                DictationError::DiarizationError(
+                    "Diarization analysis worker terminated unexpectedly".to_string(),
+                )
+            })??;
+            Ok((analysis, timings, transcription?))
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let (analysis, timings) = sagascript_core::diarization::analyze(audio, config)?;
+        let transcription =
+            backend.transcribe_sync_for_diarization_profiled(audio, language, prompt)?;
+        Ok((analysis, timings, transcription))
+    }
 }
 
 fn expand_inputs(inputs: &[PathBuf], recursive: bool) -> Result<Vec<PathBuf>, DictationError> {
@@ -712,8 +916,7 @@ fn apply_hint_corrections(
         let Some(avg_logprob) = segment.avg_logprob else {
             continue;
         };
-        if !(VOCAB_CORRECTION_MIN_LOGPROB..=VOCAB_CORRECTION_MAX_LOGPROB)
-            .contains(&avg_logprob)
+        if !(VOCAB_CORRECTION_MIN_LOGPROB..=VOCAB_CORRECTION_MAX_LOGPROB).contains(&avg_logprob)
             || segment.no_speech_prob > VOCAB_CORRECTION_MAX_NO_SPEECH_PROB
         {
             continue;
@@ -736,7 +939,10 @@ fn apply_glossary_corrections(
     segments: &mut [TranscriptSegment],
     glossary: &Glossary,
 ) -> Vec<VocabularyCorrection> {
-    let fragments = segments.iter().map(|segment| segment.text.as_str()).collect::<Vec<_>>();
+    let fragments = segments
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect::<Vec<_>>();
     let (corrected_fragments, applied) = glossary.correct_fragments(&fragments);
     let mut corrections = Vec::with_capacity(applied.len());
     for (segment_index, correction) in applied {
@@ -979,8 +1185,7 @@ fn detect_file_language(
         return transcription_backend.detect_language(audio);
     }
 
-    let Some(detection_model) = neutral_language_detection_model(model::is_model_downloaded)
-    else {
+    let Some(detection_model) = neutral_language_detection_model(model::is_model_downloaded) else {
         eprintln!(
             "Warning: language mismatch check skipped because no neutral multilingual model is downloaded."
         );
@@ -1223,8 +1428,8 @@ pub fn model_id_string(model: WhisperModel) -> &'static str {
 
 pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
     use arboard::Clipboard;
-    let mut clipboard =
-        Clipboard::new().map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
+    let mut clipboard = Clipboard::new()
+        .map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
     clipboard
         .set_text(text)
         .map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
@@ -1237,10 +1442,8 @@ mod tests {
 
     #[test]
     fn directory_expansion_filters_sorts_recurses_and_deduplicates() {
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-batch-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("sagascript-batch-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let nested = root.join("nested");
         std::fs::create_dir(&nested).unwrap();
@@ -1284,7 +1487,9 @@ mod tests {
             |_, file| {
                 visited.push(file.to_path_buf());
                 if file == Path::new("bad.wav") {
-                    Err(DictationError::FileDecodeError("corrupt fixture".to_string()))
+                    Err(DictationError::FileDecodeError(
+                        "corrupt fixture".to_string(),
+                    ))
                 } else {
                     Ok(FileTranscription {
                         json: serde_json::json!({"text": file.display().to_string()}),
@@ -1443,7 +1648,12 @@ mod tests {
     #[test]
     fn does_not_correct_confident_suspect_or_non_speech_segments() {
         let vocabulary = ["Grimnir".to_string()];
-        for (avg_logprob, no_speech_prob) in [(Some(-0.2), 0.0), (Some(-0.9), 0.0), (None, 0.0), (Some(-0.313), 0.6)] {
+        for (avg_logprob, no_speech_prob) in [
+            (Some(-0.2), 0.0),
+            (Some(-0.9), 0.0),
+            (None, 0.0),
+            (Some(-0.313), 0.6),
+        ] {
             let mut segments = vec![segment(" Grimner", avg_logprob, no_speech_prob)];
             assert!(apply_hint_corrections(&mut segments, &vocabulary).is_empty());
             assert_eq!(segments[0].text, " Grimner");
@@ -1492,7 +1702,9 @@ mod tests {
     #[test]
     fn effective_prompt_none_when_all_empty() {
         assert!(resolve_effective_prompt(None, None, "").unwrap().is_none());
-        assert!(resolve_effective_prompt(None, None, "   ").unwrap().is_none());
+        assert!(resolve_effective_prompt(None, None, "   ")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1689,25 +1901,17 @@ mod tests {
 
     #[test]
     fn resolve_effective_model_none_no_auto_uses_fallback_ignoring_language() {
-        let result = resolve_effective_model(
-            None,
-            Language::Swedish,
-            false,
-            WhisperModel::LargeV3Turbo,
-        )
-        .unwrap();
+        let result =
+            resolve_effective_model(None, Language::Swedish, false, WhisperModel::LargeV3Turbo)
+                .unwrap();
         assert_eq!(result, WhisperModel::LargeV3Turbo);
     }
 
     #[test]
     fn resolve_effective_model_explicit_arg_wins_over_auto_select() {
-        let result = resolve_effective_model(
-            Some("tiny.en"),
-            Language::Swedish,
-            true,
-            WhisperModel::Base,
-        )
-        .unwrap();
+        let result =
+            resolve_effective_model(Some("tiny.en"), Language::Swedish, true, WhisperModel::Base)
+                .unwrap();
         assert_eq!(result, WhisperModel::TinyEn);
     }
 
@@ -1738,7 +1942,12 @@ mod tests {
     #[test]
     fn uncertain_language_detector_escalates_to_downloaded_turbo() {
         let selected = accurate_language_detection_model(
-            |model| matches!(model, WhisperModel::LargeV3TurboQ8 | WhisperModel::LargeV3Turbo),
+            |model| {
+                matches!(
+                    model,
+                    WhisperModel::LargeV3TurboQ8 | WhisperModel::LargeV3Turbo
+                )
+            },
             WhisperModel::Base,
         );
         assert_eq!(selected, Some(WhisperModel::LargeV3TurboQ8));

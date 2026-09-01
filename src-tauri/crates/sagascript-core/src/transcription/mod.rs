@@ -12,6 +12,8 @@ pub use whisper_backend::{
     FILE_TRANSCRIBE_BEAM, TranscribeOptions, TranscriptSegment, WARM_MODEL_CACHE_BUDGET_MB,
     WARM_MODEL_CACHE_MAX_MODELS, WhisperBackend,
 };
+#[cfg(feature = "diarization")]
+pub use whisper_backend::{DiarizationTranscription, DiarizationTranscriptionTimings};
 pub use glossary::{Glossary, GlossaryCorrection, GlossaryEntry};
 pub use glossary_suggestions::{
     suggest_glossary_candidates, GlossarySuggestion, GlossarySuggestionKind,

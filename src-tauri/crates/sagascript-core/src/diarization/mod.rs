@@ -6,8 +6,9 @@ pub mod model;
 pub mod segmentation;
 
 use std::collections::{BTreeMap, HashMap};
+use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::DictationError;
 
@@ -20,6 +21,51 @@ pub struct DiarizeConfig {
     pub min_segment: f64,
     /// Merge same-speaker segments closer than this gap (seconds). Default 0.5s.
     pub min_gap: f64,
+}
+
+/// Threshold-independent output of segmentation and speaker embedding.
+///
+/// This is deliberately serializable so callers can persist the expensive
+/// analysis and cheaply retry only agglomerative clustering with a different
+/// threshold. The schema is versioned by the caller that persists it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiarizationAnalysis {
+    raw_segments: Vec<(f64, f64, usize)>,
+    embeddings: Vec<(usize, Vec<f32>)>,
+}
+
+impl DiarizationAnalysis {
+    /// Reject malformed persisted analysis before it reaches clustering.
+    pub fn validate(&self) -> Result<(), DictationError> {
+        for &(start, end, _) in &self.raw_segments {
+            if !start.is_finite() || !end.is_finite() || start < 0.0 || end < start {
+                return Err(DictationError::DiarizationError(
+                    "Cached diarization contains invalid segment bounds".to_string(),
+                ));
+            }
+        }
+        for (index, embedding) in &self.embeddings {
+            if *index >= self.raw_segments.len()
+                || embedding.len() != embedding::EMBEDDING_DIM
+                || embedding.iter().any(|value| !value.is_finite())
+            {
+                return Err(DictationError::DiarizationError(
+                    "Cached diarization contains an invalid speaker embedding".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Phase-level timings for the threshold-independent diarization analysis.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct DiarizationTimings {
+    pub model_load_seconds: f64,
+    pub segmentation_seconds: f64,
+    pub segment_extraction_seconds: f64,
+    pub embeddings_seconds: f64,
+    pub total_seconds: f64,
 }
 
 impl Default for DiarizeConfig {
@@ -41,8 +87,26 @@ impl Default for DiarizeConfig {
 ///
 /// Returns speaker segments with labels "SPEAKER_0", "SPEAKER_1", ...
 /// Requires the `diarization` feature and both ONNX models to be downloaded.
-pub fn diarize(audio: &[f32], config: &DiarizeConfig) -> Result<Vec<SpeakerSegment>, DictationError> {
-    use crate::diarization::model::{DiarizationModel, model_path};
+pub fn diarize(
+    audio: &[f32],
+    config: &DiarizeConfig,
+) -> Result<Vec<SpeakerSegment>, DictationError> {
+    let (analysis, _) = analyze(audio, config)?;
+    cluster(&analysis, config)
+}
+
+/// Run threshold-independent segmentation and embedding extraction.
+///
+/// `min_segment` and `min_gap` affect which regions are embedded, while the
+/// clustering threshold does not. Persisting this output therefore makes a
+/// threshold-only retry cheap without retaining the source audio.
+pub fn analyze(
+    audio: &[f32],
+    config: &DiarizeConfig,
+) -> Result<(DiarizationAnalysis, DiarizationTimings), DictationError> {
+    use crate::diarization::model::{model_path, DiarizationModel};
+
+    let total_started = Instant::now();
 
     // Load models
     let seg_path = model_path(DiarizationModel::PyannoteSegmentation3);
@@ -59,21 +123,41 @@ pub fn diarize(audio: &[f32], config: &DiarizeConfig) -> Result<Vec<SpeakerSegme
         DiarizationModel::WeSpeakerResNet34LM.download_integrity(),
     )?;
 
+    let model_load_started = Instant::now();
     let mut segmenter = segmentation::Segmenter::new(&seg_path)?;
     let mut embedder = embedding::Embedder::new(&emb_path)?;
+    let model_load_seconds = model_load_started.elapsed().as_secs_f64();
 
     // 1. Segmentation: frame-level speaker activity
+    let segmentation_started = Instant::now();
     let frame_activations = segmenter.segment(audio)?;
+    let segmentation_seconds = segmentation_started.elapsed().as_secs_f64();
 
     // 2. Convert to (start, end, local_speaker_idx) tuples
+    let segment_extraction_started = Instant::now();
     let raw_segments = frame_activations.to_speaker_segments(config.min_segment, config.min_gap);
+    let segment_extraction_seconds = segment_extraction_started.elapsed().as_secs_f64();
 
     if raw_segments.is_empty() {
-        return Ok(Vec::new());
+        return Ok((
+            DiarizationAnalysis {
+                raw_segments,
+                embeddings: Vec::new(),
+            },
+            DiarizationTimings {
+                model_load_seconds,
+                segmentation_seconds,
+                segment_extraction_seconds,
+                embeddings_seconds: 0.0,
+                total_seconds: total_started.elapsed().as_secs_f64(),
+            },
+        ));
     }
 
     // 3. Extract embeddings per segment
+    let embeddings_started = Instant::now();
     let embeddings = embedder.extract_embeddings(audio, &raw_segments)?;
+    let embeddings_seconds = embeddings_started.elapsed().as_secs_f64();
 
     if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
         for (i, segment) in raw_segments.iter().enumerate() {
@@ -84,15 +168,57 @@ pub fn diarize(audio: &[f32], config: &DiarizeConfig) -> Result<Vec<SpeakerSegme
         }
     }
 
-    // 4. Cluster embeddings → global speaker IDs
+    Ok((
+        DiarizationAnalysis {
+            raw_segments,
+            embeddings: embeddings
+                .into_iter()
+                .map(|(index, embedding)| (index, embedding.to_vec()))
+                .collect(),
+        },
+        DiarizationTimings {
+            model_load_seconds,
+            segmentation_seconds,
+            segment_extraction_seconds,
+            embeddings_seconds,
+            total_seconds: total_started.elapsed().as_secs_f64(),
+        },
+    ))
+}
+
+/// Apply the cheap threshold-dependent clustering stage to prior analysis.
+pub fn cluster(
+    analysis: &DiarizationAnalysis,
+    config: &DiarizeConfig,
+) -> Result<Vec<SpeakerSegment>, DictationError> {
+    analysis.validate()?;
+    let raw_segments = &analysis.raw_segments;
+    let embeddings = analysis
+        .embeddings
+        .iter()
+        .map(|(index, values)| {
+            let embedding: [f32; embedding::EMBEDDING_DIM] = values
+                .as_slice()
+                .try_into()
+                .expect("DiarizationAnalysis was validated with exact embeddings");
+            (*index, embedding)
+        })
+        .collect::<Vec<_>>();
+
+    // Cluster embeddings → global speaker IDs
     // speaker_map[i] = (segment_index, global_id) — segment_index keys into raw_segments
     let clustered = if embeddings.is_empty() {
         Vec::new()
     } else {
         clustering::cluster_speakers(&embeddings, config.threshold)
     };
-    let speaker_map = stabilize_clusters_by_track(&raw_segments, &clustered);
-    let n_global = speaker_map.iter().map(|(_,g)| g).max().map(|&m| m+1).unwrap_or(0);
+    let speaker_map = stabilize_clusters_by_track(raw_segments, &clustered);
+    let n_global = speaker_map
+        .iter()
+        .map(|(_, g)| g)
+        .max()
+        .map(|&m| m + 1)
+        .unwrap_or(0);
     eprintln!("  Found {n_global} speaker(s)");
 
     // Build segment_index → global_id map (default 0 for segments with no embedding)
@@ -161,7 +287,11 @@ fn stabilize_clusters_by_track(
 
     // Remap canonical cluster IDs to contiguous output labels in segment order.
     // Tracks without an embedding get a distinct deterministic fallback key.
-    let fallback_base = clustered.iter().map(|(_, cluster)| cluster).max().map_or(0, |c| c + 1);
+    let fallback_base = clustered
+        .iter()
+        .map(|(_, cluster)| cluster)
+        .max()
+        .map_or(0, |c| c + 1);
     let mut output_label_by_key = BTreeMap::new();
     let mut next_label = 0usize;
     raw_segments
@@ -256,6 +386,28 @@ mod tests {
         let json = serde_json::to_value(&seg).unwrap();
         assert_eq!(json["speaker"], "SPEAKER_1");
         assert_eq!(json["text"], "test");
+    }
+
+    #[test]
+    fn cached_analysis_rejects_wrong_embedding_dimensions() {
+        let analysis: DiarizationAnalysis = serde_json::from_value(serde_json::json!({
+            "raw_segments": [[0.0, 1.0, 0]],
+            "embeddings": [[0, [0.0, 1.0]]],
+        }))
+        .unwrap();
+
+        assert!(analysis.validate().is_err());
+        assert!(cluster(&analysis, &DiarizeConfig::default()).is_err());
+    }
+
+    #[test]
+    fn cached_analysis_accepts_exact_finite_embeddings() {
+        let analysis = DiarizationAnalysis {
+            raw_segments: vec![(0.0, 1.0, 0)],
+            embeddings: vec![(0, vec![0.0; embedding::EMBEDDING_DIM])],
+        };
+
+        assert!(analysis.validate().is_ok());
     }
 
     #[test]

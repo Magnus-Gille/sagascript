@@ -4,6 +4,8 @@ pub mod models;
 // Live recording is optional (`record` feature, on by default) so a pure
 // batch-transcribe build (`--no-default-features`) carries no audio-capture
 // stack — on Linux, no cpal/ALSA.
+#[cfg(feature = "diarization")]
+mod diarization_cache;
 #[cfg(feature = "record")]
 pub mod record;
 pub mod transcribe;
@@ -828,6 +830,33 @@ mod tests {
             }
             _ => panic!("expected Transcribe"),
         }
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn diarization_cache_requires_diarization() {
+        assert!(Cli::try_parse_from([
+            "sagascript",
+            "transcribe",
+            "meeting.m4a",
+            "--diarize-cache",
+            "analysis.json",
+        ])
+        .is_err());
+
+        let cli = Cli::try_parse_from([
+            "sagascript",
+            "transcribe",
+            "meeting.m4a",
+            "--diarize",
+            "--diarize-cache",
+            "analysis.json",
+        ])
+        .unwrap();
+        let Command::Transcribe(args) = cli.command.unwrap() else {
+            panic!("expected Transcribe");
+        };
+        assert_eq!(args.diarize_cache, Some(PathBuf::from("analysis.json")));
     }
 
     #[test]

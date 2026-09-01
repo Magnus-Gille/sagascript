@@ -8,6 +8,56 @@ Two metrics:
 - **DER** (Diarization Error Rate): measures speaker turn accuracy against reference RTTM.
 - **cpWER** (concatenated minimum-permutation WER): measures speaker-attributed transcription accuracy.
 
+## Long-file performance benchmark (issue #157)
+
+`scripts/benchmark-diarized-transcription.py` requires a 15–30 minute input and records
+wall time, realtime factor, macOS peak RSS, and every phase from the CLI's structured
+`performance` object. Use a local mono ALAC/AAC `.m4a`; never commit private recordings,
+transcripts, benchmark output containing paths, or caches.
+
+```bash
+# Cold run without reusable analysis
+python3 scripts/benchmark-diarized-transcription.py \
+  --input /path/to/20-minute-mono.m4a --language sv \
+  --model kb-whisper-large --threshold 0.75
+
+# Populate a private cache (contains embeddings and transcript text; mode 0600 on Unix)
+python3 scripts/benchmark-diarized-transcription.py \
+  --input /path/to/20-minute-mono.m4a --language sv \
+  --model kb-whisper-large --threshold 0.75 \
+  --cache /private/path/recording.diarization-cache.json
+
+# Threshold-only retry reuses the expensive ONNX analysis and Whisper timestamps
+python3 scripts/benchmark-diarized-transcription.py \
+  --input /path/to/20-minute-mono.m4a --language sv \
+  --model kb-whisper-large --threshold 0.55 \
+  --cache /private/path/recording.diarization-cache.json
+```
+
+KB/NB fine-tunes do not have matching compiled Core ML encoders: substituting an
+upstream encoder would change their fine-tuned inference. On Apple Silicon the expected
+and tested fallback is Metal. The native Core ML load warning is a one-time failed
+optional probe, not a failed Metal initialization; JSON records `acceleration_backend`
+and `coreml_status` so release benchmarks retain the selected backend.
+
+### 2026-09-01 Apple M4 benchmark
+
+The public `dj_2022_feu.m4a` fixture was repeated 20 times and encoded as mono
+48 kHz ALAC (19m34s container duration, 77.6 MB). This is deterministic and
+Voice-Memo-shaped, while deliberately not representing natural long-form accuracy.
+
+| Run | Wall | Realtime | Peak RSS | Speakers / segments |
+|---|---:|---:|---:|---:|
+| Cache population, threshold 0.75 | 289.23s | 4.05x | 4.83 GB | 2 / 177 |
+| Cache hit, threshold 0.55 | 9.90s | 118.31x | 3.38 GB | 2 / 177 |
+
+The cache retry reduced measured wall time by 96.6%. In the cold run, ONNX model
+load + segmentation + embeddings took 109.98s while Whisper took 274.76s; their
+parallel span was 274.83s. Holding those measured phase costs constant, serializing
+them would project to about 399s end-to-end, so overlap avoided about 110s (27.5%).
+The benchmark emitted the same cached word timestamps and two-speaker analysis for
+the retry; threshold-dependent clustering and merge still ran from scratch.
+
 ---
 
 ## Fetched clips (committed: ground truth only, audio gitignored)

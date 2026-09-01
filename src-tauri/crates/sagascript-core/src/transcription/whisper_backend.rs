@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 use whisper_rs::{
-    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
-    WhisperVadParams, get_lang_str,
+    get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
+    WhisperState, WhisperVadParams,
 };
 #[cfg(feature = "diarization")]
 use whisper_rs::{DtwMode, DtwParameters};
@@ -69,10 +69,7 @@ fn model_availability(
 
 fn can_cache_pair(active: WhisperModel, secondary: WhisperModel) -> bool {
     active != secondary
-        && active
-            .size_mb()
-            .saturating_add(secondary.size_mb())
-            <= WARM_MODEL_CACHE_BUDGET_MB
+        && active.size_mb().saturating_add(secondary.size_mb()) <= WARM_MODEL_CACHE_BUDGET_MB
 }
 
 fn activate_cached_runtime<C, S>(
@@ -85,10 +82,7 @@ fn activate_cached_runtime<C, S>(
     let Some(cached_runtime) = cached.take() else {
         return false;
     };
-    if cached_runtime.model != desired_model
-        || active_model.is_none()
-        || active_context.is_none()
-    {
+    if cached_runtime.model != desired_model || active_model.is_none() || active_context.is_none() {
         *cached = Some(cached_runtime);
         return false;
     }
@@ -161,6 +155,22 @@ pub struct TranscriptSegment {
     pub avg_logprob: Option<f32>,
     /// Whisper's probability that the segment window is non-speech.
     pub no_speech_prob: f32,
+}
+
+/// Timestamped transcript plus phase timings used by the diarization path.
+#[cfg(feature = "diarization")]
+#[derive(Debug, Clone)]
+pub struct DiarizationTranscription {
+    pub segments: Vec<(f64, f64, String)>,
+    pub timings: DiarizationTranscriptionTimings,
+}
+
+/// Separates native Whisper inference from Rust-side DTW word attribution.
+#[cfg(feature = "diarization")]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+pub struct DiarizationTranscriptionTimings {
+    pub whisper_inference_seconds: f64,
+    pub word_timestamp_attribution_seconds: f64,
 }
 
 /// Mean of per-token log-probabilities; `None` for an empty slice.
@@ -407,7 +417,9 @@ impl WhisperBackend {
     /// [`Self::state`] mutex instead of running to completion. This un-wedges the
     /// transcription pipeline on the timeout path (see WP2b).
     pub fn request_abort(&self) {
-        warn!("Transcription abort requested — signalling whisper to stop at the next compute step");
+        warn!(
+            "Transcription abort requested — signalling whisper to stop at the next compute step"
+        );
         self.abort_flag.store(true, Ordering::SeqCst);
     }
 
@@ -464,7 +476,6 @@ impl WhisperBackend {
             )));
         }
 
-
         // Never hand an unverified GGML file to whisper.cpp's native parser.
         // This also performs a one-time compatibility check for files saved by
         // versions released before download integrity was enforced.
@@ -516,9 +527,7 @@ impl WhisperBackend {
             })?,
             ctx_params,
         )
-        .map_err(|e| {
-            DictationError::TranscriptionFailed(format!("Failed to load model: {e}"))
-        })?;
+        .map_err(|e| DictationError::TranscriptionFailed(format!("Failed to load model: {e}")))?;
 
         // Publish the new context atomically with respect to warm-state users.
         // When the old/new pair fits the explicit cache budget, move the old
@@ -584,8 +593,7 @@ impl WhisperBackend {
             .unwrap()
             .as_ref()
             .map(|runtime| runtime.model);
-        model_availability(self.loaded_model(), cached, desired_model)
-            == ModelAvailability::Missing
+        model_availability(self.loaded_model(), cached, desired_model) == ModelAvailability::Missing
     }
 
     /// Ensure the correct model is active. Serialized via `load_lock` so two
@@ -630,7 +638,10 @@ impl WhisperBackend {
             return Err(DictationError::ModelNotLoaded);
         }
 
-        info!("Activated cached whisper model: {}", desired_model.display_name());
+        info!(
+            "Activated cached whisper model: {}",
+            desired_model.display_name()
+        );
         Ok(())
     }
 
@@ -719,7 +730,9 @@ impl WhisperBackend {
         // aborted, drop the warm state and clear the flag before releasing the
         // lock, so the next caller starts from a clean slate.
         if self.abort_flag.swap(false, Ordering::SeqCst) {
-            warn!("Inference was aborted — discarding warm whisper state; next transcription will rebuild it");
+            warn!(
+                "Inference was aborted — discarding warm whisper state; next transcription will rebuild it"
+            );
             *state_guard = None;
         }
 
@@ -814,7 +827,10 @@ impl WhisperBackend {
         let segments =
             self.transcribe_sync_with_options_segments(audio, language, opts, on_progress)?;
         let transcript = assemble_transcript(&segments);
-        Ok(super::normalize_nonspeech_markers(transcript.trim(), language))
+        Ok(super::normalize_nonspeech_markers(
+            transcript.trim(),
+            language,
+        ))
     }
 
     /// Like [`Self::transcribe_sync_with_options`] but returns the individual
@@ -832,9 +848,7 @@ impl WhisperBackend {
             return Err(DictationError::NoAudioCaptured);
         }
 
-        let model = self
-            .loaded_model()
-            .ok_or(DictationError::ModelNotLoaded)?;
+        let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
 
         // End-of-text token id, used to exclude special tokens from the
         // avg-logprob computation (matching whisper.cpp's confidence examples:
@@ -1002,7 +1016,10 @@ impl WhisperBackend {
                 }
             }
 
-            info!("Local transcription complete: {} segment(s)", segments.len());
+            info!(
+                "Local transcription complete: {} segment(s)",
+                segments.len()
+            );
             Ok(segments)
         })
     }
@@ -1024,7 +1041,15 @@ impl WhisperBackend {
         // Process full audio in one call — whisper.cpp handles long audio internally
         // via its own sliding window. With no_timestamps=true + DTW there is no
         // looping risk, and the internal context is better than manual chunking.
-        self.transcribe_chunk_timestamps(audio, language, 0.0, prompt, Granularity::Segment)
+        Ok(self
+            .transcribe_chunk_timestamps_profiled(
+                audio,
+                language,
+                0.0,
+                prompt,
+                Granularity::Segment,
+            )?
+            .segments)
     }
 
     /// Transcribe audio and return per-word timestamps.
@@ -1046,7 +1071,9 @@ impl WhisperBackend {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
-        self.transcribe_chunk_timestamps(audio, language, 0.0, prompt, Granularity::Word)
+        Ok(self
+            .transcribe_chunk_timestamps_profiled(audio, language, 0.0, prompt, Granularity::Word)?
+            .segments)
     }
 
     /// Transcribe audio at the finest timestamp granularity available for
@@ -1063,13 +1090,46 @@ impl WhisperBackend {
         language: Language,
         prompt: Option<&str>,
     ) -> Result<Vec<(f64, f64, String)>, DictationError> {
-        let words = self.transcribe_sync_with_word_timestamps(audio, language, prompt)?;
-        if words.is_empty() {
-            warn!("Word-level DTW timestamps unavailable; falling back to segment timestamps");
-            self.transcribe_sync_with_timestamps(audio, language, prompt)
-        } else {
-            Ok(words)
+        Ok(self
+            .transcribe_sync_for_diarization_profiled(audio, language, prompt)?
+            .segments)
+    }
+
+    /// Profiled variant used by the CLI benchmark and cache path.
+    #[cfg(feature = "diarization")]
+    pub fn transcribe_sync_for_diarization_profiled(
+        &self,
+        audio: &[f32],
+        language: Language,
+        prompt: Option<&str>,
+    ) -> Result<DiarizationTranscription, DictationError> {
+        if audio.is_empty() {
+            return Err(DictationError::NoAudioCaptured);
         }
+        let mut words = self.transcribe_chunk_timestamps_profiled(
+            audio,
+            language,
+            0.0,
+            prompt,
+            Granularity::Word,
+        )?;
+        if !words.segments.is_empty() {
+            return Ok(words);
+        }
+
+        warn!("Word-level DTW timestamps unavailable; falling back to segment timestamps");
+        let fallback = self.transcribe_chunk_timestamps_profiled(
+            audio,
+            language,
+            0.0,
+            prompt,
+            Granularity::Segment,
+        )?;
+        words.segments = fallback.segments;
+        words.timings.whisper_inference_seconds += fallback.timings.whisper_inference_seconds;
+        words.timings.word_timestamp_attribution_seconds +=
+            fallback.timings.word_timestamp_attribution_seconds;
+        Ok(words)
     }
 
     /// Transcribe a single audio chunk with timestamps via DTW.
@@ -1082,17 +1142,15 @@ impl WhisperBackend {
     /// the generative `<|t.xx|>` tokens that degrade quality.
     /// `t_offset` (seconds) is added to all returned timestamps.
     #[cfg(feature = "diarization")]
-    fn transcribe_chunk_timestamps(
+    fn transcribe_chunk_timestamps_profiled(
         &self,
         audio: &[f32],
         language: Language,
         t_offset: f64,
         prompt: Option<&str>,
         granularity: Granularity,
-    ) -> Result<Vec<(f64, f64, String)>, DictationError> {
-        let model = self
-            .loaded_model()
-            .ok_or(DictationError::ModelNotLoaded)?;
+    ) -> Result<DiarizationTranscription, DictationError> {
+        let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
 
         let n_threads = whisper_threads();
         let no_speech_thold = model.no_speech_threshold();
@@ -1103,7 +1161,7 @@ impl WhisperBackend {
         params.set_temperature(0.0);
         params.set_temperature_inc(0.2);
         params.set_translate(false);
-        params.set_no_timestamps(true);   // clean text — no generative timestamp tokens
+        params.set_no_timestamps(true); // clean text — no generative timestamp tokens
         params.set_token_timestamps(true); // populate token.t0/t1/t_dtw via cross-attention
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -1119,10 +1177,13 @@ impl WhisperBackend {
         self.install_abort_callback(&mut params);
 
         self.with_warm_state(|state| {
+            let inference_started = Instant::now();
             state.full(params, audio).map_err(|e| {
                 DictationError::TranscriptionFailed(format!("Whisper inference failed: {e}"))
             })?;
+            let whisper_inference_seconds = inference_started.elapsed().as_secs_f64();
 
+            let attribution_started = Instant::now();
             let n_segments = state.full_n_segments();
             let mut results = Vec::with_capacity(n_segments as usize);
 
@@ -1182,7 +1243,15 @@ impl WhisperBackend {
                 }
             }
 
-            Ok(results)
+            Ok(DiarizationTranscription {
+                segments: results,
+                timings: DiarizationTranscriptionTimings {
+                    whisper_inference_seconds,
+                    word_timestamp_attribution_seconds: attribution_started
+                        .elapsed()
+                        .as_secs_f64(),
+                },
+            })
         })
     }
 }
@@ -1284,10 +1353,7 @@ mod warm_model_cache_tests {
 
     #[test]
     fn refuses_duplicate_or_oversized_cache_pairs() {
-        assert!(!can_cache_pair(
-            WhisperModel::BaseEn,
-            WhisperModel::BaseEn
-        ));
+        assert!(!can_cache_pair(WhisperModel::BaseEn, WhisperModel::BaseEn));
         assert!(!can_cache_pair(
             WhisperModel::KbWhisperMedium,
             WhisperModel::BaseEn
@@ -1411,7 +1477,9 @@ fn dtw_segment_timestamps(
     let mut t1 = None::<f64>;
 
     for j in 0..n {
-        let Some(token) = segment.get_token(j) else { continue };
+        let Some(token) = segment.get_token(j) else {
+            continue;
+        };
         let td = token.token_data();
         if td.t_dtw >= 0 {
             let t = td.t_dtw as f64 / 100.0 + t_offset;
@@ -1561,7 +1629,10 @@ fn words_from_segments(segments: &[Vec<TokenTiming>]) -> Vec<(f64, f64, String)>
                 } else {
                     format!(" {}", token.text)
                 };
-                flat.push(TokenTiming { t_dtw: token.t_dtw, text });
+                flat.push(TokenTiming {
+                    t_dtw: token.t_dtw,
+                    text,
+                });
                 first_content = false;
             } else {
                 flat.push(token.clone());
@@ -1575,14 +1646,20 @@ fn words_from_segments(segments: &[Vec<TokenTiming>]) -> Vec<(f64, f64, String)>
 
 #[cfg(all(test, feature = "diarization"))]
 mod word_grouping_tests {
-    use super::{TokenTiming, group_tokens_into_words, words_from_segments};
+    use super::{group_tokens_into_words, words_from_segments, TokenTiming};
 
     fn tok(text: &str, t_dtw: f64) -> TokenTiming {
-        TokenTiming { t_dtw, text: text.to_string() }
+        TokenTiming {
+            t_dtw,
+            text: text.to_string(),
+        }
     }
 
     fn tok_invalid(text: &str) -> TokenTiming {
-        TokenTiming { t_dtw: -1.0, text: text.to_string() }
+        TokenTiming {
+            t_dtw: -1.0,
+            text: text.to_string(),
+        }
     }
 
     #[test]
@@ -1603,10 +1680,7 @@ mod word_grouping_tests {
     #[test]
     fn leading_space_creates_word_boundary() {
         // " Hello" starts word 1, " world" starts word 2
-        let tokens = vec![
-            tok(" Hello", 1.0),
-            tok(" world", 2.0),
-        ];
+        let tokens = vec![tok(" Hello", 1.0), tok(" world", 2.0)];
         let words = group_tokens_into_words(&tokens);
         assert_eq!(words.len(), 2);
         assert_eq!(words[0].2, "Hello");
@@ -1633,7 +1707,7 @@ mod word_grouping_tests {
         // Word "un" composed of two tokens at t=1.0 and t=1.5
         let tokens = vec![
             tok(" un", 1.0),
-            tok("e", 1.5),  // no leading space → appends
+            tok("e", 1.5), // no leading space → appends
         ];
         let words = group_tokens_into_words(&tokens);
         assert_eq!(words.len(), 1);
@@ -1646,9 +1720,9 @@ mod word_grouping_tests {
     fn special_tokens_skipped() {
         let tokens = vec![
             tok(" Hello", 1.0),
-            tok("[_BEG_]", 0.0),     // bracket special → skip
+            tok("[_BEG_]", 0.0),      // bracket special → skip
             tok("<|nospeech|>", 0.5), // angle bracket special → skip
-            tok("",  0.0),            // empty → skip
+            tok("", 0.0),             // empty → skip
             tok(" world", 2.0),
         ];
         let words = group_tokens_into_words(&tokens);
@@ -1660,14 +1734,17 @@ mod word_grouping_tests {
     #[test]
     fn invalid_dtw_word_inherits_previous_end() {
         // Word 1: t=1.0, Word 2: no valid DTW → should inherit 1.0
-        let tokens = vec![
-            tok(" Hello", 1.0),
-            tok_invalid(" world"),
-        ];
+        let tokens = vec![tok(" Hello", 1.0), tok_invalid(" world")];
         let words = group_tokens_into_words(&tokens);
         assert_eq!(words.len(), 2);
-        assert!((words[1].0 - 1.0).abs() < 1e-9, "start should inherit previous end");
-        assert!((words[1].1 - 1.0).abs() < 1e-9, "end should inherit previous end");
+        assert!(
+            (words[1].0 - 1.0).abs() < 1e-9,
+            "start should inherit previous end"
+        );
+        assert!(
+            (words[1].1 - 1.0).abs() < 1e-9,
+            "end should inherit previous end"
+        );
         assert_eq!(words[1].2, "world");
     }
 
@@ -1684,10 +1761,7 @@ mod word_grouping_tests {
     #[test]
     fn start_never_exceeds_end() {
         // Two valid tokens at the same time → start == end
-        let tokens = vec![
-            tok(" test", 3.0),
-            tok("ing", 3.0),
-        ];
+        let tokens = vec![tok(" test", 3.0), tok("ing", 3.0)];
         let words = group_tokens_into_words(&tokens);
         assert_eq!(words.len(), 1);
         assert!(words[0].0 <= words[0].1, "start must not exceed end");
@@ -1707,7 +1781,10 @@ mod word_grouping_tests {
             seg(vec![tok_invalid(" foo"), tok_invalid(" bar")]),
         ];
         let result = words_from_segments(&segs);
-        assert!(result.is_empty(), "should be empty when no valid DTW exists, got: {result:?}");
+        assert!(
+            result.is_empty(),
+            "should be empty when no valid DTW exists, got: {result:?}"
+        );
     }
 
     /// (b) Second segment's first content word has invalid DTW → inherits from
@@ -1730,12 +1807,16 @@ mod word_grouping_tests {
             assert!(
                 result[i].0 >= result[i - 1].0,
                 "start[{i}]={} < start[{}]={} — not monotonic",
-                result[i].0, i - 1, result[i - 1].0
+                result[i].0,
+                i - 1,
+                result[i - 1].0
             );
             assert!(
                 result[i].1 >= result[i - 1].1,
                 "end[{i}]={} < end[{}]={} — not monotonic",
-                result[i].1, i - 1, result[i - 1].1
+                result[i].1,
+                i - 1,
+                result[i - 1].1
             );
         }
 
@@ -1760,7 +1841,11 @@ mod word_grouping_tests {
             seg(vec![tok("world", 2.0)]),
         ];
         let result = words_from_segments(&segs);
-        assert_eq!(result.len(), 2, "segment boundary must create word break; got: {result:?}");
+        assert_eq!(
+            result.len(),
+            2,
+            "segment boundary must create word break; got: {result:?}"
+        );
         assert_eq!(result[0].2, "Hello");
         assert_eq!(result[1].2, "world");
     }
@@ -1776,10 +1861,20 @@ mod word_grouping_tests {
             seg(vec![tok(" speech", 5.0)]),
         ];
         let result = words_from_segments(&segs);
-        assert!(!result.is_empty(), "should have words when any segment has valid DTW");
+        assert!(
+            !result.is_empty(),
+            "should have words when any segment has valid DTW"
+        );
         // "silence" inherits 0.0 (nothing before it), "speech" has t=5.0
-        let speech = result.iter().find(|w| w.2 == "speech").expect("should have 'speech'");
-        assert!((speech.0 - 5.0).abs() < 1e-9, "speech start should be 5.0, got {}", speech.0);
+        let speech = result
+            .iter()
+            .find(|w| w.2 == "speech")
+            .expect("should have 'speech'");
+        assert!(
+            (speech.0 - 5.0).abs() < 1e-9,
+            "speech start should be 5.0, got {}",
+            speech.0
+        );
     }
 }
 
@@ -1845,7 +1940,10 @@ mod segment_confidence_tests {
             },
         ];
 
-        assert_eq!(assemble_transcript(&segments), "First. Second? Third! Fourth");
+        assert_eq!(
+            assemble_transcript(&segments),
+            "First. Second? Third! Fourth"
+        );
     }
 
     #[test]
@@ -1875,8 +1973,7 @@ mod segment_confidence_tests {
         let segments = [TranscriptSegment {
             start: 0.0,
             end: 4.0,
-            text: "Ja.Jag kastar att prata svenska.Jag testar att prata svenska.Jag."
-                .to_string(),
+            text: "Ja.Jag kastar att prata svenska.Jag testar att prata svenska.Jag.".to_string(),
             avg_logprob: None,
             no_speech_prob: 0.0,
         }];
@@ -1892,8 +1989,7 @@ mod segment_confidence_tests {
         let segments = [TranscriptSegment {
             start: 0.0,
             end: 1.0,
-            text: "Version 1.2 är klar. Nästa steg."
-                .to_string(),
+            text: "Version 1.2 är klar. Nästa steg.".to_string(),
             avg_logprob: None,
             no_speech_prob: 0.0,
         }];
@@ -2009,7 +2105,8 @@ mod warm_state_tests {
             tx.send(()).expect("signal lock acquired");
             thread::sleep(hold);
         });
-        rx.recv().expect("background thread should acquire the lock");
+        rx.recv()
+            .expect("background thread should acquire the lock");
         handle
     }
 
