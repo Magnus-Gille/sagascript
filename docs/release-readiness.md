@@ -188,6 +188,21 @@ Verification completed:
   `Sagascript_1.1.0_aarch64.dmg`, SHA-256
   `14c8b4ed21ec524ca06f65efd7483af270e9b60650957ea189decdefb21fd195`.
   This is a packaging smoke test, not a distributable release artifact.
+- Annotated tag `v1.1.0` points at exact release commit
+  `6782e7cdfa32af9a7bd73a4cd7aed18c62cc6493`. GitHub Actions run
+  `33524699785` passed the quality gate, real transcription, real two-speaker
+  diarization, Developer ID signing, app and DMG notarization/stapling,
+  Gatekeeper verification, simulated upgrade, and transcription through the
+  installed CLI. The generated GitHub release remains an unpublished draft.
+- The downloaded draft artifacts were verified independently against both
+  `SHA256SUMS` and GitHub's stored digests:
+  `Sagascript.dmg` is
+  `552cd99e0372d7d9f1370bdfdbd55e11f2177a4b7233792a667b2bec0e02d788`,
+  and `Sagascript.app.tar.gz` is
+  `5814d1c6eb9de9e8dfba4b6961f2a3c62f6379cf43912e2d8dd84b36a235c8c2`.
+  Both app copies pass strict code-signature verification, hardened-runtime and
+  audio-input-entitlement checks, stapler validation, and Gatekeeper with Team
+  ID `7C6WF6GFZ4`.
 - Claude Opus 5 independently reviewed commit
   `40bda7906eff25a5014dd94c313be3f7db91f11e`. Its grounded findings are fixed:
   recoverable onboarding, visible per-profile engine readiness, re-checkable
@@ -202,15 +217,19 @@ Verification completed:
 
 Open release blockers:
 
-- The exact release revision must be committed before signing. The signed app
-  and DMG then need notarization, stapling, Gatekeeper verification, and a
-  clean-machine permission/install/upgrade test.
+- Automated signing, notarization, Gatekeeper, simulated upgrade, and installed
+  CLI acceptance are complete. A manual first-launch pass on a clean Apple
+  Silicon Mac still needs to verify real TCC prompts and persistence for
+  Microphone and Accessibility, live dictation, auto-paste, launch at login,
+  profile switching, and the update link.
 - The selected glyph has been raster-checked at 32, 64, 128, 512, and 1024 px.
   Its current macOS template rendering still needs a visually isolated pass in
   both light and dark menu bars during signed acceptance.
-- The post-review fixes need one final independent diff review after they are
-  committed; the original reviewed commit must not be mistaken for the final
-  release revision.
+- Claude Opus 5 completed the base independent review, but its post-fix review
+  reached the account session limit before a verdict. M5's final-review output
+  was deterministically rejected as incorrect, so the conductor performed the
+  disclosed final review and found no grounded defect. This limitation remains
+  recorded rather than treating the base review as a review of the final SHA.
 - The product page builds and its authored files lint cleanly, but its pinned
   Sites scaffold currently reports five high-severity and one low-severity
   production dependency advisories. Do not deploy it until an approved scaffold
