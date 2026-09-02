@@ -28,7 +28,7 @@ export default function Home() {
           </p>
           <div className="hero-actions">
             <a className="button primary" href={releaseUrl}>Download for Mac <span aria-hidden="true">↘</span></a>
-            <a className="button secondary" href={sourceUrl}>View source <span aria-hidden="true">↗</span></a>
+            <a className="button secondary" href={sourceUrl}>View source on GitHub <span aria-hidden="true">↗</span></a>
           </div>
           <p className="requirements">Apple silicon · macOS 13 or later · Local processing</p>
         </div>
@@ -43,13 +43,17 @@ export default function Home() {
               priority
             />
           </div>
-          <figcaption><span>01</span> Two languages. Two shortcuts. No cloud account.</figcaption>
+          <figcaption><span>01</span> Multiple languages. A shortcut for each. No cloud account.</figcaption>
         </figure>
       </section>
 
       <section className="statement" aria-label="Privacy statement">
         <p>Your recordings stay on your Mac.</p>
-        <span>Sagascript downloads the speech engine for your chosen language, then transcription happens locally.</span>
+        <span>
+          Transcription happens locally. Internet access is only used when you
+          choose a language that needs its speech engine, download another
+          engine, or check for an update.
+        </span>
       </section>
 
       <section className="how" id="how">

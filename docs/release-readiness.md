@@ -168,58 +168,53 @@ prove or authorize publication of a later candidate.
 
 ## Current implementation checkpoint — 2026-09-02
 
-The signed `v1.1.1` candidate is installed and remains the stable daily-use
-build. Its exact release revision is
-`57b91dcdab4729b2a70d1717319c9d9760da7d8c`; GitHub Actions run
-`33551011841` passed the quality gate, signing, app and DMG notarization,
-stapling, Gatekeeper, upgrade, CLI, and transcription checks. The verified DMG
-SHA-256 is
-`03c859fd4ac0edabc8ced784fc4aaf526b9c6a13dcfdfd0c3081ef78f66b7199`.
-The GitHub release is still an unpublished draft.
+The accepted daily-use build is Sagascript `1.1.2` from exact source revision
+`6008bd191a9c33281fc420ca9492a0edd3fb8f48`. The installed Apple Silicon app
+is Developer ID signed by Team ID `7C6WF6GFZ4`, has hardened runtime and the
+audio-input entitlement, and reports
+`sagascript 1.1.2 (git 6008bd1, built 2026-09-02)`. It remains running while
+release preparation happens in a separate worktree.
 
-Clean-machine onboarding confirmed that transcription and the signed bundle's
-Accessibility identity work. The permission page now keeps an explicit reopen
-button and reopens the correct System Settings pane without creating another
-macOS prompt.
+Manual acceptance has confirmed that the idle **S** is visible in the menu
+bar, transcription works, and version/build information is visible in the app.
+The implemented release surface also includes:
 
-The next patch is prepared in an isolated `1.1.2` worktree and does not modify
-the installed app:
+- Native menu states **S**, **●**, **…**, and **!**, plus direct profile
+  selection and a clear update action.
+- A stable download-progress layout and backend-owned Dictate state, avoiding
+  the repaint overlap and conflicting recording action found during testing.
+- A completed-onboarding background path that does not create a Settings
+  window. Settings opens only through a deliberate menu, Finder/Reopen, or
+  `sagascript open` action.
+- Accessibility recovery that deep-links back to the correct pane without
+  issuing repeated permission prompts.
+- Version, source revision, and build date in both the app and
+  `sagascript --version`.
+- A short responsive product page with the shared S identity, local-processing
+  explanation, install flow, CLI examples, and canonical GitHub release link.
+  Its production dependency audit currently reports zero known
+  vulnerabilities.
 
-- The per-profile download action has a stable layout slot, preventing the
-  stale `DownDownloading 100%` WebKit repaint overlap.
-- Dictate follows backend recording, model-loading, transcribing, and idle
-  events, so it no longer offers a conflicting start while hotkey work is busy.
-- Completed-onboarding background launches create no Settings window. Settings
-  can be revealed from the menu, macOS Reopen, or the new `sagascript open`
-  recovery command; onboarding still opens when incomplete.
-- The unreliable image-backed tray marker is replaced with compact native
-  state text: S, ●, …, and !.
+The product-page copy review was delegated to the local M5 inference host using
+`qwen3-30b-instruct`. Grounded findings were adopted: the privacy boundary now
+names update checks and user-selected engine downloads, the profile copy no
+longer implies a two-language limit, and the source link names GitHub.
+An independent release-diff review with M5's `qwen3-coder-next-80b` found no
+release-blocking issues after the deterministic checks passed.
 
-Verification completed for the isolated patch:
+Open release gates:
 
-- Frontend tests, Svelte diagnostics, production frontend build, release
-  metadata, Rust workspace check, Clippy with warnings denied, the lean CLI
-  build, and all 578 Rust tests pass. The AppKit pasteboard test requires the
-  unsandboxed macOS test context and passes there.
-- A local unsigned app bundle built successfully during an earlier diagnostic.
-  That diagnostic exercised a superseded all-bare-launches-hidden rule and does
-  not verify the final login-item background marker or deliberate Finder launch
-  behavior. Those paths, the onboarding-window hide, and the native status
-  marker still need a final isolated visual pass.
-
-Open release blockers:
-
-- Keep the installed `v1.1.1` build running until daily-use work can be paused;
-  do not start another GUI candidate because the singleton lock and shared TCC
-  identity would interfere with it.
-- Visually verify S → ● → … → S and the no-popup behavior using the final signed
-  `1.1.2` candidate when an isolated acceptance window is available.
-- Resolve the final follow-up from the independent cross-model review before
-  release readiness.
-- `npm run licenses:check` needs a worktree-local `npm ci`; the current shared
-  `node_modules` contains older package versions than `package-lock.json`.
-  Dependency installation requires a separate explicit approval.
-- The product page scaffold's dependency audit must be green before deployment.
-- Tagging, pushing, signing/notarizing, publishing the GitHub release, deploying
-  the site, and linking it from gille.ai are separate publication/production
-  mutations and require explicit approval with an exact revision.
+- Complete a visual desktop/mobile pass of the final product page. The build
+  and responsive CSS checks pass, but the browser preview surface was not
+  available for the first attempt.
+- Create the final release commit, then build and verify an artifact whose
+  embedded revision matches that exact commit.
+- Run the signed/notarized clean-install acceptance: DMG drag-and-drop,
+  Gatekeeper, Microphone, Accessibility with an unrelated Settings pane open,
+  model download, dictation, auto-paste, file transcription, relaunch, update
+  check, and bundled CLI.
+- Tagging, pushing, notarization through release CI, publishing the GitHub
+  release, deploying the site, and asking the gille.ai repository to add the
+  link remain explicit production/publication actions. Each must name the
+  exact 40-character release SHA, target, verification, and rollback before
+  execution.

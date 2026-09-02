@@ -5,15 +5,16 @@
 
 Dictate anywhere. Privately. A lightweight menu bar app for macOS. Press a
 hotkey, speak, and text appears in any application. Audio and transcripts stay
-on your Mac; an internet connection is used only when you choose to download a
-speech or diarization model.
+on your Mac. Sagascript connects to the internet only when you choose a
+language that needs its speech engine, download another model, or check for an
+update.
 
 ## Features
 
 - **Push-to-talk dictation** -- hold a global hotkey, speak, release to transcribe and paste into any app
 - **Local transcription** -- audio and transcripts are processed on-device with Metal/Core ML; they are not uploaded
 - **Nordic-grade accuracy** -- Swedish and Norwegian use [KB-Whisper](https://huggingface.co/KBLab) (Swedish National Library) and [NB-Whisper](https://huggingface.co/NbAiLab) (Norwegian National Library), fine-tuned on 50,000+ hours of Nordic speech with 47% fewer errors than generic Whisper
-- **Privacy by default** -- no telemetry, cloud transcription, or transcript upload; network access is limited to model downloads you initiate
+- **Privacy by default** -- no telemetry, cloud transcription, or transcript upload; network access is limited to explicit speech-engine/model downloads and update checks
 - **No telemetry or tracking** -- no analytics, no usage sharing, no data collection of any kind
 - **Multi-language** -- English, Swedish, and Norwegian with dedicated models; additional languages supported via generic Whisper models
 - **Language shortcuts** -- assign different global hotkeys to different languages and switch without opening Settings

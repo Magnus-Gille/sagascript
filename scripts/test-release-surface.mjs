@@ -48,6 +48,10 @@ const siteCssSource = await readFile(
   new URL("../site/app/globals.css", import.meta.url),
   "utf8",
 );
+const sitePageSource = await readFile(
+  new URL("../site/app/page.tsx", import.meta.url),
+  "utf8",
+);
 
 test("release navigation exposes only Dictate, Transcribe, and Settings", () => {
   for (const label of ["Dictate", "Transcribe", "Settings"]) {
@@ -199,6 +203,14 @@ test("mobile site keeps navigation and readable terminal text", () => {
   assert.doesNotMatch(siteCssSource, /\.site-header nav\s*\{\s*display:\s*none/);
   assert.match(siteCssSource, /\.terminal-bar b[^}]*color:\s*#8f8f88/);
   assert.match(siteCssSource, /\.terminal code span[^}]*color:\s*#8f8f88/);
+});
+
+test("product page explains the complete privacy boundary without implying fixed profiles", () => {
+  assert.match(sitePageSource, /Internet access is only used when you/);
+  assert.match(sitePageSource, /check for an update/);
+  assert.match(sitePageSource, /Multiple languages\. A shortcut for each\./);
+  assert.doesNotMatch(sitePageSource, /Two languages\. Two shortcuts\./);
+  assert.match(sitePageSource, /View source on GitHub/);
 });
 
 test("app and website use the exact canonical single-S geometry", () => {
