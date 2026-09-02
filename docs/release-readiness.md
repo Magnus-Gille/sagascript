@@ -200,13 +200,13 @@ The product-page copy review was delegated to the local M5 inference host using
 names update checks and user-selected engine downloads, the profile copy no
 longer implies a two-language limit, and the source link names GitHub.
 An independent release-diff review with M5's `qwen3-coder-next-80b` found no
-release-blocking issues after the deterministic checks passed.
+release-blocking issues after the deterministic checks passed. The final
+product page passed visual desktop and mobile review at 1440 px and 390 px;
+navigation, responsive stacking, readable terminal text, and browser console
+output were checked, and an observed missing-favicon request was fixed.
 
 Open release gates:
 
-- Complete a visual desktop/mobile pass of the final product page. The build
-  and responsive CSS checks pass, but the browser preview surface was not
-  available for the first attempt.
 - A local Apple Silicon build from exact revision
   `e42d4cd4e91211a55310d0d6c4b03cf336160b7e` produced the expected app and
   DMG metadata, but signing from the Codex process omitted a usable certificate

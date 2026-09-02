@@ -9,6 +9,7 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://sagascript.gille.ai"),
   title: "Sagascript — Local dictation for Mac",
   description: "Fast, private dictation and transcription for Apple silicon Macs. Speech is processed locally on your computer.",
+  icons: { icon: "/favicon.svg" },
   openGraph: {
     title: "Sagascript — Local dictation for Mac",
     description: "Speak. Get text. Keep it local.",

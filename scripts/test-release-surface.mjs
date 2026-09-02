@@ -52,6 +52,10 @@ const sitePageSource = await readFile(
   new URL("../site/app/page.tsx", import.meta.url),
   "utf8",
 );
+const siteLayoutSource = await readFile(
+  new URL("../site/app/layout.tsx", import.meta.url),
+  "utf8",
+);
 
 test("release navigation exposes only Dictate, Transcribe, and Settings", () => {
   for (const label of ["Dictate", "Transcribe", "Settings"]) {
@@ -227,4 +231,8 @@ test("app and website use the exact canonical single-S geometry", () => {
       `${name} has drifted from the canonical S geometry`,
     );
   }
+});
+
+test("product page declares the shipped S favicon", () => {
+  assert.match(siteLayoutSource, /icons:\s*\{\s*icon:\s*"\/favicon\.svg"\s*\}/);
 });
