@@ -31,7 +31,7 @@ pub struct UncoveredSpan {
     pub speech_ratio: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionWarning {
     pub code: String,
     pub message: String,
@@ -46,6 +46,33 @@ pub struct CoverageDiagnostics {
     pub coverage_ratio: f64,
     pub uncovered_spans: Vec<UncoveredSpan>,
     pub warnings: Vec<TranscriptionWarning>,
+}
+
+/// Reusable audio-only input for transcript coverage checks.
+///
+/// Persisting this compact frame map lets callers re-check coverage after
+/// changing timestamp grouping without decoding the source audio again.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CoverageProfile {
+    audio_samples: usize,
+    speech_frames: Vec<bool>,
+}
+
+impl CoverageProfile {
+    pub fn from_audio(audio: &[f32]) -> Self {
+        Self {
+            audio_samples: audio.len(),
+            speech_frames: detect_speech_frames(audio),
+        }
+    }
+
+    pub fn duration_seconds(&self) -> f64 {
+        self.audio_samples as f64 / SAMPLE_RATE_HZ
+    }
+
+    pub fn validate(&self) -> bool {
+        self.speech_frames.len() == self.audio_samples.div_ceil(FRAME_SAMPLES)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -76,7 +103,7 @@ impl RepetitionDiagnostics {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LanguageDetection {
     pub language: String,
     pub probability: f32,
@@ -91,7 +118,7 @@ pub struct LanguageWindow {
     pub probability: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LanguageRegion {
     pub start: f64,
     pub end: f64,
@@ -103,15 +130,22 @@ pub struct LanguageRegion {
     pub last_sequence: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LanguageRegionDiagnostics {
     pub regions: Vec<LanguageRegion>,
     pub warnings: Vec<TranscriptionWarning>,
 }
 
 pub fn analyze_coverage(audio: &[f32], segments: &[TranscriptSegment]) -> CoverageDiagnostics {
-    let duration = audio.len() as f64 / SAMPLE_RATE_HZ;
-    let speech_frames = detect_speech_frames(audio);
+    analyze_coverage_profile(&CoverageProfile::from_audio(audio), segments)
+}
+
+pub fn analyze_coverage_profile(
+    profile: &CoverageProfile,
+    segments: &[TranscriptSegment],
+) -> CoverageDiagnostics {
+    let duration = profile.duration_seconds();
+    let speech_frames = &profile.speech_frames;
     let intervals = merged_segment_intervals(segments, duration);
 
     let mut total_speech_frames = 0usize;
@@ -624,6 +658,18 @@ mod tests {
     }
 
     #[test]
+    fn persisted_coverage_profile_matches_direct_audio_analysis() {
+        let audio = voiced_audio(70.0, &[(0.0, 70.0)]);
+        let segments = [segment(0.0, 25.0), segment(55.0, 70.0)];
+        let direct = analyze_coverage(&audio, &segments);
+        let encoded = serde_json::to_string(&CoverageProfile::from_audio(&audio)).unwrap();
+        let profile: CoverageProfile = serde_json::from_str(&encoded).unwrap();
+
+        assert!(profile.validate());
+        assert_eq!(analyze_coverage_profile(&profile, &segments), direct);
+    }
+
+    #[test]
     fn ignores_material_timestamp_gap_that_is_silent() {
         let audio = voiced_audio(20.0, &[(0.0, 6.0), (14.0, 20.0)]);
         let diagnostics = analyze_coverage(&audio, &[segment(0.0, 6.0), segment(14.0, 20.0)]);
@@ -691,10 +737,9 @@ mod tests {
 
     #[test]
     fn quarantines_long_ordinary_word_loop_despite_confident_no_speech_scores() {
-        let segments: Vec<TranscriptSegment> = serde_json::from_str(include_str!(
-            "../../tests/fixtures/ordinary-word-loop.json"
-        ))
-        .expect("shareable repetition fixture should parse");
+        let segments: Vec<TranscriptSegment> =
+            serde_json::from_str(include_str!("../../tests/fixtures/ordinary-word-loop.json"))
+                .expect("shareable repetition fixture should parse");
 
         let diagnostics = analyze_repetition(&segments);
 
@@ -784,8 +829,12 @@ mod tests {
             language_window(1, 20.0, "sv", 0.97),
         ];
 
-        assert!(analyze_language_windows(&english_source).warnings.is_empty());
-        assert!(analyze_language_windows(&swedish_source).warnings.is_empty());
+        assert!(analyze_language_windows(&english_source)
+            .warnings
+            .is_empty());
+        assert!(analyze_language_windows(&swedish_source)
+            .warnings
+            .is_empty());
     }
 
     fn language_window(

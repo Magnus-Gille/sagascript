@@ -8,6 +8,69 @@ Two metrics:
 - **DER** (Diarization Error Rate): measures speaker turn accuracy against reference RTTM.
 - **cpWER** (concatenated minimum-permutation WER): measures speaker-attributed transcription accuracy.
 
+## Long-file performance benchmark (issue #157)
+
+`scripts/benchmark-diarized-transcription.py` requires a 15–30 minute input and records
+wall time, realtime factor, macOS peak RSS, and every phase from the CLI's structured
+`performance` object. Use a local mono ALAC/AAC `.m4a`; never commit private recordings,
+transcripts, benchmark output containing paths, or caches.
+
+```bash
+# Cold run without reusable analysis
+python3 scripts/benchmark-diarized-transcription.py \
+  --input /path/to/20-minute-mono.m4a --language sv \
+  --model kb-whisper-large --threshold 0.75
+
+# Populate a private cache (contains embeddings and transcript text; mode 0600 on Unix)
+python3 scripts/benchmark-diarized-transcription.py \
+  --input /path/to/20-minute-mono.m4a --language sv \
+  --model kb-whisper-large --threshold 0.75 \
+  --cache /private/path/recording.diarization-cache.json
+
+# Threshold-only retry also skips audio decode, model loading, and language checks
+python3 scripts/benchmark-diarized-transcription.py \
+  --input /path/to/20-minute-mono.m4a --language sv \
+  --model kb-whisper-large --threshold 0.55 \
+  --cache /private/path/recording.diarization-cache.json
+```
+
+KB/NB fine-tunes do not have matching compiled Core ML encoders: substituting an
+upstream encoder would change their fine-tuned inference. On Apple Silicon the expected
+and tested fallback is Metal. The native Core ML load warning is a one-time failed
+optional probe, not a failed Metal initialization; JSON records `acceleration_backend`
+and `coreml_status` so release benchmarks retain the selected backend.
+
+### 2026-09-01 Apple M4 benchmark
+
+The public `dj_2022_feu.m4a` fixture was repeated 20 times and encoded as mono
+48 kHz ALAC (19m34s container duration, 77.6 MB). This is deterministic and
+Voice-Memo-shaped, while deliberately not representing natural long-form accuracy.
+
+| Run | Wall | Realtime | Peak RSS | Speakers / segments |
+|---|---:|---:|---:|---:|
+| Cache population, threshold 0.75 | 233.44s | 5.02x | 2.77 GB | 2 / 177 |
+| Initial cache implementation, threshold 0.55 | 9.90s | 118.31x | 3.38 GB | 2 / 177 |
+| Decode-free cache hit, threshold 0.55 | 0.19s | 6117.66x | 18.1 MB | 2 / 177 |
+| Decode-free confirmation, threshold 0.65 | 0.18s | 6408.01x | 18.1 MB | 2 / 177 |
+
+The final cache retry reduced measured wall time by 99.92% against its 233.44s
+population run. Compared with the initial cache implementation, the additional
+decode/model/language reuse reduced 9.90s to 0.19s (98.1%, about 52x) and peak RSS
+from 3.38 GB to 18.1 MB (99.5%). Cache lookup, including hashing the 77.6 MB source,
+took 0.15s; clustering and merge took another 0.02s. Decode, model loading, language
+detection, ONNX analysis, and Whisper inference all recorded zero seconds.
+
+The private 0600 cache is 1.4 MB and now includes the decoded duration, a compact
+speech-coverage frame map, language diagnostics, embeddings, and transcript word
+timestamps. This preserves the cold run's exact coverage ratio (0.83265), two
+speakers, 177 output segments, four uncovered spans, and warning codes on both
+measured retries. Older cache schemas miss safely and are rebuilt once.
+
+Cold timings vary with machine load. In the recorded 233.44s run, ONNX segmentation
+and embeddings took 100.24s while Whisper took 219.91s; their parallel span was
+220.03s. Threshold-dependent clustering, merge, coverage, and JSON assembly still
+run from scratch on every retry.
+
 ---
 
 ## Fetched clips (committed: ground truth only, audio gitignored)

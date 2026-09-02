@@ -22,7 +22,9 @@ use sagascript_core::settings::{
 use sagascript_core::transcription::{
     suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
 };
-use sagascript_core::transcription::{model, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend};
+use sagascript_core::transcription::{
+    model, ContextProfile, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend,
+};
 
 /// Build the per-transcription options from the current settings. Resolves the
 /// VAD model path only when VAD is enabled and the model is present (otherwise
@@ -1341,13 +1343,19 @@ pub async fn transcribe_file(
         )
     };
 
-    // Show model loading status if needed
-    if whisper.needs_reload(effective_model) {
+    #[cfg(feature = "diarization")]
+    let context_profile = ContextProfile::for_diarization(diarize.unwrap_or(false));
+    #[cfg(not(feature = "diarization"))]
+    let context_profile = ContextProfile::FlashAttention;
+
+    // Show model loading status if the exact model/profile runtime is not warm.
+    if whisper.needs_reload_with_profile(effective_model, context_profile) {
         let _ = app.emit(crate::events::event::STATE_CHANGED, "loading_model");
     }
 
-    // Ensure model is loaded
-    if let Err(error) = whisper.ensure_model(effective_model) {
+    // Ensure the model is loaded with flash attention for ordinary files and
+    // DTW token alignment only for explicit diarization.
+    if let Err(error) = whisper.ensure_model_with_profile(effective_model, context_profile) {
         let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
         return Err(error.to_string());
     }
