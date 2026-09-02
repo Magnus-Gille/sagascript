@@ -65,6 +65,7 @@ enigo = { version = "0.6", features = ["serde"] }
 core-foundation = "0.10"
 cocoa = "0.26"
 objc = "0.2"
+objc2-foundation = "0.3.2"
 block = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]

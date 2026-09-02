@@ -58,6 +58,8 @@ use sagascript_core::transcription::{
 /// Minimum recording duration before we allow stop (300ms)
 const MIN_RECORDING_MS: u64 = 300;
 const SAFE_FALLBACK_HOTKEY: &str = "Control+Shift+Space";
+#[cfg(target_os = "macos")]
+const TRAY_AUTOSAVE_NAME: &str = "ai.gille.sagascript.main";
 
 /// Shared tray status menu item for updating from anywhere
 type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
@@ -788,6 +790,8 @@ fn main() {
                 })
                 .build(app)?;
 
+            #[cfg(target_os = "macos")]
+            configure_macos_tray_identity(&tray)?;
             tray.set_visible(true)?;
 
             info!("Tray icon created");
@@ -997,6 +1001,34 @@ fn main() {
                 _ => {}
             }
         });
+}
+
+/// Give AppKit a stable identity for the status item before making it visible.
+/// Without an autosave name macOS 26 places every fresh item in the default
+/// leftmost slot, which can sit behind a MacBook camera cutout.
+#[cfg(target_os = "macos")]
+fn configure_macos_tray_identity(tray: &tauri::tray::TrayIcon) -> tauri::Result<()> {
+    let configured = tray.with_inner_tray_icon(|inner| {
+        let Some(status_item) = inner.ns_status_item() else {
+            return false;
+        };
+
+        let autosave_name = objc2_foundation::NSString::from_str(TRAY_AUTOSAVE_NAME);
+        // Tauri constructs the native item visible. Toggle it inside the same
+        // main-thread callback so the stable name is in place before AppKit
+        // performs the visible placement pass.
+        status_item.setVisible(false);
+        status_item.setAutosaveName(Some(&autosave_name));
+        status_item.setVisible(true);
+
+        status_item.autosaveName().to_string() == TRAY_AUTOSAVE_NAME
+    })?;
+
+    if configured {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("failed to assign the macOS tray autosave name").into())
+    }
 }
 
 /// Pure state -> (tooltip, title, menu_text) mapping for the tray, extracted
@@ -2050,6 +2082,12 @@ mod tests {
             stable_release_url(&semver::Version::new(1, 2, 0)),
             "https://github.com/Magnus-Gille/sagascript/releases/tag/v1.2.0"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tray_autosave_name_is_stable_and_bundle_qualified() {
+        assert_eq!(TRAY_AUTOSAVE_NAME, "ai.gille.sagascript.main");
     }
 
     #[test]
