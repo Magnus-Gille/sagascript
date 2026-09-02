@@ -1233,12 +1233,17 @@ fn initial_window_request(
 }
 
 trait MainWindowVisibility {
+    fn reset_to_normal_level(&self) -> Result<(), String>;
     fn unminimize(&self) -> Result<(), String>;
     fn show(&self) -> Result<(), String>;
     fn set_focus(&self) -> Result<(), String>;
 }
 
 impl MainWindowVisibility for tauri::WebviewWindow {
+    fn reset_to_normal_level(&self) -> Result<(), String> {
+        tauri::WebviewWindow::set_always_on_top(self, false).map_err(|error| error.to_string())
+    }
+
     fn unminimize(&self) -> Result<(), String> {
         tauri::WebviewWindow::unminimize(self).map_err(|error| error.to_string())
     }
@@ -1253,6 +1258,9 @@ impl MainWindowVisibility for tauri::WebviewWindow {
 }
 
 fn reveal_existing_main_window(window: &impl MainWindowVisibility) -> Result<(), String> {
+    if let Err(error) = window.reset_to_normal_level() {
+        warn!("Failed to restore normal main-window level: {error}");
+    }
     window
         .unminimize()
         .map_err(|error| format!("failed to restore main window: {error}"))?;
@@ -1308,6 +1316,7 @@ fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result
         .inner_size(500.0, default_height)
         .min_inner_size(500.0, 400.0)
         .resizable(true)
+        .always_on_top(false)
         .center()
         .focused(true)
         .build()
@@ -1787,6 +1796,15 @@ mod tests {
     }
 
     impl MainWindowVisibility for MockMainWindow {
+        fn reset_to_normal_level(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("reset_to_normal_level");
+            if self.fail_at == Some("reset_to_normal_level") {
+                Err("window level failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
         fn unminimize(&self) -> Result<(), String> {
             self.operations.borrow_mut().push("unminimize");
             if self.fail_at == Some("unminimize") {
@@ -1823,7 +1841,12 @@ mod tests {
 
         assert_eq!(
             *window.operations.borrow(),
-            ["unminimize", "show", "set_focus"]
+            [
+                "reset_to_normal_level",
+                "unminimize",
+                "show",
+                "set_focus"
+            ]
         );
     }
 
@@ -1838,7 +1861,30 @@ mod tests {
 
         assert!(error.contains("show main window"));
         assert!(error.contains("show failed"));
-        assert_eq!(*window.operations.borrow(), ["unminimize", "show"]);
+        assert_eq!(
+            *window.operations.borrow(),
+            ["reset_to_normal_level", "unminimize", "show"]
+        );
+    }
+
+    #[test]
+    fn main_window_reveal_continues_if_normal_window_level_cannot_be_restored() {
+        let window = MockMainWindow {
+            fail_at: Some("reset_to_normal_level"),
+            ..Default::default()
+        };
+
+        reveal_existing_main_window(&window).unwrap();
+
+        assert_eq!(
+            *window.operations.borrow(),
+            [
+                "reset_to_normal_level",
+                "unminimize",
+                "show",
+                "set_focus"
+            ]
+        );
     }
 
     #[test]

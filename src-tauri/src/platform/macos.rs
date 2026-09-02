@@ -24,6 +24,10 @@ fn accessibility_settings_command() -> Command {
     command
 }
 
+fn accessibility_request_prompts_user() -> bool {
+    false
+}
+
 fn interpret_open_result(result: io::Result<ExitStatus>) -> Result<(), String> {
     let status =
         result.map_err(|error| format!("Failed to open Accessibility settings: {error}"))?;
@@ -44,12 +48,17 @@ pub fn open_accessibility_settings() -> Result<(), String> {
     interpret_open_result(accessibility_settings_command().status())
 }
 
-/// Request Accessibility permission and bring the relevant System Settings
-/// pane forward. AXTrustedCheckOptionPrompt alone does not reliably navigate
-/// an already-running System Settings instance away from its current pane.
+/// Register the Accessibility check without showing macOS's redundant native
+/// alert, then bring the relevant System Settings pane forward directly. The
+/// onboarding UI already explains why access is needed and keeps an explicit
+/// button available if the user navigates away from the pane.
 pub fn request_accessibility_permission() -> Result<(), String> {
     let key = CFString::new("AXTrustedCheckOptionPrompt");
-    let value = CFBoolean::true_value();
+    let value = if accessibility_request_prompts_user() {
+        CFBoolean::true_value()
+    } else {
+        CFBoolean::false_value()
+    };
     let options = CFDictionary::from_CFType_pairs(&[(key, value)]);
 
     unsafe {
@@ -74,12 +83,18 @@ pub fn set_activation_policy_accessory() {
 #[cfg(test)]
 mod tests {
     use super::{
-        accessibility_settings_command, interpret_open_result, ACCESSIBILITY_SETTINGS_URL,
+        accessibility_request_prompts_user, accessibility_settings_command, interpret_open_result,
+        ACCESSIBILITY_SETTINGS_URL,
     };
     use std::ffi::OsStr;
     use std::io;
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
+
+    #[test]
+    fn initial_accessibility_request_does_not_show_a_redundant_native_prompt() {
+        assert!(!accessibility_request_prompts_user());
+    }
 
     #[test]
     fn accessibility_request_opens_the_privacy_pane() {
