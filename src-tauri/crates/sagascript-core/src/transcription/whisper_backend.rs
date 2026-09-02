@@ -13,6 +13,7 @@ use whisper_rs::{DtwMode, DtwParameters};
 
 use crate::error::DictationError;
 use crate::settings::{Language, WhisperModel};
+use crate::transcription::chunking::{plan_chunks, AudioChunk};
 use crate::transcription::diagnostics::LanguageDetection;
 use crate::transcription::model;
 
@@ -20,6 +21,36 @@ use crate::transcription::model;
 /// isn't latency-sensitive, so a wider beam trades speed for fewer repetition
 /// loops. Shared by the GUI file-transcribe command and the `transcribe` CLI.
 pub const FILE_TRANSCRIBE_BEAM: u32 = 5;
+
+/// Parallel file transcription is deliberately bounded: each state owns GPU
+/// buffers and a Metal command queue, so unbounded fan-out quickly wastes RAM.
+pub const MAX_PARALLEL_CHUNKS: usize = 4;
+
+/// Do not split into sub-minute pieces. Whisper loses decoder context at every
+/// boundary, and short chunks do not amortize state creation.
+const MIN_PARALLEL_CHUNK_SAMPLES: usize = 60 * 16_000;
+const AUTO_PARALLEL_MIN_SAMPLES: usize = 10 * 60 * 16_000;
+const AUTO_PARALLEL_MAX_MODEL_MB: u32 = 500;
+
+/// Select the measured-safe automatic file-transcription parallelism.
+///
+/// Beam search benefits from two Metal command queues on long files. Greedy
+/// decoding did not speed up in the benchmark, and large models have not yet
+/// passed the memory gate, so both remain serial unless explicitly overridden.
+pub fn recommended_parallel_chunks(
+    audio_samples: usize,
+    model: WhisperModel,
+    beam_size: u32,
+) -> usize {
+    if beam_size >= 2
+        && audio_samples >= AUTO_PARALLEL_MIN_SAMPLES
+        && model.size_mb() <= AUTO_PARALLEL_MAX_MODEL_MB
+    {
+        2
+    } else {
+        1
+    }
+}
 
 /// How long `with_warm_state` waits for the state mutex before giving up with
 /// [`DictationError::ModelBusy`] instead of blocking a caller forever.
@@ -152,6 +183,9 @@ pub struct TranscribeOptions {
     /// Request real Whisper segment timestamps for structured outputs such as
     /// CLI JSON. Text decoding remains in no-timestamps mode.
     pub segment_timestamps: bool,
+    /// Number of independent Whisper states used for long-file transcription.
+    /// Values are clamped to [`MAX_PARALLEL_CHUNKS`]; `0` and `1` are serial.
+    pub parallel_chunks: usize,
 }
 
 impl Default for TranscribeOptions {
@@ -162,6 +196,7 @@ impl Default for TranscribeOptions {
             temperature_fallback: true,
             vad_model_path: None,
             segment_timestamps: false,
+            parallel_chunks: 1,
         }
     }
 }
@@ -876,7 +911,7 @@ impl WhisperBackend {
         &self,
         audio: &[f32],
         language: Language,
-        on_progress: impl FnMut(i32) + 'static,
+        on_progress: impl FnMut(i32) + Send + 'static,
     ) -> Result<String, DictationError> {
         self.transcribe_sync_with_progress_and_prompt(audio, language, None, on_progress)
     }
@@ -888,7 +923,7 @@ impl WhisperBackend {
         audio: &[f32],
         language: Language,
         prompt: Option<&str>,
-        on_progress: impl FnMut(i32) + 'static,
+        on_progress: impl FnMut(i32) + Send + 'static,
     ) -> Result<String, DictationError> {
         let opts = TranscribeOptions {
             prompt: prompt.map(str::to_string),
@@ -909,7 +944,7 @@ impl WhisperBackend {
         audio: &[f32],
         language: Language,
         opts: &TranscribeOptions,
-        on_progress: impl FnMut(i32) + 'static,
+        on_progress: impl FnMut(i32) + Send + 'static,
     ) -> Result<String, DictationError> {
         let segments =
             self.transcribe_sync_with_options_segments(audio, language, opts, on_progress)?;
@@ -929,7 +964,7 @@ impl WhisperBackend {
         audio: &[f32],
         language: Language,
         opts: &TranscribeOptions,
-        on_progress: impl FnMut(i32) + 'static,
+        on_progress: impl FnMut(i32) + Send + 'static,
     ) -> Result<Vec<TranscriptSegment>, DictationError> {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
@@ -949,166 +984,290 @@ impl WhisperBackend {
                 .token_eot()
         };
 
-        let n_threads = whisper_threads();
-        let no_speech_thold = model.no_speech_threshold();
-
-        // Beam search (opt-in) is more accurate on hard audio but several times
-        // slower; greedy best_of=1 is the fast default. Clamp to a sane range —
-        // an unbounded beam_size from config would overflow the i32 cast or make
-        // whisper.cpp unusably slow.
-        let beam_size = opts.beam_size.clamp(0, 8);
-        let strategy = if beam_size >= 2 {
-            SamplingStrategy::BeamSearch {
-                beam_size: beam_size as i32,
-                patience: -1.0, // whisper default
-            }
-        } else {
-            SamplingStrategy::Greedy { best_of: 1 }
-        };
-
-        let mut params = FullParams::new(strategy);
-        params.set_language(language.whisper_code());
-        params.set_n_threads(n_threads);
-        params.set_temperature(0.0);
-        // Temperature fallback re-decodes hard segments at higher temperature.
-        // Disabling it caps worst-case latency at the cost of some robustness.
-        params.set_temperature_inc(if opts.temperature_fallback { 0.2 } else { 0.0 });
-        params.set_translate(false);
-        // Keep text decoding stable: generative timestamp tokens materially
-        // change some transcripts. Structured callers get timing from token
-        // alignment instead (DTW in the default macOS build).
-        params.set_no_timestamps(true);
-        params.set_token_timestamps(opts.segment_timestamps);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_no_speech_thold(no_speech_thold);
-        params.set_suppress_blank(true);
-        if let Some(p) = &opts.prompt {
-            if !p.is_empty() {
-                params.set_initial_prompt(p);
-            }
-        }
-
-        // VAD (opt-in): skip non-speech regions. The model path MUST be set
-        // before enable_vad — whisper-rs panics otherwise. The caller guarantees
-        // the file exists.
-        if let Some(vad_path) = &opts.vad_model_path {
-            model::verify_vad_model(std::path::Path::new(vad_path))?;
-            params.set_vad_model_path(Some(vad_path.as_str()));
-            let mut vad = WhisperVadParams::new();
-            vad.set_threshold(0.5);
-            vad.set_min_silence_duration(200); // ms — slightly longer for dictation
-            vad.set_speech_pad(50); // ms — avoid clipping word edges
-            params.set_vad_params(vad);
-            params.enable_vad(true);
-        }
-
-        // whisper.cpp derives progress from its internal processing windows.
-        // On clips whose final window extends beyond the decoded duration it
-        // can report a value outside the documented percentage range. Keep the
-        // backend's public callback contract (0..=100) so callers such as the
-        // CLI cannot overrun their progress bar (or cast a negative value to a
-        // very large u64).
-        params.set_progress_callback_safe(clamped_progress_callback(on_progress));
-
-        // Real abort callback: wire the raw FFI trampoline (bypassing whisper-rs
-        // 0.15.1's unsound set_abort_callback_safe — see abort_trampoline). On
-        // timeout the caller flips the flag via request_abort(); whisper.cpp then
-        // aborts at its next compute step, so this blocking call returns and
-        // releases the warm-state mutex instead of running to completion and
-        // wedging the pipeline. The flag's clear/discard lifecycle is handled by
-        // with_warm_state under the state lock — nothing to do here.
-        self.install_abort_callback(&mut params);
-
+        let chunks = plan_chunks(
+            audio,
+            opts.parallel_chunks.clamp(1, MAX_PARALLEL_CHUNKS),
+            MIN_PARALLEL_CHUNK_SAMPLES,
+        );
         info!(
-            "Starting local transcription: {} samples, {} threads, lang={:?}, beam={}, temp_fallback={}, vad={}",
+            "Starting local transcription: {} samples, {} threads/state, {} chunk(s), lang={:?}, beam={}, temp_fallback={}, vad={}",
             audio.len(),
-            n_threads,
+            whisper_threads(),
+            chunks.len(),
             language,
             opts.beam_size,
             opts.temperature_fallback,
             opts.vad_model_path.is_some()
         );
 
-        self.with_warm_state(|state| {
-            state.full(params, audio).map_err(|e| {
-                DictationError::TranscriptionFailed(format!("Whisper inference failed: {e}"))
+        if chunks.len() == 1 {
+            return self.with_warm_state(|state| {
+                self.transcribe_chunk_segments(
+                    state,
+                    audio,
+                    0.0,
+                    model,
+                    language,
+                    opts,
+                    token_eot,
+                    on_progress,
+                )
+            });
+        }
+
+        self.transcribe_parallel_segments(
+            audio,
+            &chunks,
+            model,
+            language,
+            opts,
+            token_eot,
+            on_progress,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn transcribe_parallel_segments(
+        &self,
+        audio: &[f32],
+        chunks: &[AudioChunk],
+        model: WhisperModel,
+        language: Language,
+        opts: &TranscribeOptions,
+        token_eot: i32,
+        on_progress: impl FnMut(i32) + Send + 'static,
+    ) -> Result<Vec<TranscriptSegment>, DictationError> {
+        let progress = Arc::new(Mutex::new(ParallelProgress {
+            percentages: vec![0; chunks.len()],
+            weights: chunks
+                .iter()
+                .map(|chunk| chunk.end_sample - chunk.start_sample)
+                .collect(),
+            total_weight: audio.len(),
+            last_reported: -1,
+            callback: Box::new(on_progress),
+        }));
+
+        self.with_warm_state(|warm_state| {
+            let mut secondary_states = {
+                let context = self.context.lock().unwrap();
+                let context = context.as_ref().ok_or(DictationError::ModelNotLoaded)?;
+                (1..chunks.len())
+                    .map(|_| {
+                        context.create_state().map_err(|error| {
+                            DictationError::TranscriptionFailed(format!(
+                                "Failed to create parallel whisper state: {error}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+
+            let mut chunk_results = std::thread::scope(|scope| {
+                let first_chunk = chunks[0];
+                let first_progress = parallel_progress_callback(Arc::clone(&progress), 0);
+                let first = scope.spawn(move || {
+                    self.transcribe_chunk_segments(
+                        warm_state,
+                        &audio[first_chunk.start_sample..first_chunk.end_sample],
+                        first_chunk.start_sample as f64 / 16_000.0,
+                        model,
+                        language,
+                        opts,
+                        token_eot,
+                        first_progress,
+                    )
+                });
+
+                let others = secondary_states
+                    .iter_mut()
+                    .zip(chunks.iter().copied().skip(1))
+                    .enumerate()
+                    .map(|(index, (state, chunk))| {
+                        let chunk_progress =
+                            parallel_progress_callback(Arc::clone(&progress), index + 1);
+                        scope.spawn(move || {
+                            self.transcribe_chunk_segments(
+                                state,
+                                &audio[chunk.start_sample..chunk.end_sample],
+                                chunk.start_sample as f64 / 16_000.0,
+                                model,
+                                language,
+                                opts,
+                                token_eot,
+                                chunk_progress,
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                let mut results = Vec::with_capacity(chunks.len());
+                results.push(first.join().map_err(|_| {
+                    DictationError::TranscriptionFailed(
+                        "Parallel whisper worker panicked".to_string(),
+                    )
+                })??);
+                for worker in others {
+                    results.push(worker.join().map_err(|_| {
+                        DictationError::TranscriptionFailed(
+                            "Parallel whisper worker panicked".to_string(),
+                        )
+                    })??);
+                }
+                Ok::<_, DictationError>(results)
             })?;
 
-            let n_segments = state.full_n_segments();
-            let mut segments: Vec<TranscriptSegment> =
-                Vec::with_capacity(n_segments.max(0) as usize);
             let audio_duration = audio.len() as f64 / 16_000.0;
             let mut previous_end = 0.0;
-            for i in 0..n_segments {
-                if let Some(segment) = state.get_segment(i) {
-                    let text = match segment.to_str() {
-                        Ok(t) => t.to_string(),
-                        Err(e) => {
-                            warn!(
-                                "Segment {i} failed UTF-8 conversion, dropping from transcript: {e}"
-                            );
-                            continue;
-                        }
-                    };
-                    // avg_logprob over text tokens only (id < eot excludes
-                    // timestamp/control tokens, which would skew the mean).
-                    let mut plogs = Vec::with_capacity(segment.n_tokens().max(0) as usize);
-                    for j in 0..segment.n_tokens() {
-                        if let Some(token) = segment.get_token(j) {
-                            if token.token_id() < token_eot {
-                                plogs.push(token.token_data().plog);
-                            }
-                        }
+            let mut segments = Vec::new();
+            for result in &mut chunk_results {
+                for mut segment in result.drain(..) {
+                    (segment.start, segment.end) = sanitize_segment_bounds(
+                        segment.start,
+                        segment.end,
+                        audio_duration,
+                        previous_end,
+                    );
+                    previous_end = segment.end;
+                    segments.push(segment);
+                }
+            }
+            info!(
+                "Parallel local transcription complete: {} segment(s) across {} chunks",
+                segments.len(),
+                chunks.len()
+            );
+            Ok(segments)
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn transcribe_chunk_segments(
+        &self,
+        state: &mut WhisperState,
+        audio: &[f32],
+        offset_seconds: f64,
+        model: WhisperModel,
+        language: Language,
+        opts: &TranscribeOptions,
+        token_eot: i32,
+        on_progress: impl FnMut(i32) + 'static,
+    ) -> Result<Vec<TranscriptSegment>, DictationError> {
+        let mut params = self.full_params(model, language, opts, on_progress)?;
+        self.install_abort_callback(&mut params);
+        state.full(params, audio).map_err(|error| {
+            DictationError::TranscriptionFailed(format!("Whisper inference failed: {error}"))
+        })?;
+
+        let n_segments = state.full_n_segments();
+        let mut segments = Vec::with_capacity(n_segments.max(0) as usize);
+        let chunk_duration = audio.len() as f64 / 16_000.0;
+        let mut previous_end = 0.0;
+        for index in 0..n_segments {
+            let Some(segment) = state.get_segment(index) else {
+                continue;
+            };
+            let text = match segment.to_str() {
+                Ok(text) => text.to_string(),
+                Err(error) => {
+                    warn!(
+                        "Segment {index} failed UTF-8 conversion, dropping from transcript: {error}"
+                    );
+                    continue;
+                }
+            };
+            let mut plogs = Vec::with_capacity(segment.n_tokens().max(0) as usize);
+            for token_index in 0..segment.n_tokens() {
+                if let Some(token) = segment.get_token(token_index) {
+                    if token.token_id() < token_eot {
+                        plogs.push(token.token_data().plog);
                     }
-                    let raw_bounds = {
-                        #[cfg(feature = "diarization")]
-                        {
-                            if opts.segment_timestamps {
-                                dtw_segment_timestamps(&segment, 0.0).unwrap_or_else(|| {
-                                    (
-                                        segment.start_timestamp() as f64 / 100.0,
-                                        segment.end_timestamp() as f64 / 100.0,
-                                    )
-                                })
-                            } else {
-                                (
-                                    segment.start_timestamp() as f64 / 100.0,
-                                    segment.end_timestamp() as f64 / 100.0,
-                                )
-                            }
-                        }
-                        #[cfg(not(feature = "diarization"))]
-                        {
+                }
+            }
+            let raw_bounds = {
+                #[cfg(feature = "diarization")]
+                {
+                    if opts.segment_timestamps {
+                        dtw_segment_timestamps(&segment, 0.0).unwrap_or_else(|| {
                             (
                                 segment.start_timestamp() as f64 / 100.0,
                                 segment.end_timestamp() as f64 / 100.0,
                             )
-                        }
-                    };
-                    let (start, end) = sanitize_segment_bounds(
-                        raw_bounds.0,
-                        raw_bounds.1,
-                        audio_duration,
-                        previous_end,
-                    );
-                    previous_end = end;
-                    segments.push(TranscriptSegment {
-                        start,
-                        end,
-                        text,
-                        avg_logprob: mean_logprob(&plogs),
-                        no_speech_prob: segment.no_speech_probability(),
-                    });
+                        })
+                    } else {
+                        (
+                            segment.start_timestamp() as f64 / 100.0,
+                            segment.end_timestamp() as f64 / 100.0,
+                        )
+                    }
                 }
-            }
+                #[cfg(not(feature = "diarization"))]
+                {
+                    (
+                        segment.start_timestamp() as f64 / 100.0,
+                        segment.end_timestamp() as f64 / 100.0,
+                    )
+                }
+            };
+            let (start, end) =
+                sanitize_segment_bounds(raw_bounds.0, raw_bounds.1, chunk_duration, previous_end);
+            previous_end = end;
+            segments.push(TranscriptSegment {
+                start: start + offset_seconds,
+                end: end + offset_seconds,
+                text,
+                avg_logprob: mean_logprob(&plogs),
+                no_speech_prob: segment.no_speech_probability(),
+            });
+        }
+        Ok(segments)
+    }
 
-            info!(
-                "Local transcription complete: {} segment(s)",
-                segments.len()
-            );
-            Ok(segments)
-        })
+    fn full_params(
+        &self,
+        model: WhisperModel,
+        language: Language,
+        opts: &TranscribeOptions,
+        on_progress: impl FnMut(i32) + 'static,
+    ) -> Result<FullParams<'static, 'static>, DictationError> {
+        let beam_size = opts.beam_size.clamp(0, 8);
+        let strategy = if beam_size >= 2 {
+            SamplingStrategy::BeamSearch {
+                beam_size: beam_size as i32,
+                patience: -1.0,
+            }
+        } else {
+            SamplingStrategy::Greedy { best_of: 1 }
+        };
+        let mut params = FullParams::new(strategy);
+        params.set_language(language.whisper_code());
+        params.set_n_threads(whisper_threads());
+        params.set_temperature(0.0);
+        params.set_temperature_inc(if opts.temperature_fallback { 0.2 } else { 0.0 });
+        params.set_translate(false);
+        params.set_no_timestamps(true);
+        params.set_token_timestamps(opts.segment_timestamps);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_no_speech_thold(model.no_speech_threshold());
+        params.set_suppress_blank(true);
+        if let Some(prompt) = &opts.prompt {
+            if !prompt.is_empty() {
+                params.set_initial_prompt(prompt);
+            }
+        }
+        if let Some(vad_path) = &opts.vad_model_path {
+            model::verify_vad_model(std::path::Path::new(vad_path))?;
+            params.set_vad_model_path(Some(vad_path.as_str()));
+            let mut vad = WhisperVadParams::new();
+            vad.set_threshold(0.5);
+            vad.set_min_silence_duration(200);
+            vad.set_speech_pad(50);
+            params.set_vad_params(vad);
+            params.enable_vad(true);
+        }
+        params.set_progress_callback_safe(clamped_progress_callback(on_progress));
+        Ok(params)
     }
 
     /// Transcribe audio and return per-segment timestamps.
@@ -1559,6 +1718,35 @@ fn clamped_progress_callback(
     mut on_progress: impl FnMut(i32) + 'static,
 ) -> impl FnMut(i32) + 'static {
     move |percentage| on_progress(percentage.clamp(0, 100))
+}
+
+struct ParallelProgress {
+    percentages: Vec<i32>,
+    weights: Vec<usize>,
+    total_weight: usize,
+    last_reported: i32,
+    callback: Box<dyn FnMut(i32) + Send>,
+}
+
+fn parallel_progress_callback(
+    progress: Arc<Mutex<ParallelProgress>>,
+    chunk_index: usize,
+) -> impl FnMut(i32) + Send + 'static {
+    move |percentage| {
+        let mut progress = progress.lock().unwrap();
+        progress.percentages[chunk_index] = percentage.clamp(0, 100);
+        let weighted_sum = progress
+            .percentages
+            .iter()
+            .zip(&progress.weights)
+            .map(|(percentage, weight)| *percentage as usize * *weight)
+            .sum::<usize>();
+        let aggregate = (weighted_sum / progress.total_weight.max(1)) as i32;
+        if aggregate > progress.last_reported {
+            progress.last_reported = aggregate;
+            (progress.callback)(aggregate);
+        }
+    }
 }
 
 /// Controls whether `transcribe_chunk_timestamps` emits one entry per segment or per word.
@@ -2020,7 +2208,7 @@ mod word_grouping_tests {
 
 #[cfg(test)]
 mod progress_callback_tests {
-    use super::clamped_progress_callback;
+    use super::{clamped_progress_callback, parallel_progress_callback, ParallelProgress};
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -2036,6 +2224,31 @@ mod progress_callback_tests {
         }
 
         assert_eq!(*received.lock().unwrap(), [0, 0, 99, 100, 100]);
+    }
+
+    #[test]
+    fn parallel_progress_is_weighted_and_never_moves_backwards() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&received);
+        let progress = Arc::new(Mutex::new(ParallelProgress {
+            percentages: vec![0, 0],
+            weights: vec![1, 3],
+            total_weight: 4,
+            last_reported: -1,
+            callback: Box::new(move |percentage| {
+                captured.lock().unwrap().push(percentage);
+            }),
+        }));
+        let mut first = parallel_progress_callback(Arc::clone(&progress), 0);
+        let mut second = parallel_progress_callback(progress, 1);
+
+        first(100);
+        second(50);
+        first(0);
+        second(100);
+        first(100);
+
+        assert_eq!(*received.lock().unwrap(), [25, 62, 75, 100]);
     }
 }
 
@@ -2164,6 +2377,32 @@ mod segment_confidence_tests {
     #[test]
     fn segment_timestamps_are_opt_in() {
         assert!(!TranscribeOptions::default().segment_timestamps);
+    }
+
+    #[test]
+    fn parallel_chunking_is_opt_in() {
+        assert_eq!(TranscribeOptions::default().parallel_chunks, 1);
+    }
+
+    #[test]
+    fn auto_parallelism_requires_long_beam_audio_and_bounded_model() {
+        let long_audio = 10 * 60 * 16_000;
+        assert_eq!(
+            recommended_parallel_chunks(long_audio, WhisperModel::KbWhisperSmall, 5),
+            2
+        );
+        assert_eq!(
+            recommended_parallel_chunks(long_audio - 1, WhisperModel::KbWhisperSmall, 5),
+            1
+        );
+        assert_eq!(
+            recommended_parallel_chunks(long_audio, WhisperModel::KbWhisperSmall, 0),
+            1
+        );
+        assert_eq!(
+            recommended_parallel_chunks(long_audio, WhisperModel::KbWhisperLarge, 5),
+            1
+        );
     }
 
     #[test]
