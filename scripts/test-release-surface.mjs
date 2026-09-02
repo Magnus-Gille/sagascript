@@ -22,6 +22,12 @@ const appSource = await readFile(
   new URL("../src/App.svelte", import.meta.url),
   "utf8",
 );
+const defaultCapabilities = JSON.parse(
+  await readFile(
+    new URL("../src-tauri/capabilities/default.json", import.meta.url),
+    "utf8",
+  ),
+);
 const brandMarkSource = await readFile(
   new URL("../assets/brand/sagascript-mark.svg", import.meta.url),
   "utf8",
@@ -104,6 +110,8 @@ test("dictation profiles expose missing speech engines without opening Advanced"
 
 test("Dictate reflects backend loading and transcription instead of offering a conflicting start", () => {
   assert.match(settingsSource, /backendDictationState/);
+  assert.match(settingsSource, /dictateButtonAction\(backendDictationState, testOwnsRecording\)/);
+  assert.match(settingsSource, /Recording via hotkey\.\.\./);
   assert.match(
     settingsSource,
     /\["idle", "recording", "loading_model", "transcribing"\]\.includes\(nextState\)/,
@@ -174,6 +182,10 @@ test("deliberate macOS reopen requests reveal Settings", () => {
 test("finishing onboarding hides its main window", () => {
   assert.match(appSource, /getCurrentWindow\(\)\.hide\(\)/);
   assert.match(appSource, /Failed to hide completed onboarding window/);
+  assert.ok(
+    defaultCapabilities.permissions.includes("core:window:allow-hide"),
+    "the onboarding window cannot hide without the explicit Tauri capability",
+  );
 });
 
 test("profile and update menu states remain explicit after interaction", () => {

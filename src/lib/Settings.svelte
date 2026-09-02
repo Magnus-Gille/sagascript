@@ -35,6 +35,11 @@
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import {
+    dictateButtonAction,
+    retainTestRecordingOwnership,
+    type BackendDictationState,
+  } from "./dictation-ui-state";
 
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);
@@ -82,7 +87,8 @@
   // Dictate test state
   let testRecording: boolean = $state(false);
   let testTranscribing: boolean = $state(false);
-  let backendDictationState: "idle" | "recording" | "loading_model" | "transcribing" = $state("idle");
+  let backendDictationState: BackendDictationState = $state("idle");
+  let testOwnsRecording: boolean = $state(false);
   let testResult: string = $state("");
   let testError: string = $state("");
 
@@ -157,7 +163,9 @@
       }
 
       if (!["idle", "recording", "loading_model", "transcribing"].includes(nextState)) return;
-      backendDictationState = nextState;
+      const acceptedState = nextState as BackendDictationState;
+      testOwnsRecording = retainTestRecordingOwnership(acceptedState, testOwnsRecording);
+      backendDictationState = acceptedState;
       testRecording = nextState === "recording";
       testTranscribing = nextState === "loading_model" || nextState === "transcribing";
     });
@@ -371,8 +379,12 @@
   }
 
   async function onTestRecord() {
-    if (testRecording) {
+    const action = dictateButtonAction(backendDictationState, testOwnsRecording);
+    if (action === "blocked") return;
+
+    if (action === "stop") {
       // Stop and transcribe
+      testOwnsRecording = false;
       testRecording = false;
       testTranscribing = true;
       backendDictationState = "transcribing";
@@ -391,9 +403,11 @@
       testError = "";
       try {
         await startRecording();
+        testOwnsRecording = true;
         testRecording = true;
         backendDictationState = "recording";
       } catch (e: any) {
+        testOwnsRecording = false;
         backendDictationState = "idle";
         testError = typeof e === "string" ? e : e.message || "Failed to start recording";
       }
@@ -723,7 +737,7 @@
             class:recording={testRecording}
             class:transcribing={testTranscribing}
             onclick={onTestRecord}
-            disabled={testTranscribing || downloading !== null}
+            disabled={dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" || downloading !== null}
           >
             {#if testTranscribing}
               <div class="spinner small"></div>
@@ -733,7 +747,7 @@
               Downloading speech engine...
             {:else if testRecording}
               <div class="recording-dot"></div>
-              Stop recording
+              {testOwnsRecording ? "Stop recording" : "Recording via hotkey..."}
             {:else}
               Start recording
             {/if}
