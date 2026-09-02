@@ -949,16 +949,6 @@
           </div>
         </details>
 
-        <div class="field">
-          <span class="field-label">Version</span>
-          <div class="version-text">
-            {#if buildInfo}
-              Sagascript {buildInfo.version} ({buildInfo.git_hash}) - Built {buildInfo.build_date}
-            {:else}
-              Sagascript
-            {/if}
-          </div>
-        </div>
       {/if}
     </div>
   {:else}
@@ -970,6 +960,14 @@
       {/if}
     </div>
   {/if}
+
+  <div class="build-footer" aria-label="Build information">
+    {#if buildInfo}
+      Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}
+    {:else}
+      Version information unavailable
+    {/if}
+  </div>
 
   {#if downloading}
     <div class="download-status-bar">
@@ -1398,9 +1396,13 @@
     transition: width 0.2s;
   }
 
-  .version-text {
+  .build-footer {
+    padding: 8px 20px 10px;
+    border-top: 1px solid var(--border);
     color: var(--text-muted);
-    font-size: 12px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
   }
 
   .initial-prompt-input {

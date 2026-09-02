@@ -60,6 +60,8 @@ const MIN_RECORDING_MS: u64 = 300;
 const SAFE_FALLBACK_HOTKEY: &str = "Control+Shift+Space";
 #[cfg(target_os = "macos")]
 const TRAY_AUTOSAVE_NAME: &str = "ai.gille.sagascript.main";
+#[cfg(target_os = "macos")]
+const DEFAULT_TRAY_PREFERRED_POSITION: f64 = 340.0;
 
 /// Shared tray status menu item for updating from anywhere
 type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
@@ -737,6 +739,9 @@ fn main() {
                 ],
             )?;
 
+            #[cfg(target_os = "macos")]
+            seed_macos_tray_preferred_position();
+
             let tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .tooltip("Sagascript")
@@ -1001,6 +1006,39 @@ fn main() {
                 _ => {}
             }
         });
+}
+
+/// Match the key AppKit uses to persist a named status item's menu-bar slot.
+#[cfg(target_os = "macos")]
+fn tray_preferred_position_key(autosave_name: &str) -> String {
+    format!("NSStatusItem Preferred Position {autosave_name}")
+}
+
+#[cfg(target_os = "macos")]
+fn initial_tray_preferred_position(has_saved_position: bool) -> Option<f64> {
+    (!has_saved_position).then_some(DEFAULT_TRAY_PREFERRED_POSITION)
+}
+
+/// Seed a usable first position on crowded, notched menu bars. AppKit normally
+/// puts a brand-new status item at the far-left edge of the status area, where
+/// it may report `isVisible = true` while sitting behind the camera cutout.
+/// Once the user moves the item, AppKit owns this value and we never overwrite
+/// it.
+#[cfg(target_os = "macos")]
+fn seed_macos_tray_preferred_position() {
+    use objc2_foundation::{NSString, NSUserDefaults};
+
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let key_string = tray_preferred_position_key(TRAY_AUTOSAVE_NAME);
+    let key = NSString::from_str(&key_string);
+    let Some(position) =
+        initial_tray_preferred_position(defaults.objectForKey(&key).is_some())
+    else {
+        return;
+    };
+
+    defaults.setDouble_forKey(position, &key);
+    info!(position, "Seeded initial macOS tray position");
 }
 
 /// Give AppKit a stable identity for the status item before making it visible.
@@ -2088,6 +2126,13 @@ mod tests {
     #[test]
     fn tray_autosave_name_is_stable_and_bundle_qualified() {
         assert_eq!(TRAY_AUTOSAVE_NAME, "ai.gille.sagascript.main");
+        assert_eq!(
+            tray_preferred_position_key(TRAY_AUTOSAVE_NAME),
+            "NSStatusItem Preferred Position ai.gille.sagascript.main"
+        );
+        assert_eq!(DEFAULT_TRAY_PREFERRED_POSITION, 340.0);
+        assert_eq!(initial_tray_preferred_position(false), Some(340.0));
+        assert_eq!(initial_tray_preferred_position(true), None);
     }
 
     #[test]
