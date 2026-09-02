@@ -80,6 +80,19 @@ pub fn set_activation_policy_accessory() {
     }
 }
 
+/// Bring the accessory application to the foreground before presenting a
+/// user-requested window. Accessory apps do not reliably activate when a
+/// window merely calls `show`/`set_focus`.
+#[allow(deprecated)]
+pub fn activate_app() {
+    use cocoa::appkit::{NSApp, NSApplication};
+    use cocoa::base::YES;
+
+    unsafe {
+        NSApp().activateIgnoringOtherApps_(YES);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
