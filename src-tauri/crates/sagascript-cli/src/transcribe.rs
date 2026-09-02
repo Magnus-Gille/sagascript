@@ -19,7 +19,8 @@ use sagascript_core::transcription::diagnostics::{
 use sagascript_core::transcription::diagnostics::{analyze_coverage_profile, CoverageProfile};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::{
-    normalize_nonspeech_markers, Glossary, TranscribeOptions, TranscriptSegment, WhisperBackend,
+    normalize_nonspeech_markers, ContextProfile, Glossary, TranscribeOptions, TranscriptSegment,
+    WhisperBackend,
 };
 
 #[derive(Args)]
@@ -383,6 +384,7 @@ where
 fn ensure_model_loaded(
     backend: &WhisperBackend,
     model: WhisperModel,
+    profile: ContextProfile,
     loaded: &mut bool,
 ) -> Result<f64, DictationError> {
     if *loaded {
@@ -397,7 +399,7 @@ fn ensure_model_loaded(
     }
     eprintln!("Loading model: {}...", model.display_name());
     let started = Instant::now();
-    backend.load_model(model)?;
+    backend.load_model_with_profile(model, profile)?;
     *loaded = true;
     Ok(started.elapsed().as_secs_f64())
 }
@@ -533,7 +535,12 @@ fn transcribe_file(
             #[cfg(not(feature = "diarization"))]
             unreachable!("cache hits require the diarization feature")
         } else {
-            let model_load_seconds = ensure_model_loaded(backend, model, model_loaded)?;
+            #[cfg(feature = "diarization")]
+            let context_profile = ContextProfile::for_diarization(args.diarize);
+            #[cfg(not(feature = "diarization"))]
+            let context_profile = ContextProfile::FlashAttention;
+            let model_load_seconds =
+                ensure_model_loaded(backend, model, context_profile, model_loaded)?;
             let language_detection_started = Instant::now();
             let audio = audio.as_deref().expect("cache misses decode audio");
             let detected_language = match detect_file_language(backend, audio, model) {

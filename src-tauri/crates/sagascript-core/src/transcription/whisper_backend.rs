@@ -53,10 +53,39 @@ enum ModelAvailability {
     Missing,
 }
 
+/// Context-level acceleration/timestamp mode. Whisper fixes these parameters
+/// when a context is created, so the profile is part of the runtime identity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ContextProfile {
+    /// Exact flash-attention kernels for dictation and ordinary file
+    /// transcription. This is the default profile.
+    #[default]
+    FlashAttention,
+    /// Cross-attention DTW required for diarization token alignment.
+    TokenAlignment,
+}
+
+impl ContextProfile {
+    /// Select token alignment only for explicit speaker diarization.
+    pub const fn for_diarization(enabled: bool) -> Self {
+        if enabled {
+            Self::TokenAlignment
+        } else {
+            Self::FlashAttention
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeKey {
+    model: WhisperModel,
+    profile: ContextProfile,
+}
+
 fn model_availability(
-    active: Option<WhisperModel>,
-    cached: Option<WhisperModel>,
-    desired: WhisperModel,
+    active: Option<RuntimeKey>,
+    cached: Option<RuntimeKey>,
+    desired: RuntimeKey,
 ) -> ModelAvailability {
     if active == Some(desired) {
         ModelAvailability::Active
@@ -67,14 +96,18 @@ fn model_availability(
     }
 }
 
-fn can_cache_pair(active: WhisperModel, secondary: WhisperModel) -> bool {
+fn can_cache_pair(active: RuntimeKey, secondary: RuntimeKey) -> bool {
     active != secondary
-        && active.size_mb().saturating_add(secondary.size_mb()) <= WARM_MODEL_CACHE_BUDGET_MB
+        && active
+            .model
+            .size_mb()
+            .saturating_add(secondary.model.size_mb())
+            <= WARM_MODEL_CACHE_BUDGET_MB
 }
 
 fn activate_cached_runtime<C, S>(
-    desired_model: WhisperModel,
-    active_model: &mut Option<WhisperModel>,
+    desired: RuntimeKey,
+    active_key: &mut Option<RuntimeKey>,
     active_context: &mut Option<C>,
     active_state: &mut Option<S>,
     cached: &mut Option<CachedWhisperRuntime<C, S>>,
@@ -82,17 +115,17 @@ fn activate_cached_runtime<C, S>(
     let Some(cached_runtime) = cached.take() else {
         return false;
     };
-    if cached_runtime.model != desired_model || active_model.is_none() || active_context.is_none() {
+    if cached_runtime.key != desired || active_key.is_none() || active_context.is_none() {
         *cached = Some(cached_runtime);
         return false;
     }
 
     let active_runtime = CachedWhisperRuntime {
-        model: active_model.take().unwrap(),
+        key: active_key.take().unwrap(),
         context: active_context.take().unwrap(),
         state: active_state.take(),
     };
-    *active_model = Some(cached_runtime.model);
+    *active_key = Some(cached_runtime.key);
     *active_context = Some(cached_runtime.context);
     *active_state = cached_runtime.state;
     *cached = Some(active_runtime);
@@ -298,8 +331,8 @@ pub struct WhisperBackend {
     /// whisper/Metal state-init (kernel compile + GPU buffer alloc) on every
     /// call. Created lazily on first transcription; reset to None on model reload.
     state: Mutex<Option<WhisperState>>,
-    /// Currently loaded model
-    loaded_model: Mutex<Option<WhisperModel>>,
+    /// Currently loaded model and immutable context profile.
+    loaded_runtime: Mutex<Option<RuntimeKey>>,
     /// One bounded secondary runtime. Its context and reusable state stay warm
     /// so a bilingual hotkey switch can swap runtimes without reopening model
     /// weights or recompiling inference state.
@@ -313,7 +346,7 @@ pub struct WhisperBackend {
 }
 
 struct CachedWhisperRuntime<C = WhisperContext, S = WhisperState> {
-    model: WhisperModel,
+    key: RuntimeKey,
     context: C,
     state: Option<S>,
 }
@@ -343,7 +376,7 @@ impl WhisperBackend {
         Self {
             context: Mutex::new(None),
             state: Mutex::new(None),
-            loaded_model: Mutex::new(None),
+            loaded_runtime: Mutex::new(None),
             cached_runtime: Mutex::new(None),
             abort_flag: Arc::new(AtomicBool::new(false)),
             load_lock: Mutex::new(()),
@@ -465,8 +498,23 @@ impl WhisperBackend {
         }
     }
 
-    /// Load a specific model, replacing any previously loaded model
+    /// Load a model for the default low-latency transcription profile.
     pub fn load_model(&self, whisper_model: WhisperModel) -> Result<(), DictationError> {
+        self.load_model_with_profile(whisper_model, ContextProfile::FlashAttention)
+    }
+
+    /// Load a specific model and immutable context profile, replacing the
+    /// active runtime. DTW alignment and flash attention require different
+    /// whisper contexts and therefore cannot be toggled per transcription.
+    pub fn load_model_with_profile(
+        &self,
+        whisper_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> Result<(), DictationError> {
+        let desired_key = RuntimeKey {
+            model: whisper_model,
+            profile,
+        };
         let model_path = model::model_path(whisper_model);
 
         if !model_path.exists() {
@@ -483,29 +531,29 @@ impl WhisperBackend {
         model::quarantine_unverified_coreml_encoder(whisper_model)?;
 
         info!(
-            "Loading whisper model: {} from {}",
+            "Loading whisper model: {} ({profile:?}) from {}",
             whisper_model.display_name(),
             model_path.display()
         );
 
-        // Flash attention is an exact (not approximate) attention kernel that is
-        // accelerated on Metal — a free speedup with identical output. It is
-        // incompatible with DTW: whisper.cpp silently disables DTW token
-        // timestamps when flash_attn is on. So the default (dictation) build
-        // turns it ON, and the diarization build leaves it off and uses DTW for
-        // attention-based token timestamps (used by --diarize) instead.
-        let ctx_params = {
-            let mut p = WhisperContextParameters::default();
-            #[cfg(not(feature = "diarization"))]
-            p.flash_attn(true);
-            #[cfg(feature = "diarization")]
-            p.dtw_parameters(DtwParameters {
-                mode: DtwMode::ModelPreset {
-                    model_preset: whisper_model.dtw_preset(),
-                },
-                ..DtwParameters::default()
-            });
-            p
+        let mut ctx_params = WhisperContextParameters::default();
+        match profile {
+            ContextProfile::FlashAttention => {
+                ctx_params.flash_attn(true);
+            }
+            ContextProfile::TokenAlignment => {
+                #[cfg(feature = "diarization")]
+                ctx_params.dtw_parameters(DtwParameters {
+                    mode: DtwMode::ModelPreset {
+                        model_preset: whisper_model.dtw_preset(),
+                    },
+                    ..DtwParameters::default()
+                });
+                #[cfg(not(feature = "diarization"))]
+                return Err(DictationError::TranscriptionFailed(
+                    "Token-alignment context requires the diarization feature".to_string(),
+                ));
+            }
         };
 
         // whisper.cpp's Metal backend registration assumes that macOS returns
@@ -533,8 +581,8 @@ impl WhisperBackend {
         // When the old/new pair fits the explicit cache budget, move the old
         // context and its reusable warm state into the secondary slot. The next
         // switch can then restore both without touching disk or rebuilding the
-        // state. Lock order is state -> context -> loaded_model -> cache,
-        // matching activate_cached_model().
+        // state. Lock order is state -> context -> loaded_runtime -> cache,
+        // matching activate_cached_profile().
         //
         // The state lock is acquired with the same bounded policy as
         // with_warm_state: if a stuck inference pins it past the grace budget,
@@ -544,10 +592,10 @@ impl WhisperBackend {
         {
             let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
             let mut context = self.context.lock().unwrap();
-            let mut loaded_model = self.loaded_model.lock().unwrap();
-            let previous = match (loaded_model.take(), context.take()) {
-                (Some(model), Some(context)) => Some(CachedWhisperRuntime {
-                    model,
+            let mut loaded_runtime = self.loaded_runtime.lock().unwrap();
+            let previous = match (loaded_runtime.take(), context.take()) {
+                (Some(key), Some(context)) => Some(CachedWhisperRuntime {
+                    key,
                     context,
                     state: state.take(),
                 }),
@@ -556,20 +604,28 @@ impl WhisperBackend {
             };
 
             *context = Some(ctx);
-            *loaded_model = Some(whisper_model);
+            *loaded_runtime = Some(desired_key);
             *state = None;
 
             let mut cached = self.cached_runtime.lock().unwrap();
-            *cached = previous.filter(|runtime| can_cache_pair(whisper_model, runtime.model));
+            *cached = previous.filter(|runtime| can_cache_pair(desired_key, runtime.key));
         }
 
-        info!("Model loaded: {}", whisper_model.display_name());
+        info!(
+            "Model loaded: {} ({profile:?})",
+            whisper_model.display_name()
+        );
         Ok(())
     }
 
     /// Get the currently loaded model
     pub fn loaded_model(&self) -> Option<WhisperModel> {
-        *self.loaded_model.lock().unwrap()
+        self.loaded_runtime.lock().unwrap().map(|key| key.model)
+    }
+
+    /// Get the immutable context profile of the active runtime.
+    pub fn loaded_context_profile(&self) -> Option<ContextProfile> {
+        self.loaded_runtime.lock().unwrap().map(|key| key.profile)
     }
 
     /// Models currently resident in memory, active first.
@@ -580,40 +636,70 @@ impl WhisperBackend {
             .lock()
             .unwrap()
             .as_ref()
-            .map(|runtime| runtime.model);
+            .map(|runtime| runtime.key.model);
         active.into_iter().chain(cached).collect()
     }
 
-    /// Check whether selecting this model requires opening model weights. A
-    /// warm cached model returns false even when it is not currently active.
+    /// Check whether selecting this model in the default flash-attention
+    /// profile requires opening model weights.
     pub fn needs_reload(&self, desired_model: WhisperModel) -> bool {
-        let cached = self
-            .cached_runtime
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|runtime| runtime.model);
-        model_availability(self.loaded_model(), cached, desired_model) == ModelAvailability::Missing
+        self.needs_reload_with_profile(desired_model, ContextProfile::FlashAttention)
     }
 
-    /// Ensure the correct model is active. Serialized via `load_lock` so two
-    /// concurrent callers don't both load or switch the same model.
-    pub fn ensure_model(&self, desired_model: WhisperModel) -> Result<(), DictationError> {
-        let _load = self.load_lock.lock().unwrap();
+    /// Check whether selecting this model/profile runtime requires opening
+    /// model weights. A warm cached runtime returns false.
+    pub fn needs_reload_with_profile(
+        &self,
+        desired_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> bool {
+        let desired = RuntimeKey {
+            model: desired_model,
+            profile,
+        };
+        let active = *self.loaded_runtime.lock().unwrap();
         let cached = self
             .cached_runtime
             .lock()
             .unwrap()
             .as_ref()
-            .map(|runtime| runtime.model);
-        match model_availability(self.loaded_model(), cached, desired_model) {
+            .map(|runtime| runtime.key);
+        model_availability(active, cached, desired) == ModelAvailability::Missing
+    }
+
+    /// Ensure the correct model is active in the default flash-attention
+    /// profile.
+    pub fn ensure_model(&self, desired_model: WhisperModel) -> Result<(), DictationError> {
+        self.ensure_model_with_profile(desired_model, ContextProfile::FlashAttention)
+    }
+
+    /// Ensure the correct model/profile runtime is active. Serialized via
+    /// `load_lock` so concurrent callers cannot race a load or cache switch.
+    pub fn ensure_model_with_profile(
+        &self,
+        desired_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> Result<(), DictationError> {
+        let _load = self.load_lock.lock().unwrap();
+        let desired = RuntimeKey {
+            model: desired_model,
+            profile,
+        };
+        let active = *self.loaded_runtime.lock().unwrap();
+        let cached = self
+            .cached_runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|runtime| runtime.key);
+        match model_availability(active, cached, desired) {
             ModelAvailability::Active => {}
             ModelAvailability::Cached => {
-                self.activate_cached_model(desired_model)?;
+                self.activate_cached_profile(desired)?;
             }
             ModelAvailability::Missing => {
-                info!("Loading model: {:?}", desired_model);
-                self.load_model(desired_model)?;
+                info!("Loading model runtime: {desired:?}");
+                self.load_model_with_profile(desired_model, profile)?;
             }
         }
         Ok(())
@@ -622,15 +708,15 @@ impl WhisperBackend {
     /// Swap the active and secondary runtimes while preserving both warm
     /// states. The caller holds load_lock, so cache membership cannot change
     /// concurrently with this operation.
-    fn activate_cached_model(&self, desired_model: WhisperModel) -> Result<(), DictationError> {
+    fn activate_cached_profile(&self, desired: RuntimeKey) -> Result<(), DictationError> {
         let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
         let mut context = self.context.lock().unwrap();
-        let mut loaded_model = self.loaded_model.lock().unwrap();
+        let mut loaded_runtime = self.loaded_runtime.lock().unwrap();
         let mut cached = self.cached_runtime.lock().unwrap();
 
         if !activate_cached_runtime(
-            desired_model,
-            &mut loaded_model,
+            desired,
+            &mut loaded_runtime,
             &mut context,
             &mut state,
             &mut cached,
@@ -639,8 +725,9 @@ impl WhisperBackend {
         }
 
         info!(
-            "Activated cached whisper model: {}",
-            desired_model.display_name()
+            "Activated cached whisper model: {} ({:?})",
+            desired.model.display_name(),
+            desired.profile
         );
         Ok(())
     }
@@ -1106,6 +1193,11 @@ impl WhisperBackend {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
+        if self.loaded_context_profile() != Some(ContextProfile::TokenAlignment) {
+            return Err(DictationError::TranscriptionFailed(
+                "Diarization transcription requires a token-alignment model context".to_string(),
+            ));
+        }
         let mut words = self.transcribe_chunk_timestamps_profiled(
             audio,
             language,
@@ -1315,29 +1407,33 @@ mod language_detection_preview_tests {
 mod warm_model_cache_tests {
     use super::*;
 
+    fn key(model: WhisperModel, profile: ContextProfile) -> RuntimeKey {
+        RuntimeKey { model, profile }
+    }
+
     #[test]
     fn distinguishes_active_cached_and_missing_models() {
+        let swedish = key(
+            WhisperModel::KbWhisperBase,
+            ContextProfile::FlashAttention,
+        );
+        let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
         assert_eq!(
-            model_availability(
-                Some(WhisperModel::KbWhisperBase),
-                Some(WhisperModel::BaseEn),
-                WhisperModel::KbWhisperBase,
-            ),
+            model_availability(Some(swedish), Some(english), swedish),
             ModelAvailability::Active
         );
         assert_eq!(
-            model_availability(
-                Some(WhisperModel::KbWhisperBase),
-                Some(WhisperModel::BaseEn),
-                WhisperModel::BaseEn,
-            ),
+            model_availability(Some(swedish), Some(english), english),
             ModelAvailability::Cached
         );
         assert_eq!(
             model_availability(
-                Some(WhisperModel::KbWhisperBase),
-                Some(WhisperModel::BaseEn),
-                WhisperModel::NbWhisperBase,
+                Some(swedish),
+                Some(english),
+                key(
+                    WhisperModel::KbWhisperBase,
+                    ContextProfile::TokenAlignment,
+                ),
             ),
             ModelAvailability::Missing
         );
@@ -1346,70 +1442,114 @@ mod warm_model_cache_tests {
     #[test]
     fn caches_two_base_models_within_budget() {
         assert!(can_cache_pair(
-            WhisperModel::KbWhisperBase,
-            WhisperModel::BaseEn
+            key(
+                WhisperModel::KbWhisperBase,
+                ContextProfile::FlashAttention,
+            ),
+            key(WhisperModel::BaseEn, ContextProfile::FlashAttention),
         ));
     }
 
     #[test]
     fn refuses_duplicate_or_oversized_cache_pairs() {
-        assert!(!can_cache_pair(WhisperModel::BaseEn, WhisperModel::BaseEn));
+        let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
+        assert!(!can_cache_pair(english, english));
         assert!(!can_cache_pair(
-            WhisperModel::KbWhisperMedium,
-            WhisperModel::BaseEn
+            key(
+                WhisperModel::KbWhisperMedium,
+                ContextProfile::FlashAttention,
+            ),
+            english,
         ));
     }
 
     #[test]
+    fn treats_same_model_with_different_profiles_as_distinct_runtimes() {
+        let flash = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
+        let alignment = key(WhisperModel::BaseEn, ContextProfile::TokenAlignment);
+
+        assert_eq!(
+            model_availability(Some(flash), None, alignment),
+            ModelAvailability::Missing
+        );
+        assert!(can_cache_pair(flash, alignment));
+    }
+
+    #[test]
+    fn selects_token_alignment_only_for_diarization() {
+        assert_eq!(
+            ContextProfile::for_diarization(false),
+            ContextProfile::FlashAttention
+        );
+        assert_eq!(
+            ContextProfile::for_diarization(true),
+            ContextProfile::TokenAlignment
+        );
+    }
+
+    #[test]
     fn cached_runtime_switch_preserves_both_warm_payloads() {
-        let mut active_model = Some(WhisperModel::KbWhisperBase);
+        let swedish = key(
+            WhisperModel::KbWhisperBase,
+            ContextProfile::FlashAttention,
+        );
+        let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
+        let mut active_key = Some(swedish);
         let mut active_context = Some("swedish-context");
         let mut active_state = Some("swedish-state");
         let mut cached = Some(CachedWhisperRuntime {
-            model: WhisperModel::BaseEn,
+            key: english,
             context: "english-context",
             state: Some("english-state"),
         });
 
         assert!(activate_cached_runtime(
-            WhisperModel::BaseEn,
-            &mut active_model,
+            english,
+            &mut active_key,
             &mut active_context,
             &mut active_state,
             &mut cached,
         ));
-        assert_eq!(active_model, Some(WhisperModel::BaseEn));
+        assert_eq!(active_key, Some(english));
         assert_eq!(active_context, Some("english-context"));
         assert_eq!(active_state, Some("english-state"));
 
         let cached = cached.unwrap();
-        assert_eq!(cached.model, WhisperModel::KbWhisperBase);
+        assert_eq!(cached.key, swedish);
         assert_eq!(cached.context, "swedish-context");
         assert_eq!(cached.state, Some("swedish-state"));
     }
 
     #[test]
     fn cache_miss_leaves_active_and_secondary_unchanged() {
-        let mut active_model = Some(WhisperModel::KbWhisperBase);
+        let swedish = key(
+            WhisperModel::KbWhisperBase,
+            ContextProfile::FlashAttention,
+        );
+        let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
+        let mut active_key = Some(swedish);
         let mut active_context = Some("swedish-context");
         let mut active_state = Some("swedish-state");
         let mut cached = Some(CachedWhisperRuntime {
-            model: WhisperModel::BaseEn,
+            key: english,
             context: "english-context",
             state: Some("english-state"),
         });
 
         assert!(!activate_cached_runtime(
-            WhisperModel::NbWhisperBase,
-            &mut active_model,
+            key(
+                WhisperModel::NbWhisperBase,
+                ContextProfile::FlashAttention,
+            ),
+            &mut active_key,
             &mut active_context,
             &mut active_state,
             &mut cached,
         ));
-        assert_eq!(active_model, Some(WhisperModel::KbWhisperBase));
+        assert_eq!(active_key, Some(swedish));
         assert_eq!(active_context, Some("swedish-context"));
         assert_eq!(active_state, Some("swedish-state"));
-        assert_eq!(cached.as_ref().unwrap().model, WhisperModel::BaseEn);
+        assert_eq!(cached.as_ref().unwrap().key, english);
     }
 }
 

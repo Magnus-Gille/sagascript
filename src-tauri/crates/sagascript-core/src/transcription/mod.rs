@@ -9,8 +9,8 @@ pub mod whisper_backend;
 mod metal_preflight;
 
 pub use whisper_backend::{
-    FILE_TRANSCRIBE_BEAM, TranscribeOptions, TranscriptSegment, WARM_MODEL_CACHE_BUDGET_MB,
-    WARM_MODEL_CACHE_MAX_MODELS, WhisperBackend,
+    ContextProfile, FILE_TRANSCRIBE_BEAM, TranscribeOptions, TranscriptSegment,
+    WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS, WhisperBackend,
 };
 #[cfg(feature = "diarization")]
 pub use whisper_backend::{DiarizationTranscription, DiarizationTranscriptionTimings};
