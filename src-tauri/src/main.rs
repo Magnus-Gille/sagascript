@@ -39,7 +39,7 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 const ABORT_GRACE_SECS: u64 = 5;
 
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, Submenu},
+    menu::{Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
@@ -48,9 +48,9 @@ use tracing::{error, info, warn};
 
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
+use sagascript_core::settings::HotkeyProfile;
 #[cfg(test)]
-use sagascript_core::settings::validate_hotkey;
-use sagascript_core::settings::Language;
+use sagascript_core::settings::{validate_hotkey, Language};
 use sagascript_core::transcription::{
     WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS, WhisperBackend,
 };
@@ -58,50 +58,151 @@ use sagascript_core::transcription::{
 /// Minimum recording duration before we allow stop (300ms)
 const MIN_RECORDING_MS: u64 = 300;
 const SAFE_FALLBACK_HOTKEY: &str = "Control+Shift+Space";
+#[cfg(target_os = "macos")]
+const TRAY_AUTOSAVE_NAME: &str = "ai.gille.sagascript.main";
+#[cfg(target_os = "macos")]
+const DEFAULT_TRAY_PREFERRED_POSITION: f64 = 340.0;
 
 /// Shared tray status menu item for updating from anywhere
 type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
 
-#[derive(Clone)]
-struct LanguageMenuItems {
-    auto: CheckMenuItem<tauri::Wry>,
-    swedish: CheckMenuItem<tauri::Wry>,
-    english: CheckMenuItem<tauri::Wry>,
-    norwegian: CheckMenuItem<tauri::Wry>,
+struct ProfileMenuState {
+    submenu: Submenu<tauri::Wry>,
+    items: Vec<MenuItem<tauri::Wry>>,
+    selected_profile_id: Option<String>,
 }
 
-type SharedLanguageMenuItems = Mutex<Option<LanguageMenuItems>>;
+type SharedProfileMenuState = Mutex<Option<ProfileMenuState>>;
 
-fn language_from_menu_id(id: &str) -> Option<Language> {
-    match id {
-        "language_auto" => Some(Language::Auto),
-        "language_swedish" => Some(Language::Swedish),
-        "language_english" => Some(Language::English),
-        "language_norwegian" => Some(Language::Norwegian),
-        _ => None,
+fn format_menu_shortcut(shortcut: &str) -> String {
+    let parts: Vec<(&str, String)> = shortcut
+        .split('+')
+        .map(|part| {
+            let original = part.trim();
+            let normalized = match original.to_ascii_lowercase().as_str() {
+                "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" => {
+                    if cfg!(target_os = "macos") { "command" } else { "control" }
+                }
+                _ => original,
+            };
+            (original, normalized.to_ascii_lowercase())
+        })
+        .collect();
+    let mut label = String::new();
+    for (aliases, symbol) in [
+        (&["control", "ctrl"][..], "⌃"),
+        (&["alt", "option"][..], "⌥"),
+        (&["shift"][..], "⇧"),
+        (&["super", "command", "cmd"][..], "⌘"),
+    ] {
+        if parts
+            .iter()
+            .any(|(_, normalized)| aliases.contains(&normalized.as_str()))
+        {
+            label.push_str(symbol);
+        }
     }
+    for (original, normalized) in parts {
+        if matches!(
+            normalized.as_str(),
+            "control" | "ctrl" | "alt" | "option" | "shift" | "super" | "command" | "cmd"
+        ) {
+            continue;
+        }
+        label.push_str(match normalized.as_str() {
+            "space" => "Space",
+            "arrowup" | "up" => "↑",
+            "arrowdown" | "down" => "↓",
+            "arrowleft" | "left" => "←",
+            "arrowright" | "right" => "→",
+            _ => original,
+        });
+    }
+    label
 }
 
-pub(crate) fn update_language_menu(app: &tauri::AppHandle, language: Language) {
-    let items = {
-        let state: tauri::State<'_, SharedLanguageMenuItems> = app.state();
-        let items = state.lock().unwrap().clone();
-        items
-    };
-    let Some(items) = items else {
+fn profile_menu_label(profile: &HotkeyProfile, selected: bool) -> String {
+    format!(
+        "{}{} — {} · {}",
+        if selected { "✓ " } else { "" },
+        profile.name,
+        profile.language.display_name(),
+        format_menu_shortcut(&profile.shortcut)
+    )
+}
+
+fn create_profile_menu_items(
+    app: &impl tauri::Manager<tauri::Wry>,
+    profiles: &[HotkeyProfile],
+    selected_profile_id: Option<&str>,
+) -> tauri::Result<Vec<MenuItem<tauri::Wry>>> {
+    let mut items = Vec::with_capacity(profiles.len() + 1);
+    for profile in profiles {
+        items.push(MenuItem::with_id(
+            app,
+            format!("profile_shortcut_{}", profile.id),
+            profile_menu_label(profile, selected_profile_id == Some(profile.id.as_str())),
+            false,
+            None::<&str>,
+        )?);
+    }
+    items.push(MenuItem::with_id(
+        app,
+        "manage_profiles",
+        "Edit Profiles…",
+        true,
+        None::<&str>,
+    )?);
+    Ok(items)
+}
+
+pub(crate) fn update_profiles_menu(app: &tauri::AppHandle, profiles: &[HotkeyProfile]) {
+    let state: tauri::State<'_, SharedProfileMenuState> = app.state();
+    let mut state = state.lock().unwrap();
+    let Some(state) = state.as_mut() else {
         return;
     };
 
-    for (item, selected) in [
-        (&items.auto, language == Language::Auto),
-        (&items.swedish, language == Language::Swedish),
-        (&items.english, language == Language::English),
-        (&items.norwegian, language == Language::Norwegian),
-    ] {
-        if let Err(error) = item.set_checked(selected) {
-            error!("Failed to update tray language menu: {error}");
+    let selected_profile_id = state
+        .selected_profile_id
+        .as_deref()
+        .filter(|selected| profiles.iter().any(|profile| profile.id == *selected))
+        .map(str::to_string)
+        .or_else(|| profiles.first().map(|profile| profile.id.clone()));
+
+    for item in state.items.drain(..) {
+        if let Err(error) = state.submenu.remove(&item) {
+            error!("Failed to remove stale tray profile item: {error}");
         }
     }
+    match create_profile_menu_items(app, profiles, selected_profile_id.as_deref()) {
+        Ok(items) => {
+            for item in &items {
+                if let Err(error) = state.submenu.append(item) {
+                    error!("Failed to add tray profile item: {error}");
+                }
+            }
+            state.items = items;
+            state.selected_profile_id = selected_profile_id;
+        }
+        Err(error) => error!("Failed to rebuild tray profiles menu: {error}"),
+    }
+}
+
+fn select_profile_menu(app: &tauri::AppHandle, profile: &HotkeyProfile) {
+    let profiles = {
+        let controller: tauri::State<'_, SharedController> = app.state();
+        let profiles = controller.lock().unwrap().settings().resolved_hotkey_profiles();
+        profiles
+    };
+    {
+        let state: tauri::State<'_, SharedProfileMenuState> = app.state();
+        let mut state = state.lock().unwrap();
+        if let Some(state) = state.as_mut() {
+            state.selected_profile_id = Some(profile.id.clone());
+        }
+    }
+    update_profiles_menu(app, &profiles);
 }
 
 #[derive(Clone)]
@@ -113,6 +214,7 @@ struct UpdateMenuItems {
 struct UpdateMenuState {
     items: Option<UpdateMenuItems>,
     checking: bool,
+    available_version: Option<semver::Version>,
 }
 
 type SharedUpdateMenuState = Mutex<UpdateMenuState>;
@@ -122,10 +224,44 @@ const UPDATE_CHECK_ACTION: &str = "Check for Updates…";
 fn update_status_text(result: &updates::UpdateCheck) -> String {
     match result {
         updates::UpdateCheck::Available { version } => {
-            format!("Update Available — v{version}")
+            format!("Update available — v{version}")
         }
         updates::UpdateCheck::UpToDate => "Sagascript is up to date".to_string(),
     }
+}
+
+fn update_action_text(result: &updates::UpdateCheck) -> String {
+    match result {
+        updates::UpdateCheck::Available { version } => {
+            format!("Download Sagascript v{version}…")
+        }
+        updates::UpdateCheck::UpToDate => "Check Again…".to_string(),
+    }
+}
+
+fn stable_release_url(version: &semver::Version) -> String {
+    format!("https://github.com/Magnus-Gille/sagascript/releases/tag/v{version}")
+}
+
+fn open_update_release(version: &semver::Version) -> Result<(), String> {
+    let url = stable_release_url(version);
+
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "linux")]
+    let mut command = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    };
+
+    command
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("failed to open {url}: {error}"))
 }
 
 fn check_for_updates(app: tauri::AppHandle) {
@@ -151,9 +287,25 @@ fn check_for_updates(app: tauri::AppHandle) {
 
     tauri::async_runtime::spawn(async move {
         let result = updates::check_for_update(env!("CARGO_PKG_VERSION")).await;
-        let (status_text, check_error) = match result {
-            Ok(result) => (update_status_text(&result), None),
-            Err(error) => ("Update check failed — try again".to_string(), Some(error)),
+        let (status_text, action_text, available_version, check_error) = match result {
+            Ok(result) => {
+                let available_version = match &result {
+                    updates::UpdateCheck::Available { version } => Some(version.clone()),
+                    updates::UpdateCheck::UpToDate => None,
+                };
+                (
+                    update_status_text(&result),
+                    update_action_text(&result),
+                    available_version,
+                    None,
+                )
+            }
+            Err(error) => (
+                "Couldn't check for updates".to_string(),
+                "Try Again…".to_string(),
+                None,
+                Some(error),
+            ),
         };
         if let Some(error) = check_error {
             warn!("Update check failed: {error}");
@@ -163,6 +315,7 @@ fn check_for_updates(app: tauri::AppHandle) {
             let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
             let mut state = state.lock().unwrap();
             state.checking = false;
+            state.available_version = available_version;
             state.items.clone()
         };
         let Some(items) = items else {
@@ -170,6 +323,9 @@ fn check_for_updates(app: tauri::AppHandle) {
         };
         if let Err(error) = items.status.set_text(status_text) {
             error!("Failed to set tray update status: {error}");
+        }
+        if let Err(error) = items.check.set_text(action_text) {
+            error!("Failed to set tray update action: {error}");
         }
         if let Err(error) = items.check.set_enabled(true) {
             error!("Failed to re-enable update action: {error}");
@@ -294,21 +450,26 @@ fn acquire_gui_instance_guard_at(path: &Path) -> Result<GuiInstanceGuard, GuiIns
 }
 
 fn main() {
+    let gui_launch_mode = gui_launch_mode(std::env::args_os());
+
     // CLI mode: if a subcommand is given, run CLI and exit. The desktop
     // binary is a full CLI (CLI-first design) — the GUI only launches on a
-    // bare invocation.
-    if let Some(parsed) = sagascript_cli::try_parse() {
-        // CLI mode uses warn-level logging to keep stdout clean
-        let configured_filter = std::env::var("RUST_LOG").ok();
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
-                configured_filter.as_deref(),
-                "warn",
-            )))
-            .with_writer(std::io::stderr)
-            .init();
-        sagascript_cli::run(parsed);
-        return;
+    // bare invocation. The private GUI-open marker is consumed here rather
+    // than passed to clap so `sagascript open` can explicitly reveal Settings.
+    if gui_launch_mode == GuiLaunchMode::Standard {
+        if let Some(parsed) = sagascript_cli::try_parse() {
+            // CLI mode uses warn-level logging to keep stdout clean
+            let configured_filter = std::env::var("RUST_LOG").ok();
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
+                    configured_filter.as_deref(),
+                    "warn",
+                )))
+                .with_writer(std::io::stderr)
+                .init();
+            sagascript_cli::run(parsed);
+            return;
+        }
     }
 
     // GUI mode: initialize tracing (console logging)
@@ -390,6 +551,7 @@ fn main() {
                                     };
                                     let _ = app.emit(events::event::STATE_CHANGED, "recording");
                                     if let Some(profile) = active_profile {
+                                        select_profile_menu(app, &profile);
                                         let _ = app.emit(events::event::ACTIVE_HOTKEY_PROFILE_CHANGED, profile);
                                     }
                                     update_tray_status(app, "recording");
@@ -413,19 +575,20 @@ fn main() {
         )
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![sagascript_cli::open::GUI_BACKGROUND_ARG]),
         ))
         .plugin(tauri_plugin_dialog::init())
         .manage(controller)
         .manage(whisper)
         .manage(hotkey_health)
         .manage(Mutex::new(None::<MenuItem<tauri::Wry>>) as SharedStatusItem)
-        .manage(Mutex::new(None::<LanguageMenuItems>) as SharedLanguageMenuItems)
+        .manage(Mutex::new(None::<ProfileMenuState>) as SharedProfileMenuState)
         .manage(Mutex::new(UpdateMenuState {
             items: None,
             checking: false,
+            available_version: None,
         }) as SharedUpdateMenuState)
-        .setup(|app| {
+        .setup(move |app| {
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
             platform::macos::set_activation_policy_accessory();
@@ -515,54 +678,18 @@ fn main() {
                 MenuItem::with_id(app, "transcribe_file", "Transcribe File...", true, None::<&str>)?;
             let status =
                 MenuItem::with_id(app, "status", "Sagascript - Idle", false, None::<&str>)?;
-            let language = {
+            let profiles = {
                 let ctrl: tauri::State<'_, SharedController> = app.state();
-                let language = ctrl.lock().unwrap().language();
-                language
+                let profiles = ctrl.lock().unwrap().settings().resolved_hotkey_profiles();
+                profiles
             };
-            let language_auto = CheckMenuItem::with_id(
-                app,
-                "language_auto",
-                "Auto-detect",
-                true,
-                language == Language::Auto,
-                None::<&str>,
-            )?;
-            let language_swedish = CheckMenuItem::with_id(
-                app,
-                "language_swedish",
-                "Swedish",
-                true,
-                language == Language::Swedish,
-                None::<&str>,
-            )?;
-            let language_english = CheckMenuItem::with_id(
-                app,
-                "language_english",
-                "English",
-                true,
-                language == Language::English,
-                None::<&str>,
-            )?;
-            let language_norwegian = CheckMenuItem::with_id(
-                app,
-                "language_norwegian",
-                "Norwegian",
-                true,
-                language == Language::Norwegian,
-                None::<&str>,
-            )?;
-            let language_menu = Submenu::with_items(
-                app,
-                "Language",
-                true,
-                &[
-                    &language_auto,
-                    &language_swedish,
-                    &language_english,
-                    &language_norwegian,
-                ],
-            )?;
+            let selected_profile_id = profiles.first().map(|profile| profile.id.clone());
+            let profile_items =
+                create_profile_menu_items(app, &profiles, selected_profile_id.as_deref())?;
+            let profiles_menu = Submenu::new(app, "Profiles", true)?;
+            for item in &profile_items {
+                profiles_menu.append(item)?;
+            }
             let update_status = MenuItem::with_id(
                 app,
                 "update_status",
@@ -584,12 +711,11 @@ fn main() {
                 *status_state.lock().unwrap() = Some(status.clone());
             }
             {
-                let language_state: tauri::State<'_, SharedLanguageMenuItems> = app.state();
-                *language_state.lock().unwrap() = Some(LanguageMenuItems {
-                    auto: language_auto,
-                    swedish: language_swedish,
-                    english: language_english,
-                    norwegian: language_norwegian,
+                let profile_state: tauri::State<'_, SharedProfileMenuState> = app.state();
+                *profile_state.lock().unwrap() = Some(ProfileMenuState {
+                    submenu: profiles_menu.clone(),
+                    items: profile_items,
+                    selected_profile_id,
                 });
             }
             {
@@ -604,7 +730,7 @@ fn main() {
                 app,
                 &[
                     &status,
-                    &language_menu,
+                    &profiles_menu,
                     &update_status,
                     &check_for_updates_item,
                     &settings_item,
@@ -613,21 +739,17 @@ fn main() {
                 ],
             )?;
 
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+            #[cfg(target_os = "macos")]
+            seed_macos_tray_preferred_position();
 
-            let _tray = TrayIconBuilder::with_id("main")
+            let tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .tooltip("Sagascript")
-                .icon(tray_icon)
-                .icon_as_template(true)
+                // macOS 26 can register an image-backed status item but paint
+                // it blank. Compact native text stays visible: S while idle,
+                // then a state marker while recording or transcribing.
+                .title("S")
                 .on_menu_event(move |app, event| {
-                    if let Some(language) = language_from_menu_id(event.id().as_ref()) {
-                        if let Err(error) = commands::set_language_for_app(app, language) {
-                            error!("Failed to change language from tray menu: {error}");
-                        }
-                        return;
-                    }
-
                     match event.id().as_ref() {
                     "quit" => {
                         info!("Quit requested");
@@ -639,13 +761,43 @@ fn main() {
                     "transcribe_file" => {
                         open_settings_window(app, Some("transcribe"));
                     }
+                    "manage_profiles" => {
+                        open_settings_window(app, Some("dictate"));
+                    }
                     "check_for_updates" => {
-                        check_for_updates(app.clone());
+                        let available_version = {
+                            let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+                            let version = state.lock().unwrap().available_version.clone();
+                            version
+                        };
+                        if let Some(version) = available_version {
+                            if let Err(error) = open_update_release(&version) {
+                                error!("Failed to open update release: {error}");
+                            } else {
+                                let items = {
+                                    let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+                                    let mut state = state.lock().unwrap();
+                                    state.available_version = None;
+                                    state.items.clone()
+                                };
+                                if let Some(items) = items {
+                                    if let Err(error) = items.check.set_text("Check Again…") {
+                                        error!("Failed to reset update action after opening release: {error}");
+                                    }
+                                }
+                            }
+                        } else {
+                            check_for_updates(app.clone());
+                        }
                     }
                     _ => {}
                 }
                 })
                 .build(app)?;
+
+            #[cfg(target_os = "macos")]
+            configure_macos_tray_identity(&tray)?;
+            tray.set_visible(true)?;
 
             info!("Tray icon created");
 
@@ -672,17 +824,24 @@ fn main() {
             // Watch settings file for external changes (e.g. `sagascript config set`)
             start_settings_watcher(app.handle().clone());
 
-            // A bare GUI launch is an explicit request to see Sagascript. The
-            // app has no configured Tauri windows, so completed-onboarding
-            // launches must open Settings here too instead of leaving the user
-            // with only a menu-bar icon.
+            // Only the login-item marker stays headless after onboarding.
+            // A normal Finder/Spotlight launch is deliberate and opens
+            // Settings; hotkey recording/transcription never enters this path.
             {
                 let settings = sagascript_core::settings::store::load();
-                let initial_tab = initial_main_window_tab(settings.has_completed_onboarding);
-                if initial_tab == Some("onboarding") {
-                    info!("First launch detected, opening onboarding");
+                match initial_window_request(settings.has_completed_onboarding, gui_launch_mode) {
+                    InitialWindowRequest::Hidden => {
+                        info!("Background launch complete; Settings remains hidden");
+                    }
+                    InitialWindowRequest::Settings => {
+                        info!("Foreground GUI launch requested");
+                        open_settings_window(app.handle(), None);
+                    }
+                    InitialWindowRequest::Onboarding => {
+                        info!("First launch detected, opening onboarding");
+                        open_settings_window(app.handle(), Some("onboarding"));
+                    }
                 }
-                open_settings_window(app.handle(), initial_tab);
             }
 
             // Preload + warm the bounded set of models selected by the hotkey
@@ -805,6 +964,7 @@ fn main() {
             commands::cancel_recording,
             commands::is_model_downloaded,
             commands::get_model_info,
+            commands::get_effective_model_info,
             commands::download_model,
             commands::set_auto_paste,
             commands::set_show_overlay,
@@ -819,6 +979,7 @@ fn main() {
             commands::get_supported_formats,
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,
+            commands::open_accessibility_settings,
             commands::microphone_status,
             commands::request_microphone_access,
             commands::open_microphone_settings,
@@ -847,6 +1008,67 @@ fn main() {
         });
 }
 
+/// Match the key AppKit uses to persist a named status item's menu-bar slot.
+#[cfg(target_os = "macos")]
+fn tray_preferred_position_key(autosave_name: &str) -> String {
+    format!("NSStatusItem Preferred Position {autosave_name}")
+}
+
+#[cfg(target_os = "macos")]
+fn initial_tray_preferred_position(has_saved_position: bool) -> Option<f64> {
+    (!has_saved_position).then_some(DEFAULT_TRAY_PREFERRED_POSITION)
+}
+
+/// Seed a usable first position on crowded, notched menu bars. AppKit normally
+/// puts a brand-new status item at the far-left edge of the status area, where
+/// it may report `isVisible = true` while sitting behind the camera cutout.
+/// Once the user moves the item, AppKit owns this value and we never overwrite
+/// it.
+#[cfg(target_os = "macos")]
+fn seed_macos_tray_preferred_position() {
+    use objc2_foundation::{NSString, NSUserDefaults};
+
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let key_string = tray_preferred_position_key(TRAY_AUTOSAVE_NAME);
+    let key = NSString::from_str(&key_string);
+    let Some(position) =
+        initial_tray_preferred_position(defaults.objectForKey(&key).is_some())
+    else {
+        return;
+    };
+
+    defaults.setDouble_forKey(position, &key);
+    info!(position, "Seeded initial macOS tray position");
+}
+
+/// Give AppKit a stable identity for the status item before making it visible.
+/// Without an autosave name macOS 26 places every fresh item in the default
+/// leftmost slot, which can sit behind a MacBook camera cutout.
+#[cfg(target_os = "macos")]
+fn configure_macos_tray_identity(tray: &tauri::tray::TrayIcon) -> tauri::Result<()> {
+    let configured = tray.with_inner_tray_icon(|inner| {
+        let Some(status_item) = inner.ns_status_item() else {
+            return false;
+        };
+
+        let autosave_name = objc2_foundation::NSString::from_str(TRAY_AUTOSAVE_NAME);
+        // Tauri constructs the native item visible. Toggle it inside the same
+        // main-thread callback so the stable name is in place before AppKit
+        // performs the visible placement pass.
+        status_item.setVisible(false);
+        status_item.setAutosaveName(Some(&autosave_name));
+        status_item.setVisible(true);
+
+        status_item.autosaveName().to_string() == TRAY_AUTOSAVE_NAME
+    })?;
+
+    if configured {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("failed to assign the macOS tray autosave name").into())
+    }
+}
+
 /// Pure state -> (tooltip, title, menu_text) mapping for the tray, extracted
 /// so the "hotkey unavailable" sticky-warning behavior can be unit tested
 /// without a running Tauri app. `hotkey_failed` must win over every normal
@@ -856,17 +1078,13 @@ fn main() {
 /// warning sticky.
 fn tray_label(state: &str, hotkey_failed: bool) -> (&'static str, &'static str, &'static str) {
     if hotkey_failed {
-        return (
-            "Sagascript - Hotkey unavailable",
-            "\u{26A0}",
-            "Hotkey unavailable",
-        );
+        return ("Sagascript - Hotkey unavailable", "!", "Hotkey unavailable");
     }
     match state {
-        "recording" => ("Sagascript - Recording...", "Rec", "Recording..."),
-        "loading_model" => ("Sagascript - Loading model...", "Loading...", "Loading model..."),
-        "transcribing" => ("Sagascript - Transcribing...", "...", "Transcribing..."),
-        _ => ("Sagascript", "", "Idle"),
+        "recording" => ("Sagascript - Recording...", "●", "Recording..."),
+        "loading_model" => ("Sagascript - Loading model...", "…", "Loading model..."),
+        "transcribing" => ("Sagascript - Transcribing...", "…", "Transcribing..."),
+        _ => ("Sagascript", "S", "Idle"),
     }
 }
 
@@ -969,11 +1187,48 @@ fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
     }
 }
 
-fn initial_main_window_tab(has_completed_onboarding: bool) -> Option<&'static str> {
-    if has_completed_onboarding {
-        None
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitialWindowRequest {
+    Hidden,
+    Settings,
+    Onboarding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuiLaunchMode {
+    Standard,
+    ShowSettings,
+    Background,
+}
+
+fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLaunchMode {
+    let mut args = args.into_iter();
+    let _program = args.next();
+    match (args.next(), args.next()) {
+        (Some(argument), None)
+            if argument == std::ffi::OsStr::new(sagascript_cli::open::GUI_OPEN_ARG) =>
+        {
+            GuiLaunchMode::ShowSettings
+        }
+        (Some(argument), None)
+            if argument == std::ffi::OsStr::new(sagascript_cli::open::GUI_BACKGROUND_ARG) =>
+        {
+            GuiLaunchMode::Background
+        }
+        _ => GuiLaunchMode::Standard,
+    }
+}
+
+fn initial_window_request(
+    has_completed_onboarding: bool,
+    launch_mode: GuiLaunchMode,
+) -> InitialWindowRequest {
+    if !has_completed_onboarding {
+        InitialWindowRequest::Onboarding
+    } else if launch_mode == GuiLaunchMode::Background {
+        InitialWindowRequest::Hidden
     } else {
-        Some("onboarding")
+        InitialWindowRequest::Settings
     }
 }
 
@@ -1472,12 +1727,12 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             }
 
             // Update controller with all new settings
-            let selected_language = new_settings.language;
+            let profiles = new_settings.resolved_hotkey_profiles();
             {
                 let mut c = ctrl.lock().unwrap();
                 c.update_settings(new_settings);
             }
-            update_language_menu(&app, selected_language);
+            update_profiles_menu(&app, &profiles);
 
             // Notify frontend so UI reflects external changes
             let _ = app.emit(events::event::STATE_CHANGED, "settings_reloaded");
@@ -1512,30 +1767,12 @@ mod tests {
     }
 
     #[test]
-    fn language_menu_ids_resolve_to_persisted_language_values() {
-        assert_eq!(language_from_menu_id("language_auto"), Some(Language::Auto));
-        assert_eq!(
-            language_from_menu_id("language_swedish"),
-            Some(Language::Swedish)
-        );
-        assert_eq!(
-            language_from_menu_id("language_english"),
-            Some(Language::English)
-        );
-        assert_eq!(
-            language_from_menu_id("language_norwegian"),
-            Some(Language::Norwegian)
-        );
-        assert_eq!(language_from_menu_id("other"), None);
-    }
-
-    #[test]
     fn update_status_describes_available_and_current_releases() {
         assert_eq!(
             update_status_text(&updates::UpdateCheck::Available {
                 version: semver::Version::new(1, 2, 3)
             }),
-            "Update Available — v1.2.3"
+            "Update available — v1.2.3"
         );
         assert_eq!(
             update_status_text(&updates::UpdateCheck::UpToDate),
@@ -1605,13 +1842,58 @@ mod tests {
     }
 
     #[test]
-    fn completed_onboarding_starts_on_the_settings_view() {
-        assert_eq!(initial_main_window_tab(true), None);
+    fn completed_onboarding_normal_launch_opens_settings() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::Standard),
+            InitialWindowRequest::Settings
+        );
     }
 
     #[test]
-    fn incomplete_onboarding_starts_on_the_onboarding_view() {
-        assert_eq!(initial_main_window_tab(false), Some("onboarding"));
+    fn explicit_open_starts_on_the_settings_view() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::ShowSettings),
+            InitialWindowRequest::Settings
+        );
+    }
+
+    #[test]
+    fn completed_onboarding_background_launch_stays_hidden() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::Background),
+            InitialWindowRequest::Hidden
+        );
+    }
+
+    #[test]
+    fn incomplete_onboarding_starts_on_the_onboarding_view_even_when_headless() {
+        assert_eq!(
+            initial_window_request(false, GuiLaunchMode::Background),
+            InitialWindowRequest::Onboarding
+        );
+    }
+
+    #[test]
+    fn private_gui_markers_are_accepted_only_as_the_sole_argument() {
+        use std::ffi::OsString;
+
+        let mode = |args: &[&str]| {
+            gui_launch_mode(args.iter().map(OsString::from).collect::<Vec<_>>())
+        };
+
+        assert_eq!(mode(&["sagascript"]), GuiLaunchMode::Standard);
+        assert_eq!(
+            mode(&["sagascript", sagascript_cli::open::GUI_OPEN_ARG]),
+            GuiLaunchMode::ShowSettings
+        );
+        assert_eq!(
+            mode(&["sagascript", sagascript_cli::open::GUI_BACKGROUND_ARG]),
+            GuiLaunchMode::Background
+        );
+        assert_eq!(
+            mode(&["sagascript", "config", sagascript_cli::open::GUI_OPEN_ARG]),
+            GuiLaunchMode::Standard
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -1815,16 +2097,121 @@ mod tests {
     // -- tray_label --
 
     #[test]
+    fn update_menu_makes_available_release_actionable() {
+        let result = updates::UpdateCheck::Available {
+            version: semver::Version::new(1, 2, 0),
+        };
+
+        assert_eq!(update_status_text(&result), "Update available — v1.2.0");
+        assert_eq!(update_action_text(&result), "Download Sagascript v1.2.0…");
+    }
+
+    #[test]
+    fn update_menu_keeps_a_clear_recheck_action_when_current() {
+        assert_eq!(
+            update_action_text(&updates::UpdateCheck::UpToDate),
+            "Check Again…"
+        );
+    }
+
+    #[test]
+    fn update_action_targets_the_exact_stable_release() {
+        assert_eq!(
+            stable_release_url(&semver::Version::new(1, 2, 0)),
+            "https://github.com/Magnus-Gille/sagascript/releases/tag/v1.2.0"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tray_autosave_name_is_stable_and_bundle_qualified() {
+        assert_eq!(TRAY_AUTOSAVE_NAME, "ai.gille.sagascript.main");
+        assert_eq!(
+            tray_preferred_position_key(TRAY_AUTOSAVE_NAME),
+            "NSStatusItem Preferred Position ai.gille.sagascript.main"
+        );
+        assert_eq!(DEFAULT_TRAY_PREFERRED_POSITION, 340.0);
+        assert_eq!(initial_tray_preferred_position(false), Some(340.0));
+        assert_eq!(initial_tray_preferred_position(true), None);
+    }
+
+    #[test]
     fn tray_label_idle_not_failed() {
-        assert_eq!(tray_label("idle", false), ("Sagascript", "", "Idle"));
+        assert_eq!(tray_label("idle", false), ("Sagascript", "S", "Idle"));
     }
 
     #[test]
     fn tray_label_recording_not_failed() {
         assert_eq!(
             tray_label("recording", false),
-            ("Sagascript - Recording...", "Rec", "Recording...")
+            ("Sagascript - Recording...", "●", "Recording...")
         );
+    }
+
+    #[test]
+    fn tray_status_uses_compact_native_state_markers() {
+        assert_eq!(tray_label("idle", false).1, "S");
+        assert_eq!(tray_label("recording", false).1, "●");
+        assert_eq!(tray_label("loading_model", false).1, "…");
+        assert_eq!(tray_label("transcribing", false).1, "…");
+        assert_eq!(tray_label("idle", true).1, "!");
+    }
+
+    #[test]
+    fn profile_menu_label_explains_language_shortcut_and_selection() {
+        let profile = sagascript_core::settings::HotkeyProfile {
+            id: "swedish".to_string(),
+            name: "Svenska".to_string(),
+            shortcut: "Super+Shift+S".to_string(),
+            language: Language::Swedish,
+        };
+
+        assert_eq!(
+            profile_menu_label(&profile, true),
+            "✓ Svenska — Swedish · ⇧⌘S"
+        );
+        assert_eq!(
+            profile_menu_label(&profile, false),
+            "Svenska — Swedish · ⇧⌘S"
+        );
+    }
+
+    #[test]
+    fn profile_menu_label_keeps_non_macos_shortcuts_readable() {
+        let profile = sagascript_core::settings::HotkeyProfile {
+            id: "english".to_string(),
+            name: "English".to_string(),
+            shortcut: "Control+Alt+Space".to_string(),
+            language: Language::English,
+        };
+
+        assert_eq!(
+            profile_menu_label(&profile, false),
+            "English — English · ⌃⌥Space"
+        );
+    }
+
+    #[test]
+    fn profile_menu_shortcut_formats_command_or_control_aliases() {
+        let expected = if cfg!(target_os = "macos") {
+            "⇧⌘Space"
+        } else {
+            "⌃⇧Space"
+        };
+        for shortcut in [
+            "CommandOrControl+Shift+Space",
+            "CommandOrCtrl+Shift+Space",
+            "CmdOrCtrl+Shift+Space",
+            "CmdOrControl+Shift+Space",
+        ] {
+            assert_eq!(format_menu_shortcut(shortcut), expected);
+        }
+    }
+
+    #[test]
+    fn profile_menu_shortcut_formats_arrow_keys() {
+        assert_eq!(format_menu_shortcut("Control+ArrowUp"), "⌃↑");
+        assert_eq!(format_menu_shortcut("Alt+Left"), "⌥←");
     }
 
     #[test]

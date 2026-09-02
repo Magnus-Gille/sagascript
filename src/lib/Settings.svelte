@@ -14,7 +14,7 @@
     setVadEnabled,
     getBuildInfo,
     getModelInfo,
-    getLoadedModel,
+    getEffectiveModelInfo,
     downloadModel,
     transcribeFile,
     getSupportedFormats,
@@ -22,36 +22,35 @@
     checkAccessibilityPermission,
     requestAccessibilityPermission,
     startRecording,
-    startTrainingRecording,
-    cancelRecording,
     stopAndTranscribe,
-    stopAndTranscribeTraining,
-    transcribeTrainingFile,
-    suggestTrainingGlossary,
-    applyTrainingGlossary,
     hotkeyStatus,
     type Settings,
     type BuildInfo,
     type Language,
     type HotkeyMode,
     type WhisperModel,
-    type LoadedModelInfo,
     type HotkeyStatus,
     type HotkeyProfile,
-    type GlossarySuggestion,
   } from "./api";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import {
+    dictateButtonAction,
+    retainTestRecordingOwnership,
+    type BackendDictationState,
+  } from "./dictation-ui-state";
 
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);
   let models: WhisperModel[] = $state([]);
-  let loadedModel: LoadedModelInfo | null = $state(null);
-  let activeTab: "dictate" | "transcribe" | "teach" | "settings" = $state("dictate");
+  let activeTab: "dictate" | "transcribe" | "settings" = $state("dictate");
   let downloading: string | null = $state(null);
   let downloadingName: string = $state("");
   let downloadProgress: number = $state(0);
+  let profileModels: Record<string, WhisperModel> = $state({});
+  let profileModelErrors: Record<string, string> = $state({});
+  let profileModelRefresh = 0;
 
   let platform: string = $state("macos");
 
@@ -88,32 +87,10 @@
   // Dictate test state
   let testRecording: boolean = $state(false);
   let testTranscribing: boolean = $state(false);
+  let backendDictationState: BackendDictationState = $state("idle");
+  let testOwnsRecording: boolean = $state(false);
   let testResult: string = $state("");
   let testError: string = $state("");
-
-  // Local, review-first personal dictionary training state
-  let teachProfileId: string = $state("default");
-  let teachRecording: boolean = $state(false);
-  let teachTranscribing: boolean = $state(false);
-  let teachRawText: string = $state("");
-  let teachEffectiveText: string = $state("");
-  let teachCorrectedText: string = $state("");
-  let teachSuggestions: GlossarySuggestion[] = $state([]);
-  let teachSelected: Record<number, boolean> = $state({});
-  let teachError: string = $state("");
-  let teachMessage: string = $state("");
-
-  function explicitTeachProfiles(current: Settings | null = settings): HotkeyProfile[] {
-    return current?.hotkey_profiles.filter((profile) => profile.language !== "auto") ?? [];
-  }
-
-  function chooseTeachProfile(current: Settings, preferred?: string): string {
-    const profiles = explicitTeachProfiles(current);
-    return profiles.find((profile) => profile.id === preferred)?.id
-      ?? profiles.find((profile) => profile.id === "default")?.id
-      ?? profiles[0]?.id
-      ?? "";
-  }
 
   // Transcribe tab state
   let supportedFormats: string[] = $state([]);
@@ -124,6 +101,25 @@
   let dragOver: boolean = $state(false);
   let transcribePrompt: string = $state('');
   let transcribeDiarize: boolean = $state(false);
+
+  async function refreshProfileModels(profiles: HotkeyProfile[]) {
+    const generation = ++profileModelRefresh;
+    try {
+      const entries = await Promise.all(
+        profiles.map(async (profile) => [
+          profile.id,
+          await getEffectiveModelInfo(profile.language),
+        ] as const),
+      );
+      if (generation === profileModelRefresh) {
+        profileModels = Object.fromEntries(entries);
+      }
+    } catch (e: any) {
+      if (generation === profileModelRefresh) {
+        settingsError = typeof e === "string" ? e : e?.message || "Failed to check speech engines.";
+      }
+    }
+  }
 
   onMount(() => {
     // Register listeners + drag-drop FIRST — they don't depend on the data
@@ -141,7 +137,7 @@
       downloading = null;
       downloadProgress = 0;
       models = await getModelInfo();
-      loadedModel = await getLoadedModel();
+      if (settings) await refreshProfileModels(settings.hotkey_profiles);
     });
 
     // Hotkey registration health can change at any time (settings-file
@@ -153,21 +149,31 @@
       hotkeyStatusError = status.error ?? "";
     });
 
-    // Keep an already-open window in sync with settings changed by the CLI or
-    // another process. Backend commands are field-granular, so this refresh is
-    // display-only and never writes a stale snapshot back.
+    // Keep Dictate synchronized with hotkey-driven work. Previously these
+    // states were ignored, so the button still offered "Start recording"
+    // while the backend was loading/transcribing and the next click produced
+    // a misleading busy error.
     listen("state-changed", async (event: any) => {
-      if (event.payload !== "settings_reloaded") return;
-      settings = await getSettings();
-      teachProfileId = chooseTeachProfile(settings, teachProfileId);
-      models = await getModelInfo();
-      loadedModel = await getLoadedModel();
+      const nextState = event.payload;
+      if (nextState === "settings_reloaded") {
+        settings = await getSettings();
+        models = await getModelInfo();
+        await refreshProfileModels(settings.hotkey_profiles);
+        return;
+      }
+
+      if (!["idle", "recording", "loading_model", "transcribing"].includes(nextState)) return;
+      const acceptedState = nextState as BackendDictationState;
+      testOwnsRecording = retainTestRecordingOwnership(acceptedState, testOwnsRecording);
+      backendDictationState = acceptedState;
+      testRecording = nextState === "recording";
+      testTranscribing = nextState === "loading_model" || nextState === "transcribing";
     });
 
     // Listen for tab navigation from tray menu
     listen("navigate_tab", (event: any) => {
       const t = event.payload;
-      if (t === "dictate" || t === "transcribe" || t === "teach" || t === "settings") {
+      if (t === "dictate" || t === "transcribe" || t === "settings") {
         activeTab = t;
       }
     });
@@ -195,14 +201,13 @@
       initError = "";
       try {
         settings = await getSettings();
-        teachProfileId = chooseTeachProfile(settings);
+        await refreshProfileModels(settings.hotkey_profiles);
         platform = await getPlatform();
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
         }
         buildInfo = await getBuildInfo();
         models = await getModelInfo();
-        loadedModel = await getLoadedModel();
         supportedFormats = await getSupportedFormats();
         const status = await hotkeyStatus();
         hotkeyStatusOk = status.ok;
@@ -211,7 +216,7 @@
         // Check URL params for initial tab
         const params = new URLSearchParams(window.location.search);
         const tab = params.get("tab");
-        if (tab === "dictate" || tab === "transcribe" || tab === "teach" || tab === "settings") {
+        if (tab === "dictate" || tab === "transcribe" || tab === "settings") {
           activeTab = tab;
         }
       } catch (e: any) {
@@ -232,6 +237,7 @@
     try {
       await mutate();
       settings = await getSettings();
+      await refreshProfileModels(settings.hotkey_profiles);
       return true;
     } catch (e: any) {
       settingsError = typeof e === "string" ? e : e?.message || "Failed to save setting.";
@@ -245,7 +251,6 @@
     const ok = await applySetting(() => setLanguage(value));
     if (ok) {
       models = await getModelInfo();
-      loadedModel = await getLoadedModel();
     }
   }
 
@@ -342,7 +347,6 @@
       await setWhisperModel(model.id);
       settings = await getSettings();
       models = await getModelInfo();
-      loadedModel = await getLoadedModel();
     } catch (e: any) {
       modelError = typeof e === "string" ? e : e?.message || "Model selection failed.";
     } finally {
@@ -352,11 +356,38 @@
     }
   }
 
+  async function downloadProfileModel(profile: HotkeyProfile) {
+    const model = profileModels[profile.id];
+    if (!model || model.downloaded || downloading !== null) return;
+    downloading = model.id;
+    downloadingName = model.display_name;
+    downloadProgress = 0;
+    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
+    try {
+      await downloadModel(model.id);
+      await refreshProfileModels(settings?.hotkey_profiles ?? []);
+      models = await getModelInfo();
+    } catch (e: any) {
+      profileModelErrors = {
+        ...profileModelErrors,
+        [profile.id]: typeof e === "string" ? e : e?.message || "Speech engine download failed.",
+      };
+    } finally {
+      downloading = null;
+      downloadProgress = 0;
+    }
+  }
+
   async function onTestRecord() {
-    if (testRecording) {
+    const action = dictateButtonAction(backendDictationState, testOwnsRecording);
+    if (action === "blocked") return;
+
+    if (action === "stop") {
       // Stop and transcribe
+      testOwnsRecording = false;
       testRecording = false;
       testTranscribing = true;
+      backendDictationState = "transcribing";
       testError = "";
       try {
         const text = await stopAndTranscribe();
@@ -365,146 +396,21 @@
         testError = typeof e === "string" ? e : e.message || "Transcription failed";
       } finally {
         testTranscribing = false;
+        backendDictationState = "idle";
       }
     } else {
       // Start recording
       testError = "";
       try {
         await startRecording();
+        testOwnsRecording = true;
         testRecording = true;
+        backendDictationState = "recording";
       } catch (e: any) {
+        testOwnsRecording = false;
+        backendDictationState = "idle";
         testError = typeof e === "string" ? e : e.message || "Failed to start recording";
       }
-    }
-  }
-
-  async function onTeachRecord() {
-    teachError = "";
-    teachMessage = "";
-    if (teachRecording) {
-      teachRecording = false;
-      teachTranscribing = true;
-      try {
-        const transcript = await stopAndTranscribeTraining();
-        setTeachTranscript(transcript.raw_text, transcript.effective_text);
-      } catch (e: any) {
-        teachError = typeof e === "string" ? e : e?.message || "Transcription failed";
-      } finally {
-        teachTranscribing = false;
-      }
-    } else {
-      try {
-        await startTrainingRecording(teachProfileId);
-        teachRecording = true;
-        teachRawText = "";
-        teachEffectiveText = "";
-        teachCorrectedText = "";
-        teachSuggestions = [];
-        teachSelected = {};
-      } catch (e: any) {
-        teachError = typeof e === "string" ? e : e?.message || "Failed to start recording";
-      }
-    }
-  }
-
-  async function onTeachCancel() {
-    teachError = "";
-    teachMessage = "";
-    try {
-      await cancelRecording();
-      teachRecording = false;
-      teachMessage = "Training recording cancelled.";
-    } catch (e: any) {
-      teachError = typeof e === "string" ? e : e?.message || "Failed to cancel recording";
-    }
-  }
-
-  function setTeachTranscript(rawText: string, effectiveText: string) {
-    teachRawText = rawText;
-    teachEffectiveText = effectiveText;
-    teachCorrectedText = effectiveText;
-    teachSuggestions = [];
-    teachSelected = {};
-  }
-
-  async function onTeachPickFile() {
-    const extensions = supportedFormats.length > 0
-      ? supportedFormats
-      : ["wav", "mp3", "m4a", "mp4", "ogg", "flac"];
-    const file = await open({
-      multiple: false,
-      filters: [{ name: "Audio/Video", extensions }],
-    });
-    if (!file) return;
-
-    teachError = "";
-    teachMessage = "";
-    teachTranscribing = true;
-    try {
-      const transcript = await transcribeTrainingFile(file, teachProfileId);
-      setTeachTranscript(transcript.raw_text, transcript.effective_text);
-    } catch (e: any) {
-      teachError = typeof e === "string" ? e : e?.message || "Training import failed";
-    } finally {
-      teachTranscribing = false;
-    }
-  }
-
-  async function findTeachSuggestions() {
-    teachError = "";
-    teachMessage = "";
-    if (!teachEffectiveText.trim() || !teachCorrectedText.trim()) {
-      teachError = "Record and correct a transcript first.";
-      return;
-    }
-    try {
-      teachSuggestions = await suggestTrainingGlossary(
-        teachEffectiveText,
-        teachCorrectedText,
-        teachProfileId,
-      );
-      teachSelected = Object.fromEntries(teachSuggestions.map((_, index) => [index, true]));
-      if (teachSuggestions.length === 0) {
-        teachMessage = "No safe dictionary changes found. Broad or ambiguous edits are ignored.";
-      }
-    } catch (e: any) {
-      teachError = typeof e === "string" ? e : e?.message || "Could not analyze corrections";
-    }
-  }
-
-  function setTeachSuggestionSelected(index: number, selected: boolean) {
-    teachSelected = { ...teachSelected, [index]: selected };
-  }
-
-  function editTeachSuggestionCanonical(index: number, canonical: string) {
-    teachSuggestions = teachSuggestions.map((suggestion, candidateIndex) =>
-      candidateIndex === index ? { ...suggestion, canonical } : suggestion,
-    );
-  }
-
-  function editTeachSuggestionKind(index: number, kind: GlossarySuggestion["kind"]) {
-    teachSuggestions = teachSuggestions.map((suggestion, candidateIndex) =>
-      candidateIndex === index ? { ...suggestion, kind } : suggestion,
-    );
-  }
-
-  async function addTeachSuggestions() {
-    const accepted = teachSuggestions.filter((_, index) => teachSelected[index]);
-    teachError = "";
-    teachMessage = "";
-    try {
-      await applyTrainingGlossary(
-        teachEffectiveText,
-        teachCorrectedText,
-        teachProfileId,
-        accepted,
-      );
-      settings = await getSettings();
-      teachSuggestions = [];
-      teachSelected = {};
-      teachMessage = `Added ${accepted.length} reviewed ${accepted.length === 1 ? "entry" : "entries"} to this profile.`;
-    } catch (e: any) {
-      teachError = typeof e === "string" ? e : e?.message || "Could not save dictionary entries";
     }
   }
 
@@ -648,12 +554,10 @@
     );
     if (profileId === draftProfileId) {
       settings = { ...settings, hotkey_profiles: profiles };
-      teachProfileId = chooseTeachProfile(settings, teachProfileId);
+      await refreshProfileModels(profiles);
       return;
     }
-    if (await applySetting(() => setHotkeyProfiles(profiles)) && settings) {
-      teachProfileId = chooseTeachProfile(settings, teachProfileId);
-    }
+    await applySetting(() => setHotkeyProfiles(profiles));
   }
 
   function addProfile() {
@@ -670,27 +574,22 @@
       language: settings.language === "sv" ? "en" : "sv",
     };
     settings = { ...settings, hotkey_profiles: [...settings.hotkey_profiles, profile] };
-    teachProfileId = chooseTeachProfile(settings, teachProfileId);
     draftProfileId = profile.id;
     recordingProfileId = profile.id;
+    void refreshProfileModels(settings.hotkey_profiles);
   }
 
   async function removeProfile(profileId: string) {
     if (!settings || settings.hotkey_profiles.length <= 1) return;
     if (profileId === draftProfileId) {
       settings = { ...settings, hotkey_profiles: settings.hotkey_profiles.filter((profile) => profile.id !== profileId) };
-      teachProfileId = chooseTeachProfile(settings, teachProfileId);
       draftProfileId = null;
       recordingProfileId = null;
       return;
     }
-    if (
-      await applySetting(() =>
-        setHotkeyProfiles(settings!.hotkey_profiles.filter((profile) => profile.id !== profileId)),
-      ) && settings
-    ) {
-      teachProfileId = chooseTeachProfile(settings, teachProfileId);
-    }
+    await applySetting(() =>
+      setHotkeyProfiles(settings!.hotkey_profiles.filter((profile) => profile.id !== profileId)),
+    );
   }
 
   function languageLabel(lang: Language): string {
@@ -702,22 +601,9 @@
     }
   }
 
-  function activeModelName(): string {
-    if (loadedModel) return loadedModel.effective_model;
-    const active = models.find(m => m.active);
-    return active ? active.display_name : "Not selected";
-  }
-
-  function modelStatus(): string {
-    if (!loadedModel) return "";
-    if (!loadedModel.is_downloaded) return "Not downloaded";
-    return "";
-  }
 </script>
 
 <div class="settings-window">
-  <div class="titlebar">Sagascript</div>
-
   <div class="tabs">
     <button class="tab" class:active={activeTab === "dictate"} onclick={() => (activeTab = "dictate")}>
       Dictate
@@ -725,11 +611,8 @@
     <button class="tab" class:active={activeTab === "transcribe"} onclick={() => (activeTab = "transcribe")}>
       Transcribe
     </button>
-    <button class="tab" class:active={activeTab === "teach"} onclick={() => (activeTab = "teach")}>
-      Teach
-    </button>
     <button class="tab" class:active={activeTab === "settings"} onclick={() => (activeTab = "settings")}>
-      Language & Model
+      Settings
     </button>
   </div>
 
@@ -742,21 +625,6 @@
         <div class="transcribe-error">{settingsError}</div>
       {/if}
       {#if activeTab === "dictate"}
-        <button class="active-config-bar" onclick={() => (activeTab = "settings")}>
-          <div class="active-config-row">
-            <span class="active-config-label">Dictation profiles</span>
-            <span class="active-config-value">{settings.hotkey_profiles.map((profile) => languageLabel(profile.language)).join(" · ")}</span>
-          </div>
-          <div class="active-config-row">
-            <span class="active-config-label">Model</span>
-            <span class="active-config-value">
-              {activeModelName()}
-              {#if modelStatus()}<span class="active-config-warn"> · {modelStatus()}</span>{/if}
-            </span>
-          </div>
-          <span class="active-config-link">Change</span>
-        </button>
-
         <div class="field profile-field">
           <div class="profile-heading">
             <span class="field-label">Dictation shortcuts</span>
@@ -766,6 +634,7 @@
             <div class="profile-card">
               <div class="profile-row">
                 <input
+                  type="text"
                   class="profile-name"
                   aria-label="Profile name"
                   value={profile.name}
@@ -800,6 +669,29 @@
                   <button class="profile-remove" aria-label={`Remove ${profile.name}`} onclick={() => removeProfile(profile.id)}>Remove</button>
                 {/if}
               </div>
+              {#if profileModels[profile.id]}
+                <div class="profile-engine" class:missing={!profileModels[profile.id].downloaded}>
+                  <span>
+                    {profileModels[profile.id].downloaded
+                      ? "Speech engine ready"
+                      : `Speech engine required · ${profileModels[profile.id].size_mb} MB`}
+                  </span>
+                  {#if !profileModels[profile.id].downloaded}
+                    <button
+                      class="link-btn profile-engine-action"
+                      onclick={() => downloadProfileModel(profile)}
+                      disabled={downloading !== null}
+                    >
+                      {downloading === profileModels[profile.id].id
+                        ? `Downloading ${Math.round(downloadProgress)}%`
+                        : "Download speech engine"}
+                    </button>
+                  {/if}
+                </div>
+                {#if profileModelErrors[profile.id]}
+                  <div class="hotkey-error">{profileModelErrors[profile.id]}</div>
+                {/if}
+              {/if}
             </div>
           {/each}
           {#if hotkeyError}
@@ -813,7 +705,7 @@
         </div>
 
         <div class="field">
-          <label for="hotkey-mode">Hotkey Mode</label>
+          <label for="hotkey-mode">Shortcut behavior</label>
           <select id="hotkey-mode" value={settings.hotkey_mode} onchange={onHotkeyModeChange}>
             <option value="push">Push-to-talk</option>
             <option value="toggle">Toggle</option>
@@ -845,14 +737,17 @@
             class:recording={testRecording}
             class:transcribing={testTranscribing}
             onclick={onTestRecord}
-            disabled={testTranscribing}
+            disabled={dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" || downloading !== null}
           >
             {#if testTranscribing}
               <div class="spinner small"></div>
-              Transcribing...
+              {backendDictationState === "loading_model" ? "Preparing speech engine..." : "Transcribing..."}
+            {:else if downloading !== null}
+              <div class="spinner small"></div>
+              Downloading speech engine...
             {:else if testRecording}
               <div class="recording-dot"></div>
-              Stop recording
+              {testOwnsRecording ? "Stop recording" : "Recording via hotkey..."}
             {:else}
               Start recording
             {/if}
@@ -873,14 +768,7 @@
             <span class="active-config-label">Language</span>
             <span class="active-config-value">{languageLabel(settings.language)}</span>
           </div>
-          <div class="active-config-row">
-            <span class="active-config-label">Model</span>
-            <span class="active-config-value">
-              {activeModelName()}
-              {#if modelStatus()}<span class="active-config-warn"> · {modelStatus()}</span>{/if}
-            </span>
-          </div>
-          <span class="active-config-link">Change</span>
+          <span class="active-config-link">Settings</span>
         </button>
 
         <div
@@ -931,142 +819,6 @@
           <textarea class="transcribe-result" readonly>{transcriptionResult}</textarea>
         {/if}
 
-      {:else if activeTab === "teach"}
-        <div class="teach-intro">
-          <div class="teach-title">Teach Sagascript your vocabulary</div>
-          <div class="hotkey-hint">
-            Speak naturally, correct the transcript, then review the safe local dictionary changes. This never changes model weights or sends audio to a cloud service.
-          </div>
-        </div>
-
-        <div class="field">
-          <label for="teach-profile">Save for profile</label>
-          <select id="teach-profile" bind:value={teachProfileId} disabled={teachRecording || teachTranscribing}>
-            {#if explicitTeachProfiles().length === 0}
-              <option value="">Create a profile with an explicit language first</option>
-            {/if}
-            {#each explicitTeachProfiles() as profile (profile.id)}
-              <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
-            {/each}
-          </select>
-          <div class="hotkey-hint">Learned entries apply only when this dictation profile is active. Auto-detect profiles are excluded to avoid cross-language aliases.</div>
-        </div>
-
-        <button
-          class="test-record-btn"
-          class:recording={teachRecording}
-          class:transcribing={teachTranscribing}
-          onclick={onTeachRecord}
-          disabled={teachTranscribing || testRecording || !teachProfileId}
-        >
-          {#if teachTranscribing}
-            <div class="spinner small"></div>
-            Transcribing locally...
-          {:else if teachRecording}
-            <div class="recording-dot"></div>
-            Stop training recording
-          {:else}
-            Start training recording
-          {/if}
-        </button>
-        {#if teachRecording}
-          <button class="teach-import-btn" onclick={onTeachCancel}>
-            Cancel training recording
-          </button>
-        {/if}
-        <button
-          class="teach-import-btn"
-          onclick={onTeachPickFile}
-          disabled={teachRecording || teachTranscribing || testRecording || !teachProfileId}
-        >
-          Import audio or video...
-        </button>
-
-        {#if teachError}
-          <div class="transcribe-error">{teachError}</div>
-        {/if}
-        {#if teachMessage}
-          <div class="teach-message">{teachMessage}</div>
-        {/if}
-
-        {#if teachEffectiveText}
-          <details class="teach-raw">
-            <summary>Show raw recognizer transcript</summary>
-            <div>{teachRawText}</div>
-          </details>
-
-          <div class="field teach-editor">
-            <label for="teach-correction">Correct the transcript</label>
-            <textarea
-              id="teach-correction"
-              class="transcribe-result"
-              bind:value={teachCorrectedText}
-              disabled={teachRecording || teachTranscribing}
-              rows="6"
-            ></textarea>
-            <div class="hotkey-hint">Fix only the words you want Sagascript to learn. Punctuation, deletions and broad rewrites are ignored.</div>
-          </div>
-          <button
-            class="primary teach-action"
-            onclick={findTeachSuggestions}
-            disabled={teachRecording || teachTranscribing}
-          >
-            Find likely dictionary entries
-          </button>
-        {/if}
-
-        {#if teachSuggestions.length > 0}
-          <div class="result-label">Review suggestions</div>
-          <div class="hotkey-hint">Edit a preferred spelling here, or switch a replacement to a decoder-only hint. To change what was heard, edit the transcript above and analyze again.</div>
-          <div class="teach-suggestions">
-            {#each teachSuggestions as suggestion, index}
-              <div class="teach-suggestion">
-                <input
-                  type="checkbox"
-                  checked={teachSelected[index] ?? false}
-                  onchange={(event) => setTeachSuggestionSelected(index, (event.target as HTMLInputElement).checked)}
-                  aria-label={`Include ${suggestion.canonical}`}
-                  disabled={teachRecording || teachTranscribing}
-                />
-                <div class="teach-suggestion-body">
-                  <input
-                    class="teach-canonical"
-                    value={suggestion.canonical}
-                    oninput={(event) => editTeachSuggestionCanonical(index, (event.target as HTMLInputElement).value)}
-                    aria-label="Preferred spelling"
-                    disabled={teachRecording || teachTranscribing}
-                  />
-                  {#if suggestion.kind === "alias"}
-                    <span class="teach-alias"> heard as “{suggestion.observed}”</span>
-                  {:else}
-                    <span class="teach-alias"> decoder hint only</span>
-                  {/if}
-                  {#if suggestion.observed}
-                    <select
-                      class="teach-kind"
-                      value={suggestion.kind}
-                      onchange={(event) => editTeachSuggestionKind(index, (event.target as HTMLSelectElement).value as GlossarySuggestion["kind"])}
-                      aria-label="Dictionary entry type"
-                      disabled={teachRecording || teachTranscribing}
-                    >
-                      <option value="alias">Replace exact mishearing</option>
-                      <option value="hint_only">Decoder hint only</option>
-                    </select>
-                  {/if}
-                  <span class="teach-context">{suggestion.context}</span>
-                </div>
-              </div>
-            {/each}
-          </div>
-          <button
-            class="primary teach-action"
-            onclick={addTeachSuggestions}
-            disabled={teachRecording || teachTranscribing || !teachSuggestions.some((_, index) => teachSelected[index])}
-          >
-            Add selected to personal dictionary
-          </button>
-        {/if}
-
       {:else if activeTab === "settings"}
         <div class="field">
           <label for="language">Language</label>
@@ -1078,51 +830,7 @@
           </select>
         </div>
 
-        <div class="model-section-label">
-          {languageLabel(settings.language)} models
-        </div>
-
-        <div class="model-picker">
-          {#each models as model}
-            <button
-              class="model-card"
-              class:active={model.active}
-              class:downloading={downloading === model.id}
-              onclick={() => selectModel(model)}
-              disabled={downloading !== null || selecting}
-            >
-              <div class="model-card-header">
-                <span class="model-card-name">{model.display_name}</span>
-                {#if model.active}
-                  <span class="model-badge active-badge">Active</span>
-                {:else if model.downloaded}
-                  <span class="model-badge ready-badge">Ready</span>
-                {:else}
-                  <span class="model-badge download-badge">Download · {model.size_mb} MB</span>
-                {/if}
-              </div>
-              <div class="model-card-desc">{model.description}</div>
-              {#if downloading === model.id}
-                <div class="progress-bar">
-                  <div class="progress-fill" style="width: {downloadProgress}%"></div>
-                </div>
-              {/if}
-            </button>
-          {/each}
-        </div>
-
-        {#if modelError}
-          <div class="transcribe-error">{modelError}</div>
-        {/if}
-
-        <div class="model-hint">
-          Pick a size. Larger models are more accurate but take longer to transcribe.
-          {#if models.some(m => !m.downloaded && !m.active)}
-            Models are downloaded once and stored locally.
-          {/if}
-        </div>
-
-        <div class="field-row" style="margin-top: 20px;">
+        <div class="field-row">
           <span class="field-label">Show recording overlay</span>
           <button
             type="button"
@@ -1151,52 +859,96 @@
           </div>
         </div>
 
-        <div class="field">
-          <label for="beam-size">Decoding mode</label>
-          <select id="beam-size" value={settings.beam_size} onchange={onBeamSizeChange}>
-            <option value={0}>Greedy (fast)</option>
-            <option value={5}>Beam search (accurate)</option>
-          </select>
-        </div>
+        <details class="advanced-section">
+          <summary>Advanced</summary>
+          <div class="advanced-content">
+            <p class="advanced-intro">
+              Sagascript automatically chooses the recommended local model for each language.
+              Change these controls only when you have a specific quality or performance need.
+            </p>
 
-        <div class="field-row">
-          <span class="field-label">Temperature fallback</span>
-          <button
-            type="button"
-            class="toggle"
-            class:active={settings.temperature_fallback}
-            onclick={onTemperatureFallbackToggle}
-            role="switch"
-            aria-checked={settings.temperature_fallback}
-            aria-label="Temperature fallback"
-          ></button>
-        </div>
-        <div class="hotkey-hint">Re-decode hard segments; off = faster, less robust.</div>
+            <div class="model-section-label">
+              Manual model choice · {languageLabel(settings.language)}
+            </div>
 
-        <div class="field-row">
-          <span class="field-label">Voice activity detection</span>
-          <button
-            type="button"
-            class="toggle"
-            class:active={settings.vad_enabled}
-            onclick={onVadToggle}
-            role="switch"
-            aria-checked={settings.vad_enabled}
-            aria-label="Voice activity detection"
-          ></button>
-        </div>
-        <div class="hotkey-hint">Skip silence; downloads a small model on first enable.</div>
+            <div class="model-picker">
+              {#each models as model}
+                <button
+                  class="model-card"
+                  class:active={model.active}
+                  class:downloading={downloading === model.id}
+                  onclick={() => selectModel(model)}
+                  disabled={downloading !== null || selecting}
+                >
+                  <div class="model-card-header">
+                    <span class="model-card-name">{model.display_name}</span>
+                    {#if model.active}
+                      <span class="model-badge active-badge">Active</span>
+                    {:else if model.downloaded}
+                      <span class="model-badge ready-badge">Ready</span>
+                    {:else}
+                      <span class="model-badge download-badge">Download · {model.size_mb} MB</span>
+                    {/if}
+                  </div>
+                  <div class="model-card-desc">{model.description}</div>
+                  {#if downloading === model.id}
+                    <div class="progress-bar">
+                      <div class="progress-fill" style="width: {downloadProgress}%"></div>
+                    </div>
+                  {/if}
+                </button>
+              {/each}
+            </div>
 
-        <div class="field">
-          <span class="field-label">Version</span>
-          <div class="version-text">
-            {#if buildInfo}
-              Sagascript {buildInfo.version} ({buildInfo.git_hash}) - Built {buildInfo.build_date}
-            {:else}
-              Sagascript
+            {#if modelError}
+              <div class="transcribe-error">{modelError}</div>
             {/if}
+
+            <div class="model-hint">
+              Larger models are more accurate but take longer to transcribe.
+              {#if models.some(m => !m.downloaded && !m.active)}
+                Models are downloaded once and stored locally.
+              {/if}
+            </div>
+
+            <div class="field advanced-field">
+              <label for="beam-size">Decoding mode</label>
+              <select id="beam-size" value={settings.beam_size} onchange={onBeamSizeChange}>
+                <option value={0}>Greedy (fast)</option>
+                <option value={5}>Beam search (accurate)</option>
+              </select>
+            </div>
+
+            <div class="field-row">
+              <span class="field-label">Temperature fallback</span>
+              <button
+                type="button"
+                class="toggle"
+                class:active={settings.temperature_fallback}
+                onclick={onTemperatureFallbackToggle}
+                role="switch"
+                aria-checked={settings.temperature_fallback}
+                aria-label="Temperature fallback"
+              ></button>
+            </div>
+            <div class="hotkey-hint">Re-decode hard segments; off is faster but less robust.</div>
+
+            <div class="field-row advanced-toggle">
+              <span class="field-label">Voice activity detection</span>
+              <button
+                type="button"
+                class="toggle"
+                class:active={settings.vad_enabled}
+                onclick={onVadToggle}
+                role="switch"
+                aria-checked={settings.vad_enabled}
+                aria-label="Voice activity detection"
+              ></button>
+            </div>
+            <div class="hotkey-hint">Skip silence; downloads a small model on first enable.</div>
           </div>
-        </div>
+        </details>
+
       {/if}
     </div>
   {:else}
@@ -1208,6 +960,14 @@
       {/if}
     </div>
   {/if}
+
+  <div class="build-footer" aria-label="Build information">
+    {#if buildInfo}
+      Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}
+    {:else}
+      Version information unavailable
+    {/if}
+  </div>
 
   {#if downloading}
     <div class="download-status-bar">
@@ -1229,17 +989,9 @@
     height: 100vh;
   }
 
-  .titlebar {
-    padding: 16px 20px 8px;
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text);
-    -webkit-app-region: drag;
-  }
-
   .tabs {
     display: flex;
-    padding: 0 20px;
+    padding: 12px 20px 0;
     gap: 4px;
     border-bottom: 1px solid var(--border);
   }
@@ -1307,11 +1059,6 @@
     color: var(--text);
   }
 
-  .active-config-warn {
-    color: var(--danger);
-    font-size: 11px;
-  }
-
   .active-config-link {
     font-size: 11px;
     color: var(--accent);
@@ -1369,12 +1116,48 @@
 
   .profile-name {
     min-width: 0;
-    flex: 1;
+    width: auto;
+    flex: 1 1 52%;
     font-weight: 600;
+  }
+
+  .profile-row > select {
+    min-width: 0;
+    width: auto;
+    flex: 1 1 48%;
   }
 
   .profile-row .hotkey-recorder {
     flex: 1;
+  }
+
+  .profile-engine {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 3px;
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  .profile-engine.missing {
+    color: var(--danger);
+  }
+
+  .profile-engine .link-btn:disabled {
+    cursor: wait;
+    opacity: 0.7;
+  }
+
+  .profile-engine-action {
+    display: inline-block;
+    flex: 0 0 152px;
+    width: 152px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
   }
 
   .profile-remove {
@@ -1413,6 +1196,57 @@
   }
 
   /* Model picker */
+
+  .advanced-section {
+    margin: 22px 0 18px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .advanced-section summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 13px 0;
+    color: var(--text);
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .advanced-section summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .advanced-section summary::after {
+    content: "+";
+    color: var(--text-muted);
+    font-size: 18px;
+    font-weight: 400;
+  }
+
+  .advanced-section[open] summary::after {
+    content: "−";
+  }
+
+  .advanced-content {
+    padding: 2px 0 18px;
+  }
+
+  .advanced-intro {
+    margin-bottom: 16px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+
+  .advanced-field {
+    margin-top: 20px;
+  }
+
+  .advanced-toggle {
+    margin-top: 16px;
+  }
 
   .model-section-label {
     font-size: 12px;
@@ -1562,9 +1396,13 @@
     transition: width 0.2s;
   }
 
-  .version-text {
+  .build-footer {
+    padding: 8px 20px 10px;
+    border-top: 1px solid var(--border);
     color: var(--text-muted);
-    font-size: 12px;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
   }
 
   .initial-prompt-input {
@@ -1740,131 +1578,6 @@
 
   .transcribe-result:focus {
     border-color: var(--accent);
-  }
-
-  /* Teach tab */
-
-  .teach-intro {
-    margin-bottom: 18px;
-  }
-
-  .teach-title {
-    margin-bottom: 6px;
-    color: var(--text);
-    font-size: 15px;
-    font-weight: 600;
-  }
-
-  .teach-message {
-    margin-top: 12px;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--bg-secondary);
-    color: var(--text-muted);
-    font-size: 12px;
-  }
-
-  .teach-raw {
-    margin-top: 14px;
-    color: var(--text-muted);
-    font-size: 12px;
-  }
-
-  .teach-raw div {
-    margin-top: 6px;
-    padding: 8px 10px;
-    border-radius: var(--radius);
-    background: var(--bg-secondary);
-    white-space: pre-wrap;
-  }
-
-  .teach-editor {
-    margin-top: 14px;
-  }
-
-  .teach-editor .transcribe-result {
-    box-sizing: border-box;
-    max-height: 240px;
-  }
-
-  .teach-action {
-    width: 100%;
-    margin-top: 10px;
-  }
-
-  .teach-import-btn {
-    width: 100%;
-    margin-top: 8px;
-    padding: 9px 14px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: transparent;
-    color: var(--text-muted);
-  }
-
-  .teach-suggestions {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .teach-suggestion {
-    display: flex;
-    align-items: flex-start;
-    gap: 9px;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--bg-secondary);
-    color: var(--text);
-    font-size: 13px;
-  }
-
-  .teach-suggestion input {
-    margin-top: 2px;
-    accent-color: var(--accent);
-  }
-
-  .teach-suggestion-body {
-    min-width: 0;
-    flex: 1;
-  }
-
-  .teach-canonical,
-  .teach-kind {
-    box-sizing: border-box;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    background: var(--bg);
-    color: var(--text);
-    font: inherit;
-  }
-
-  .teach-canonical {
-    width: 100%;
-    margin-bottom: 5px;
-    padding: 5px 7px;
-    font-weight: 600;
-  }
-
-  .teach-kind {
-    display: block;
-    width: 100%;
-    margin-top: 7px;
-    padding: 5px 7px;
-    font-size: 12px;
-  }
-
-  .teach-alias {
-    color: var(--text-muted);
-  }
-
-  .teach-context {
-    display: block;
-    margin-top: 3px;
-    color: var(--text-muted);
-    font-size: 11px;
   }
 
   /* Test dictation section */

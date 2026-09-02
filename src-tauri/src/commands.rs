@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{Manager, State};
+use tauri::State;
 use tracing::{error, info, warn};
 
 /// Maximum time to wait for whisper inference before aborting (seconds)
@@ -240,11 +240,6 @@ pub async fn set_language(
     set_language_for_controller(&controller, &app, language)
 }
 
-pub fn set_language_for_app(app: &tauri::AppHandle, language: Language) -> Result<(), String> {
-    let controller: tauri::State<'_, SharedController> = app.state();
-    set_language_for_controller(&controller, app, language)
-}
-
 fn set_language_for_controller(
     controller: &State<'_, SharedController>,
     app: &tauri::AppHandle,
@@ -256,7 +251,7 @@ fn set_language_for_controller(
     let mut ctrl = controller.lock().unwrap();
     ctrl.update_settings(persisted.clone());
     drop(ctrl);
-    crate::update_language_menu(app, persisted.language);
+    crate::update_profiles_menu(app, &persisted.resolved_hotkey_profiles());
     info!("Language set to {:?}", language);
     Ok(())
 }
@@ -372,11 +367,15 @@ pub async fn set_hotkey_profiles(
             settings.replace_hotkey_profiles(profiles.clone())?;
             Ok(())
         })?;
-        controller.lock().unwrap().update_settings(persisted);
+        controller
+            .lock()
+            .unwrap()
+            .update_settings(persisted.clone());
         let change = health.record(&new_primary, None, old_operational);
         if change.changed {
             let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
         }
+        crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
         return Ok(());
     }
 
@@ -490,6 +489,8 @@ pub async fn set_hotkey_profiles(
     if change.changed {
         let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
     }
+
+    crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
 
     info!("Hotkey profiles changed: {} registered", new_shortcuts.len());
     Ok(())
@@ -827,6 +828,28 @@ pub async fn get_model_info(
             active: *m == effective,
         })
         .collect())
+}
+
+/// Return the effective speech engine for one profile language. This keeps the
+/// normal Dictate surface model-name-free while still giving it enough state to
+/// offer a direct download when an upgraded or newly added profile is not ready.
+#[tauri::command]
+pub async fn get_effective_model_info(
+    controller: State<'_, SharedController>,
+    language: Language,
+) -> Result<ModelInfo, String> {
+    let ctrl = controller.lock().unwrap();
+    let model = ctrl.settings().effective_model_for(language);
+    Ok(ModelInfo {
+        id: serde_json::to_value(model)
+            .and_then(serde_json::from_value::<String>)
+            .unwrap_or_else(|_| format!("{model:?}")),
+        display_name: model.display_name().to_string(),
+        description: model.description().to_string(),
+        size_mb: model.size_mb(),
+        downloaded: model::is_model_downloaded(model),
+        active: true,
+    })
 }
 
 // -- Model download --
@@ -1611,6 +1634,15 @@ pub async fn request_accessibility_permission() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         crate::platform::macos::request_accessibility_permission()?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_accessibility_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::platform::macos::open_accessibility_settings()?;
     }
     Ok(())
 }
