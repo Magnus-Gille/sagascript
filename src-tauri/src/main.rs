@@ -2193,13 +2193,18 @@ mod tests {
 
     #[test]
     fn profile_menu_shortcut_formats_command_or_control_aliases() {
+        let expected = if cfg!(target_os = "macos") {
+            "⇧⌘Space"
+        } else {
+            "⌃⇧Space"
+        };
         for shortcut in [
             "CommandOrControl+Shift+Space",
             "CommandOrCtrl+Shift+Space",
             "CmdOrCtrl+Shift+Space",
             "CmdOrControl+Shift+Space",
         ] {
-            assert_eq!(format_menu_shortcut(shortcut), "⇧⌘Space");
+            assert_eq!(format_menu_shortcut(shortcut), expected);
         }
     }
 
