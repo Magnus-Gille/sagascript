@@ -8,6 +8,7 @@ use ndarray::Array3;
 use ort::{session::Session, value::Tensor};
 use tracing::info;
 
+use super::ORT_INTRA_THREADS;
 use crate::diarization::fbank;
 use crate::error::DictationError;
 
@@ -26,9 +27,17 @@ impl Embedder {
     pub fn new(model_path: &Path) -> Result<Self, DictationError> {
         let session = Session::builder()
             .map_err(|e| DictationError::DiarizationError(format!("Failed to create ORT session builder: {e}")))?
+            .with_intra_threads(ORT_INTRA_THREADS)
+            .map_err(|e| DictationError::DiarizationError(format!("Failed to configure ORT intra-op threads: {e}")))?
+            .with_inter_threads(1)
+            .map_err(|e| DictationError::DiarizationError(format!("Failed to configure ORT inter-op threads: {e}")))?
             .commit_from_file(model_path)
             .map_err(|e| DictationError::DiarizationError(format!("Failed to load embedding model: {e}")))?;
-        info!("Embedding model loaded from {}", model_path.display());
+        info!(
+            "Embedding model loaded from {} (ORT intra-op {}, inter-op 1)",
+            model_path.display(),
+            ORT_INTRA_THREADS
+        );
         // Log expected input/output shapes so we can verify tensor orientation
         info!("Embedding model input: {:?}", session.inputs().iter().map(|i| format!("'{}' {:?}", i.name(), i.dtype())).collect::<Vec<_>>());
         Ok(Self { session })

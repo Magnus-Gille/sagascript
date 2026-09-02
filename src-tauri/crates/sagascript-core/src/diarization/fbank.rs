@@ -3,6 +3,8 @@
 /// Matches WeSpeaker ResNet34-LM training configuration:
 /// - 16kHz input, 80 mel bins, 25ms window, 10ms hop
 /// - Global mean subtraction across all frames
+use std::sync::OnceLock;
+
 use rustfft::{FftPlanner, num_complex::Complex};
 
 const SAMPLE_RATE: f32 = 16_000.0;
@@ -59,6 +61,20 @@ fn mel_filterbank() -> Vec<[f32; N_FREQS]> {
     filters
 }
 
+fn cached_mel_filterbank() -> &'static [[f32; N_FREQS]] {
+    static FILTERS: OnceLock<Vec<[f32; N_FREQS]>> = OnceLock::new();
+    FILTERS.get_or_init(mel_filterbank)
+}
+
+fn hann_window() -> &'static [f32; N_FFT] {
+    static HANN: OnceLock<[f32; N_FFT]> = OnceLock::new();
+    HANN.get_or_init(|| {
+        std::array::from_fn(|i| {
+            0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (N_FFT - 1) as f32).cos())
+        })
+    })
+}
+
 /// Compute 80-dim log-mel filterbank features from 16kHz mono f32 audio.
 ///
 /// Returns one feature vector per frame. Frame count = `(audio.len() - N_FFT) / HOP_LENGTH + 1`.
@@ -72,37 +88,32 @@ pub fn compute_fbank(audio: &[f32]) -> Vec<[f32; N_MELS]> {
 
     let n_frames = (audio.len() - N_FFT) / HOP_LENGTH + 1;
 
-    // Hann window
-    let hann: Vec<f32> = (0..N_FFT)
-        .map(|i| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (N_FFT - 1) as f32).cos()))
-        .collect();
-
-    let filters = mel_filterbank();
+    let hann = hann_window();
+    let filters = cached_mel_filterbank();
 
     // FFT planner (reused across frames)
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(N_FFT);
 
     let mut features = vec![[0.0f32; N_MELS]; n_frames];
+    let mut buffer = vec![Complex::new(0.0f32, 0.0f32); N_FFT];
+    let mut power = vec![0.0f32; N_FREQS];
 
     for (frame_idx, frame_features) in features.iter_mut().enumerate() {
         let start = frame_idx * HOP_LENGTH;
         let frame = &audio[start..start + N_FFT];
 
         // Apply Hann window and convert to complex
-        let mut buffer: Vec<Complex<f32>> = frame
-            .iter()
-            .zip(hann.iter())
-            .map(|(&s, &w)| Complex::new(s * w, 0.0))
-            .collect();
+        for ((value, &sample), &window) in buffer.iter_mut().zip(frame).zip(hann) {
+            *value = Complex::new(sample * window, 0.0);
+        }
 
         fft.process(&mut buffer);
 
         // Power spectrum (one-sided): |X(k)|^2
-        let power: Vec<f32> = buffer[..N_FREQS]
-            .iter()
-            .map(|c| c.norm_sqr())
-            .collect();
+        for (value, spectrum) in power.iter_mut().zip(&buffer[..N_FREQS]) {
+            *value = spectrum.norm_sqr();
+        }
 
         // Apply mel filterbank and log
         for m in 0..N_MELS {
@@ -226,6 +237,15 @@ mod tests {
             let sum: f32 = row.iter().sum();
             assert!(sum > 0.0, "mel filter {m} should have positive sum, got {sum}");
         }
+    }
+
+    #[test]
+    fn coefficient_tables_are_reused() {
+        assert!(std::ptr::eq(hann_window(), hann_window()));
+        assert!(std::ptr::eq(
+            cached_mel_filterbank(),
+            cached_mel_filterbank()
+        ));
     }
 
     #[test]
