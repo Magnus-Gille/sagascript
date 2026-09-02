@@ -207,8 +207,14 @@ Open release gates:
 - Complete a visual desktop/mobile pass of the final product page. The build
   and responsive CSS checks pass, but the browser preview surface was not
   available for the first attempt.
-- Create the final release commit, then build and verify an artifact whose
-  embedded revision matches that exact commit.
+- A local Apple Silicon build from exact revision
+  `e42d4cd4e91211a55310d0d6c4b03cf336160b7e` produced the expected app and
+  DMG metadata, but signing from the Codex process omitted a usable certificate
+  chain: strict `codesign` verification rejected both artifacts. Those
+  artifacts are quarantined from installation and publication. Produce the
+  authoritative Developer ID signed and notarized artifacts through the
+  release workflow's ephemeral keychain, or rebuild from the owner's Terminal,
+  then verify the newly embedded exact revision.
 - Run the signed/notarized clean-install acceptance: DMG drag-and-drop,
   Gatekeeper, Microphone, Accessibility with an unrelated Settings pane open,
   model download, dictation, auto-paste, file transcription, relaunch, update
