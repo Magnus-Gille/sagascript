@@ -141,6 +141,10 @@ export async function getModelInfo(): Promise<WhisperModel[]> {
   return invoke("get_model_info");
 }
 
+export async function getEffectiveModelInfo(language: Language): Promise<WhisperModel> {
+  return invoke("get_effective_model_info", { language });
+}
+
 export async function getLoadedModel(): Promise<LoadedModelInfo> {
   return invoke("get_loaded_model");
 }
@@ -228,6 +232,10 @@ export async function checkAccessibilityPermission(): Promise<boolean> {
 
 export async function requestAccessibilityPermission(): Promise<void> {
   return invoke("request_accessibility_permission");
+}
+
+export async function openAccessibilitySettings(): Promise<void> {
+  return invoke("open_accessibility_settings");
 }
 
 export async function microphoneStatus(): Promise<string> {

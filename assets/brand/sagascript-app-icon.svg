@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Sagascript app icon</title>
+  <desc id="desc">A single soft ivory S with rounded terminals on a charcoal rounded square.</desc>
+  <rect x="64" y="64" width="896" height="896" rx="210" fill="#11110f" />
+  <path
+    d="M 694 292 C 653 191 526 166 419 205 C 323 240 268 324 294 404 C 316 471 385 512 515 571 C 610 615 662 664 640 734 C 614 818 492 863 384 824 C 322 802 285 757 272 711"
+    fill="none"
+    stroke="#f6f4ef"
+    stroke-width="176"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

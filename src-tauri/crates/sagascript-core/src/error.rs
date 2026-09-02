@@ -35,6 +35,9 @@ pub enum DictationError {
     #[error("Settings error: {0}")]
     SettingsError(String),
 
+    #[error("Application launch error: {0}")]
+    ApplicationLaunchError(String),
+
     #[error("Paste error: {0}")]
     PasteError(String),
 
@@ -92,6 +95,9 @@ mod tests {
 
         let err = DictationError::ModelDownloadFailed("404".into());
         assert_eq!(err.to_string(), "Model download failed: 404");
+
+        let err = DictationError::ApplicationLaunchError("not installed".into());
+        assert_eq!(err.to_string(), "Application launch error: not installed");
 
         let err = DictationError::FileDecodeError("corrupt".into());
         assert_eq!(err.to_string(), "File decode error: corrupt");

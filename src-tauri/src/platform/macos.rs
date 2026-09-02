@@ -37,6 +37,13 @@ fn interpret_open_result(result: io::Result<ExitStatus>) -> Result<(), String> {
     }
 }
 
+/// Bring the Accessibility pane forward without asking macOS to show its
+/// permission prompt again. This is used when onboarding is already polling
+/// and the user only needs to return to the correct System Settings pane.
+pub fn open_accessibility_settings() -> Result<(), String> {
+    interpret_open_result(accessibility_settings_command().status())
+}
+
 /// Request Accessibility permission and bring the relevant System Settings
 /// pane forward. AXTrustedCheckOptionPrompt alone does not reliably navigate
 /// an already-running System Settings instance away from its current pane.
@@ -49,7 +56,7 @@ pub fn request_accessibility_permission() -> Result<(), String> {
         AXIsProcessTrustedWithOptions(options.as_CFTypeRef());
     }
 
-    interpret_open_result(accessibility_settings_command().status())
+    open_accessibility_settings()
 }
 
 /// Set the app as an accessory (no dock icon)

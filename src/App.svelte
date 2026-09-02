@@ -4,6 +4,7 @@
   import Onboarding from "./lib/Onboarding.svelte";
   import Overlay from "./lib/Overlay.svelte";
   import { getSettings } from "./lib/api";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
 
   // null = loading, true = show onboarding, false = show settings
   let showOnboarding: boolean | null = null;
@@ -34,12 +35,17 @@
     }
   });
 
-  function onOnboardingComplete() {
+  async function onOnboardingComplete() {
     showOnboarding = false;
     // Strip onboarding param from URL
     const url = new URL(window.location.href);
     url.searchParams.delete("onboarding");
     window.history.replaceState({}, "", url.toString());
+    try {
+      await getCurrentWindow().hide();
+    } catch (error) {
+      console.error("Failed to hide completed onboarding window", error);
+    }
   }
 </script>
 

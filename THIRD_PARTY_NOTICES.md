@@ -588,10 +588,10 @@ link; the upstream repository is authoritative for its license terms.
 | magic-string | 0.30.21 | MIT | [upstream](https://www.npmjs.com/package/magic-string/v/0.30.21) |
 | mri | 1.2.0 | MIT | [upstream](https://www.npmjs.com/package/mri/v/1.2.0) |
 | ms | 2.1.3 | MIT | [upstream](https://www.npmjs.com/package/ms/v/2.1.3) |
-| nanoid | 3.3.15 | MIT | [upstream](https://www.npmjs.com/package/nanoid/v/3.3.15) |
+| nanoid | 3.3.18 | MIT | [upstream](https://www.npmjs.com/package/nanoid/v/3.3.18) |
 | picocolors | 1.1.1 | ISC | [upstream](https://www.npmjs.com/package/picocolors/v/1.1.1) |
 | picomatch | 4.0.5 | MIT | [upstream](https://www.npmjs.com/package/picomatch/v/4.0.5) |
-| postcss | 8.5.16 | MIT | [upstream](https://www.npmjs.com/package/postcss/v/8.5.16) |
+| postcss | 8.5.26 | MIT | [upstream](https://www.npmjs.com/package/postcss/v/8.5.26) |
 | readdirp | 4.1.2 | MIT | [upstream](https://www.npmjs.com/package/readdirp/v/4.1.2) |
 | rollup | 4.62.2 | MIT | [upstream](https://www.npmjs.com/package/rollup/v/4.62.2) |
 | sade | 1.8.1 | MIT | [upstream](https://www.npmjs.com/package/sade/v/1.8.1) |
@@ -3188,7 +3188,7 @@ THE SOFTWARE.
 
 ### 33dc6a453e22
 
-Components: npm nanoid@3.3.15
+Components: npm nanoid@3.3.18
 
 Source filenames: LICENSE
 
@@ -13943,7 +13943,7 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ### a2764f26c504
 
-Components: npm postcss@8.5.16
+Components: npm postcss@8.5.26
 
 Source filenames: LICENSE
 
