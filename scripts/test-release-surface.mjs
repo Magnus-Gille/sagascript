@@ -18,6 +18,10 @@ const mainSource = await readFile(
   new URL("../src-tauri/src/main.rs", import.meta.url),
   "utf8",
 );
+const appSource = await readFile(
+  new URL("../src/App.svelte", import.meta.url),
+  "utf8",
+);
 const brandMarkSource = await readFile(
   new URL("../assets/brand/sagascript-mark.svg", import.meta.url),
   "utf8",
@@ -90,6 +94,22 @@ test("dictation profiles expose missing speech engines without opening Advanced"
   assert.match(ordinarySource, /getEffectiveModelInfo/);
   assert.match(ordinarySource, /Download speech engine/);
   assert.match(ordinarySource, /Speech engine ready/);
+  assert.match(ordinarySource, /class="link-btn profile-engine-action"/);
+  assert.match(
+    settingsSource,
+    /\.profile-engine-action\s*\{[^}]*flex:\s*0 0 152px;[^}]*white-space:\s*nowrap;[^}]*overflow:\s*hidden;/,
+    "download progress must keep a stable layout slot while its label changes",
+  );
+});
+
+test("Dictate reflects backend loading and transcription instead of offering a conflicting start", () => {
+  assert.match(settingsSource, /backendDictationState/);
+  assert.match(
+    settingsSource,
+    /\["idle", "recording", "loading_model", "transcribing"\]\.includes\(nextState\)/,
+  );
+  assert.match(settingsSource, /backendDictationState === "loading_model"/);
+  assert.match(settingsSource, /Preparing speech engine\.\.\./);
 });
 
 test("onboarding prevents duplicate setup requests and exposes language selection", () => {
@@ -126,10 +146,34 @@ test("Accessibility onboarding reopens System Settings without prompting again",
   );
 });
 
-test("menu bar uses the one monochrome S template without a text marker", () => {
-  assert.match(mainSource, /include_bytes!\("\.\.\/icons\/tray-icon@2x\.png"\)/);
-  assert.match(mainSource, /\.icon_as_template\(true\)/);
-  assert.doesNotMatch(mainSource, /\.title\("S"\)/);
+test("menu bar uses compact native state markers", () => {
+  assert.match(mainSource, /TrayIconBuilder::with_id\("main"\)[\s\S]*?\.title\("S"\)/);
+  assert.match(mainSource, /tray\.set_visible\(true\)/);
+  assert.doesNotMatch(mainSource, /include_bytes!\("\.\.\/icons\/tray-icon(?:@2x)?\.png"\)/);
+  assert.doesNotMatch(mainSource, /\.icon_as_template\(true\)/);
+  assert.match(mainSource, /"recording"\s*=>\s*\("Sagascript - Recording\.\.\."\s*,\s*"●"/);
+  assert.match(mainSource, /"transcribing"\s*=>\s*\("Sagascript - Transcribing\.\.\."\s*,\s*"…"/);
+});
+
+test("only background startup stays headless after onboarding", () => {
+  assert.match(mainSource, /GUI_BACKGROUND_ARG/);
+  assert.match(mainSource, /MacosLauncher::LaunchAgent,[\s\S]*Some\(vec!\[sagascript_cli::open::GUI_BACKGROUND_ARG\]\)/);
+  assert.match(mainSource, /InitialWindowRequest::Hidden/);
+  assert.match(mainSource, /InitialWindowRequest::Settings/);
+  assert.match(mainSource, /InitialWindowRequest::Onboarding/);
+  assert.doesNotMatch(mainSource, /initial_main_window_tab/);
+});
+
+test("deliberate macOS reopen requests reveal Settings", () => {
+  assert.match(
+    mainSource,
+    /tauri::RunEvent::Reopen \{ \.\. \} => \{[\s\S]*?open_settings_window\(_app_handle, None\);[\s\S]*?\}/,
+  );
+});
+
+test("finishing onboarding hides its main window", () => {
+  assert.match(appSource, /getCurrentWindow\(\)\.hide\(\)/);
+  assert.match(appSource, /Failed to hide completed onboarding window/);
 });
 
 test("profile and update menu states remain explicit after interaction", () => {

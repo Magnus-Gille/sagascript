@@ -446,21 +446,26 @@ fn acquire_gui_instance_guard_at(path: &Path) -> Result<GuiInstanceGuard, GuiIns
 }
 
 fn main() {
+    let gui_launch_mode = gui_launch_mode(std::env::args_os());
+
     // CLI mode: if a subcommand is given, run CLI and exit. The desktop
     // binary is a full CLI (CLI-first design) — the GUI only launches on a
-    // bare invocation.
-    if let Some(parsed) = sagascript_cli::try_parse() {
-        // CLI mode uses warn-level logging to keep stdout clean
-        let configured_filter = std::env::var("RUST_LOG").ok();
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
-                configured_filter.as_deref(),
-                "warn",
-            )))
-            .with_writer(std::io::stderr)
-            .init();
-        sagascript_cli::run(parsed);
-        return;
+    // bare invocation. The private GUI-open marker is consumed here rather
+    // than passed to clap so `sagascript open` can explicitly reveal Settings.
+    if gui_launch_mode == GuiLaunchMode::Standard {
+        if let Some(parsed) = sagascript_cli::try_parse() {
+            // CLI mode uses warn-level logging to keep stdout clean
+            let configured_filter = std::env::var("RUST_LOG").ok();
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
+                    configured_filter.as_deref(),
+                    "warn",
+                )))
+                .with_writer(std::io::stderr)
+                .init();
+            sagascript_cli::run(parsed);
+            return;
+        }
     }
 
     // GUI mode: initialize tracing (console logging)
@@ -566,7 +571,7 @@ fn main() {
         )
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![sagascript_cli::open::GUI_BACKGROUND_ARG]),
         ))
         .plugin(tauri_plugin_dialog::init())
         .manage(controller)
@@ -579,7 +584,7 @@ fn main() {
             checking: false,
             available_version: None,
         }) as SharedUpdateMenuState)
-        .setup(|app| {
+        .setup(move |app| {
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
             platform::macos::set_activation_policy_accessory();
@@ -730,17 +735,13 @@ fn main() {
                 ],
             )?;
 
-            let tray_icon =
-                tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon@2x.png"))?;
-
-            let _tray = TrayIconBuilder::with_id("main")
+            let tray = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .tooltip("Sagascript")
-                // One monochrome S template is used in every state. The former
-                // parchment bitmap and changing text markers are intentionally
-                // gone; status belongs in the tooltip and first menu row.
-                .icon(tray_icon)
-                .icon_as_template(true)
+                // macOS 26 can register an image-backed status item but paint
+                // it blank. Compact native text stays visible: S while idle,
+                // then a state marker while recording or transcribing.
+                .title("S")
                 .on_menu_event(move |app, event| {
                     match event.id().as_ref() {
                     "quit" => {
@@ -787,6 +788,8 @@ fn main() {
                 })
                 .build(app)?;
 
+            tray.set_visible(true)?;
+
             info!("Tray icon created");
 
             // Render the initial tray state through the same path as later
@@ -812,17 +815,24 @@ fn main() {
             // Watch settings file for external changes (e.g. `sagascript config set`)
             start_settings_watcher(app.handle().clone());
 
-            // A bare GUI launch is an explicit request to see Sagascript. The
-            // app has no configured Tauri windows, so completed-onboarding
-            // launches must open Settings here too instead of leaving the user
-            // with only a menu-bar icon.
+            // Only the login-item marker stays headless after onboarding.
+            // A normal Finder/Spotlight launch is deliberate and opens
+            // Settings; hotkey recording/transcription never enters this path.
             {
                 let settings = sagascript_core::settings::store::load();
-                let initial_tab = initial_main_window_tab(settings.has_completed_onboarding);
-                if initial_tab == Some("onboarding") {
-                    info!("First launch detected, opening onboarding");
+                match initial_window_request(settings.has_completed_onboarding, gui_launch_mode) {
+                    InitialWindowRequest::Hidden => {
+                        info!("Background launch complete; Settings remains hidden");
+                    }
+                    InitialWindowRequest::Settings => {
+                        info!("Foreground GUI launch requested");
+                        open_settings_window(app.handle(), None);
+                    }
+                    InitialWindowRequest::Onboarding => {
+                        info!("First launch detected, opening onboarding");
+                        open_settings_window(app.handle(), Some("onboarding"));
+                    }
                 }
-                open_settings_window(app.handle(), initial_tab);
             }
 
             // Preload + warm the bounded set of models selected by the hotkey
@@ -998,13 +1008,13 @@ fn main() {
 /// warning sticky.
 fn tray_label(state: &str, hotkey_failed: bool) -> (&'static str, &'static str, &'static str) {
     if hotkey_failed {
-        return ("Sagascript - Hotkey unavailable", "", "Hotkey unavailable");
+        return ("Sagascript - Hotkey unavailable", "!", "Hotkey unavailable");
     }
     match state {
-        "recording" => ("Sagascript - Recording...", "", "Recording..."),
-        "loading_model" => ("Sagascript - Loading model...", "", "Loading model..."),
-        "transcribing" => ("Sagascript - Transcribing...", "", "Transcribing..."),
-        _ => ("Sagascript", "", "Idle"),
+        "recording" => ("Sagascript - Recording...", "●", "Recording..."),
+        "loading_model" => ("Sagascript - Loading model...", "…", "Loading model..."),
+        "transcribing" => ("Sagascript - Transcribing...", "…", "Transcribing..."),
+        _ => ("Sagascript", "S", "Idle"),
     }
 }
 
@@ -1019,7 +1029,7 @@ fn update_tray_status(app: &tauri::AppHandle, state: &str) {
 
     if let Some(tray) = app.tray_by_id("main") {
         let _ = tray.set_tooltip(Some(tooltip));
-        let _ = tray.set_title((!title.is_empty()).then_some(title));
+        let _ = tray.set_title(Some(title));
     }
 
     set_status_menu_text(app, &format!("Sagascript - {menu_text}"));
@@ -1107,11 +1117,48 @@ fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
     }
 }
 
-fn initial_main_window_tab(has_completed_onboarding: bool) -> Option<&'static str> {
-    if has_completed_onboarding {
-        None
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitialWindowRequest {
+    Hidden,
+    Settings,
+    Onboarding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuiLaunchMode {
+    Standard,
+    ShowSettings,
+    Background,
+}
+
+fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLaunchMode {
+    let mut args = args.into_iter();
+    let _program = args.next();
+    match (args.next(), args.next()) {
+        (Some(argument), None)
+            if argument == std::ffi::OsStr::new(sagascript_cli::open::GUI_OPEN_ARG) =>
+        {
+            GuiLaunchMode::ShowSettings
+        }
+        (Some(argument), None)
+            if argument == std::ffi::OsStr::new(sagascript_cli::open::GUI_BACKGROUND_ARG) =>
+        {
+            GuiLaunchMode::Background
+        }
+        _ => GuiLaunchMode::Standard,
+    }
+}
+
+fn initial_window_request(
+    has_completed_onboarding: bool,
+    launch_mode: GuiLaunchMode,
+) -> InitialWindowRequest {
+    if !has_completed_onboarding {
+        InitialWindowRequest::Onboarding
+    } else if launch_mode == GuiLaunchMode::Background {
+        InitialWindowRequest::Hidden
     } else {
-        Some("onboarding")
+        InitialWindowRequest::Settings
     }
 }
 
@@ -1725,13 +1772,58 @@ mod tests {
     }
 
     #[test]
-    fn completed_onboarding_starts_on_the_settings_view() {
-        assert_eq!(initial_main_window_tab(true), None);
+    fn completed_onboarding_normal_launch_opens_settings() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::Standard),
+            InitialWindowRequest::Settings
+        );
     }
 
     #[test]
-    fn incomplete_onboarding_starts_on_the_onboarding_view() {
-        assert_eq!(initial_main_window_tab(false), Some("onboarding"));
+    fn explicit_open_starts_on_the_settings_view() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::ShowSettings),
+            InitialWindowRequest::Settings
+        );
+    }
+
+    #[test]
+    fn completed_onboarding_background_launch_stays_hidden() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::Background),
+            InitialWindowRequest::Hidden
+        );
+    }
+
+    #[test]
+    fn incomplete_onboarding_starts_on_the_onboarding_view_even_when_headless() {
+        assert_eq!(
+            initial_window_request(false, GuiLaunchMode::Background),
+            InitialWindowRequest::Onboarding
+        );
+    }
+
+    #[test]
+    fn private_gui_markers_are_accepted_only_as_the_sole_argument() {
+        use std::ffi::OsString;
+
+        let mode = |args: &[&str]| {
+            gui_launch_mode(args.iter().map(OsString::from).collect::<Vec<_>>())
+        };
+
+        assert_eq!(mode(&["sagascript"]), GuiLaunchMode::Standard);
+        assert_eq!(
+            mode(&["sagascript", sagascript_cli::open::GUI_OPEN_ARG]),
+            GuiLaunchMode::ShowSettings
+        );
+        assert_eq!(
+            mode(&["sagascript", sagascript_cli::open::GUI_BACKGROUND_ARG]),
+            GuiLaunchMode::Background
+        );
+        assert_eq!(
+            mode(&["sagascript", "config", sagascript_cli::open::GUI_OPEN_ARG]),
+            GuiLaunchMode::Standard
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -1962,23 +2054,24 @@ mod tests {
 
     #[test]
     fn tray_label_idle_not_failed() {
-        assert_eq!(tray_label("idle", false), ("Sagascript", "", "Idle"));
+        assert_eq!(tray_label("idle", false), ("Sagascript", "S", "Idle"));
     }
 
     #[test]
     fn tray_label_recording_not_failed() {
         assert_eq!(
             tray_label("recording", false),
-            ("Sagascript - Recording...", "", "Recording...")
+            ("Sagascript - Recording...", "●", "Recording...")
         );
     }
 
     #[test]
-    fn tray_status_never_adds_text_beside_the_template_icon() {
-        for state in ["idle", "recording", "loading_model", "transcribing"] {
-            assert_eq!(tray_label(state, false).1, "");
-        }
-        assert_eq!(tray_label("idle", true).1, "");
+    fn tray_status_uses_compact_native_state_markers() {
+        assert_eq!(tray_label("idle", false).1, "S");
+        assert_eq!(tray_label("recording", false).1, "●");
+        assert_eq!(tray_label("loading_model", false).1, "…");
+        assert_eq!(tray_label("transcribing", false).1, "…");
+        assert_eq!(tray_label("idle", true).1, "!");
     }
 
     #[test]

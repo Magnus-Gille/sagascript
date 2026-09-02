@@ -22,7 +22,7 @@
     setOnboardingCompleted,
   } from "./api";
 
-  let { oncomplete }: { oncomplete: () => void } = $props();
+  let { oncomplete }: { oncomplete: () => void | Promise<void> } = $props();
 
   type Step = "language" | "download" | "microphone" | "accessibility" | "ready";
   type OnboardingLanguage = "en" | "sv" | "no";
@@ -307,7 +307,7 @@
     try {
       stopPoll();
       await setOnboardingCompleted();
-      oncomplete();
+      await oncomplete();
     } catch (e: any) {
       finishError = typeof e === "string" ? e : e?.message ?? "Failed to complete setup. Please try again.";
     }

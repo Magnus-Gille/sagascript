@@ -18,9 +18,10 @@ choose a language, and dictate.
   temperature fallback, and VAD belong in a collapsed **Advanced** section.
 - Keep the menu-bar menu task-oriented: current state, profiles, transcribe a
   file, updates, settings, and quit.
-- Use one monochrome **S** template as the macOS menu-bar marker in every state.
-  Do not combine it with the former parchment-style bitmap icon or changing
-  text markers; status belongs in the tooltip and first menu row.
+- Use compact native macOS text in the menu bar: **S** while idle, **●** while
+  recording, **…** while loading or transcribing, and **!** when the hotkey is
+  unavailable. Do not use the former parchment bitmap or depend on an
+  image-backed status item that macOS may register but paint blank.
 - Establish one custom S silhouette as the product identity. Derive the macOS
   app icon, DMG/Finder icon, menu-bar template glyph, website favicon, social
   mark, and future platform assets from one vector master; do not maintain a
@@ -57,8 +58,8 @@ Acceptance:
 - Invalid or conflicting shortcuts fail closed and explain how to recover.
 - Equivalent profile management remains available through
   `sagascript config profiles`.
-- Idle, recording, loading, transcribing, and hotkey-error states all retain
-  the same visible S marker in the macOS menu bar.
+- Idle, recording, loading/transcribing, and hotkey-error states render the
+  native markers S, ●, …, and ! respectively.
 
 ### 3. Streamline onboarding and permissions
 
@@ -144,107 +145,81 @@ cargo build -p sagascript-cli --no-default-features
 - Intel macOS binaries and public Windows installers.
 - Additional model tuning in the normal settings surface.
 
-## Current implementation checkpoint — 2026-09-01
+## Historical signed baseline — v1.1.0
 
-Completed locally on branch `codex/release-readiness`:
+The signed `v1.1.0` baseline is preserved as release evidence. Annotated tag
+`v1.1.0` points at exact release commit
+`6782e7cdfa32af9a7bd73a4cd7aed18c62cc6493`; GitHub Actions run
+`33524699785` passed the quality gate, real transcription and diarization,
+Developer ID signing, app and DMG notarization/stapling, Gatekeeper, simulated
+upgrade, and installed-CLI checks. The GitHub release remained an unpublished
+draft.
 
-- The normal UI is reduced to Dictate, Transcribe, and Settings. Model choice
-  and decoder controls are hidden under Advanced, and Teach is absent from the
-  first-release UI while its CLI/core implementation remains intact.
-- Onboarding starts with language, immediately prepares the recommended local
-  speech engine, has no model-name decision, and then guides the user through
-  macOS permissions. A failed download has an error-only escape so an offline
-  first run cannot lock the user out of the application.
-- The menu bar always uses the monochrome S template. The Profiles submenu shows
-  every configured profile with its language and macOS shortcut, marks the
-  active or most recently used profile, and links to profile editing;
-  shortcut-triggered profiles remain the authoritative selection mechanism.
-- Each Dictate profile reports whether its recommended speech engine is ready
-  and offers a direct download when it is missing. Manual model selection stays
-  hidden under Advanced.
-- Update checks expose checking, current, available, and retry states. An
-  available release turns the action into a link to that exact stable GitHub
-  release tag.
-- A minimal product page exists in `site/`, including responsive layout, the
-  app screenshot, CLI usage, download links, metadata, favicon, and social
-  preview image.
-- Four candidate S directions are recorded in
-  `docs/design/sagascript-icon-concepts-v1.png`. The selected lower-right soft
-  direction is rebuilt in `assets/brand/` as a deterministic vector master.
-  Continuous curves, rounded inward-facing terminals, and a single-glyph-only
-  rule keep it visually separate from paired lightning-bolt or historical rune
-  symbols.
-  App, platform, menu-bar, favicon, wordmark, and social-card assets now derive
-  from that identity.
+The independently verified draft artifacts were:
 
-Verification completed:
+- `Sagascript.dmg` SHA-256:
+  `552cd99e0372d7d9f1370bdfdbd55e11f2177a4b7233792a667b2bec0e02d788`
+- `Sagascript.app.tar.gz` SHA-256:
+  `5814d1c6eb9de9e8dfba4b6961f2a3c62f6379cf43912e2d8dd84b36a235c8c2`
+- Signing Team ID: `7C6WF6GFZ4`
 
-- All frontend checks pass, including 21 release-surface regression tests and
-  Svelte diagnostics with zero errors or warnings.
-- All Rust workspace checks pass: check, Clippy with warnings denied, lean CLI
-  build, and 573 tests.
-- Release metadata and license inventory checks pass.
-- A local unsigned debug DMG builds and verifies as a valid disk image:
-  `Sagascript_1.1.0_aarch64.dmg`, SHA-256
-  `14c8b4ed21ec524ca06f65efd7483af270e9b60650957ea189decdefb21fd195`.
-  This is a packaging smoke test, not a distributable release artifact.
-- Annotated tag `v1.1.0` points at exact release commit
-  `6782e7cdfa32af9a7bd73a4cd7aed18c62cc6493`. GitHub Actions run
-  `33524699785` passed the quality gate, real transcription, real two-speaker
-  diarization, Developer ID signing, app and DMG notarization/stapling,
-  Gatekeeper verification, simulated upgrade, and transcription through the
-  installed CLI. The generated GitHub release remains an unpublished draft.
-- The downloaded draft artifacts were verified independently against both
-  `SHA256SUMS` and GitHub's stored digests:
-  `Sagascript.dmg` is
-  `552cd99e0372d7d9f1370bdfdbd55e11f2177a4b7233792a667b2bec0e02d788`,
-  and `Sagascript.app.tar.gz` is
-  `5814d1c6eb9de9e8dfba4b6961f2a3c62f6379cf43912e2d8dd84b36a235c8c2`.
-  Both app copies pass strict code-signature verification, hardened-runtime and
-  audio-input-entitlement checks, stapler validation, and Gatekeeper with Team
-  ID `7C6WF6GFZ4`.
-- The signing, notarization, Gatekeeper, upgrade, CLI, hash, and artifact
-  evidence above applies only to the historical `v1.1.0` baseline at
-  `6782e7cdfa32af9a7bd73a4cd7aed18c62cc6493`. It does not cover the 1.1.1
-  Accessibility fixes or authorize publishing 1.1.1.
-- Claude Opus 5 independently reviewed commit
-  `40bda7906eff25a5014dd94c313be3f7db91f11e`. Its grounded findings are fixed:
-  recoverable onboarding, visible per-profile engine readiness, re-checkable
-  update actions, selected-profile indication, shortcut alias formatting,
-  Retina tray source, site contrast/mobile navigation, and dead site scaffold.
-- The onboarding window was launched with isolated first-run settings and
-  visually checked on macOS. An isolated QA bundle confirmed that the selected
-  single-S template is created at startup without a text label or legacy
-  parchment fallback. The new QA item was hidden by the MacBook menu-bar
-  overflow/notch, so its real rendered appearance remains part of the signed
-  acceptance pass rather than being inferred from an older installed S item.
+This evidence applies only to that exact historical revision. It does not
+prove or authorize publication of a later candidate.
+
+## Current implementation checkpoint — 2026-09-02
+
+The signed `v1.1.1` candidate is installed and remains the stable daily-use
+build. Its exact release revision is
+`57b91dcdab4729b2a70d1717319c9d9760da7d8c`; GitHub Actions run
+`33551011841` passed the quality gate, signing, app and DMG notarization,
+stapling, Gatekeeper, upgrade, CLI, and transcription checks. The verified DMG
+SHA-256 is
+`03c859fd4ac0edabc8ced784fc4aaf526b9c6a13dcfdfd0c3081ef78f66b7199`.
+The GitHub release is still an unpublished draft.
+
+Clean-machine onboarding confirmed that transcription and the signed bundle's
+Accessibility identity work. The permission page now keeps an explicit reopen
+button and reopens the correct System Settings pane without creating another
+macOS prompt.
+
+The next patch is prepared in an isolated `1.1.2` worktree and does not modify
+the installed app:
+
+- The per-profile download action has a stable layout slot, preventing the
+  stale `DownDownloading 100%` WebKit repaint overlap.
+- Dictate follows backend recording, model-loading, transcribing, and idle
+  events, so it no longer offers a conflicting start while hotkey work is busy.
+- Completed-onboarding background launches create no Settings window. Settings
+  can be revealed from the menu, macOS Reopen, or the new `sagascript open`
+  recovery command; onboarding still opens when incomplete.
+- The unreliable image-backed tray marker is replaced with compact native
+  state text: S, ●, …, and !.
+
+Verification completed for the isolated patch:
+
+- Frontend tests, Svelte diagnostics, production frontend build, release
+  metadata, Rust workspace check, Clippy with warnings denied, the lean CLI
+  build, and all 578 Rust tests pass. The AppKit pasteboard test requires the
+  unsandboxed macOS test context and passes there.
+- A local unsigned app bundle built successfully during an earlier diagnostic.
+  That diagnostic exercised a superseded all-bare-launches-hidden rule and does
+  not verify the final login-item background marker or deliberate Finder launch
+  behavior. Those paths, the onboarding-window hide, and the native status
+  marker still need a final isolated visual pass.
 
 Open release blockers:
 
-- The exact 1.1.1 release revision has not been tagged, pushed, signed,
-  notarized, stapled, or checked by Gatekeeper. The 1.1.1 CI run must repeat the
-  automated quality gate, simulated upgrade, installed CLI acceptance, artifact
-  hashes, and signature verification before its output can be installed.
-- After that CI run, a manual first-launch pass on a clean Apple Silicon Mac
-  still needs to verify real TCC prompts and persistence for Microphone and
-  Accessibility, live dictation, auto-paste, launch at login, profile switching,
-  and the update link.
-- The selected glyph has been raster-checked at 32, 64, 128, 512, and 1024 px.
-  Its current macOS template rendering still needs a visually isolated pass in
-  both light and dark menu bars during signed acceptance.
-- Claude Opus 5 completed the historical base review. A separate Opus 5 review
-  of the full 1.1.0-to-1.1.1 candidate correctly reopened stale release-evidence
-  claims and one missing wiring assertion. Those findings were fixed locally; the
-  complete corrected diff still needs an independent pass before the release
-  SHA is approved. M5 remained unavailable for this pass because its connector
-  returned a network failure and the local profile doctor reported a missing
-  credential; no credentials were changed.
-- The product page builds and its authored files lint cleanly, but its pinned
-  Sites scaffold currently reports five high-severity and one low-severity
-  production dependency advisories. Do not deploy it until an approved scaffold
-  update resolves that audit. Browser-based rendered-page QA is also pending:
-  the in-app browser runtime had no connected browser instance during the
-  post-review validation pass.
-- Linking from gille.ai and publishing the GitHub release/site are separate
-  production mutations and require an explicit release approval after these
-  gates pass.
+- Keep the installed `v1.1.1` build running until daily-use work can be paused;
+  do not start another GUI candidate because the singleton lock and shared TCC
+  identity would interfere with it.
+- Visually verify S → ● → … → S and the no-popup behavior using the final signed
+  `1.1.2` candidate when an isolated acceptance window is available.
+- Resolve the final follow-up from the independent cross-model review before
+  release readiness.
+- `npm run licenses:check` needs a worktree-local `npm ci`; the current shared
+  `node_modules` contains older package versions than `package-lock.json`.
+  Dependency installation requires a separate explicit approval.
+- The product page scaffold's dependency audit must be green before deployment.
+- Tagging, pushing, signing/notarizing, publishing the GitHub release, deploying
+  the site, and linking it from gille.ai are separate publication/production
+  mutations and require explicit approval with an exact revision.

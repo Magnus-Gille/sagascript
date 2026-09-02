@@ -82,6 +82,7 @@
   // Dictate test state
   let testRecording: boolean = $state(false);
   let testTranscribing: boolean = $state(false);
+  let backendDictationState: "idle" | "recording" | "loading_model" | "transcribing" = $state("idle");
   let testResult: string = $state("");
   let testError: string = $state("");
 
@@ -142,14 +143,23 @@
       hotkeyStatusError = status.error ?? "";
     });
 
-    // Keep an already-open window in sync with settings changed by the CLI or
-    // another process. Backend commands are field-granular, so this refresh is
-    // display-only and never writes a stale snapshot back.
+    // Keep Dictate synchronized with hotkey-driven work. Previously these
+    // states were ignored, so the button still offered "Start recording"
+    // while the backend was loading/transcribing and the next click produced
+    // a misleading busy error.
     listen("state-changed", async (event: any) => {
-      if (event.payload !== "settings_reloaded") return;
-      settings = await getSettings();
-      models = await getModelInfo();
-      await refreshProfileModels(settings.hotkey_profiles);
+      const nextState = event.payload;
+      if (nextState === "settings_reloaded") {
+        settings = await getSettings();
+        models = await getModelInfo();
+        await refreshProfileModels(settings.hotkey_profiles);
+        return;
+      }
+
+      if (!["idle", "recording", "loading_model", "transcribing"].includes(nextState)) return;
+      backendDictationState = nextState;
+      testRecording = nextState === "recording";
+      testTranscribing = nextState === "loading_model" || nextState === "transcribing";
     });
 
     // Listen for tab navigation from tray menu
@@ -365,6 +375,7 @@
       // Stop and transcribe
       testRecording = false;
       testTranscribing = true;
+      backendDictationState = "transcribing";
       testError = "";
       try {
         const text = await stopAndTranscribe();
@@ -373,6 +384,7 @@
         testError = typeof e === "string" ? e : e.message || "Transcription failed";
       } finally {
         testTranscribing = false;
+        backendDictationState = "idle";
       }
     } else {
       // Start recording
@@ -380,7 +392,9 @@
       try {
         await startRecording();
         testRecording = true;
+        backendDictationState = "recording";
       } catch (e: any) {
+        backendDictationState = "idle";
         testError = typeof e === "string" ? e : e.message || "Failed to start recording";
       }
     }
@@ -650,7 +664,7 @@
                   </span>
                   {#if !profileModels[profile.id].downloaded}
                     <button
-                      class="link-btn"
+                      class="link-btn profile-engine-action"
                       onclick={() => downloadProfileModel(profile)}
                       disabled={downloading !== null}
                     >
@@ -709,11 +723,14 @@
             class:recording={testRecording}
             class:transcribing={testTranscribing}
             onclick={onTestRecord}
-            disabled={testTranscribing}
+            disabled={testTranscribing || downloading !== null}
           >
             {#if testTranscribing}
               <div class="spinner small"></div>
-              Transcribing...
+              {backendDictationState === "loading_model" ? "Preparing speech engine..." : "Transcribing..."}
+            {:else if downloading !== null}
+              <div class="spinner small"></div>
+              Downloading speech engine...
             {:else if testRecording}
               <div class="recording-dot"></div>
               Stop recording
@@ -1119,6 +1136,16 @@
   .profile-engine .link-btn:disabled {
     cursor: wait;
     opacity: 0.7;
+  }
+
+  .profile-engine-action {
+    display: inline-block;
+    flex: 0 0 152px;
+    width: 152px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: right;
   }
 
   .profile-remove {
