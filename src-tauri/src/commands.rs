@@ -23,7 +23,8 @@ use sagascript_core::transcription::{
     suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
 };
 use sagascript_core::transcription::{
-    model, ContextProfile, FILE_TRANSCRIBE_BEAM, TranscribeOptions, WhisperBackend,
+    model, recommended_parallel_chunks, ContextProfile, FILE_TRANSCRIBE_BEAM, TranscribeOptions,
+    WhisperBackend,
 };
 
 /// Build the per-transcription options from the current settings. Resolves the
@@ -55,6 +56,7 @@ pub(crate) fn build_transcribe_options_for_profile(
         temperature_fallback: settings.temperature_fallback,
         vad_model_path,
         segment_timestamps: false,
+        parallel_chunks: 1,
     }
 }
 
@@ -1503,10 +1505,12 @@ pub async fn transcribe_file(
 
     // Standard (non-diarize) transcription path. File transcription defaults to
     // beam search (quality over latency).
-    let opts = {
+    let mut opts = {
         let ctrl = controller.lock().unwrap();
         build_file_transcribe_options(ctrl.settings(), prompt)
     };
+    opts.parallel_chunks =
+        recommended_parallel_chunks(audio.len(), effective_model, opts.beam_size);
     let whisper_ref = whisper.inner().clone();
     let app_progress = app.clone();
     // Borrowed handle (`&mut fut`) so the timeout path can await the task's

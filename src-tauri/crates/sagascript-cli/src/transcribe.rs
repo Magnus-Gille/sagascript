@@ -19,8 +19,8 @@ use sagascript_core::transcription::diagnostics::{
 use sagascript_core::transcription::diagnostics::{analyze_coverage_profile, CoverageProfile};
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::{
-    normalize_nonspeech_markers, ContextProfile, Glossary, TranscribeOptions, TranscriptSegment,
-    WhisperBackend,
+    normalize_nonspeech_markers, recommended_parallel_chunks, ContextProfile, Glossary,
+    TranscribeOptions, TranscriptSegment, WhisperBackend,
 };
 
 #[derive(Args)]
@@ -125,6 +125,16 @@ pub struct TranscribeArgs {
     /// (pass --beam 0 to force greedy).
     #[arg(long = "beam", value_name = "N")]
     pub beam_size: Option<u32>,
+
+    /// Split long files across this many concurrent Whisper states (1–4).
+    /// When omitted, long beam-search files use two states for measured-safe speedup.
+    #[arg(
+        long,
+        value_name = "N",
+        value_parser = parse_parallel_chunks
+    )]
+    #[cfg_attr(feature = "diarization", arg(conflicts_with = "diarize"))]
+    pub parallel: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -793,7 +803,7 @@ fn transcribe_file(
     } else {
         None
     };
-    let opts = TranscribeOptions {
+    let mut opts = TranscribeOptions {
         prompt: glossary.decoder_prompt(),
         // File transcription isn't latency-sensitive, so default to beam search
         // (fewer repetition loops). Honor an explicit beam setting/flag.
@@ -807,9 +817,16 @@ fn transcribe_file(
         // Coverage diagnostics need real segment bounds for both human and
         // JSON output. Text decoding remains in no-timestamps mode.
         segment_timestamps: true,
+        parallel_chunks: 1,
     };
+    opts.parallel_chunks = args.parallel.unwrap_or_else(|| {
+        recommended_parallel_chunks(audio.len(), model, opts.beam_size)
+    });
     if opts.beam_size >= 2 {
         eprintln!("Beam search: width {}", opts.beam_size);
+    }
+    if opts.parallel_chunks > 1 {
+        eprintln!("Parallel Whisper states: {}", opts.parallel_chunks);
     }
     if vad_enabled {
         eprintln!("VAD: enabled");
@@ -1394,6 +1411,34 @@ fn parse_diarize_threshold(s: &str) -> Result<f32, String> {
         ));
     }
     Ok(value)
+}
+
+fn parse_parallel_chunks(s: &str) -> Result<usize, String> {
+    let value = s
+        .parse::<usize>()
+        .map_err(|_| format!("'{s}' is not a valid chunk count"))?;
+    if !(1..=4).contains(&value) {
+        return Err(format!("parallel must be between 1 and 4, got {value}"));
+    }
+    Ok(value)
+}
+
+#[cfg(test)]
+mod parallel_chunks_tests {
+    use super::parse_parallel_chunks;
+
+    #[test]
+    fn accepts_supported_parallel_chunk_counts() {
+        assert_eq!(parse_parallel_chunks("1"), Ok(1));
+        assert_eq!(parse_parallel_chunks("4"), Ok(4));
+    }
+
+    #[test]
+    fn rejects_zero_and_unbounded_parallelism() {
+        assert!(parse_parallel_chunks("0").is_err());
+        assert!(parse_parallel_chunks("5").is_err());
+        assert!(parse_parallel_chunks("many").is_err());
+    }
 }
 
 pub(crate) fn resolve_profile(
