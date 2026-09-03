@@ -110,14 +110,71 @@ test("rejects malformed timestamps and asset counters", () => {
   }
 });
 
-test("CLI rejects unknown flags", () => {
+test("rejects malformed repository, release, and asset fields", () => {
+  const capturedAt = "2026-09-03T00:00:00Z";
+  assert.throws(() => createSnapshot([], "missing-slash", capturedAt), /owner\/repo/);
+
+  for (const [input, expected] of [
+    [[release("", "2026-09-01T00:00:00Z")], /tag_name.*non-empty string/],
+    [
+      [release("v1", "2026-09-01T00:00:00Z", [], { prerelease: "false" })],
+      /prerelease.*boolean/,
+    ],
+    [[release("v1", "2026-09-01T00:00:00Z", {})], /assets.*array/],
+    [
+      [release("v1", "2026-09-01T00:00:00Z", [asset("", 1)])],
+      /assets\[0\]\.name.*non-empty string/,
+    ],
+    [
+      [
+        release("v1", "2026-09-01T00:00:00Z", [
+          asset("file", 1, { content_type: null }),
+        ]),
+      ],
+      /content_type.*string/,
+    ],
+  ]) {
+    assert.throws(() => createSnapshot(input, "owner/repo", capturedAt), expected);
+  }
+});
+
+test("CLI rejects unknown, missing, and duplicate flags", () => {
+  const run = (arguments_) =>
+    spawnSync(process.execPath, ["scripts/record-release-downloads.mjs", ...arguments_], {
+      cwd: new URL("..", import.meta.url),
+      encoding: "utf8",
+    });
+
+  const unknown = run(["--unknown", "value"]);
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /unknown flag.*--unknown/i);
+
+  const missing = run(["--input", "releases.json"]);
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /missing required flag.*--output/i);
+
+  const duplicate = run([
+    "--input",
+    "one.json",
+    "--input",
+    "two.json",
+    "--output",
+    "snapshot.json",
+    "--repository",
+    "owner/repo",
+  ]);
+  assert.notEqual(duplicate.status, 0);
+  assert.match(duplicate.stderr, /duplicate flag.*--input/i);
+});
+
+test("CLI rejects missing flag values", () => {
   const result = spawnSync(
     process.execPath,
-    ["scripts/record-release-downloads.mjs", "--unknown", "value"],
+    ["scripts/record-release-downloads.mjs", "--input", "--output"],
     { cwd: new URL("..", import.meta.url), encoding: "utf8" },
   );
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /unknown flag.*--unknown/i);
+  assert.match(result.stderr, /missing value.*--input/i);
 });
 
 test("CLI writes pretty JSON with a trailing newline and creates parent directories", () => {
