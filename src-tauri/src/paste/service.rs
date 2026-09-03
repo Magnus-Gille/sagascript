@@ -1,5 +1,6 @@
 #[cfg(not(target_os = "macos"))]
 use arboard::Clipboard;
+use std::borrow::Cow;
 #[cfg(target_os = "macos")]
 #[path = "macos_clipboard.rs"]
 mod macos_clipboard;
@@ -7,7 +8,7 @@ mod macos_clipboard;
 // the Control modifier unmapped (paste silently fails), so we shell out to
 // xdotool instead and don't depend on enigo there.
 #[cfg(not(target_os = "linux"))]
-use enigo::{Enigo, Keyboard, Settings as EnigoSettings, Key, Direction};
+use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
 use tracing::info;
 #[cfg(target_os = "macos")]
 use tracing::warn;
@@ -17,6 +18,14 @@ use sagascript_core::error::DictationError;
 /// Service for pasting transcribed text into the active application
 /// Uses clipboard + simulated Cmd+V (macOS) or Ctrl+V (Windows/Linux)
 pub struct PasteService;
+
+fn paste_payload(text: &str) -> Cow<'_, str> {
+    if text.is_empty() || text.chars().last().is_some_and(char::is_whitespace) {
+        Cow::Borrowed(text)
+    } else {
+        Cow::Owned(format!("{text} "))
+    }
+}
 
 impl PasteService {
     pub fn new() -> Self {
@@ -29,6 +38,7 @@ impl PasteService {
         if text.is_empty() {
             return Ok(());
         }
+        let text = paste_payload(text);
 
         #[cfg(not(target_os = "macos"))]
         let mut clipboard = Clipboard::new()
@@ -47,7 +57,7 @@ impl PasteService {
         // generation created by our clear, closing the race that a later
         // changeCount sample could accidentally attribute to another app.
         #[cfg(target_os = "macos")]
-        let owned_change_count = match macos_clipboard::set_temporary_text(text) {
+        let owned_change_count = match macos_clipboard::set_temporary_text(text.as_ref()) {
             Ok(generation) => generation,
             Err(error) => {
                 if let Some(snapshot) = saved_pasteboard {
@@ -67,7 +77,7 @@ impl PasteService {
 
         #[cfg(not(target_os = "macos"))]
         clipboard
-            .set_text(text)
+            .set_text(text.as_ref())
             .map_err(|e| DictationError::PasteError(format!("Failed to set clipboard: {e}")))?;
 
         info!("Text copied to clipboard ({} chars)", text.len());
@@ -130,7 +140,7 @@ fn validate_accessibility(trusted: bool) -> Result<(), DictationError> {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::validate_accessibility;
+    use super::{paste_payload, validate_accessibility};
     use sagascript_core::error::DictationError;
 
     #[test]
@@ -140,6 +150,19 @@ mod tests {
             Err(DictationError::AccessibilityPermissionDenied)
         ));
         assert!(validate_accessibility(true).is_ok());
+    }
+
+    #[test]
+    fn paste_payload_adds_one_separator_between_dictations() {
+        assert_eq!(paste_payload("Första meningen."), "Första meningen. ");
+        assert_eq!(paste_payload("Nästa fras"), "Nästa fras ");
+    }
+
+    #[test]
+    fn paste_payload_preserves_existing_trailing_whitespace() {
+        assert_eq!(paste_payload("Redan klart. "), "Redan klart. ");
+        assert_eq!(paste_payload("Ny rad\n"), "Ny rad\n");
+        assert_eq!(paste_payload(""), "");
     }
 }
 

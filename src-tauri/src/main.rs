@@ -46,6 +46,8 @@ use tauri::{
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tracing::{error, info, warn};
 
+#[cfg(any(target_os = "macos", test))]
+use app_controller::AppState;
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
 use sagascript_core::settings::HotkeyProfile;
@@ -1000,8 +1002,17 @@ fn main() {
                 // "visible", so always run the full reveal path.
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
-                    info!("Application reopen requested");
-                    open_settings_window(_app_handle, None);
+                    let state = {
+                        let ctrl: tauri::State<'_, SharedController> = _app_handle.state();
+                        let state = ctrl.lock().unwrap().state();
+                        state
+                    };
+                    if should_reveal_for_reopen(state) {
+                        info!("Application reopen requested");
+                        open_settings_window(_app_handle, None);
+                    } else {
+                        info!("Ignoring application reopen while dictation is {state:?}");
+                    }
                 }
                 _ => {}
             }
@@ -1232,13 +1243,34 @@ fn initial_window_request(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn should_reveal_for_reopen(state: AppState) -> bool {
+    !state.is_busy()
+}
+
 trait MainWindowVisibility {
+    fn activate_app(&self);
+    fn reset_to_normal_level(&self) -> Result<(), String>;
     fn unminimize(&self) -> Result<(), String>;
     fn show(&self) -> Result<(), String>;
     fn set_focus(&self) -> Result<(), String>;
 }
 
 impl MainWindowVisibility for tauri::WebviewWindow {
+    fn activate_app(&self) {
+        #[cfg(target_os = "macos")]
+        if let Err(error) = self
+            .app_handle()
+            .run_on_main_thread(platform::macos::activate_app)
+        {
+            warn!("Failed to schedule foreground application activation: {error}");
+        }
+    }
+
+    fn reset_to_normal_level(&self) -> Result<(), String> {
+        tauri::WebviewWindow::set_always_on_top(self, false).map_err(|error| error.to_string())
+    }
+
     fn unminimize(&self) -> Result<(), String> {
         tauri::WebviewWindow::unminimize(self).map_err(|error| error.to_string())
     }
@@ -1253,6 +1285,9 @@ impl MainWindowVisibility for tauri::WebviewWindow {
 }
 
 fn reveal_existing_main_window(window: &impl MainWindowVisibility) -> Result<(), String> {
+    if let Err(error) = window.reset_to_normal_level() {
+        warn!("Failed to restore normal main-window level: {error}");
+    }
     window
         .unminimize()
         .map_err(|error| format!("failed to restore main window: {error}"))?;
@@ -1261,7 +1296,12 @@ fn reveal_existing_main_window(window: &impl MainWindowVisibility) -> Result<(),
         .map_err(|error| format!("failed to show main window: {error}"))?;
     window
         .set_focus()
-        .map_err(|error| format!("failed to focus main window: {error}"))
+        .map_err(|error| format!("failed to focus main window: {error}"))?;
+    // Queue activation after presentation. During initial `.setup()` a direct
+    // AppKit activation happens before Tauri's event loop is ready and macOS
+    // leaves the onboarding window behind the previously active application.
+    window.activate_app();
+    Ok(())
 }
 
 /// Open or focus the main window, optionally navigating to a specific tab.
@@ -1308,6 +1348,7 @@ fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result
         .inner_size(500.0, default_height)
         .min_inner_size(500.0, 400.0)
         .resizable(true)
+        .always_on_top(false)
         .center()
         .focused(true)
         .build()
@@ -1787,6 +1828,19 @@ mod tests {
     }
 
     impl MainWindowVisibility for MockMainWindow {
+        fn activate_app(&self) {
+            self.operations.borrow_mut().push("activate_app");
+        }
+
+        fn reset_to_normal_level(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("reset_to_normal_level");
+            if self.fail_at == Some("reset_to_normal_level") {
+                Err("window level failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
         fn unminimize(&self) -> Result<(), String> {
             self.operations.borrow_mut().push("unminimize");
             if self.fail_at == Some("unminimize") {
@@ -1823,7 +1877,13 @@ mod tests {
 
         assert_eq!(
             *window.operations.borrow(),
-            ["unminimize", "show", "set_focus"]
+            [
+                "reset_to_normal_level",
+                "unminimize",
+                "show",
+                "set_focus",
+                "activate_app"
+            ]
         );
     }
 
@@ -1838,7 +1898,31 @@ mod tests {
 
         assert!(error.contains("show main window"));
         assert!(error.contains("show failed"));
-        assert_eq!(*window.operations.borrow(), ["unminimize", "show"]);
+        assert_eq!(
+            *window.operations.borrow(),
+            ["reset_to_normal_level", "unminimize", "show"]
+        );
+    }
+
+    #[test]
+    fn main_window_reveal_continues_if_normal_window_level_cannot_be_restored() {
+        let window = MockMainWindow {
+            fail_at: Some("reset_to_normal_level"),
+            ..Default::default()
+        };
+
+        reveal_existing_main_window(&window).unwrap();
+
+        assert_eq!(
+            *window.operations.borrow(),
+            [
+                "reset_to_normal_level",
+                "unminimize",
+                "show",
+                "set_focus",
+                "activate_app"
+            ]
+        );
     }
 
     #[test]
@@ -1847,6 +1931,13 @@ mod tests {
             initial_window_request(true, GuiLaunchMode::Standard),
             InitialWindowRequest::Settings
         );
+    }
+
+    #[test]
+    fn dictation_state_never_turns_a_reopen_event_into_a_settings_window() {
+        assert!(should_reveal_for_reopen(AppState::Idle));
+        assert!(!should_reveal_for_reopen(AppState::Recording));
+        assert!(!should_reveal_for_reopen(AppState::Transcribing));
     }
 
     #[test]
