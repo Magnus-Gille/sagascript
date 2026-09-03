@@ -1,0 +1,73 @@
+name: Download metrics
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: download-metrics
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      - name: Test snapshot normalizer
+        run: node --test scripts/test-record-release-downloads.mjs
+
+      - name: Fetch and normalize public release downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          captured_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            > "$RUNNER_TEMP/release-pages.json"
+          jq 'add' "$RUNNER_TEMP/release-pages.json" > "$RUNNER_TEMP/releases.json"
+          node scripts/record-release-downloads.mjs \
+            --input "$RUNNER_TEMP/releases.json" \
+            --output "$RUNNER_TEMP/snapshot.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --captured-at "$captured_at"
+          echo "SNAPSHOT_DATE=${captured_at%%T*}" >> "$GITHUB_ENV"
+
+      - name: Commit snapshot to metrics branch
+        run: |
+          if git ls-remote --exit-code --heads origin refs/heads/metrics/downloads > /dev/null; then
+            git fetch --no-tags origin refs/heads/metrics/downloads
+            git switch --detach FETCH_HEAD
+          else
+            status=$?
+            if [[ "$status" -ne 2 ]]; then
+              exit "$status"
+            fi
+            git switch -c metrics-downloads-data
+          fi
+
+          snapshot="metrics/downloads/${SNAPSHOT_DATE}.json"
+          mkdir -p "$(dirname "$snapshot")"
+          cp "$RUNNER_TEMP/snapshot.json" "$snapshot"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$snapshot"
+          if git diff --cached --quiet; then
+            echo "Snapshot is already current for ${SNAPSHOT_DATE}."
+            exit 0
+          fi
+          git commit -m "metrics: record downloads ${SNAPSHOT_DATE}"
+          git push origin HEAD:refs/heads/metrics/downloads
