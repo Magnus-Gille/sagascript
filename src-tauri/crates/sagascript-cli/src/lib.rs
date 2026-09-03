@@ -1,6 +1,7 @@
 pub mod config;
 pub mod glossary;
 pub mod models;
+pub mod open;
 // Live recording is optional (`record` feature, on by default) so a pure
 // batch-transcribe build (`--no-default-features`) carries no audio-capture
 // stack — on Linux, no cpal/ALSA.
@@ -315,6 +316,16 @@ EXAMPLES:
     )]
     DeleteModel(models::DeleteModelArgs),
 
+    /// Open or focus the installed Sagascript desktop app
+    #[command(
+        long_about = "\
+Open the installed Sagascript desktop app or focus its Settings window when it is already running.
+
+This is a recovery path when the menu-bar status item is unavailable. On macOS, the command asks Launch Services to open the signed app bundle; it never changes saved settings or permissions.",
+        after_long_help = "EXAMPLES:\n  sagascript open"
+    )]
+    Open,
+
     /// Reset first-launch onboarding (re-run setup wizard on next launch)
     #[command(
         long_about = "\
@@ -452,6 +463,7 @@ pub fn run(cli: Cli) {
         Command::ListModels(args) => models::list(args),
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
+        Command::Open => open::run(),
         Command::ResetOnboarding => {
             sagascript_core::settings::store::update(|settings| {
                 settings.has_completed_onboarding = false;
@@ -1095,6 +1107,12 @@ mod tests {
             }
             _ => panic!("expected DownloadModel"),
         }
+    }
+
+    #[test]
+    fn parse_open_gui() {
+        let cli = Cli::try_parse_from(["sagascript", "open"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Open)));
     }
 
     #[test]

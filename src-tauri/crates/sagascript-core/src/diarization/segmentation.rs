@@ -4,10 +4,11 @@
 /// Output: per-frame speaker activity for up to 3 simultaneous speakers
 use std::path::Path;
 
-use ndarray::Array3;
+use ndarray::{Array3, ArrayView3, Ix3};
 use ort::{session::Session, value::Tensor};
 use tracing::info;
 
+use super::ORT_INTRA_THREADS;
 use crate::error::DictationError;
 
 /// 10-second window at 16kHz
@@ -22,6 +23,8 @@ pub const FRAME_DURATION_S: f64 = 270.0 / 16_000.0;
 pub const NUM_CLASSES: usize = 7;
 /// Maximum simultaneous speakers supported by the model
 pub const MAX_SPEAKERS: usize = 3;
+/// Number of overlapping windows evaluated in one ONNX Runtime call.
+const SEGMENTATION_BATCH_SIZE: usize = 16;
 
 /// Powerset mapping: class index → [speaker0_active, speaker1_active, speaker2_active]
 /// Class 0: silence, classes 1-3: single speakers, classes 4-6: speaker pairs
@@ -112,9 +115,18 @@ impl Segmenter {
     pub fn new(model_path: &Path) -> Result<Self, DictationError> {
         let session = Session::builder()
             .map_err(|e| DictationError::DiarizationError(format!("Failed to create ORT session builder: {e}")))?
+            .with_intra_threads(ORT_INTRA_THREADS)
+            .map_err(|e| DictationError::DiarizationError(format!("Failed to configure ORT intra-op threads: {e}")))?
+            .with_inter_threads(1)
+            .map_err(|e| DictationError::DiarizationError(format!("Failed to configure ORT inter-op threads: {e}")))?
             .commit_from_file(model_path)
             .map_err(|e| DictationError::DiarizationError(format!("Failed to load segmentation model: {e}")))?;
-        info!("Segmentation model loaded from {}", model_path.display());
+        info!(
+            "Segmentation model loaded from {} (batch {}, ORT intra-op {}, inter-op 1)",
+            model_path.display(),
+            SEGMENTATION_BATCH_SIZE,
+            ORT_INTRA_THREADS
+        );
         Ok(Self { session })
     }
 
@@ -135,11 +147,7 @@ impl Segmenter {
             });
         }
 
-        let n_windows = if audio.len() <= WINDOW_SAMPLES {
-            1
-        } else {
-            (audio.len() - WINDOW_SAMPLES) / STEP_SAMPLES + 2
-        };
+        let n_windows = window_count_for_audio(audio.len());
         // Frame offsets are derived per-window from the sample position (not
         // win_idx * rounded-frames-per-step, which drifts ~0.26 frames/window).
         let total_frames =
@@ -147,19 +155,12 @@ impl Segmenter {
 
         let mut stitcher = WindowStitcher::new(total_frames);
 
-        for win_idx in 0..n_windows {
-            let win_start = win_idx * STEP_SAMPLES;
-            if win_start >= audio.len() {
-                break;
-            }
+        for batch_start in (0..n_windows).step_by(SEGMENTATION_BATCH_SIZE) {
+            let batch_len = (n_windows - batch_start).min(SEGMENTATION_BATCH_SIZE);
+            let windows = build_window_batch(audio, batch_start, batch_len);
 
-            // Build the 10s window, zero-padding if needed
-            let mut window = vec![0.0f32; WINDOW_SAMPLES];
-            let available = (audio.len() - win_start).min(WINDOW_SAMPLES);
-            window[..available].copy_from_slice(&audio[win_start..win_start + available]);
-
-            // Run ONNX inference
-            let input = Array3::from_shape_vec((1, 1, WINDOW_SAMPLES), window)
+            // Run one ONNX inference for several adjacent 10-second windows.
+            let input = Array3::from_shape_vec((batch_len, 1, WINDOW_SAMPLES), windows)
                 .map_err(|e| DictationError::DiarizationError(format!("Shape error: {e}")))?;
             let tensor = Tensor::from_array(input)
                 .map_err(|e| DictationError::DiarizationError(format!("Tensor error: {e}")))?;
@@ -168,30 +169,22 @@ impl Segmenter {
                 .run(ort::inputs![tensor])
                 .map_err(|e| DictationError::DiarizationError(format!("Inference failed: {e}")))?;
 
-            // Extract [1, 589, 7] output
+            // Extract [batch, 589, 7] output.
             let logits = outputs[0]
                 .try_extract_array::<f32>()
                 .map_err(|e| DictationError::DiarizationError(format!("Output extraction failed: {e}")))?;
+            let logits = logits
+                .into_dimensionality::<Ix3>()
+                .map_err(|e| DictationError::DiarizationError(format!("Unexpected segmentation output rank: {e}")))?;
+            let decoded = decode_batch_logits(logits)?;
 
-            let logits = logits.view();
-
-            // Decode this window's powerset logits to binary per-slot activity
-            // (argmax per frame), then let the stitcher align + accumulate.
-            let mut local = Vec::with_capacity(FRAMES_PER_WINDOW);
-            for f in 0..FRAMES_PER_WINDOW {
-                let mut best_class = 0usize;
-                let mut best_logit = f32::MIN;
-                for c in 0..NUM_CLASSES {
-                    let v = logits[[0, f, c]];
-                    if v > best_logit {
-                        best_logit = v;
-                        best_class = c;
-                    }
-                }
-                local.push(POWERSET[best_class]);
+            // Preserve chronological stitching: speaker-slot alignment for a
+            // window depends on the accumulated overlap from earlier windows.
+            for (batch_idx, local) in decoded.iter().enumerate() {
+                let win_idx = batch_start + batch_idx;
+                let win_start = win_idx * STEP_SAMPLES;
+                stitcher.add_window(frame_offset_for_sample(win_start), local);
             }
-
-            stitcher.add_window(frame_offset_for_sample(win_start), &local);
         }
 
         Ok(FrameActivations {
@@ -199,6 +192,62 @@ impl Segmenter {
             frame_duration: FRAME_DURATION_S,
         })
     }
+}
+
+fn window_count_for_audio(audio_len: usize) -> usize {
+    if audio_len <= WINDOW_SAMPLES {
+        1
+    } else {
+        (audio_len - WINDOW_SAMPLES) / STEP_SAMPLES + 2
+    }
+}
+
+/// Pack adjacent sliding windows contiguously as `[batch, 1, samples]`.
+fn build_window_batch(audio: &[f32], first_window: usize, batch_len: usize) -> Vec<f32> {
+    let mut windows = vec![0.0f32; batch_len * WINDOW_SAMPLES];
+    for batch_idx in 0..batch_len {
+        let win_start = (first_window + batch_idx) * STEP_SAMPLES;
+        if win_start >= audio.len() {
+            continue;
+        }
+        let available = (audio.len() - win_start).min(WINDOW_SAMPLES);
+        let output_start = batch_idx * WINDOW_SAMPLES;
+        windows[output_start..output_start + available]
+            .copy_from_slice(&audio[win_start..win_start + available]);
+    }
+    windows
+}
+
+/// Decode `[batch, frames, classes]` logits into one local activity track per
+/// input window. Windows remain independent until chronological stitching.
+fn decode_batch_logits(
+    logits: ArrayView3<'_, f32>,
+) -> Result<Vec<Vec<[f32; MAX_SPEAKERS]>>, DictationError> {
+    let shape = logits.shape();
+    if shape[1] != FRAMES_PER_WINDOW || shape[2] != NUM_CLASSES {
+        return Err(DictationError::DiarizationError(format!(
+            "Unexpected segmentation output shape: expected [batch, {FRAMES_PER_WINDOW}, {NUM_CLASSES}], got {shape:?}"
+        )));
+    }
+
+    let mut decoded = Vec::with_capacity(shape[0]);
+    for batch_idx in 0..shape[0] {
+        let mut local = Vec::with_capacity(FRAMES_PER_WINDOW);
+        for frame in 0..FRAMES_PER_WINDOW {
+            let mut best_class = 0usize;
+            let mut best_logit = f32::MIN;
+            for class in 0..NUM_CLASSES {
+                let value = logits[[batch_idx, frame, class]];
+                if value > best_logit {
+                    best_logit = value;
+                    best_class = class;
+                }
+            }
+            local.push(POWERSET[best_class]);
+        }
+        decoded.push(local);
+    }
+    Ok(decoded)
 }
 
 /// Global frame index for a sample position (receptive_field_shift = 270 samples).
@@ -457,6 +506,44 @@ mod tests {
         assert_eq!(frame_offset_for_sample(10 * STEP_SAMPLES), 593);
         // Window 50: 800000/270 = 2963.0 (old scheme: 2950 — 13 frames ≈ 0.22s off)
         assert_eq!(frame_offset_for_sample(50 * STEP_SAMPLES), 2963);
+    }
+
+    #[test]
+    fn window_batch_packs_consecutive_windows_and_zero_pads_tail() {
+        let audio_len = WINDOW_SAMPLES + STEP_SAMPLES + 7;
+        let audio: Vec<f32> = (0..audio_len).map(|sample| sample as f32).collect();
+
+        let batch = build_window_batch(&audio, 1, 2);
+
+        assert_eq!(batch.len(), 2 * WINDOW_SAMPLES);
+        assert_eq!(batch[0], STEP_SAMPLES as f32);
+        assert_eq!(
+            batch[WINDOW_SAMPLES - 1],
+            (STEP_SAMPLES + WINDOW_SAMPLES - 1) as f32
+        );
+        assert_eq!(batch[WINDOW_SAMPLES], (2 * STEP_SAMPLES) as f32);
+        let second_available = audio_len - 2 * STEP_SAMPLES;
+        assert_eq!(
+            batch[WINDOW_SAMPLES + second_available - 1],
+            (audio_len - 1) as f32
+        );
+        assert_eq!(batch[WINDOW_SAMPLES + second_available], 0.0);
+        assert_eq!(*batch.last().unwrap(), 0.0);
+    }
+
+    #[test]
+    fn batched_logits_decode_each_window_independently() {
+        let mut logits = Array3::from_elem((2, FRAMES_PER_WINDOW, NUM_CLASSES), -10.0f32);
+        for frame in 0..FRAMES_PER_WINDOW {
+            logits[[0, frame, 1]] = 5.0;
+            logits[[1, frame, 6]] = 6.0;
+        }
+
+        let decoded = decode_batch_logits(logits.view()).unwrap();
+
+        assert_eq!(decoded.len(), 2);
+        assert!(decoded[0].iter().all(|frame| *frame == POWERSET[1]));
+        assert!(decoded[1].iter().all(|frame| *frame == POWERSET[6]));
     }
 
     // -- slot permutation alignment --

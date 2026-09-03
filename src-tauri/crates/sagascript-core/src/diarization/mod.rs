@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::DictationError;
 
+/// Keep both CPU-bound ONNX stages within the Apple-Silicon performance-core
+/// budget while Whisper runs concurrently on Metal.
+const ORT_INTRA_THREADS: usize = 4;
+
 /// Configuration for the diarization pipeline.
 pub struct DiarizeConfig {
     /// Cosine distance threshold for agglomerative clustering (0.0–2.0).
