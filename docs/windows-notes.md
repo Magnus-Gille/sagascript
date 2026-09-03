@@ -5,6 +5,9 @@ and notarized macOS artifacts only; the project does not publish an unsigned
 Windows installer. CI coverage is useful development evidence, not a promise
 of production support.
 
+The active zero-cost release strategy, candidate workflow, and clean-machine
+acceptance checklist live in [Windows release track](windows-release.md).
+
 ## Differences from macOS
 
 | Feature | macOS | Windows |
