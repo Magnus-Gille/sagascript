@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 const workflow = await readFile(
   new URL("../.github/workflows/windows-package.yml", import.meta.url),
@@ -36,4 +38,16 @@ test("Windows release guide forbids publishing unsigned candidates", () => {
   assert.match(releaseGuide, /Do not publish those artifacts/);
   assert.match(releaseGuide, /Microsoft Store MSIX/);
   assert.match(releaseGuide, /Release[^\n]*requires every executable artifact/i);
+});
+
+test("third-party notice comparison accepts Windows checkout line endings", () => {
+  const output = execFileSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./generate-third-party-notices.mjs", import.meta.url)),
+      "--test-newline-normalization",
+    ],
+    { encoding: "utf8" },
+  );
+  assert.match(output, /newline normalization passed/);
 });
