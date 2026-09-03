@@ -27,9 +27,12 @@ clearly labelled internal candidate on a known test machine.
 
 `.github/workflows/windows-package.yml` runs the release metadata, license,
 frontend, Rust, and real CPU-transcription gates on `windows-latest`. It then
-builds unsigned NSIS and MSI installers plus the native executable and uploads
-them as a short-lived GitHub Actions artifact. It never creates or modifies a
-GitHub Release.
+builds unsigned NSIS and MSI installers, a portable desktop executable, and a
+separate console CLI executable. It uploads them as one short-lived GitHub
+Actions artifact and never creates or modifies a GitHub Release. Windows GUI
+executables do not reliably expose redirected console output, so the candidate
+keeps the desktop and CLI launch surfaces explicit instead of pretending one
+file behaves identically in both contexts.
 
 `scripts/verify-windows-release.ps1` validates the executable surface,
 signature state, and deterministic checksums. `Internal` signature policy
@@ -38,12 +41,12 @@ public pipeline must use `Release`, which requires every executable artifact to
 have a valid Authenticode signature.
 
 After installing an internally accepted candidate on the test PC, run the
-bundled CLI acceptance helper against the exact installed executable (replace
-the placeholder with the path reported by the installer):
+bundled CLI acceptance helper against the CLI executable from the same workflow
+artifact:
 
 ```powershell
 .\accept-windows-candidate.ps1 `
-  -AppExe "C:\path-reported-by-installer\sagascript.exe" `
+  -CliExe ".\Sagascript-Windows-x64-CLI.exe" `
   -ExpectedVersion "1.1.3"
 ```
 
@@ -58,7 +61,9 @@ promises merely because an installer default was expected.
 
 - Windows 11 on x86-64.
 - CPU transcription using the recommended small language-specific engine.
-- One installed desktop app with system-tray UI and the canonical CLI commands.
+- One installed desktop app with system-tray UI plus a candidate CLI executable
+  exposing the canonical commands. Installer/PATH integration remains a public-
+  release decision.
 - No ARM64 promise and no GPU-acceleration promise in the first release.
 - Windows 10 may work but is not release-supported until separately accepted.
 
@@ -114,11 +119,12 @@ settings, model directory, or running process.
 
 ### CLI, updates, and upgrade
 
-- The installed `sagascript.exe --version` reports the GUI version and source
-  revision.
+- `Sagascript-Windows-x64-CLI.exe --version` reports the candidate version and
+  source revision.
 - `--help`, `list-models`, `config`, file transcription, microphone recording,
-  JSON output, and PowerShell completions work from the installed binary.
-- Decide and document whether the installer adds Sagascript to `PATH`; do not
+  JSON output, and PowerShell completions work from the candidate CLI binary.
+- Decide and document how the CLI is installed and whether it is added to
+  `PATH`; do not
   imply a bare `sagascript` command works until this is verified.
 - Check for Updates reports checking/current/available/error and opens the exact
   stable release page without claiming it installed anything.

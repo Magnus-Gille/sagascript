@@ -21,6 +21,9 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /windows-x64-unsigned-candidate/);
   assert.match(workflow, /accept-windows-candidate\.ps1/);
   assert.match(workflow, /norwegian-short-3s\.mp3/);
+  assert.match(workflow, /Sagascript-Windows-x64-Portable\.exe/);
+  assert.match(workflow, /Sagascript-Windows-x64-CLI\.exe/);
+  assert.match(workflow, /-CliExe "artifacts\\Sagascript-Windows-x64-CLI\.exe"/);
   assert.doesNotMatch(workflow, /action-gh-release|gh release|contents: write/);
 });
 

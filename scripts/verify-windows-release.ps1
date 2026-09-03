@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$AppExe,
+    [string]$CliExe,
 
     [Parameter(Mandatory = $true)]
     [string]$ExpectedVersion,
@@ -39,7 +39,7 @@ function Resolve-NonemptyFile {
     return $item.FullName
 }
 
-function Invoke-AppProbe {
+function Invoke-CliProbe {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
@@ -66,7 +66,7 @@ if (-not (Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue)) 
     throw "Get-AuthenticodeSignature is unavailable; run this verifier on Windows"
 }
 
-$appExePath = Resolve-NonemptyFile -Path $AppExe -Label "AppExe"
+$cliExePath = Resolve-NonemptyFile -Path $CliExe -Label "CliExe"
 $pathSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
 $nameSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
 $artifactByName = @{}
@@ -84,16 +84,16 @@ foreach ($artifact in $Artifacts) {
     $artifactByName[$basename] = $resolved
 }
 
-if (-not $pathSet.Contains($appExePath)) {
-    throw "AppExe must also appear in Artifacts: $appExePath"
+if (-not $pathSet.Contains($cliExePath)) {
+    throw "CliExe must also appear in Artifacts: $cliExePath"
 }
 
-$versionOutput = Invoke-AppProbe -Executable $appExePath -Argument "--version"
+$versionOutput = Invoke-CliProbe -Executable $cliExePath -Argument "--version"
 $versionPattern = "(?<![0-9.])$([regex]::Escape($ExpectedVersion))(?![0-9.])"
 if ($versionOutput -notmatch $versionPattern) {
     throw "Version output does not contain exact version '$ExpectedVersion': $versionOutput"
 }
-[void](Invoke-AppProbe -Executable $appExePath -Argument "--help")
+[void](Invoke-CliProbe -Executable $cliExePath -Argument "--help")
 Write-Host "Executable probes passed for Sagascript $ExpectedVersion"
 
 foreach ($basename in $artifactByName.Keys) {

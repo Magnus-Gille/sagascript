@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$AppExe,
+    [string]$CliExe,
 
     [Parameter(Mandatory = $true)]
     [string]$ExpectedVersion,
@@ -41,7 +41,7 @@ if ($ExpectedVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+
     throw "ExpectedVersion is not a semantic version: $ExpectedVersion"
 }
 
-$appExePath = Resolve-NonemptyFile -Path $AppExe -Label "AppExe"
+$cliExePath = Resolve-NonemptyFile -Path $CliExe -Label "CliExe"
 $fixturePath = Resolve-NonemptyFile -Path $Fixture -Label "Fixture"
 $outputFullPath = [System.IO.Path]::GetFullPath($OutputPath)
 $outputParent = [System.IO.Path]::GetDirectoryName($outputFullPath)
@@ -49,23 +49,23 @@ if (-not [System.IO.Directory]::Exists($outputParent)) {
     throw "Acceptance output directory does not exist: $outputParent"
 }
 
-$versionOutput = Invoke-Sagascript -Executable $appExePath -Arguments @("--version")
+$versionOutput = Invoke-Sagascript -Executable $cliExePath -Arguments @("--version")
 $versionPattern = "(?<![0-9.])$([regex]::Escape($ExpectedVersion))(?![0-9.])"
 if ($versionOutput -notmatch $versionPattern) {
-    throw "Installed executable did not report expected version $ExpectedVersion`: $versionOutput"
+    throw "CLI executable did not report expected version $ExpectedVersion`: $versionOutput"
 }
-[void](Invoke-Sagascript -Executable $appExePath -Arguments @("--help"))
-[void](Invoke-Sagascript -Executable $appExePath -Arguments @("list-models"))
-[void](Invoke-Sagascript -Executable $appExePath -Arguments @("config", "path"))
+[void](Invoke-Sagascript -Executable $cliExePath -Arguments @("--help"))
+[void](Invoke-Sagascript -Executable $cliExePath -Arguments @("list-models"))
+[void](Invoke-Sagascript -Executable $cliExePath -Arguments @("config", "path"))
 
 $downloadTimer = [System.Diagnostics.Stopwatch]::StartNew()
-[void](Invoke-Sagascript -Executable $appExePath -Arguments @("download-model", "nb-whisper-tiny"))
+[void](Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny"))
 $downloadTimer.Stop()
 
 $transcriptTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("sagascript-acceptance-{0}.json" -f [guid]::NewGuid())
 try {
     $transcriptionTimer = [System.Diagnostics.Stopwatch]::StartNew()
-    & $appExePath transcribe `
+    & $cliExePath transcribe `
         --language no `
         --model nb-whisper-tiny `
         --beam 0 `

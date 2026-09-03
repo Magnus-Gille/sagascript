@@ -96,6 +96,7 @@ jobs:
           if ($result.language -ne "no") { throw "Expected Norwegian result, got '$($result.language)'" }
           if ($result.text -notmatch "(?i)storting") { throw "Expected 'storting' in transcription" }
           if (-not $result.segments) { throw "Expected at least one transcription segment" }
+          Copy-Item $binary (Join-Path $env:RUNNER_TEMP "sagascript-cli.exe")
 
       - name: Build unsigned internal installers
         run: npx tauri build --ci --bundles nsis,msi --no-sign
@@ -104,14 +105,16 @@ jobs:
         shell: pwsh
         run: |
           $version = node -p "require('./package.json').version"
-          $native = "src-tauri\target\release\sagascript.exe"
+          $desktop = "src-tauri\target\release\sagascript.exe"
+          $cli = Join-Path $env:RUNNER_TEMP "sagascript-cli.exe"
           $nsis = Get-ChildItem "src-tauri\target\release\bundle\nsis" -Filter "*.exe" -File | Select-Object -First 1
           $msi = Get-ChildItem "src-tauri\target\release\bundle\msi" -Filter "*.msi" -File | Select-Object -First 1
           if (-not $nsis) { throw "Tauri did not produce an NSIS installer" }
           if (-not $msi) { throw "Tauri did not produce an MSI installer" }
 
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          Copy-Item $native "artifacts\Sagascript-Windows-x64.exe"
+          Copy-Item $desktop "artifacts\Sagascript-Windows-x64-Portable.exe"
+          Copy-Item $cli "artifacts\Sagascript-Windows-x64-CLI.exe"
           Copy-Item $nsis.FullName "artifacts\Sagascript-Windows-x64-Setup.exe"
           Copy-Item $msi.FullName "artifacts\Sagascript-Windows-x64.msi"
           Copy-Item "docs\windows-release.md" "artifacts\README-Windows-Candidate.md"
@@ -119,10 +122,11 @@ jobs:
           Copy-Item "test-audio\norwegian-short-3s.mp3" "artifacts\norwegian-short-3s.mp3"
 
           ./scripts/verify-windows-release.ps1 `
-            -AppExe "artifacts\Sagascript-Windows-x64.exe" `
+            -CliExe "artifacts\Sagascript-Windows-x64-CLI.exe" `
             -ExpectedVersion $version `
             -Artifacts @(
-              "artifacts\Sagascript-Windows-x64.exe",
+              "artifacts\Sagascript-Windows-x64-Portable.exe",
+              "artifacts\Sagascript-Windows-x64-CLI.exe",
               "artifacts\Sagascript-Windows-x64-Setup.exe",
               "artifacts\Sagascript-Windows-x64.msi"
             ) `
