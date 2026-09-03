@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "repository": "Magnus-Gille/sagascript",
-  "captured_at": "2026-09-03T13:44:08.000Z",
+  "captured_at": "2026-09-03T14:29:29.000Z",
   "snapshot_date": "2026-09-03",
   "totals": {
-    "all_assets": 74,
-    "app_downloads": 61,
-    "dmg_downloads": 49,
+    "all_assets": 75,
+    "app_downloads": 62,
+    "dmg_downloads": 50,
     "updater_downloads": 12,
     "windows_downloads": 0
   },
@@ -444,7 +444,7 @@
           "name": "Sagascript.dmg",
           "content_type": "application/x-apple-diskimage",
           "size": 14270149,
-          "download_count": 13
+          "download_count": 14
         },
         {
           "name": "sbom-full.cdx.json",
