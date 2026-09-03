@@ -83,7 +83,14 @@ jobs:
             --beam 0 `
             --json `
             test-audio/norwegian-short-3s.mp3 > $stdout 2> $stderr
-          if ($LASTEXITCODE -ne 0) { throw "Transcription failed with exit code $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) {
+            $transcriptionExit = $LASTEXITCODE
+            Write-Host "Transcription stdout:"
+            if (Test-Path $stdout) { Get-Content $stdout }
+            Write-Host "Transcription stderr:"
+            if (Test-Path $stderr) { Get-Content $stderr }
+            throw "Transcription failed with exit code $transcriptionExit"
+          }
           python scripts/verify-json-cli-streams.py $stdout $stderr
           $result = Get-Content $stdout -Raw | ConvertFrom-Json
           if ($result.language -ne "no") { throw "Expected Norwegian result, got '$($result.language)'" }
