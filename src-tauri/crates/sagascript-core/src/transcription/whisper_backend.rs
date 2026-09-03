@@ -285,6 +285,174 @@ fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
     separate_sentence_boundaries(&transcript)
 }
 
+const MIN_STITCH_ANCHOR_WORDS: usize = 4;
+const MIN_STITCH_ANCHOR_CHARS: usize = 12;
+const MAX_STITCH_OVERLAP_WORDS: usize = 96;
+const MAX_STITCH_UNANCHORED_WORDS: usize = 32;
+
+#[derive(Debug)]
+struct StitchWord {
+    normalized: String,
+    start: usize,
+}
+
+/// Join independently decoded, overlapping chunks without repeating their
+/// shared prefix. Matching is deliberately conservative: short repetitions
+/// are preserved rather than risking deletion of real speech.
+fn stitch_chunk_results(
+    chunk_results: Vec<Vec<TranscriptSegment>>,
+    audio_duration: f64,
+) -> Vec<TranscriptSegment> {
+    let mut stitched: Vec<TranscriptSegment> = Vec::new();
+    let mut previous_end = 0.0;
+
+    for chunk in chunk_results {
+        if !stitched.is_empty() && !chunk.is_empty() {
+            let previous_text = concatenated_segment_text(&stitched);
+            let chunk_text = concatenated_segment_text(&chunk);
+            if let Some(suffix_start) = overlapping_suffix_start(&previous_text, &chunk_text) {
+                trim_segment_suffix(&mut stitched, suffix_start);
+            }
+        }
+
+        for mut segment in chunk {
+            if segment.text.trim().is_empty() {
+                continue;
+            }
+            (segment.start, segment.end) =
+                sanitize_segment_bounds(segment.start, segment.end, audio_duration, previous_end);
+            previous_end = segment.end;
+            stitched.push(segment);
+        }
+    }
+
+    stitched
+}
+
+fn concatenated_segment_text(segments: &[TranscriptSegment]) -> String {
+    let capacity = segments.iter().map(|segment| segment.text.len()).sum();
+    let mut text = String::with_capacity(capacity);
+    for segment in segments {
+        text.push_str(&segment.text);
+    }
+    text
+}
+
+fn overlapping_suffix_start(previous: &str, next: &str) -> Option<usize> {
+    let previous_words = stitch_words(previous);
+    let next_words = stitch_words(next);
+    let previous_floor = previous_words
+        .len()
+        .saturating_sub(MAX_STITCH_OVERLAP_WORDS);
+    let next_limit = next_words.len().min(MAX_STITCH_OVERLAP_WORDS);
+    let mut best: Option<(usize, usize, usize)> = None;
+
+    for previous_index in previous_floor..previous_words.len() {
+        for next_index in 0..next_limit {
+            if previous_index < next_index {
+                continue;
+            }
+            let aligned_start = previous_index - next_index;
+            if aligned_start < previous_floor {
+                continue;
+            }
+
+            let mut anchor_words = 0;
+            while previous_index + anchor_words < previous_words.len()
+                && next_index + anchor_words < next_limit
+                && previous_words[previous_index + anchor_words].normalized
+                    == next_words[next_index + anchor_words].normalized
+            {
+                anchor_words += 1;
+            }
+            if anchor_words < MIN_STITCH_ANCHOR_WORDS
+                || next_index > MAX_STITCH_UNANCHORED_WORDS
+                || previous_words.len() - previous_index - anchor_words
+                    > MAX_STITCH_UNANCHORED_WORDS
+            {
+                continue;
+            }
+            let anchor_chars = next_words[next_index..next_index + anchor_words]
+                .iter()
+                .map(|word| word.normalized.chars().count())
+                .sum::<usize>();
+            if anchor_chars < MIN_STITCH_ANCHOR_CHARS {
+                continue;
+            }
+
+            let candidate = (next_index, usize::MAX - anchor_words, aligned_start);
+            if best.is_none_or(|current| candidate < current) {
+                best = Some(candidate);
+            }
+        }
+    }
+
+    best.map(|(_, _, aligned_start)| previous_words[aligned_start].start)
+}
+
+fn stitch_words(text: &str) -> Vec<StitchWord> {
+    let mut words = Vec::new();
+    let mut start = None;
+
+    for (index, character) in text.char_indices() {
+        let continues_word = character.is_alphanumeric()
+            || (start.is_some() && matches!(character, '\'' | '’' | '-'));
+        if continues_word {
+            if start.is_none() && character.is_alphanumeric() {
+                start = Some(index);
+            }
+        } else if let Some(word_start) = start.take() {
+            let normalized = text[word_start..index]
+                .trim_end_matches(['\'', '’', '-'])
+                .to_lowercase();
+            if !normalized.is_empty() {
+                words.push(StitchWord {
+                    normalized,
+                    start: word_start,
+                });
+            }
+        }
+    }
+
+    if let Some(word_start) = start {
+        let normalized = text[word_start..]
+            .trim_end_matches(['\'', '’', '-'])
+            .to_lowercase();
+        if !normalized.is_empty() {
+            words.push(StitchWord {
+                normalized,
+                start: word_start,
+            });
+        }
+    }
+
+    words
+}
+
+fn trim_segment_suffix(segments: &mut Vec<TranscriptSegment>, suffix_start: usize) {
+    let mut remaining = suffix_start;
+    let mut retained = Vec::with_capacity(segments.len());
+
+    for mut segment in segments.drain(..) {
+        if remaining > segment.text.len() {
+            remaining -= segment.text.len();
+            retained.push(segment);
+            continue;
+        }
+
+        debug_assert!(segment.text.is_char_boundary(remaining));
+        segment.text.truncate(remaining);
+        let trimmed_len = segment.text.trim_end().len();
+        segment.text.truncate(trimmed_len);
+        if !segment.text.is_empty() {
+            retained.push(segment);
+        }
+        break;
+    }
+
+    *segments = retained;
+}
+
 /// Insert a missing word boundary after sentence-ending punctuation when the
 /// following character clearly begins a new sentence. Whisper can omit this
 /// separator inside a single raw segment, so repairing only segment joins is
@@ -1069,8 +1237,8 @@ impl WhisperBackend {
                 let first = scope.spawn(move || {
                     self.transcribe_chunk_segments(
                         warm_state,
-                        &audio[first_chunk.start_sample..first_chunk.end_sample],
-                        first_chunk.start_sample as f64 / 16_000.0,
+                        &audio[first_chunk.decode_start_sample..first_chunk.decode_end_sample],
+                        first_chunk.decode_start_sample as f64 / 16_000.0,
                         model,
                         language,
                         opts,
@@ -1089,8 +1257,8 @@ impl WhisperBackend {
                         scope.spawn(move || {
                             self.transcribe_chunk_segments(
                                 state,
-                                &audio[chunk.start_sample..chunk.end_sample],
-                                chunk.start_sample as f64 / 16_000.0,
+                                &audio[chunk.decode_start_sample..chunk.decode_end_sample],
+                                chunk.decode_start_sample as f64 / 16_000.0,
                                 model,
                                 language,
                                 opts,
@@ -1117,21 +1285,10 @@ impl WhisperBackend {
                 Ok::<_, DictationError>(results)
             })?;
 
-            let audio_duration = audio.len() as f64 / 16_000.0;
-            let mut previous_end = 0.0;
-            let mut segments = Vec::new();
-            for result in &mut chunk_results {
-                for mut segment in result.drain(..) {
-                    (segment.start, segment.end) = sanitize_segment_bounds(
-                        segment.start,
-                        segment.end,
-                        audio_duration,
-                        previous_end,
-                    );
-                    previous_end = segment.end;
-                    segments.push(segment);
-                }
-            }
+            let segments = stitch_chunk_results(
+                std::mem::take(&mut chunk_results),
+                audio.len() as f64 / 16_000.0,
+            );
             info!(
                 "Parallel local transcription complete: {} segment(s) across {} chunks",
                 segments.len(),
@@ -2366,6 +2523,87 @@ mod segment_confidence_tests {
         assert_eq!(
             assemble_transcript(&segments),
             "Jag bor i U.S.A. Nästa mening."
+        );
+    }
+
+    #[test]
+    fn overlapping_continuous_speech_is_stitched_without_dropping_words() {
+        let chunk_results = vec![
+            vec![TranscriptSegment {
+                start: 0.0,
+                end: 65.0,
+                text: " Vi testar sammanhängande tal över chunkgränsen".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.0,
+            }],
+            vec![TranscriptSegment {
+                start: 55.0,
+                end: 120.0,
+                text: " sammanhängande tal över chunkgränsen utan att kapa ord.".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.0,
+            }],
+        ];
+
+        let stitched = stitch_chunk_results(chunk_results, 120.0);
+        assert_eq!(
+            assemble_transcript(&stitched).trim(),
+            "Vi testar sammanhängande tal över chunkgränsen utan att kapa ord."
+        );
+        assert!(stitched.windows(2).all(|pair| pair[0].end <= pair[1].start));
+    }
+
+    #[test]
+    fn ambiguous_single_word_overlap_is_preserved_instead_of_dropped() {
+        let chunk_results = vec![
+            vec![TranscriptSegment {
+                start: 0.0,
+                end: 65.0,
+                text: " Jag sa ja".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            }],
+            vec![TranscriptSegment {
+                start: 55.0,
+                end: 120.0,
+                text: " ja till förslaget".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            }],
+        ];
+
+        let stitched = stitch_chunk_results(chunk_results, 120.0);
+        assert_eq!(
+            assemble_transcript(&stitched).trim(),
+            "Jag sa ja ja till förslaget"
+        );
+    }
+
+    #[test]
+    fn matching_anchor_replaces_a_differently_decoded_overlap() {
+        let chunk_results = vec![
+            vec![TranscriptSegment {
+                start: 0.0,
+                end: 65.0,
+                text: " Tidigare text. Där kommer det in på rätt svår. Det har ju också ett mellanskikt där."
+                    .to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            }],
+            vec![TranscriptSegment {
+                start: 55.0,
+                end: 120.0,
+                text: " Där kommer du in på rätt svår mark. Du har ju också ett mellanskikt där anonymisering fungerar."
+                    .to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            }],
+        ];
+
+        let stitched = stitch_chunk_results(chunk_results, 120.0);
+        assert_eq!(
+            assemble_transcript(&stitched).trim(),
+            "Tidigare text. Där kommer du in på rätt svår mark. Du har ju också ett mellanskikt där anonymisering fungerar."
         );
     }
 

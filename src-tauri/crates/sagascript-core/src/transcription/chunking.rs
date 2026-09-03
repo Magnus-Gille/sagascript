@@ -2,11 +2,17 @@ const SAMPLE_RATE: usize = 16_000;
 const SEARCH_RADIUS_SAMPLES: usize = 15 * SAMPLE_RATE;
 const ENERGY_WINDOW_SAMPLES: usize = SAMPLE_RATE * 2 / 5;
 const SEARCH_STRIDE_SAMPLES: usize = SAMPLE_RATE / 100;
+const DECODE_OVERLAP_SAMPLES: usize = 5 * SAMPLE_RATE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AudioChunk {
+    /// Non-overlapping ownership interval used for progress and ordering.
     pub(crate) start_sample: usize,
     pub(crate) end_sample: usize,
+    /// Audio actually decoded. Internal boundaries include context on both
+    /// sides so a word crossing the ownership boundary is never hard-cut.
+    pub(crate) decode_start_sample: usize,
+    pub(crate) decode_end_sample: usize,
 }
 
 /// Split audio near balanced boundaries, preferring quiet points within 15 seconds.
@@ -33,6 +39,8 @@ pub(crate) fn plan_chunks(
         return vec![AudioChunk {
             start_sample: 0,
             end_sample: audio.len(),
+            decode_start_sample: 0,
+            decode_end_sample: audio.len(),
         }];
     }
 
@@ -60,9 +68,22 @@ pub(crate) fn plan_chunks(
 
     boundaries
         .windows(2)
-        .map(|pair| AudioChunk {
+        .enumerate()
+        .map(|(index, pair)| AudioChunk {
             start_sample: pair[0],
             end_sample: pair[1],
+            decode_start_sample: if index == 0 {
+                pair[0]
+            } else {
+                pair[0].saturating_sub(DECODE_OVERLAP_SAMPLES)
+            },
+            decode_end_sample: if index + 1 == chunk_count {
+                pair[1]
+            } else {
+                pair[1]
+                    .saturating_add(DECODE_OVERLAP_SAMPLES)
+                    .min(audio.len())
+            },
         })
         .collect()
 }
@@ -124,6 +145,8 @@ mod tests {
         let full = AudioChunk {
             start_sample: 0,
             end_sample: 100,
+            decode_start_sample: 0,
+            decode_end_sample: 100,
         };
         assert_eq!(plan_chunks(&audio, 0, 10), vec![full]);
         assert_eq!(plan_chunks(&audio, 1, 10), vec![full]);
@@ -142,6 +165,10 @@ mod tests {
         assert!(chunks
             .iter()
             .all(|chunk| chunk.end_sample - chunk.start_sample >= 20_000));
+        assert!(chunks.iter().all(|chunk| {
+            chunk.decode_start_sample <= chunk.start_sample
+                && chunk.decode_end_sample >= chunk.end_sample
+        }));
     }
 
     #[test]
@@ -151,6 +178,24 @@ mod tests {
         let chunks = plan_chunks(&audio, 2, 10_000);
         assert_eq!(chunks.len(), 2);
         assert!((38_400..=40_000).contains(&chunks[0].end_sample));
+    }
+
+    #[test]
+    fn continuous_speech_chunks_decode_across_the_core_boundary() {
+        let audio = vec![0.5; 10 * 60 * 16_000];
+        let chunks = plan_chunks(&audio, 2, 60 * 16_000);
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].end_sample, chunks[1].start_sample);
+        assert_eq!(
+            chunks[0].decode_end_sample - chunks[0].end_sample,
+            5 * 16_000
+        );
+        assert_eq!(
+            chunks[1].start_sample - chunks[1].decode_start_sample,
+            5 * 16_000
+        );
+        assert!(chunks[0].decode_end_sample > chunks[1].decode_start_sample);
     }
 
     #[test]
@@ -178,18 +223,26 @@ mod tests {
                 AudioChunk {
                     start_sample: 0,
                     end_sample: 20_000,
+                    decode_start_sample: 0,
+                    decode_end_sample: 80_000,
                 },
                 AudioChunk {
                     start_sample: 20_000,
                     end_sample: 40_000,
+                    decode_start_sample: 0,
+                    decode_end_sample: 80_000,
                 },
                 AudioChunk {
                     start_sample: 40_000,
                     end_sample: 60_000,
+                    decode_start_sample: 0,
+                    decode_end_sample: 80_000,
                 },
                 AudioChunk {
                     start_sample: 60_000,
                     end_sample: 80_000,
+                    decode_start_sample: 0,
+                    decode_end_sample: 80_000,
                 },
             ]
         );
