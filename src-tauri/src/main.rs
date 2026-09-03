@@ -46,7 +46,7 @@ use tauri::{
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tracing::{error, info, warn};
 
-use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
+use app_controller::{AppController, AppState, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
 use sagascript_core::settings::HotkeyProfile;
 #[cfg(test)]
@@ -1000,8 +1000,17 @@ fn main() {
                 // "visible", so always run the full reveal path.
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
-                    info!("Application reopen requested");
-                    open_settings_window(_app_handle, None);
+                    let state = {
+                        let ctrl: tauri::State<'_, SharedController> = _app_handle.state();
+                        let state = ctrl.lock().unwrap().state();
+                        state
+                    };
+                    if should_reveal_for_reopen(state) {
+                        info!("Application reopen requested");
+                        open_settings_window(_app_handle, None);
+                    } else {
+                        info!("Ignoring application reopen while dictation is {state:?}");
+                    }
                 }
                 _ => {}
             }
@@ -1230,6 +1239,10 @@ fn initial_window_request(
     } else {
         InitialWindowRequest::Settings
     }
+}
+
+fn should_reveal_for_reopen(state: AppState) -> bool {
+    !state.is_busy()
 }
 
 trait MainWindowVisibility {
@@ -1915,6 +1928,13 @@ mod tests {
             initial_window_request(true, GuiLaunchMode::Standard),
             InitialWindowRequest::Settings
         );
+    }
+
+    #[test]
+    fn dictation_state_never_turns_a_reopen_event_into_a_settings_window() {
+        assert!(should_reveal_for_reopen(AppState::Idle));
+        assert!(!should_reveal_for_reopen(AppState::Recording));
+        assert!(!should_reveal_for_reopen(AppState::Transcribing));
     }
 
     #[test]
