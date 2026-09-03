@@ -46,7 +46,9 @@ use tauri::{
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tracing::{error, info, warn};
 
-use app_controller::{AppController, AppState, HotkeyDownResult, StopRecordingOutcome};
+#[cfg(any(target_os = "macos", test))]
+use app_controller::AppState;
+use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
 use sagascript_core::settings::HotkeyProfile;
 #[cfg(test)]
@@ -1241,6 +1243,7 @@ fn initial_window_request(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn should_reveal_for_reopen(state: AppState) -> bool {
     !state.is_busy()
 }
