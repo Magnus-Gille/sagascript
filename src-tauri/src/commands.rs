@@ -513,12 +513,34 @@ pub async fn set_hotkey_profiles(
 /// running. Reading the file again matters for CLI-driven changes: the file
 /// can contain a requested bare F-key while the controller deliberately keeps
 /// the previous operational shortcut after registration failed closed.
+///
+/// If the AppKit event monitor itself was never installed (setup failure),
+/// reinstall it here on the macOS main thread before re-registering, so a
+/// retry can recover without an app restart. Install and registration
+/// failures still surface through the normal health path below.
 #[tauri::command]
 pub async fn retry_hotkey_registration(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
     health: State<'_, HotkeyHealth>,
 ) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if !crate::hotkey::bare_function_key_monitor_installed() {
+        let app_for_install = app.clone();
+        let (installed_tx, installed_rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let result =
+                crate::hotkey::install_bare_function_key_monitor(&app_for_install);
+            let _ = installed_tx.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+        // The main thread runs the install promptly; a disconnected channel
+        // means the app is shutting down, so fall through and let the
+        // registration attempt below report the monitor as unavailable.
+        if let Ok(Err(error)) = installed_rx.recv() {
+            tracing::warn!("F13-F24 event monitor reinstall failed: {error}");
+        }
+    }
     let profiles = sagascript_core::settings::store::load().resolved_hotkey_profiles();
     set_hotkey_profiles(app, controller, health, profiles).await
 }

@@ -219,7 +219,12 @@
         const status = await hotkeyStatus();
         hotkeyStatusOk = status.ok;
         hotkeyStatusError = status.error ?? "";
-        if (platform === "macos" && accessibilityGranted && !status.ok) {
+        if (
+          platform === "macos" &&
+          accessibilityGranted &&
+          !status.ok &&
+          configuredShortcutsUseBareHotkey()
+        ) {
           await refreshHotkeyRegistration();
         }
 
@@ -316,8 +321,21 @@
     return false;
   }
 
-  async function refreshHotkeyRegistration(): Promise<void> {
-    try {
+  function configuredShortcutsUseBareHotkey(): boolean {
+    // Only bare F13–F24 registrations depend on the macOS Accessibility
+    // grant, so only those benefit from an automatic retry on Settings
+    // open. Retrying other failures (e.g. shortcut-in-use) would just churn
+    // unregister/register without helping. Gated on shortcut content, not
+    // on backend error text, to avoid fragile string coupling.
+    if (!settings) return false;
+    const shortcuts = [
+      settings.hotkey,
+      ...settings.hotkey_profiles.map((profile) => profile.shortcut),
+    ];
+    return shortcuts.some((shortcut) => canUseBareHotkey(shortcut, platform));
+  }
+
+  async function refreshHotkeyRegistration(): Promise<void> {    try {
       await retryHotkeyRegistration();
       settings = await getSettings();
       await refreshProfileModels(settings.hotkey_profiles);

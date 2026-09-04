@@ -355,11 +355,16 @@ fn setting_warning(key: &str, settings: &Settings) -> Option<&'static str> {
 }
 
 fn bare_extended_hotkey_warning(shortcut: &str) -> Option<&'static str> {
+    // Strict parity with src/lib/hotkey.js (/^F(\d{1,2})$/i): at most two
+    // ASCII digits, so "F013" never warns as a bare extended key.
     let normalized = shortcut.trim().to_ascii_lowercase();
-    let is_bare_extended = normalized
-        .strip_prefix('f')
-        .and_then(|number| number.parse::<u8>().ok())
-        .is_some_and(|number| (13..=24).contains(&number));
+    let digits = normalized.strip_prefix('f')?;
+    let is_bare_extended = !digits.is_empty()
+        && digits.len() <= 2
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && digits
+            .parse::<u8>()
+            .is_ok_and(|number| (13..=24).contains(&number));
     (cfg!(target_os = "macos") && is_bare_extended).then_some(
         "bare F13-F24 requires Accessibility approval for the installed Sagascript app",
     )
@@ -844,5 +849,6 @@ mod tests {
         assert!(warning.contains("Accessibility approval"));
 
         assert!(bare_extended_hotkey_warning("Shift+F24").is_none());
+        assert!(bare_extended_hotkey_warning("F013").is_none());
     }
 }

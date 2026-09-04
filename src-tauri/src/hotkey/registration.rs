@@ -1,11 +1,19 @@
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
-fn is_bare_extended_function_key(shortcut: &str) -> bool {
+fn bare_extended_function_key_number(shortcut: &str) -> Option<u8> {
+    // Strict parity with src/lib/hotkey.js canUseBareHotkey (/^F(\d{1,2})$/i):
+    // at most two ASCII digits, so "F013" or "F1a" never qualify.
     let normalized = shortcut.trim().to_ascii_lowercase();
-    normalized
-        .strip_prefix('f')
-        .and_then(|number| number.parse::<u8>().ok())
-        .is_some_and(|number| (13..=24).contains(&number))
+    let digits = normalized.strip_prefix('f')?;
+    if digits.is_empty() || digits.len() > 2 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let number: u8 = digits.parse().ok()?;
+    (13..=24).contains(&number).then_some(number)
+}
+
+fn is_bare_extended_function_key(shortcut: &str) -> bool {
+    bare_extended_function_key_number(shortcut).is_some()
 }
 
 fn uses_native_macos_monitor(shortcut: &str) -> bool {
@@ -75,7 +83,9 @@ mod tests {
         for shortcut in ["F13", "f20", " F24 "] {
             assert!(is_bare_extended_function_key(shortcut), "{shortcut}");
         }
-        for shortcut in ["F12", "F25", "Shift+F13", "F13+F14", "Space"] {
+        for shortcut in [
+            "F12", "F25", "Shift+F13", "F13+F14", "Space", "F013", "F0013", "F1a",
+        ] {
             assert!(!is_bare_extended_function_key(shortcut), "{shortcut}");
         }
     }

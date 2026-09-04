@@ -44,7 +44,7 @@ test("the bare-key range shown in Settings matches registration support", () => 
 });
 
 test("malformed extended function keys never qualify as bare shortcuts", () => {
-  for (const key of ["F013", "F13a", "F25", "F-13", "13"]) {
+  for (const key of ["F013", "F0013", "F13a", "F25", "F-13", "13"]) {
     assert.equal(canUseBareHotkey(key, "macos"), false, key);
   }
   assert.equal(canUseBareHotkey(" F13 ", "macos"), true);
