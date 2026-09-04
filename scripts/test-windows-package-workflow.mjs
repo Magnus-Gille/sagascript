@@ -12,6 +12,10 @@ const releaseGuide = await readFile(
   new URL("../docs/windows-release.md", import.meta.url),
   "utf8",
 );
+const acceptanceScript = await readFile(
+  new URL("./accept-windows-candidate.ps1", import.meta.url),
+  "utf8",
+);
 
 test("Windows candidate workflow stays non-publishing and explicitly unsigned", () => {
   assert.match(workflow, /workflow_dispatch:/);
@@ -68,11 +72,47 @@ test("Windows candidate makes real transcription a blocking gate", () => {
   const buildStart = workflow.indexOf("name: Build unsigned internal installers");
   assert.ok(gateStart >= 0 && buildStart > gateStart);
   const gate = workflow.slice(gateStart, buildStart);
-  assert.match(gate, /download-model nb-whisper-tiny/);
+  const downloadCalls = gate.match(/& \$binary download-model nb-whisper-tiny/g) ?? [];
+  assert.equal(
+    downloadCalls.length,
+    2,
+    "native gate must download once and re-verify the existing model",
+  );
+  const firstDownload = gate.indexOf("& $binary download-model nb-whisper-tiny");
+  const secondDownload = gate.indexOf(
+    "& $binary download-model nb-whisper-tiny",
+    firstDownload + 1,
+  );
+  const transcription = gate.indexOf("& $binary transcribe");
+  assert.ok(firstDownload >= 0 && secondDownload > firstDownload);
+  assert.ok(transcription > secondDownload);
+  assert.match(gate, /Existing model verification failed/);
   assert.match(gate, /verify-json-cli-streams\.py/);
   assert.doesNotMatch(gate, /continue-on-error/);
   assert.match(workflow, /Verify native runner architecture/);
   assert.match(workflow, /Expected native \$\{\{ matrix\.rust_target \}\} runner/);
+});
+
+test("Windows acceptance re-verifies an already-downloaded model", () => {
+  const downloadCalls = acceptanceScript.match(
+    /Invoke-Sagascript -Executable \$cliExePath -Arguments @\("download-model", "nb-whisper-tiny"\)/g,
+  ) ?? [];
+  assert.equal(
+    downloadCalls.length,
+    2,
+    "packaged acceptance must exercise existing-model verification",
+  );
+  const firstDownload = acceptanceScript.indexOf(
+    'Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny")',
+  );
+  const secondDownload = acceptanceScript.indexOf(
+    'Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny")',
+    firstDownload + 1,
+  );
+  const transcription = acceptanceScript.indexOf("$cliExePath transcribe");
+  assert.ok(firstDownload >= 0 && secondDownload > firstDownload);
+  assert.ok(transcription > secondDownload);
+  assert.match(acceptanceScript, /verification_seconds/);
 });
 
 test("Windows release guide forbids publishing unsigned candidates", () => {

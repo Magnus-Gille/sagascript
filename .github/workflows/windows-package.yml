@@ -121,6 +121,8 @@ jobs:
           $stderr = Join-Path $env:RUNNER_TEMP "transcription-smoke.stderr"
           & $binary download-model nb-whisper-tiny
           if ($LASTEXITCODE -ne 0) { throw "Model download failed with exit code $LASTEXITCODE" }
+          & $binary download-model nb-whisper-tiny
+          if ($LASTEXITCODE -ne 0) { throw "Existing model verification failed with exit code $LASTEXITCODE" }
           & $binary transcribe `
             --language no `
             --model nb-whisper-tiny `
