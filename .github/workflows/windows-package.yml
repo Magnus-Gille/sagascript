@@ -56,20 +56,36 @@ jobs:
             throw "Expected native ${{ matrix.architecture }} runner, got $runnerArchitecture"
           }
 
+      - name: Configure native ARM64 C and C++ toolchain
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          $clang = Get-Command clang-cl -ErrorAction Stop
+          $ninja = Get-Command ninja -ErrorAction Stop
+          & $clang.Source --version
+          & $ninja.Source --version
+          "CMAKE_GENERATOR=Ninja" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CC=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CXX=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_C_COMPILER=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_CXX_COMPILER=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_ASM_COMPILER=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
 
-      - name: Cache Cargo registry and target
+      - name: Cache Cargo registry
         uses: actions/cache@v5
         with:
           path: |
             ~\.cargo\registry
             ~\.cargo\git
-            src-tauri\target
-          key: windows-package-${{ matrix.architecture }}-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json') }}
+          key: windows-package-${{ matrix.architecture }}-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json', '.github/workflows/windows-package.yml') }}
           restore-keys: |
             windows-package-${{ matrix.architecture }}-
 

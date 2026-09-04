@@ -24,6 +24,25 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /windows-\$\{\{ matrix\.architecture \}\}-unsigned-candidate/);
   assert.match(workflow, /RuntimeInformation\]::OSArchitecture/);
   assert.match(workflow, /rustc -vV/);
+  assert.match(workflow, /name: Configure native ARM64 C and C\+\+ toolchain/);
+  assert.match(workflow, /if: matrix\.architecture == 'arm64'/);
+  assert.match(workflow, /CMAKE_GENERATOR=Ninja/);
+  assert.match(workflow, /CMAKE_C_COMPILER=clang-cl/);
+  assert.match(workflow, /CMAKE_CXX_COMPILER=clang-cl/);
+  assert.match(workflow, /CMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc/);
+  assert.match(workflow, /CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc/);
+  assert.match(
+    workflow,
+    /hashFiles\('src-tauri\/Cargo\.lock', 'package-lock\.json', '\.github\/workflows\/windows-package\.yml'\)/,
+  );
+  const cargoCacheStart = workflow.indexOf("name: Cache Cargo registry");
+  const cargoCacheEnd = workflow.indexOf("name: Install npm dependencies", cargoCacheStart);
+  assert.ok(cargoCacheStart >= 0 && cargoCacheEnd > cargoCacheStart);
+  assert.doesNotMatch(
+    workflow.slice(cargoCacheStart, cargoCacheEnd),
+    /src-tauri\\target/,
+    "native build output must not be restored across C/C++ toolchain changes",
+  );
   assert.match(workflow, /accept-windows-candidate\.ps1/);
   assert.match(workflow, /norwegian-short-3s\.mp3/);
   assert.match(workflow, /Sagascript-Windows-\$architecture-Portable\.exe/);
