@@ -41,7 +41,7 @@ fn canonical_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Strin
         .map(|modifier| match modifier.as_str() {
             "control" | "ctrl" => "control",
             "alt" | "option" => "alt",
-            "super" | "command" | "cmd" => "super",
+            "super" | "command" | "cmd" | "meta" => "super",
             "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" => {
                 if platform == HotkeyPlatform::MacOS { "super" } else { "control" }
             }
@@ -82,6 +82,10 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
         "super",
         "command",
         "cmd",
+        // `global-hotkey` 0.8 (keyboard-types 0.8) renamed the Command/Win
+        // modifier from `super` to `meta`, and shortcut events are reported
+        // with that spelling. Accept it so events match saved profiles.
+        "meta",
         "commandorcontrol",
         "commandorctrl",
         "cmdorctrl",
@@ -232,6 +236,11 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
         ";",
         "slash",
         "/",
+        // ISO section key: `§` left of `1` on Swedish, UK and other Apple ISO
+        // keyboards (macOS virtual key 0x0A), `<`/`\` next to left Shift on
+        // PC ISO keyboards. Only registrable once the patched `global-hotkey`
+        // (tauri-apps/global-hotkey#216) is in use; see src-tauri/Cargo.toml.
+        "intlbackslash",
         // Lock & control
         "capslock",
         "numlock",
@@ -390,6 +399,7 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
             "super"
                 | "command"
                 | "cmd"
+                | "meta"
                 | "commandorcontrol"
                 | "commandorctrl"
                 | "cmdorctrl"
@@ -430,6 +440,7 @@ mod tests {
             "Command+Q",
             "Cmd+KeyQ",
             "Super+Q",
+            "Meta+Q",
             "CmdOrCtrl+Q",
             "CommandOrControl+q",
             "Control+Super+Shift+Q",
@@ -474,6 +485,56 @@ mod tests {
             assert!(
                 validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).is_ok(),
                 "should remain valid: {shortcut}"
+            );
+        }
+    }
+
+    #[test]
+    fn iso_section_key_is_accepted_with_modifiers_on_every_platform() {
+        for platform in [
+            HotkeyPlatform::MacOS,
+            HotkeyPlatform::Windows,
+            HotkeyPlatform::Other,
+        ] {
+            for shortcut in [
+                "Command+IntlBackslash",
+                "Control+intlbackslash",
+                "Shift+Alt+IntlBackslash",
+            ] {
+                assert!(
+                    validate_hotkey_for_platform(shortcut, platform).is_ok(),
+                    "should be valid: {shortcut}"
+                );
+            }
+            let error = validate_hotkey_for_platform("IntlBackslash", platform).unwrap_err();
+            assert!(
+                error.contains("modifier is required"),
+                "unexpected error for bare IntlBackslash: {error}"
+            );
+        }
+        assert_eq!(
+            canonical_hotkey_for_platform("Cmd+IntlBackslash", HotkeyPlatform::MacOS),
+            "super+intlbackslash"
+        );
+    }
+
+    #[test]
+    fn meta_is_the_event_spelling_of_the_command_modifier() {
+        // global-hotkey reports a registered `Super+IntlBackslash` shortcut
+        // back as `meta+IntlBackslash`; both must resolve to the same profile.
+        for platform in [
+            HotkeyPlatform::MacOS,
+            HotkeyPlatform::Windows,
+            HotkeyPlatform::Other,
+        ] {
+            assert!(validate_hotkey_for_platform("meta+IntlBackslash", platform).is_ok());
+            assert_eq!(
+                canonical_hotkey_for_platform("meta+IntlBackslash", platform),
+                canonical_hotkey_for_platform("Super+IntlBackslash", platform)
+            );
+            assert_eq!(
+                canonical_hotkey_for_platform("shift+meta+Space", platform),
+                canonical_hotkey_for_platform("Command+Shift+Space", platform)
             );
         }
     }
