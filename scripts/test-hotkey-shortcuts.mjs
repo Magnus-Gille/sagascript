@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   canUseBareHotkey,
+  hotkeyKeyLabel,
   supportedBareFunctionKeyRange,
   tauriKeyName,
 } from "../src/lib/hotkey.js";
@@ -48,4 +49,23 @@ test("malformed extended function keys never qualify as bare shortcuts", () => {
     assert.equal(canUseBareHotkey(key, "macos"), false, key);
   }
   assert.equal(canUseBareHotkey(" F13 ", "macos"), true);
+});
+
+test("the ISO section key is identified by its physical code, not its printed character", () => {
+  // Swedish/UK Apple ISO keyboards print "§" (Shift: "±"); German prints "^", French "@".
+  for (const key of ["§", "±", "^", "@", "<", ">", "\\", "Dead"]) {
+    assert.equal(tauriKeyName(key, "IntlBackslash"), "IntlBackslash", key);
+  }
+  assert.equal(tauriKeyName("§"), null);
+  assert.equal(tauriKeyName("§", "Backquote"), null);
+  assert.equal(tauriKeyName("a", "IntlBackslash"), "IntlBackslash");
+  assert.equal(tauriKeyName("a", "KeyA"), "A");
+  assert.equal(canUseBareHotkey("IntlBackslash", "macos"), false);
+});
+
+test("the section key is labelled with its Apple keycap on macOS", () => {
+  assert.equal(hotkeyKeyLabel("IntlBackslash", "macos"), "§");
+  assert.equal(hotkeyKeyLabel("IntlBackslash", "windows"), "IntlBackslash");
+  assert.equal(hotkeyKeyLabel("Space", "macos"), "Space");
+  assert.equal(hotkeyKeyLabel("F13", "linux"), "F13");
 });

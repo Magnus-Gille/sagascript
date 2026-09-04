@@ -61,6 +61,21 @@ rejected there; F21–F24 failed earlier as unknown scancodes. The source mappin
 for F13–F20 therefore did not provide a working permission-free registration
 path. This probe was run on 2026-09-04 before adopting the AppKit monitor.
 
+## The ISO section key (Command+§)
+
+Apple ISO keyboards (Swedish, Norwegian, Danish, Finnish, UK and others) have an
+extra key left of `1` that is labelled `§` on most of them.
+It is a physical key of its own (macOS virtual key `0x0A`, DOM code `IntlBackslash`), separate from the `` ` `` key.
+Sagascript names it `IntlBackslash`, so `Command+§` is written `Command+IntlBackslash`:
+
+```bash
+sagascript config set hotkey 'Command+IntlBackslash'
+```
+
+In Settings, pressing the key while recording a shortcut captures it automatically, and macOS shows it as `§`.
+Like every other modified shortcut it is registered through the platform hotkey API and needs no Accessibility permission.
+The crates.io release of `global-hotkey` cannot register this key yet, so `src-tauri/Cargo.toml` pins the upstream commit that added it (tauri-apps/global-hotkey#216).
+
 ## Overrides and migration
 
 `SAGASCRIPT_SETTINGS_PATH=/absolute/path/to/settings.json` selects one exact

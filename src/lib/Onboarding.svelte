@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { hotkeyKeyLabel } from "./hotkey.js";
   import {
     adoptDownloadListeners,
     awaitDownloadCompletion,
@@ -367,7 +368,7 @@
     // Seed language and hotkey from existing settings
     try {
       const settings = await getSettings();
-      hotkeyParts = settings.hotkey.split("+");
+      hotkeyParts = settings.hotkey.split("+").map((part) => hotkeyKeyLabel(part, platform));
       // Map existing language to onboarding options (auto → en since onboarding requires a specific choice)
       const lang = settings.language;
       if (lang === "en" || lang === "sv" || lang === "no") {

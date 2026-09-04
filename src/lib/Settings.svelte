@@ -43,6 +43,7 @@
   } from "./dictation-ui-state";
   import {
     canUseBareHotkey,
+    hotkeyKeyLabel,
     supportedBareFunctionKeyRange,
     tauriKeyName,
   } from "./hotkey.js";
@@ -511,8 +512,9 @@
     return shortcut
       .replace(/Control/g, m.ctrl)
       .replace(/Alt/g, m.alt)
-      .replace(/Super/g, m.meta)
+      .replace(/Super|Command|Cmd/g, m.meta)
       .split("+")
+      .map((part) => hotkeyKeyLabel(part, platform))
       .join(" + ");
   }
 
@@ -538,9 +540,9 @@
     // Ignore bare modifier presses — wait for a non-modifier key
     if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
 
-    const keyName = tauriKeyName(e.key);
+    const keyName = tauriKeyName(e.key, e.code);
     if (!keyName) {
-      hotkeyError = `"${e.key}" is not a supported key. Use A–Z, 0–9, F1–F24, Space, Arrow keys, or Tab/Enter/Delete.`;
+      hotkeyError = `"${e.key}" is not a supported key. Use A–Z, 0–9, F1–F24, Space, §, Arrow keys, or Tab/Enter/Delete.`;
       return;
     }
 

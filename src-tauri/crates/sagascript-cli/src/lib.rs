@@ -351,7 +351,8 @@ Available setting keys:
   show_overlay       Show recording overlay (true/false)
   auto_paste         Auto-paste transcription result (true/false)
   auto_select_model  Auto-select best model for language (true/false)
-  hotkey             Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows",
+  hotkey             Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows.
+                     IntlBackslash is the ISO section key (§ left of 1 on Swedish/UK Macs)",
         after_long_help = "\
 EXAMPLES:
   # Show all settings with current and default values
@@ -366,6 +367,7 @@ EXAMPLES:
   # Change the global hotkey
   sagascript config set hotkey 'Option+Space'
   sagascript config set hotkey F13
+  sagascript config set hotkey 'Command+IntlBackslash'   # Command+§ on an ISO Mac keyboard
 
   # Reset a single setting to its default
   sagascript config reset language
