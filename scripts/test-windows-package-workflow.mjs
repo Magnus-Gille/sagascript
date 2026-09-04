@@ -27,6 +27,7 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /name: Configure native ARM64 C and C\+\+ toolchain/);
   assert.match(workflow, /if: matrix\.architecture == 'arm64'/);
   assert.match(workflow, /CMAKE_GENERATOR=Ninja/);
+  assert.match(workflow, /CMAKE_CXX_FLAGS=\/EHsc \/utf-8/);
   assert.match(workflow, /CMAKE_C_COMPILER=clang-cl/);
   assert.match(workflow, /CMAKE_CXX_COMPILER=clang-cl/);
   assert.match(workflow, /CMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc/);
