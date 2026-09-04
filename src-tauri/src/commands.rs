@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{Manager, State};
+use tauri::State;
 use tracing::{error, info, warn};
 
 /// Maximum time to wait for whisper inference before aborting (seconds)
