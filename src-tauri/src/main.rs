@@ -413,18 +413,6 @@ fn main() {
 
     info!("Sagascript starting...");
 
-    let settings = load_settings_with_permission_gate();
-    info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
-    let initial_hotkey = settings.hotkey.clone();
-    let controller = Mutex::new(AppController::new(settings));
-    let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
-    // Process-wide hotkey registration health (see hotkey::health for why this
-    // is deliberately independent of the AppController mutex). Assumed healthy
-    // until the first real registration attempt in `.setup()` below proves
-    // otherwise — there's no observable window in between since that attempt
-    // runs synchronously before the event loop starts.
-    let hotkey_health = hotkey::HotkeyHealth::new(&initial_hotkey);
-
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if !second_instance_requests_settings(&args) {
@@ -519,17 +507,34 @@ fn main() {
             Some(vec![sagascript_cli::open::GUI_BACKGROUND_ARG]),
         ))
         .plugin(tauri_plugin_dialog::init())
-        .manage(controller)
-        .manage(whisper)
-        .manage(hotkey_health)
-        .manage(Mutex::new(None::<MenuItem<tauri::Wry>>) as SharedStatusItem)
-        .manage(Mutex::new(None::<ProfileMenuState>) as SharedProfileMenuState)
-        .manage(Mutex::new(UpdateMenuState {
-            items: None,
-            checking: false,
-            available_version: None,
-        }) as SharedUpdateMenuState)
         .setup(move |app| {
+            // `tauri-plugin-single-instance` is initialized before Tauri calls
+            // setup. Keep backend construction here so a secondary process is
+            // rejected before it loads settings, opens audio resources, or
+            // creates a Whisper backend.
+            let settings = load_settings_with_permission_gate();
+            info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
+            let initial_hotkey = settings.hotkey.clone();
+            let controller: SharedController = Mutex::new(AppController::new(settings));
+            let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
+            app.manage(controller);
+            app.manage(whisper);
+            // Process-wide hotkey registration health (see hotkey::health for
+            // why this is deliberately independent of the AppController
+            // mutex). Assumed healthy until the synchronous registration
+            // attempt below proves otherwise.
+            app.manage(hotkey::HotkeyHealth::new(&initial_hotkey));
+            let status_item: SharedStatusItem = Mutex::new(None);
+            let profile_menu: SharedProfileMenuState = Mutex::new(None);
+            let update_menu: SharedUpdateMenuState = Mutex::new(UpdateMenuState {
+                items: None,
+                checking: false,
+                available_version: None,
+            });
+            app.manage(status_item);
+            app.manage(profile_menu);
+            app.manage(update_menu);
+
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
             platform::macos::set_activation_policy_accessory();

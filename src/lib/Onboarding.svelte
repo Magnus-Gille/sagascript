@@ -28,7 +28,7 @@
   type OnboardingLanguage = "en" | "sv" | "no";
 
   let currentStep: Step = $state("language");
-  let platform = $state("macos");
+  let platform: string | null = $state(null);
 
   // Language selection — seeded from existing settings in onMount
   let selectedLanguage: OnboardingLanguage = $state("en");
@@ -98,7 +98,7 @@
   // -- Language --
 
   async function selectLanguageAndContinue() {
-    if (languageSaving) return;
+    if (languageSaving || platform === null) return;
     languageError = null;
     languageSaving = true;
     try {
@@ -343,7 +343,14 @@
     );
     if (componentDestroyed) return;
 
-    platform = await getPlatform();
+    try {
+      platform = await getPlatform();
+    } catch (error) {
+      // Never fall back to the macOS-only permission flow when platform
+      // detection fails. "unknown" follows the portable onboarding path.
+      console.error("Failed to detect platform", error);
+      platform = "unknown";
+    }
     try {
       micStatus = await microphoneStatus();
     } catch {
@@ -452,8 +459,12 @@
           </div>
         {/if}
         <div class="actions">
-          <button class="primary" onclick={selectLanguageAndContinue} disabled={languageSaving}>
-            {languageSaving ? "Saving…" : "Continue"}
+          <button
+            class="primary"
+            onclick={selectLanguageAndContinue}
+            disabled={languageSaving || platform === null}
+          >
+            {platform === null ? "Preparing…" : languageSaving ? "Saving…" : "Continue"}
           </button>
         </div>
       </div>

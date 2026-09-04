@@ -33,6 +33,13 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /-CliExe "artifacts\\Sagascript-Windows-\$architecture-CLI\.exe"/);
   assert.match(workflow, /ChecksumOutput "artifacts\\SHA256SUMS-Windows-\$architecture"/);
   assert.match(workflow, /targetRoot = "src-tauri\\target\\\$\{\{ matrix\.rust_target \}\}\\release"/);
+  assert.match(workflow, /name: Remove cached installer bundles/);
+  assert.match(workflow, /Remove-Item -LiteralPath \$bundleDirectory -Recurse -Force/);
+  assert.match(workflow, /\$nsis\.Count -ne 1/);
+  assert.match(workflow, /\$msi\.Count -ne 1/);
+  assert.match(workflow, /\$nsis\[0\]\.Name -notmatch \[regex\]::Escape\(\$version\)/);
+  assert.match(workflow, /\$msi\[0\]\.Name -notmatch \[regex\]::Escape\(\$version\)/);
+  assert.doesNotMatch(workflow, /\$version:/);
   assert.doesNotMatch(workflow, /action-gh-release|gh release|contents: write/);
 });
 

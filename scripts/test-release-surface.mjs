@@ -92,9 +92,22 @@ test("onboarding starts with language instead of a disposable welcome step", () 
 });
 
 test("cross-platform onboarding copy never identifies every device as a Mac", () => {
-  assert.doesNotMatch(onboardingSource, /this Mac/i);
-  assert.match(onboardingSource, /Speech stays on this device/);
-  assert.match(onboardingSource, /recordings are processed on this device/);
+  const renderedMarkup = onboardingSource
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "");
+  const visibleCopy = renderedMarkup
+    .replace(/\{[^{}]*\}/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ");
+
+  assert.doesNotMatch(visibleCopy, /\bmac(?:os)?\b/i);
+  assert.match(visibleCopy, /Speech stays on this device/);
+  assert.match(visibleCopy, /recordings are processed on this device/);
+  assert.match(
+    onboardingSource,
+    /if \(platform === "macos"\) \{\s*return \["language", "download", "microphone", "accessibility", "ready"\];\s*\}\s*return \["language", "download", "ready"\];/s,
+  );
 });
 
 test("onboarding automatically prepares one hidden recommended engine", () => {
@@ -133,8 +146,10 @@ test("Dictate reflects backend loading and transcription instead of offering a c
 });
 
 test("onboarding prevents duplicate setup requests and exposes language selection", () => {
-  assert.match(onboardingSource, /if \(languageSaving\) return;/);
-  assert.match(onboardingSource, /disabled=\{languageSaving\}/);
+  assert.match(onboardingSource, /let platform: string \| null = \$state\(null\)/);
+  assert.match(onboardingSource, /if \(languageSaving \|\| platform === null\) return;/);
+  assert.match(onboardingSource, /disabled=\{languageSaving \|\| platform === null\}/);
+  assert.match(onboardingSource, /platform === null \? "Preparing…"/);
   assert.equal((onboardingSource.match(/aria-pressed=\{selectedLanguage ===/g) ?? []).length, 3);
 });
 
@@ -208,6 +223,13 @@ test("second GUI launches are routed to the running instance", () => {
   assert.match(mainSource, /second_instance_requests_settings/);
   assert.match(mainSource, /Second-instance launch requested Settings/);
   assert.doesNotMatch(mainSource, /Another Sagascript GUI instance is already running; exiting/);
+  const singleInstanceInit = mainSource.indexOf("tauri_plugin_single_instance::init");
+  const backendInit = mainSource.indexOf("WhisperBackend::new()");
+  assert.ok(singleInstanceInit >= 0 && backendInit > singleInstanceInit);
+  assert.match(
+    mainSource,
+    /\.setup\(move \|app\| \{[\s\S]*?let whisper: SharedWhisper = Arc::new\(WhisperBackend::new\(\)\);[\s\S]*?app\.manage\(whisper\);/,
+  );
 });
 
 test("profile and update menu states remain explicit after interaction", () => {

@@ -125,6 +125,17 @@ jobs:
           if (-not $result.segments) { throw "Expected at least one transcription segment" }
           Copy-Item $binary (Join-Path $env:RUNNER_TEMP "sagascript-cli.exe")
 
+      - name: Remove cached installer bundles
+        shell: pwsh
+        run: |
+          $bundleRoot = "src-tauri\target\${{ matrix.rust_target }}\release\bundle"
+          foreach ($format in @("nsis", "msi")) {
+            $bundleDirectory = Join-Path $bundleRoot $format
+            if (Test-Path -LiteralPath $bundleDirectory) {
+              Remove-Item -LiteralPath $bundleDirectory -Recurse -Force
+            }
+          }
+
       - name: Build unsigned internal installers
         run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }}
 
@@ -139,16 +150,18 @@ jobs:
           if (-not (Test-Path -LiteralPath $desktop -PathType Leaf)) {
             throw "Tauri did not produce the desktop executable at the native target path: $desktop"
           }
-          $nsis = Get-ChildItem (Join-Path $targetRoot "bundle\nsis") -Filter "*.exe" -File | Sort-Object Name | Select-Object -First 1
-          $msi = Get-ChildItem (Join-Path $targetRoot "bundle\msi") -Filter "*.msi" -File | Sort-Object Name | Select-Object -First 1
-          if (-not $nsis) { throw "Tauri did not produce an NSIS installer" }
-          if (-not $msi) { throw "Tauri did not produce an MSI installer" }
+          $nsis = @(Get-ChildItem (Join-Path $targetRoot "bundle\nsis") -Filter "*.exe" -File)
+          $msi = @(Get-ChildItem (Join-Path $targetRoot "bundle\msi") -Filter "*.msi" -File)
+          if ($nsis.Count -ne 1) { throw "Expected exactly one current NSIS installer, found $($nsis.Count)" }
+          if ($msi.Count -ne 1) { throw "Expected exactly one current MSI installer, found $($msi.Count)" }
+          if ($nsis[0].Name -notmatch [regex]::Escape($version)) { throw "NSIS installer does not match version ${version}: $($nsis[0].Name)" }
+          if ($msi[0].Name -notmatch [regex]::Escape($version)) { throw "MSI installer does not match version ${version}: $($msi[0].Name)" }
 
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           Copy-Item $desktop "artifacts\Sagascript-Windows-$architecture-Portable.exe"
           Copy-Item $cli "artifacts\Sagascript-Windows-$architecture-CLI.exe"
-          Copy-Item $nsis.FullName "artifacts\Sagascript-Windows-$architecture-Setup.exe"
-          Copy-Item $msi.FullName "artifacts\Sagascript-Windows-$architecture.msi"
+          Copy-Item $nsis[0].FullName "artifacts\Sagascript-Windows-$architecture-Setup.exe"
+          Copy-Item $msi[0].FullName "artifacts\Sagascript-Windows-$architecture.msi"
           Copy-Item "docs\windows-release.md" "artifacts\README-Windows-Candidate.md"
           Copy-Item "scripts\accept-windows-candidate.ps1" "artifacts\accept-windows-candidate.ps1"
           Copy-Item "test-audio\norwegian-short-3s.mp3" "artifacts\norwegian-short-3s.mp3"
