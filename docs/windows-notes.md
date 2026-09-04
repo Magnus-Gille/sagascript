@@ -26,7 +26,7 @@ acceptance checklist live in [Windows release track](windows-release.md).
 
 - **CPU-only transcription.** GPU acceleration (Metal/Core ML) is not available on Windows. Large models (`large`, `large-v3`) will be significantly slower than on macOS with Metal. We recommend using `base` or `small` models on Windows.
 - **No official binary or auto-updater.** Build the current preview from source.
-- **ARM64 not tested.** Snapdragon / Copilot+ PCs (ARM64) have not been tested yet. The app is currently x86_64 only.
+- **Architecture-specific builds.** Use the native ARM64 candidate on Snapdragon / Copilot+ PCs and the x64 candidate on Intel or AMD Windows PCs. CPU transcription is tested natively on both architectures in the candidate workflow.
 
 ## Troubleshooting
 

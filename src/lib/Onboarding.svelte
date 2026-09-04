@@ -413,7 +413,7 @@
         </div>
         <h1>Set up Sagascript</h1>
         <p class="description">
-          Choose your first dictation language. Speech stays on this Mac, and
+          Choose your first dictation language. Speech stays on this device, and
           you can add more language profiles later.
         </p>
         <div class="language-options">
@@ -476,7 +476,7 @@
         <h1>Setting up speech engine</h1>
         <p class="description">
           Preparing the local speech engine ({engineSize[selectedLanguage]}).
-          Your recordings are processed on this Mac.
+          Your recordings are processed on this device.
         </p>
 
         {#if downloadError}

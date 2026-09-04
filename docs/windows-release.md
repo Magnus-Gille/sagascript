@@ -1,7 +1,7 @@
 # Windows release track
 
 Sagascript's Windows build is a release candidate, not a public release. The
-candidate workflow intentionally produces **unsigned** x64 artifacts for
+candidate workflow intentionally produces **unsigned** x64 and ARM64 artifacts for
 testing on an owner-controlled Windows PC. Do not publish those artifacts or
 tell users to bypass SmartScreen.
 
@@ -26,13 +26,22 @@ clearly labelled internal candidate on a known test machine.
 ## Candidate workflow
 
 `.github/workflows/windows-package.yml` runs the release metadata, license,
-frontend, Rust, and real CPU-transcription gates on `windows-latest`. It then
+frontend, Rust, and real CPU-transcription gates on native `windows-latest`
+(x64) and `windows-11-arm` (ARM64) runners. Each runner then
 builds unsigned NSIS and MSI installers, a portable desktop executable, and a
 separate console CLI executable. It uploads them as one short-lived GitHub
 Actions artifact and never creates or modifies a GitHub Release. Windows GUI
 executables do not reliably expose redirected console output, so the candidate
 keeps the desktop and CLI launch surfaces explicit instead of pretending one
 file behaves identically in both contexts.
+
+The artifact names are architecture-qualified:
+`Sagascript-Windows-<architecture>-Portable.exe`,
+`Sagascript-Windows-<architecture>-CLI.exe`,
+`Sagascript-Windows-<architecture>-Setup.exe`, and
+`Sagascript-Windows-<architecture>.msi`, where `<architecture>` is `x64` or
+`arm64`. The matching `SHA256SUMS-Windows-<architecture>` file covers exactly
+those four files.
 
 `scripts/verify-windows-release.ps1` validates the executable surface,
 signature state, and deterministic checksums. `Internal` signature policy
@@ -46,7 +55,7 @@ artifact:
 
 ```powershell
 .\accept-windows-candidate.ps1 `
-  -CliExe ".\Sagascript-Windows-x64-CLI.exe" `
+  -CliExe ".\Sagascript-Windows-<architecture>-CLI.exe" `
   -ExpectedVersion "1.1.3"
 ```
 
@@ -59,12 +68,12 @@ promises merely because an installer default was expected.
 
 ## Initial support boundary
 
-- Windows 11 on x86-64.
+- Windows 11 on x64 and ARM64.
 - CPU transcription using the recommended small language-specific engine.
 - One installed desktop app with system-tray UI plus a candidate CLI executable
   exposing the canonical commands. Installer/PATH integration remains a public-
   release decision.
-- No ARM64 promise and no GPU-acceleration promise in the first release.
+- No GPU-acceleration promise in the first release.
 - Windows 10 may work but is not release-supported until separately accepted.
 
 ## Clean-machine acceptance
@@ -76,7 +85,8 @@ settings, model directory, or running process.
 ### Installation and identity
 
 - SmartScreen identifies the candidate as unsigned; test only after independently
-  matching `SHA256SUMS-Windows` from the workflow artifact.
+  matching the architecture-specific `SHA256SUMS-Windows-<architecture>` file
+  from the workflow artifact.
 - NSIS installation completes without development tools.
 - MSI installation completes without development tools.
 - Only one installer format is selected for the eventual Store/MSIX conversion.
@@ -119,7 +129,7 @@ settings, model directory, or running process.
 
 ### CLI, updates, and upgrade
 
-- `Sagascript-Windows-x64-CLI.exe --version` reports the candidate version and
+- `Sagascript-Windows-<architecture>-CLI.exe --version` reports the candidate version and
   source revision.
 - `--help`, `list-models`, `config`, file transcription, microphone recording,
   JSON output, and PowerShell completions work from the candidate CLI binary.

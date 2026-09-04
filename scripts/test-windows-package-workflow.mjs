@@ -18,12 +18,21 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /permissions:\s*\n\s*contents: read/);
   assert.match(workflow, /tauri build --ci --bundles nsis,msi --no-sign/);
   assert.match(workflow, /SignaturePolicy Internal/);
-  assert.match(workflow, /windows-x64-unsigned-candidate/);
+  assert.match(workflow, /runs-on: \$\{\{ matrix\.runner \}\}/);
+  assert.match(workflow, /architecture: x64[\s\S]*runner: windows-latest[\s\S]*rust_target: x86_64-pc-windows-msvc/);
+  assert.match(workflow, /architecture: arm64[\s\S]*runner: windows-11-arm[\s\S]*rust_target: aarch64-pc-windows-msvc/);
+  assert.match(workflow, /windows-\$\{\{ matrix\.architecture \}\}-unsigned-candidate/);
+  assert.match(workflow, /RuntimeInformation\]::OSArchitecture/);
+  assert.match(workflow, /rustc -vV/);
   assert.match(workflow, /accept-windows-candidate\.ps1/);
   assert.match(workflow, /norwegian-short-3s\.mp3/);
-  assert.match(workflow, /Sagascript-Windows-x64-Portable\.exe/);
-  assert.match(workflow, /Sagascript-Windows-x64-CLI\.exe/);
-  assert.match(workflow, /-CliExe "artifacts\\Sagascript-Windows-x64-CLI\.exe"/);
+  assert.match(workflow, /Sagascript-Windows-\$architecture-Portable\.exe/);
+  assert.match(workflow, /Sagascript-Windows-\$architecture-CLI\.exe/);
+  assert.match(workflow, /Sagascript-Windows-\$architecture-Setup\.exe/);
+  assert.match(workflow, /Sagascript-Windows-\$architecture\.msi/);
+  assert.match(workflow, /-CliExe "artifacts\\Sagascript-Windows-\$architecture-CLI\.exe"/);
+  assert.match(workflow, /ChecksumOutput "artifacts\\SHA256SUMS-Windows-\$architecture"/);
+  assert.match(workflow, /targetRoot = "src-tauri\\target\\\$\{\{ matrix\.rust_target \}\}\\release"/);
   assert.doesNotMatch(workflow, /action-gh-release|gh release|contents: write/);
 });
 
@@ -35,12 +44,19 @@ test("Windows candidate makes real transcription a blocking gate", () => {
   assert.match(gate, /download-model nb-whisper-tiny/);
   assert.match(gate, /verify-json-cli-streams\.py/);
   assert.doesNotMatch(gate, /continue-on-error/);
+  assert.match(workflow, /Verify native runner architecture/);
+  assert.match(workflow, /Expected native \$\{\{ matrix\.rust_target \}\} runner/);
 });
 
 test("Windows release guide forbids publishing unsigned candidates", () => {
   assert.match(releaseGuide, /Do not publish those artifacts/);
   assert.match(releaseGuide, /Microsoft Store MSIX/);
   assert.match(releaseGuide, /Release[^\n]*requires every executable artifact/i);
+  assert.match(releaseGuide, /SHA256SUMS-Windows-<architecture>/);
+  assert.match(releaseGuide, /Sagascript-Windows-<architecture>-Portable\.exe/);
+  assert.match(releaseGuide, /Sagascript-Windows-<architecture>-CLI\.exe/);
+  assert.match(releaseGuide, /Sagascript-Windows-<architecture>-Setup\.exe/);
+  assert.match(releaseGuide, /Sagascript-Windows-<architecture>\.msi/);
 });
 
 test("third-party notice comparison accepts Windows checkout line endings", () => {

@@ -17,7 +17,18 @@ permissions:
 
 jobs:
   build-windows-candidate:
-    runs-on: windows-latest
+    name: Build Windows ${{ matrix.architecture }} candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - architecture: arm64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
 
     steps:
@@ -28,6 +39,22 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: ${{ matrix.rust_target }}
+
+      - name: Verify native runner architecture
+        shell: pwsh
+        run: |
+          $hostTriple = rustc -vV | Select-String '^host:' | ForEach-Object { ($_ -split ':', 2)[1].Trim() }
+          if ([string]::IsNullOrWhiteSpace($hostTriple)) {
+            throw "Unable to determine the Rust host triple"
+          }
+          if ($hostTriple -ne '${{ matrix.rust_target }}') {
+            throw "Expected native ${{ matrix.rust_target }} runner, got $hostTriple"
+          }
+          $runnerArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+          if ($runnerArchitecture -ne '${{ matrix.architecture }}') {
+            throw "Expected native ${{ matrix.architecture }} runner, got $runnerArchitecture"
+          }
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -42,9 +69,9 @@ jobs:
             ~\.cargo\registry
             ~\.cargo\git
             src-tauri\target
-          key: windows-package-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json') }}
+          key: windows-package-${{ matrix.architecture }}-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json') }}
           restore-keys: |
-            windows-package-
+            windows-package-${{ matrix.architecture }}-
 
       - name: Install npm dependencies
         run: npm ci
@@ -71,8 +98,8 @@ jobs:
       - name: Gate real Windows transcription
         shell: pwsh
         run: |
-          cargo build --release -p sagascript-cli --manifest-path src-tauri/Cargo.toml
-          $binary = "src-tauri\target\release\sagascript.exe"
+          cargo build --release -p sagascript-cli --manifest-path src-tauri/Cargo.toml --target ${{ matrix.rust_target }}
+          $binary = "src-tauri\target\${{ matrix.rust_target }}\release\sagascript.exe"
           $stdout = Join-Path $env:RUNNER_TEMP "transcription-smoke.json"
           $stderr = Join-Path $env:RUNNER_TEMP "transcription-smoke.stderr"
           & $binary download-model nb-whisper-tiny
@@ -99,44 +126,49 @@ jobs:
           Copy-Item $binary (Join-Path $env:RUNNER_TEMP "sagascript-cli.exe")
 
       - name: Build unsigned internal installers
-        run: npx tauri build --ci --bundles nsis,msi --no-sign
+        run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }}
 
       - name: Prepare and verify candidate artifacts
         shell: pwsh
         run: |
           $version = node -p "require('./package.json').version"
-          $desktop = "src-tauri\target\release\sagascript.exe"
+          $architecture = "${{ matrix.architecture }}"
+          $targetRoot = "src-tauri\target\${{ matrix.rust_target }}\release"
+          $desktop = Join-Path $targetRoot "sagascript.exe"
           $cli = Join-Path $env:RUNNER_TEMP "sagascript-cli.exe"
-          $nsis = Get-ChildItem "src-tauri\target\release\bundle\nsis" -Filter "*.exe" -File | Select-Object -First 1
-          $msi = Get-ChildItem "src-tauri\target\release\bundle\msi" -Filter "*.msi" -File | Select-Object -First 1
+          if (-not (Test-Path -LiteralPath $desktop -PathType Leaf)) {
+            throw "Tauri did not produce the desktop executable at the native target path: $desktop"
+          }
+          $nsis = Get-ChildItem (Join-Path $targetRoot "bundle\nsis") -Filter "*.exe" -File | Sort-Object Name | Select-Object -First 1
+          $msi = Get-ChildItem (Join-Path $targetRoot "bundle\msi") -Filter "*.msi" -File | Sort-Object Name | Select-Object -First 1
           if (-not $nsis) { throw "Tauri did not produce an NSIS installer" }
           if (-not $msi) { throw "Tauri did not produce an MSI installer" }
 
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          Copy-Item $desktop "artifacts\Sagascript-Windows-x64-Portable.exe"
-          Copy-Item $cli "artifacts\Sagascript-Windows-x64-CLI.exe"
-          Copy-Item $nsis.FullName "artifacts\Sagascript-Windows-x64-Setup.exe"
-          Copy-Item $msi.FullName "artifacts\Sagascript-Windows-x64.msi"
+          Copy-Item $desktop "artifacts\Sagascript-Windows-$architecture-Portable.exe"
+          Copy-Item $cli "artifacts\Sagascript-Windows-$architecture-CLI.exe"
+          Copy-Item $nsis.FullName "artifacts\Sagascript-Windows-$architecture-Setup.exe"
+          Copy-Item $msi.FullName "artifacts\Sagascript-Windows-$architecture.msi"
           Copy-Item "docs\windows-release.md" "artifacts\README-Windows-Candidate.md"
           Copy-Item "scripts\accept-windows-candidate.ps1" "artifacts\accept-windows-candidate.ps1"
           Copy-Item "test-audio\norwegian-short-3s.mp3" "artifacts\norwegian-short-3s.mp3"
 
           ./scripts/verify-windows-release.ps1 `
-            -CliExe "artifacts\Sagascript-Windows-x64-CLI.exe" `
+            -CliExe "artifacts\Sagascript-Windows-$architecture-CLI.exe" `
             -ExpectedVersion $version `
             -Artifacts @(
-              "artifacts\Sagascript-Windows-x64-Portable.exe",
-              "artifacts\Sagascript-Windows-x64-CLI.exe",
-              "artifacts\Sagascript-Windows-x64-Setup.exe",
-              "artifacts\Sagascript-Windows-x64.msi"
+              "artifacts\Sagascript-Windows-$architecture-Portable.exe",
+              "artifacts\Sagascript-Windows-$architecture-CLI.exe",
+              "artifacts\Sagascript-Windows-$architecture-Setup.exe",
+              "artifacts\Sagascript-Windows-$architecture.msi"
             ) `
             -SignaturePolicy Internal `
-            -ChecksumOutput "artifacts\SHA256SUMS-Windows"
+            -ChecksumOutput "artifacts\SHA256SUMS-Windows-$architecture"
 
       - name: Upload internal Windows candidate
         uses: actions/upload-artifact@v4
         with:
-          name: windows-x64-unsigned-candidate
+          name: windows-${{ matrix.architecture }}-unsigned-candidate
           path: artifacts/
           if-no-files-found: error
           retention-days: 14

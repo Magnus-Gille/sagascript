@@ -1,4 +1,6 @@
 use sagascript_core::error::DictationError;
+#[cfg(target_os = "windows")]
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 const APP_BUNDLE_PATH: &str = "/Applications/Sagascript.app";
@@ -33,12 +35,57 @@ pub fn run() -> Result<(), DictationError> {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let executable = installed_windows_app_path().ok_or_else(|| {
+            DictationError::ApplicationLaunchError(
+                "LOCALAPPDATA is unavailable; cannot locate the installed Sagascript app"
+                    .to_string(),
+            )
+        })?;
+        launch_windows_app(&executable)?;
+        eprintln!("Opening Sagascript...");
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Err(DictationError::ApplicationLaunchError(
-            "the desktop recovery command is currently available only on macOS".to_string(),
+            "the desktop recovery command is currently available only on macOS and Windows"
+                .to_string(),
         ))
     }
+}
+
+#[cfg(target_os = "windows")]
+fn installed_windows_app_path() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|base| windows_app_path(Path::new(&base)))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_app_path(local_app_data: &Path) -> PathBuf {
+    local_app_data.join("Sagascript").join("sagascript.exe")
+}
+
+#[cfg(target_os = "windows")]
+fn launch_windows_app(executable: &Path) -> Result<(), DictationError> {
+    if !executable.is_file() {
+        return Err(DictationError::ApplicationLaunchError(format!(
+            "Sagascript desktop app was not found at {}; install the desktop app first",
+            executable.display()
+        )));
+    }
+
+    std::process::Command::new(executable)
+        .arg(GUI_OPEN_ARG)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| {
+            DictationError::ApplicationLaunchError(format!(
+                "failed to launch {}: {error}",
+                executable.display()
+            ))
+        })
 }
 
 #[cfg(target_os = "macos")]
@@ -64,6 +111,17 @@ mod tests {
                 OsStr::new("--args"),
                 OsStr::new(super::GUI_OPEN_ARG),
             ]
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_launcher_targets_the_per_user_install() {
+        use std::path::Path;
+
+        assert_eq!(
+            super::windows_app_path(Path::new(r"C:\Users\test\AppData\Local")),
+            Path::new(r"C:\Users\test\AppData\Local\Sagascript\sagascript.exe")
         );
     }
 }

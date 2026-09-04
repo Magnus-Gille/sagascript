@@ -18,15 +18,13 @@ const mainSource = await readFile(
   new URL("../src-tauri/src/main.rs", import.meta.url),
   "utf8",
 );
+const commandsSource = await readFile(
+  new URL("../src-tauri/src/commands.rs", import.meta.url),
+  "utf8",
+);
 const appSource = await readFile(
   new URL("../src/App.svelte", import.meta.url),
   "utf8",
-);
-const defaultCapabilities = JSON.parse(
-  await readFile(
-    new URL("../src-tauri/capabilities/default.json", import.meta.url),
-    "utf8",
-  ),
 );
 const brandMarkSource = await readFile(
   new URL("../assets/brand/sagascript-mark.svg", import.meta.url),
@@ -91,6 +89,12 @@ test("onboarding starts with language instead of a disposable welcome step", () 
   assert.match(onboardingSource, /currentStep:\s*Step\s*=\s*\$state\("language"\)/);
   assert.doesNotMatch(onboardingSource, /type Step = [^\n]*"welcome"/);
   assert.doesNotMatch(onboardingSource, /Welcome to Sagascript/);
+});
+
+test("cross-platform onboarding copy never identifies every device as a Mac", () => {
+  assert.doesNotMatch(onboardingSource, /this Mac/i);
+  assert.match(onboardingSource, /Speech stays on this device/);
+  assert.match(onboardingSource, /recordings are processed on this device/);
 });
 
 test("onboarding automatically prepares one hidden recommended engine", () => {
@@ -162,8 +166,9 @@ test("Accessibility onboarding reopens System Settings without prompting again",
   );
 });
 
-test("menu bar uses compact native state markers", () => {
+test("tray uses compact macOS markers and a real Windows icon", () => {
   assert.match(mainSource, /TrayIconBuilder::with_id\("main"\)[\s\S]*?\.title\("S"\)/);
+  assert.match(mainSource, /#\[cfg\(target_os = "windows"\)\][\s\S]*?default_window_icon\(\)[\s\S]*?tray_builder\.icon\(icon\.clone\(\)\)/);
   assert.match(mainSource, /tray\.set_visible\(true\)/);
   assert.doesNotMatch(mainSource, /include_bytes!\("\.\.\/icons\/tray-icon(?:@2x)?\.png"\)/);
   assert.doesNotMatch(mainSource, /\.icon_as_template\(true\)/);
@@ -187,13 +192,22 @@ test("deliberate macOS reopen requests reveal Settings", () => {
   );
 });
 
-test("finishing onboarding hides its main window", () => {
-  assert.match(appSource, /getCurrentWindow\(\)\.hide\(\)/);
-  assert.match(appSource, /Failed to hide completed onboarding window/);
-  assert.ok(
-    defaultCapabilities.permissions.includes("core:window:allow-hide"),
-    "the onboarding window cannot hide without the explicit Tauri capability",
-  );
+test("finishing onboarding keeps the main Settings window visible", () => {
+  assert.doesNotMatch(appSource, /getCurrentWindow\(\)\.hide\(\)/);
+  assert.doesNotMatch(appSource, /Failed to hide completed onboarding window/);
+  assert.match(appSource, /showOnboarding = false/);
+  const commandStart = commandsSource.indexOf("pub async fn set_onboarding_completed");
+  const commandEnd = commandsSource.indexOf("\n#[tauri::command]", commandStart + 1);
+  assert.ok(commandStart >= 0 && commandEnd > commandStart);
+  const completionCommand = commandsSource.slice(commandStart, commandEnd);
+  assert.doesNotMatch(completionCommand, /\.hide\(\)/);
+});
+
+test("second GUI launches are routed to the running instance", () => {
+  assert.match(mainSource, /tauri_plugin_single_instance::init/);
+  assert.match(mainSource, /second_instance_requests_settings/);
+  assert.match(mainSource, /Second-instance launch requested Settings/);
+  assert.doesNotMatch(mainSource, /Another Sagascript GUI instance is already running; exiting/);
 });
 
 test("profile and update menu states remain explicit after interaction", () => {

@@ -260,7 +260,6 @@ fn set_language_for_controller(
 
 #[tauri::command]
 pub async fn set_onboarding_completed(
-    app: tauri::AppHandle,
     controller: State<'_, SharedController>,
 ) -> Result<(), String> {
     let persisted = sagascript_core::settings::store::update(|settings| {
@@ -270,15 +269,6 @@ pub async fn set_onboarding_completed(
     ctrl.settings_mut().has_completed_onboarding = persisted.has_completed_onboarding;
     drop(ctrl);
 
-    // The frontend also hides itself after this command resolves, but doing it
-    // here closes the first-dictation race: once completion is persisted, no
-    // background hotkey work can briefly revive a still-visible onboarding
-    // window before the next JavaScript turn runs.
-    if let Some(window) = app.get_webview_window("settings") {
-        if let Err(error) = window.hide() {
-            warn!("Failed to hide completed onboarding window: {error}");
-        }
-    }
     info!("Onboarding marked as completed");
     Ok(())
 }
