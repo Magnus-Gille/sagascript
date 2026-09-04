@@ -32,7 +32,8 @@ test("the keyboard event mapper accepts exactly F1 through F24", () => {
   assert.equal(tauriKeyName("F0"), null);
   assert.equal(tauriKeyName("F25"), null);
   assert.equal(tauriKeyName("F99"), null);
-  assert.equal(tauriKeyName("f13"), null);
+  assert.equal(tauriKeyName("f13"), "F13");
+  assert.equal(tauriKeyName(" F24 "), "F24");
   assert.equal(tauriKeyName("F١٣"), null);
 });
 
@@ -43,7 +44,8 @@ test("the bare-key range shown in Settings matches registration support", () => 
 });
 
 test("malformed extended function keys never qualify as bare shortcuts", () => {
-  for (const key of ["F013", "F13a", "F25", "F-13", "13", " F13 "]) {
+  for (const key of ["F013", "F13a", "F25", "F-13", "13"]) {
     assert.equal(canUseBareHotkey(key, "macos"), false, key);
   }
+  assert.equal(canUseBareHotkey(" F13 ", "macos"), true);
 });

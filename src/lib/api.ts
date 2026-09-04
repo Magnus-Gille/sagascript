@@ -113,6 +113,11 @@ export async function hotkeyStatus(): Promise<HotkeyStatus> {
   return invoke("hotkey_status");
 }
 
+/** Retry the shortcuts persisted by either the GUI or CLI. */
+export async function retryHotkeyRegistration(): Promise<void> {
+  return invoke("retry_hotkey_registration");
+}
+
 export async function setAutoPaste(enabled: boolean): Promise<void> {
   return invoke("set_auto_paste", { enabled });
 }

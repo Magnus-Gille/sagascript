@@ -8,7 +8,7 @@ export function tauriKeyName(key) {
   if (key === " ") return "Space";
   if (["Meta", "Control", "Alt", "Shift"].includes(key)) return null;
 
-  const functionKey = /^F(\d{1,2})$/.exec(key);
+  const functionKey = /^F(\d{1,2})$/i.exec(key.trim());
   if (functionKey) {
     const number = Number.parseInt(functionKey[1], 10);
     return number >= 1 && number <= 24 ? `F${number}` : null;
@@ -43,7 +43,7 @@ export function tauriKeyName(key) {
  * @returns {boolean}
  */
 export function canUseBareHotkey(key, platform) {
-  const match = /^F(\d{1,2})$/i.exec(key);
+  const match = /^F(\d{1,2})$/i.exec(key.trim());
   if (!match) return false;
 
   const number = Number.parseInt(match[1], 10);

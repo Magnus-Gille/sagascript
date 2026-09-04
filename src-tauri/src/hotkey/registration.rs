@@ -40,16 +40,16 @@ pub fn register_shortcuts(app: &tauri::AppHandle, shortcuts: &[String]) -> Resul
         None
     };
 
+    #[cfg(target_os = "macos")]
+    if let Some(error) = native_monitor_error {
+        return Err(error);
+    }
+
     let plugin_shortcuts = plugin_shortcuts(shortcuts);
     if !plugin_shortcuts.is_empty() {
         app.global_shortcut()
             .register_multiple(plugin_shortcuts)
             .map_err(|error| error.to_string())?;
-    }
-
-    #[cfg(target_os = "macos")]
-    if let Some(error) = native_monitor_error {
-        return Err(error);
     }
 
     Ok(())

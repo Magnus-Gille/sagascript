@@ -354,10 +354,7 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
             {
                 Some("F21-F24 are supported without modifiers on macOS, but the modified forms cannot be registered reliably")
             }
-            HotkeyPlatform::Other => Some(
-                "F13-F24 are not supported by the current Linux global-hotkey backend",
-            ),
-            HotkeyPlatform::MacOS | HotkeyPlatform::Windows => None,
+            HotkeyPlatform::MacOS | HotkeyPlatform::Windows | HotkeyPlatform::Other => None,
         };
         if let Some(error) = unsupported_error {
             return Err(format!("Invalid hotkey '{}': {}.", value, error));
@@ -534,11 +531,18 @@ mod tests {
     }
 
     #[test]
-    fn linux_rejects_extended_function_keys_missing_from_its_backend_mapping() {
-        for shortcut in ["F13", "Control+F20", "F24"] {
+    fn linux_preserves_modified_extended_function_keys_but_rejects_bare_ones() {
+        for shortcut in ["Control+F13", "Shift+F20", "Alt+F24"] {
+            assert!(
+                validate_hotkey_for_platform(shortcut, HotkeyPlatform::Other).is_ok(),
+                "modified shortcut should remain valid on Linux: {shortcut}"
+            );
+        }
+
+        for shortcut in ["F13", "F24"] {
             let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::Other).unwrap_err();
             assert!(
-                error.contains("not supported by the current Linux global-hotkey backend"),
+                error.contains("modifier is required"),
                 "unexpected error for {shortcut}: {error}"
             );
         }

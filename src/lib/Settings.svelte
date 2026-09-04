@@ -21,6 +21,7 @@
     getPlatform,
     checkAccessibilityPermission,
     requestAccessibilityPermission,
+    retryHotkeyRegistration,
     startRecording,
     stopAndTranscribe,
     hotkeyStatus,
@@ -218,6 +219,9 @@
         const status = await hotkeyStatus();
         hotkeyStatusOk = status.ok;
         hotkeyStatusError = status.error ?? "";
+        if (platform === "macos" && accessibilityGranted && !status.ok) {
+          await refreshHotkeyRegistration();
+        }
 
         // Check URL params for initial tab
         const params = new URLSearchParams(window.location.search);
@@ -304,9 +308,27 @@
     // minute; no unbounded timer survives after this explicit attempt.
     for (let attempt = 0; attempt < 60; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
-      if (await checkAccessibilityPermission()) return true;
+      if (await checkAccessibilityPermission()) {
+        await refreshHotkeyRegistration();
+        return true;
+      }
     }
     return false;
+  }
+
+  async function refreshHotkeyRegistration(): Promise<void> {
+    try {
+      await retryHotkeyRegistration();
+      settings = await getSettings();
+      await refreshProfileModels(settings.hotkey_profiles);
+    } catch (error) {
+      // The registration-health response below contains the backend's full
+      // diagnostic and keeps the failure visible in Settings.
+      console.warn("Failed to retry hotkey registration", error);
+    }
+    const status = await hotkeyStatus();
+    hotkeyStatusOk = status.ok;
+    hotkeyStatusError = status.error ?? "";
   }
 
   async function onShowOverlayToggle() {
@@ -718,11 +740,11 @@
             <div class="hotkey-error">{hotkeyError}</div>
           {:else if !hotkeyStatusOk}
             <div class="hotkey-error">
-              ⚠ Not registered{hotkeyStatusError ? `: ${hotkeyStatusError}` : ""}{#if !hotkeyStatusError.includes("Accessibility")} — this shortcut may already be in use by another app. Try a different combination.{/if}
+              ⚠ Not registered{hotkeyStatusError ? `: ${hotkeyStatusError}` : ""}{#if platform === "macos"} — check Accessibility permission or whether another app uses this shortcut.{:else} — this shortcut may already be in use by another app. Try a different combination.{/if}
             </div>
           {/if}
           <div class="hotkey-hint">
-            Each shortcut selects its language. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}{" "}Bare F13–F24 requires Accessibility permission.{/if}
+            Each shortcut selects its language. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}{" "}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
           </div>
         </div>
 

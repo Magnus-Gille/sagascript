@@ -966,6 +966,7 @@ fn main() {
             commands::set_hotkey_mode,
             commands::set_hotkey,
             commands::set_hotkey_profiles,
+            commands::retry_hotkey_registration,
             commands::hotkey_status,
             commands::start_recording,
             commands::start_training_recording,

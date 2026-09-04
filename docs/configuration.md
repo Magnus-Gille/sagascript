@@ -39,6 +39,28 @@ sagascript glossary path --profile swedish
 The GUI and CLI watch and update the same files. Atomic writes preserve
 user-managed symlinks, so the files can be checked into a dotfiles repository.
 
+## Extended function-key shortcuts
+
+Bare F13–F24 shortcuts are supported on macOS and Windows. Ordinary keys and
+F1–F12 still require a modifier. Linux keeps accepting previously valid
+modified F13–F24 configurations, but bare extended function keys remain
+unsupported by the current backend.
+
+On macOS, bare F13–F24 use an AppKit event monitor and therefore require the
+installed Sagascript app to have Accessibility permission. This is an explicit
+product/privacy tradeoff: macOS delivers every system KeyDown/KeyUp event to
+the monitor callback, but Sagascript immediately discards any event that is not
+one unmodified F13–F24 scalar. Non-matching events are not logged, stored, or
+sent anywhere. The monitor exists only for the lifetime of the app process.
+Users who do not want this access can continue using a modified shortcut.
+
+The native path covers the whole range rather than only F21–F24 because a
+runtime probe of the locked `global-hotkey` 0.7.0 Carbon path on macOS 26.6.2
+(build 25G83) found that bare F13–F20 all reached `RegisterEventHotKey` but were
+rejected there; F21–F24 failed earlier as unknown scancodes. The source mapping
+for F13–F20 therefore did not provide a working permission-free registration
+path. This probe was run on 2026-09-04 before adopting the AppKit monitor.
+
 ## Overrides and migration
 
 `SAGASCRIPT_SETTINGS_PATH=/absolute/path/to/settings.json` selects one exact

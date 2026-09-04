@@ -374,7 +374,10 @@ pub async fn set_hotkey_profiles(
         .into_iter()
         .map(|profile| profile.shortcut)
         .collect();
-    if new_shortcuts == old_shortcuts {
+    if new_shortcuts == old_shortcuts
+        && old_operational.matches(&new_shortcuts)
+        && !health.is_failed()
+    {
         let persisted = sagascript_core::settings::store::try_update(|settings| {
             settings.replace_hotkey_profiles(profiles.clone())?;
             Ok(())
@@ -502,6 +505,22 @@ pub async fn set_hotkey_profiles(
 
     info!("Hotkey profiles changed: {} registered", new_shortcuts.len());
     Ok(())
+}
+
+/// Retry the shortcuts currently persisted on disk.
+///
+/// This is used after macOS grants Accessibility while the app is already
+/// running. Reading the file again matters for CLI-driven changes: the file
+/// can contain a requested bare F-key while the controller deliberately keeps
+/// the previous operational shortcut after registration failed closed.
+#[tauri::command]
+pub async fn retry_hotkey_registration(
+    app: tauri::AppHandle,
+    controller: State<'_, SharedController>,
+    health: State<'_, HotkeyHealth>,
+) -> Result<(), String> {
+    let profiles = sagascript_core::settings::store::load().resolved_hotkey_profiles();
+    set_hotkey_profiles(app, controller, health, profiles).await
 }
 
 /// Current hotkey registration health — whether the last registration
