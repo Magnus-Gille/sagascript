@@ -349,8 +349,6 @@ pub async fn set_hotkey_profiles(
     profiles: Vec<HotkeyProfile>,
 ) -> Result<(), String> {
     use tauri::Emitter;
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
     Settings::validate_hotkey_profiles(&profiles)?;
     let new_shortcuts: Vec<String> = profiles.iter().map(|profile| profile.shortcut.clone()).collect();
     let new_primary = profiles
@@ -394,7 +392,7 @@ pub async fn set_hotkey_profiles(
     }
 
     if let OperationalHotkey::Registered(old_shortcuts) = &old_operational {
-        if let Err(error) = app.global_shortcut().unregister_multiple(old_shortcuts.iter().map(String::as_str)) {
+        if let Err(error) = crate::hotkey::unregister_shortcuts(&app, old_shortcuts) {
             error!("Failed to unregister operational hotkeys: {error}");
             let change = health.record(
                 &old_shortcut,
@@ -413,8 +411,8 @@ pub async fn set_hotkey_profiles(
         }
     }
 
-    if let Err(error) = app.global_shortcut().register_multiple(new_shortcuts.iter().map(String::as_str)) {
-        if let Err(cleanup_error) = app.global_shortcut().unregister_multiple(new_shortcuts.iter().map(String::as_str)) {
+    if let Err(error) = crate::hotkey::register_shortcuts(&app, &new_shortcuts) {
+        if let Err(cleanup_error) = crate::hotkey::unregister_shortcuts(&app, &new_shortcuts) {
             let change = health.record(
                 &old_shortcut,
                 Some(format!("new registration failed: {error}; partial registration cleanup failed: {cleanup_error}; operational state is unknown")),
@@ -426,10 +424,7 @@ pub async fn set_hotkey_profiles(
             return Err(format!("Failed to register hotkey profiles: {error}; cleanup failed: {cleanup_error}"));
         }
         let change = match &old_operational {
-            OperationalHotkey::Registered(old_shortcuts) => match app
-                .global_shortcut()
-                .register_multiple(old_shortcuts.iter().map(String::as_str))
-            {
+            OperationalHotkey::Registered(old_shortcuts) => match crate::hotkey::register_shortcuts(&app, old_shortcuts) {
                 Ok(()) => health.record(&old_shortcut, None, old_operational.clone()),
                 Err(rollback_error) => {
                     health.record(
@@ -464,13 +459,12 @@ pub async fn set_hotkey_profiles(
     }) {
         Ok(settings) => settings,
         Err(save_error) => {
-            let unregister_error = app.global_shortcut().unregister_multiple(new_shortcuts.iter().map(String::as_str)).err();
+            let unregister_error = crate::hotkey::unregister_shortcuts(&app, &new_shortcuts).err();
             let rollback_error = if unregister_error.is_none() {
                 match &old_operational {
-                    OperationalHotkey::Registered(old_shortcuts) => app
-                        .global_shortcut()
-                        .register_multiple(old_shortcuts.iter().map(String::as_str))
-                        .err(),
+                    OperationalHotkey::Registered(old_shortcuts) => {
+                        crate::hotkey::register_shortcuts(&app, old_shortcuts).err()
+                    }
                     OperationalHotkey::Inactive => None,
                     OperationalHotkey::Unknown => unreachable!("unknown state returned above"),
                 }

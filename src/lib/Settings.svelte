@@ -40,6 +40,11 @@
     retainTestRecordingOwnership,
     type BackendDictationState,
   } from "./dictation-ui-state";
+  import {
+    canUseBareHotkey,
+    supportedBareFunctionKeyRange,
+    tauriKeyName,
+  } from "./hotkey.js";
 
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);
@@ -68,6 +73,7 @@
 
   // Hotkey recorder state
   let recordingProfileId: string | null = $state(null);
+  let hotkeyCaptureGeneration = 0;
   let draftProfileId: string | null = $state(null);
   let hotkeyError: string = $state("");
   let hotkeyRecorderEl: HTMLButtonElement | undefined = $state();
@@ -449,28 +455,6 @@
     }
   }
 
-  /** Map DOM key names to Tauri global-shortcut format */
-  function tauriKeyName(key: string): string | null {
-    if (key === " ") return "Space";
-    if (key === "Meta") return null; // modifier only
-    if (key === "Control") return null;
-    if (key === "Alt") return null;
-    if (key === "Shift") return null;
-    // F-keys
-    if (/^F\d{1,2}$/.test(key)) return key;
-    // Single letter/digit
-    if (/^[a-zA-Z0-9]$/.test(key)) return key.toUpperCase();
-    // Arrow keys
-    if (key.startsWith("Arrow")) return key;
-    // Named keys
-    const mapped: Record<string, string> = {
-      Tab: "Tab", Enter: "Enter", Backspace: "Backspace", Delete: "Delete",
-      Escape: "Escape", Home: "Home", End: "End", PageUp: "PageUp",
-      PageDown: "PageDown", Insert: "Insert",
-    };
-    return mapped[key] ?? null;
-  }
-
   /** Platform-correct modifier display names */
   function modifierNames(): { ctrl: string; alt: string; meta: string } {
     const mac = platform === "macos";
@@ -492,12 +476,20 @@
       .join(" + ");
   }
 
-  function onHotkeyKeydown(e: KeyboardEvent, profileId: string) {
+  function beginHotkeyCapture(profileId: string) {
+    hotkeyCaptureGeneration += 1;
+    recordingProfileId = profileId;
+    hotkeyError = "";
+  }
+
+  async function onHotkeyKeydown(e: KeyboardEvent, profileId: string) {
+    const captureGeneration = hotkeyCaptureGeneration;
     e.preventDefault();
     e.stopPropagation();
 
     // Escape cancels recording
     if (e.key === "Escape") {
+      hotkeyCaptureGeneration += 1;
       recordingProfileId = null;
       hotkeyError = "";
       return;
@@ -508,16 +500,44 @@
 
     const keyName = tauriKeyName(e.key);
     if (!keyName) {
-      hotkeyError = `"${e.key}" is not a supported key. Use A–Z, 0–9, F1–F12, Space, Arrow keys, or Tab/Enter/Delete.`;
+      hotkeyError = `"${e.key}" is not a supported key. Use A–Z, 0–9, F1–F24, Space, Arrow keys, or Tab/Enter/Delete.`;
       return;
     }
 
-    // Must have at least one modifier
+    // Ordinary keys require a modifier. Extended function keys are reserved
+    // for programmable buttons and may be used directly through the native
+    // macOS monitor or the Windows global-shortcut backend.
     const hasModifier = e.ctrlKey || e.altKey || e.metaKey || e.shiftKey;
-    if (!hasModifier) {
-      const m = modifierNames();
-      hotkeyError = `Shortcut must include a modifier (${m.ctrl}, ${m.alt}, ${m.meta}, or Shift)`;
+    if (platform === "macos" && hasModifier && /^F2[1-4]$/.test(keyName)) {
+      hotkeyError = `${keyName} is supported without modifiers on macOS, but its modified forms cannot be registered reliably.`;
       return;
+    }
+    if (!hasModifier && !canUseBareHotkey(keyName, platform)) {
+      const m = modifierNames();
+      const bareRange = supportedBareFunctionKeyRange(platform);
+      hotkeyError = `Shortcut must include a modifier (${m.ctrl}, ${m.alt}, ${m.meta}, or Shift).${bareRange ? ` ${bareRange} may be used alone.` : ""}`;
+      return;
+    }
+
+    if (platform === "macos" && !hasModifier && /^F(?:1[3-9]|2[0-4])$/.test(keyName)) {
+      accessibilityChecking = true;
+      try {
+        accessibilityGranted = await checkAccessibilityPermission();
+        if (!accessibilityGranted) {
+          await requestAccessibilityPermission();
+          accessibilityGranted = await waitForAccessibilityPermission();
+        }
+      } catch (error: any) {
+        hotkeyError = typeof error === "string" ? error : error?.message || "Failed to check Accessibility permission.";
+        return;
+      } finally {
+        accessibilityChecking = false;
+      }
+      if (!accessibilityGranted) {
+        hotkeyError = "F13–F24 requires Accessibility permission on macOS. Permission was not granted.";
+        return;
+      }
+      if (captureGeneration !== hotkeyCaptureGeneration) return;
     }
 
     // Build Tauri-format shortcut string (order: Control, Alt, Super, Shift, Key)
@@ -575,7 +595,7 @@
     };
     settings = { ...settings, hotkey_profiles: [...settings.hotkey_profiles, profile] };
     draftProfileId = profile.id;
-    recordingProfileId = profile.id;
+    beginHotkeyCapture(profile.id);
     void refreshProfileModels(settings.hotkey_profiles);
   }
 
@@ -662,7 +682,7 @@
                 {:else}
                   <button
                     class="hotkey-recorder"
-                    onclick={() => { recordingProfileId = profile.id; hotkeyError = ""; }}
+                    onclick={() => beginHotkeyCapture(profile.id)}
                   >{formatHotkeyDisplay(profile.shortcut)}</button>
                 {/if}
                 {#if settings.hotkey_profiles.length > 1}
@@ -698,10 +718,12 @@
             <div class="hotkey-error">{hotkeyError}</div>
           {:else if !hotkeyStatusOk}
             <div class="hotkey-error">
-              ⚠ Not registered{hotkeyStatusError ? `: ${hotkeyStatusError}` : ""} — this shortcut may already be in use by another app. Try a different combination.
+              ⚠ Not registered{hotkeyStatusError ? `: ${hotkeyStatusError}` : ""}{#if !hotkeyStatusError.includes("Accessibility")} — this shortcut may already be in use by another app. Try a different combination.{/if}
             </div>
           {/if}
-          <div class="hotkey-hint">Each shortcut selects its language. Modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key.</div>
+          <div class="hotkey-hint">
+            Each shortcut selects its language. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}{" "}Bare F13–F24 requires Accessibility permission.{/if}
+          </div>
         </div>
 
         <div class="field">
