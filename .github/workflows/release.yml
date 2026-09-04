@@ -26,16 +26,35 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Cache Cargo registry and target
+      # Same rust-cache scheme as CI (#178): per-crate fingerprints shared
+      # across branches instead of a `Cargo.lock`-keyed multi-GB target dump.
+      # `build-macos` below uses the same shared key so the release Tauri
+      # build reuses dependencies this gate job just compiled.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: sagascript-release
+
+      # The inference gates re-download `nb-whisper-tiny`, `tiny` and the
+      # diarization models every run (#178). Same key as CI, so a PR-warmed
+      # model cache carries over to the release run.
+      - name: Cache downloaded models
         uses: actions/cache@v5
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: release-gate-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json') }}
+          path: ~/Library/Application Support/Sagascript/Models
+          key: macos-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
           restore-keys: |
-            release-gate-
+            macos-models-
+
+      # The diarization fixture is re-downloaded from Hugging Face every run
+      # (#178). RUNNER_TEMP is per-run, so the cache lives in a stable path
+      # and is copied into place; actions/cache persists it post-job.
+      - name: Cache diarization fixture
+        uses: actions/cache@v5
+        with:
+          path: ~/sagascript-fixture-cache
+          key: diarization-fixture-dj_2022_feu-6b63943
 
       - name: Install npm dependencies
         run: npm ci
@@ -99,9 +118,16 @@ jobs:
           result="$RUNNER_TEMP/diarization-smoke.json"
           "$binary" download-model tiny
           "$binary" download-model diarization
-          curl --fail --location --retry 3 \
-            'https://huggingface.co/datasets/medkit/simsamu/resolve/6b639431f658d636c30dbf342074d723bf303e0f/dj_2022_feu/dj_2022_feu.m4a' \
-            --output "$fixture"
+          fixture_cache="$HOME/sagascript-fixture-cache/dj_2022_feu.m4a"
+          mkdir -p "$HOME/sagascript-fixture-cache"
+          if [[ -f "$fixture_cache" ]]; then
+            cp "$fixture_cache" "$fixture"
+          else
+            curl --fail --location --retry 3 \
+              'https://huggingface.co/datasets/medkit/simsamu/resolve/6b639431f658d636c30dbf342074d723bf303e0f/dj_2022_feu/dj_2022_feu.m4a' \
+              --output "$fixture"
+            cp "$fixture" "$fixture_cache"
+          fi
           "$binary" transcribe \
             --language auto \
             --model tiny \
@@ -130,16 +156,13 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Cache Cargo registry and target
-        uses: actions/cache@v5
+      # Shares the quality-gate shared key above (#178) so this build reuses
+      # dependencies the gate just compiled instead of rebuilding from cold.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src-tauri/target
-          key: macos-arm64-release-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            macos-arm64-release-cargo-
+          workspaces: src-tauri
+          shared-key: sagascript-release
 
       - name: Install npm dependencies
         run: npm ci
