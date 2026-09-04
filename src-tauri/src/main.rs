@@ -25,9 +25,6 @@ mod updates;
 
 use tracing_subscriber::EnvFilter;
 
-use fs2::FileExt;
-use std::fs::{File, OpenOptions};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -46,7 +43,6 @@ use tauri::{
 use tauri_plugin_global_shortcut::ShortcutState;
 use tracing::{error, info, warn};
 
-#[cfg(any(target_os = "macos", test))]
 use app_controller::AppState;
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
@@ -383,74 +379,6 @@ fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
     settings
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum GuiInstanceLockError {
-    AlreadyRunning,
-    Unavailable(String),
-}
-
-/// Process-lifetime OS lock for the bare GUI launch path. The lock file may
-/// remain on disk, but the kernel-owned lock is released automatically on
-/// clean exit or crash, so stale files cannot strand a later launch.
-#[derive(Debug)]
-struct GuiInstanceGuard {
-    _file: File,
-}
-
-fn acquire_gui_instance_guard() -> Result<GuiInstanceGuard, GuiInstanceLockError> {
-    let app_data_dir = sagascript_core::settings::store::app_data_dir();
-    std::fs::create_dir_all(&app_data_dir).map_err(|error| {
-        GuiInstanceLockError::Unavailable(format!(
-            "failed to create app data directory {}: {error}",
-            app_data_dir.display()
-        ))
-    })?;
-    acquire_gui_instance_guard_at(&app_data_dir.join("gui-instance.lock"))
-}
-
-fn is_gui_instance_lock_contention(error: &std::io::Error) -> bool {
-    if error.kind() == std::io::ErrorKind::WouldBlock {
-        return true;
-    }
-
-    // LockFileEx reports contention as ERROR_LOCK_VIOLATION. Rust does not
-    // currently normalize that code to WouldBlock on Windows.
-    #[cfg(windows)]
-    if error.raw_os_error() == Some(33) {
-        return true;
-    }
-
-    false
-}
-
-fn acquire_gui_instance_guard_at(path: &Path) -> Result<GuiInstanceGuard, GuiInstanceLockError> {
-    let mut options = OpenOptions::new();
-    options.create(true).read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-
-    let file = options.open(path).map_err(|error| {
-        GuiInstanceLockError::Unavailable(format!(
-            "failed to open GUI instance lock {}: {error}",
-            path.display()
-        ))
-    })?;
-
-    match file.try_lock_exclusive() {
-        Ok(()) => Ok(GuiInstanceGuard { _file: file }),
-        Err(error) if is_gui_instance_lock_contention(&error) => {
-            Err(GuiInstanceLockError::AlreadyRunning)
-        }
-        Err(error) => Err(GuiInstanceLockError::Unavailable(format!(
-            "failed to lock GUI instance file {}: {error}",
-            path.display()
-        ))),
-    }
-}
-
 fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::BareHotkeyState) {
     let ctrl: tauri::State<'_, SharedController> = app.state();
 
@@ -509,7 +437,6 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
         }
     }
 }
-
 fn main() {
     let gui_launch_mode = gui_launch_mode(std::env::args_os());
 
@@ -544,33 +471,32 @@ fn main() {
 
     info!("Sagascript starting...");
 
-    // CLI subcommands returned above, so this lock covers GUI processes only.
-    // Acquire it before TCC checks, state construction, or desktop services.
-    let _gui_instance_guard = match acquire_gui_instance_guard() {
-        Ok(guard) => guard,
-        Err(GuiInstanceLockError::AlreadyRunning) => {
-            info!("Another Sagascript GUI instance is already running; exiting");
-            return;
-        }
-        Err(GuiInstanceLockError::Unavailable(error)) => {
-            error!("Cannot establish single-instance GUI ownership: {error}");
-            return;
-        }
-    };
-
-    let settings = load_settings_with_permission_gate();
-    info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
-    let initial_hotkey = settings.hotkey.clone();
-    let controller = Mutex::new(AppController::new(settings));
-    let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
-    // Process-wide hotkey registration health (see hotkey::health for why this
-    // is deliberately independent of the AppController mutex). Assumed healthy
-    // until the first real registration attempt in `.setup()` below proves
-    // otherwise — there's no observable window in between since that attempt
-    // runs synchronously before the event loop starts.
-    let hotkey_health = hotkey::HotkeyHealth::new(&initial_hotkey);
-
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !second_instance_requests_settings(&args) {
+                info!("Background second-instance launch ignored");
+                return;
+            }
+
+            // The callback is delivered by the single-instance transport,
+            // which is not guaranteed to be the Tauri main thread (notably on
+            // macOS). Queue all state/UI work onto the main thread. This also
+            // makes the Windows WM_COPYDATA callback return promptly instead
+            // of keeping the secondary process blocked on a window operation.
+            let app = app.clone();
+            dispatch_to_main(&app, move |app| {
+                let should_reveal = app
+                    .try_state::<SharedController>()
+                    .map(|ctrl| should_reveal_for_reopen(ctrl.lock().unwrap().state()))
+                    .unwrap_or(true);
+                if should_reveal {
+                    info!("Second-instance launch requested Settings");
+                    open_settings_window(app, None);
+                } else {
+                    info!("Ignoring second-instance launch while dictation is active");
+                }
+            });
+        }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
@@ -587,17 +513,34 @@ fn main() {
             Some(vec![sagascript_cli::open::GUI_BACKGROUND_ARG]),
         ))
         .plugin(tauri_plugin_dialog::init())
-        .manage(controller)
-        .manage(whisper)
-        .manage(hotkey_health)
-        .manage(Mutex::new(None::<MenuItem<tauri::Wry>>) as SharedStatusItem)
-        .manage(Mutex::new(None::<ProfileMenuState>) as SharedProfileMenuState)
-        .manage(Mutex::new(UpdateMenuState {
-            items: None,
-            checking: false,
-            available_version: None,
-        }) as SharedUpdateMenuState)
         .setup(move |app| {
+            // `tauri-plugin-single-instance` is initialized before Tauri calls
+            // setup. Keep backend construction here so a secondary process is
+            // rejected before it loads settings, opens audio resources, or
+            // creates a Whisper backend.
+            let settings = load_settings_with_permission_gate();
+            info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
+            let initial_hotkey = settings.hotkey.clone();
+            let controller: SharedController = Mutex::new(AppController::new(settings));
+            let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
+            app.manage(controller);
+            app.manage(whisper);
+            // Process-wide hotkey registration health (see hotkey::health for
+            // why this is deliberately independent of the AppController
+            // mutex). Assumed healthy until the synchronous registration
+            // attempt below proves otherwise.
+            app.manage(hotkey::HotkeyHealth::new(&initial_hotkey));
+            let status_item: SharedStatusItem = Mutex::new(None);
+            let profile_menu: SharedProfileMenuState = Mutex::new(None);
+            let update_menu: SharedUpdateMenuState = Mutex::new(UpdateMenuState {
+                items: None,
+                checking: false,
+                available_version: None,
+            });
+            app.manage(status_item);
+            app.manage(profile_menu);
+            app.manage(update_menu);
+
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
             {
@@ -753,13 +696,19 @@ fn main() {
             #[cfg(target_os = "macos")]
             seed_macos_tray_preferred_position();
 
-            let tray = TrayIconBuilder::with_id("main")
+            let tray_builder = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .tooltip("Sagascript")
                 // macOS 26 can register an image-backed status item but paint
                 // it blank. Compact native text stays visible: S while idle,
                 // then a state marker while recording or transcribing.
-                .title("S")
+                .title("S");
+            #[cfg(target_os = "windows")]
+            let tray_builder = match app.default_window_icon() {
+                Some(icon) => tray_builder.icon(icon.clone()),
+                None => return Err("Windows tray icon is missing from the app bundle".into()),
+            };
+            let tray = tray_builder
                 .on_menu_event(move |app, event| {
                     match event.id().as_ref() {
                     "quit" => {
@@ -1240,6 +1189,18 @@ fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLau
     }
 }
 
+fn second_instance_requests_settings(args: &[String]) -> bool {
+    // `tauri-plugin-single-instance` forwards the complete argv on Windows,
+    // including argv[0], but transports differ across platforms and versions.
+    // Treat the private background marker as a capability to stay hidden and
+    // let every other relaunch (including a bare Start-menu launch) reveal
+    // Settings. Looking for the marker anywhere is robust to either argv
+    // shape and to a future plugin adding metadata arguments.
+    !args
+        .iter()
+        .any(|argument| argument == sagascript_cli::open::GUI_BACKGROUND_ARG)
+}
+
 fn initial_window_request(
     has_completed_onboarding: bool,
     launch_mode: GuiLaunchMode,
@@ -1253,7 +1214,6 @@ fn initial_window_request(
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
 fn should_reveal_for_reopen(state: AppState) -> bool {
     !state.is_busy()
 }
@@ -1386,9 +1346,9 @@ fn handle_hotkey_release(
     stop_recording_and_transcribe(app, ctrl);
 }
 
-/// Run a UI closure on the macOS main thread. NSStatusItem / NSWindow (tray,
-/// overlay) APIs must not be touched from a worker thread; best-effort — logs
-/// if the dispatch itself fails.
+/// Run a UI closure on Tauri's main thread. Native tray/window APIs must not be
+/// touched from a transport or worker thread; best-effort — logs if dispatch
+/// itself fails.
 fn dispatch_to_main<F>(app: &tauri::AppHandle, f: F)
 where
     F: FnOnce(&tauri::AppHandle) + Send + 'static,
@@ -1799,23 +1759,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gui_instance_lock_rejects_a_concurrent_owner_and_recovers_after_drop() {
-        let dir = std::env::temp_dir().join(format!(
-            "sagascript-instance-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("gui-instance.lock");
-
-        let first = acquire_gui_instance_guard_at(&path).unwrap();
-        assert_eq!(
-            acquire_gui_instance_guard_at(&path).unwrap_err(),
-            GuiInstanceLockError::AlreadyRunning
-        );
-
-        drop(first);
-        acquire_gui_instance_guard_at(&path).unwrap();
-        std::fs::remove_dir_all(dir).unwrap();
+    fn second_instance_reveals_settings_except_for_background_startup() {
+        assert!(second_instance_requests_settings(&[
+            "sagascript".to_string()
+        ]));
+        assert!(second_instance_requests_settings(&[
+            "sagascript".to_string(),
+            sagascript_cli::open::GUI_OPEN_ARG.to_string()
+        ]));
+        assert!(second_instance_requests_settings(&[
+            sagascript_cli::open::GUI_OPEN_ARG.to_string()
+        ]));
+        assert!(!second_instance_requests_settings(&[
+            "sagascript".to_string(),
+            sagascript_cli::open::GUI_BACKGROUND_ARG.to_string()
+        ]));
+        assert!(!second_instance_requests_settings(&[
+            sagascript_cli::open::GUI_BACKGROUND_ARG.to_string(),
+            "future-metadata".to_string()
+        ]));
     }
 
     #[test]

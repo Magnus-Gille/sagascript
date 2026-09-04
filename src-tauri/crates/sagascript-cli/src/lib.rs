@@ -25,6 +25,9 @@ pub const NATIVE_LOG_SUPPRESSION: &str =
 pub const DEFAULT_CLI_LOG_FILTER: &str =
     "warn,whisper_rs::whisper_logging_hook=error,whisper_rs::ggml_logging_hook=error";
 
+#[cfg(target_os = "windows")]
+const WINDOWS_INFERENCE_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 /// Preserve an application's requested log level without accidentally opting
 /// into noisy native Whisper/GGML diagnostics. Native logging is enabled only
 /// when the filter names `whisper_rs` explicitly.
@@ -458,9 +461,10 @@ pub fn run(cli: Cli) {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
     let result = match cli.command.unwrap() {
-        Command::Transcribe(args) => transcribe::run(args),
+        Command::Transcribe(args) =>
+            run_inference_command("transcribe", move || transcribe::run(args)),
         #[cfg(feature = "record")]
-        Command::Record(args) => record::run(args),
+        Command::Record(args) => run_inference_command("record", move || record::run(args)),
         Command::ListModels(args) => models::list(args),
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
@@ -491,6 +495,39 @@ pub fn run(cli: Cli) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
+}
+
+#[cfg(target_os = "windows")]
+fn run_inference_command(
+    command: &'static str,
+    task: impl FnOnce() -> Result<(), sagascript_core::error::DictationError> + Send + 'static,
+) -> Result<(), sagascript_core::error::DictationError> {
+    // MSVC executables start with a much smaller main-thread stack than the
+    // worker threads used by the desktop app. Whisper inference exhausted it
+    // with STATUS_STACK_OVERFLOW (0xC00000FD) in the real Windows CI gate.
+    std::thread::Builder::new()
+        .name(format!("sagascript-cli-{command}"))
+        .stack_size(WINDOWS_INFERENCE_STACK_BYTES)
+        .spawn(task)
+        .map_err(|error| {
+            sagascript_core::error::DictationError::ApplicationLaunchError(format!(
+                "Failed to start Windows {command} worker: {error}"
+            ))
+        })?
+        .join()
+        .map_err(|_| {
+            sagascript_core::error::DictationError::TranscriptionFailed(format!(
+                "Windows {command} worker terminated unexpectedly"
+            ))
+        })?
+}
+
+#[cfg(not(target_os = "windows"))]
+fn run_inference_command(
+    _command: &'static str,
+    task: impl FnOnce() -> Result<(), sagascript_core::error::DictationError>,
+) -> Result<(), sagascript_core::error::DictationError> {
+    task()
 }
 
 fn formats() {
@@ -562,6 +599,21 @@ fn render_manpage_tree(cmd: &clap::Command, dir: &PathBuf) -> Result<(), io::Err
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_inference_command_has_a_large_named_worker_stack() {
+        run_inference_command("stack-test", || {
+            let stack_probe = [0_u8; 4 * 1024 * 1024];
+            assert_eq!(
+                std::thread::current().name(),
+                Some("sagascript-cli-stack-test")
+            );
+            std::hint::black_box(&stack_probe);
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn log_filter_suppresses_native_diagnostics_by_default() {

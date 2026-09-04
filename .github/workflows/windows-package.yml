@@ -1,0 +1,204 @@
+name: Windows Package Candidate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/windows-package.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/**"
+      - "src/**"
+      - "src-tauri/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-candidate:
+    name: Build Windows ${{ matrix.architecture }} candidate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - architecture: arm64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ matrix.rust_target }}
+
+      - name: Verify native runner architecture
+        shell: pwsh
+        run: |
+          $hostTriple = rustc -vV | Select-String '^host:' | ForEach-Object { ($_ -split ':', 2)[1].Trim() }
+          if ([string]::IsNullOrWhiteSpace($hostTriple)) {
+            throw "Unable to determine the Rust host triple"
+          }
+          if ($hostTriple -ne '${{ matrix.rust_target }}') {
+            throw "Expected native ${{ matrix.rust_target }} runner, got $hostTriple"
+          }
+          $runnerArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+          if ($runnerArchitecture -ne '${{ matrix.architecture }}') {
+            throw "Expected native ${{ matrix.architecture }} runner, got $runnerArchitecture"
+          }
+
+      - name: Configure native ARM64 C and C++ toolchain
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          $clang = Get-Command clang-cl -ErrorAction Stop
+          $ninja = Get-Command ninja -ErrorAction Stop
+          & $clang.Source --version
+          & $ninja.Source --version
+          "CMAKE_GENERATOR=Ninja" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CC=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CXX=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_CXX_FLAGS=/EHsc /utf-8" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_C_COMPILER=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_CXX_COMPILER=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_ASM_COMPILER=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+          key: windows-package-${{ matrix.architecture }}-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json', '.github/workflows/windows-package.yml') }}
+          restore-keys: |
+            windows-package-${{ matrix.architecture }}-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Verify release metadata and licenses
+        run: |
+          npm run release:check
+          npm run licenses:check
+
+      - name: Test frontend release surface
+        run: npm run test:frontend
+
+      - name: Build and check frontend
+        run: |
+          npm run build
+          npm run check
+
+      - name: Test and lint Rust workspace
+        working-directory: src-tauri
+        run: |
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Gate real Windows transcription
+        shell: pwsh
+        run: |
+          cargo build --release -p sagascript-cli --manifest-path src-tauri/Cargo.toml --target ${{ matrix.rust_target }}
+          $binary = "src-tauri\target\${{ matrix.rust_target }}\release\sagascript.exe"
+          $stdout = Join-Path $env:RUNNER_TEMP "transcription-smoke.json"
+          $stderr = Join-Path $env:RUNNER_TEMP "transcription-smoke.stderr"
+          & $binary download-model nb-whisper-tiny
+          if ($LASTEXITCODE -ne 0) { throw "Model download failed with exit code $LASTEXITCODE" }
+          & $binary transcribe `
+            --language no `
+            --model nb-whisper-tiny `
+            --beam 0 `
+            --json `
+            test-audio/norwegian-short-3s.mp3 > $stdout 2> $stderr
+          if ($LASTEXITCODE -ne 0) {
+            $transcriptionExit = $LASTEXITCODE
+            Write-Host "Transcription stdout:"
+            if (Test-Path $stdout) { Get-Content $stdout }
+            Write-Host "Transcription stderr:"
+            if (Test-Path $stderr) { Get-Content $stderr }
+            throw "Transcription failed with exit code $transcriptionExit"
+          }
+          python scripts/verify-json-cli-streams.py $stdout $stderr
+          $result = Get-Content $stdout -Raw | ConvertFrom-Json
+          if ($result.language -ne "no") { throw "Expected Norwegian result, got '$($result.language)'" }
+          if ($result.text -notmatch "(?i)storting") { throw "Expected 'storting' in transcription" }
+          if (-not $result.segments) { throw "Expected at least one transcription segment" }
+          Copy-Item $binary (Join-Path $env:RUNNER_TEMP "sagascript-cli.exe")
+
+      - name: Remove cached installer bundles
+        shell: pwsh
+        run: |
+          $bundleRoot = "src-tauri\target\${{ matrix.rust_target }}\release\bundle"
+          foreach ($format in @("nsis", "msi")) {
+            $bundleDirectory = Join-Path $bundleRoot $format
+            if (Test-Path -LiteralPath $bundleDirectory) {
+              Remove-Item -LiteralPath $bundleDirectory -Recurse -Force
+            }
+          }
+
+      - name: Build unsigned internal installers
+        run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }}
+
+      - name: Prepare and verify candidate artifacts
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $architecture = "${{ matrix.architecture }}"
+          $targetRoot = "src-tauri\target\${{ matrix.rust_target }}\release"
+          $desktop = Join-Path $targetRoot "sagascript.exe"
+          $cli = Join-Path $env:RUNNER_TEMP "sagascript-cli.exe"
+          if (-not (Test-Path -LiteralPath $desktop -PathType Leaf)) {
+            throw "Tauri did not produce the desktop executable at the native target path: $desktop"
+          }
+          $nsis = @(Get-ChildItem (Join-Path $targetRoot "bundle\nsis") -Filter "*.exe" -File)
+          $msi = @(Get-ChildItem (Join-Path $targetRoot "bundle\msi") -Filter "*.msi" -File)
+          if ($nsis.Count -ne 1) { throw "Expected exactly one current NSIS installer, found $($nsis.Count)" }
+          if ($msi.Count -ne 1) { throw "Expected exactly one current MSI installer, found $($msi.Count)" }
+          if ($nsis[0].Name -notmatch [regex]::Escape($version)) { throw "NSIS installer does not match version ${version}: $($nsis[0].Name)" }
+          if ($msi[0].Name -notmatch [regex]::Escape($version)) { throw "MSI installer does not match version ${version}: $($msi[0].Name)" }
+
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item $desktop "artifacts\Sagascript-Windows-$architecture-Portable.exe"
+          Copy-Item $cli "artifacts\Sagascript-Windows-$architecture-CLI.exe"
+          Copy-Item $nsis[0].FullName "artifacts\Sagascript-Windows-$architecture-Setup.exe"
+          Copy-Item $msi[0].FullName "artifacts\Sagascript-Windows-$architecture.msi"
+          Copy-Item "docs\windows-release.md" "artifacts\README-Windows-Candidate.md"
+          Copy-Item "scripts\accept-windows-candidate.ps1" "artifacts\accept-windows-candidate.ps1"
+          Copy-Item "test-audio\norwegian-short-3s.mp3" "artifacts\norwegian-short-3s.mp3"
+
+          ./scripts/verify-windows-release.ps1 `
+            -CliExe "artifacts\Sagascript-Windows-$architecture-CLI.exe" `
+            -ExpectedVersion $version `
+            -Artifacts @(
+              "artifacts\Sagascript-Windows-$architecture-Portable.exe",
+              "artifacts\Sagascript-Windows-$architecture-CLI.exe",
+              "artifacts\Sagascript-Windows-$architecture-Setup.exe",
+              "artifacts\Sagascript-Windows-$architecture.msi"
+            ) `
+            -SignaturePolicy Internal `
+            -ChecksumOutput "artifacts\SHA256SUMS-Windows-$architecture"
+
+      - name: Upload internal Windows candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.architecture }}-unsigned-candidate
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
