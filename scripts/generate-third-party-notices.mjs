@@ -18,6 +18,10 @@ function compareCodeUnits(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+function normalizeNewlines(text) {
+  return text.replace(/\r\n?/g, "\n");
+}
+
 function npmInstallationError(pkg, installedVersion, directoryExists) {
   const path = relative(root, pkg.directory);
   if (!directoryExists) {
@@ -76,9 +80,20 @@ if (mode === "--test-npm-installation") {
   process.exit(0);
 }
 
+if (mode === "--test-newline-normalization") {
+  const lf = "first\nsecond\n";
+  for (const candidate of [lf, "first\r\nsecond\r\n", "first\rsecond\r"]) {
+    if (normalizeNewlines(candidate) !== lf) {
+      throw new Error("Generated notice comparison is not newline-stable");
+    }
+  }
+  console.log("newline normalization passed");
+  process.exit(0);
+}
+
 if (!new Set(["--check", "--write"]).has(mode)) {
   console.error(
-    "Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort|--test-npm-installation",
+    "Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort|--test-npm-installation|--test-newline-normalization",
   );
   process.exit(2);
 }
@@ -372,7 +387,7 @@ if (mode === "--write") {
   writeFileSync(outputPath, generated);
   console.log(`Wrote ${relative(root, outputPath)} (${rustPackages.length} Rust, ${npmPackages.length} npm packages)`);
 } else {
-  if (!existsSync(outputPath) || readFileSync(outputPath, "utf8") !== generated) {
+  if (!existsSync(outputPath) || normalizeNewlines(readFileSync(outputPath, "utf8")) !== generated) {
     console.error("THIRD_PARTY_NOTICES.md is stale; run npm run licenses:generate and review the diff");
     process.exit(1);
   }

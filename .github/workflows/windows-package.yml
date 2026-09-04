@@ -1,0 +1,142 @@
+name: Windows Package Candidate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/windows-package.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/**"
+      - "src/**"
+      - "src-tauri/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-candidate:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            src-tauri\target
+          key: windows-package-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json') }}
+          restore-keys: |
+            windows-package-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Verify release metadata and licenses
+        run: |
+          npm run release:check
+          npm run licenses:check
+
+      - name: Test frontend release surface
+        run: npm run test:frontend
+
+      - name: Build and check frontend
+        run: |
+          npm run build
+          npm run check
+
+      - name: Test and lint Rust workspace
+        working-directory: src-tauri
+        run: |
+          cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Gate real Windows transcription
+        shell: pwsh
+        run: |
+          cargo build --release -p sagascript-cli --manifest-path src-tauri/Cargo.toml
+          $binary = "src-tauri\target\release\sagascript.exe"
+          $stdout = Join-Path $env:RUNNER_TEMP "transcription-smoke.json"
+          $stderr = Join-Path $env:RUNNER_TEMP "transcription-smoke.stderr"
+          & $binary download-model nb-whisper-tiny
+          if ($LASTEXITCODE -ne 0) { throw "Model download failed with exit code $LASTEXITCODE" }
+          & $binary transcribe `
+            --language no `
+            --model nb-whisper-tiny `
+            --beam 0 `
+            --json `
+            test-audio/norwegian-short-3s.mp3 > $stdout 2> $stderr
+          if ($LASTEXITCODE -ne 0) {
+            $transcriptionExit = $LASTEXITCODE
+            Write-Host "Transcription stdout:"
+            if (Test-Path $stdout) { Get-Content $stdout }
+            Write-Host "Transcription stderr:"
+            if (Test-Path $stderr) { Get-Content $stderr }
+            throw "Transcription failed with exit code $transcriptionExit"
+          }
+          python scripts/verify-json-cli-streams.py $stdout $stderr
+          $result = Get-Content $stdout -Raw | ConvertFrom-Json
+          if ($result.language -ne "no") { throw "Expected Norwegian result, got '$($result.language)'" }
+          if ($result.text -notmatch "(?i)storting") { throw "Expected 'storting' in transcription" }
+          if (-not $result.segments) { throw "Expected at least one transcription segment" }
+          Copy-Item $binary (Join-Path $env:RUNNER_TEMP "sagascript-cli.exe")
+
+      - name: Build unsigned internal installers
+        run: npx tauri build --ci --bundles nsis,msi --no-sign
+
+      - name: Prepare and verify candidate artifacts
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $desktop = "src-tauri\target\release\sagascript.exe"
+          $cli = Join-Path $env:RUNNER_TEMP "sagascript-cli.exe"
+          $nsis = Get-ChildItem "src-tauri\target\release\bundle\nsis" -Filter "*.exe" -File | Select-Object -First 1
+          $msi = Get-ChildItem "src-tauri\target\release\bundle\msi" -Filter "*.msi" -File | Select-Object -First 1
+          if (-not $nsis) { throw "Tauri did not produce an NSIS installer" }
+          if (-not $msi) { throw "Tauri did not produce an MSI installer" }
+
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Copy-Item $desktop "artifacts\Sagascript-Windows-x64-Portable.exe"
+          Copy-Item $cli "artifacts\Sagascript-Windows-x64-CLI.exe"
+          Copy-Item $nsis.FullName "artifacts\Sagascript-Windows-x64-Setup.exe"
+          Copy-Item $msi.FullName "artifacts\Sagascript-Windows-x64.msi"
+          Copy-Item "docs\windows-release.md" "artifacts\README-Windows-Candidate.md"
+          Copy-Item "scripts\accept-windows-candidate.ps1" "artifacts\accept-windows-candidate.ps1"
+          Copy-Item "test-audio\norwegian-short-3s.mp3" "artifacts\norwegian-short-3s.mp3"
+
+          ./scripts/verify-windows-release.ps1 `
+            -CliExe "artifacts\Sagascript-Windows-x64-CLI.exe" `
+            -ExpectedVersion $version `
+            -Artifacts @(
+              "artifacts\Sagascript-Windows-x64-Portable.exe",
+              "artifacts\Sagascript-Windows-x64-CLI.exe",
+              "artifacts\Sagascript-Windows-x64-Setup.exe",
+              "artifacts\Sagascript-Windows-x64.msi"
+            ) `
+            -SignaturePolicy Internal `
+            -ChecksumOutput "artifacts\SHA256SUMS-Windows"
+
+      - name: Upload internal Windows candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-unsigned-candidate
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
