@@ -351,7 +351,7 @@ Available setting keys:
   show_overlay       Show recording overlay (true/false)
   auto_paste         Auto-paste transcription result (true/false)
   auto_select_model  Auto-select best model for language (true/false)
-  hotkey             Global hotkey shortcut (e.g. Control+Shift+Space)",
+  hotkey             Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows",
         after_long_help = "\
 EXAMPLES:
   # Show all settings with current and default values
@@ -365,6 +365,7 @@ EXAMPLES:
 
   # Change the global hotkey
   sagascript config set hotkey 'Option+Space'
+  sagascript config set hotkey F13
 
   # Reset a single setting to its default
   sagascript config reset language

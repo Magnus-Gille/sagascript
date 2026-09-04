@@ -17,6 +17,7 @@
     openMicrophoneSettings,
     checkAccessibilityPermission,
     requestAccessibilityPermission,
+    retryHotkeyRegistration,
     openAccessibilitySettings,
     setAutoPaste,
     setOnboardingCompleted,
@@ -206,6 +207,11 @@
             accessibilityGranted = true;
             accessibilityChecking = false;
             stopPoll();
+            try {
+              await retryHotkeyRegistration();
+            } catch (e: any) {
+              accessibilityError = `Accessibility was granted, but the saved dictation shortcut could not be registered: ${typeof e === "string" ? e : e?.message ?? "unknown error"}`;
+            }
           }
         } catch (e: any) {
           if (!isCurrent()) return;

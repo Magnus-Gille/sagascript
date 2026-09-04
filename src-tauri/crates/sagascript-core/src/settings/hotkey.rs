@@ -18,11 +18,14 @@ pub fn canonical_hotkey(value: &str) -> Result<String, String> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HotkeyPlatform {
     MacOS,
+    Windows,
     Other,
 }
 
 const CURRENT_PLATFORM: HotkeyPlatform = if cfg!(target_os = "macos") {
     HotkeyPlatform::MacOS
+} else if cfg!(target_os = "windows") {
+    HotkeyPlatform::Windows
 } else {
     HotkeyPlatform::Other
 };
@@ -337,11 +340,47 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
         }
     }
 
-    if modifier_tokens.is_empty() {
+    let function_key_number = key
+        .strip_prefix('f')
+        .and_then(|number| number.parse::<u8>().ok());
+
+    // Reject parsed keys that cannot reach either the platform shortcut
+    // backend or Sagascript's native macOS bare-function-key monitor.
+    if function_key_number.is_some_and(|number| (13..=24).contains(&number)) {
+        let unsupported_error = match platform {
+            HotkeyPlatform::MacOS
+                if !modifier_tokens.is_empty()
+                    && function_key_number.is_some_and(|number| number >= 21) =>
+            {
+                Some("F21-F24 are supported without modifiers on macOS, but the modified forms cannot be registered reliably")
+            }
+            HotkeyPlatform::MacOS | HotkeyPlatform::Windows | HotkeyPlatform::Other => None,
+        };
+        if let Some(error) = unsupported_error {
+            return Err(format!("Invalid hotkey '{}': {}.", value, error));
+        }
+    }
+
+    let bare_function_key_range = match platform {
+        HotkeyPlatform::MacOS => Some(13..=24),
+        HotkeyPlatform::Windows => Some(13..=24),
+        HotkeyPlatform::Other => None,
+    };
+    let is_allowed_bare_function_key = modifier_tokens.is_empty()
+        && function_key_number.is_some_and(|number| {
+            bare_function_key_range.is_some_and(|range| range.contains(&number))
+        });
+
+    if modifier_tokens.is_empty() && !is_allowed_bare_function_key {
         return Err(format!(
             "Invalid hotkey '{}': at least one modifier is required. \
-             Example: 'Control+Space', 'Option+Space'",
-            value
+             Example: 'Control+Space', 'Option+Space'. {} may be used without modifiers.",
+            value,
+            match platform {
+                HotkeyPlatform::MacOS => "F13-F24",
+                HotkeyPlatform::Windows => "F13-F24",
+                HotkeyPlatform::Other => "No keys",
+            }
         ));
     }
 
@@ -454,5 +493,73 @@ mod tests {
             canonical_hotkey_for_platform("CmdOrCtrl+Space", HotkeyPlatform::MacOS),
             canonical_hotkey_for_platform("Command+Space", HotkeyPlatform::MacOS)
         );
+        assert_eq!(
+            canonical_hotkey_for_platform("F13", HotkeyPlatform::MacOS),
+            canonical_hotkey_for_platform("f13", HotkeyPlatform::MacOS)
+        );
+    }
+
+    #[test]
+    fn bare_extended_function_keys_follow_platform_registration_support() {
+        for shortcut in ["F13", "f17", "F20", "F21", "F24"] {
+            assert!(
+                validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).is_ok(),
+                "macOS should accept {shortcut} without a modifier"
+            );
+        }
+
+        for shortcut in ["F13", "f20", "F21", "F24"] {
+            assert!(
+                validate_hotkey_for_platform(shortcut, HotkeyPlatform::Windows).is_ok(),
+                "Windows should accept {shortcut} without a modifier"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_only_accepts_f21_through_f24_without_modifiers() {
+        for shortcut in ["Shift+F21", "Control+f22", "Shift+F23", "Command+F24"] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).unwrap_err();
+            assert!(
+                error.contains("supported without modifiers on macOS"),
+                "unexpected error for {shortcut}: {error}"
+            );
+        }
+
+        assert!(validate_hotkey_for_platform("F24", HotkeyPlatform::MacOS).is_ok());
+        assert!(validate_hotkey_for_platform("Control+F24", HotkeyPlatform::Windows).is_ok());
+    }
+
+    #[test]
+    fn linux_preserves_modified_extended_function_keys_but_rejects_bare_ones() {
+        for shortcut in ["Control+F13", "Shift+F20", "Alt+F24"] {
+            assert!(
+                validate_hotkey_for_platform(shortcut, HotkeyPlatform::Other).is_ok(),
+                "modified shortcut should remain valid on Linux: {shortcut}"
+            );
+        }
+
+        for shortcut in ["F13", "F24"] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::Other).unwrap_err();
+            assert!(
+                error.contains("modifier is required"),
+                "unexpected error for {shortcut}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_bare_keys_and_f1_through_f12_still_require_modifiers() {
+        for shortcut in ["Space", "A", "7", "F1", "f12", "ArrowUp"] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).unwrap_err();
+            assert!(
+                error.contains("modifier is required"),
+                "unexpected error for {shortcut}: {error}"
+            );
+        }
+
+        for shortcut in ["Control+Space", "Option+A", "Shift+F12"] {
+            assert!(validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).is_ok());
+        }
     }
 }

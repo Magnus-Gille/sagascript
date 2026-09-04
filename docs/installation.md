@@ -20,7 +20,8 @@ Download the latest `.dmg` from the [Releases page](https://github.com/Magnus-Gi
 3. Launch Sagascript -- it will appear in your menu bar
 4. Grant permissions when prompted:
    - **Microphone** -- for recording audio
-   - **Accessibility** -- for pasting transcriptions into the active app
+   - **Accessibility** -- for pasting transcriptions into the active app and
+     for bare F13–F24 shortcuts
 
 To make the app's CLI available in your shell, create this link once:
 
