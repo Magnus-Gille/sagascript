@@ -405,6 +405,7 @@ link; the upstream repository is authoritative for its license terms.
 | tauri-plugin-dialog | 2.6.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-plugin-fs | 2.4.5 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-plugin-global-shortcut | 2.3.1 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
+| tauri-plugin-single-instance | 2.4.4 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-runtime | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-runtime-wry | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-utils | 2.8.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
@@ -5490,7 +5491,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 4bf96504d6e8
 
-Components: Rust arboard@3.6.1, Rust fdeflate@0.3.7, Rust half@2.7.1, Rust image@0.25.9, Rust miniz_oxide@0.8.9, Rust pin-project-lite@0.2.16, Rust portable-atomic@1.13.1, Rust raw-window-handle@0.6.2, Rust sync_wrapper@1.0.2, Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, Rust time-core@0.1.8, Rust time-macros@0.2.27, Rust time@0.3.47, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
+Components: Rust arboard@3.6.1, Rust fdeflate@0.3.7, Rust half@2.7.1, Rust image@0.25.9, Rust miniz_oxide@0.8.9, Rust pin-project-lite@0.2.16, Rust portable-atomic@1.13.1, Rust raw-window-handle@0.6.2, Rust sync_wrapper@1.0.2, Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, Rust tauri-plugin-single-instance@2.4.4, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, Rust time-core@0.1.8, Rust time-macros@0.2.27, Rust time@0.3.47, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
 
 Source filenames: LICENSE, LICENSE-APACHE, LICENSE-APACHE.md, LICENSE-APACHE.txt, LICENSE-Apache, LICENSE_APACHE-2.0
 
@@ -15724,6 +15725,36 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### b7f455413bfe
+
+Components: Rust tauri-plugin-single-instance@2.4.4
+
+Source filenames: LICENSE_MIT
+
+~~~~text
+MIT License
+
+Copyright (c) 2017 - Present The Tauri Programme in the Commons Conservancy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### b8778b155bfd
 
 Components: npm @jridgewell/resolve-uri@3.1.2
@@ -19228,7 +19259,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 ### eb8a6c846304
 
-Components: Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, npm @tauri-apps/plugin-autostart@2.5.1, npm @tauri-apps/plugin-dialog@2.6.0
+Components: Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, Rust tauri-plugin-single-instance@2.4.4, npm @tauri-apps/plugin-autostart@2.5.1, npm @tauri-apps/plugin-dialog@2.6.0
 
 Source filenames: LICENSE.spdx
 

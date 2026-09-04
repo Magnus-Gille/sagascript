@@ -29,7 +29,7 @@
   type OnboardingLanguage = "en" | "sv" | "no";
 
   let currentStep: Step = $state("language");
-  let platform = $state("macos");
+  let platform: string | null = $state(null);
 
   // Language selection — seeded from existing settings in onMount
   let selectedLanguage: OnboardingLanguage = $state("en");
@@ -99,7 +99,7 @@
   // -- Language --
 
   async function selectLanguageAndContinue() {
-    if (languageSaving) return;
+    if (languageSaving || platform === null) return;
     languageError = null;
     languageSaving = true;
     try {
@@ -349,7 +349,14 @@
     );
     if (componentDestroyed) return;
 
-    platform = await getPlatform();
+    try {
+      platform = await getPlatform();
+    } catch (error) {
+      // Never fall back to the macOS-only permission flow when platform
+      // detection fails. "unknown" follows the portable onboarding path.
+      console.error("Failed to detect platform", error);
+      platform = "unknown";
+    }
     try {
       micStatus = await microphoneStatus();
     } catch {
@@ -419,7 +426,7 @@
         </div>
         <h1>Set up Sagascript</h1>
         <p class="description">
-          Choose your first dictation language. Speech stays on this Mac, and
+          Choose your first dictation language. Speech stays on this device, and
           you can add more language profiles later.
         </p>
         <div class="language-options">
@@ -458,8 +465,12 @@
           </div>
         {/if}
         <div class="actions">
-          <button class="primary" onclick={selectLanguageAndContinue} disabled={languageSaving}>
-            {languageSaving ? "Saving…" : "Continue"}
+          <button
+            class="primary"
+            onclick={selectLanguageAndContinue}
+            disabled={languageSaving || platform === null}
+          >
+            {platform === null ? "Preparing…" : languageSaving ? "Saving…" : "Continue"}
           </button>
         </div>
       </div>
@@ -482,7 +493,7 @@
         <h1>Setting up speech engine</h1>
         <p class="description">
           Preparing the local speech engine ({engineSize[selectedLanguage]}).
-          Your recordings are processed on this Mac.
+          Your recordings are processed on this device.
         </p>
 
         {#if downloadError}

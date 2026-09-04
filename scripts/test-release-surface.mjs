@@ -18,15 +18,13 @@ const mainSource = await readFile(
   new URL("../src-tauri/src/main.rs", import.meta.url),
   "utf8",
 );
+const commandsSource = await readFile(
+  new URL("../src-tauri/src/commands.rs", import.meta.url),
+  "utf8",
+);
 const appSource = await readFile(
   new URL("../src/App.svelte", import.meta.url),
   "utf8",
-);
-const defaultCapabilities = JSON.parse(
-  await readFile(
-    new URL("../src-tauri/capabilities/default.json", import.meta.url),
-    "utf8",
-  ),
 );
 const brandMarkSource = await readFile(
   new URL("../assets/brand/sagascript-mark.svg", import.meta.url),
@@ -93,6 +91,25 @@ test("onboarding starts with language instead of a disposable welcome step", () 
   assert.doesNotMatch(onboardingSource, /Welcome to Sagascript/);
 });
 
+test("cross-platform onboarding copy never identifies every device as a Mac", () => {
+  const renderedMarkup = onboardingSource
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "");
+  const visibleCopy = renderedMarkup
+    .replace(/\{[^{}]*\}/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ");
+
+  assert.doesNotMatch(visibleCopy, /\bmac(?:os)?\b/i);
+  assert.match(visibleCopy, /Speech stays on this device/);
+  assert.match(visibleCopy, /recordings are processed on this device/);
+  assert.match(
+    onboardingSource,
+    /if \(platform === "macos"\) \{\s*return \["language", "download", "microphone", "accessibility", "ready"\];\s*\}\s*return \["language", "download", "ready"\];/s,
+  );
+});
+
 test("onboarding automatically prepares one hidden recommended engine", () => {
   assert.match(onboardingSource, /nextStep\(\);\s*void startDownload\(\);/s);
   assert.match(onboardingSource, /local speech engine/i);
@@ -129,8 +146,10 @@ test("Dictate reflects backend loading and transcription instead of offering a c
 });
 
 test("onboarding prevents duplicate setup requests and exposes language selection", () => {
-  assert.match(onboardingSource, /if \(languageSaving\) return;/);
-  assert.match(onboardingSource, /disabled=\{languageSaving\}/);
+  assert.match(onboardingSource, /let platform: string \| null = \$state\(null\)/);
+  assert.match(onboardingSource, /if \(languageSaving \|\| platform === null\) return;/);
+  assert.match(onboardingSource, /disabled=\{languageSaving \|\| platform === null\}/);
+  assert.match(onboardingSource, /platform === null \? "Preparing…"/);
   assert.equal((onboardingSource.match(/aria-pressed=\{selectedLanguage ===/g) ?? []).length, 3);
 });
 
@@ -162,8 +181,9 @@ test("Accessibility onboarding reopens System Settings without prompting again",
   );
 });
 
-test("menu bar uses compact native state markers", () => {
+test("tray uses compact macOS markers and a real Windows icon", () => {
   assert.match(mainSource, /TrayIconBuilder::with_id\("main"\)[\s\S]*?\.title\("S"\)/);
+  assert.match(mainSource, /#\[cfg\(target_os = "windows"\)\][\s\S]*?default_window_icon\(\)[\s\S]*?tray_builder\.icon\(icon\.clone\(\)\)/);
   assert.match(mainSource, /tray\.set_visible\(true\)/);
   assert.doesNotMatch(mainSource, /include_bytes!\("\.\.\/icons\/tray-icon(?:@2x)?\.png"\)/);
   assert.doesNotMatch(mainSource, /\.icon_as_template\(true\)/);
@@ -187,12 +207,28 @@ test("deliberate macOS reopen requests reveal Settings", () => {
   );
 });
 
-test("finishing onboarding hides its main window", () => {
-  assert.match(appSource, /getCurrentWindow\(\)\.hide\(\)/);
-  assert.match(appSource, /Failed to hide completed onboarding window/);
-  assert.ok(
-    defaultCapabilities.permissions.includes("core:window:allow-hide"),
-    "the onboarding window cannot hide without the explicit Tauri capability",
+test("finishing onboarding keeps the main Settings window visible", () => {
+  assert.doesNotMatch(appSource, /getCurrentWindow\(\)\.hide\(\)/);
+  assert.doesNotMatch(appSource, /Failed to hide completed onboarding window/);
+  assert.match(appSource, /showOnboarding = false/);
+  const commandStart = commandsSource.indexOf("pub async fn set_onboarding_completed");
+  const commandEnd = commandsSource.indexOf("\n#[tauri::command]", commandStart + 1);
+  assert.ok(commandStart >= 0 && commandEnd > commandStart);
+  const completionCommand = commandsSource.slice(commandStart, commandEnd);
+  assert.doesNotMatch(completionCommand, /\.hide\(\)/);
+});
+
+test("second GUI launches are routed to the running instance", () => {
+  assert.match(mainSource, /tauri_plugin_single_instance::init/);
+  assert.match(mainSource, /second_instance_requests_settings/);
+  assert.match(mainSource, /Second-instance launch requested Settings/);
+  assert.doesNotMatch(mainSource, /Another Sagascript GUI instance is already running; exiting/);
+  const singleInstanceInit = mainSource.indexOf("tauri_plugin_single_instance::init");
+  const backendInit = mainSource.indexOf("WhisperBackend::new()");
+  assert.ok(singleInstanceInit >= 0 && backendInit > singleInstanceInit);
+  assert.match(
+    mainSource,
+    /\.setup\(move \|app\| \{[\s\S]*?let whisper: SharedWhisper = Arc::new\(WhisperBackend::new\(\)\);[\s\S]*?app\.manage\(whisper\);/,
   );
 });
 
