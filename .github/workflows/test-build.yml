@@ -132,7 +132,7 @@ jobs:
           mkdir -p artifacts
           cp "$dmg" "artifacts/Sagascript-TEST-${label}-${sha}.dmg"
           tar -czf "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
-          (cd artifacts && sha256sum Sagascript-TEST-* > SHA256SUMS)
+          (cd artifacts && shasum -a 256 Sagascript-TEST-* > SHA256SUMS)
           ls -lh artifacts/
 
       - name: Upload macOS test artifacts (no GitHub Release is created)
