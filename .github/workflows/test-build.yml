@@ -1,0 +1,145 @@
+name: Test Build
+
+# Manual lane for clearly-marked, signed + notarized test DMGs (e.g. #171).
+# Deliberately separate from release.yml: uploads a workflow artifact only and
+# never creates a GitHub Release, so test builds stay off the stable channel.
+# Run with: gh workflow run test-build.yml --ref <branch> [-f label=<name>]
+# Heavy inference smoke tests are skipped here on purpose — the PR-gating CI
+# already runs the full workspace test suites before merge.
+
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: "Short label baked into the TEST artifact filename"
+        required: false
+        default: "F13-F24"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos-test:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: macos-arm64-test-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            macos-arm64-test-cargo-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Verify release metadata (no tag check for test builds)
+        run: npm run release:check
+
+      - name: Verify third-party notices
+        run: npm run licenses:check
+
+      - name: Build fresh frontend
+        run: npm run build
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          : "${APPLE_CERTIFICATE:?APPLE_CERTIFICATE secret is required}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?APPLE_CERTIFICATE_PASSWORD secret is required}"
+          : "${KEYCHAIN_PASSWORD:?KEYCHAIN_PASSWORD secret is required}"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          keychain="$RUNNER_TEMP/sagascript-build.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$certificate" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          security list-keychains -d user -s "$keychain"
+
+      - name: Prepare notarization credentials and build metadata
+        env:
+          APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          : "${APPLE_API_PRIVATE_KEY_BASE64:?APPLE_API_PRIVATE_KEY_BASE64 secret is required}"
+          : "${APPLE_API_KEY:?APPLE_API_KEY secret is required}"
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY_BASE64" | base64 --decode > "$api_key_path"
+          chmod 600 "$api_key_path"
+          echo "APPLE_API_KEY_PATH=$api_key_path" >> "$GITHUB_ENV"
+          echo "SAGASCRIPT_GIT_HASH=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_ENV"
+          echo "SAGASCRIPT_BUILD_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize, and staple Apple Silicon app
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
+          : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
+          npx tauri build --target aarch64-apple-darwin
+
+      - name: Notarize and staple disk image
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
+          : "${APPLE_API_KEY:?APPLE_API_KEY secret is required}"
+          dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
+          [[ -n "$dmg" ]]
+          xcrun notarytool submit "$dmg" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$dmg"
+
+      - name: Verify macOS test artifact and rename as TEST build
+        run: |
+          version=$(node -p "require('./package.json').version")
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
+          dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
+          [[ -n "$dmg" ]]
+          ./scripts/verify-macos-release.sh "$app" "$dmg" "$version"
+          label="${{ inputs.label }}"
+          sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+          mkdir -p artifacts
+          cp "$dmg" "artifacts/Sagascript-TEST-${label}-${sha}.dmg"
+          tar -czf "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
+          (cd artifacts && sha256sum Sagascript-TEST-* > SHA256SUMS)
+          ls -lh artifacts/
+
+      - name: Upload macOS test artifacts (no GitHub Release is created)
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-dmg-${{ inputs.label }}
+          path: |
+            artifacts/Sagascript-TEST-*
+            artifacts/SHA256SUMS
+          if-no-files-found: error
