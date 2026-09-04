@@ -6,12 +6,15 @@ on:
   pull_request:
     branches: [main]
 
-# Cancel superseded PR runs (#178): pushing a fix cancels the stale run instead
-# of burning runner-minutes compiling it from scratch. PR runs only — `main`
-# pushes use event `push`, so they are never cancelled.
+# Cancel superseded PR runs (#178): pushes to a PR share one group, so a fix
+# cancels the stale run instead of burning runner-minutes compiling it twice.
+# Pushes (e.g. to `main`) get a unique group per run, so a newer push can
+# neither cancel an in-progress run nor replace a pending one — with the
+# default single-slot queue, same-group pending runs would otherwise be
+# dropped. Never touches release.yml (tag builds must never cancel).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   check-macos:
