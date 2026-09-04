@@ -41,6 +41,10 @@ impl OperationalHotkey {
     pub fn registered_many(shortcuts: &[String]) -> Self {
         Self::Registered(shortcuts.to_vec())
     }
+
+    pub fn matches(&self, shortcuts: &[String]) -> bool {
+        matches!(self, Self::Registered(registered) if registered == shortcuts)
+    }
 }
 
 /// Process-wide hotkey registration health.
@@ -242,6 +246,17 @@ mod tests {
 
         assert_eq!(h.status().shortcuts, shortcuts);
         assert_eq!(h.operational_hotkey(), OperationalHotkey::Registered(shortcuts));
+    }
+
+    #[test]
+    fn operational_match_requires_the_complete_registered_shortcut_set() {
+        let shortcuts = vec!["F13".to_string(), "Control+Space".to_string()];
+        let operational = OperationalHotkey::registered_many(&shortcuts);
+
+        assert!(operational.matches(&shortcuts));
+        assert!(!operational.matches(&["F13".to_string()]));
+        assert!(!OperationalHotkey::Inactive.matches(&shortcuts));
+        assert!(!OperationalHotkey::Unknown.matches(&shortcuts));
     }
 
     #[test]

@@ -43,7 +43,7 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::ShortcutState;
 use tracing::{error, info, warn};
 
 #[cfg(any(target_os = "macos", test))]
@@ -451,6 +451,65 @@ fn acquire_gui_instance_guard_at(path: &Path) -> Result<GuiInstanceGuard, GuiIns
     }
 }
 
+fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::BareHotkeyState) {
+    let ctrl: tauri::State<'_, SharedController> = app.state();
+
+    match state {
+        hotkey::BareHotkeyState::Pressed => {
+            info!("Hotkey pressed: {shortcut}");
+            let (result, active_profile) = {
+                let mut c = ctrl.lock().unwrap();
+                let profile = c
+                    .settings()
+                    .hotkey_profile_for_shortcut(shortcut)
+                    .or_else(|| {
+                        (shortcut == SAFE_FALLBACK_HOTKEY)
+                            .then(|| c.settings().resolved_hotkey_profiles()[0].clone())
+                    });
+                let result = match profile {
+                    Some(profile) => match c.handle_hotkey_down_for_profile(profile) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            error!("Hotkey down error: {error}");
+                            HotkeyDownResult::NoOp
+                        }
+                    },
+                    None => {
+                        warn!("Ignoring unconfigured shortcut event: {shortcut}");
+                        HotkeyDownResult::NoOp
+                    }
+                };
+                (result, c.active_hotkey_profile().cloned())
+            };
+            match result {
+                HotkeyDownResult::StartedRecording => {
+                    let show_overlay = {
+                        let c = ctrl.lock().unwrap();
+                        c.settings().show_overlay
+                    };
+                    let _ = app.emit(events::event::STATE_CHANGED, "recording");
+                    if let Some(profile) = active_profile {
+                        select_profile_menu(app, &profile);
+                        let _ = app.emit(events::event::ACTIVE_HOTKEY_PROFILE_CHANGED, profile);
+                    }
+                    update_tray_status(app, "recording");
+                    if show_overlay {
+                        overlay::show(app);
+                    }
+                }
+                HotkeyDownResult::StopRecording => {
+                    stop_recording_and_transcribe(app, &ctrl);
+                }
+                HotkeyDownResult::NoOp => {}
+            }
+        }
+        hotkey::BareHotkeyState::Released => {
+            info!("Hotkey released: {shortcut}");
+            handle_hotkey_release(app, &ctrl, shortcut);
+        }
+    }
+}
+
 fn main() {
     let gui_launch_mode = gui_launch_mode(std::env::args_os());
 
@@ -515,63 +574,11 @@ fn main() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    let ctrl: tauri::State<'_, SharedController> = app.state();
-
-                    match event.state {
-                        ShortcutState::Pressed => {
-                            info!("Hotkey pressed: {shortcut}");
-                            let (result, active_profile) = {
-                                let mut c = ctrl.lock().unwrap();
-                                let profile = c
-                                    .settings()
-                                    .hotkey_profile_for_shortcut(&shortcut.to_string())
-                                    .or_else(|| {
-                                        (shortcut.to_string() == SAFE_FALLBACK_HOTKEY).then(|| {
-                                            c.settings().resolved_hotkey_profiles()[0].clone()
-                                        })
-                                    });
-                                let result = match profile {
-                                    Some(profile) => match c.handle_hotkey_down_for_profile(profile) {
-                                        Ok(r) => r,
-                                        Err(e) => {
-                                            error!("Hotkey down error: {e}");
-                                            HotkeyDownResult::NoOp
-                                        }
-                                    },
-                                    None => {
-                                        warn!("Ignoring unconfigured shortcut event: {shortcut}");
-                                        HotkeyDownResult::NoOp
-                                    }
-                                };
-                                (result, c.active_hotkey_profile().cloned())
-                            };
-                            match result {
-                                HotkeyDownResult::StartedRecording => {
-                                    let show_overlay = {
-                                        let c = ctrl.lock().unwrap();
-                                        c.settings().show_overlay
-                                    };
-                                    let _ = app.emit(events::event::STATE_CHANGED, "recording");
-                                    if let Some(profile) = active_profile {
-                                        select_profile_menu(app, &profile);
-                                        let _ = app.emit(events::event::ACTIVE_HOTKEY_PROFILE_CHANGED, profile);
-                                    }
-                                    update_tray_status(app, "recording");
-                                    if show_overlay {
-                                        overlay::show(app);
-                                    }
-                                }
-                                HotkeyDownResult::StopRecording => {
-                                    stop_recording_and_transcribe(app, &ctrl);
-                                }
-                                HotkeyDownResult::NoOp => {}
-                            }
-                        }
-                        ShortcutState::Released => {
-                            info!("Hotkey released: {shortcut}");
-                            handle_hotkey_release(app, &ctrl, &shortcut.to_string());
-                        }
-                    }
+                    let state = match event.state {
+                        ShortcutState::Pressed => hotkey::BareHotkeyState::Pressed,
+                        ShortcutState::Released => hotkey::BareHotkeyState::Released,
+                    };
+                    handle_hotkey_event(app, &shortcut.to_string(), state);
                 })
                 .build(),
         )
@@ -593,7 +600,12 @@ fn main() {
         .setup(move |app| {
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
-            platform::macos::set_activation_policy_accessory();
+            {
+                platform::macos::set_activation_policy_accessory();
+                if let Err(error) = hotkey::install_bare_function_key_monitor(app.handle()) {
+                    error!("Failed to install F13-F24 event monitor: {error}");
+                }
+            }
 
             // Read every configured dictation profile and register its shortcut.
             let profiles = {
@@ -625,14 +637,11 @@ fn main() {
                     "Refusing invalid saved hotkey profiles: {error}; trying safe fallback '{SAFE_FALLBACK_HOTKEY}'"
                 );
             }
-            let registration_error = app
-                .global_shortcut()
-                .register_multiple(registration_shortcuts.iter().map(String::as_str))
+            let registration_error = hotkey::register_shortcuts(app.handle(), &registration_shortcuts)
                 .err()
                 .map(|error| error.to_string());
             let cleanup_error = registration_error.as_ref().and_then(|_| {
-                app.global_shortcut()
-                    .unregister_multiple(registration_shortcuts.iter().map(String::as_str))
+                hotkey::unregister_shortcuts(app.handle(), &registration_shortcuts)
                     .err()
                     .map(|error| error.to_string())
             });
@@ -957,6 +966,7 @@ fn main() {
             commands::set_hotkey_mode,
             commands::set_hotkey,
             commands::set_hotkey_profiles,
+            commands::retry_hotkey_registration,
             commands::hotkey_status,
             commands::start_recording,
             commands::start_training_recording,
@@ -1709,9 +1719,10 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 let validation_error = sagascript_core::settings::Settings::validate_hotkey_profiles(&new_profiles).err();
                 let unregister_error = if validation_error.is_none() {
                     match &old_operational {
-                        hotkey::OperationalHotkey::Registered(shortcuts) => app
-                            .global_shortcut()
-                            .unregister_multiple(shortcuts.iter().map(String::as_str))
+                        hotkey::OperationalHotkey::Registered(shortcuts) => hotkey::unregister_shortcuts(
+                            &app,
+                            shortcuts,
+                        )
                             .err()
                             .map(|error| error.to_string()),
                         hotkey::OperationalHotkey::Inactive => None,
@@ -1734,13 +1745,13 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                     new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
                     health.record(&old_settings.hotkey, Some(format!("failed to unregister previous hotkeys: {error}")), hotkey::OperationalHotkey::Unknown)
                 } else {
-                    match app.global_shortcut().register_multiple(new_shortcuts.iter().map(String::as_str)) {
+                    match hotkey::register_shortcuts(&app, &new_shortcuts) {
                         Ok(()) => health.record(&new_settings.hotkey, None, hotkey::OperationalHotkey::registered_many(&new_shortcuts)),
                         Err(error) => {
                             new_settings.hotkey = old_settings.hotkey.clone();
                             new_settings.language = old_settings.language;
                             new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
-                            match app.global_shortcut().unregister_multiple(new_shortcuts.iter().map(String::as_str)) {
+                            match hotkey::unregister_shortcuts(&app, &new_shortcuts) {
                                 Err(cleanup_error) => health.record(
                                     &old_settings.hotkey,
                                     Some(format!("failed to register new hotkey profiles: {error}; partial-registration cleanup failed: {cleanup_error}")),
@@ -1748,7 +1759,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                                 ),
                                 Ok(()) => {
                                     let restored = match &old_operational {
-                                        hotkey::OperationalHotkey::Registered(shortcuts) => app.global_shortcut().register_multiple(shortcuts.iter().map(String::as_str)).is_ok(),
+                                        hotkey::OperationalHotkey::Registered(shortcuts) => hotkey::register_shortcuts(&app, shortcuts).is_ok(),
                                         hotkey::OperationalHotkey::Inactive => true,
                                         hotkey::OperationalHotkey::Unknown => false,
                                     };

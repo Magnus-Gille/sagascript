@@ -349,8 +349,6 @@ pub async fn set_hotkey_profiles(
     profiles: Vec<HotkeyProfile>,
 ) -> Result<(), String> {
     use tauri::Emitter;
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
     Settings::validate_hotkey_profiles(&profiles)?;
     let new_shortcuts: Vec<String> = profiles.iter().map(|profile| profile.shortcut.clone()).collect();
     let new_primary = profiles
@@ -376,7 +374,10 @@ pub async fn set_hotkey_profiles(
         .into_iter()
         .map(|profile| profile.shortcut)
         .collect();
-    if new_shortcuts == old_shortcuts {
+    if new_shortcuts == old_shortcuts
+        && old_operational.matches(&new_shortcuts)
+        && !health.is_failed()
+    {
         let persisted = sagascript_core::settings::store::try_update(|settings| {
             settings.replace_hotkey_profiles(profiles.clone())?;
             Ok(())
@@ -394,7 +395,7 @@ pub async fn set_hotkey_profiles(
     }
 
     if let OperationalHotkey::Registered(old_shortcuts) = &old_operational {
-        if let Err(error) = app.global_shortcut().unregister_multiple(old_shortcuts.iter().map(String::as_str)) {
+        if let Err(error) = crate::hotkey::unregister_shortcuts(&app, old_shortcuts) {
             error!("Failed to unregister operational hotkeys: {error}");
             let change = health.record(
                 &old_shortcut,
@@ -413,8 +414,8 @@ pub async fn set_hotkey_profiles(
         }
     }
 
-    if let Err(error) = app.global_shortcut().register_multiple(new_shortcuts.iter().map(String::as_str)) {
-        if let Err(cleanup_error) = app.global_shortcut().unregister_multiple(new_shortcuts.iter().map(String::as_str)) {
+    if let Err(error) = crate::hotkey::register_shortcuts(&app, &new_shortcuts) {
+        if let Err(cleanup_error) = crate::hotkey::unregister_shortcuts(&app, &new_shortcuts) {
             let change = health.record(
                 &old_shortcut,
                 Some(format!("new registration failed: {error}; partial registration cleanup failed: {cleanup_error}; operational state is unknown")),
@@ -426,10 +427,7 @@ pub async fn set_hotkey_profiles(
             return Err(format!("Failed to register hotkey profiles: {error}; cleanup failed: {cleanup_error}"));
         }
         let change = match &old_operational {
-            OperationalHotkey::Registered(old_shortcuts) => match app
-                .global_shortcut()
-                .register_multiple(old_shortcuts.iter().map(String::as_str))
-            {
+            OperationalHotkey::Registered(old_shortcuts) => match crate::hotkey::register_shortcuts(&app, old_shortcuts) {
                 Ok(()) => health.record(&old_shortcut, None, old_operational.clone()),
                 Err(rollback_error) => {
                     health.record(
@@ -464,13 +462,12 @@ pub async fn set_hotkey_profiles(
     }) {
         Ok(settings) => settings,
         Err(save_error) => {
-            let unregister_error = app.global_shortcut().unregister_multiple(new_shortcuts.iter().map(String::as_str)).err();
+            let unregister_error = crate::hotkey::unregister_shortcuts(&app, &new_shortcuts).err();
             let rollback_error = if unregister_error.is_none() {
                 match &old_operational {
-                    OperationalHotkey::Registered(old_shortcuts) => app
-                        .global_shortcut()
-                        .register_multiple(old_shortcuts.iter().map(String::as_str))
-                        .err(),
+                    OperationalHotkey::Registered(old_shortcuts) => {
+                        crate::hotkey::register_shortcuts(&app, old_shortcuts).err()
+                    }
                     OperationalHotkey::Inactive => None,
                     OperationalHotkey::Unknown => unreachable!("unknown state returned above"),
                 }
@@ -508,6 +505,44 @@ pub async fn set_hotkey_profiles(
 
     info!("Hotkey profiles changed: {} registered", new_shortcuts.len());
     Ok(())
+}
+
+/// Retry the shortcuts currently persisted on disk.
+///
+/// This is used after macOS grants Accessibility while the app is already
+/// running. Reading the file again matters for CLI-driven changes: the file
+/// can contain a requested bare F-key while the controller deliberately keeps
+/// the previous operational shortcut after registration failed closed.
+///
+/// If the AppKit event monitor itself was never installed (setup failure),
+/// reinstall it here on the macOS main thread before re-registering, so a
+/// retry can recover without an app restart. Install and registration
+/// failures still surface through the normal health path below.
+#[tauri::command]
+pub async fn retry_hotkey_registration(
+    app: tauri::AppHandle,
+    controller: State<'_, SharedController>,
+    health: State<'_, HotkeyHealth>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if !crate::hotkey::bare_function_key_monitor_installed() {
+        let app_for_install = app.clone();
+        let (installed_tx, installed_rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let result =
+                crate::hotkey::install_bare_function_key_monitor(&app_for_install);
+            let _ = installed_tx.send(result);
+        })
+        .map_err(|error| error.to_string())?;
+        // The main thread runs the install promptly; a disconnected channel
+        // means the app is shutting down, so fall through and let the
+        // registration attempt below report the monitor as unavailable.
+        if let Ok(Err(error)) = installed_rx.recv() {
+            tracing::warn!("F13-F24 event monitor reinstall failed: {error}");
+        }
+    }
+    let profiles = sagascript_core::settings::store::load().resolved_hotkey_profiles();
+    set_hotkey_profiles(app, controller, health, profiles).await
 }
 
 /// Current hotkey registration health — whether the last registration

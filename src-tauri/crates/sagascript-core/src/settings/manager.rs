@@ -1382,6 +1382,12 @@ mod tests {
             profile("two", "shift+alt+KeyA", Language::Swedish),
         ];
         assert!(Settings::validate_hotkey_profiles(&duplicate_aliases).is_err());
+
+        let duplicate_bare_function_keys = vec![
+            profile("one", "F13", Language::English),
+            profile("two", "f13", Language::Swedish),
+        ];
+        assert!(Settings::validate_hotkey_profiles(&duplicate_bare_function_keys).is_err());
     }
 
     #[test]

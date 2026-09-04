@@ -56,7 +56,7 @@ Valid values per key:
   show_overlay         true, false
   auto_paste           true, false (enabling requires Accessibility approval for the installed GUI)
   auto_select_model    true, false
-  hotkey               Modifier+Key (e.g. Control+Shift+Space, Option+Space)
+  hotkey               Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows
   initial_prompt       Personal dictionary text; aliases use TERM = ALIAS | ALIAS
   beam_size            Integer >= 0 (0 = greedy/fast, 5 = beam search/accurate)
   temperature_fallback true, false
@@ -66,6 +66,7 @@ EXAMPLES:
   sagascript config set language sv
   sagascript config set whisper_model kb-whisper-base
   sagascript config set hotkey 'Option+Space'
+  sagascript config set hotkey F13
   sagascript config set auto_paste false
   sagascript config set initial_prompt $'OpenRouter = open router | open vrouter\\nmerge = merch'"
     )]
@@ -175,6 +176,7 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
         }
         ProfileAction::Create { id, name, hotkey, language } => {
             let language = parse_enum_value::<Language>(&language, "language")?;
+            let hotkey_warning = bare_extended_hotkey_warning(&hotkey);
             let mut profiles = settings::store::load().resolved_hotkey_profiles();
             if profiles.iter().any(|profile| profile.id == id) {
                 return Err(DictationError::SettingsError(format!("Profile '{id}' already exists")));
@@ -182,12 +184,18 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             profiles.push(HotkeyProfile { id: id.clone(), name, shortcut: hotkey, language });
             persist_profiles(profiles)?;
             eprintln!("Created profile {id}");
+            if let Some(warning) = hotkey_warning {
+                eprintln!("Warning: {warning}");
+            }
             Ok(())
         }
         ProfileAction::Update { id, name, hotkey, language } => {
             if name.is_none() && hotkey.is_none() && language.is_none() {
                 return Err(DictationError::SettingsError("Specify at least one of --name, --hotkey, or --language".to_string()));
             }
+            let hotkey_warning = hotkey
+                .as_deref()
+                .and_then(bare_extended_hotkey_warning);
             let language = language.as_deref().map(|value| parse_enum_value::<Language>(value, "language")).transpose()?;
             let mut profiles = settings::store::load().resolved_hotkey_profiles();
             let profile = profiles.iter_mut().find(|profile| profile.id == id).ok_or_else(|| DictationError::SettingsError(format!("Unknown profile '{id}'")))?;
@@ -196,6 +204,9 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             if let Some(language) = language { profile.language = language; }
             persist_profiles(profiles)?;
             eprintln!("Updated profile {id}");
+            if let Some(warning) = hotkey_warning {
+                eprintln!("Warning: {warning}");
+            }
             Ok(())
         }
         ProfileAction::Remove { id } => {
@@ -331,9 +342,31 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
 }
 
 fn setting_warning(key: &str, settings: &Settings) -> Option<&'static str> {
-    (key == "auto_paste" && settings.auto_paste).then_some(
-        "auto-paste requires Accessibility approval for the installed Sagascript app; \
-         until it is granted, the GUI will keep or reset auto-paste to false",
+    if key == "auto_paste" && settings.auto_paste {
+        Some(
+            "auto-paste requires Accessibility approval for the installed Sagascript app; \
+             until it is granted, the GUI will keep or reset auto-paste to false",
+        )
+    } else if key == "hotkey" {
+        bare_extended_hotkey_warning(&settings.hotkey)
+    } else {
+        None
+    }
+}
+
+fn bare_extended_hotkey_warning(shortcut: &str) -> Option<&'static str> {
+    // Strict parity with src/lib/hotkey.js (/^F(\d{1,2})$/i): at most two
+    // ASCII digits, so "F013" never warns as a bare extended key.
+    let normalized = shortcut.trim().to_ascii_lowercase();
+    let digits = normalized.strip_prefix('f')?;
+    let is_bare_extended = !digits.is_empty()
+        && digits.len() <= 2
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && digits
+            .parse::<u8>()
+            .is_ok_and(|number| (13..=24).contains(&number));
+    (cfg!(target_os = "macos") && is_bare_extended).then_some(
+        "bare F13-F24 requires Accessibility approval for the installed Sagascript app",
     )
 }
 
@@ -581,6 +614,23 @@ mod tests {
         assert!(err.to_string().contains("modifier is required"));
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn apply_setting_value_accepts_bare_extended_function_key() {
+        let mut settings = Settings::default();
+        apply_setting_value(&mut settings, "hotkey", "F13").unwrap();
+        assert_eq!(settings.hotkey, "F13");
+        assert_eq!(settings.resolved_hotkey_profiles()[0].shortcut, "F13");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apply_setting_value_accepts_bare_f24_on_macos() {
+        let mut settings = Settings::default();
+        apply_setting_value(&mut settings, "hotkey", "F24").unwrap();
+        assert_eq!(settings.hotkey, "F24");
+    }
+
     #[test]
     fn validate_hotkey_rejects_unknown_key() {
         let err = validate_hotkey("Control+FooBar").unwrap_err();
@@ -785,5 +835,20 @@ mod tests {
         };
         assert!(setting_warning("auto_paste", &disabled).is_none());
         assert!(setting_warning("show_overlay", &Settings::default()).is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bare_extended_hotkey_warns_about_gui_accessibility_requirement() {
+        let settings = Settings {
+            hotkey: "F24".to_string(),
+            ..Default::default()
+        };
+        let warning = setting_warning("hotkey", &settings).unwrap();
+        assert!(warning.contains("F13-F24"));
+        assert!(warning.contains("Accessibility approval"));
+
+        assert!(bare_extended_hotkey_warning("Shift+F24").is_none());
+        assert!(bare_extended_hotkey_warning("F013").is_none());
     }
 }
