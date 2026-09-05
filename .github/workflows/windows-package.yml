@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   build-windows-candidate:
     name: Build Windows ${{ matrix.architecture }} candidate
@@ -74,21 +78,32 @@ jobs:
           "CMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Identify Windows runner image
+        id: windows-image
+        shell: pwsh
+        run: |
+          $imageOs = $env:ImageOS
+          $imageVersion = $env:ImageVersion
+          if ([string]::IsNullOrWhiteSpace($imageOs)) {
+            throw "ImageOS is unavailable; refusing to share native build cache"
+          }
+          if ([string]::IsNullOrWhiteSpace($imageVersion)) {
+            throw "ImageVersion is unavailable; refusing to share native build cache"
+          }
+          "image_os=$imageOs" >> $env:GITHUB_OUTPUT
+          "image_version=$imageVersion" >> $env:GITHUB_OUTPUT
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: src-tauri
+          shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml') }}
+
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~\.cargo\registry
-            ~\.cargo\git
-          key: windows-package-${{ matrix.architecture }}-${{ hashFiles('src-tauri/Cargo.lock', 'package-lock.json', '.github/workflows/windows-package.yml') }}
-          restore-keys: |
-            windows-package-${{ matrix.architecture }}-
 
       - name: Install npm dependencies
         run: npm ci

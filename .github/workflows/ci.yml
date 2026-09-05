@@ -40,7 +40,7 @@ jobs:
       # cold multi-GB rebuild (plus minutes of save/restore) on any lockfile
       # change. rust-cache prunes before upload and stays warm across branches.
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: src-tauri
           shared-key: sagascript-ci
@@ -230,7 +230,7 @@ jobs:
       # Same rust-cache scheme as the macOS job (#178); the shared key spans
       # branches while rust-cache keeps OS/target entries separate.
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: src-tauri
           shared-key: sagascript-ci
@@ -317,7 +317,7 @@ jobs:
       # Same rust-cache scheme as the macOS job (#178); the shared key spans
       # branches while rust-cache keeps OS/target entries separate.
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           workspaces: src-tauri
           shared-key: sagascript-ci
