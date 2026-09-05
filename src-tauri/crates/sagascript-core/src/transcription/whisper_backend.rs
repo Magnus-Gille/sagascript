@@ -904,6 +904,24 @@ impl WhisperBackend {
         self.ensure_model_inner(desired_model, profile)
     }
 
+    /// Ensure a model/profile is active and run a callback while the model
+    /// selection remains pinned. This keeps model selection, context access,
+    /// and inference in one transaction for callers that need to use one of
+    /// the lower-level transcription entry points.
+    ///
+    /// The callback must not call `ensure_model*` or `load_model*` on this
+    /// backend, because the bounded load lock is held until it returns.
+    pub fn with_model<R>(
+        &self,
+        model: WhisperModel,
+        profile: ContextProfile,
+        callback: impl FnOnce(&Self) -> Result<R, DictationError>,
+    ) -> Result<R, DictationError> {
+        let _load = self.lock_load_bounded()?;
+        self.ensure_model_inner(model, profile)?;
+        callback(self)
+    }
+
     fn ensure_model_inner(
         &self,
         desired_model: WhisperModel,

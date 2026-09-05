@@ -778,10 +778,6 @@ pub async fn transcribe_training_file(
     if whisper.needs_reload(effective_model) {
         let _ = app.emit(crate::events::event::STATE_CHANGED, "loading_model");
     }
-    if let Err(error) = whisper.ensure_model(effective_model) {
-        let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
-        return Err(error.to_string());
-    }
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 
     let whisper_ref = whisper.inner().clone();
@@ -789,9 +785,15 @@ pub async fn transcribe_training_file(
     let duration_seconds = (audio.len() / 16_000) as u64;
     let timeout = Duration::from_secs((duration_seconds * 6).max(TRANSCRIPTION_TIMEOUT_SECS));
     let mut task = tokio::task::spawn_blocking(move || {
-        whisper_ref.transcribe_sync_with_options(&audio, language, &opts, move |progress| {
-            let _ = progress_app.emit("transcription-progress", progress);
-        })
+        whisper_ref.with_model(
+            effective_model,
+            ContextProfile::FlashAttention,
+            |backend| {
+                backend.transcribe_sync_with_options(&audio, language, &opts, move |progress| {
+                    let _ = progress_app.emit("transcription-progress", progress);
+                })
+            },
+        )
     });
 
     let result = match tokio::time::timeout(timeout, &mut task).await {
@@ -1398,15 +1400,6 @@ pub async fn transcribe_file(
         let _ = app.emit(crate::events::event::STATE_CHANGED, "loading_model");
     }
 
-    // Ensure the model is loaded with flash attention for ordinary files and
-    // DTW token alignment only for explicit diarization.
-    if let Err(error) = whisper.ensure_model_with_profile(effective_model, context_profile) {
-        let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
-        return Err(error.to_string());
-    }
-
-    let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
-
     // Diarization path — runs both diarization and timestamped transcription in parallel,
     // then merges and consolidates speaker-attributed segments.
     #[cfg(feature = "diarization")]
@@ -1429,6 +1422,8 @@ pub async fn transcribe_file(
             }
         }
 
+        let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
+
         let whisper_ref = whisper.inner().clone();
         // Fall back to the saved initial_prompt when the file-dialog prompt is
         // empty (matches the standard file path).
@@ -1445,10 +1440,16 @@ pub async fn transcribe_file(
         // Segment-level timestamps can span multiple speaker turns and would
         // cause maximum-overlap merging to collapse the GUI output to one label.
         let mut transcribe_fut = tokio::task::spawn_blocking(move || {
-            whisper_ref.transcribe_sync_for_diarization(
-                &audio_for_transcribe,
-                language,
-                prompt_ref.as_deref(),
+            whisper_ref.with_model(
+                effective_model,
+                ContextProfile::TokenAlignment,
+                |backend| {
+                    backend.transcribe_sync_for_diarization(
+                        &audio_for_transcribe,
+                        language,
+                        prompt_ref.as_deref(),
+                    )
+                },
             )
         });
 
@@ -1554,13 +1555,16 @@ pub async fn transcribe_file(
     };
     opts.parallel_chunks =
         recommended_parallel_chunks(audio.len(), effective_model, opts.beam_size);
+    let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
     let whisper_ref = whisper.inner().clone();
     let app_progress = app.clone();
     // Borrowed handle (`&mut fut`) so the timeout path can await the task's
     // actual exit after requesting an abort — mirrors the live dictation path.
     let mut fut = tokio::task::spawn_blocking(move || {
-        whisper_ref.transcribe_sync_with_options(&audio, language, &opts, move |pct| {
-            let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
+        whisper_ref.with_model(effective_model, context_profile, |backend| {
+            backend.transcribe_sync_with_options(&audio, language, &opts, move |pct| {
+                let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
+            })
         })
     });
 

@@ -4,8 +4,8 @@ The CLI benchmark measures the local Whisper inference path used by live
 dictation. Build the CLI and run it against a supplied fixture:
 
 ```powershell
-cargo build -p sagascript-cli --release
-.\target\release\sagascript.exe benchmark-dictation test-audio\english-jfk.wav --language en
+cargo build --manifest-path src-tauri/Cargo.toml -p sagascript-cli --release
+.\src-tauri\target\release\sagascript.exe benchmark-dictation test-audio\english-jfk.wav --language en
 ```
 
 The recommended model for the selected language must already be present. The
@@ -26,12 +26,21 @@ by the first cold call; all warm calls use the same in-process backend and the
 same decoded PCM buffer.
 
 This is an inference benchmark. It excludes microphone capture, hotkey
-handling, UI state changes, and paste. The GUI's phase log records those phases
-for an end-to-end measurement: compare `capture`, `model_acquisition`,
-`inference`, and `clipboard_focus_paste` timestamps when assessing the complete
-dictation path.
+handling, UI state changes, and paste. The GUI writes a
+`dictation_session_finished` event with `recording_finalization`, `conversion`,
+`model_acquisition`, `inference`, `postprocessing`, and `clipboard_focus_paste`
+durations in `phases_ms`. `key_up_to_completion_ms` starts when the shortcut's
+release reaches the application and ends after the paste operation returns
+(or inference completes when auto-paste is off). It measures input dispatch;
+it cannot prove when another application's editor renders the text.
+
+The installed 604a9c1 candidate only logs session starts, so historical
+push-to-talk latency cannot be reconstructed from that log. Keep the source
+revision with every new baseline. Use `scripts/summarize-windows-dictation.ps1`
+with `-LogPath`, `-OutputPath`, and optionally `-Since` to export aggregate
+durations and hardware metadata without dictated content.
 
 The checked-in Windows gate currently uses the public English fixture to catch
-model reuse and transcription regressions. A Swedish fixture and any
-cross-language latency claim remain deferred until representative audio is
-available.
+model reuse and transcription regressions. The owner judged longer Swedish
+dictation fast enough on 2026-09-05 and deferred performance optimization in
+#184. No model, decoder-quality or latency-budget default is changed here.

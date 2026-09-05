@@ -200,6 +200,8 @@ jobs:
           Copy-Item $msi[0].FullName "artifacts\Sagascript-Windows-$architecture.msi"
           Copy-Item "docs\windows-release.md" "artifacts\README-Windows-Candidate.md"
           Copy-Item "scripts\accept-windows-candidate.ps1" "artifacts\accept-windows-candidate.ps1"
+          Copy-Item "scripts\summarize-windows-dictation.ps1" "artifacts\summarize-windows-dictation.ps1"
+          Copy-Item "docs\windows-dictation-benchmark.md" "artifacts\README-Dictation-Metrics.md"
           Copy-Item "test-audio\norwegian-short-3s.mp3" "artifacts\norwegian-short-3s.mp3"
           Copy-Item "test-audio\english-jfk.wav" "artifacts\english-jfk.wav"
           Copy-Item "$env:RUNNER_TEMP\english-dictation-benchmark.json" "artifacts\english-dictation-benchmark.json"

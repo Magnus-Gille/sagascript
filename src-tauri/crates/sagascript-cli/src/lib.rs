@@ -674,6 +674,18 @@ mod tests {
         assert_eq!(command.get_long_version(), Some(LONG_VERSION));
     }
 
+    #[test]
+    fn benchmark_dictation_is_discoverable_with_gate_arguments() {
+        let command = Cli::command();
+        let benchmark = command
+            .find_subcommand("benchmark-dictation")
+            .expect("benchmark-dictation should be a root subcommand");
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "language"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "iterations"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "max_warm_ms"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "expect_word"));
+    }
+
     // -- Completions generation --
 
     #[test]

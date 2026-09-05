@@ -92,7 +92,7 @@ struct SampleTiming {
 
 pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
     let expected_word = match args.expect_word.as_deref().map(str::trim) {
-        Some(word) if word.is_empty() => {
+        Some("") => {
             return Err(DictationError::SettingsError(
                 "--expect-word must not be empty".to_string(),
             ));
@@ -315,6 +315,70 @@ fn percentile_sorted(values: &[f64], quantile: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    #[derive(Debug, Parser)]
+    struct BenchmarkTestCli {
+        #[command(flatten)]
+        args: BenchmarkDictationArgs,
+    }
+
+    #[test]
+    fn clap_contract_requires_language_and_bounds_iterations() {
+        let parsed = BenchmarkTestCli::try_parse_from([
+            "sagascript",
+            "fixture.wav",
+            "--language",
+            "en",
+        ])
+        .expect("valid benchmark arguments should parse");
+        assert_eq!(parsed.args.input, PathBuf::from("fixture.wav"));
+        assert_eq!(parsed.args.language, "en");
+        assert_eq!(parsed.args.iterations, 5);
+
+        for value in ["2", "30"] {
+            let result = BenchmarkTestCli::try_parse_from([
+                "sagascript",
+                "fixture.wav",
+                "--language",
+                "en",
+                "--iterations",
+                value,
+            ])
+            .expect("inclusive iteration bounds should parse");
+            let expected = value.parse::<u32>().expect("test bound is numeric");
+            assert_eq!(result.args.iterations, expected);
+        }
+
+        for value in ["1", "31"] {
+            let result = BenchmarkTestCli::try_parse_from([
+                "sagascript",
+                "fixture.wav",
+                "--language",
+                "en",
+                "--iterations",
+                value,
+            ]);
+            assert!(result.is_err(), "iterations={value} must be rejected");
+        }
+
+        let missing_language = BenchmarkTestCli::try_parse_from(["sagascript", "fixture.wav"]);
+        assert!(missing_language.is_err(), "--language must be required");
+    }
+
+    #[test]
+    fn clap_contract_preserves_expected_word_without_exposing_transcript() {
+        let parsed = BenchmarkTestCli::try_parse_from([
+            "sagascript",
+            "fixture.wav",
+            "--language",
+            "sv",
+            "--expect-word",
+            "country",
+        ])
+        .expect("expected-word gate should parse");
+        assert_eq!(parsed.args.expect_word.as_deref(), Some("country"));
+    }
 
     #[test]
     fn benchmark_language_parser_accepts_only_public_codes() {
@@ -401,5 +465,53 @@ mod tests {
             error.as_deref(),
             Some("warm run 2 did not contain the expected word")
         );
+    }
+
+    #[test]
+    fn serialized_report_has_expected_schema_without_input_or_transcript() {
+        let report = BenchmarkOutput {
+            build_version: super::super::LONG_VERSION,
+            language: "en",
+            model: "base.en",
+            duration_seconds: 11.0,
+            decode_duration_ms: 4.0,
+            cold_run: ColdRun {
+                model_ms: 100.0,
+                inference_ms: 50.0,
+                total_ms: 150.0,
+                model_cached: false,
+                text_nonempty_count: 1,
+            },
+            warm_samples: WarmSamples {
+                count: 5,
+                text_nonempty_count: 5,
+                model_ms: TimingPercentiles { p50: 0.0, p95: 0.0 },
+                inference_ms: TimingPercentiles {
+                    p50: 45.0,
+                    p95: 55.0,
+                },
+                total_ms: TimingPercentiles {
+                    p50: 45.0,
+                    p95: 55.0,
+                },
+            },
+        };
+        let json = serde_json::to_value(report).expect("benchmark report should serialize");
+
+        assert_eq!(json["build_version"], super::super::LONG_VERSION);
+        assert_eq!(json["language"], "en");
+        assert_eq!(json["model"], "base.en");
+        assert_eq!(json["duration_seconds"], 11.0);
+        assert_eq!(json["decode_duration_ms"], 4.0);
+        assert_eq!(json["cold_run"]["text_nonempty_count"], 1);
+        assert_eq!(json["warm_samples"]["count"], 5);
+        assert_eq!(json["warm_samples"]["inference_ms"]["p95"], 55.0);
+        assert!(json.get("input").is_none());
+        assert!(json.get("path").is_none());
+        assert!(json.get("transcript").is_none());
+        assert!(json.get("text").is_none());
+        let serialized = json.to_string();
+        assert!(!serialized.contains("fixture.wav"));
+        assert!(!serialized.contains("private transcript"));
     }
 }

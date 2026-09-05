@@ -253,8 +253,11 @@ impl AppController {
         );
 
         self.session_data = Some(serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "git_hash": env!("GIT_HASH"),
             "language": profile.language,
             "model": self.settings.effective_model_for(profile.language),
+            "audio_ms": null,
             "phases_ms": {},
             "auto_paste": self.settings.auto_paste,
         }));

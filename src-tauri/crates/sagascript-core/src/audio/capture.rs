@@ -394,4 +394,20 @@ mod tests {
             .expect("silence should be Ok(empty), not Err");
         assert!(out.is_empty());
     }
+
+    #[test]
+    fn stop_capture_propagates_worker_device_failure() {
+        let mut svc = AudioCaptureService::new();
+        svc.capture_thread = Some(thread::spawn(|| {
+            Err(DictationError::AudioCaptureError("device disconnected".into()))
+        }));
+        assert!(matches!(svc.stop_capture(), Err(DictationError::AudioCaptureError(message)) if message == "device disconnected"));
+    }
+
+    #[test]
+    fn stop_capture_propagates_worker_panic() {
+        let mut svc = AudioCaptureService::new();
+        svc.capture_thread = Some(thread::spawn(|| panic!("test capture worker failure")));
+        assert!(matches!(svc.stop_capture(), Err(DictationError::AudioCaptureError(_))));
+    }
 }
