@@ -377,7 +377,9 @@ fn apply_setting_value(
 ) -> Result<(), DictationError> {
     match key {
         "language" => {
-            settings.set_legacy_language(parse_enum_value::<Language>(value, "language")?);
+            settings
+                .set_legacy_language(parse_enum_value::<Language>(value, "language")?)
+                .map_err(DictationError::SettingsError)?;
         }
         "whisper_model" => {
             settings.whisper_model = parse_enum_value::<WhisperModel>(value, "whisper_model")?;
@@ -429,35 +431,75 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
             eprintln!("Reset hotkey to {}", settings::store::load().hotkey);
             return Ok(());
         }
-        let settings = settings::store::update(|settings| match key {
+        let settings = settings::store::try_update(|settings| match key {
             "language" => settings.set_legacy_language(defaults.language),
-            "whisper_model" => settings.whisper_model = defaults.whisper_model,
-            "hotkey_mode" => settings.hotkey_mode = defaults.hotkey_mode,
-            "show_overlay" => settings.show_overlay = defaults.show_overlay,
-            "auto_paste" => settings.auto_paste = defaults.auto_paste,
-            "auto_select_model" => settings.auto_select_model = defaults.auto_select_model,
+            "whisper_model" => {
+                settings.whisper_model = defaults.whisper_model;
+                Ok(())
+            }
+            "hotkey_mode" => {
+                settings.hotkey_mode = defaults.hotkey_mode;
+                Ok(())
+            }
+            "show_overlay" => {
+                settings.show_overlay = defaults.show_overlay;
+                Ok(())
+            }
+            "auto_paste" => {
+                settings.auto_paste = defaults.auto_paste;
+                Ok(())
+            }
+            "auto_select_model" => {
+                settings.auto_select_model = defaults.auto_select_model;
+                Ok(())
+            }
             "hotkey" => unreachable!("hotkey reset handled transactionally above"),
-            "initial_prompt" => settings.initial_prompt = defaults.initial_prompt,
-            "beam_size" => settings.beam_size = defaults.beam_size,
-            "temperature_fallback" => settings.temperature_fallback = defaults.temperature_fallback,
-            "vad_enabled" => settings.vad_enabled = defaults.vad_enabled,
+            "initial_prompt" => {
+                settings.initial_prompt = defaults.initial_prompt;
+                Ok(())
+            }
+            "beam_size" => {
+                settings.beam_size = defaults.beam_size;
+                Ok(())
+            }
+            "temperature_fallback" => {
+                settings.temperature_fallback = defaults.temperature_fallback;
+                Ok(())
+            }
+            "vad_enabled" => {
+                settings.vad_enabled = defaults.vad_enabled;
+                Ok(())
+            }
             _ => unreachable!(),
         })
         .map_err(DictationError::SettingsError)?;
         eprintln!("Reset {key} to {}", get_setting_value(&settings, key));
     } else {
-        settings::store::update(|current| {
-            let initial_prompt = std::mem::take(&mut current.initial_prompt);
-            let profile_glossaries = std::mem::take(&mut current.profile_glossaries);
-            *current = Settings {
-                initial_prompt,
-                profile_glossaries,
-                ..Default::default()
-            };
+        settings::store::try_update(|current| {
+            reset_all_settings(current)?;
+            Ok(())
         })
         .map_err(DictationError::SettingsError)?;
         eprintln!("All application settings reset to defaults; personal dictionaries preserved");
     }
+    Ok(())
+}
+
+fn reset_all_settings(current: &mut Settings) -> Result<(), String> {
+    let defaults = Settings::default();
+    let mut validation = current.clone();
+    validation.replace_hotkey_profiles(vec![HotkeyProfile::legacy_default(
+        defaults.hotkey.clone(),
+        defaults.language,
+    )])?;
+
+    let initial_prompt = std::mem::take(&mut current.initial_prompt);
+    let profile_glossaries = std::mem::take(&mut current.profile_glossaries);
+    *current = Settings {
+        initial_prompt,
+        profile_glossaries,
+        ..defaults
+    };
     Ok(())
 }
 
@@ -736,6 +778,144 @@ mod tests {
     fn parse_enum_value_invalid_language() {
         let result = parse_enum_value::<Language>("de", "language");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn language_change_with_profile_dictionary_is_rejected_without_mutation() {
+        let mut settings = Settings::default();
+        settings.hotkey_profiles = vec![HotkeyProfile {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+            shortcut: settings.hotkey.clone(),
+            language: Language::Swedish,
+        }];
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+        let before = settings.clone();
+
+        let error = apply_setting_value(&mut settings, "language", "en").unwrap_err();
+
+        assert!(error.to_string().contains("personal dictionary"));
+        assert_eq!(settings.language, before.language);
+        assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
+        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
+    }
+
+    #[test]
+    fn reset_all_without_dictionaries_uses_defaults_and_preserves_global_source() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            initial_prompt: "Codex".to_string(),
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Option+Space".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+
+        reset_all_settings(&mut settings).unwrap();
+
+        assert_eq!(settings.language, Settings::default().language);
+        assert!(settings.hotkey_profiles.is_empty());
+        assert_eq!(settings.initial_prompt, "Codex");
+        assert!(settings.profile_glossaries.is_empty());
+    }
+
+    #[test]
+    fn reset_all_preserves_same_language_active_default_dictionary() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Option+Space".to_string(),
+                Language::English,
+            )],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        reset_all_settings(&mut settings).unwrap();
+
+        assert!(settings.hotkey_profiles.is_empty());
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(
+            settings.profile_glossaries.get("default").map(String::as_str),
+            Some("merge = merch")
+        );
+    }
+
+    #[test]
+    fn reset_all_rejects_default_language_change_with_active_dictionary_atomically() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Option+Space".to_string(),
+                Language::Swedish,
+            )],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+        let before = settings.clone();
+
+        let error = reset_all_settings(&mut settings).unwrap_err();
+
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, before.language);
+        assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
+        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
+    }
+
+    #[test]
+    fn reset_all_keeps_removed_profile_dictionary_inactive() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Option+Space".to_string(),
+                Language::English,
+            )],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("removed".to_string(), "merge = merch".to_string());
+
+        reset_all_settings(&mut settings).unwrap();
+
+        assert!(settings.hotkey_profiles.is_empty());
+        assert_eq!(
+            settings.profile_glossaries.get("removed").map(String::as_str),
+            Some("merge = merch")
+        );
+        assert_eq!(settings.effective_glossary_source(Some("removed")), "");
+    }
+
+    #[test]
+    fn reset_all_rejects_orphan_default_dictionary_atomically() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Option+Space".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+        let before = settings.clone();
+
+        let error = reset_all_settings(&mut settings).unwrap_err();
+
+        assert!(error.contains("inactive personal dictionary"));
+        assert_eq!(settings.language, before.language);
+        assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
+        assert_eq!(settings.initial_prompt, before.initial_prompt);
+        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
     }
 
     #[test]

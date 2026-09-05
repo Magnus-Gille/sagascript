@@ -13,8 +13,8 @@ use sagascript_core::transcription::model;
 use sagascript_core::transcription::{Glossary, TranscribeOptions, WhisperBackend};
 
 use super::transcribe::{
-    copy_to_clipboard, model_id_string, parse_language, resolve_effective_model, resolve_profile,
-    resolve_effective_prompt,
+    copy_to_clipboard, effective_glossary, model_id_string, parse_language,
+    resolve_effective_model, resolve_profile,
 };
 
 #[derive(Args)]
@@ -72,18 +72,16 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         (None, None) => stored.language,
     };
     let save_only = args.output.is_some();
-    // Effective hint/prompt: --prompt-file, else --hint/--prompt, else the saved
-    // initial_prompt. Resolved up front so a bad --prompt-file fails before we
-    // spend time recording — but skipped entirely on the save-only path, which
-    // never transcribes, so `--output` isn't blocked by an unusable hint file.
-    let effective_prompt = if save_only {
-        None
+    // Resolve the effective source before model work or recording. Save-only
+    // output never transcribes, so it intentionally does not read a hint file.
+    let glossary = if save_only {
+        Glossary::parse("")
     } else {
-        let stored_prompt = stored.effective_glossary_source(args.profile.as_deref());
-        resolve_effective_prompt(
+        effective_glossary(
+            &stored,
+            args.profile.as_deref(),
             args.prompt.as_deref(),
             args.prompt_file.as_deref(),
-            &stored_prompt,
         )?
     };
 
@@ -160,7 +158,6 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let backend = WhisperBackend::new();
     backend.load_model(model)?;
 
-    let glossary = Glossary::parse(effective_prompt.as_deref().unwrap_or_default());
     let decoder_prompt = glossary.decoder_prompt();
     let prompt = decoder_prompt.as_deref();
     let opts = TranscribeOptions {
