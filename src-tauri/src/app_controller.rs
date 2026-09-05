@@ -419,7 +419,11 @@ impl AppController {
     ) -> Result<String, String> {
         match result {
             Ok(text) => {
-                self.on_transcription_success(&text);
+                if text.trim().is_empty() {
+                    self.on_no_speech_detected();
+                } else {
+                    self.on_transcription_success(&text);
+                }
                 Ok(text)
             }
             Err(error) => {
@@ -625,6 +629,32 @@ mod tests {
 
         assert_eq!(result, Ok("Hello again".to_string()));
         assert_eq!(ctrl.last_transcription(), Some("Hello again"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn finish_transcription_empty_result_preserves_last_transcription() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+
+        let result = ctrl.finish_transcription(Ok(String::new()));
+
+        assert_eq!(result, Ok(String::new()));
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn finish_transcription_whitespace_result_preserves_last_transcription() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+
+        let result = ctrl.finish_transcription(Ok(" \n\t".to_string()));
+
+        assert_eq!(result, Ok(" \n\t".to_string()));
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
         assert_eq!(ctrl.state(), AppState::Idle);
     }
 

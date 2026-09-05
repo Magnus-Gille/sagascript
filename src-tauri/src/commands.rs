@@ -684,7 +684,7 @@ async fn stop_and_transcribe_impl(
         // exit after abort and log whether the lock was released.
         let whisper_ref = whisper.inner().clone();
         let mut fut = tokio::task::spawn_blocking(move || {
-            whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
+            whisper_ref.transcribe_live_sync_with_options(&audio, language, &opts, |_| {})
         });
 
         let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
