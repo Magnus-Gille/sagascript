@@ -164,7 +164,7 @@ link; the upstream repository is authoritative for its license terms.
 | getrandom | 0.3.4 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/getrandom) |
 | getrandom | 0.4.1 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/getrandom) |
 | glob | 0.3.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/glob) |
-| global-hotkey | 0.7.0 | Apache-2.0 OR MIT | [upstream](https://github.com/amrbashir/global-hotkey) |
+| global-hotkey | 0.8.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/global-hotkey) |
 | h2 | 0.4.13 | MIT | [upstream](https://github.com/hyperium/h2) |
 | half | 2.7.1 | MIT OR Apache-2.0 | [upstream](https://github.com/VoidStarKat/half-rs) |
 | hashbrown | 0.12.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/hashbrown) |
@@ -208,6 +208,7 @@ link; the upstream repository is authoritative for its license terms.
 | json-patch | 3.0.1 | MIT/Apache-2.0 | [upstream](https://github.com/idubrov/json-patch) |
 | jsonptr | 0.6.3 | MIT OR Apache-2.0 | [upstream](https://github.com/chanced/jsonptr) |
 | keyboard-types | 0.7.0 | MIT OR Apache-2.0 | [upstream](https://github.com/pyfisch/keyboard-types) |
+| keyboard-types | 0.8.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-windowing/keyboard-types) |
 | kodama | 0.2.3 | MIT | [upstream](https://github.com/diffeo/kodama) |
 | kuchikiki | 0.8.8-speedreader | MIT | [upstream](https://github.com/brave/kuchikiki) |
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang-nursery/lazy-static.rs) |
@@ -404,7 +405,7 @@ link; the upstream repository is authoritative for its license terms.
 | tauri-plugin-autostart | 2.5.1 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-plugin-dialog | 2.6.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-plugin-fs | 2.4.5 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
-| tauri-plugin-global-shortcut | 2.3.1 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
+| tauri-plugin-global-shortcut | 2.3.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-plugin-single-instance | 2.4.4 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-runtime | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-runtime-wry | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
@@ -3161,7 +3162,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 31dbbab009f1
 
-Components: Rust keyboard-types@0.7.0
+Components: Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3
 
 Source filenames: LICENSE-MIT
 
@@ -3708,7 +3709,7 @@ third-party/chromium/LICENSE.
 
 ### 3b3a242fa170
 
-Components: Rust global-hotkey@0.7.0
+Components: Rust global-hotkey@0.8.0
 
 Source filenames: LICENSE.spdx
 
@@ -5491,7 +5492,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 4bf96504d6e8
 
-Components: Rust arboard@3.6.1, Rust fdeflate@0.3.7, Rust half@2.7.1, Rust image@0.25.9, Rust miniz_oxide@0.8.9, Rust pin-project-lite@0.2.16, Rust portable-atomic@1.13.1, Rust raw-window-handle@0.6.2, Rust sync_wrapper@1.0.2, Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, Rust tauri-plugin-single-instance@2.4.4, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, Rust time-core@0.1.8, Rust time-macros@0.2.27, Rust time@0.3.47, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
+Components: Rust arboard@3.6.1, Rust fdeflate@0.3.7, Rust half@2.7.1, Rust image@0.25.9, Rust miniz_oxide@0.8.9, Rust pin-project-lite@0.2.16, Rust portable-atomic@1.13.1, Rust raw-window-handle@0.6.2, Rust sync_wrapper@1.0.2, Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-plugin-single-instance@2.4.4, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, Rust time-core@0.1.8, Rust time-macros@0.2.27, Rust time@0.3.47, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
 
 Source filenames: LICENSE, LICENSE-APACHE, LICENSE-APACHE.md, LICENSE-APACHE.txt, LICENSE-Apache, LICENSE_APACHE-2.0
 
@@ -9306,7 +9307,7 @@ THE SOFTWARE.
 
 ### 859a90323b68
 
-Components: Rust global-hotkey@0.7.0, Rust muda@0.17.1, Rust tray-icon@0.21.3
+Components: Rust global-hotkey@0.8.0, Rust muda@0.17.1, Rust tray-icon@0.21.3
 
 Source filenames: LICENSE-MIT
 
@@ -10200,7 +10201,7 @@ limitations under the License.
 
 ### 89ff9689dcf9
 
-Components: Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
+Components: Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
 
 Source filenames: LICENSE_MIT
 
@@ -12954,7 +12955,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 954f335b8baf
 
-Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust base64@0.21.7, Rust base64@0.22.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.7.0, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust mime@0.3.17, Rust muda@0.17.1, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.14, Rust regex-syntax@0.8.9, Rust regex@1.12.3, Rust rustc_version@0.4.1, Rust rustix@1.1.3, Rust rustls@0.23.36, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust smallvec@1.15.1, Rust socket2@0.6.2, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tempfile@3.25.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.2
+Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust base64@0.21.7, Rust base64@0.22.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.8.0, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust mime@0.3.17, Rust muda@0.17.1, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.14, Rust regex-syntax@0.8.9, Rust regex@1.12.3, Rust rustc_version@0.4.1, Rust rustix@1.1.3, Rust rustls@0.23.36, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust smallvec@1.15.1, Rust socket2@0.6.2, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tempfile@3.25.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.2
 
 Source filenames: LICENSE-APACHE
 
@@ -19259,7 +19260,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 ### eb8a6c846304
 
-Components: Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, Rust tauri-plugin-single-instance@2.4.4, npm @tauri-apps/plugin-autostart@2.5.1, npm @tauri-apps/plugin-dialog@2.6.0
+Components: Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-plugin-single-instance@2.4.4, npm @tauri-apps/plugin-autostart@2.5.1, npm @tauri-apps/plugin-dialog@2.6.0
 
 Source filenames: LICENSE.spdx
 

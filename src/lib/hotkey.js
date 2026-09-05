@@ -7,16 +7,21 @@
  *
  * @param {string} key
  * @param {string} [code]
+ * @param {string|null} [platform]
  * @returns {string | null}
  */
-export function tauriKeyName(key, code = "") {
-  if (key === " ") return "Space";
+export function tauriKeyName(key, code = "", platform = null) {
   if (["Meta", "Control", "Alt", "Shift"].includes(key)) return null;
 
   // The ISO section key (`§` left of `1` on Swedish, UK and other Apple ISO
   // keyboards) produces layout-specific characters such as "§", "±", "<" or
   // "^", so it is identified by its physical code instead.
-  if (code === "IntlBackslash") return "IntlBackslash";
+  if (code === "IntlBackslash") {
+    if (platform === "macos" || platform === "windows") return "IntlBackslash";
+    return null;
+  }
+
+  if (key === " ") return "Space";
 
   const functionKey = /^F(\d{1,2})$/i.exec(key.trim());
   if (functionKey) {

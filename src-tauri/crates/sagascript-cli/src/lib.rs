@@ -352,7 +352,7 @@ Available setting keys:
   auto_paste         Auto-paste transcription result (true/false)
   auto_select_model  Auto-select best model for language (true/false)
   hotkey             Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows.
-                     IntlBackslash is the ISO section key (§ left of 1 on Swedish/UK Macs)",
+                     IntlBackslash is the ISO section key (§ left of 1 on Swedish/UK Macs); macOS/Windows only",
         after_long_help = "\
 EXAMPLES:
   # Show all settings with current and default values
