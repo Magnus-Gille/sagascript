@@ -87,6 +87,20 @@ working tree:
   timings are “observed run; actual cache hit/miss unknown,” with the Windows
   native-target scope known from the workflow configuration.
 
+GitHub Actions cache scope matters for the delivery plan: a cache written by a
+pull-request run cannot seed `main` or another pull request. A warm comparison
+must run the workflow again at the exact same head SHA after the first run has
+completed its post-job cache save; cancelling the first run before that save
+leaves the warm run cold. Cache keys are not a substitute for recording the
+actual hit/miss result.
+
+The reviewed `rust-cache` action sets `CARGO_INCREMENTAL=0` in its source. That
+is an intentional cache/build tradeoff and must be recorded with timing data.
+Its dependency-focused workspace cache can still require workspace crates to
+rebuild, so a warm cache result is not a pure cache-hit speed measurement.
+The actual cache size and eviction behavior remain unmeasured here; this report
+does not assert a current service quota.
+
 The proposed workflow changes must record a first-miss run before a warm rerun
 on the same revision, preserving all required checks and recording the actual
 cache hit/miss result. Future timing reports can be reproduced with:
@@ -94,6 +108,10 @@ cache hit/miss result. Future timing reports can be reproduced with:
 ```sh
 gh run view <RUN_ID> --repo Magnus-Gille/sagascript --json databaseId,headSha,jobs | node scripts/ci-run-timings.mjs
 ```
+
+The reporter returns null totals if any job has no complete timestamp pair,
+including jobs that never started. Known individual job durations are retained;
+a skipped or incomplete step does not erase a completed job's measured span.
 
 Stable-toolchain comparisons assume the runner labels and workflow toolchain
 inputs used here: `macos-14`, `windows-latest`, `windows-11-arm`,
@@ -128,3 +146,15 @@ No gate is removed. PR package runs share a PR-number concurrency group; manual
 runs use their unique run ID and do not cancel unrelated builds. The macOS test
 cache remains separate from Windows and the stable release lane, and only
 dependency artifacts are retained by the action's default policy.
+
+The first ARM64 and x64 runs passed the new runner-image identity step. Keep the
+missing-`ImageOS`/`ImageVersion` checks fail-closed; there is no skip or fallback
+path for an unknown native toolchain.
+
+## R0 cache seeding plan
+
+After the R0 workflow changes merge, dispatch the existing Windows candidate
+workflow on `main` once to seed the base cache before the next product PR, then
+verify that a later PR restores it. Do not add a `main` trigger or change
+workflow events for this bootstrap. Use the same `main` bootstrap approach for
+the signed macOS test lane: branch-scoped caches do not cross PR boundaries.

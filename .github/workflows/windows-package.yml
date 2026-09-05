@@ -94,7 +94,7 @@ jobs:
           "image_version=$imageVersion" >> $env:GITHUB_OUTPUT
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
           shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml') }}
