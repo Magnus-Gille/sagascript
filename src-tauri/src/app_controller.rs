@@ -235,6 +235,23 @@ impl AppController {
         &mut self,
         profile: HotkeyProfile,
     ) -> Result<bool, DictationError> {
+        self.start_recording_for_profile_with_capture(profile, |audio| audio.start_capture())
+    }
+
+    /// Start recording using the supplied capture operation.
+    ///
+    /// The injected capture operation keeps the startup transition testable
+    /// without requiring a microphone. It also makes sure a failure after the
+    /// dictation session is opened goes through the same controller-owned
+    /// cleanup path as other workflow errors.
+    fn start_recording_for_profile_with_capture<F>(
+        &mut self,
+        profile: HotkeyProfile,
+        start_capture: F,
+    ) -> Result<bool, DictationError>
+    where
+        F: FnOnce(&mut AudioCaptureService) -> Result<(), DictationError>,
+    {
         if self.state != AppState::Idle {
             warn!("Cannot start recording: state is {:?}", self.state);
             return Ok(false);
@@ -248,7 +265,12 @@ impl AppController {
             serde_json::json!({ "dictationSessionId": session_id }),
         );
 
-        self.audio.start_capture()?;
+        if let Err(error) = start_capture(&mut self.audio) {
+            let message = error.to_string();
+            self.on_transcription_error(&message);
+            return Err(error);
+        }
+
         info!(
             profile_id = %profile.id,
             profile_name = %profile.name,
@@ -780,6 +802,45 @@ mod tests {
         let started = ctrl.start_recording().unwrap();
         assert!(!started);
         assert_eq!(ctrl.state(), AppState::Transcribing); // unchanged
+    }
+
+    #[test]
+    fn recording_start_failure_closes_session_and_restores_idle_without_capture() {
+        let mut ctrl = default_controller();
+        let profile = ctrl
+            .settings()
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .next()
+            .expect("default settings provide a hotkey profile");
+        let expected_error = DictationError::MicrophonePermissionDenied;
+        let expected_message = expected_error.to_string();
+
+        let result = ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            Err(expected_error.clone())
+        });
+
+        assert!(matches!(result, Err(DictationError::MicrophonePermissionDenied)));
+        assert_eq!(ctrl.last_error(), Some(expected_message.as_str()));
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert!(ctrl.active_hotkey_profile().is_none());
+        assert!(!ctrl.training_recording);
+
+        // The failed start must leave the controller reusable for a later
+        // attempt; this still injects the capture result and never opens a mic.
+        assert!(matches!(
+            ctrl.start_recording_for_profile_with_capture(
+                ctrl.settings()
+                    .resolved_hotkey_profiles()
+                    .into_iter()
+                    .next()
+                    .unwrap(),
+                |_| Ok(()),
+            ),
+            Ok(true)
+        ));
+        assert_eq!(ctrl.state(), AppState::Recording);
+        ctrl.cancel_recording();
     }
 
     // -- stop_recording_guarded --

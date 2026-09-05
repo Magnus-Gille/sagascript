@@ -404,6 +404,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                         Ok(result) => result,
                         Err(error) => {
                             error!("Hotkey down error: {error}");
+                            let _ = app.emit(events::event::ERROR, error.to_string());
                             HotkeyDownResult::NoOp
                         }
                     },

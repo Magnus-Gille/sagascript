@@ -159,6 +159,32 @@ fn assemble_diarized_plain_text(segments: &[DiarizedSegment]) -> String {
 }
 
 #[cfg(feature = "diarization")]
+fn prepare_diarized_plain_segments(
+    segments: &[DiarizedSegment],
+    language: Language,
+    glossary: &Glossary,
+) -> Vec<DiarizedSegment> {
+    let filtered = segments
+        .iter()
+        .filter(|segment| !contains_no_speech_marker(&segment.text))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut consolidated = sagascript_core::diarization::merge::consolidate(&filtered);
+    for segment in &mut consolidated {
+        segment.text = normalize_nonspeech_markers(&segment.text, language);
+    }
+    let fragments = consolidated
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect::<Vec<_>>();
+    let (corrected_fragments, _) = glossary.correct_fragments(&fragments);
+    for (segment, text) in consolidated.iter_mut().zip(corrected_fragments) {
+        segment.text = text;
+    }
+    consolidated
+}
+
+#[cfg(feature = "diarization")]
 #[derive(Debug, Default, serde::Serialize)]
 struct DiarizationPerformance {
     acceleration_backend: &'static str,
@@ -722,6 +748,7 @@ fn transcribe_file(
             .collect();
 
         let diarized = merge_with_transcript(&speaker_segments, &transcript);
+        let plain_segments = prepare_diarized_plain_segments(&diarized, language, glossary);
         let mut consolidated = consolidate(&diarized);
         for segment in &mut consolidated {
             segment.text = normalize_nonspeech_markers(&segment.text, language);
@@ -763,7 +790,7 @@ fn transcribe_file(
                 .filter(|speaker| seen.insert(speaker.clone()))
                 .collect()
         };
-        let plain = assemble_diarized_plain_text(&consolidated);
+        let plain = assemble_diarized_plain_text(&plain_segments);
         performance.merge_diagnostics_seconds = merge_diagnostics_started.elapsed().as_secs_f64();
         let json_assembly_started = Instant::now();
         let mut json = serde_json::json!({
@@ -1830,6 +1857,48 @@ mod tests {
             "[SPEAKER_0] First.\n[SPEAKER_1] Second."
         );
         assert!(contains_no_speech_marker(&segments[1].text));
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn diarized_plain_filter_precedes_consolidation_without_mutating_diagnostics() {
+        let segments = vec![
+            DiarizedSegment {
+                start: 0.0,
+                end: 1.0,
+                speaker: "SPEAKER_0".to_string(),
+                text: "First hello Music Music Music".to_string(),
+            },
+            DiarizedSegment {
+                start: 1.0,
+                end: 1.3,
+                speaker: "SPEAKER_0".to_string(),
+                text: "<|nospeech|>-Hej Tack! Tack! Tack!".to_string(),
+            },
+            DiarizedSegment {
+                start: 1.3,
+                end: 2.0,
+                speaker: "SPEAKER_0".to_string(),
+                text: "Second.".to_string(),
+            },
+        ];
+        let consolidated = sagascript_core::diarization::merge::consolidate(&segments);
+        let diagnostic_text = consolidated[0].text.clone();
+
+        let glossary = Glossary::parse("Greeting = hello");
+        let plain_segments =
+            prepare_diarized_plain_segments(&segments, Language::English, &glossary);
+
+        assert_eq!(consolidated.len(), 1);
+        assert_eq!(consolidated[0].text, diagnostic_text);
+        assert_eq!(
+            diagnostic_text,
+            "First hello Music Music Music <|nospeech|>-Hej Tack! Tack! Tack! Second."
+        );
+        assert_eq!(
+            assemble_diarized_plain_text(&plain_segments),
+            "[SPEAKER_0] First Greeting [MUSIC] Second."
+        );
     }
 
     #[test]
