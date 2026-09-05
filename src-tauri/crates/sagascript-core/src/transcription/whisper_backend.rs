@@ -22,6 +22,14 @@ use crate::transcription::model;
 /// loops. Shared by the GUI file-transcribe command and the `transcribe` CLI.
 pub const FILE_TRANSCRIBE_BEAM: u32 = 5;
 
+/// Privacy-safe timings shared by live dictation and its CLI benchmark.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct DictationTimings {
+    pub model_ms: f64,
+    pub inference_ms: f64,
+    pub model_cached: bool,
+}
+
 /// Parallel file transcription is deliberately bounded: each state owns GPU
 /// buffers and a Metal command queue, so unbounded fan-out quickly wastes RAM.
 pub const MAX_PARALLEL_CHUNKS: usize = 4;
@@ -714,6 +722,15 @@ impl WhisperBackend {
         whisper_model: WhisperModel,
         profile: ContextProfile,
     ) -> Result<(), DictationError> {
+        let _load = self.lock_load_bounded()?;
+        self.load_model_inner(whisper_model, profile)
+    }
+
+    fn load_model_inner(
+        &self,
+        whisper_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> Result<(), DictationError> {
         let desired_key = RuntimeKey {
             model: whisper_model,
             profile,
@@ -883,7 +900,33 @@ impl WhisperBackend {
         desired_model: WhisperModel,
         profile: ContextProfile,
     ) -> Result<(), DictationError> {
-        let _load = self.load_lock.lock().unwrap();
+        let _load = self.lock_load_bounded()?;
+        self.ensure_model_inner(desired_model, profile)
+    }
+
+    /// Ensure a model/profile is active and run a callback while the model
+    /// selection remains pinned. This keeps model selection, context access,
+    /// and inference in one transaction for callers that need to use one of
+    /// the lower-level transcription entry points.
+    ///
+    /// The callback must not call `ensure_model*` or `load_model*` on this
+    /// backend, because the bounded load lock is held until it returns.
+    pub fn with_model<R>(
+        &self,
+        model: WhisperModel,
+        profile: ContextProfile,
+        callback: impl FnOnce(&Self) -> Result<R, DictationError>,
+    ) -> Result<R, DictationError> {
+        let _load = self.lock_load_bounded()?;
+        self.ensure_model_inner(model, profile)?;
+        callback(self)
+    }
+
+    fn ensure_model_inner(
+        &self,
+        desired_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> Result<(), DictationError> {
         let desired = RuntimeKey {
             model: desired_model,
             profile,
@@ -902,9 +945,52 @@ impl WhisperBackend {
             }
             ModelAvailability::Missing => {
                 info!("Loading model runtime: {desired:?}");
-                self.load_model_with_profile(desired_model, profile)?;
+                self.load_model_inner(desired_model, profile)?;
             }
         }
+        Ok(())
+    }
+
+    fn lock_load_bounded(&self) -> Result<MutexGuard<'_, ()>, DictationError> {
+        let deadline = Instant::now() + WARM_STATE_GRACE;
+        loop {
+            match self.load_lock.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(TryLockError::Poisoned(_)) => return Err(DictationError::ModelBusy),
+                Err(TryLockError::WouldBlock) if Instant::now() >= deadline => {
+                    return Err(DictationError::ModelBusy);
+                }
+                Err(TryLockError::WouldBlock) => std::thread::sleep(WARM_STATE_POLL_INTERVAL),
+            }
+        }
+    }
+
+    /// Keep selection and inference in one transaction: startup warmup or a
+    /// second language must not swap the active context between these steps.
+    /// Blocking; desktop callers must use spawn_blocking.
+    pub fn transcribe_dictation(
+        &self,
+        model: WhisperModel,
+        audio: &[f32],
+        language: Language,
+        options: &TranscribeOptions,
+        timings: &mut DictationTimings,
+    ) -> Result<String, DictationError> {
+        let started = Instant::now();
+        let _load = self.lock_load_bounded()?;
+        timings.model_cached = !self.needs_reload(model);
+        let selection = self.ensure_model_inner(model, ContextProfile::FlashAttention);
+        timings.model_ms = started.elapsed().as_secs_f64() * 1000.0;
+        selection?;
+        let started = Instant::now();
+        let result = self.transcribe_sync_with_options(audio, language, options, |_| {});
+        timings.inference_ms = started.elapsed().as_secs_f64() * 1000.0;
+        result
+    }
+
+    pub fn warmup_model(&self, model: WhisperModel, language: Language) -> Result<(), DictationError> {
+        let mut timings = DictationTimings::default();
+        self.transcribe_dictation(model, &[0.0; 1600], language, &TranscribeOptions::default(), &mut timings)?;
         Ok(())
     }
 
