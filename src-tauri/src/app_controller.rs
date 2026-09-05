@@ -76,6 +76,8 @@ pub struct AppController {
     model_ready: bool,
     active_hotkey_profile: Option<HotkeyProfile>,
     training_recording: bool,
+    session_data: Option<serde_json::Value>,
+    release_started: Option<Instant>,
 }
 
 impl AppController {
@@ -103,6 +105,8 @@ impl AppController {
             model_ready: false,
             active_hotkey_profile: None,
             training_recording: false,
+            session_data: None,
+            release_started: None,
         }
     }
 
@@ -248,7 +252,17 @@ impl AppController {
             serde_json::json!({ "dictationSessionId": session_id }),
         );
 
-        self.audio.start_capture()?;
+        self.session_data = Some(serde_json::json!({
+            "language": profile.language,
+            "model": self.settings.effective_model_for(profile.language),
+            "phases_ms": {},
+            "auto_paste": self.settings.auto_paste,
+        }));
+        self.release_started = None;
+        if let Err(error) = self.audio.start_capture() {
+            self.on_transcription_error(&error.to_string());
+            return Err(error);
+        }
         info!(
             profile_id = %profile.id,
             profile_name = %profile.name,
@@ -287,7 +301,14 @@ impl AppController {
     /// left as `Recording`; callers surface the error and return to Idle (see
     /// [`Self::stop_recording_guarded`]).
     pub fn stop_recording(&mut self) -> Result<Vec<f32>, DictationError> {
+        self.mark_release();
         let samples = self.audio.stop_capture()?;
+        let (finalization, conversion) = self.audio.stop_timings();
+        self.record_phase("recording_finalization", finalization);
+        self.record_phase("conversion", conversion);
+        if let Some(data) = self.session_data.as_mut() {
+            data["audio_ms"] = serde_json::json!(samples.len() as u64 / 16);
+        }
         let duration = self
             .recording_start
             .map(|s| s.elapsed().as_millis())
@@ -324,7 +345,14 @@ impl AppController {
     }
 
     /// Called after transcription succeeds
+    pub fn preserve_transcription(&mut self, text: &str) {
+        self.last_transcription = Some(text.to_string());
+    }
+
+    /// Called after transcription succeeds
     pub fn on_transcription_success(&mut self, text: &str) {
+        self.end_session("success");
+        self.last_error = None;
         self.last_transcription = Some(text.to_string());
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
@@ -335,6 +363,7 @@ impl AppController {
 
     /// Called after transcription fails
     pub fn on_transcription_error(&mut self, error: &str) {
+        self.end_session("error");
         self.last_error = Some(error.to_string());
         self.state = AppState::Idle;
         self.active_hotkey_profile = None;
@@ -352,9 +381,14 @@ impl AppController {
         result: Result<String, String>,
     ) -> Result<String, String> {
         match result {
-            Ok(text) => {
+            Ok(text) if !text.trim().is_empty() => {
                 self.on_transcription_success(&text);
                 Ok(text)
+            }
+            Ok(_) => {
+                let error = "No speech was recognized. Check the microphone and selected language, then try a longer phrase.".to_string();
+                self.on_transcription_error(&error);
+                Err(error)
             }
             Err(error) => {
                 self.on_transcription_error(&error);
@@ -376,11 +410,41 @@ impl AppController {
     pub fn cancel_recording(&mut self) {
         if self.state.is_recording() {
             let _ = self.audio.stop_capture();
+            self.end_session("cancelled");
             self.state = AppState::Idle;
             self.active_hotkey_profile = None;
             self.training_recording = false;
             self.logging.end_dictation_session();
             info!("Recording cancelled");
+        }
+    }
+
+    pub fn mark_release(&mut self) {
+        self.release_started.get_or_insert_with(Instant::now);
+    }
+
+    pub fn record_phase(&mut self, phase: &'static str, duration: Duration) {
+        if let Some(data) = self.session_data.as_mut() {
+            data["phases_ms"][phase] = serde_json::json!(duration.as_secs_f64() * 1000.0);
+        }
+    }
+
+    pub fn record_model_cache(&mut self, cached: bool) {
+        if let Some(data) = self.session_data.as_mut() {
+            data["model_cached"] = serde_json::json!(cached);
+            data["context_profile"] = serde_json::json!("flash_attention");
+        }
+    }
+
+    fn end_session(&mut self, outcome: &'static str) {
+        if let Some(mut data) = self.session_data.take() {
+            data["outcome"] = serde_json::json!(outcome);
+            if let Some(start) = self.release_started.take() {
+                data["key_up_to_completion_ms"] = serde_json::json!(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            // Only typed identifiers, durations and outcomes. Never log text,
+            // glossary entries, audio, window titles or free-form errors.
+            self.logging.log("info", "Dictation", "dictation_session_finished", data);
         }
     }
 
@@ -562,6 +626,20 @@ mod tests {
         assert_eq!(ctrl.state(), AppState::Idle);
     }
 
+    #[test]
+    fn finish_transcription_whitespace_is_an_error_and_returns_idle() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+
+        let result = ctrl.finish_transcription(Ok(" \n\t ".to_string()));
+
+        let error = result.expect_err("whitespace-only transcription must fail");
+        assert!(error.contains("No speech was recognized"));
+        assert_eq!(ctrl.last_error(), Some(error.as_str()));
+        assert_eq!(ctrl.last_transcription(), None);
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
     // -- Recording elapsed --
 
     #[test]
@@ -622,6 +700,81 @@ mod tests {
         let swedish = HotkeyProfile { id: "swedish".into(), name: "Swedish".into(), shortcut: "Option+Space".into(), language: sagascript_core::settings::Language::Swedish };
 
         assert_eq!(ctrl.handle_hotkey_down_for_profile(swedish).unwrap(), HotkeyDownResult::NoOp);
+    }
+
+    #[test]
+    fn english_alt_e_profile_freezes_english_model_with_global_swedish() {
+        let settings = Settings {
+            language: sagascript_core::settings::Language::Swedish,
+            auto_select_model: true,
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "default".into(),
+                    name: "Swedish".into(),
+                    shortcut: "Control+Shift+Space".into(),
+                    language: sagascript_core::settings::Language::Swedish,
+                },
+                HotkeyProfile {
+                    id: "english".into(),
+                    name: "English".into(),
+                    shortcut: "Alt+E".into(),
+                    language: sagascript_core::settings::Language::English,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut ctrl = AppController::new(settings);
+        let english = ctrl
+            .settings()
+            .hotkey_profile_for_shortcut("Alt+E")
+            .expect("English Alt+E profile should resolve");
+
+        assert_eq!(
+            ctrl.handle_hotkey_down_for_profile(english).unwrap(),
+            HotkeyDownResult::StartedRecording
+        );
+        assert_eq!(ctrl.language(), sagascript_core::settings::Language::English);
+
+        let session = ctrl
+            .session_data
+            .as_ref()
+            .expect("recording should snapshot session metadata");
+        assert_eq!(session["language"], serde_json::json!("en"));
+        assert_eq!(session["model"], serde_json::json!("base.en"));
+
+        // Changes to global settings during an active recording must not
+        // replace the profile model selected when Alt+E started the session.
+        ctrl.settings_mut().language = sagascript_core::settings::Language::Swedish;
+        ctrl.settings_mut().whisper_model = sagascript_core::settings::WhisperModel::KbWhisperBase;
+        assert_eq!(
+            ctrl.session_data.as_ref().unwrap()["model"],
+            serde_json::json!("base.en")
+        );
+
+        ctrl.cancel_recording();
+    }
+
+    #[test]
+    fn terminal_session_payload_is_consumed_once_without_transcript_contents() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.session_data = Some(serde_json::json!({
+            "language": "en",
+            "model": "base.en",
+            "phases_ms": {},
+        }));
+
+        ctrl.preserve_transcription("private transcript text");
+        let payload_before_end = ctrl.session_data.as_ref().unwrap().to_string();
+        assert!(!payload_before_end.contains("private transcript text"));
+
+        ctrl.on_transcription_success("private transcript text");
+        assert!(ctrl.session_data.is_none(), "the terminal event must consume the session payload");
+
+        // A repeated terminal callback has no active payload to emit, so one
+        // dictation session can produce at most one finished-session event.
+        ctrl.on_transcription_success("private transcript text");
+        assert!(ctrl.session_data.is_none());
     }
 
     // -- handle_hotkey_down --

@@ -79,6 +79,8 @@ impl PasteService {
         clipboard
             .set_text(text.as_ref())
             .map_err(|e| DictationError::PasteError(format!("Failed to set clipboard: {e}")))?;
+        #[cfg(target_os = "windows")]
+        let clipboard_generation = unsafe { GetClipboardSequenceNumber() };
 
         info!("Text copied to clipboard ({} chars)", text.len());
 
@@ -97,8 +99,14 @@ impl PasteService {
         }
 
         // Small delay to let the previously-focused app regain focus
-        info!("Waiting 50ms before paste simulation...");
+        #[cfg(not(target_os = "windows"))]
         std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Windows SendInput inherits physically held modifiers. In particular,
+        // releasing E before Alt would otherwise dispatch Alt+Ctrl+V. Wait on
+        // the paste worker, without releasing keys the user is still holding.
+        #[cfg(target_os = "windows")]
+        wait_for_windows_modifiers()?;
 
         // Simulate paste keystroke
         info!("Simulating paste keystroke...");
@@ -119,6 +127,10 @@ impl PasteService {
 
             #[cfg(not(target_os = "macos"))]
             if let Some(text) = saved {
+                #[cfg(target_os = "windows")]
+                if unsafe { GetClipboardSequenceNumber() } != clipboard_generation {
+                    return;
+                }
                 if let Ok(mut cb) = Clipboard::new() {
                     let _ = cb.set_text(text);
                 }
@@ -180,14 +192,42 @@ fn simulate_paste() -> Result<(), DictationError> {
     enigo
         .key(modifier, Direction::Press)
         .map_err(|e| DictationError::PasteError(format!("Key press failed: {e}")))?;
-    enigo
-        .key(Key::Unicode('v'), Direction::Click)
-        .map_err(|e| DictationError::PasteError(format!("Key click failed: {e}")))?;
+    #[cfg(target_os = "windows")]
+    let paste_key = Key::Other(0x56); // VK_V, independent of layout/Unicode packets
+    #[cfg(target_os = "macos")]
+    let paste_key = Key::Unicode('v');
+    let click_result = enigo
+        .key(paste_key, Direction::Click)
+        .map_err(|e| DictationError::PasteError(format!("Key click failed: {e}")));
     enigo
         .key(modifier, Direction::Release)
         .map_err(|e| DictationError::PasteError(format!("Key release failed: {e}")))?;
 
     info!("Paste keystroke simulated");
+    click_result
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+extern "system" {
+    fn GetAsyncKeyState(key: i32) -> i16;
+    fn GetForegroundWindow() -> isize;
+    fn GetClipboardSequenceNumber() -> u32;
+}
+
+#[cfg(target_os = "windows")]
+fn wait_for_windows_modifiers() -> Result<(), DictationError> {
+    let target = unsafe { GetForegroundWindow() };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while [0x10, 0x11, 0x12, 0x5B, 0x5C].iter().any(|key| unsafe { GetAsyncKeyState(*key) < 0 }) {
+        if std::time::Instant::now() >= deadline {
+            return Err(DictationError::PasteError("Release the shortcut keys and paste with Ctrl+V. The recognized text is on the clipboard.".into()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    if target == 0 || unsafe { GetForegroundWindow() } != target {
+        return Err(DictationError::PasteError("The focused window changed. Select the intended text field and paste with Ctrl+V.".into()));
+    }
     Ok(())
 }
 

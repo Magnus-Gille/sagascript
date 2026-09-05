@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
@@ -24,7 +25,8 @@ pub struct AudioCaptureService {
     /// Device sample rate published by the capture thread once the input opens
     /// (0 until known). Read by `stop_capture` to resample the whole buffer.
     device_sample_rate: Arc<AtomicU32>,
-    capture_thread: Option<thread::JoinHandle<()>>,
+    capture_thread: Option<thread::JoinHandle<Result<(), DictationError>>>,
+    stop_timings: (Duration, Duration),
     /// Retained audio from last capture for retry
     last_captured: Option<Vec<f32>>,
 }
@@ -46,6 +48,7 @@ impl AudioCaptureService {
             stop_signal: Arc::new(Mutex::new(false)),
             device_sample_rate: Arc::new(AtomicU32::new(0)),
             capture_thread: None,
+            stop_timings: (Duration::ZERO, Duration::ZERO),
             last_captured: None,
         }
     }
@@ -69,9 +72,7 @@ impl AudioCaptureService {
 
         // Spawn a thread that owns the cpal::Stream
         let handle = thread::spawn(move || {
-            if let Err(e) = run_capture(buffer, stop_signal, device_sample_rate) {
-                error!("Audio capture thread error: {e}");
-            }
+            run_capture(buffer, stop_signal, device_sample_rate)
         });
 
         self.capture_thread = Some(handle);
@@ -90,6 +91,7 @@ impl AudioCaptureService {
     /// error as empty made a real failure indistinguishable from silence (and
     /// surfaced the misleading "No audio captured" to the user).
     pub fn stop_capture(&mut self) -> Result<Vec<f32>, DictationError> {
+        let started = Instant::now();
         // Signal the capture thread to stop
         {
             let mut stop = self.stop_signal.lock().unwrap();
@@ -98,8 +100,11 @@ impl AudioCaptureService {
 
         // Wait for the capture thread to finish
         if let Some(handle) = self.capture_thread.take() {
-            let _ = handle.join();
+            handle.thread().unpark();
+            handle.join().map_err(|_| DictationError::AudioCaptureError("Microphone capture thread stopped unexpectedly".into()))??;
         }
+        self.stop_timings.0 = started.elapsed();
+        let conversion_started = Instant::now();
 
         let raw = {
             let mut buf = self.buffer.lock().unwrap();
@@ -132,8 +137,14 @@ impl AudioCaptureService {
 
         // Retain for retry
         self.last_captured = Some(samples.clone());
+        self.stop_timings.1 = conversion_started.elapsed();
 
         Ok(samples)
+    }
+
+    /// Durations for the most recent successful capture stop and conversion.
+    pub fn stop_timings(&self) -> (Duration, Duration) {
+        self.stop_timings
     }
 
     /// Get the last captured audio for retry
@@ -231,7 +242,7 @@ fn run_capture(
 
     // Spin until stop signal (the stream callback fills the buffer)
     loop {
-        thread::sleep(std::time::Duration::from_millis(10));
+        thread::park_timeout(std::time::Duration::from_millis(10));
         let stop = stop_signal.lock().unwrap();
         if *stop {
             break;

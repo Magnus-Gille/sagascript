@@ -50,13 +50,16 @@ public pipeline must use `Release`, which requires every executable artifact to
 have a valid Authenticode signature.
 
 After installing an internally accepted candidate on the test PC, run the
-bundled CLI acceptance helper against the CLI executable from the same workflow
-artifact:
+bundled CLI acceptance helper from the extracted workflow artifact directory.
+Pass the bundled public fixture and keep the JSON evidence beside the artifact
+files:
 
 ```powershell
 .\accept-windows-candidate.ps1 `
   -CliExe ".\Sagascript-Windows-<architecture>-CLI.exe" `
-  -ExpectedVersion "1.1.3"
+  -ExpectedVersion "1.1.3" `
+  -Fixture ".\norwegian-short-3s.mp3" `
+  -OutputPath ".\windows-acceptance.json"
 ```
 
 The helper downloads the recommended Norwegian test engine, transcribes only

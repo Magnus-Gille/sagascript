@@ -109,7 +109,7 @@ test("Windows acceptance re-verifies an already-downloaded model", () => {
     'Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny")',
     firstDownload + 1,
   );
-  const transcription = acceptanceScript.indexOf("$cliExePath transcribe");
+  const transcription = acceptanceScript.indexOf('$transcriptionOutput = Invoke-Sagascript');
   assert.ok(firstDownload >= 0 && secondDownload > firstDownload);
   assert.ok(transcription > secondDownload);
   assert.match(acceptanceScript, /verification_seconds/);

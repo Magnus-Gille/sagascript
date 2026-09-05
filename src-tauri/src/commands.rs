@@ -672,9 +672,7 @@ async fn stop_and_transcribe_impl(
     // `finish_transcription`: stop_recording_guarded has already moved the
     // controller to Transcribing, so returning early would wedge subsequent
     // recording attempts until the app restarts.
-    let result = if let Err(error) = whisper.ensure_model(effective_model) {
-        Err(error.to_string())
-    } else {
+    let result = {
         // Run blocking transcription on a separate thread with a timeout. On timeout
         // we now trigger a REAL abort (the whisper-rs abort callback wired in
         // WhisperBackend): request_abort() flips the flag whisper.cpp checks between
@@ -684,12 +682,20 @@ async fn stop_and_transcribe_impl(
         // exit after abort and log whether the lock was released.
         let whisper_ref = whisper.inner().clone();
         let mut fut = tokio::task::spawn_blocking(move || {
-            whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
+            let mut timings = sagascript_core::transcription::whisper_backend::DictationTimings::default();
+            let result = whisper_ref.transcribe_dictation(effective_model, &audio, language, &opts, &mut timings);
+            (result, timings)
         });
 
         let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
         match tokio::time::timeout(timeout, &mut fut).await {
-            Ok(Ok(result)) => result.map_err(|error| error.to_string()),
+            Ok(Ok((result, timings))) => {
+                let mut ctrl = controller.lock().unwrap();
+                ctrl.record_phase("model_acquisition", Duration::from_secs_f64(timings.model_ms / 1000.0));
+                ctrl.record_phase("inference", Duration::from_secs_f64(timings.inference_ms / 1000.0));
+                ctrl.record_model_cache(timings.model_cached);
+                result.map_err(|error| error.to_string())
+            }
             Ok(Err(error)) => Err(format!("Transcription task failed: {error}")),
             Err(_) => {
                 warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
