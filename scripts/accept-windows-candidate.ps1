@@ -61,6 +61,9 @@ if ($versionOutput -notmatch $versionPattern) {
 $downloadTimer = [System.Diagnostics.Stopwatch]::StartNew()
 [void](Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny"))
 $downloadTimer.Stop()
+$verificationTimer = [System.Diagnostics.Stopwatch]::StartNew()
+[void](Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny"))
+$verificationTimer.Stop()
 
 $transcriptTemp = Join-Path ([System.IO.Path]::GetTempPath()) ("sagascript-acceptance-{0}.json" -f [guid]::NewGuid())
 try {
@@ -98,6 +101,7 @@ try {
         reported_version = $versionOutput.Trim()
         source_fixture_sha256 = (Get-FileHash -LiteralPath $fixturePath -Algorithm SHA256).Hash.ToLowerInvariant()
         download_seconds = [Math]::Round($downloadTimer.Elapsed.TotalSeconds, 3)
+        verification_seconds = [Math]::Round($verificationTimer.Elapsed.TotalSeconds, 3)
         transcription_seconds = [Math]::Round($transcriptionTimer.Elapsed.TotalSeconds, 3)
         detected_language = $result.language
         segment_count = @($result.segments).Count
