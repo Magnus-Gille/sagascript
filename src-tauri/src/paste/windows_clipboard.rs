@@ -83,12 +83,13 @@ impl NativeTransaction {
 #[cfg(target_os = "windows")]
 impl Transaction for NativeTransaction {
     fn text(&mut self) -> Result<Option<String>, String> {
+        use clipboard_win::Getter;
         if !clipboard_win::is_format_avail(13) {
             // CF_UNICODETEXT
             return Ok(None);
         }
         let mut text = String::new();
-        clipboard_win::raw::get_string(&mut text)
+        clipboard_win::formats::Unicode.read_clipboard(&mut text)
             .map_err(|error| format!("Read clipboard failed: {error}"))?;
         Ok(Some(text))
     }
