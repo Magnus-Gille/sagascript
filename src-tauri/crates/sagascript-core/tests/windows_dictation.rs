@@ -98,7 +98,7 @@ fn english_fixture_reuses_loaded_runtime() {
 
     let mut first_timings = DictationTimings::default();
     let first = backend
-        .transcribe_dictation(
+        .transcribe_live_dictation(
             WhisperModel::BaseEn,
             &audio,
             Language::English,
@@ -114,7 +114,7 @@ fn english_fixture_reuses_loaded_runtime() {
 
     let mut second_timings = DictationTimings::default();
     let second = backend
-        .transcribe_dictation(
+        .transcribe_live_dictation(
             WhisperModel::BaseEn,
             &audio,
             Language::English,
@@ -171,7 +171,7 @@ fn concurrent_warmup_switching_keeps_bilingual_runtime_selection_atomic() {
     for repetition in 0..2 {
         let mut english_timings = DictationTimings::default();
         let english = backend
-            .transcribe_dictation(
+            .transcribe_live_dictation(
                 WhisperModel::BaseEn,
                 &english_audio,
                 Language::English,
@@ -187,7 +187,7 @@ fn concurrent_warmup_switching_keeps_bilingual_runtime_selection_atomic() {
 
         let mut swedish_timings = DictationTimings::default();
         let swedish = backend
-            .transcribe_dictation(
+            .transcribe_live_dictation(
                 WhisperModel::KbWhisperBase,
                 &swedish_audio,
                 Language::Swedish,

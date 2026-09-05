@@ -131,7 +131,9 @@
         testError = error ?? "";
         testResult = text ?? "";
       }
-    }).catch(() => {});
+    }).catch((error) => {
+      console.warn("Could not restore the last dictation result", error);
+    });
     return () => { disposed = true; stops.forEach((stop) => stop()); };
   });
 
@@ -243,13 +245,19 @@
     (async () => {
       initError = "";
       try {
+        buildInfo = await getBuildInfo();
+      } catch (error) {
+        // Build identity is diagnostic only. Keep it independent from the
+        // settings bootstrap so it remains visible when another query fails.
+        console.warn("Failed to load build information", error);
+      }
+      try {
         settings = await getSettings();
         await refreshProfileModels(settings.hotkey_profiles);
         platform = await getPlatform();
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
         }
-        buildInfo = await getBuildInfo();
         models = await getModelInfo();
         supportedFormats = await getSupportedFormats();
         const status = await hotkeyStatus();
@@ -700,6 +708,17 @@
 </script>
 
 <div class="settings-window">
+  <header class="window-header">
+    <h1 class="window-title">Sagascript</h1>
+    <div class="build-info" aria-label="Build information">
+      {#if buildInfo}
+        Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}
+      {:else}
+        Version information unavailable
+      {/if}
+    </div>
+  </header>
+
   <div class="tabs">
     <button class="tab" class:active={activeTab === "dictate"} onclick={() => (activeTab = "dictate")}>
       Dictate
@@ -1059,14 +1078,6 @@
     </div>
   {/if}
 
-  <div class="build-footer" aria-label="Build information">
-    {#if buildInfo}
-      Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}
-    {:else}
-      Version information unavailable
-    {/if}
-  </div>
-
   {#if downloading}
     <div class="download-status-bar">
       <div class="download-status-info">
@@ -1092,6 +1103,29 @@
     padding: 12px 20px 0;
     gap: 4px;
     border-bottom: 1px solid var(--border);
+  }
+
+  .window-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .window-title {
+    font-size: 18px;
+    line-height: 1.2;
+    color: var(--text);
+  }
+
+  .build-info {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
   }
 
   .tab {
@@ -1492,15 +1526,6 @@
     background: var(--accent);
     border-radius: 3px;
     transition: width 0.2s;
-  }
-
-  .build-footer {
-    padding: 8px 20px 10px;
-    border-top: 1px solid var(--border);
-    color: var(--text-muted);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-    flex-shrink: 0;
   }
 
   .initial-prompt-input {

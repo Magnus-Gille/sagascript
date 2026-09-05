@@ -142,7 +142,7 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
 
     let cold_started = Instant::now();
     let mut cold_timings = DictationTimings::default();
-    let cold_text = backend.transcribe_dictation(
+    let cold_text = backend.transcribe_live_dictation(
         model,
         &audio,
         language,
@@ -171,7 +171,7 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
     for iteration in 0..args.iterations {
         let started = Instant::now();
         let mut timings = DictationTimings::default();
-        let text = backend.transcribe_dictation(
+        let text = backend.transcribe_live_dictation(
             model,
             &audio,
             language,
@@ -264,6 +264,12 @@ fn exceeds_budget(total_ms: f64, max_warm_ms: Option<f64>) -> bool {
     max_warm_ms.is_some_and(|max_ms| total_ms > max_ms)
 }
 
+fn contains_expected_token(text: &str, expected_word: &str) -> bool {
+    let expected_lower = expected_word.to_lowercase();
+    text.split(|character: char| !character.is_alphanumeric())
+        .any(|token| !token.is_empty() && token.to_lowercase() == expected_lower)
+}
+
 fn validate_text(
     run_name: &str,
     text: &str,
@@ -277,11 +283,8 @@ fn validate_text(
         return;
     }
     if let Some(expected_word) = expected_word.filter(|word| !word.trim().is_empty()) {
-        let expected_lower = expected_word.to_lowercase();
-        if !text.to_lowercase().contains(&expected_lower) && validation_error.is_none() {
-            *validation_error = Some(format!(
-                "{run_name} did not contain the expected word"
-            ));
+        if !contains_expected_token(text, expected_word) && validation_error.is_none() {
+            *validation_error = Some(format!("{run_name} did not contain the expected word"));
         }
     }
 }
@@ -465,6 +468,44 @@ mod tests {
             error.as_deref(),
             Some("warm run 2 did not contain the expected word")
         );
+    }
+
+    #[test]
+    fn expected_word_matches_unicode_tokens_with_punctuation_and_case() {
+        for (text, expected) in [
+            ("Hello, WORLD!", "world"),
+            ("ÅNGSTRÖM — klart", "ångström"),
+            ("Hej världen.", "VÄRLDEN"),
+        ] {
+            assert!(
+                contains_expected_token(text, expected),
+                "{expected:?} should match a whole token in {text:?}"
+            );
+        }
+        assert!(contains_expected_token("hello-world", "world"));
+    }
+
+    #[test]
+    fn expected_word_does_not_match_an_embedded_partial_token() {
+        assert!(!contains_expected_token("countryside", "country"));
+        assert!(!contains_expected_token("concatenate", "cat"));
+    }
+
+    #[test]
+    fn empty_expect_word_is_rejected_before_model_or_input_access() {
+        let result = run(BenchmarkDictationArgs {
+            input: PathBuf::from("missing-fixture.wav"),
+            language: "en".to_string(),
+            iterations: 2,
+            max_warm_ms: None,
+            expect_word: Some(" \t".to_string()),
+        });
+
+        assert!(matches!(
+            result,
+            Err(DictationError::SettingsError(message))
+                if message == "--expect-word must not be empty"
+        ));
     }
 
     #[test]

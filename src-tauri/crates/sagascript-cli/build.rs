@@ -14,9 +14,36 @@ fn metadata_value(key: &str, fallback: impl FnOnce() -> String) -> String {
     std::env::var(key).ok().unwrap_or_else(fallback)
 }
 
+fn local_git_hash() -> String {
+    let hash =
+        command_output(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
+    let dirty = command_output(&["status", "--porcelain=v1", "--untracked-files=all"])
+        .is_some_and(|status| !status.is_empty());
+    if dirty {
+        format!("{hash}-dirty")
+    } else {
+        hash
+    }
+}
+
+fn emit_source_rerun_triggers() {
+    // Watch CLI and core source without watching the package root, which can
+    // include target/ and cause the build script to rebuild itself forever.
+    for path in [
+        "src",
+        "../sagascript-core/src",
+        "../sagascript-core/Cargo.toml",
+        "../../Cargo.lock",
+        "Cargo.toml",
+    ] {
+        println!("cargo:rerun-if-changed={path}");
+    }
+}
+
 fn emit_git_rerun_triggers() {
     if let Some(git_dir) = command_output(&["rev-parse", "--absolute-git-dir"]) {
         println!("cargo:rerun-if-changed={git_dir}/HEAD");
+        println!("cargo:rerun-if-changed={git_dir}/index");
         if let Some(reference) = command_output(&["symbolic-ref", "-q", "HEAD"]) {
             if let Some(reference_path) =
                 command_output(&["rev-parse", "--git-path", reference.as_str()])
@@ -34,10 +61,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_GIT_HASH");
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_BUILD_DATE");
     emit_git_rerun_triggers();
+    emit_source_rerun_triggers();
 
-    let git_hash = metadata_value("SAGASCRIPT_GIT_HASH", || {
-        command_output(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_string())
-    });
+    let git_hash = metadata_value("SAGASCRIPT_GIT_HASH", local_git_hash);
     let build_date = metadata_value("SAGASCRIPT_BUILD_DATE", || {
         // Keep local builds reproducible enough to identify without adding a
         // chrono build dependency to the CLI crate. Release CI always supplies

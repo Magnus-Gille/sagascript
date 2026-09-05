@@ -10,6 +10,9 @@ Rust, Svelte 5, and local Whisper inference.
   discover the current inventory with `sagascript --help` rather than duplicating it here.
 - **Privacy first:** local transcription is the default; remote/cloud behavior is opt-in.
 - Optimize latency and perceived speed; keep the UI to the menu bar, settings, and indicator.
+- Every build must identify itself with its release version and source revision/build
+  identity in the tray menu, prominently in Settings, and in CLI `--version` output.
+  Use generated build metadata rather than manually maintained display strings.
 - Make changes only on a task branch in a separate worktree; never edit the primary checkout.
 - Never read, print, modify, or commit `.env`, `.env.*`, or `secrets/**` without explicit
   user authorization. Never hardcode secrets.

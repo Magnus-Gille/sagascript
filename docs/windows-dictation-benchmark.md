@@ -23,7 +23,9 @@ The JSON report includes the build version, selected language and model, audio
 duration, one decode duration, cold model and inference timings, warm p50/p95
 model/inference/total timings, and nonempty text counts. The model is loaded
 by the first cold call; all warm calls use the same in-process backend and the
-same decoded PCM buffer.
+same decoded PCM buffer. These percentiles use linear interpolation between
+sorted samples; the offline `latency-report` command uses nearest rank, so do
+not compare the two formats as if their percentile estimators were identical.
 
 This is an inference benchmark. It excludes microphone capture, hotkey
 handling, UI state changes, and paste. The GUI writes a
@@ -31,8 +33,10 @@ handling, UI state changes, and paste. The GUI writes a
 `model_acquisition`, `inference`, `postprocessing`, and `clipboard_focus_paste`
 durations in `phases_ms`. `key_up_to_completion_ms` starts when the shortcut's
 release reaches the application and ends after the paste operation returns
-(or inference completes when auto-paste is off). It measures input dispatch;
-it cannot prove when another application's editor renders the text.
+(or inference completes when auto-paste is off). It excludes OS/input dispatch
+before the application's stop handler; it cannot prove when another
+application's editor renders the text. A timeout ends the application's wait,
+not necessarily the native paste operation; check the editor before retrying.
 
 The installed 604a9c1 candidate only logs session starts, so historical
 push-to-talk latency cannot be reconstructed from that log. Keep the source
@@ -40,7 +44,17 @@ revision with every new baseline. Use `scripts/summarize-windows-dictation.ps1`
 with `-LogPath`, `-OutputPath`, and optionally `-Since` to export aggregate
 durations and hardware metadata without dictated content.
 
-The checked-in Windows gate currently uses the public English fixture to catch
-model reuse and transcription regressions. The owner judged longer Swedish
-dictation fast enough on 2026-09-05 and deferred performance optimization in
-#184. No model, decoder-quality or latency-budget default is changed here.
+That PowerShell summary is a legacy exploratory diagnostic: its overall and
+per-language distributions can combine different builds, models and utterance
+lengths. They are not a configuration-specific regression baseline. For new
+R1 builds use `sagascript latency-report --input <copied.jsonl>` for separate
+configuration/length/outcome cohorts and an explicit successful-paste budget;
+see [the metric and privacy boundaries](latency-measurement.md). The published
+September 5 beta predates that CLI command, so use the new R1 CLI for reports.
+
+The checked-in Windows gate uses the public English fixture to catch model
+reuse and transcription regressions. Historical subjective Swedish feedback
+is not a controlled Windows baseline. Roadmap #198 includes #184 in R1;
+physical Windows cold/warm measurements and any evidence-backed optimization
+remain separate acceptance work. No model, decoder-quality or latency-budget
+default is changed here.

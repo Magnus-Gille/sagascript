@@ -80,7 +80,11 @@ promises merely because an installer default was expected.
 ## Beta verification record
 
 The candidate uses app version `1.1.3` from full source revision
-`56cf3420f7d81ac2c423bcfee6c8961de03fcfaf`. The ARM64 app was installed and
+`56cf3420f7d81ac2c423bcfee6c8961de03fcfaf`. Both native job checkout logs for
+run `33963645741` identify that pull-request merge ref; the run API's
+`9d75ce806041641e7635f1ef01f1cb044fb8a5f0` is its PR-head parent, not the
+checked-out merge revision. The published beta tag points to the merge
+revision. The ARM64 app was installed and
 uninstalled on a user Windows machine and Swedish and English dictation were
 tested. The x64 candidate passed the automated CI gates, but GUI acceptance was
 not performed on an x64 machine. The install test retained existing models and

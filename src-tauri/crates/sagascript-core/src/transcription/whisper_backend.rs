@@ -28,6 +28,12 @@ pub struct DictationTimings {
     pub model_ms: f64,
     pub inference_ms: f64,
     pub model_cached: bool,
+    #[serde(skip)]
+    pub model_acquisition_started: bool,
+    #[serde(skip)]
+    pub inference_started: bool,
+    #[serde(skip)]
+    pub model_ready_at: Option<Instant>,
 }
 
 /// Parallel file transcription is deliberately bounded: each state owns GPU
@@ -257,15 +263,32 @@ fn mean_logprob(plogs: &[f32]) -> Option<f32> {
     Some(plogs.iter().sum::<f32>() / plogs.len() as f32)
 }
 
+/// Return whether a raw Whisper segment contains its exact no-speech marker.
+///
+/// The marker is only interpreted while assembling user-facing text. Raw
+/// timestamped segments remain unchanged for diagnostics.
+pub fn contains_no_speech_marker(text: &str) -> bool {
+    text.contains("<|nospeech|>")
+}
+
 /// Assemble the plain transcript from Whisper's raw segments.
 ///
 /// Whisper normally includes a leading space on each new segment. When it does
 /// not, preserve the expected sentence boundary in the user-facing transcript
 /// without changing the raw, timestamped segment text.
-fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
+pub fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
     let mut transcript = String::new();
 
     for segment in segments {
+        // Whisper can prefix a silence hallucination with its internal
+        // no-speech token. Dropping only the marker would still expose the
+        // fabricated words that follow it, so discard the whole segment from
+        // the plain user-facing transcript. Raw timestamped segments remain
+        // unchanged for diagnostics.
+        if contains_no_speech_marker(&segment.text) {
+            continue;
+        }
+
         let previous_ends_with_whitespace = transcript
             .chars()
             .next_back()
@@ -527,6 +550,14 @@ fn sanitize_segment_bounds(
         start
     };
     (start, end)
+}
+
+fn has_live_audio_signal(audio: &[f32]) -> Result<bool, DictationError> {
+    if audio.is_empty() {
+        return Err(DictationError::NoAudioCaptured);
+    }
+    crate::audio::speech::has_audio_signal(audio)
+        .map_err(|reason| DictationError::TranscriptionFailed(reason.to_string()))
 }
 
 /// Local transcription backend using whisper-rs (whisper.cpp bindings)
@@ -976,16 +1007,46 @@ impl WhisperBackend {
         options: &TranscribeOptions,
         timings: &mut DictationTimings,
     ) -> Result<String, DictationError> {
-        let started = Instant::now();
-        let _load = self.lock_load_bounded()?;
+        *timings = DictationTimings::default();
+        let model_started = Instant::now();
+        timings.model_acquisition_started = true;
+        let _load = match self.lock_load_bounded() {
+            Ok(load) => load,
+            Err(error) => {
+                timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
+                return Err(error);
+            }
+        };
         timings.model_cached = !self.needs_reload(model);
         let selection = self.ensure_model_inner(model, ContextProfile::FlashAttention);
-        timings.model_ms = started.elapsed().as_secs_f64() * 1000.0;
+        timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
         selection?;
-        let started = Instant::now();
+        timings.model_ready_at = Some(Instant::now());
+        timings.inference_started = true;
+        let inference_started = Instant::now();
         let result = self.transcribe_sync_with_options(audio, language, options, |_| {});
-        timings.inference_ms = started.elapsed().as_secs_f64() * 1000.0;
+        timings.inference_ms = inference_started.elapsed().as_secs_f64() * 1000.0;
         result
+    }
+
+    /// Transactional live-microphone transcription. The signal guard runs
+    /// before model selection so empty, invalid, and near-silent captures do
+    /// not acquire or load a model. File/diagnostic callers should continue to
+    /// use [`Self::transcribe_dictation`] so intentional warmups remain raw.
+    pub fn transcribe_live_dictation(
+        &self,
+        model: WhisperModel,
+        audio: &[f32],
+        language: Language,
+        options: &TranscribeOptions,
+        timings: &mut DictationTimings,
+    ) -> Result<String, DictationError> {
+        *timings = DictationTimings::default();
+        if !has_live_audio_signal(audio)? {
+            info!("Skipping near-silent dictation: {} samples", audio.len());
+            return Ok(String::new());
+        }
+        self.transcribe_dictation(model, audio, language, options, timings)
     }
 
     pub fn warmup_model(&self, model: WhisperModel, language: Language) -> Result<(), DictationError> {
@@ -1184,6 +1245,22 @@ impl WhisperBackend {
             ..Default::default()
         };
         self.transcribe_sync_with_options(audio, language, &opts, on_progress)
+    }
+
+    /// Live microphone transcription with a conservative near-silence guard.
+    /// File/diagnostic APIs and intentional silent model warmup remain ungated.
+    pub fn transcribe_live_sync_with_options(
+        &self,
+        audio: &[f32],
+        language: Language,
+        opts: &TranscribeOptions,
+        on_progress: impl FnMut(i32) + Send + 'static,
+    ) -> Result<String, DictationError> {
+        if !has_live_audio_signal(audio)? {
+            info!("Skipping near-silent dictation: {} samples", audio.len());
+            return Ok(String::new());
+        }
+        self.transcribe_sync_with_options(audio, language, opts, on_progress)
     }
 
     /// Core transcription entry point. Honors the opt-in [`TranscribeOptions`]
@@ -2502,6 +2579,216 @@ mod progress_callback_tests {
 #[cfg(test)]
 mod segment_confidence_tests {
     use super::*;
+
+    #[test]
+    fn silent_audio_skips_decoder_without_a_loaded_model() {
+        let backend = WhisperBackend::new();
+        for language in [Language::Swedish, Language::English] {
+            for samples in [4052, 6400, 8000] {
+                let audio = vec![0.0; samples];
+                assert!(backend
+                    .transcribe_live_sync_with_options(
+                        &audio,
+                        language,
+                        &TranscribeOptions::default(),
+                        |_| {},
+                    )
+                    .unwrap()
+                    .is_empty());
+                assert!(matches!(
+                    backend.transcribe_sync_with_options_segments(
+                        &audio, language, &TranscribeOptions::default(), |_| {},
+                    ),
+                    Err(DictationError::ModelNotLoaded)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn live_dictation_guard_rejects_empty_and_non_finite_audio_without_model_access() {
+        let backend = WhisperBackend::new();
+        let options = TranscribeOptions::default();
+
+        let mut empty_timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: true,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+        assert!(matches!(
+            backend.transcribe_live_dictation(
+                WhisperModel::Base,
+                &[],
+                Language::English,
+                &options,
+                &mut empty_timings,
+            ),
+            Err(DictationError::NoAudioCaptured)
+        ));
+        assert_eq!(empty_timings.model_ms, 0.0);
+        assert_eq!(empty_timings.inference_ms, 0.0);
+        assert!(!empty_timings.model_cached);
+        assert!(!empty_timings.model_acquisition_started);
+        assert!(!empty_timings.inference_started);
+        assert!(empty_timings.model_ready_at.is_none());
+
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let audio = [0.0, invalid, 0.0];
+            let mut timings = DictationTimings::default();
+            assert!(matches!(
+                backend.transcribe_live_dictation(
+                    WhisperModel::Base,
+                    &audio,
+                    Language::English,
+                    &options,
+                    &mut timings,
+                ),
+                Err(DictationError::TranscriptionFailed(message))
+                    if message.contains("non-finite")
+            ));
+            assert!(!timings.model_acquisition_started);
+            assert!(!timings.inference_started);
+            assert!(timings.model_ready_at.is_none());
+        }
+    }
+
+    #[test]
+    fn live_silence_resets_timings_and_skips_model_access() {
+        let backend = WhisperBackend::new();
+        let mut timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: true,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+
+        let result = backend.transcribe_live_dictation(
+            WhisperModel::Base,
+            &[0.0; 8_000],
+            Language::English,
+            &TranscribeOptions::default(),
+            &mut timings,
+        );
+
+        assert_eq!(result.unwrap(), "");
+        assert_eq!(backend.loaded_model(), None);
+        assert_eq!(timings.model_ms, 0.0);
+        assert_eq!(timings.inference_ms, 0.0);
+        assert!(!timings.model_cached);
+        assert!(!timings.model_acquisition_started);
+        assert!(!timings.inference_started);
+        assert!(timings.model_ready_at.is_none());
+    }
+
+    #[test]
+    fn raw_dictation_resets_timings_and_marks_only_model_acquisition_on_failure() {
+        let backend = WhisperBackend::new();
+        let mut timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: false,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+
+        let poisoning = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _load = backend.load_lock.lock().unwrap();
+            panic!("poison load lock for deterministic timing test");
+        }));
+        assert!(poisoning.is_err());
+
+        let result = backend.transcribe_dictation(
+            WhisperModel::Base,
+            &[0.0; 8_000],
+            Language::English,
+            &TranscribeOptions::default(),
+            &mut timings,
+        );
+
+        assert!(matches!(result, Err(DictationError::ModelBusy)));
+        assert!(timings.model_acquisition_started);
+        assert!(!timings.inference_started);
+        assert!(timings.model_ready_at.is_none());
+        assert!(timings.model_ms.is_finite());
+        assert!(timings.model_ms >= 0.0);
+        assert_eq!(timings.inference_ms, 0.0);
+    }
+
+    #[test]
+    fn dictation_timings_keep_private_state_out_of_json_contract() {
+        let timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: true,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+        let json = serde_json::to_value(timings).unwrap();
+
+        assert_eq!(json["model_ms"], 12.0);
+        assert_eq!(json["inference_ms"], 34.0);
+        assert_eq!(json["model_cached"], true);
+        assert!(json.get("model_acquisition_started").is_none());
+        assert!(json.get("inference_started").is_none());
+        assert!(json.get("model_ready_at").is_none());
+    }
+
+    #[test]
+    fn warmup_still_requires_a_model_and_does_not_skip_silent_inference() {
+        assert!(matches!(
+            WhisperBackend::new().warmup(Language::English),
+            Err(DictationError::ModelNotLoaded)
+        ));
+    }
+
+    #[test]
+    fn assembled_transcript_discards_no_speech_marked_hallucination() {
+        let segments = [TranscriptSegment {
+            start: 0.0,
+            end: 0.3,
+            text: "<|nospeech|>-Hej Tack! Tack! Tack!".to_string(),
+            avg_logprob: Some(-0.1),
+            no_speech_prob: 0.9,
+        }];
+
+        assert_eq!(assemble_transcript(&segments), "");
+    }
+
+    #[test]
+    fn assembled_transcript_discards_no_speech_segment_between_sentences() {
+        let segments = [
+            TranscriptSegment {
+                start: 0.0,
+                end: 1.0,
+                text: "First.".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.01,
+            },
+            TranscriptSegment {
+                start: 1.0,
+                end: 1.3,
+                text: "<|nospeech|>-Hej Tack! Tack! Tack!".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.9,
+            },
+            TranscriptSegment {
+                start: 1.3,
+                end: 2.0,
+                text: "Second.".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.01,
+            },
+        ];
+
+        assert_eq!(assemble_transcript(&segments), "First. Second.");
+    }
 
     #[test]
     fn assembled_transcript_separates_sentence_ending_segments() {

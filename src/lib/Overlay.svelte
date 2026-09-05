@@ -27,7 +27,9 @@
       const initialRevision = revision;
       const [active, state] = await Promise.all([getActiveHotkeyProfile(), getState()]);
       if (!disposed && revision === initialRevision) { profile = active; phase = state; }
-    }).catch(() => {});
+    }).catch((error) => {
+      console.warn("Could not initialize dictation indicator state", error);
+    });
     return () => { disposed = true; stops.forEach((stop) => stop()); };
   });
 

@@ -683,7 +683,13 @@ async fn stop_and_transcribe_impl(
         let whisper_ref = whisper.inner().clone();
         let mut fut = tokio::task::spawn_blocking(move || {
             let mut timings = sagascript_core::transcription::whisper_backend::DictationTimings::default();
-            let result = whisper_ref.transcribe_dictation(effective_model, &audio, language, &opts, &mut timings);
+            let result = whisper_ref.transcribe_live_dictation(
+                effective_model,
+                &audio,
+                language,
+                &opts,
+                &mut timings,
+            );
             (result, timings)
         });
 
@@ -691,9 +697,19 @@ async fn stop_and_transcribe_impl(
         match tokio::time::timeout(timeout, &mut fut).await {
             Ok(Ok((result, timings))) => {
                 let mut ctrl = controller.lock().unwrap();
-                ctrl.record_phase("model_acquisition", Duration::from_secs_f64(timings.model_ms / 1000.0));
-                ctrl.record_phase("inference", Duration::from_secs_f64(timings.inference_ms / 1000.0));
-                ctrl.record_model_cache(timings.model_cached);
+                if timings.model_acquisition_started {
+                    ctrl.record_phase(
+                        "model_acquisition",
+                        Duration::from_secs_f64(timings.model_ms / 1000.0),
+                    );
+                    ctrl.record_model_cache(timings.model_cached);
+                }
+                if timings.inference_started {
+                    ctrl.record_phase(
+                        "inference",
+                        Duration::from_secs_f64(timings.inference_ms / 1000.0),
+                    );
+                }
                 result.map_err(|error| error.to_string())
             }
             Ok(Err(error)) => Err(format!("Transcription task failed: {error}")),

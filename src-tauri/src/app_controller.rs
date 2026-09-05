@@ -239,6 +239,23 @@ impl AppController {
         &mut self,
         profile: HotkeyProfile,
     ) -> Result<bool, DictationError> {
+        self.start_recording_for_profile_with_capture(profile, |audio| audio.start_capture())
+    }
+
+    /// Start recording using the supplied capture operation.
+    ///
+    /// The injected capture operation keeps the startup transition testable
+    /// without requiring a microphone. It also makes sure a failure after the
+    /// dictation session is opened goes through the same controller-owned
+    /// cleanup path as other workflow errors.
+    fn start_recording_for_profile_with_capture<F>(
+        &mut self,
+        profile: HotkeyProfile,
+        start_capture: F,
+    ) -> Result<bool, DictationError>
+    where
+        F: FnOnce(&mut AudioCaptureService) -> Result<(), DictationError>,
+    {
         if self.state != AppState::Idle {
             warn!("Cannot start recording: state is {:?}", self.state);
             return Ok(false);
@@ -262,10 +279,12 @@ impl AppController {
             "auto_paste": self.settings.auto_paste,
         }));
         self.release_started = None;
-        if let Err(error) = self.audio.start_capture() {
-            self.on_transcription_error(&error.to_string());
+        if let Err(error) = start_capture(&mut self.audio) {
+            let message = error.to_string();
+            self.on_transcription_error(&message);
             return Err(error);
         }
+
         info!(
             profile_id = %profile.id,
             profile_name = %profile.name,
@@ -316,10 +335,29 @@ impl AppController {
             .recording_start
             .map(|s| s.elapsed().as_millis())
             .unwrap_or(0);
+        let metrics = self.audio.metrics();
+        let recording_duration_ms = u64::try_from(duration).unwrap_or(u64::MAX);
+        let audio_duration_ms = u64::try_from(
+            (samples.len() as u128).saturating_mul(1_000) / 16_000,
+        )
+        .unwrap_or(u64::MAX);
 
         info!(
             "Recording stopped: {} samples ({duration}ms)",
             samples.len()
+        );
+        self.logging.log(
+            "info",
+            "Performance",
+            log_events::audio::CAPTURE_STOPPED,
+            serde_json::json!({
+                "recordingDurationMs": recording_duration_ms,
+                "audioDurationMs": audio_duration_ms,
+                "audioSamples": samples.len(),
+                "captureRequestToStreamPlayReturnMs": metrics.stream_play_return_ms,
+                "captureRequestToFirstAudioCallbackMs": metrics.first_callback_ms,
+                "deviceSampleRateHz": metrics.device_sample_rate_hz,
+            }),
         );
 
         self.state = AppState::Transcribing;
@@ -364,6 +402,32 @@ impl AppController {
         self.logging.end_dictation_session();
     }
 
+    /// Complete a quiet push-to-talk cancellation without replacing the last
+    /// useful transcript, surfacing an error, or leaving retry audio behind.
+    pub fn on_no_speech_detected(&mut self) {
+        self.end_session("no_speech");
+        self.audio.clear_last_captured();
+        self.state = AppState::Idle;
+        self.active_hotkey_profile = None;
+        self.training_recording = false;
+        self.logging.log(
+            "info",
+            "Transcription",
+            log_events::transcription::NO_SPEECH,
+            serde_json::json!({}),
+        );
+        self.logging.end_dictation_session();
+    }
+
+    pub fn log_dictation_performance(&self, data: serde_json::Value) {
+        self.logging.log(
+            "info",
+            "Performance",
+            log_events::transcription::PHASE_TIMINGS,
+            data,
+        );
+    }
+
     /// Called after transcription fails
     pub fn on_transcription_error(&mut self, error: &str) {
         self.end_session("error");
@@ -384,14 +448,13 @@ impl AppController {
         result: Result<String, String>,
     ) -> Result<String, String> {
         match result {
-            Ok(text) if !text.trim().is_empty() => {
-                self.on_transcription_success(&text);
+            Ok(text) => {
+                if text.trim().is_empty() {
+                    self.on_no_speech_detected();
+                } else {
+                    self.on_transcription_success(&text);
+                }
                 Ok(text)
-            }
-            Ok(_) => {
-                let error = "No speech was recognized. Check the microphone and selected language, then try a longer phrase.".to_string();
-                self.on_transcription_error(&error);
-                Err(error)
             }
             Err(error) => {
                 self.on_transcription_error(&error);
@@ -630,17 +693,57 @@ mod tests {
     }
 
     #[test]
-    fn finish_transcription_whitespace_is_an_error_and_returns_idle() {
+    fn finish_transcription_empty_result_preserves_last_transcription() {
         let mut ctrl = default_controller();
         ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
 
-        let result = ctrl.finish_transcription(Ok(" \n\t ".to_string()));
+        let result = ctrl.finish_transcription(Ok(String::new()));
 
-        let error = result.expect_err("whitespace-only transcription must fail");
-        assert!(error.contains("No speech was recognized"));
-        assert_eq!(ctrl.last_error(), Some(error.as_str()));
-        assert_eq!(ctrl.last_transcription(), None);
+        assert_eq!(result, Ok(String::new()));
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
         assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn finish_transcription_whitespace_result_preserves_last_transcription() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+
+        let result = ctrl.finish_transcription(Ok(" \n\t".to_string()));
+
+        assert_eq!(result, Ok(" \n\t".to_string()));
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn no_speech_returns_idle_without_replacing_last_transcription() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+        ctrl.last_error = Some("stale error".to_string());
+        ctrl.session_data = Some(serde_json::json!({
+            "language": "en",
+            "model": "base.en",
+            "phases_ms": {},
+        }));
+        ctrl.release_started = Some(Instant::now());
+
+        ctrl.on_no_speech_detected();
+
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+        assert_eq!(ctrl.last_error(), Some("stale error"));
+        assert!(ctrl.session_data.is_none());
+        assert!(ctrl.release_started.is_none());
+
+        // A repeated terminal callback has no active payload, so it cannot
+        // emit a second typed terminal event for the same session.
+        ctrl.on_no_speech_detected();
+        assert!(ctrl.session_data.is_none());
+        assert!(ctrl.release_started.is_none());
     }
 
     // -- Recording elapsed --
@@ -732,10 +835,9 @@ mod tests {
             .hotkey_profile_for_shortcut("Alt+E")
             .expect("English Alt+E profile should resolve");
 
-        assert_eq!(
-            ctrl.handle_hotkey_down_for_profile(english).unwrap(),
-            HotkeyDownResult::StartedRecording
-        );
+        assert!(ctrl
+            .start_recording_for_profile_with_capture(english, |_| Ok(()))
+            .unwrap());
         assert_eq!(ctrl.language(), sagascript_core::settings::Language::English);
 
         let session = ctrl
@@ -773,6 +875,7 @@ mod tests {
 
         ctrl.on_transcription_success("private transcript text");
         assert!(ctrl.session_data.is_none(), "the terminal event must consume the session payload");
+        assert!(ctrl.release_started.is_none());
 
         // A repeated terminal callback has no active payload to emit, so one
         // dictation session can produce at most one finished-session event.
@@ -878,6 +981,45 @@ mod tests {
         let started = ctrl.start_recording().unwrap();
         assert!(!started);
         assert_eq!(ctrl.state(), AppState::Transcribing); // unchanged
+    }
+
+    #[test]
+    fn recording_start_failure_closes_session_and_restores_idle_without_capture() {
+        let mut ctrl = default_controller();
+        let profile = ctrl
+            .settings()
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .next()
+            .expect("default settings provide a hotkey profile");
+        let expected_error = DictationError::MicrophonePermissionDenied;
+        let expected_message = expected_error.to_string();
+
+        let result = ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            Err(expected_error.clone())
+        });
+
+        assert!(matches!(result, Err(DictationError::MicrophonePermissionDenied)));
+        assert_eq!(ctrl.last_error(), Some(expected_message.as_str()));
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert!(ctrl.active_hotkey_profile().is_none());
+        assert!(!ctrl.training_recording);
+
+        // The failed start must leave the controller reusable for a later
+        // attempt; this still injects the capture result and never opens a mic.
+        assert!(matches!(
+            ctrl.start_recording_for_profile_with_capture(
+                ctrl.settings()
+                    .resolved_hotkey_profiles()
+                    .into_iter()
+                    .next()
+                    .unwrap(),
+                |_| Ok(()),
+            ),
+            Ok(true)
+        ));
+        assert_eq!(ctrl.state(), AppState::Recording);
+        ctrl.cancel_recording();
     }
 
     // -- stop_recording_guarded --

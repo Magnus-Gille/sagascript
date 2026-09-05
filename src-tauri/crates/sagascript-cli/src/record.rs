@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use sagascript_core::audio::AudioCaptureService;
 use sagascript_core::audio::resample::TARGET_SAMPLE_RATE;
 use sagascript_core::error::DictationError;
 use sagascript_core::transcription::model;
-use sagascript_core::transcription::{Glossary, WhisperBackend};
+use sagascript_core::transcription::{Glossary, TranscribeOptions, WhisperBackend};
 
 use super::transcribe::{
     copy_to_clipboard, model_id_string, parse_language, resolve_effective_model, resolve_profile,
@@ -162,6 +163,10 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let glossary = Glossary::parse(effective_prompt.as_deref().unwrap_or_default());
     let decoder_prompt = glossary.decoder_prompt();
     let prompt = decoder_prompt.as_deref();
+    let opts = TranscribeOptions {
+        prompt: prompt.map(str::to_string),
+        ..TranscribeOptions::default()
+    };
     let text = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(
@@ -169,10 +174,10 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
                 .unwrap(),
         );
         let pb_cb = pb.clone();
-        let text = backend.transcribe_sync_with_progress_and_prompt(
+        let text = backend.transcribe_live_sync_with_options(
             &audio,
             language,
-            prompt,
+            &opts,
             move |pct| {
                 crate::set_transcription_progress(&pb_cb, pct);
             },
@@ -181,10 +186,11 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         text
     } else {
         eprintln!("Transcribing...");
-        backend.transcribe_sync_with_progress_and_prompt(&audio, language, prompt, |_| {})?
+        backend.transcribe_live_sync_with_options(&audio, language, &opts, |_| {})?
     };
 
     let (text, vocabulary_corrections) = glossary.correct_text(&text);
+    let has_text = !text.trim().is_empty();
 
     // Output
     if args.json {
@@ -197,10 +203,13 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         });
         println!("{}", serde_json::to_string_pretty(&json).unwrap());
     } else {
-        println!("{text}");
+        let mut stdout = io::stdout().lock();
+        write_plain_record_output(&mut stdout, &text).map_err(|error| {
+            DictationError::TranscriptionFailed(format!("Failed to write output: {error}"))
+        })?;
     }
 
-    if args.clipboard {
+    if args.clipboard && has_text {
         copy_to_clipboard(&text)?;
         eprintln!("Copied to clipboard.");
     }
@@ -208,8 +217,38 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     Ok(())
 }
 
+fn write_plain_record_output(writer: &mut impl Write, text: &str) -> io::Result<bool> {
+    if text.trim().is_empty() {
+        return Ok(false);
+    }
+
+    writeln!(writer, "{text}")?;
+    Ok(true)
+}
+
 fn ctrlc_handler(running: Arc<AtomicBool>) {
     let _ = ctrlc::set_handler(move || {
         running.store(false, Ordering::Relaxed);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_plain_record_output;
+
+    #[test]
+    fn empty_plain_record_output_emits_nothing() {
+        for text in ["", " \n\t"] {
+            let mut output = Vec::new();
+            assert!(!write_plain_record_output(&mut output, text).unwrap());
+            assert!(output.is_empty());
+        }
+    }
+
+    #[test]
+    fn nonempty_plain_record_output_keeps_text_and_newline() {
+        let mut output = Vec::new();
+        assert!(write_plain_record_output(&mut output, "hello").unwrap());
+        assert_eq!(output, b"hello\n");
+    }
 }

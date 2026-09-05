@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -7,13 +7,27 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use tracing::{error, info};
 
-use crate::error::DictationError;
 use super::resample::{resample_to_16khz, TARGET_SAMPLE_RATE};
+use crate::error::DictationError;
 
 /// Maximum recording length: 15 minutes. Capped in device-rate samples while
 /// recording (the buffer holds raw mono at the device rate), then resampled to
 /// 16 kHz on stop.
 const MAX_BUFFER_SECONDS: usize = 60 * 15;
+const STREAM_NOT_READY: u64 = u64::MAX;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioCaptureMetrics {
+    /// Time from the capture request until `stream.play()` returns. A slow
+    /// Bluetooth profile switch is visible here without recording a device
+    /// name or any audio content.
+    pub stream_play_return_ms: Option<u64>,
+    /// Time from the capture request until the first input callback runs.
+    /// This can be later than `stream_play_return_ms` when the audio backend
+    /// takes time to deliver the first buffer.
+    pub first_callback_ms: Option<u64>,
+    pub device_sample_rate_hz: Option<u32>,
+}
 
 /// Audio capture service using cpal
 /// The cpal::Stream is !Send, so we spawn a dedicated thread to own it.
@@ -25,7 +39,14 @@ pub struct AudioCaptureService {
     /// Device sample rate published by the capture thread once the input opens
     /// (0 until known). Read by `stop_capture` to resample the whole buffer.
     device_sample_rate: Arc<AtomicU32>,
-    capture_thread: Option<thread::JoinHandle<Result<(), DictationError>>>,
+    /// Time published by the capture thread after `stream.play()` returns.
+    stream_play_return_ms: Arc<AtomicU64>,
+    /// Time published by the first input callback.
+    first_callback_ms: Arc<AtomicU64>,
+    /// First initialization or stream-processing error from the capture
+    /// thread for the current capture, if any.
+    worker_error: Arc<Mutex<Option<DictationError>>>,
+    capture_thread: Option<thread::JoinHandle<()>>,
     stop_timings: (Duration, Duration),
     /// Retained audio from last capture for retry
     last_captured: Option<Vec<f32>>,
@@ -47,6 +68,9 @@ impl AudioCaptureService {
             buffer: Arc::new(Mutex::new(Vec::new())),
             stop_signal: Arc::new(Mutex::new(false)),
             device_sample_rate: Arc::new(AtomicU32::new(0)),
+            stream_play_return_ms: Arc::new(AtomicU64::new(STREAM_NOT_READY)),
+            first_callback_ms: Arc::new(AtomicU64::new(STREAM_NOT_READY)),
+            worker_error: Arc::new(Mutex::new(None)),
             capture_thread: None,
             stop_timings: (Duration::ZERO, Duration::ZERO),
             last_captured: None,
@@ -68,17 +92,45 @@ impl AudioCaptureService {
         let buffer = Arc::clone(&self.buffer);
         let stop_signal = Arc::clone(&self.stop_signal);
         let device_sample_rate = Arc::clone(&self.device_sample_rate);
+        let stream_play_return_ms = Arc::clone(&self.stream_play_return_ms);
+        let first_callback_ms = Arc::clone(&self.first_callback_ms);
+        clear_worker_error(&self.worker_error);
+        let worker_error = Arc::clone(&self.worker_error);
         device_sample_rate.store(0, Ordering::SeqCst);
+        stream_play_return_ms.store(STREAM_NOT_READY, Ordering::SeqCst);
+        first_callback_ms.store(STREAM_NOT_READY, Ordering::SeqCst);
+        let capture_requested_at = Instant::now();
 
         // Spawn a thread that owns the cpal::Stream
         let handle = thread::spawn(move || {
-            run_capture(buffer, stop_signal, device_sample_rate)
+            if let Err(e) = run_capture(
+                buffer,
+                stop_signal,
+                device_sample_rate,
+                stream_play_return_ms,
+                first_callback_ms,
+                worker_error.clone(),
+                capture_requested_at,
+            ) {
+                record_first_worker_error(&worker_error, e.clone());
+                error!("Audio capture thread error: {e}");
+            }
         });
 
         self.capture_thread = Some(handle);
 
         // Give the capture thread a moment to initialize
         thread::sleep(std::time::Duration::from_millis(50));
+
+        // Initialization failures are often known by now. Return them to the
+        // caller while retaining the error for stop_capture as well.
+        let startup_error = { self.worker_error.lock().unwrap().clone() };
+        if let Some(error) = startup_error {
+            if let Some(handle) = self.capture_thread.take() {
+                let _ = handle.join();
+            }
+            return Err(error);
+        }
 
         info!("Audio capture started");
         Ok(())
@@ -101,10 +153,19 @@ impl AudioCaptureService {
         // Wait for the capture thread to finish
         if let Some(handle) = self.capture_thread.take() {
             handle.thread().unpark();
-            handle.join().map_err(|_| DictationError::AudioCaptureError("Microphone capture thread stopped unexpectedly".into()))??;
+            handle.join().map_err(|_| {
+                DictationError::AudioCaptureError(
+                    "Microphone capture thread stopped unexpectedly".into(),
+                )
+            })?;
         }
         self.stop_timings.0 = started.elapsed();
         let conversion_started = Instant::now();
+
+        if let Some(error) = self.worker_error.lock().unwrap().take() {
+            error!("Audio capture failed: {error}");
+            return Err(error);
+        }
 
         let raw = {
             let mut buf = self.buffer.lock().unwrap();
@@ -157,6 +218,18 @@ impl AudioCaptureService {
     pub fn clear_last_captured(&mut self) {
         self.last_captured = None;
     }
+
+    pub fn metrics(&self) -> AudioCaptureMetrics {
+        let stream_play_return_ms = self.stream_play_return_ms.load(Ordering::SeqCst);
+        let first_callback_ms = self.first_callback_ms.load(Ordering::SeqCst);
+        let device_sample_rate_hz = self.device_sample_rate.load(Ordering::SeqCst);
+        AudioCaptureMetrics {
+            stream_play_return_ms: (stream_play_return_ms != STREAM_NOT_READY)
+                .then_some(stream_play_return_ms),
+            first_callback_ms: (first_callback_ms != STREAM_NOT_READY).then_some(first_callback_ms),
+            device_sample_rate_hz: (device_sample_rate_hz != 0).then_some(device_sample_rate_hz),
+        }
+    }
 }
 
 /// Run audio capture on a dedicated thread (owns the !Send cpal::Stream)
@@ -164,15 +237,19 @@ fn run_capture(
     buffer: Arc<Mutex<Vec<f32>>>,
     stop_signal: Arc<Mutex<bool>>,
     device_sample_rate_out: Arc<AtomicU32>,
+    stream_play_return_ms_out: Arc<AtomicU64>,
+    first_callback_ms_out: Arc<AtomicU64>,
+    worker_error: Arc<Mutex<Option<DictationError>>>,
+    capture_requested_at: Instant,
 ) -> Result<(), DictationError> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
         .ok_or(DictationError::MicrophonePermissionDenied)?;
 
-    let config = device
-        .default_input_config()
-        .map_err(|e| DictationError::AudioCaptureError(format!("Failed to get input config: {e}")))?;
+    let config = device.default_input_config().map_err(|e| {
+        DictationError::AudioCaptureError(format!("Failed to get input config: {e}"))
+    })?;
 
     let device_sample_rate = config.sample_rate().0;
     let device_channels = config.channels();
@@ -187,11 +264,21 @@ fn run_capture(
         config.sample_format()
     );
 
-    let err_fn = |err: cpal::StreamError| {
+    let worker_error_for_callback = Arc::clone(&worker_error);
+    let stop_signal_for_callback = Arc::clone(&stop_signal);
+    let err_fn = move |err: cpal::StreamError| {
+        record_first_worker_error(
+            &worker_error_for_callback,
+            DictationError::AudioCaptureError(format!("Audio stream error: {err}")),
+        );
         error!("Audio stream error: {err}");
+        if let Ok(mut stop) = stop_signal_for_callback.lock() {
+            *stop = true;
+        }
     };
 
     let buf_clone = Arc::clone(&buffer);
+    let first_callback_ms_clone = Arc::clone(&first_callback_ms_out);
 
     let stream = match config.sample_format() {
         SampleFormat::F32 => {
@@ -200,6 +287,10 @@ fn run_capture(
                 .build_input_stream(
                     &config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        publish_first_callback_ms(
+                            &first_callback_ms_clone,
+                            elapsed_ms(capture_requested_at),
+                        );
                         process_samples(data, device_channels, device_sample_rate, &buf_clone);
                     },
                     err_fn,
@@ -211,16 +302,16 @@ fn run_capture(
         }
         SampleFormat::I16 => {
             let config = config.into();
+            let first_callback_ms_clone = Arc::clone(&first_callback_ms_out);
             device
                 .build_input_stream(
                     &config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        process_samples_i16(
-                            data,
-                            device_channels,
-                            device_sample_rate,
-                            &buf_clone,
+                        publish_first_callback_ms(
+                            &first_callback_ms_clone,
+                            elapsed_ms(capture_requested_at),
                         );
+                        process_samples_i16(data, device_channels, device_sample_rate, &buf_clone);
                     },
                     err_fn,
                     None,
@@ -239,6 +330,9 @@ fn run_capture(
     stream
         .play()
         .map_err(|e| DictationError::AudioCaptureError(format!("Failed to start stream: {e}")))?;
+    let stream_play_return_ms = elapsed_ms(capture_requested_at);
+    stream_play_return_ms_out.store(stream_play_return_ms, Ordering::SeqCst);
+    info!("Audio input stream play returned after {stream_play_return_ms}ms");
 
     // Spin until stop signal (the stream callback fills the buffer)
     loop {
@@ -253,12 +347,34 @@ fn run_capture(
     Ok(())
 }
 
-fn process_samples(
-    data: &[f32],
-    channels: u16,
-    device_rate: u32,
-    buffer: &Arc<Mutex<Vec<f32>>>,
+fn clear_worker_error(error: &Arc<Mutex<Option<DictationError>>>) {
+    *error.lock().unwrap() = None;
+}
+
+fn record_first_worker_error(
+    error_slot: &Arc<Mutex<Option<DictationError>>>,
+    error: DictationError,
 ) {
+    let mut first_error = error_slot.lock().unwrap();
+    if first_error.is_none() {
+        *first_error = Some(error);
+    }
+}
+
+fn elapsed_ms(since: Instant) -> u64 {
+    since.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn publish_first_callback_ms(output: &AtomicU64, elapsed_ms: u64) {
+    let _ = output.compare_exchange(
+        STREAM_NOT_READY,
+        elapsed_ms,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+}
+
+fn process_samples(data: &[f32], channels: u16, device_rate: u32, buffer: &Arc<Mutex<Vec<f32>>>) {
     // Realtime-safe hot path: downmix to mono and append raw device-rate samples
     // with a length cap. No resampling and no per-callback allocation here —
     // resampling to 16 kHz happens once on stop (see stop_capture).
@@ -313,8 +429,11 @@ fn process_samples_i16(
             if buf.len() >= max_samples {
                 break;
             }
-            let avg =
-                frame.iter().map(|&s| s as f32 / i16::MAX as f32).sum::<f32>() / channels as f32;
+            let avg = frame
+                .iter()
+                .map(|&s| s as f32 / i16::MAX as f32)
+                .sum::<f32>()
+                / channels as f32;
             buf.push(avg);
         }
     }
@@ -396,18 +515,177 @@ mod tests {
     }
 
     #[test]
+    fn capture_metrics_are_unknown_before_a_stream_opens() {
+        let svc = AudioCaptureService::new();
+        assert_eq!(
+            svc.metrics(),
+            AudioCaptureMetrics {
+                stream_play_return_ms: None,
+                first_callback_ms: None,
+                device_sample_rate_hz: None,
+            }
+        );
+    }
+
+    #[test]
+    fn capture_metrics_preserve_zero_latency_and_known_sample_rate() {
+        let svc = AudioCaptureService::new();
+        svc.stream_play_return_ms.store(0, Ordering::SeqCst);
+        svc.first_callback_ms.store(0, Ordering::SeqCst);
+        svc.device_sample_rate.store(48_000, Ordering::SeqCst);
+
+        assert_eq!(
+            svc.metrics(),
+            AudioCaptureMetrics {
+                stream_play_return_ms: Some(0),
+                first_callback_ms: Some(0),
+                device_sample_rate_hz: Some(48_000),
+            }
+        );
+    }
+
+    #[test]
+    fn capture_metrics_keep_zero_sample_rate_unknown() {
+        let svc = AudioCaptureService::new();
+        svc.stream_play_return_ms.store(0, Ordering::SeqCst);
+        svc.first_callback_ms.store(3, Ordering::SeqCst);
+
+        assert_eq!(
+            svc.metrics(),
+            AudioCaptureMetrics {
+                stream_play_return_ms: Some(0),
+                first_callback_ms: Some(3),
+                device_sample_rate_hz: None,
+            }
+        );
+    }
+
+    #[test]
+    fn first_callback_metric_records_only_the_first_callback() {
+        let output = AtomicU64::new(STREAM_NOT_READY);
+        publish_first_callback_ms(&output, 0);
+        publish_first_callback_ms(&output, 0);
+        publish_first_callback_ms(&output, 12);
+
+        assert_eq!(output.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn first_worker_error_is_retained_and_taken_once() {
+        let error_slot = Arc::new(Mutex::new(None));
+        record_first_worker_error(&error_slot, DictationError::MicrophonePermissionDenied);
+        record_first_worker_error(
+            &error_slot,
+            DictationError::AudioCaptureError("later error".into()),
+        );
+
+        assert!(matches!(
+            error_slot.lock().unwrap().take(),
+            Some(DictationError::MicrophonePermissionDenied)
+        ));
+        assert!(error_slot.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn stop_capture_returns_worker_error_and_consumes_it() {
+        let mut svc = AudioCaptureService::new();
+        *svc.worker_error.lock().unwrap() =
+            Some(DictationError::AudioCaptureError("stream stopped".into()));
+
+        let err = svc
+            .stop_capture()
+            .expect_err("worker error should not become silence");
+        assert_eq!(err.to_string(), "Audio capture error: stream stopped");
+        assert!(svc
+            .stop_capture()
+            .expect("error should be consumed")
+            .is_empty());
+    }
+
+    #[test]
     fn stop_capture_propagates_worker_device_failure() {
         let mut svc = AudioCaptureService::new();
-        svc.capture_thread = Some(thread::spawn(|| {
-            Err(DictationError::AudioCaptureError("device disconnected".into()))
+        let worker_error = Arc::clone(&svc.worker_error);
+        svc.capture_thread = Some(thread::spawn(move || {
+            record_first_worker_error(
+                &worker_error,
+                DictationError::AudioCaptureError("device disconnected".into()),
+            );
         }));
-        assert!(matches!(svc.stop_capture(), Err(DictationError::AudioCaptureError(message)) if message == "device disconnected"));
+        assert!(
+            matches!(svc.stop_capture(), Err(DictationError::AudioCaptureError(message)) if message == "device disconnected")
+        );
     }
 
     #[test]
     fn stop_capture_propagates_worker_panic() {
         let mut svc = AudioCaptureService::new();
         svc.capture_thread = Some(thread::spawn(|| panic!("test capture worker failure")));
-        assert!(matches!(svc.stop_capture(), Err(DictationError::AudioCaptureError(_))));
+        assert!(matches!(
+            svc.stop_capture(),
+            Err(DictationError::AudioCaptureError(_))
+        ));
+    }
+
+    #[test]
+    fn stop_capture_unparks_parked_worker_and_updates_timings() {
+        use std::sync::mpsc;
+
+        let mut svc = AudioCaptureService::new();
+        let previous_timings = (Duration::from_secs(7), Duration::from_secs(11));
+        svc.stop_timings = previous_timings;
+
+        let stop_signal = Arc::clone(&svc.stop_signal);
+        let (parked_sender, parked_receiver) = mpsc::channel();
+        let parked_thread = Arc::new(Mutex::new(None));
+        let parked_thread_for_worker = Arc::clone(&parked_thread);
+        svc.capture_thread = Some(thread::spawn(move || {
+            *parked_thread_for_worker.lock().unwrap() = Some(thread::current());
+            parked_sender.send(()).unwrap();
+            loop {
+                thread::park();
+                if *stop_signal.lock().unwrap() {
+                    break;
+                }
+            }
+        }));
+
+        parked_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("fake capture worker should be ready to park");
+
+        let (result_sender, result_receiver) = mpsc::channel();
+        let stopper = thread::spawn(move || {
+            let result = svc.stop_capture();
+            let timings = svc.stop_timings();
+            result_sender.send((result, timings)).unwrap();
+        });
+
+        let (result, timings) = match result_receiver.recv_timeout(Duration::from_secs(5)) {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(worker) = parked_thread.lock().unwrap().take() {
+                    worker.unpark();
+                }
+                let _ = stopper.join();
+                panic!("stop_capture did not release parked worker: {error}");
+            }
+        };
+        stopper.join().expect("stopper should finish");
+
+        assert!(result.is_ok());
+        assert_ne!(timings, previous_timings);
+        assert!(timings.0 < previous_timings.0);
+        assert!(timings.1 < previous_timings.1);
+    }
+
+    #[test]
+    fn clearing_worker_error_removes_stale_capture_failure() {
+        let svc = AudioCaptureService::new();
+        *svc.worker_error.lock().unwrap() = Some(DictationError::MicrophonePermissionDenied);
+
+        clear_worker_error(&svc.worker_error);
+
+        assert!(svc.worker_error.lock().unwrap().is_none());
     }
 }
