@@ -85,6 +85,10 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
 });
 
 test("Windows candidate makes real transcription a blocking gate", () => {
+  const clipboardGate = workflow.indexOf("name: Gate native Windows clipboard transactions");
+  assert.ok(clipboardGate >= 0);
+  assert.match(workflow.slice(clipboardGate), /native_runner_clipboard_transaction_smoke -- --ignored --test-threads=1/);
+  assert.match(workflow.slice(clipboardGate), /if \(\$LASTEXITCODE -ne 0\) \{ throw "Native clipboard transaction gate failed" \}/);
   const gateStart = workflow.indexOf("name: Gate real Windows transcription");
   const buildStart = workflow.indexOf("name: Build unsigned internal installers");
   assert.ok(gateStart >= 0 && buildStart > gateStart);

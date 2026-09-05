@@ -40,7 +40,7 @@ const ABORT_GRACE_SECS: u64 = 5;
 /// Maximum time to wait for the native paste callback to report its result.
 /// macOS paste stays on its mandatory main thread; other platforms use a
 /// blocking worker. A lost callback must not leave dictation stuck processing.
-const PASTE_COMPLETION_TIMEOUT_MS: u64 = 2_000;
+const PASTE_COMPLETION_TIMEOUT_MS: u64 = paste_completion::COMPLETION_TIMEOUT_MS;
 
 use tauri::{
     menu::{Menu, MenuItem, Submenu},
@@ -1441,7 +1441,6 @@ fn stop_recording_and_transcribe(
                     update_tray_status(app, "idle");
                 });
                 let _ = app_handle.emit(events::event::ERROR, msg);
-                dispatch_to_main(&app_handle, |app| open_settings_window(app, Some("dictate")));
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
                 return;
             }
@@ -1700,10 +1699,13 @@ fn stop_recording_and_transcribe(
                     let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
                     let _ = app_handle.emit(events::event::ERROR, message);
                     let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                    dispatch_to_main(&app_handle, |app| {
+                    let open_copy_fallback = paste_completion::should_open_copy_fallback(paste_outcome);
+                    dispatch_to_main(&app_handle, move |app| {
                         overlay::hide(app);
                         update_tray_status(app, "idle");
-                        open_settings_window(app, Some("dictate"));
+                        if open_copy_fallback {
+                            open_settings_window(app, Some("dictate"));
+                        }
                     });
                     return;
                 }
@@ -1742,7 +1744,6 @@ fn stop_recording_and_transcribe(
                 c.on_transcription_error(&e.to_string());
                 drop(c);
                 let _ = app_handle.emit(events::event::ERROR, e.to_string());
-                dispatch_to_main(&app_handle, |app| open_settings_window(app, Some("dictate")));
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
                 dispatch_to_main(&app_handle, |app| {
                     overlay::hide(app);

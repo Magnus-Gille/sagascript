@@ -129,6 +129,12 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
           cargo build -p sagascript-cli --no-default-features
 
+      - name: Gate native Windows clipboard transactions
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml -p sagascript --target ${{ matrix.rust_target }} native_runner_clipboard_transaction_smoke -- --ignored --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw "Native clipboard transaction gate failed" }
+
       - name: Gate real Windows transcription
         shell: pwsh
         run: |

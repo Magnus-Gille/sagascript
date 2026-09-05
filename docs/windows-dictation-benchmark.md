@@ -15,7 +15,8 @@ Use `sagascript download-model base.en`, `kb-whisper-base`, or
 
 `--iterations` controls the warm sample count and accepts 2 through 30
 (default 5). `--max-warm-ms` turns the run into a gate: every warm sample's
-inference total must be at or below that limit. `--expect-word WORD` checks
+transaction wall time (lock acquisition, model selection and inference) must be
+at or below that limit. `--expect-word WORD` checks
 that every cold and warm transcript contains the expected token while the JSON
 output still contains no transcript text or input path.
 

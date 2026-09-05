@@ -2,6 +2,15 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
+pub const COMPLETION_TIMEOUT_MS: u64 = 2_000;
+#[cfg(any(target_os = "windows", test))]
+pub const WINDOWS_MODIFIER_WAIT_MS: u64 = 1_000;
+
+/// Never move focus while a timed-out native paste may still be running.
+pub fn should_open_copy_fallback(outcome: &str) -> bool {
+    matches!(outcome, "failed" | "dispatch_failed" | "completion_dropped")
+}
+
 const COMPLETION_DROPPED_ERROR: &str =
     "Automatic paste did not report a result. Copy the recognized text from Dictate.";
 const TIMED_OUT_ERROR: &str = "Automatic paste did not finish in time and may still complete. \
@@ -45,6 +54,30 @@ pub async fn wait(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_completed_or_undispatched_failures_open_copy_fallback() {
+        for (outcome, expected) in [
+            ("failed", true),
+            ("dispatch_failed", true),
+            ("completion_dropped", true),
+            ("timed_out", false),
+            ("succeeded", false),
+            ("disabled", false),
+            ("", false),
+            ("unknown", false),
+        ] {
+            assert_eq!(should_open_copy_fallback(outcome), expected, "{outcome}");
+        }
+    }
+
+    #[test]
+    fn modifier_wait_leaves_completion_slack() {
+        let slack = COMPLETION_TIMEOUT_MS
+            .checked_sub(WINDOWS_MODIFIER_WAIT_MS)
+            .unwrap();
+        assert!(slack >= 500);
+    }
 
     #[tokio::test]
     async fn reports_success_when_paste_returns_ok() {

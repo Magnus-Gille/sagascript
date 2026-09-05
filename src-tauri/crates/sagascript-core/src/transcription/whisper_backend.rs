@@ -987,7 +987,16 @@ impl WhisperBackend {
         loop {
             match self.load_lock.try_lock() {
                 Ok(guard) => return Ok(guard),
-                Err(TryLockError::Poisoned(_)) => return Err(DictationError::ModelBusy),
+                Err(TryLockError::Poisoned(_)) => {
+                    // This mutex protects the multi-field runtime transaction,
+                    // not merely its unit payload. A panic can leave context,
+                    // runtime identity or warm state partially updated/poisoned.
+                    // Do not recover the guard and reuse potentially invalid
+                    // native state, or misreport a permanent fault as contention.
+                    return Err(DictationError::TranscriptionFailed(
+                        "The transcription engine was interrupted and cannot safely resume; restart Sagascript before trying again.".into(),
+                    ));
+                }
                 Err(TryLockError::WouldBlock) if Instant::now() >= deadline => {
                     return Err(DictationError::ModelBusy);
                 }
@@ -2711,7 +2720,8 @@ mod segment_confidence_tests {
             &mut timings,
         );
 
-        assert!(matches!(result, Err(DictationError::ModelBusy)));
+        assert!(matches!(result, Err(DictationError::TranscriptionFailed(ref message))
+            if message.contains("restart Sagascript")));
         assert!(timings.model_acquisition_started);
         assert!(!timings.inference_started);
         assert!(timings.model_ready_at.is_none());

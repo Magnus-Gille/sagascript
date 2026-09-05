@@ -1,9 +1,12 @@
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use arboard::Clipboard;
 use std::borrow::Cow;
 #[cfg(target_os = "macos")]
 #[path = "macos_clipboard.rs"]
 mod macos_clipboard;
+#[cfg(any(target_os = "windows", test))]
+#[path = "windows_clipboard.rs"]
+mod windows_clipboard;
 // enigo is the input simulator on macOS/Windows. On Linux its X11 backend leaves
 // the Control modifier unmapped (paste silently fails), so we shell out to
 // xdotool instead and don't depend on enigo there.
@@ -40,7 +43,7 @@ impl PasteService {
         }
         let text = paste_payload(text);
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         let mut clipboard = Clipboard::new()
             .map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
 
@@ -49,8 +52,8 @@ impl PasteService {
         #[cfg(target_os = "macos")]
         let saved_pasteboard = macos_clipboard::snapshot();
 
-        // Other platforms currently use arboard's portable text API.
-        #[cfg(not(target_os = "macos"))]
+        // Linux currently uses arboard's portable text API.
+        #[cfg(target_os = "linux")]
         let saved_text = clipboard.get_text().ok();
 
         // Set new text. On macOS the native write returns the pasteboard
@@ -75,12 +78,13 @@ impl PasteService {
             }
         };
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         clipboard
             .set_text(text.as_ref())
             .map_err(|e| DictationError::PasteError(format!("Failed to set clipboard: {e}")))?;
         #[cfg(target_os = "windows")]
-        let clipboard_generation = unsafe { GetClipboardSequenceNumber() };
+        let saved_windows = windows_clipboard::set_temporary_text(text.as_ref())
+            .map_err(|error| DictationError::PasteError(format!("Failed to set clipboard: {error}")))?;
 
         info!("Text copied to clipboard ({} chars)", text.len());
 
@@ -113,7 +117,7 @@ impl PasteService {
         simulate_paste()?;
 
         // Schedule clipboard restore
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         let saved = saved_text;
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -125,12 +129,15 @@ impl PasteService {
                 let _ = macos_clipboard::restore_if_unchanged(snapshot, owned_change_count);
             }
 
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
+            match windows_clipboard::restore_if_unchanged(saved_windows) {
+                Ok(false) => tracing::debug!("Clipboard restore skipped: generation changed or no text snapshot"),
+                Err(error) => tracing::warn!("Clipboard restore failed: {error}"),
+                Ok(true) => {}
+            }
+
+            #[cfg(target_os = "linux")]
             if let Some(text) = saved {
-                #[cfg(target_os = "windows")]
-                if unsafe { GetClipboardSequenceNumber() } != clipboard_generation {
-                    return;
-                }
                 if let Ok(mut cb) = Clipboard::new() {
                     let _ = cb.set_text(text);
                 }
@@ -212,13 +219,13 @@ fn simulate_paste() -> Result<(), DictationError> {
 extern "system" {
     fn GetAsyncKeyState(key: i32) -> i16;
     fn GetForegroundWindow() -> isize;
-    fn GetClipboardSequenceNumber() -> u32;
 }
 
 #[cfg(target_os = "windows")]
 fn wait_for_windows_modifiers() -> Result<(), DictationError> {
     let target = unsafe { GetForegroundWindow() };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_millis(crate::paste_completion::WINDOWS_MODIFIER_WAIT_MS);
     while [0x10, 0x11, 0x12, 0x5B, 0x5C].iter().any(|key| unsafe { GetAsyncKeyState(*key) < 0 }) {
         if std::time::Instant::now() >= deadline {
             return Err(DictationError::PasteError("Release the shortcut keys and paste with Ctrl+V. The recognized text is on the clipboard.".into()));

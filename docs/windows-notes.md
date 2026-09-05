@@ -29,6 +29,16 @@ acceptance checklist live in [Windows release track](windows-release.md).
 - **No signed stable binary or auto-updater.** The beta is a manually published
   preview; build from source if you need to inspect or reproduce it.
 - **Architecture-specific builds.** Use the native ARM64 candidate on Snapdragon / Copilot+ PCs and the x64 candidate on Intel or AMD Windows PCs. CPU transcription is tested natively on both architectures in the candidate workflow.
+- **Clipboard restoration is text-only.** Sagascript restores previous plain text
+  only while its temporary clipboard generation is still current. New user
+  copies or clipboard managers that add formats suppress restoration. Images
+  and custom formats are not preserved on Windows. The generation check and
+  restore share one native clipboard-open transaction, so a new copy cannot
+  interleave between them.
+- **Late paste does not move focus.** Modifier release waits at most one second,
+  within the two-second paste-completion budget. A timeout can still finish
+  later; check the editor before retrying. Dictate retains recognized text,
+  but does not automatically open and steal focus while paste is uncertain.
 
 ## Troubleshooting
 
