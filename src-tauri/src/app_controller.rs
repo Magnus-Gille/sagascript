@@ -292,10 +292,29 @@ impl AppController {
             .recording_start
             .map(|s| s.elapsed().as_millis())
             .unwrap_or(0);
+        let metrics = self.audio.metrics();
+        let recording_duration_ms = u64::try_from(duration).unwrap_or(u64::MAX);
+        let audio_duration_ms = u64::try_from(
+            (samples.len() as u128).saturating_mul(1_000) / 16_000,
+        )
+        .unwrap_or(u64::MAX);
 
         info!(
             "Recording stopped: {} samples ({duration}ms)",
             samples.len()
+        );
+        self.logging.log(
+            "info",
+            "Performance",
+            log_events::audio::CAPTURE_STOPPED,
+            serde_json::json!({
+                "recordingDurationMs": recording_duration_ms,
+                "audioDurationMs": audio_duration_ms,
+                "audioSamples": samples.len(),
+                "captureRequestToStreamPlayReturnMs": metrics.stream_play_return_ms,
+                "captureRequestToFirstAudioCallbackMs": metrics.first_callback_ms,
+                "deviceSampleRateHz": metrics.device_sample_rate_hz,
+            }),
         );
 
         self.state = AppState::Transcribing;
@@ -331,6 +350,31 @@ impl AppController {
         self.active_hotkey_profile = None;
         self.training_recording = false;
         self.logging.end_dictation_session();
+    }
+
+    /// Complete a quiet push-to-talk cancellation without replacing the last
+    /// useful transcript, surfacing an error, or leaving retry audio behind.
+    pub fn on_no_speech_detected(&mut self) {
+        self.audio.clear_last_captured();
+        self.state = AppState::Idle;
+        self.active_hotkey_profile = None;
+        self.training_recording = false;
+        self.logging.log(
+            "info",
+            "Transcription",
+            log_events::transcription::NO_SPEECH,
+            serde_json::json!({}),
+        );
+        self.logging.end_dictation_session();
+    }
+
+    pub fn log_dictation_performance(&self, data: serde_json::Value) {
+        self.logging.log(
+            "info",
+            "Performance",
+            log_events::transcription::PHASE_TIMINGS,
+            data,
+        );
     }
 
     /// Called after transcription fails
@@ -560,6 +604,20 @@ mod tests {
         assert_eq!(result, Ok("Hello again".to_string()));
         assert_eq!(ctrl.last_transcription(), Some("Hello again"));
         assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn no_speech_returns_idle_without_replacing_last_transcription() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+        ctrl.last_error = Some("stale error".to_string());
+
+        ctrl.on_no_speech_detected();
+
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+        assert_eq!(ctrl.last_error(), Some("stale error"));
     }
 
     // -- Recording elapsed --

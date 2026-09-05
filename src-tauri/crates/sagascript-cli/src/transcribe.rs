@@ -8,6 +8,8 @@ use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use sagascript_core::audio::decoder::{decode_audio_file, SUPPORTED_EXTENSIONS};
+#[cfg(feature = "diarization")]
+use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{HotkeyProfile, Language, Settings, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
@@ -18,6 +20,9 @@ use sagascript_core::transcription::diagnostics::{
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::diagnostics::{analyze_coverage_profile, CoverageProfile};
 use sagascript_core::transcription::model;
+use sagascript_core::transcription::whisper_backend::assemble_transcript;
+#[cfg(feature = "diarization")]
+use sagascript_core::transcription::whisper_backend::contains_no_speech_marker;
 use sagascript_core::transcription::{
     normalize_nonspeech_markers, recommended_parallel_chunks, ContextProfile, Glossary,
     TranscribeOptions, TranscriptSegment, WhisperBackend,
@@ -141,6 +146,16 @@ pub struct TranscribeArgs {
 struct FileTranscription {
     json: serde_json::Value,
     plain: String,
+}
+
+#[cfg(feature = "diarization")]
+fn assemble_diarized_plain_text(segments: &[DiarizedSegment]) -> String {
+    segments
+        .iter()
+        .filter(|segment| !contains_no_speech_marker(&segment.text))
+        .map(|segment| format!("[{}] {}", segment.speaker, segment.text.trim()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(feature = "diarization")]
@@ -748,11 +763,7 @@ fn transcribe_file(
                 .filter(|speaker| seen.insert(speaker.clone()))
                 .collect()
         };
-        let plain = consolidated
-            .iter()
-            .map(|segment| format!("[{}] {}", segment.speaker, segment.text.trim()))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let plain = assemble_diarized_plain_text(&consolidated);
         performance.merge_diagnostics_seconds = merge_diagnostics_started.elapsed().as_secs_f64();
         let json_assembly_started = Instant::now();
         let mut json = serde_json::json!({
@@ -860,14 +871,7 @@ fn transcribe_file(
     // Keep timestamped segment text source-faithful, while the rendered
     // top-level text excludes quarantined loops and uses the same display
     // normalization as live dictation.
-    let raw_text = segments
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| !repetition.quarantines_segment(*index))
-        .map(|(_, segment)| segment.text.as_str())
-        .collect::<String>()
-        .trim()
-        .to_string();
+    let raw_text = assemble_transcript(&trusted_segments).trim().to_string();
     let text = normalize_nonspeech_markers(&raw_text, language);
     let coverage = analyze_coverage(&audio, &trusted_segments);
     let mut warnings = combined_warnings(&coverage, language, detected_language.as_ref());
@@ -1780,6 +1784,52 @@ mod tests {
             avg_logprob,
             no_speech_prob,
         }
+    }
+
+    #[test]
+    fn cli_plain_assembly_matches_core_no_speech_filter() {
+        let segments = vec![
+            segment(" First.", Some(-0.1), 0.01),
+            segment("<|nospeech|>-Hej Tack! Tack! Tack!", Some(-0.1), 0.9),
+            segment(" Second.", Some(-0.1), 0.01),
+        ];
+
+        assert_eq!(assemble_transcript(&segments), " First. Second.");
+        assert_eq!(
+            segments[1].text, "<|nospeech|>-Hej Tack! Tack! Tack!",
+            "display assembly must not mutate diagnostic segment text"
+        );
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn diarized_plain_assembly_discards_no_speech_segments() {
+        let segments = vec![
+            DiarizedSegment {
+                start: 0.0,
+                end: 1.0,
+                speaker: "SPEAKER_0".to_string(),
+                text: "First.".to_string(),
+            },
+            DiarizedSegment {
+                start: 1.0,
+                end: 1.3,
+                speaker: "SPEAKER_1".to_string(),
+                text: "<|nospeech|>-Hej Tack! Tack! Tack!".to_string(),
+            },
+            DiarizedSegment {
+                start: 1.3,
+                end: 2.0,
+                speaker: "SPEAKER_1".to_string(),
+                text: "Second.".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            assemble_diarized_plain_text(&segments),
+            "[SPEAKER_0] First.\n[SPEAKER_1] Second."
+        );
+        assert!(contains_no_speech_marker(&segments[1].text));
     }
 
     #[test]
