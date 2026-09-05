@@ -61,6 +61,14 @@ use sagascript_core::transcription::{
 /// Minimum recording duration before we allow stop (300ms)
 const MIN_RECORDING_MS: u64 = 300;
 const SAFE_FALLBACK_HOTKEY: &str = "Control+Shift+Space";
+const BUILD_IDENTITY: &str = concat!(
+    "Version ",
+    env!("CARGO_PKG_VERSION"),
+    " · Build ",
+    env!("GIT_HASH"),
+    " · ",
+    env!("BUILD_DATE"),
+);
 #[cfg(target_os = "macos")]
 const TRAY_AUTOSAVE_NAME: &str = "ai.gille.sagascript.main";
 #[cfg(target_os = "macos")]
@@ -664,6 +672,8 @@ fn main() {
                 true,
                 None::<&str>,
             )?;
+            let build_info_item =
+                MenuItem::with_id(app, "build_info", BUILD_IDENTITY, false, None::<&str>)?;
 
             // Store status item so we can update it after transcription
             {
@@ -693,6 +703,7 @@ fn main() {
                     &profiles_menu,
                     &update_status,
                     &check_for_updates_item,
+                    &build_info_item,
                     &settings_item,
                     &transcribe_file_item,
                     &quit,
@@ -1513,7 +1524,7 @@ fn stop_recording_and_transcribe(
             let whisper_ref = whisper.inner().clone();
             let whisper_started_at = Instant::now();
             let mut fut = tokio::task::spawn_blocking(move || {
-                whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
+                whisper_ref.transcribe_live_sync_with_options(&audio, language, &opts, |_| {})
             });
 
             let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
@@ -2324,6 +2335,13 @@ mod tests {
             stable_release_url(&semver::Version::new(1, 2, 0)),
             "https://github.com/Magnus-Gille/sagascript/releases/tag/v1.2.0"
         );
+    }
+
+    #[test]
+    fn build_identity_identifies_the_exact_app_build() {
+        assert!(BUILD_IDENTITY.contains(env!("CARGO_PKG_VERSION")));
+        assert!(BUILD_IDENTITY.contains(env!("GIT_HASH")));
+        assert!(BUILD_IDENTITY.contains(env!("BUILD_DATE")));
     }
 
     #[cfg(target_os = "macos")]

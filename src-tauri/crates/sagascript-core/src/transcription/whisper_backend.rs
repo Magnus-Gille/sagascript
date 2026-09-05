@@ -1117,6 +1117,27 @@ impl WhisperBackend {
         self.transcribe_sync_with_options(audio, language, &opts, on_progress)
     }
 
+    /// Live microphone transcription with a conservative near-silence guard.
+    /// File/diagnostic APIs and intentional silent model warmup remain ungated.
+    pub fn transcribe_live_sync_with_options(
+        &self,
+        audio: &[f32],
+        language: Language,
+        opts: &TranscribeOptions,
+        on_progress: impl FnMut(i32) + Send + 'static,
+    ) -> Result<String, DictationError> {
+        if audio.is_empty() {
+            return Err(DictationError::NoAudioCaptured);
+        }
+        let has_signal = crate::audio::speech::has_audio_signal(audio)
+            .map_err(|reason| DictationError::TranscriptionFailed(reason.to_string()))?;
+        if !has_signal {
+            info!("Skipping near-silent dictation: {} samples", audio.len());
+            return Ok(String::new());
+        }
+        self.transcribe_sync_with_options(audio, language, opts, on_progress)
+    }
+
     /// Core transcription entry point. Honors the opt-in [`TranscribeOptions`]
     /// (prompt, beam search, temperature fallback, VAD). Blocking — call from
     /// spawn_blocking.
@@ -2433,6 +2454,39 @@ mod progress_callback_tests {
 #[cfg(test)]
 mod segment_confidence_tests {
     use super::*;
+
+    #[test]
+    fn silent_audio_skips_decoder_without_a_loaded_model() {
+        let backend = WhisperBackend::new();
+        for language in [Language::Swedish, Language::English] {
+            for samples in [4052, 6400, 8000] {
+                let audio = vec![0.0; samples];
+                assert!(backend
+                    .transcribe_live_sync_with_options(
+                        &audio,
+                        language,
+                        &TranscribeOptions::default(),
+                        |_| {},
+                    )
+                    .unwrap()
+                    .is_empty());
+                assert!(matches!(
+                    backend.transcribe_sync_with_options_segments(
+                        &audio, language, &TranscribeOptions::default(), |_| {},
+                    ),
+                    Err(DictationError::ModelNotLoaded)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn warmup_still_requires_a_model_and_does_not_skip_silent_inference() {
+        assert!(matches!(
+            WhisperBackend::new().warmup(Language::English),
+            Err(DictationError::ModelNotLoaded)
+        ));
+    }
 
     #[test]
     fn assembled_transcript_discards_no_speech_marked_hallucination() {
