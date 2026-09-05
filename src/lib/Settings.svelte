@@ -161,7 +161,15 @@
   let glossaryDraftGeneration = 0;
   let lastStoredGlossarySources: Record<string, string> = {};
   let glossaryEditBaseline: { scopeId: string; source: string; generation: number } | null = null;
-  let orphanGlossaryDraft: { scopeId: string; draft: string } | null = $state(null);
+  type RecoveredGlossaryDraft = { scopeId: string; draft: string; conflicted: boolean };
+  type GlossarySaveRequest = {
+    scopeId: string;
+    generation: number;
+    draftGeneration: number;
+    value: string;
+  };
+  let recoveredGlossaryDrafts: RecoveredGlossaryDraft[] = $state([]);
+  let glossaryConflictScopeId: string | null = $state(null);
 
   const dictionaryConflictPrefix = "Dictionary changed elsewhere:";
 
@@ -181,6 +189,38 @@
 
   function isValidGlossaryScope(scopeId: string, source: Settings | null = settings): boolean {
     return scopeId === "" || profileForId(scopeId, source) !== null;
+  }
+
+  function glossaryScopeLabel(scopeId: string, source: Settings | null = settings): string {
+    if (scopeId === "") return "Global hints";
+    return profileForId(scopeId, source)?.name ?? scopeId;
+  }
+
+  function rememberGlossaryRecovery(scopeId: string, draft: string, conflicted = false): void {
+    const existing = recoveredGlossaryDrafts.find(
+      (recovery) => recovery.scopeId === scopeId && recovery.draft === draft,
+    );
+    if (existing) {
+      if (conflicted && !existing.conflicted) {
+        recoveredGlossaryDrafts = recoveredGlossaryDrafts.map((recovery) =>
+          recovery === existing ? { ...recovery, conflicted: true } : recovery,
+        );
+      }
+      return;
+    }
+    recoveredGlossaryDrafts = [...recoveredGlossaryDrafts, { scopeId, draft, conflicted }];
+  }
+
+  function removeGlossaryRecovery(scopeId: string, draft: string): void {
+    recoveredGlossaryDrafts = recoveredGlossaryDrafts.filter(
+      (recovery) => recovery.scopeId !== scopeId || recovery.draft !== draft,
+    );
+  }
+
+  function isCurrentGlossaryRequest(request: GlossarySaveRequest): boolean {
+    return request.generation === glossaryScopeGeneration
+      && request.scopeId === glossaryScopeId
+      && request.draftGeneration === glossaryDraftGeneration;
   }
 
   function selectedTranscribeProfile(): HotkeyProfile | null {
@@ -214,13 +254,18 @@
           || (glossaryDraftInitialized && glossaryDraft !== (previousStored ?? currentStored))
         );
       if (removedProfileHasDraft) {
-        orphanGlossaryDraft = { scopeId: currentScope, draft: glossaryDraft };
+        rememberGlossaryRecovery(
+          currentScope,
+          glossaryDraft,
+          glossaryConflictScopeId === currentScope && settingsError.startsWith(dictionaryConflictPrefix),
+        );
       }
       glossaryScopeGeneration += 1;
       glossaryScopeId = "";
       glossaryDraft = currentSettings.initial_prompt;
       glossaryDraftGeneration += 1;
       glossaryEditBaseline = null;
+      glossaryConflictScopeId = null;
     }
     if (currentTranscribeProfile && !profileForId(currentTranscribeProfile, currentSettings)) {
       transcribeProfileId = null;
@@ -371,8 +416,12 @@
    * bindings re-render from state, so a native control that already shows
    * the rejected value snaps back). Never re-throws.
    */
-  async function applySetting(mutate: () => Promise<void>, errorSink?: { value: string }): Promise<boolean> {
-    settingsError = "";
+  async function applySetting(
+    mutate: () => Promise<void>,
+    errorSink?: { value: string },
+    reportError = true,
+  ): Promise<boolean> {
+    if (reportError) settingsError = "";
     try {
       await mutate();
       settings = await getSettings();
@@ -380,7 +429,7 @@
       return true;
     } catch (e: any) {
       const message = typeof e === "string" ? e : e?.message || "Failed to save setting.";
-      settingsError = message;
+      if (reportError) settingsError = message;
       if (errorSink) errorSink.value = message;
       if (settings) settings = { ...settings };
       return false;
@@ -481,21 +530,31 @@
     await applySetting(() => setShowOverlay(next));
   }
 
-  async function refreshDictionaryAfterConflict(primaryError: string) {
+  async function refreshDictionaryAfterConflict(primaryError: string, request: GlossarySaveRequest) {
     try {
       settings = await getSettings();
     } catch (error) {
       console.warn("Could not refresh the dictionary after a concurrent change", error);
     }
-    // The conflict belongs to this save request. Preserve it even if the
-    // fresh read or a concurrent settings operation changed shared UI state.
-    settingsError = primaryError;
+    // A stale request still refreshes the source of truth, but cannot replace
+    // a newer scope's error or draft. The recovery item carries its context.
+    if (isCurrentGlossaryRequest(request)) {
+      settingsError = primaryError;
+      glossaryConflictScopeId = request.scopeId;
+    } else {
+      rememberGlossaryRecovery(request.scopeId, request.value, true);
+    }
   }
 
   async function onInitialPromptBlur(e: Event) {
-    const scopeId = glossaryScopeId;
-    const generation = glossaryScopeGeneration;
-    const draftGeneration = glossaryDraftGeneration;
+    const request: GlossarySaveRequest = {
+      scopeId: glossaryScopeId,
+      generation: glossaryScopeGeneration,
+      draftGeneration: glossaryDraftGeneration,
+      value: (e.target as HTMLTextAreaElement).value,
+    };
+    const scopeId = request.scopeId;
+    const draftGeneration = request.draftGeneration;
     const value = (e.target as HTMLTextAreaElement).value;
     const editBaseline = glossaryEditBaseline;
     const expectedSource = editBaseline?.scopeId === scopeId
@@ -504,15 +563,26 @@
       : lastStoredGlossarySources[scopeId] ?? glossarySourceForScope(scopeId);
     glossaryDraft = value;
     if (!settings || !isValidGlossaryScope(scopeId)) return;
+    if (!editBaseline && value === (lastStoredGlossarySources[scopeId] ?? glossarySourceForScope(scopeId))) return;
 
     const saveError = { value: "" };
     const saved = await applySetting(() => scopeId === ""
       ? setInitialPrompt(value, expectedSource)
-      : setProfileGlossary(scopeId, value, expectedSource), saveError);
+      : setProfileGlossary(scopeId, value, expectedSource), saveError, false);
     const conflict = saveError.value.startsWith(dictionaryConflictPrefix);
+    let requestIsCurrent = isCurrentGlossaryRequest(request);
     if (conflict) {
-      await refreshDictionaryAfterConflict(saveError.value);
+      await refreshDictionaryAfterConflict(saveError.value, request);
+      requestIsCurrent = isCurrentGlossaryRequest(request);
+    } else if (!saved && !requestIsCurrent) {
+      rememberGlossaryRecovery(scopeId, value);
     }
+
+    if (requestIsCurrent) {
+      settingsError = saved ? "" : saveError.value;
+      if (saved) glossaryConflictScopeId = null;
+    }
+    if (saved) removeGlossaryRecovery(scopeId, value);
 
     // If our own save won the CAS race while the user kept typing in the
     // same edit lineage, advance only that lineage's baseline to our value.
@@ -533,16 +603,9 @@
 
     // A selector change while the invoke was pending owns the textarea now;
     // never overwrite its newer scope with this request's result.
-    if (
-      generation !== glossaryScopeGeneration
-      || scopeId !== glossaryScopeId
-      || draftGeneration !== glossaryDraftGeneration
-    ) return;
+    if (!requestIsCurrent) return;
     if (saved) {
       if (glossaryEditBaseline === editBaseline) glossaryEditBaseline = null;
-    } else if (!conflict && settings) {
-      glossaryDraft = glossarySourceForScope(scopeId, settings);
-      glossaryEditBaseline = null;
     }
   }
 
@@ -561,10 +624,22 @@
   function onGlossaryScopeChange(e: Event) {
     const nextScope = (e.target as HTMLSelectElement).value;
     if (!settings || !isValidGlossaryScope(nextScope)) return;
+    const previousScope = glossaryScopeId;
+    const previousConflict = glossaryConflictScopeId === previousScope
+      && settingsError.startsWith(dictionaryConflictPrefix);
+    if (
+      glossaryEditBaseline?.scopeId === previousScope
+      || previousConflict
+    ) {
+      rememberGlossaryRecovery(previousScope, glossaryDraft, previousConflict);
+    }
     glossaryScopeGeneration += 1;
     glossaryDraftGeneration += 1;
     glossaryEditBaseline = null;
-    if (settingsError.startsWith(dictionaryConflictPrefix)) settingsError = "";
+    if (previousConflict) {
+      settingsError = "";
+      glossaryConflictScopeId = null;
+    }
     glossaryScopeId = nextScope;
     glossaryDraft = glossarySourceForScope(nextScope, settings);
   }
@@ -1171,22 +1246,30 @@
               This explicit-language profile supplies deterministic aliases for its language. Leaving this field saves this profile only; switching scope never moves entries to another dictionary.
             </div>
           {/if}
-          {#if settingsError.startsWith(dictionaryConflictPrefix)}
+          {#if glossaryConflictScopeId === glossaryScopeId && settingsError.startsWith(dictionaryConflictPrefix)}
             <div class="hotkey-hint glossary-migration">
               This dictionary changed elsewhere. Your draft is preserved; copy it if needed, then switch scopes and reselect this scope to reload the saved value. If it still shows the old text, close and reopen Settings.
             </div>
           {/if}
-          {#if orphanGlossaryDraft}
+          {#if recoveredGlossaryDrafts.length > 0}
             <div class="hotkey-hint glossary-migration">
-              Unsaved draft for removed profile <code>{orphanGlossaryDraft.scopeId}</code> was preserved below. Copy it before re-creating or selecting a replacement profile; it is never saved automatically into Global hints.
+              Unsaved drafts are preserved below for manual recovery. They are never saved or copied automatically into another dictionary.
             </div>
-            <textarea
-              class="initial-prompt-input"
-              rows="3"
-              aria-label="Recovered dictionary draft"
-              value={orphanGlossaryDraft.draft}
-              readonly
-            ></textarea>
+            {#each recoveredGlossaryDrafts as recovery (recovery.scopeId + "\u0000" + recovery.draft)}
+              <div class="glossary-recovery">
+                <div class="hotkey-hint">
+                  <strong>Unsaved draft</strong> for <code>{glossaryScopeLabel(recovery.scopeId)}</code>
+                  {#if recovery.conflicted} — the saved dictionary changed elsewhere.{/if}
+                </div>
+                <textarea
+                  class="initial-prompt-input"
+                  rows="3"
+                  aria-label={`Unsaved draft for ${glossaryScopeLabel(recovery.scopeId)}`}
+                  value={recovery.draft}
+                  readonly
+                ></textarea>
+              </div>
+            {/each}
           {/if}
           <div class="hotkey-hint">
             One preferred spelling per line. Add exact mishearings after <code>=</code>, separated by <code>|</code>.

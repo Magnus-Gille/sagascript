@@ -1275,7 +1275,9 @@ fn ensure_expected_dictionary_source(
     current_source: &str,
     expected_source: Option<&str>,
 ) -> Result<(), String> {
-    if expected_source.is_some_and(|expected| expected != current_source) {
+    if expected_source.is_some_and(|expected| {
+        !sagascript_core::settings::store::glossary_sources_match(expected, current_source)
+    }) {
         return Err(format!(
             "{DICTIONARY_CHANGED_ELSEWHERE_PREFIX} the persisted source no longer matches the editor baseline"
         ));
@@ -1311,7 +1313,10 @@ fn reconcile_global_dictionary_after_conflict(
     expected_source: &str,
     persisted_source: &str,
 ) {
-    if settings.initial_prompt == expected_source {
+    if sagascript_core::settings::store::glossary_sources_match(
+        &settings.initial_prompt,
+        expected_source,
+    ) {
         settings.initial_prompt = persisted_source.to_string();
     }
 }
@@ -1327,7 +1332,7 @@ fn reconcile_profile_dictionary_after_conflict(
         .get(profile_id)
         .map(String::as_str)
         .unwrap_or_default();
-    if current_source != expected_source {
+    if !sagascript_core::settings::store::glossary_sources_match(current_source, expected_source) {
         return;
     }
 
@@ -1432,6 +1437,20 @@ pub async fn set_profile_glossary(
 #[cfg(test)]
 mod dictionary_compare_and_set_tests {
     use super::*;
+
+    #[test]
+    fn dictionary_cas_matches_the_stores_trailing_newline_normalization() {
+        assert!(ensure_expected_dictionary_source("OpenRouter", Some("OpenRouter\n\n")).is_ok());
+        assert!(
+            ensure_expected_dictionary_source("merge = merch", Some("merge = merch\r\n")).is_ok()
+        );
+        assert!(ensure_expected_dictionary_source("", Some("\r\n")).is_ok());
+        assert!(ensure_expected_dictionary_source("OpenRouter ", Some("OpenRouter")).is_err());
+        assert!(
+            ensure_expected_dictionary_source("OpenRouter\nmerge", Some("OpenRouter merge"))
+                .is_err()
+        );
+    }
 
     fn profile_settings() -> Settings {
         Settings {

@@ -871,6 +871,25 @@ mod tests {
     }
 
     #[test]
+    fn reset_all_rejects_implicit_swedish_default_dictionary_atomically() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: Vec::new(),
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".into(), "merge = merch".into());
+        let before = settings.clone();
+        let error = reset_all_settings(&mut settings).unwrap_err();
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, before.language);
+        assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
+        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
+        assert_eq!(settings.initial_prompt, before.initial_prompt);
+    }
+
+    #[test]
     fn reset_all_keeps_removed_profile_dictionary_inactive() {
         let mut settings = Settings {
             hotkey_profiles: vec![HotkeyProfile::legacy_default(
