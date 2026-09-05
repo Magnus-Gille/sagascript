@@ -132,7 +132,9 @@ jobs:
       - name: Gate native Windows clipboard transactions
         shell: pwsh
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml -p sagascript --target ${{ matrix.rust_target }} native_runner_clipboard_transaction_smoke -- --ignored --test-threads=1
+          # The host triple was verified above. Reuse the workspace test binary
+          # instead of recompiling a duplicate explicit-target debug tree.
+          cargo test --manifest-path src-tauri/Cargo.toml -p sagascript native_runner_clipboard_transaction_smoke -- --ignored --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw "Native clipboard transaction gate failed" }
 
       - name: Gate real Windows transcription
