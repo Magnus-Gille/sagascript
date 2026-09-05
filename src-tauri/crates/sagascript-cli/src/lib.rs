@@ -1,5 +1,6 @@
 pub mod config;
 pub mod glossary;
+pub mod latency;
 pub mod models;
 pub mod open;
 // Live recording is optional (`record` feature, on by default) so a pure
@@ -210,6 +211,13 @@ EXAMPLES:
   sagascript transcribe recordings/ --recursive --jsonl"
     )]
     Transcribe(transcribe::TranscribeArgs),
+
+    /// Summarize copied live-dictation latency JSONL without launching the app
+    #[command(
+        long_about = "Summarize explicitly copied dictation_phase_timings JSONL. Valid input emits JSON and exits zero. An explicit budget failure emits the JSON report and exits nonzero; invalid input or arguments exit nonzero without JSON. This command never reads the default log directory, starts the app, captures audio, loads a model, changes settings, or contacts a remote service.",
+        after_long_help = "EXAMPLES:\n  sagascript latency-report --input /tmp/sagascript.log\n  sagascript latency-report --input /tmp/sagascript.log --budget-length short --max-warm-p95-ms 800 --min-samples 20"
+    )]
+    LatencyReport(latency::LatencyReportArgs),
 
     /// Record from microphone and transcribe
     #[cfg(feature = "record")]
@@ -463,6 +471,7 @@ pub fn run(cli: Cli) {
     let result = match cli.command.unwrap() {
         Command::Transcribe(args) =>
             run_inference_command("transcribe", move || transcribe::run(args)),
+        Command::LatencyReport(args) => latency::run(args),
         #[cfg(feature = "record")]
         Command::Record(args) => run_inference_command("record", move || record::run(args)),
         Command::ListModels(args) => models::list(args),
