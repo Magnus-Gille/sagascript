@@ -670,6 +670,17 @@
 </script>
 
 <div class="settings-window">
+  <header class="window-header">
+    <h1 class="window-title">Sagascript</h1>
+    <div class="build-info" aria-label="Build information">
+      {#if buildInfo}
+        Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}
+      {:else}
+        Version information unavailable
+      {/if}
+    </div>
+  </header>
+
   <div class="tabs">
     <button class="tab" class:active={activeTab === "dictate"} onclick={() => (activeTab = "dictate")}>
       Dictate
@@ -681,17 +692,6 @@
       Settings
     </button>
   </div>
-
-  <header class="window-header">
-    <h1 class="window-title">Sagascript</h1>
-    <div class="build-info" aria-label="Build information">
-      {#if buildInfo}
-        Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}
-      {:else}
-        Version information unavailable
-      {/if}
-    </div>
-  </header>
 
   {#if settings}
     <div class="content">
