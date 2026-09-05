@@ -249,15 +249,32 @@ fn mean_logprob(plogs: &[f32]) -> Option<f32> {
     Some(plogs.iter().sum::<f32>() / plogs.len() as f32)
 }
 
+/// Return whether a raw Whisper segment contains its exact no-speech marker.
+///
+/// The marker is only interpreted while assembling user-facing text. Raw
+/// timestamped segments remain unchanged for diagnostics.
+pub fn contains_no_speech_marker(text: &str) -> bool {
+    text.contains("<|nospeech|>")
+}
+
 /// Assemble the plain transcript from Whisper's raw segments.
 ///
 /// Whisper normally includes a leading space on each new segment. When it does
 /// not, preserve the expected sentence boundary in the user-facing transcript
 /// without changing the raw, timestamped segment text.
-fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
+pub fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
     let mut transcript = String::new();
 
     for segment in segments {
+        // Whisper can prefix a silence hallucination with its internal
+        // no-speech token. Dropping only the marker would still expose the
+        // fabricated words that follow it, so discard the whole segment from
+        // the plain user-facing transcript. Raw timestamped segments remain
+        // unchanged for diagnostics.
+        if contains_no_speech_marker(&segment.text) {
+            continue;
+        }
+
         let previous_ends_with_whitespace = transcript
             .chars()
             .next_back()
@@ -2416,6 +2433,48 @@ mod progress_callback_tests {
 #[cfg(test)]
 mod segment_confidence_tests {
     use super::*;
+
+    #[test]
+    fn assembled_transcript_discards_no_speech_marked_hallucination() {
+        let segments = [TranscriptSegment {
+            start: 0.0,
+            end: 0.3,
+            text: "<|nospeech|>-Hej Tack! Tack! Tack!".to_string(),
+            avg_logprob: Some(-0.1),
+            no_speech_prob: 0.9,
+        }];
+
+        assert_eq!(assemble_transcript(&segments), "");
+    }
+
+    #[test]
+    fn assembled_transcript_discards_no_speech_segment_between_sentences() {
+        let segments = [
+            TranscriptSegment {
+                start: 0.0,
+                end: 1.0,
+                text: "First.".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.01,
+            },
+            TranscriptSegment {
+                start: 1.0,
+                end: 1.3,
+                text: "<|nospeech|>-Hej Tack! Tack! Tack!".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.9,
+            },
+            TranscriptSegment {
+                start: 1.3,
+                end: 2.0,
+                text: "Second.".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.01,
+            },
+        ];
+
+        assert_eq!(assemble_transcript(&segments), "First. Second.");
+    }
 
     #[test]
     fn assembled_transcript_separates_sentence_ending_segments() {

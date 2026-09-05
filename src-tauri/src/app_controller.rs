@@ -235,6 +235,23 @@ impl AppController {
         &mut self,
         profile: HotkeyProfile,
     ) -> Result<bool, DictationError> {
+        self.start_recording_for_profile_with_capture(profile, |audio| audio.start_capture())
+    }
+
+    /// Start recording using the supplied capture operation.
+    ///
+    /// The injected capture operation keeps the startup transition testable
+    /// without requiring a microphone. It also makes sure a failure after the
+    /// dictation session is opened goes through the same controller-owned
+    /// cleanup path as other workflow errors.
+    fn start_recording_for_profile_with_capture<F>(
+        &mut self,
+        profile: HotkeyProfile,
+        start_capture: F,
+    ) -> Result<bool, DictationError>
+    where
+        F: FnOnce(&mut AudioCaptureService) -> Result<(), DictationError>,
+    {
         if self.state != AppState::Idle {
             warn!("Cannot start recording: state is {:?}", self.state);
             return Ok(false);
@@ -248,7 +265,12 @@ impl AppController {
             serde_json::json!({ "dictationSessionId": session_id }),
         );
 
-        self.audio.start_capture()?;
+        if let Err(error) = start_capture(&mut self.audio) {
+            let message = error.to_string();
+            self.on_transcription_error(&message);
+            return Err(error);
+        }
+
         info!(
             profile_id = %profile.id,
             profile_name = %profile.name,
@@ -292,10 +314,29 @@ impl AppController {
             .recording_start
             .map(|s| s.elapsed().as_millis())
             .unwrap_or(0);
+        let metrics = self.audio.metrics();
+        let recording_duration_ms = u64::try_from(duration).unwrap_or(u64::MAX);
+        let audio_duration_ms = u64::try_from(
+            (samples.len() as u128).saturating_mul(1_000) / 16_000,
+        )
+        .unwrap_or(u64::MAX);
 
         info!(
             "Recording stopped: {} samples ({duration}ms)",
             samples.len()
+        );
+        self.logging.log(
+            "info",
+            "Performance",
+            log_events::audio::CAPTURE_STOPPED,
+            serde_json::json!({
+                "recordingDurationMs": recording_duration_ms,
+                "audioDurationMs": audio_duration_ms,
+                "audioSamples": samples.len(),
+                "captureRequestToStreamPlayReturnMs": metrics.stream_play_return_ms,
+                "captureRequestToFirstAudioCallbackMs": metrics.first_callback_ms,
+                "deviceSampleRateHz": metrics.device_sample_rate_hz,
+            }),
         );
 
         self.state = AppState::Transcribing;
@@ -331,6 +372,31 @@ impl AppController {
         self.active_hotkey_profile = None;
         self.training_recording = false;
         self.logging.end_dictation_session();
+    }
+
+    /// Complete a quiet push-to-talk cancellation without replacing the last
+    /// useful transcript, surfacing an error, or leaving retry audio behind.
+    pub fn on_no_speech_detected(&mut self) {
+        self.audio.clear_last_captured();
+        self.state = AppState::Idle;
+        self.active_hotkey_profile = None;
+        self.training_recording = false;
+        self.logging.log(
+            "info",
+            "Transcription",
+            log_events::transcription::NO_SPEECH,
+            serde_json::json!({}),
+        );
+        self.logging.end_dictation_session();
+    }
+
+    pub fn log_dictation_performance(&self, data: serde_json::Value) {
+        self.logging.log(
+            "info",
+            "Performance",
+            log_events::transcription::PHASE_TIMINGS,
+            data,
+        );
     }
 
     /// Called after transcription fails
@@ -562,6 +628,20 @@ mod tests {
         assert_eq!(ctrl.state(), AppState::Idle);
     }
 
+    #[test]
+    fn no_speech_returns_idle_without_replacing_last_transcription() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+        ctrl.last_error = Some("stale error".to_string());
+
+        ctrl.on_no_speech_detected();
+
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+        assert_eq!(ctrl.last_error(), Some("stale error"));
+    }
+
     // -- Recording elapsed --
 
     #[test]
@@ -722,6 +802,45 @@ mod tests {
         let started = ctrl.start_recording().unwrap();
         assert!(!started);
         assert_eq!(ctrl.state(), AppState::Transcribing); // unchanged
+    }
+
+    #[test]
+    fn recording_start_failure_closes_session_and_restores_idle_without_capture() {
+        let mut ctrl = default_controller();
+        let profile = ctrl
+            .settings()
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .next()
+            .expect("default settings provide a hotkey profile");
+        let expected_error = DictationError::MicrophonePermissionDenied;
+        let expected_message = expected_error.to_string();
+
+        let result = ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            Err(expected_error.clone())
+        });
+
+        assert!(matches!(result, Err(DictationError::MicrophonePermissionDenied)));
+        assert_eq!(ctrl.last_error(), Some(expected_message.as_str()));
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert!(ctrl.active_hotkey_profile().is_none());
+        assert!(!ctrl.training_recording);
+
+        // The failed start must leave the controller reusable for a later
+        // attempt; this still injects the capture result and never opens a mic.
+        assert!(matches!(
+            ctrl.start_recording_for_profile_with_capture(
+                ctrl.settings()
+                    .resolved_hotkey_profiles()
+                    .into_iter()
+                    .next()
+                    .unwrap(),
+                |_| Ok(()),
+            ),
+            Ok(true)
+        ));
+        assert_eq!(ctrl.state(), AppState::Recording);
+        ctrl.cancel_recording();
     }
 
     // -- stop_recording_guarded --

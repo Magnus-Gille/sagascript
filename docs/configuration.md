@@ -61,6 +61,33 @@ rejected there; F21–F24 failed earlier as unknown scancodes. The source mappin
 for F13–F20 therefore did not provide a working permission-free registration
 path. This probe was run on 2026-09-04 before adopting the AppKit monitor.
 
+## Dictation latency diagnostics
+
+The macOS app writes local JSONL events to
+`~/Library/Logs/Sagascript/sagascript.log`. Match events by `dictationSession`
+when comparing a Bluetooth headset microphone with the Mac microphone.
+The new performance events contain timings, sample counts, sample rate, and
+decoder settings, but no audio, transcript text, or device names.
+
+- `capture_stopped` reports `captureRequestToStreamPlayReturnMs` and
+  `captureRequestToFirstAudioCallbackMs`. These start at the capture request,
+  not the shortcut event; they separate stream setup from first-buffer delivery.
+- `dictation_phase_timings` separates model readiness, Whisper duration, and
+  paste completion. `keyUpToCaptureStoppedMs` includes any minimum-recording
+  top-up delay (up to 300 ms); it is not a pure device-stop measurement. In
+  toggle mode, the origin is the second shortcut press instead of key-up.
+- Missing stages are `null`. Paste completion is measured only when its
+  main-thread callback reports a result. The app waits at most two seconds
+  for that result before returning to idle; a callback already dispatched may
+  still run later. `pasteOutcome` distinguishes success, failure, and timeout.
+
+Quiet cancellation and no-speech-marked Whisper output do not replace the last
+useful dictation or paste text. Capture failures are errors, not silence. If
+the input stream fails partway through a recording, the partial recording is
+not automatically transcribed or pasted. These measurements help diagnose
+startup latency; they do not establish that Bluetooth caused a delay or that
+the first spoken word was captured.
+
 ## Overrides and migration
 
 `SAGASCRIPT_SETTINGS_PATH=/absolute/path/to/settings.json` selects one exact
