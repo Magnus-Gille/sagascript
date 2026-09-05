@@ -38,15 +38,32 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc/);
   assert.match(
     workflow,
-    /hashFiles\('src-tauri\/Cargo\.lock', 'package-lock\.json', '\.github\/workflows\/windows-package\.yml'\)/,
+    /concurrency:\s*\n\s*group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}\s*\n\s*cancel-in-progress:\s+true/,
   );
-  const cargoCacheStart = workflow.indexOf("name: Cache Cargo registry");
-  const cargoCacheEnd = workflow.indexOf("name: Install npm dependencies", cargoCacheStart);
-  assert.ok(cargoCacheStart >= 0 && cargoCacheEnd > cargoCacheStart);
+  assert.match(workflow, /name: Identify Windows runner image/);
+  assert.match(workflow, /\$env:ImageOS/);
+  assert.match(workflow, /\$env:ImageVersion/);
+  assert.match(workflow, /IsNullOrWhiteSpace\(\$imageOs\)/);
+  assert.match(workflow, /IsNullOrWhiteSpace\(\$imageVersion\)/);
+  assert.match(workflow, /GITHUB_OUTPUT/);
+  const imageStart = workflow.indexOf("name: Identify Windows runner image");
+  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
+  const nodeStart = workflow.indexOf("name: Install Node.js");
+  assert.ok(imageStart >= 0 && cacheStart > imageStart && nodeStart > cacheStart);
+  const rustCache = workflow.slice(cacheStart, nodeStart);
+  assert.match(
+    rustCache,
+    /uses: Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/,
+  );
+  assert.match(rustCache, /workspaces:\s+src-tauri/);
+  assert.match(
+    rustCache,
+    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml'\) \}\}/,
+  );
   assert.doesNotMatch(
-    workflow.slice(cargoCacheStart, cargoCacheEnd),
-    /src-tauri\\target/,
-    "native build output must not be restored across C/C++ toolchain changes",
+    rustCache,
+    /actions\/cache/,
+    "native cache must use the target-aware Rust cache namespace",
   );
   assert.match(workflow, /accept-windows-candidate\.ps1/);
   assert.match(workflow, /norwegian-short-3s\.mp3/);
