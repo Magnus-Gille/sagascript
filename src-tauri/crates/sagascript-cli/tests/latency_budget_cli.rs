@@ -175,6 +175,32 @@ fn excluded_warm_success_paste_samples_are_reported_without_affecting_eligibilit
 }
 
 #[test]
+fn disabled_warm_success_sample_is_excluded_without_affecting_eligibility() {
+    let mut entries = Vec::new();
+    for index in 0..20 {
+        sample_events(&mut entries, index, 1_000, 100, true, "succeeded");
+    }
+    sample_events(&mut entries, 20, 1_000, 100, true, "disabled");
+
+    let fixture = fixture(entries);
+    let output = run_report(
+        &fixture.input,
+        &[
+            "--budget-length",
+            "short",
+            "--max-warm-p95-ms",
+            "100",
+            "--min-samples",
+            "20",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr={:?}", output.stderr);
+    let report = assert_budget(&output, true);
+    assert_eq!(report["budget"]["excludedWarmSuccessSamples"], 1);
+}
+
+#[test]
 fn budget_failure_still_emits_json_when_p95_is_over_threshold() {
     let mut entries = Vec::new();
     for index in 0..18 {
