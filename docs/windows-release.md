@@ -1,17 +1,24 @@
 # Windows release track
 
-Sagascript's Windows build is a release candidate, not a public release. The
-candidate workflow intentionally produces **unsigned** x64 and ARM64 artifacts for
-testing on an owner-controlled Windows PC. Do not publish those artifacts or
-tell users to bypass SmartScreen.
+The selected zero-cost option is a clearly labelled **unsigned Windows beta**
+distributed from the GitHub prerelease
+[`windows-beta-20260905`](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905).
+It contains the exact binaries produced by the accepted candidate run. This
+is a public preview for Windows 11 on x64 and ARM64, not a signed or stable
+release. Do not tell users to bypass SmartScreen.
 
 ## Zero-cost distribution decision
 
-The intended public path is a Microsoft Store MSIX submission. Microsoft signs
-Store-distributed MSIX packages and provides the trusted installation and
-update path without a separate code-signing subscription. Tauri currently
-produces NSIS and MSI installers for Sagascript; MSIX packaging is a separate
-follow-up after the native Windows behavior passes acceptance.
+The selected zero-cost path is a GitHub prerelease linked from the product
+website after publication readback. The beta keeps the unsigned status explicit
+and provides architecture-qualified NSIS, MSI, portable, CLI, and checksum
+artifacts. The Microsoft Store and MSIX remain optional future work for a
+trusted installation and update path.
+
+Future signing investigations are tracked separately in
+[#190: SignPath Foundation](https://github.com/Magnus-Gille/sagascript/issues/190)
+and [#191: Microsoft Store/MSIX](https://github.com/Magnus-Gille/sagascript/issues/191).
+They do not block this unsigned beta.
 
 References:
 
@@ -19,9 +26,8 @@ References:
 - [Publish a first Windows app](https://learn.microsoft.com/windows/apps/package-and-deploy/publish-first-app)
 - [SmartScreen reputation for developers](https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation)
 
-Direct website/GitHub distribution remains blocked for a normal public release
-while the installers are unsigned. An unsigned build may be used only as a
-clearly labelled internal candidate on a known test machine.
+Direct distribution is limited to this clearly labelled beta. It must not be
+described as an official, signed, stable, or fully accepted Windows release.
 
 ## Candidate workflow
 
@@ -30,10 +36,12 @@ frontend, Rust, and real CPU-transcription gates on native `windows-latest`
 (x64) and `windows-11-arm` (ARM64) runners. Each runner then
 builds unsigned NSIS and MSI installers, a portable desktop executable, and a
 separate console CLI executable. It uploads them as one short-lived GitHub
-Actions artifact and never creates or modifies a GitHub Release. Windows GUI
-executables do not reliably expose redirected console output, so the candidate
-keeps the desktop and CLI launch surfaces explicit instead of pretending one
-file behaves identically in both contexts.
+Actions artifact and never creates or modifies a GitHub Release. Its artifacts
+are to be attached manually from [Actions run 33963645741](https://github.com/Magnus-Gille/sagascript/actions/runs/33963645741)
+to the prerelease tag above. Windows GUI executables do not reliably expose
+redirected console output, so the candidate keeps the desktop and CLI launch
+surfaces explicit instead of pretending one file behaves identically in both
+contexts.
 
 The artifact names are architecture-qualified:
 `Sagascript-Windows-<architecture>-Portable.exe`,
@@ -45,9 +53,9 @@ those four files.
 
 `scripts/verify-windows-release.ps1` validates the executable surface,
 signature state, and deterministic checksums. `Internal` signature policy
-allows only a valid signature or a genuinely unsigned artifact. The future
+allows only a valid signature or a genuinely unsigned artifact. The stable
 public pipeline must use `Release`, which requires every executable artifact to
-have a valid Authenticode signature.
+have a valid Authenticode signature; the beta does not satisfy that gate.
 
 After installing an internally accepted candidate on the test PC, run the
 bundled CLI acceptance helper from the extracted workflow artifact directory.
@@ -69,27 +77,37 @@ stores transcript text. The installed path remains an acceptance finding until
 it has been observed on Windows; do not add it to documentation or `PATH`
 promises merely because an installer default was expected.
 
+## Beta verification record
+
+The candidate uses app version `1.1.3` from full source revision
+`56cf3420f7d81ac2c423bcfee6c8961de03fcfaf`. The ARM64 app was installed and
+uninstalled on a user Windows machine and Swedish and English dictation were
+tested. The x64 candidate passed the automated CI gates, but GUI acceptance was
+not performed on an x64 machine. The install test retained existing models and
+settings, so it is not a clean-state acceptance.
+
 ## Initial support boundary
 
 - Windows 11 on x64 and ARM64.
 - CPU transcription using the recommended small language-specific engine.
-- One installed desktop app with system-tray UI plus a candidate CLI executable
+- One installed desktop app with system-tray UI plus a beta CLI executable
   exposing the canonical commands. Installer/PATH integration remains a public-
   release decision.
 - No GPU-acceleration promise in the first release.
-- Windows 10 may work but is not release-supported until separately accepted.
+- Windows 10 may work but is not supported by this beta.
 
-## Clean-machine acceptance
+## Remaining acceptance work
 
-Record the Windows edition/build, CPU, RAM, microphone, and exact candidate
-artifact checksums. Start from a machine with no prior Sagascript installation,
-settings, model directory, or running process.
+Record the Windows edition/build, CPU, RAM, microphone, and exact beta artifact
+checksums. A clean-machine run is still required before calling the Windows
+build stable. The existing install test retained models and settings and does
+not replace that run.
 
 ### Installation and identity
 
-- SmartScreen identifies the candidate as unsigned; test only after independently
-  matching the architecture-specific `SHA256SUMS-Windows-<architecture>` file
-  from the workflow artifact.
+- SmartScreen identifies the beta as unsigned; verify the architecture-specific
+  `SHA256SUMS-Windows-<architecture>` file from the GitHub prerelease before
+  deciding whether to run it.
 - NSIS installation completes without development tools.
 - MSI installation completes without development tools.
 - Only one installer format is selected for the eventual Store/MSIX conversion.
@@ -144,18 +162,19 @@ settings, model directory, or running process.
 - An upgrade candidate preserves settings, profiles, glossary, and downloaded
   engines and does not create duplicate startup/tray entries.
 
-## Public-release gates
+## Stable-release gates
 
 Before removing the candidate warning:
 
 1. All automated Windows candidate checks pass without `continue-on-error`.
 2. Clean-machine acceptance is recorded against the exact commit and hashes.
-3. A Microsoft Store account and product identity are ready at no recurring
-   signing cost.
-4. The accepted installer is converted to MSIX and tested through Store flighting.
-5. Store certification passes and the Store-delivered package is installed on a
-   clean machine.
-6. The website Windows button points to the Store listing only after readback.
+3. Every executable in the stable release has a valid Authenticode signature;
+   use the `Release` verification policy.
+4. The signed installer passes clean-machine installation, upgrade, uninstall,
+   dictation, CLI, and recovery checks.
+5. If the Microsoft Store path is chosen, the accepted installer is converted to
+   MSIX, passes Store flighting/certification, and the website link is updated
+   only after the listing is read back.
 
 Creating the Store product identity is an owner action. Do not store Microsoft
 passwords, session material, recovery codes, or signing credentials in this

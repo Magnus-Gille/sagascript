@@ -115,9 +115,11 @@ test("Windows acceptance re-verifies an already-downloaded model", () => {
   assert.match(acceptanceScript, /verification_seconds/);
 });
 
-test("Windows release guide forbids publishing unsigned candidates", () => {
-  assert.match(releaseGuide, /Do not publish those artifacts/);
-  assert.match(releaseGuide, /Microsoft Store MSIX/);
+test("Windows release guide distinguishes the unsigned beta from stable release", () => {
+  assert.match(releaseGuide, /clearly labelled \*\*unsigned Windows beta\*\*/);
+  assert.match(releaseGuide, /not a signed or stable\s+release/);
+  assert.match(releaseGuide, /windows-beta-20260905/);
+  assert.match(releaseGuide, /Microsoft Store and MSIX remain optional future work/);
   assert.match(releaseGuide, /Release[^\n]*requires every executable artifact/i);
   assert.match(releaseGuide, /SHA256SUMS-Windows-<architecture>/);
   assert.match(releaseGuide, /Sagascript-Windows-<architecture>-Portable\.exe/);

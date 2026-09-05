@@ -1,9 +1,10 @@
 # Windows-Specific Notes
 
-Windows support is a build-from-source preview. Sagascript v1 publishes signed
-and notarized macOS artifacts only; the project does not publish an unsigned
-Windows installer. CI coverage is useful development evidence, not a promise
-of production support.
+Windows support has an unsigned beta preview. Download the exact binaries from the
+[`windows-beta-20260905` GitHub prerelease](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905)
+for Windows 11 on x64 or ARM64. The beta is not signed or stable, and it is
+not a promise of production support; verify its architecture-specific checksums
+before use.
 
 The active zero-cost release strategy, candidate workflow, and clean-machine
 acceptance checklist live in [Windows release track](windows-release.md).
@@ -20,21 +21,23 @@ acceptance checklist live in [Windows release track](windows-release.md).
 | Settings path | `~/Library/Application Support/ai.gille.sagascript/` | `%APPDATA%\ai.gille.sagascript\` |
 | Log path | `~/Library/Logs/Sagascript/` | `%LOCALAPPDATA%\Sagascript\Logs\` |
 | Model path | `~/.sagascript/models/` | `%USERPROFILE%\.sagascript\models\` |
-| Installer format | Official signed `.dmg` | Local source build: `.exe` (NSIS) / `.msi` |
+| Installer format | Official signed `.dmg` | Unsigned beta: `.exe` (NSIS) / `.msi` |
 
 ## Known limitations
 
 - **CPU-only transcription.** GPU acceleration (Metal/Core ML) is not available on Windows. Large models (`large`, `large-v3`) will be significantly slower than on macOS with Metal. We recommend using `base` or `small` models on Windows.
-- **No official binary or auto-updater.** Build the current preview from source.
+- **No signed stable binary or auto-updater.** The beta is a manually published
+  preview; build from source if you need to inspect or reproduce it.
 - **Architecture-specific builds.** Use the native ARM64 candidate on Snapdragon / Copilot+ PCs and the x64 candidate on Intel or AMD Windows PCs. CPU transcription is tested natively on both architectures in the candidate workflow.
 
 ## Troubleshooting
 
 ### "Windows protected your PC" (SmartScreen warning)
 
-Do not bypass SmartScreen for a Sagascript installer downloaded from another
-party. The project does not publish Windows binaries for v1. Inspect the source
-and build the preview locally instead.
+The beta is intentionally unsigned and may trigger SmartScreen. Verify the
+matching `SHA256SUMS-Windows-<architecture>` file from the GitHub prerelease
+before deciding whether to run it. Do not bypass SmartScreen. If you need to
+avoid an unsigned installer, inspect the source and build the preview locally.
 
 ### Microphone not working
 
