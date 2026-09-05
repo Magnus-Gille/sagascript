@@ -6,6 +6,32 @@ use std::num::NonZeroU32;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+#[cfg(all(test, target_os = "windows"))]
+type OpenRetryHook = (mpsc::Sender<()>, mpsc::Receiver<()>);
+
+#[cfg(all(test, target_os = "windows"))]
+static OPEN_RETRY_HOOK: std::sync::OnceLock<std::sync::Mutex<Option<OpenRetryHook>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(all(test, target_os = "windows"))]
+fn set_open_retry_signal(hook: Option<OpenRetryHook>) {
+    let slot = OPEN_RETRY_HOOK.get_or_init(|| std::sync::Mutex::new(None));
+    *slot.lock().unwrap() = hook;
+}
+
+#[cfg(all(test, target_os = "windows"))]
+fn signal_open_retry() {
+    let hook = OPEN_RETRY_HOOK
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap()
+        .take();
+    if let Some((sender, resume_rx)) = hook {
+        let _ = sender.send(());
+        let _ = resume_rx.recv_timeout(Duration::from_secs(2));
+    }
+}
+
 pub(super) struct TemporaryText {
     saved_text: Option<String>,
     generation: Option<NonZeroU32>,
@@ -67,6 +93,29 @@ fn finalize_generation_in(
         saved.generation = transaction.generation();
     }
     Ok(saved)
+}
+
+/// Retry clipboard acquisition without starving the owner window's message
+/// queue. A failed `OpenClipboard` attempt holds no guard, so pumping before
+/// the bounded delay cannot dispatch work while the clipboard is locked.
+fn retry_with_pump<T, Open, Pump>(mut open: Open, mut pump: Pump) -> Result<T, String>
+where
+    Open: FnMut() -> Result<T, String>,
+    Pump: FnMut(),
+{
+    const MAX_ATTEMPTS: usize = 6;
+
+    for attempt in 0..MAX_ATTEMPTS {
+        match open() {
+            Ok(value) => return Ok(value),
+            Err(error) if attempt + 1 == MAX_ATTEMPTS => return Err(error),
+            Err(_) => {
+                pump();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+    unreachable!("bounded retry loop returns on its final attempt")
 }
 
 enum RestoreRequest {
@@ -207,6 +256,13 @@ fn pump_messages() {
 }
 
 #[cfg(target_os = "windows")]
+fn pump_before_open_retry() {
+    #[cfg(test)]
+    signal_open_retry();
+    pump_messages();
+}
+
+#[cfg(target_os = "windows")]
 impl ClipboardOwner {
     fn new() -> Result<Self, String> {
         // A built-in STATIC message-only window needs no registered class or
@@ -293,22 +349,17 @@ impl NativeTransaction {
 
     fn open_for(owner: *mut std::ffi::c_void) -> Result<Self, String> {
         // Match arboard's bounded retries, including a real sleep rather than
-        // clipboard-win's zero-ms retry loop. Guard is local and RAII-closed.
-        for attempt in 0..=5 {
-            match clipboard_win::Clipboard::new_for(owner) {
-                Ok(guard) => {
-                    return Ok(Self {
-                        _guard: guard,
-                        _thread: std::marker::PhantomData,
-                    })
-                }
-                Err(error) if attempt == 5 => {
-                    return Err(format!("Open clipboard failed: {error}"))
-                }
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
-            }
-        }
-        unreachable!("bounded loop returns on its last attempt")
+        // clipboard-win's zero-ms retry loop. A failed attempt has no guard;
+        // pump the owner thread before each retry delay.
+        let guard = retry_with_pump(
+            || clipboard_win::Clipboard::new_for(owner).map_err(|error| error.to_string()),
+            pump_before_open_retry,
+        )
+        .map_err(|error| format!("Open clipboard failed: {error}"))?;
+        Ok(Self {
+            _guard: guard,
+            _thread: std::marker::PhantomData,
+        })
     }
 }
 
@@ -375,7 +426,7 @@ fn set_temporary_text_on_thread(text: &str) -> Result<NativeTemporaryText, Strin
 fn restore_if_unchanged_on_thread(temporary: NativeTemporaryText) -> Result<bool, String> {
     let transaction = NativeTransaction::open_for(temporary.owner.0.as_ptr())?;
     if clipboard_win::get_owner() != Some(temporary.owner.0) {
-        tracing::debug!("Clipboard restore skipped: generation changed or no text snapshot");
+        tracing::debug!("Clipboard restore skipped: clipboard owner changed");
         return Ok(false);
     }
     let restored = restore_in(transaction, temporary.saved)?;
@@ -395,7 +446,7 @@ fn restore_session_on_thread(temporary: NativeTemporaryText) -> Result<(), Strin
 pub(super) fn set_temporary_text(text: &str) -> Result<PendingRestore, String> {
     let text = text.to_owned();
     spawn_restore_worker(
-        move || set_temporary_text_on_thread(&text).map_err(|error| error.to_owned()),
+        move || set_temporary_text_on_thread(&text),
         restore_session_on_thread,
         pump_messages,
     )

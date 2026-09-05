@@ -65,6 +65,48 @@ fn native_runner_clipboard_transaction_smoke() {
             }
         }
     };
+    let start_contended_foreign_writer = |text: &str| {
+        let text = text.to_owned();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (write_tx, write_rx) = mpsc::channel();
+        let (written_tx, written_rx) = mpsc::channel::<Result<(), String>>();
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let setup = (|| -> Result<_, String> {
+                let owner = super::ClipboardOwner::new()?;
+                let transaction = super::NativeTransaction::open_for(owner.0.as_ptr())?;
+                Ok((owner, transaction))
+            })();
+            let (owner, mut transaction) = match setup {
+                Ok(value) => value,
+                Err(error) => {
+                    let _ = ready_tx.send(Err(error));
+                    return;
+                }
+            };
+            if ready_tx.send(Ok(())).is_err() {
+                return;
+            }
+            let result = (|| -> Result<(), String> {
+                write_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .map_err(|error| format!("foreign write request failed: {error}"))?;
+                transaction.set_text(&text)?;
+                drop(transaction);
+                drop(owner);
+                written_tx
+                    .send(Ok(()))
+                    .map_err(|_| "foreign write result receiver dropped".to_owned())?;
+                Ok(())
+            })();
+            let _ = done_tx.send(result);
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("contended foreign writer setup timed out")
+            .expect("contended foreign writer setup failed");
+        (write_tx, written_rx, done_rx)
+    };
     write_foreign_bounded(original);
     let saved = super::set_temporary_text_on_thread(temporary).unwrap();
     assert_eq!(
@@ -183,6 +225,44 @@ fn native_runner_clipboard_transaction_smoke() {
             .as_deref(),
         Some(foreign)
     );
+
+    // Hold the clipboard open while the creator thread enters its checked
+    // restore. The foreign owner only opens the clipboard before readiness; a
+    // synchronized EmptyClipboard call is released after the production
+    // open-retry pump signals. No test-side message pumping is allowed here.
+    write_foreign_bounded(original);
+    let saved = super::set_temporary_text_on_thread(temporary).unwrap();
+    let (retry_signal_tx, retry_signal_rx) = mpsc::channel();
+    let (retry_resume_tx, retry_resume_rx) = mpsc::channel();
+    let (write_tx, written_rx, done_rx) = start_contended_foreign_writer(foreign);
+    super::set_open_retry_signal(Some((retry_signal_tx, retry_resume_rx)));
+    let coordinator = std::thread::spawn(move || -> Result<(), String> {
+        retry_signal_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|error| format!("production clipboard open retry did not run: {error}"))?;
+        write_tx
+            .send(())
+            .map_err(|_| "foreign writer request receiver dropped".to_owned())?;
+        retry_resume_tx
+            .send(())
+            .map_err(|_| "production retry resume receiver dropped".to_owned())?;
+        written_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|error| {
+                format!("production retry pump did not release foreign EmptyClipboard: {error}")
+            })?
+            .map_err(|error| format!("contended foreign write failed: {error}"))?;
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|error| format!("contended foreign writer did not terminate: {error}"))?
+            .map_err(|error| format!("contended foreign writer failed: {error}"))
+    });
+    let restored = super::restore_if_unchanged_on_thread(saved);
+    coordinator
+        .join()
+        .expect("foreign coordinator thread panicked")
+        .expect("foreign coordinator failed");
+    assert!(!restored.expect("checked restore should open after foreign release"));
 
     // Exercise the public channel-only lifecycle. The worker owns and drops
     // its HWND on one thread while the caller only receives a Send handle.
@@ -551,6 +631,18 @@ struct SyntheticLifecycleState {
 
 struct SyntheticSession {
     state: Arc<Mutex<SyntheticLifecycleState>>,
+    // Deliberately model the native HWND/session payload: it must not be
+    // `Send`; only the channel-only PendingRestore handle crosses threads.
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+impl SyntheticSession {
+    fn new(state: Arc<Mutex<SyntheticLifecycleState>>) -> Self {
+        Self {
+            state,
+            _not_send: std::marker::PhantomData,
+        }
+    }
 }
 
 impl Drop for SyntheticSession {
@@ -578,6 +670,46 @@ fn pending_restore_handle_is_send_channel_only() {
 }
 
 #[test]
+fn retry_pumps_before_each_bounded_open_delay() {
+    let mut attempts = 0;
+    let mut events = Vec::new();
+    let result = super::retry_with_pump(
+        || {
+            attempts += 1;
+            if attempts < 3 {
+                Err("clipboard busy".to_owned())
+            } else {
+                Ok("opened")
+            }
+        },
+        || events.push("pump"),
+    )
+    .expect("retry should eventually open");
+
+    assert_eq!(result, "opened");
+    assert_eq!(attempts, 3);
+    assert_eq!(events, ["pump", "pump"]);
+}
+
+#[test]
+fn retry_exhaustion_is_bounded_and_pumps_before_each_retry() {
+    let mut attempts = 0;
+    let mut pumps = 0;
+    let error = super::retry_with_pump(
+        || {
+            attempts += 1;
+            Err::<(), _>("clipboard busy".to_owned())
+        },
+        || pumps += 1,
+    )
+    .expect_err("persistent clipboard contention must fail");
+
+    assert_eq!(error, "clipboard busy");
+    assert_eq!(attempts, 6);
+    assert_eq!(pumps, 5);
+}
+
+#[test]
 fn restore_worker_success_restores_and_drops_on_creation_thread() {
     let state = Arc::new(Mutex::new(SyntheticLifecycleState::default()));
     let init_state = Arc::clone(&state);
@@ -586,7 +718,7 @@ fn restore_worker_success_restores_and_drops_on_creation_thread() {
         move || {
             let thread = std::thread::current().id();
             init_state.lock().unwrap().init_thread = Some(thread);
-            Ok(SyntheticSession { state: init_state })
+            Ok(SyntheticSession::new(init_state))
         },
         move |session: SyntheticSession| {
             let mut state = restore_state.lock().unwrap();
@@ -618,7 +750,7 @@ fn restore_worker_disconnect_drops_without_restore_on_creation_thread() {
         move || {
             let thread = std::thread::current().id();
             init_state.lock().unwrap().init_thread = Some(thread);
-            Ok(SyntheticSession { state: init_state })
+            Ok(SyntheticSession::new(init_state))
         },
         move |session: SyntheticSession| {
             restore_state.lock().unwrap().restore_thread = Some(std::thread::current().id());
