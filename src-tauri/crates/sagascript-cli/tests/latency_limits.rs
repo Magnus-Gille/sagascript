@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use std::io::{self, BufReader, Cursor, ErrorKind, Read};
 
 const PRIVATE_SENTINEL: &str = "PRIVATE_LATENCY_LIMIT_SENTINEL_4c2e";
+const MAX_LINE_BYTES: usize = 1024 * 1024;
 
 fn event(app_session: &str, dictation_session: &str, name: &str, data: Value) -> Value {
     json!({
@@ -82,6 +83,53 @@ fn result_error<T>(result: Result<T, String>, message: &str) -> String {
     }
 }
 
+fn unrelated_line_with_content_size(content_size: usize, line_ending: &[u8]) -> Vec<u8> {
+    const PREFIX: &[u8] = br#"{"event":"unrelated","data":{"padding":""#;
+    const SUFFIX: &[u8] = br#""}}"#;
+    assert!(content_size >= PREFIX.len() + SUFFIX.len());
+
+    let mut line = Vec::with_capacity(content_size + line_ending.len());
+    line.extend_from_slice(PREFIX);
+    line.extend(std::iter::repeat_n(
+        b'x',
+        content_size - PREFIX.len() - SUFFIX.len(),
+    ));
+    line.extend_from_slice(SUFFIX);
+    line.extend_from_slice(line_ending);
+    line
+}
+
+struct ChunkedInput {
+    bytes: Vec<u8>,
+    offset: usize,
+    chunk_size: usize,
+}
+
+impl ChunkedInput {
+    fn new(bytes: Vec<u8>, chunk_size: usize) -> Self {
+        Self {
+            bytes,
+            offset: 0,
+            chunk_size,
+        }
+    }
+}
+
+impl Read for ChunkedInput {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.offset == self.bytes.len() {
+            return Ok(0);
+        }
+        let amount = self
+            .chunk_size
+            .min(buffer.len())
+            .min(self.bytes.len() - self.offset);
+        buffer[..amount].copy_from_slice(&self.bytes[self.offset..self.offset + amount]);
+        self.offset += amount;
+        Ok(amount)
+    }
+}
+
 #[test]
 fn oversized_single_line_is_rejected_without_echoing_payload() {
     let mut padding = "x".repeat(1_048_600);
@@ -96,6 +144,74 @@ fn oversized_single_line_is_rejected_without_echoing_payload() {
     let error = result_error(result, "single line over 1 MiB must be rejected");
     assert!(error.to_ascii_lowercase().contains("line 1"));
     assert!(!error.contains(PRIVATE_SENTINEL));
+}
+
+#[test]
+fn accepts_exact_1_mib_content_for_lf_crlf_eof_and_chunked_input() {
+    for line_ending in [b"\n".as_slice(), b"\r\n".as_slice(), b"".as_slice()] {
+        let report = summarize_reader(Cursor::new(unrelated_line_with_content_size(
+            MAX_LINE_BYTES,
+            line_ending,
+        )))
+        .expect("exact 1 MiB content should be accepted");
+        assert_eq!(report.input_records, 1);
+    }
+
+    let reader = BufReader::new(ChunkedInput::new(
+        unrelated_line_with_content_size(MAX_LINE_BYTES, b"\r\n"),
+        3,
+    ));
+    let report = summarize_reader(reader).expect("chunked CRLF input should be accepted");
+    assert_eq!(report.input_records, 1);
+}
+
+#[test]
+fn rejects_content_over_1_mib_for_line_endings_and_chunked_input() {
+    for line_ending in [b"\n".as_slice(), b"\r\n".as_slice(), b"".as_slice()] {
+        let result = summarize_reader(Cursor::new(unrelated_line_with_content_size(
+            MAX_LINE_BYTES + 1,
+            line_ending,
+        )));
+        assert!(result.is_err(), "over-limit input was accepted");
+    }
+
+    let reader = BufReader::new(ChunkedInput::new(
+        unrelated_line_with_content_size(MAX_LINE_BYTES + 1, b"\r\n"),
+        3,
+    ));
+    assert!(summarize_reader(reader).is_err());
+}
+
+#[test]
+fn blank_and_whitespace_lines_remain_malformed() {
+    for input in [b"\n".to_vec(), b" \t\r\n".to_vec()] {
+        assert!(summarize_reader(Cursor::new(input)).is_err());
+    }
+}
+
+#[test]
+fn relevant_events_require_both_correlation_identifiers() {
+    let mut missing_app = capture_event("app-missing", "dict", 1_000);
+    missing_app
+        .as_object_mut()
+        .expect("capture event object")
+        .remove("appSession");
+    assert!(summarize_reader(Cursor::new(jsonl(&[missing_app]))).is_err());
+
+    let mut missing_dict = success_phase_event("app", "dict-missing");
+    missing_dict
+        .as_object_mut()
+        .expect("phase event object")
+        .remove("dictationSession");
+    assert!(summarize_reader(Cursor::new(jsonl(&[missing_dict]))).is_err());
+}
+
+#[test]
+fn empty_file_is_a_valid_empty_report() {
+    let report = summarize_reader(Cursor::new(Vec::<u8>::new())).expect("empty input is valid");
+    assert_eq!(report.input_records, 0);
+    assert_eq!(report.phase_records, 0);
+    assert!(report.groups.is_empty());
 }
 
 struct RepeatingLines {

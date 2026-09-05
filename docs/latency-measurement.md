@@ -26,6 +26,12 @@ It never echoes raw rows, transcripts, paths, session IDs, device names,
 arbitrary metadata or invalid values in errors. Errors identify the line and
 field, not the rejected value. Unknown events are ignored after valid JSON
 parsing; malformed JSON or malformed relevant events fail the report.
+Every input line must contain a JSON record: blank or whitespace-only lines are
+malformed. Relevant `capture_stopped` and `dictation_phase_timings` records
+must contain both correlation identifiers, `appSession` and
+`dictationSession`; missing either identifier fails closed. An empty file is a
+valid empty report, but it cannot pass an explicit budget because it has no
+eligible samples.
 
 ## Cohorts and statistics
 
@@ -49,7 +55,8 @@ For each phase report count, numeric count, null count, missing count, p50 and
 p95. Null/missing values never become zero. Use nearest-rank percentiles:
 sort ascending, rank = ceil(percentile × count / 100), with one-based ranks.
 Samples must be finite and non-negative. Output is deterministic across input
-ordering. Input is bounded to 32 MiB total and 1 MiB per line.
+ordering. Input is bounded to 32 MiB total and 1 MiB of record content per
+line, after stripping its optional LF or CRLF line ending.
 
 ## Explicit regression checks
 
@@ -63,8 +70,14 @@ Only successful, warm, successfully auto-pasted samples of the selected length
 are eligible. Every eligible configuration group must have at least the
 requested numeric samples and p95 at or below the explicit threshold. No
 eligible groups or incomplete eligible metrics fails the check. Emit the JSON
-report even on a budget failure, then exit nonzero. Other cohorts are reported
-but are not claimed to meet that selected budget.
+report even on a budget failure, then exit nonzero. The budget object also
+reports `excludedWarmSuccessSamples`: the number of selected-length samples
+with a successful warm transcription but a non-success paste outcome. These
+samples are excluded from eligibility and do not prevent a pass when all
+eligible groups satisfy the requested budget. Other cohorts are reported but
+are not claimed to meet that selected budget. Invalid input or arguments exit
+nonzero without emitting JSON; a failed explicit budget is the exception and
+emits its JSON report before exiting nonzero.
 
 ## Remaining physical acceptance
 

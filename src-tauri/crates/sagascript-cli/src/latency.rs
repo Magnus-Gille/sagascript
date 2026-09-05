@@ -12,7 +12,6 @@ use sagascript_core::settings::{Language, WhisperModel};
 
 use crate::transcribe::model_id_string;
 
-#[path = "latency/percentile.rs"]
 mod percentile;
 
 use percentile::percentile_ms;
@@ -681,7 +680,7 @@ fn read_bounded_line<R: BufRead>(
         if line
             .len()
             .checked_add(take)
-            .is_none_or(|length| length > MAX_LINE_BYTES + 1)
+            .is_none_or(|length| length > MAX_LINE_BYTES + 2)
         {
             return Err(format!(
                 "line {line_number}: input line exceeds the 1 MiB limit"
@@ -704,7 +703,8 @@ fn read_bounded_line<R: BufRead>(
         if line.last() == Some(&b'\r') {
             line.pop();
         }
-    } else if line.len() > MAX_LINE_BYTES {
+    }
+    if line.len() > MAX_LINE_BYTES {
         return Err(format!(
             "line {line_number}: input line exceeds the 1 MiB limit"
         ));
@@ -737,6 +737,20 @@ fn budget_passes(
         }
     }
     eligible_groups > 0
+}
+
+fn excluded_warm_success_samples(report: &Report, length: LengthBucket) -> usize {
+    report
+        .groups
+        .iter()
+        .filter(|group| {
+            group.length_bucket == length
+                && group.outcome == "success"
+                && group.model_was_warm == Some(true)
+                && group.paste_outcome.as_deref() != Some("succeeded")
+        })
+        .map(|group| group.samples)
+        .sum()
 }
 
 pub fn run(args: LatencyReportArgs) -> Result<(), DictationError> {
@@ -777,6 +791,7 @@ pub fn run(args: LatencyReportArgs) -> Result<(), DictationError> {
             threshold,
             args.min_samples,
             budget_passes(&report, length, threshold, args.min_samples),
+            excluded_warm_success_samples(&report, length),
         )),
         (None, None) => None,
         _ => unreachable!("budget arguments validated above"),
@@ -785,12 +800,13 @@ pub fn run(args: LatencyReportArgs) -> Result<(), DictationError> {
     let mut output = serde_json::to_value(&report).map_err(|_| {
         DictationError::TranscriptionFailed("latency report serialization failed".to_string())
     })?;
-    if let Some((length, threshold, min_samples, passed)) = budget {
+    if let Some((length, threshold, min_samples, passed, excluded_samples)) = budget {
         output["budget"] = serde_json::json!({
             "lengthBucket": length,
             "maxWarmP95Ms": threshold,
             "minSamples": min_samples,
             "passed": passed,
+            "excludedWarmSuccessSamples": excluded_samples,
         });
     }
     let encoded = serde_json::to_string(&output).map_err(|_| {

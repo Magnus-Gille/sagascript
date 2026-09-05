@@ -39,7 +39,12 @@ fn fixture(entries: Vec<Value>) -> Fixture {
         .map(|entry| serde_json::to_string(&entry).expect("serialize fixture event"))
         .collect::<Vec<_>>()
         .join("\n");
-    fs::write(&fixture.input, format!("{contents}\n"))
+    let contents = if contents.is_empty() {
+        String::new()
+    } else {
+        format!("{contents}\n")
+    };
+    fs::write(&fixture.input, contents)
         .unwrap_or_else(|error| panic!("write fixture JSONL: {:?}", error.kind()));
     fixture
 }
@@ -55,7 +60,7 @@ fn sample_events(
     let app_session = format!("app-budget-{index}");
     let dictation_session = format!("dict-budget-{index}");
     entries.push(json!({
-        "ts": format!("2026-01-01T00:00:{index:02}Z"),
+        "ts": "2026-01-01T00:00:00Z",
         "level": "info",
         "appSession": app_session,
         "dictationSession": dictation_session,
@@ -71,7 +76,7 @@ fn sample_events(
         },
     }));
     entries.push(json!({
-        "ts": format!("2026-01-01T00:01:{index:02}Z"),
+        "ts": "2026-01-01T00:00:00Z",
         "level": "info",
         "appSession": app_session,
         "dictationSession": dictation_session,
@@ -143,6 +148,33 @@ fn budget_passes_twenty_warm_successful_short_samples_at_exact_threshold() {
 }
 
 #[test]
+fn excluded_warm_success_paste_samples_are_reported_without_affecting_eligibility() {
+    let mut entries = Vec::new();
+    for index in 0..20 {
+        sample_events(&mut entries, index, 1_000, 100, true, "succeeded");
+    }
+    for index in 20..220 {
+        sample_events(&mut entries, index, 1_000, 100, true, "timed_out");
+    }
+    let fixture = fixture(entries);
+    let output = run_report(
+        &fixture.input,
+        &[
+            "--budget-length",
+            "short",
+            "--max-warm-p95-ms",
+            "100",
+            "--min-samples",
+            "20",
+        ],
+    );
+
+    assert!(output.status.success(), "stderr={:?}", output.stderr);
+    let report = assert_budget(&output, true);
+    assert_eq!(report["budget"]["excludedWarmSuccessSamples"], 200);
+}
+
+#[test]
 fn budget_failure_still_emits_json_when_p95_is_over_threshold() {
     let mut entries = Vec::new();
     for index in 0..18 {
@@ -200,7 +232,8 @@ fn budget_fails_with_no_eligible_warm_samples() {
     );
 
     assert!(!output.status.success(), "cold-only budget must be nonzero");
-    assert_budget(&output, false);
+    let report = assert_budget(&output, false);
+    assert_eq!(report["budget"]["excludedWarmSuccessSamples"], 0);
 }
 
 #[test]
@@ -229,7 +262,8 @@ fn selected_length_does_not_combine_other_length_samples() {
         !output.status.success(),
         "short cohort must remain under min samples"
     );
-    assert_budget(&output, false);
+    let report = assert_budget(&output, false);
+    assert_eq!(report["budget"]["excludedWarmSuccessSamples"], 0);
 }
 
 #[test]
@@ -342,6 +376,28 @@ fn report_only_mode_works_without_budget_flags() {
 }
 
 #[test]
+fn empty_input_is_valid_json_but_cannot_pass_a_budget() {
+    let fixture = fixture(Vec::new());
+    let report_output = run_report(&fixture.input, &[]);
+    assert!(
+        report_output.status.success(),
+        "stderr={:?}",
+        report_output.stderr
+    );
+    let report = parse_report(&report_output);
+    assert_eq!(report["inputRecords"], 0);
+    assert!(report["groups"].as_array().is_some_and(Vec::is_empty));
+
+    let budget_output = run_report(
+        &fixture.input,
+        &["--budget-length", "short", "--max-warm-p95-ms", "100"],
+    );
+    assert!(!budget_output.status.success());
+    let budget_report = assert_budget(&budget_output, false);
+    assert_eq!(budget_report["budget"]["excludedWarmSuccessSamples"], 0);
+}
+
+#[test]
 fn missing_input_fails_without_echoing_private_path() {
     let sentinel = "PRIVATE_LATENCY_SENTINEL_9f0c";
     let missing = std::env::temp_dir()
@@ -354,4 +410,5 @@ fn missing_input_fails_without_echoing_private_path() {
     assert!(!output.status.success());
     assert!(!stdout.contains(sentinel), "stdout echoed private sentinel");
     assert!(!stderr.contains(sentinel), "stderr echoed private sentinel");
+    assert!(stdout.trim().is_empty(), "input errors must not emit JSON");
 }

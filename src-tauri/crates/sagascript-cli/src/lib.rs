@@ -214,7 +214,7 @@ EXAMPLES:
 
     /// Summarize copied live-dictation latency JSONL without launching the app
     #[command(
-        long_about = "Summarize explicitly copied dictation_phase_timings JSONL. This command never reads the default log directory, starts the app, captures audio, loads a model, changes settings, or contacts a remote service.",
+        long_about = "Summarize explicitly copied dictation_phase_timings JSONL. Valid input emits JSON and exits zero. An explicit budget failure emits the JSON report and exits nonzero; invalid input or arguments exit nonzero without JSON. This command never reads the default log directory, starts the app, captures audio, loads a model, changes settings, or contacts a remote service.",
         after_long_help = "EXAMPLES:\n  sagascript latency-report --input /tmp/sagascript.log\n  sagascript latency-report --input /tmp/sagascript.log --budget-length short --max-warm-p95-ms 800 --min-samples 20"
     )]
     LatencyReport(latency::LatencyReportArgs),
