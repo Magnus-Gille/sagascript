@@ -88,6 +88,20 @@ not automatically transcribed or pasted. These measurements help diagnose
 startup latency; they do not establish that Bluetooth caused a delay or that
 the first spoken word was captured.
 
+Before live dictation decoding (GUI and CLI `record`), a local near-silence guard
+examines 20 ms frames of 16 kHz audio. If every frame's RMS level is below 0.0015,
+the capture returns empty text without running Whisper. A frame above this
+conservative floor keeps the entire recording, including its beginning; no
+minimum word duration is imposed. This is separate from optional Silero VAD and
+does not download a model or send audio anywhere. Explicit `[BLANK_AUDIO]`
+artifacts are also removed from display text; ordinary words such as “tack” and
+“thank you” are never blacklisted. File/diagnostic APIs and model warmup are
+unchanged. Louder microphone noise can still reach Whisper, so acceptance testing
+should include silent taps and short spoken words on each microphone in use.
+
+The tray menu and the top of Settings show the release version, build revision,
+and build date. The CLI exposes the same identity with `sagascript --version`.
+
 ## Overrides and migration
 
 `SAGASCRIPT_SETTINGS_PATH=/absolute/path/to/settings.json` selects one exact
