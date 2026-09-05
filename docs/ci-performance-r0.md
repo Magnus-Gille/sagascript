@@ -5,9 +5,14 @@ successful runs below. Job elapsed time is `completedAt - startedAt` using the
 whole-second timestamps returned by GitHub. CI wall time is the earliest job
 `startedAt` to the latest job `completedAt`; it includes post-job cleanup that
 is represented in `completedAt`, and excludes queue time before the first job
-starts. No workflow was dispatched and no cache was cleared.
+starts. The archival baseline collection itself dispatched no workflow and
+cleared no cache. Later R0 measurement runs are explicitly separated below;
+their cache saves and restores are part of those measurements.
 
-## Current PR #197 observation
+## Archival baseline observations: PR #197
+
+This is the pre-R0 archival baseline. Its timings and cache-state limits are
+not the same-SHA R0 results added later in this report.
 
 The current CI and Windows candidate runs are on the exact revision
 `90300ac5a654b2011a82b9b935422e3c1b629124`.
@@ -43,7 +48,7 @@ current CI run. The earlier 8m 15s figure used the top-level run start and
 therefore included three seconds before the first job; it is not the table's
 job-span metric.
 
-## Prior comparison observations
+## Archival prior comparison observations
 
 These are directional comparisons, not a controlled A/B test: the runs have
 different head SHAs and may have different runner/cache state.
@@ -65,7 +70,7 @@ same-SHA, same-runner, cache-hit evidence. On the same reporter metric, CI wall
 time is 10s (2.0%) faster, with runner-seconds falling from 1,035 to 836
 (19.2%); these are also directional because the revisions differ.
 
-## Observed cache configuration and limits
+## Archival baseline cache configuration and limits
 
 The job JSON exposes cache step names and durations, but not the cache-hit
 outputs. The following is the workflow configuration that produced each
@@ -98,8 +103,9 @@ The reviewed `rust-cache` action sets `CARGO_INCREMENTAL=0` in its source. That
 is an intentional cache/build tradeoff and must be recorded with timing data.
 Its dependency-focused workspace cache can still require workspace crates to
 rebuild, so a warm cache result is not a pure cache-hit speed measurement.
-The actual cache size and eviction behavior remain unmeasured here; this report
-does not assert a current service quota.
+For these archival baseline runs, actual cache archive sizes and eviction
+observations were not recorded. The R0 archive sizes measured below are not
+evidence of archival-baseline hit/miss state.
 
 The proposed workflow changes must record a first-miss run before a warm rerun
 on the same revision, preserving all required checks and recording the actual
@@ -119,6 +125,73 @@ inputs used here: `macos-14`, `windows-latest`, `windows-11-arm`,
 must be recorded for each future run; the proposed pinned revision is not a
 property of these baseline measurements. Runner image/toolchain drift must be
 noted with the measurement.
+
+## R0 measured results
+
+These are later same-head measurements, distinct from the archival baselines
+above. The required checks remained enabled; no gate was removed. A bounded
+cleanup removed only the two superseded pre-final Windows namespace entries
+(cache IDs `7367669305` and `7367635947`, `3,293,808,676` bytes total); the
+measured macOS and final-Windows namespaces were retained.
+
+### Signed macOS test: same-SHA first miss then warm
+
+Run [33986074362](https://github.com/Magnus-Gille/sagascript/actions/runs/33986074362)
+used exact SHA `16e216f9de38ba7d889c43cb1a909222290229b1` on
+`macos-14-arm64` image `20260831.0302.1`.
+
+| Attempt | Job | Cache state | Elapsed |
+| --- | --- | --- | ---: |
+| 1 | `101359680872` | first miss (`No cache found`) | 455s (7m 35s) |
+| 2 | `101361528405` | warm hit; `Cache up-to-date` | 241s (4m 01s) |
+
+Both attempts used the exact Rust-cache key
+`v0-rust-sagascript-test-macos-arm64-Darwin-arm64-2eab217e-3c0a7087` and the
+same runner image. Attempt 1 uploaded a compressed archive of `638,589,073`
+bytes (about 609 MiB); attempt 2 emitted no duplicate upload. Only the
+compressed upload size is reported here; no stored-size value was collected.
+
+The warm result is 214s (47.0%) below the same-SHA first miss. Compared with
+the archival raw-target-cache baseline [33984088875](https://github.com/Magnus-Gille/sagascript/actions/runs/33984088875)
+at 276s, it is 35s (12.7%) faster. The 276s comparison uses a different
+revision/workflow/cache strategy, so it is directional; the same-SHA 455s to
+241s comparison is the stronger cache measurement. **Mac acceptance gate:
+PASS** — 241s is below the 360s (6m) target and does not regress the 276s
+archival baseline.
+
+### Final Windows candidate gate
+
+Final-workflow run [33986720550](https://github.com/Magnus-Gille/sagascript/actions/runs/33986720550)
+used exact SHA `a7d595c3567a3b3743d270a8a22fd0b542b47ee4`. Both attempts
+completed successfully with the same runner images and final cache namespaces:
+
+| Attempt | x64 job / elapsed | ARM64 job / elapsed | Rust-cache state |
+| --- | --- | --- | --- |
+| 1 (first miss) | [101361540562](https://github.com/Magnus-Gille/sagascript/actions/runs/33986720550/job/101361540562) / 1,430s (23m 50s) | [101361540387](https://github.com/Magnus-Gille/sagascript/actions/runs/33986720550/job/101361540387) / 1,157s (19m 17s) | direct misses; both saved |
+| 2 (warm) | [101364930255](https://github.com/Magnus-Gille/sagascript/actions/runs/33986720550/job/101364930255) / 687s (11m 27s) | [101364930401](https://github.com/Magnus-Gille/sagascript/actions/runs/33986720550/job/101364930401) / 601s (10m 01s) | exact hits; restored; up-to-date |
+
+The x64 runner was `windows-2025-vs2026` / `20260824.214.3`, with exact key
+`v0-rust-windows-package-x64-win25-vs2026-20260824.214.3-5fafc8541ef3c9a4f1e599f1fae678867ad684dfe9c7659e1cb26c4b3587af11-Windows_NT-x64-2113753f-3c0a7087`.
+The ARM64 runner was `windows-11-arm64` / `20260830.155.1`, with exact key
+`v0-rust-windows-package-arm64-win11-arm64-20260830.155.1-5fafc8541ef3c9a4f1e599f1fae678867ad684dfe9c7659e1cb26c4b3587af11-Windows_NT-arm64-931dfa08-3c0a7087`.
+Both keys use workflow hash `5fafc8541ef3c9a4f1e599f1fae678867ad684dfe9c7659e1cb26c4b3587af11`.
+
+Attempt 1 saved compressed Rust-cache archives of `1,652,192,855` bytes (x64)
+and `1,641,248,114` bytes (ARM64). Attempt 2 restored exact full matches, then
+reported `Cache up-to-date` with no duplicate save; the collected cache API
+stored sizes match those upload byte counts. Both native architecture/image
+identity checks passed on both attempts; no required native check was removed.
+
+The warm reporter result was `wallSeconds=687` and `runnerSeconds=1288`.
+Against the archival x64 baseline of 1,220s (20m 20s), warm x64 improved by
+533s (43.7%) and is 11m 27s, below the 12m target. Against the same-SHA first
+miss of 1,430s, warm x64 improved by 743s (52.0%). The first miss was 210s
+(17.2%) slower than the archival baseline; that cold-run regression is retained
+here and not hidden by the warm result. **Windows acceptance gate: PASS.**
+
+The earlier first-miss run [33985466337](https://github.com/Magnus-Gille/sagascript/actions/runs/33985466337)
+used the pre-final `d97ef...` namespace and remains excluded from this final
+warm comparison.
 
 ## R0 acceptance targets
 
