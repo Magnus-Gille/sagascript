@@ -259,7 +259,10 @@ configuration counts, pooled first-warm human-speech WER, all-warm nearest-rank
 p50/p95, cold timings, duration strata, fixed-control counts, and paired
 utterance bootstrap intervals (2,000 resamples, frozen plan seed). Synthetic
 speech and silence do not enter human-speech WER or latency; silence is retained
-as a separate negative control. Missing false-replacement annotations stay null.
+as a separate negative control. `controls` includes human speech and silence;
+synthetic controls are reported separately as `synthetic_controls` and never
+inflate human specialist recall or number/negation evidence. Missing
+false-replacement annotations stay null.
 
 Any failed pair is counted and suppresses that configuration's metrics rather
 than selecting a successful subset. Comparisons require complete matching human

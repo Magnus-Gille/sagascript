@@ -172,7 +172,10 @@ def _summarize(manifest, plan, reference_map, terms_map, output_dir):
                                "p95_exploratory": len(human) < 40,
                                "duration_strata": strata,
                                "synthetic_utterances": sum(rows[uid]["origin"] == "synthetic" for uid in scores[key]),
-                               "controls": _controls(scores[key], rows) if complete else None})
+                               "controls": _controls({uid: score for uid, score in scores[key].items()
+                                                      if rows[uid]["origin"] != "synthetic"}, rows) if complete else None,
+                               "synthetic_controls": _controls({uid: score for uid, score in scores[key].items()
+                                                                if rows[uid]["origin"] == "synthetic"}, rows) if complete else None})
     comparisons = []
     for key, config in configs.items():
         baseline_id = next((bid for bid, base in configs.items()

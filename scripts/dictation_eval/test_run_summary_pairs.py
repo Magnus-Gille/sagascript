@@ -287,6 +287,37 @@ class RunSummaryPairTests(unittest.TestCase):
         self.assertIsNone(candidate["controls"])
         self.assertEqual(summary["comparisons"], [])
 
+    def test_synthetic_controls_do_not_inflate_human_controls(self):
+        fixture, output = self._fixture()
+        fixture.terms_map["synthetic"] = {
+            "specialist_terms": ["synthetic"],
+            "control_terms": ["words"],
+        }
+        original_warm_texts = fixture._warm_texts
+
+        def warm_texts(identifier, model):
+            if identifier == "synthetic":
+                return ["other"] * 5
+            return original_warm_texts(identifier, model)
+
+        fixture._warm_texts = warm_texts
+
+        summary = fixture.run(output)
+        baseline = next(
+            row for row in summary["configurations"] if row["model"] == "base.en"
+        )
+
+        self.assertEqual(baseline["controls"]["specialist_expected"], 2)
+        self.assertEqual(baseline["controls"]["specialist_recalled"], 1)
+        self.assertEqual(baseline["controls"]["first_warm_control_errors"], 0)
+        self.assertEqual(baseline["controls"]["silence_utterances"], 1)
+
+        synthetic = baseline["synthetic_controls"]
+        self.assertEqual(synthetic["specialist_expected"], 1)
+        self.assertEqual(synthetic["specialist_recalled"], 0)
+        self.assertEqual(synthetic["first_warm_control_errors"], 1)
+        self.assertEqual(synthetic["silence_utterances"], 0)
+
     def test_zero_baseline_warm_latency_is_inconclusive_not_an_error(self):
         fixture, output = self._fixture(zero_baseline_warm=True)
         summary = fixture.run(output)
