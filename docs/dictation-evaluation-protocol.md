@@ -209,18 +209,22 @@ hash-checked without trimming and frozen in memory. No paths or transcripts
 are printed in successful summaries or processing-error messages.
 
 Output must not exist and its parent must already exist. Unix directory/file
-modes are0700/0600; Windows inherits the operator-selected parent's ACL.
+modes are 0700/0600; Windows inherits the operator-selected parent's ACL.
 Each pair retains its raw transcript-bearing quality report, private stderr,
 and scored result under numeric names. Stderr can contain paths/text and must
 not be published. These diagnostics are not a public aggregate. Existing files
 are never overwritten; interruption/disk failure can leave a partial directory,
 which is retained without implicit resume or deletion. The default child
-timeout is900seconds (explicit range1–3600). Identity failure stops further
+timeout is 900 seconds for the entire cold-plus-warm sequence of one pair
+(explicit range 1–3600). Identity failure stops further
 launches while recording remaining pairs as not attempted.
 
 A nonzero child with a valid report keeps its scores and failure status rather
-than disappearing from the experiment. Failed executions yield exit1 with a
-content-free summary; invalid preflight inputs yield exit2. Summary success is
+than disappearing from the experiment. Failed executions yield exit 1 with a
+content-free summary; invalid preflight inputs yield exit 2. Output I/O failures
+after creation yield exit 3 and explicitly require retaining partial output.
+Binary, audio and reference inputs must be regular files, not symlinks; resolve
+an executable symlink explicitly before freezing its plan. Summary success is
 only execution success: `decision` remains `inconclusive`. Cold means the first
 call in each new backend, not an OS-cold machine. First warm is fixed for WER;
 later warm results remain available and must not become best-of selection.

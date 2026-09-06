@@ -29,6 +29,10 @@ MAX_REFERENCE_BYTES = 400_000
 MAX_JSON_BYTES = 16 * 1024 * 1024
 
 
+class ExecutionOutputError(RuntimeError):
+    """A private output may be partial and must be retained for inspection."""
+
+
 def _invalid():
     return ValueError("invalid local paired execution input")
 
@@ -70,10 +74,13 @@ def _write_new(path, value):
     # Serialize before exclusive creation. Keep a partial file on write failure;
     # never unlink a name that another process could have replaced.
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(encoded)
-        handle.flush()
-        os.fsync(handle.fileno())
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError:
+        raise ExecutionOutputError("private evaluation output may be partial") from None
 
 
 def freeze_plan(manifest, configurations, *, split, seed, iterations,
@@ -128,8 +135,8 @@ def _inputs(manifest, plan, audio_map, reference_map, terms_map):
     return prepared
 
 
-def run_evaluation(manifest, plan, audio_map, reference_map, terms_map,
-                   binary_path, output_dir, timeout_seconds=900):
+def _run_evaluation(manifest, plan, audio_map, reference_map, terms_map,
+                    binary_path, output_dir, timeout_seconds=900):
     """Execute all frozen pairs, preserving per-pair failure and scoring evidence.
 
     No existing output is reused. Preflight failures create nothing. Interruption
@@ -164,11 +171,11 @@ def run_evaluation(manifest, plan, audio_map, reference_map, terms_map,
         result = {"schema_version": 1, "index": index, **pair,
                   "status": "not_attempted", "exit_code": None, "score": None,
                   "source_audio_sha256_before": None, "source_audio_sha256_after": None}
+        if identity_failed:
+            _write_new(output / f"{index:05d}-result.json", result)
+            statuses["not_attempted"] = statuses.get("not_attempted", 0) + 1
+            continue
         try:
-            if identity_failed:
-                _write_new(output / f"{index:05d}-result.json", result)
-                statuses["not_attempted"] = statuses.get("not_attempted", 0) + 1
-                continue
             before = _file_digest(audio, MAX_AUDIO_BYTES)
             result["source_audio_sha256_before"] = before
             if (before != row["audio_sha256"]
@@ -228,4 +235,15 @@ def run_evaluation(manifest, plan, audio_map, reference_map, terms_map,
     return summary
 
 
-__all__ = ["freeze_plan", "run_evaluation"]
+def run_evaluation(manifest, plan, audio_map, reference_map, terms_map,
+                   binary_path, output_dir, timeout_seconds=900):
+    try:
+        return _run_evaluation(manifest, plan, audio_map, reference_map, terms_map,
+                               binary_path, output_dir, timeout_seconds)
+    except OSError:
+        # Preflight filesystem errors have already become ValueError. A later
+        # error can leave private output: do not call it "no result produced".
+        raise ExecutionOutputError("private evaluation output may be partial") from None
+
+
+__all__ = ["ExecutionOutputError", "freeze_plan", "run_evaluation"]

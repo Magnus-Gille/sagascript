@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import stat
 import subprocess
@@ -107,7 +108,8 @@ class RunnerCliTests(unittest.TestCase):
                 "plan_written": True,
             })
             self.assertFalse("clip_1" in result.stdout or "a" * 64 in result.stdout)
-            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+            if os.name == "posix":
+                self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
             frozen = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(frozen["order"], [{"utterance_id": "clip_1", "configuration_id": "en_baseline"}])
             original = output.read_bytes()
@@ -140,6 +142,7 @@ class RunnerCliTests(unittest.TestCase):
             manifest_path = self.write_json(root, "manifest.json", manifest())
             plan_path = self.write_json(root, "plan.json", {})
             missing = root / "PRIVATE_SENTINEL_missing.json"
+            binary = (root / "binary").resolve()
             result = self.run_cli(
                 "run-plan",
                 "--manifest",
@@ -153,7 +156,7 @@ class RunnerCliTests(unittest.TestCase):
                 "--terms",
                 missing,
                 "--binary",
-                "/private/binary",
+                binary,
                 "--output-dir",
                 root / "output",
             )
@@ -179,6 +182,7 @@ class RunnerCliTests(unittest.TestCase):
                 "statuses": {"cli_failed": 1, "completed": 1},
             }
             output = io.StringIO()
+            binary = str((root / "binary").resolve())
             with mock.patch.dict(sys.modules, {"runner": fake_runner}):
                 with contextlib.redirect_stdout(output):
                     code = main(
@@ -195,7 +199,7 @@ class RunnerCliTests(unittest.TestCase):
                             "--terms",
                             str(paths["terms"]),
                             "--binary",
-                            "/private/binary",
+                            binary,
                             "--output-dir",
                             str(root / "output"),
                         ]

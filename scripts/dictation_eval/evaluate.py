@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from corpus_manifest import coverage_report
+from runner import ExecutionOutputError
 
 
 VERSION = "Sagascript dictation evaluator 0.2.0 (schema 1)"
@@ -127,6 +128,10 @@ def main(argv=None):
                 args.timeout_seconds,
             )
         encoded = json.dumps(result, allow_nan=False, sort_keys=True, indent=2)
+    except ExecutionOutputError:
+        print("Evaluation output failed; retain the private partial output for inspection.",
+              file=sys.stderr)
+        return 3
     except (OSError, ValueError, TypeError, UnicodeError, OverflowError, RecursionError):
         # Never print source paths, opaque IDs, transcript text, or an exception
         # representation. Fine-grained diagnostics remain in pure helper tests.
