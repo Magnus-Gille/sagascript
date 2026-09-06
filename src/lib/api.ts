@@ -2,7 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import type { MeetingExportFormat, MeetingTranscript } from "./meeting-types";
 
 export type Language = "en" | "sv" | "no" | "auto";
-export type HotkeyMode = "push" | "toggle";
+export type HotkeyMode = "push" | "toggle" | "presenter";
+
+export type PresenterFinishAction = "insert_only" | "return" | "command_return";
+
+export interface PresenterConfig {
+  finish_shortcut: string;
+  cancel_shortcut: string | null;
+  app_actions: Record<string, PresenterFinishAction>;
+}
 
 export interface HotkeyProfile {
   id: string;
@@ -24,6 +32,7 @@ export interface Settings {
   language: Language;
   whisper_model: string;
   hotkey_mode: HotkeyMode;
+  presenter: PresenterConfig;
   show_overlay: boolean;
   auto_paste: boolean;
   auto_select_model: boolean;
@@ -112,6 +121,10 @@ export async function setAutoSelectModel(enabled: boolean): Promise<void> {
 
 export async function setHotkeyMode(mode: HotkeyMode): Promise<void> {
   return invoke("set_hotkey_mode", { mode });
+}
+
+export async function setPresenterConfig(config: PresenterConfig): Promise<void> {
+  return invoke("set_presenter_config", { config });
 }
 
 export async function setHotkey(shortcut: string): Promise<void> {

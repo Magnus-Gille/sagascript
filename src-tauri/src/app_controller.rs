@@ -75,6 +75,10 @@ pub struct AppController {
     last_error: Option<String>,
     model_ready: bool,
     active_hotkey_profile: Option<HotkeyProfile>,
+    active_hotkey_mode: Option<HotkeyMode>,
+    presenter_owned: bool,
+    recording_generation: u64,
+    hotkey_configuration_changing: bool,
     training_recording: bool,
     session_data: Option<serde_json::Value>,
     release_started: Option<Instant>,
@@ -105,6 +109,10 @@ impl AppController {
             last_error: None,
             model_ready: false,
             active_hotkey_profile: None,
+            active_hotkey_mode: None,
+            presenter_owned: false,
+            recording_generation: 0,
+            hotkey_configuration_changing: false,
             training_recording: false,
             session_data: None,
             release_started: None,
@@ -190,7 +198,7 @@ impl AppController {
     ) -> Result<HotkeyDownResult, DictationError> {
         info!("Hotkey DOWN");
 
-        match self.settings.hotkey_mode {
+        match self.session_hotkey_mode() {
             HotkeyMode::PushToTalk => {
                 // Only report StartedRecording if we actually started. Holding
                 // PTT while a prior utterance is still Transcribing must be a
@@ -213,7 +221,19 @@ impl AppController {
                 {
                     Ok(HotkeyDownResult::StopRecording)
                 } else if self.state == AppState::Idle {
-                    self.start_recording_for_profile(profile)?;
+                    if self.start_recording_for_profile(profile)? {
+                        Ok(HotkeyDownResult::StartedRecording)
+                    } else {
+                        Ok(HotkeyDownResult::NoOp)
+                    }
+                } else {
+                    Ok(HotkeyDownResult::NoOp)
+                }
+            }
+            HotkeyMode::Presenter => {
+                // Atomic Start is never a toggle. Finish has its own action;
+                // repeated Start, training and in-flight transcription are no-ops.
+                if self.start_recording_for_profile(profile)? {
                     Ok(HotkeyDownResult::StartedRecording)
                 } else {
                     Ok(HotkeyDownResult::NoOp)
@@ -222,9 +242,66 @@ impl AppController {
         }
     }
 
+    fn session_hotkey_mode(&self) -> HotkeyMode {
+        if self.state.is_busy() {
+            self.active_hotkey_mode.unwrap_or(self.settings.hotkey_mode)
+        } else {
+            self.settings.hotkey_mode
+        }
+    }
+
+    pub fn should_finish_presenter(&self) -> bool {
+        self.is_presenter_session() && self.state.is_recording()
+    }
+
+    pub fn recording_generation(&self) -> u64 {
+        self.recording_generation
+    }
+
+    pub fn is_presenter_session(&self) -> bool {
+        self.state.is_busy()
+            && self.presenter_owned
+            && self.active_hotkey_mode == Some(HotkeyMode::Presenter)
+            && !self.training_recording
+    }
+
+    /// Only the validated registration-failure fallback caller may use this.
+    /// Keep the invalid saved configuration visible, but make this one capture
+    /// releasable by the exact fallback key that actually started it.
+    pub fn use_safe_fallback_lifecycle(&mut self) {
+        if self.state.is_recording() && !self.training_recording {
+            self.active_hotkey_mode = Some(HotkeyMode::PushToTalk);
+            if let Some(profile) = &mut self.active_hotkey_profile {
+                profile.shortcut = crate::SAFE_FALLBACK_HOTKEY.to_string();
+            }
+        }
+    }
+
+    pub fn stop_recording_generation(&mut self, generation: u64) -> StopRecordingOutcome {
+        if self.recording_generation != generation {
+            StopRecordingOutcome::NotRecording
+        } else {
+            self.stop_recording_guarded()
+        }
+    }
+
+    /// Prevent a recording from starting halfway through an OS registration
+    /// transaction, without holding the controller mutex across native calls.
+    pub fn begin_hotkey_configuration_change(&mut self) -> bool {
+        if self.state != AppState::Idle || self.hotkey_configuration_changing {
+            return false;
+        }
+        self.hotkey_configuration_changing = true;
+        true
+    }
+
+    pub fn end_hotkey_configuration_change(&mut self) {
+        self.hotkey_configuration_changing = false;
+    }
+
     /// Handle hotkey up event
     pub fn should_stop_on_key_up(&self) -> bool {
-        self.settings.hotkey_mode == HotkeyMode::PushToTalk
+        self.session_hotkey_mode() == HotkeyMode::PushToTalk
             && self.state.is_recording()
             && !self.training_recording
     }
@@ -278,10 +355,14 @@ impl AppController {
     where
         F: FnOnce(&mut AudioCaptureService) -> Result<(), DictationError>,
     {
-        if self.state != AppState::Idle {
+        if self.state != AppState::Idle || self.hotkey_configuration_changing {
             warn!("Cannot start recording: state is {:?}", self.state);
             return Ok(false);
         }
+
+        let next_generation = self.recording_generation.checked_add(1).ok_or_else(|| {
+            DictationError::TranscriptionFailed("Recording generation exhausted; restart Sagascript.".into())
+        })?;
 
         let session_id = self.logging.start_dictation_session();
         self.logging.log(
@@ -314,6 +395,9 @@ impl AppController {
             "Recording profile selected"
         );
         self.active_hotkey_profile = Some(profile);
+        self.recording_generation = next_generation;
+        self.active_hotkey_mode = Some(self.settings.hotkey_mode);
+        self.presenter_owned = false;
         self.training_recording = false;
         self.state = AppState::Recording;
         self.recording_start = Some(Instant::now());
@@ -321,6 +405,34 @@ impl AppController {
 
         info!("Recording started");
         Ok(true)
+    }
+
+    /// Only the native Presenter coordinator owns this completion pipeline.
+    /// A GUI/manual recording must keep its normal lifecycle even when the
+    /// configured global-hotkey mode happens to be Presenter.
+    pub fn start_presenter_recording_for_profile(
+        &mut self,
+        profile: HotkeyProfile,
+    ) -> Result<bool, DictationError> {
+        self.start_presenter_recording_with_capture(profile, |audio| audio.start_capture())
+    }
+
+    fn start_presenter_recording_with_capture<F>(
+        &mut self,
+        profile: HotkeyProfile,
+        start_capture: F,
+    ) -> Result<bool, DictationError>
+    where
+        F: FnOnce(&mut AudioCaptureService) -> Result<(), DictationError>,
+    {
+        if self.settings.hotkey_mode != HotkeyMode::Presenter {
+            return Ok(false);
+        }
+        let started = self.start_recording_for_profile_with_capture(profile, start_capture)?;
+        if started {
+            self.presenter_owned = true;
+        }
+        Ok(started)
     }
 
     /// Start a Teach Sagascript recording that only the Teach UI may stop.
@@ -414,6 +526,7 @@ impl AppController {
 
     /// Called after transcription succeeds
     pub fn on_transcription_success(&mut self, text: &str) {
+        self.presenter_owned = false;
         self.end_session("success");
         self.last_error = None;
         self.last_transcription = Some(text.to_string());
@@ -427,6 +540,7 @@ impl AppController {
     /// Complete a quiet push-to-talk cancellation without replacing the last
     /// useful transcript, surfacing an error, or leaving retry audio behind.
     pub fn on_no_speech_detected(&mut self) {
+        self.presenter_owned = false;
         self.end_session("no_speech");
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
@@ -452,6 +566,7 @@ impl AppController {
 
     /// Called after transcription fails
     pub fn on_transcription_error(&mut self, error: &str) {
+        self.presenter_owned = false;
         self.end_session("error");
         self.last_error = Some(error.to_string());
         self.state = AppState::Idle;
@@ -495,14 +610,22 @@ impl AppController {
     }
 
     /// Cancel recording without transcribing
+    pub fn complete_cancelled_recording(&mut self) {
+        self.presenter_owned = false;
+        self.end_session("cancelled");
+        self.audio.clear_last_captured();
+        self.state = AppState::Idle;
+        self.active_hotkey_profile = None;
+        self.active_hotkey_mode = None;
+        self.training_recording = false;
+        self.logging.end_dictation_session();
+    }
+
+    /// Cancel recording without transcribing
     pub fn cancel_recording(&mut self) {
         if self.state.is_recording() {
             let _ = self.audio.stop_capture();
-            self.end_session("cancelled");
-            self.state = AppState::Idle;
-            self.active_hotkey_profile = None;
-            self.training_recording = false;
-            self.logging.end_dictation_session();
+            self.complete_cancelled_recording();
             info!("Recording cancelled");
         }
     }
@@ -557,6 +680,7 @@ impl AppController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     fn default_controller() -> AppController {
         AppController::new(Settings::default())
@@ -595,6 +719,237 @@ mod tests {
     fn initial_state_is_idle() {
         let ctrl = default_controller();
         assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn a_deferred_stop_cannot_stop_a_new_recording() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        ctrl.start_recording_for_profile_with_capture(profile.clone(), |_| Ok(())).unwrap();
+        let old_generation = ctrl.recording_generation();
+        ctrl.cancel_recording();
+        ctrl.start_recording_for_profile_with_capture(profile, |_| Ok(())).unwrap();
+        assert_ne!(old_generation, ctrl.recording_generation());
+        assert!(matches!(ctrl.stop_recording_generation(old_generation), StopRecordingOutcome::NotRecording));
+        assert_eq!(ctrl.state(), AppState::Recording);
+        ctrl.cancel_recording();
+    }
+
+    #[test]
+    fn cancellation_during_transcription_requires_explicit_completion() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+
+        ctrl.cancel_recording();
+        assert_eq!(ctrl.state(), AppState::Transcribing);
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+
+        ctrl.complete_cancelled_recording();
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+    }
+
+    #[test]
+    fn failed_capture_keeps_generation_available_for_next_start() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        assert!(ctrl
+            .start_recording_for_profile_with_capture(profile.clone(), |_| Ok(()))
+            .unwrap());
+        let first_generation = ctrl.recording_generation();
+        ctrl.cancel_recording();
+
+        let failed = ctrl.start_recording_for_profile_with_capture(profile.clone(), |_| {
+            Err(DictationError::MicrophonePermissionDenied)
+        });
+        assert!(matches!(failed, Err(DictationError::MicrophonePermissionDenied)));
+        assert_eq!(ctrl.recording_generation(), first_generation);
+        assert_eq!(ctrl.state(), AppState::Idle);
+
+        assert!(ctrl
+            .start_recording_for_profile_with_capture(profile, |_| Ok(()))
+            .unwrap());
+        assert_eq!(ctrl.recording_generation(), first_generation + 1);
+        ctrl.cancel_recording();
+    }
+
+    #[test]
+    fn generation_exhaustion_fails_before_capture() {
+        let mut ctrl = default_controller();
+        ctrl.recording_generation = u64::MAX;
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        let capture_called = Cell::new(false);
+
+        let result = ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            capture_called.set(true);
+            Ok(())
+        });
+
+        assert!(matches!(
+            result,
+            Err(DictationError::TranscriptionFailed(message))
+                if message.contains("generation exhausted")
+        ));
+        assert!(!capture_called.get());
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert_eq!(ctrl.recording_generation(), u64::MAX);
+    }
+
+    #[test]
+    fn manual_recording_in_presenter_mode_does_not_own_presenter_pipeline() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Presenter;
+        let profile = ctrl.settings.resolved_hotkey_profiles()[0].clone();
+        ctrl.start_recording_for_profile_with_capture(profile, |_| Ok(())).unwrap();
+        assert!(!ctrl.is_presenter_session());
+        assert!(!ctrl.should_finish_presenter());
+        ctrl.state = AppState::Transcribing;
+        assert!(!ctrl.is_presenter_session());
+        ctrl.finish_transcription(Ok("manual result".into())).unwrap();
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert_eq!(ctrl.last_transcription(), Some("manual result"));
+    }
+
+    #[test]
+    fn dedicated_presenter_start_owns_successful_capture_and_repeated_start_is_noop() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Presenter;
+        let profile = ctrl.settings.resolved_hotkey_profiles()[0].clone();
+
+        assert!(ctrl
+            .start_presenter_recording_with_capture(profile.clone(), |_| Ok(()))
+            .unwrap());
+        let generation = ctrl.recording_generation();
+        assert!(ctrl.presenter_owned);
+        assert!(ctrl.is_presenter_session());
+
+        assert!(!ctrl
+            .start_presenter_recording_with_capture(profile, |_| {
+                panic!("a repeated presenter start must not invoke capture")
+            })
+            .unwrap());
+        assert_eq!(ctrl.recording_generation(), generation);
+        assert!(ctrl.presenter_owned);
+        assert!(ctrl.is_presenter_session());
+        ctrl.complete_cancelled_recording();
+    }
+
+    #[test]
+    fn presenter_start_failure_block_and_wrong_mode_never_take_ownership() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings.resolved_hotkey_profiles()[0].clone();
+
+        assert!(!ctrl
+            .start_presenter_recording_with_capture(profile.clone(), |_| {
+                panic!("wrong-mode presenter start must not invoke capture")
+            })
+            .unwrap());
+        assert!(!ctrl.presenter_owned);
+        assert_eq!(ctrl.state(), AppState::Idle);
+
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Presenter;
+        ctrl.state = AppState::Transcribing;
+        assert!(!ctrl
+            .start_presenter_recording_with_capture(profile.clone(), |_| {
+                panic!("blocked presenter start must not invoke capture")
+            })
+            .unwrap());
+        assert!(!ctrl.presenter_owned);
+        assert_eq!(ctrl.state(), AppState::Transcribing);
+
+        ctrl.state = AppState::Idle;
+        let failed = ctrl.start_presenter_recording_with_capture(profile, |_| {
+            Err(DictationError::MicrophonePermissionDenied)
+        });
+        assert!(matches!(failed, Err(DictationError::MicrophonePermissionDenied)));
+        assert!(!ctrl.presenter_owned);
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert!(ctrl.active_hotkey_profile().is_none());
+    }
+
+    #[test]
+    fn presenter_ownership_clears_on_every_terminal_path_and_manual_restart_stays_normal() {
+        for terminal in ["success", "error", "no_speech", "cancelled"] {
+            let mut ctrl = default_controller();
+            ctrl.settings_mut().hotkey_mode = HotkeyMode::Presenter;
+            let profile = ctrl.settings.resolved_hotkey_profiles()[0].clone();
+            assert!(ctrl
+                .start_presenter_recording_with_capture(profile, |_| Ok(()))
+                .unwrap());
+            assert!(ctrl.presenter_owned);
+
+            match terminal {
+                "success" => ctrl.on_transcription_success("presenter result"),
+                "error" => ctrl.on_transcription_error("presenter failed"),
+                "no_speech" => ctrl.on_no_speech_detected(),
+                "cancelled" => ctrl.complete_cancelled_recording(),
+                _ => unreachable!(),
+            }
+            assert!(!ctrl.presenter_owned, "terminal path: {terminal}");
+            assert_eq!(ctrl.state(), AppState::Idle);
+
+            let profile = ctrl.settings.resolved_hotkey_profiles()[0].clone();
+            assert!(ctrl
+                .start_recording_for_profile_with_capture(profile, |_| Ok(()))
+                .unwrap());
+            assert!(!ctrl.presenter_owned, "manual restart: {terminal}");
+            assert!(!ctrl.is_presenter_session(), "manual restart: {terminal}");
+            ctrl.complete_cancelled_recording();
+        }
+    }
+
+    #[test]
+    fn training_capture_is_never_presenter_owned() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Presenter;
+        let profile = ctrl.settings.resolved_hotkey_profiles()[0].clone();
+        assert!(ctrl
+            .start_recording_for_profile_with_capture(profile, |_| Ok(()))
+            .unwrap());
+        ctrl.training_recording = true;
+        assert!(!ctrl.presenter_owned);
+        assert!(!ctrl.is_presenter_session());
+        ctrl.complete_cancelled_recording();
+    }
+
+    #[test]
+    fn training_recording_is_not_a_presenter_session() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Presenter;
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_mode = Some(HotkeyMode::Presenter);
+        ctrl.training_recording = true;
+        assert!(!ctrl.is_presenter_session());
+        assert!(!ctrl.should_finish_presenter());
+        ctrl.complete_cancelled_recording();
+    }
+
+    #[test]
+    fn pending_toggle_configuration_does_not_report_started_recording() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        assert!(ctrl.begin_hotkey_configuration_change());
+
+        let result = ctrl.handle_hotkey_down_for_profile(profile);
+
+        assert_eq!(result.unwrap(), HotkeyDownResult::NoOp);
+        assert_eq!(ctrl.state(), AppState::Idle);
+        ctrl.end_hotkey_configuration_change();
+    }
+
+    #[test]
+    fn fallback_start_freezes_push_to_talk_without_rewriting_preferences() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Presenter;
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        ctrl.start_recording_for_profile_with_capture(profile, |_| Ok(())).unwrap();
+        ctrl.use_safe_fallback_lifecycle();
+        assert!(ctrl.should_stop_profile_on_key_up(crate::SAFE_FALLBACK_HOTKEY));
+        assert!(!ctrl.should_finish_presenter());
+        assert_eq!(ctrl.settings().hotkey_mode, HotkeyMode::Presenter);
+        ctrl.cancel_recording();
     }
 
     #[test]
@@ -800,6 +1155,58 @@ mod tests {
         ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
         ctrl.state = AppState::Recording;
         assert!(!ctrl.should_stop_on_key_up());
+    }
+
+    #[test]
+    fn presenter_start_and_release_never_implicitly_finish() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Presenter;
+        ctrl.active_hotkey_mode = Some(HotkeyMode::Presenter);
+        ctrl.presenter_owned = true;
+        for state in [AppState::Recording, AppState::Transcribing] {
+            ctrl.state = state;
+            assert_eq!(ctrl.handle_hotkey_down().unwrap(), HotkeyDownResult::NoOp);
+            assert!(!ctrl.should_stop_on_key_up());
+            assert_eq!(ctrl.should_finish_presenter(), state == AppState::Recording);
+        }
+        ctrl.state = AppState::Recording;
+        ctrl.training_recording = true;
+        assert!(!ctrl.should_finish_presenter());
+    }
+
+    #[test]
+    fn mode_changes_do_not_reinterpret_active_recording() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_mode = Some(HotkeyMode::Presenter);
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        ctrl.presenter_owned = true;
+        assert!(!ctrl.should_stop_on_key_up());
+        assert!(ctrl.should_finish_presenter());
+        assert_eq!(ctrl.handle_hotkey_down().unwrap(), HotkeyDownResult::NoOp);
+
+        ctrl.active_hotkey_mode = Some(HotkeyMode::PushToTalk);
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Presenter;
+        assert!(ctrl.should_stop_on_key_up());
+        assert!(!ctrl.should_finish_presenter());
+    }
+
+    #[test]
+    fn shortcut_transaction_blocks_capture_without_holding_controller_lock() {
+        let mut ctrl = default_controller();
+        assert!(ctrl.begin_hotkey_configuration_change());
+        assert!(!ctrl.begin_hotkey_configuration_change());
+        let profile = ctrl.settings.resolved_hotkey_profiles()[0].clone();
+        assert!(!ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            panic!("capture must not start while bindings are changing");
+        }).unwrap());
+        ctrl.end_hotkey_configuration_change();
+        assert!(ctrl.begin_hotkey_configuration_change());
+        ctrl.end_hotkey_configuration_change();
+        for state in [AppState::Recording, AppState::Transcribing, AppState::Error] {
+            ctrl.state = state;
+            assert!(!ctrl.begin_hotkey_configuration_change());
+        }
     }
 
     #[test]
@@ -1074,6 +1481,33 @@ mod tests {
             assert!(!ctrl.finish_meeting_job("job-a"));
             assert_eq!(ctrl.state(), state);
         }
+    }
+
+    #[test]
+    fn meeting_and_presenter_ownership_remain_independent() {
+        let mut ctrl = default_controller();
+        ctrl.settings.hotkey_mode = HotkeyMode::Presenter;
+        let profile = ctrl.settings().resolved_hotkey_profiles().remove(0);
+        assert!(ctrl.begin_meeting_job("meeting"));
+        assert!(!ctrl.start_presenter_recording_with_capture(profile.clone(), |_| {
+            panic!("meeting lease must also block Presenter microphone access")
+        }).unwrap());
+        assert!(!ctrl.is_presenter_session());
+        ctrl.cancel_recording();
+        assert_eq!(ctrl.state(), AppState::Transcribing);
+        assert!(!ctrl.finish_meeting_job("foreign"));
+        assert!(ctrl.finish_meeting_job("meeting"));
+
+        assert!(ctrl.start_presenter_recording_with_capture(profile, |_| Ok(())).unwrap());
+        let generation = ctrl.recording_generation;
+        assert!(ctrl.is_presenter_session());
+        assert!(!ctrl.begin_meeting_job("new-meeting"));
+        assert!(!ctrl.finish_meeting_job("meeting"));
+        assert!(ctrl.is_presenter_session());
+        assert_eq!(ctrl.recording_generation, generation);
+        assert_eq!(ctrl.state(), AppState::Recording);
+        // Synthetic capture never opened a microphone.
+        ctrl.complete_cancelled_recording();
     }
 
     // Finding 3: a stop that races an in-flight transcription (state !=

@@ -22,12 +22,39 @@ use sagascript_core::error::DictationError;
 /// Uses clipboard + simulated Cmd+V (macOS) or Ctrl+V (Windows/Linux)
 pub struct PasteService;
 
-fn paste_payload(text: &str) -> Cow<'_, str> {
+pub(crate) fn paste_payload(text: &str) -> Cow<'_, str> {
     if text.is_empty() || text.chars().last().is_some_and(char::is_whitespace) {
         Cow::Borrowed(text)
     } else {
         Cow::Owned(format!("{text} "))
     }
+}
+
+const PASTE_GUARD_REJECTED: &str =
+    "Paste target changed before keystroke dispatch; paste was cancelled.";
+
+#[derive(Debug)]
+enum CheckedDispatchError {
+    GuardRejected,
+    Dispatch(DictationError),
+}
+
+fn run_checked_dispatch<Before, Dispatch>(
+    text: &str,
+    before_key: Before,
+    dispatch: Dispatch,
+) -> Result<(), CheckedDispatchError>
+where
+    Before: FnOnce() -> bool,
+    Dispatch: FnOnce() -> Result<(), DictationError>,
+{
+    if text.is_empty() {
+        return Ok(());
+    }
+    if !before_key() {
+        return Err(CheckedDispatchError::GuardRejected);
+    }
+    dispatch().map_err(CheckedDispatchError::Dispatch)
 }
 
 impl PasteService {
@@ -38,6 +65,17 @@ impl PasteService {
     /// Paste text into the currently active application
     /// Saves and restores previous clipboard contents
     pub fn paste(&self, text: &str) -> Result<(), DictationError> {
+        self.paste_checked(text, || true)
+    }
+
+    /// Paste text only if the caller's target guard is still valid immediately
+    /// before the synthetic keystroke. Clipboard setup and focus delays happen
+    /// before this final check; a rejected guard never dispatches a key.
+    pub(crate) fn paste_checked(
+        &self,
+        text: &str,
+        before_key: impl FnOnce() -> bool,
+    ) -> Result<(), DictationError> {
         if text.is_empty() {
             return Ok(());
         }
@@ -112,9 +150,26 @@ impl PasteService {
         #[cfg(target_os = "windows")]
         wait_for_windows_modifiers()?;
 
-        // Simulate paste keystroke
+        // Simulate paste keystroke. This is intentionally the first operation
+        // after the final target check: a rejected guard cannot emit a key.
         info!("Simulating paste keystroke...");
-        simulate_paste()?;
+        match run_checked_dispatch(text.as_ref(), before_key, simulate_paste) {
+            Ok(()) => {}
+            Err(CheckedDispatchError::GuardRejected) => {
+                // macOS and Windows retain generation/ownership checks for
+                // restoration. Linux has no equivalent generation primitive,
+                // so leave its temporary clipboard untouched rather than
+                // risking a concurrent-copy overwrite.
+                #[cfg(target_os = "macos")]
+                if let Some(snapshot) = saved_pasteboard {
+                    let _ = macos_clipboard::restore_if_unchanged(snapshot, owned_change_count);
+                }
+                #[cfg(target_os = "windows")]
+                saved_windows.schedule_restore();
+                return Err(DictationError::PasteError(PASTE_GUARD_REJECTED.to_owned()));
+            }
+            Err(CheckedDispatchError::Dispatch(error)) => return Err(error),
+        }
 
         // Windows owns the native clipboard session on its worker thread. A
         // dropped pending handle deliberately leaves the temporary copy in
@@ -157,6 +212,61 @@ fn validate_accessibility(trusted: bool) -> Result<(), DictationError> {
         Ok(())
     } else {
         Err(DictationError::AccessibilityPermissionDenied)
+    }
+}
+
+#[cfg(test)]
+mod checked_paste_tests {
+    use super::{run_checked_dispatch, CheckedDispatchError};
+
+    #[test]
+    fn rejected_guard_skips_key_dispatch() {
+        let mut key_calls = 0;
+        let result = run_checked_dispatch(
+            "recognized text",
+            || false,
+            || {
+                key_calls += 1;
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(CheckedDispatchError::GuardRejected)));
+        assert_eq!(key_calls, 0);
+    }
+
+    #[test]
+    fn accepted_guard_dispatches_once() {
+        let mut key_calls = 0;
+        run_checked_dispatch(
+            "recognized text",
+            || true,
+            || {
+                key_calls += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(key_calls, 1);
+    }
+
+    #[test]
+    fn empty_text_does_not_check_guard_or_dispatch() {
+        let mut guard_checks = 0;
+        let mut key_calls = 0;
+        run_checked_dispatch(
+            "",
+            || {
+                guard_checks += 1;
+                true
+            },
+            || {
+                key_calls += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(guard_checks, 0);
+        assert_eq!(key_calls, 0);
     }
 }
 

@@ -15,9 +15,10 @@ const ABORT_GRACE_SECS: u64 = 5;
 
 use crate::app_controller::{AppController, AppState, StopRecordingOutcome};
 use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
+use crate::hotkey::configuration::HotkeyChange;
 use sagascript_core::audio::decoder;
 use sagascript_core::settings::{
-    validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
+    validate_hotkey, HotkeyMode, HotkeyProfile, Language, PresenterConfig, Settings, WhisperModel,
 };
 use sagascript_core::transcription::{
     model, recommended_parallel_chunks, ContextProfile, TranscribeOptions, WhisperBackend,
@@ -486,16 +487,22 @@ pub async fn set_auto_select_model(
 
 #[tauri::command]
 pub async fn set_hotkey_mode(
+    app: tauri::AppHandle,
     controller: State<'_, SharedController>,
+    health: State<'_, HotkeyHealth>,
     mode: HotkeyMode,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
-        settings.hotkey_mode = mode;
-    })?;
-    let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().hotkey_mode = persisted.hotkey_mode;
-    info!("Hotkey mode set to {:?}", mode);
-    Ok(())
+    apply_hotkey_change(app, controller, health, HotkeyChange::Mode(mode))
+}
+
+#[tauri::command]
+pub async fn set_presenter_config(
+    app: tauri::AppHandle,
+    controller: State<'_, SharedController>,
+    health: State<'_, HotkeyHealth>,
+    config: PresenterConfig,
+) -> Result<(), String> {
+    apply_hotkey_change(app, controller, health, HotkeyChange::Presenter(config))
 }
 
 #[tauri::command]
@@ -526,21 +533,39 @@ pub async fn set_hotkey_profiles(
     health: State<'_, HotkeyHealth>,
     profiles: Vec<HotkeyProfile>,
 ) -> Result<(), String> {
-    use tauri::Emitter;
-    Settings::validate_hotkey_profiles(&profiles)?;
-    let new_shortcuts: Vec<String> = profiles
-        .iter()
-        .map(|profile| profile.shortcut.clone())
-        .collect();
-    let new_primary = profiles
-        .iter()
-        .find(|profile| profile.id == "default")
-        .unwrap_or(&profiles[0])
-        .shortcut
-        .clone();
+    apply_hotkey_change(app, controller, health, HotkeyChange::Profiles(profiles))
+}
 
+pub(crate) struct HotkeyConfigurationLease<'a>(&'a SharedController);
+
+impl Drop for HotkeyConfigurationLease<'_> {
+    fn drop(&mut self) {
+        self.0.lock().unwrap().end_hotkey_configuration_change();
+    }
+}
+
+pub(crate) fn acquire_hotkey_configuration(
+    controller: &SharedController,
+) -> Result<HotkeyConfigurationLease<'_>, String> {
+    if !controller.lock().unwrap().begin_hotkey_configuration_change() {
+        return Err("Finish or cancel the active dictation before changing shortcuts".into());
+    }
+    Ok(HotkeyConfigurationLease(controller))
+}
+
+fn apply_hotkey_change(
+    app: tauri::AppHandle,
+    controller: State<'_, SharedController>,
+    health: State<'_, HotkeyHealth>,
+    update: HotkeyChange,
+) -> Result<(), String> {
+    use tauri::Emitter;
     let _transition = health.transition_guard();
+    let _recording_lease = acquire_hotkey_configuration(&controller)?;
     let old_settings = controller.lock().unwrap().settings().clone();
+    let candidate = update.prepare(&sagascript_core::settings::store::load())?;
+    let new_shortcuts = candidate.resolved_shortcuts();
+    let new_primary = candidate.hotkey.clone();
     let old_shortcut = old_settings.hotkey.clone();
     let old_operational = health.operational_hotkey();
     if old_operational == OperationalHotkey::Unknown {
@@ -550,18 +575,13 @@ pub async fn set_hotkey_profiles(
         );
     }
 
-    let old_shortcuts: Vec<String> = old_settings
-        .resolved_hotkey_profiles()
-        .into_iter()
-        .map(|profile| profile.shortcut)
-        .collect();
+    let old_shortcuts = old_settings.resolved_shortcuts();
     if new_shortcuts == old_shortcuts
         && old_operational.matches(&new_shortcuts)
         && !health.is_failed()
     {
         let persisted = sagascript_core::settings::store::try_update(|settings| {
-            settings.replace_hotkey_profiles(profiles.clone())?;
-            Ok(())
+            update.apply_registered(settings, &new_shortcuts)
         })?;
         controller
             .lock()
@@ -649,8 +669,7 @@ pub async fn set_hotkey_profiles(
     );
 
     let persisted = match sagascript_core::settings::store::try_update(|settings| {
-        settings.replace_hotkey_profiles(profiles.clone())?;
-        Ok(())
+        update.apply_registered(settings, &new_shortcuts)
     }) {
         Ok(settings) => settings,
         Err(save_error) => {
@@ -1077,6 +1096,12 @@ pub async fn cancel_recording(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
 ) -> Result<(), String> {
+    if controller.lock().unwrap().is_presenter_session() {
+        let handle = app.clone();
+        app.run_on_main_thread(move || crate::presenter::cancel(&handle))
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
     let mut ctrl = controller.lock().unwrap();
     ctrl.cancel_recording();
     drop(ctrl);
