@@ -14,6 +14,14 @@ test("Dictate renders fixed presenter status feedback", () => {
   assert.match(settings, /No speech detected/);
 });
 
+test("Presenter status does not hijack the selected tab", () => {
+  const listener = settings.match(/const presenterStatusListener = listen\([\s\S]*?\n    \}\)\.then\(remember\);/);
+  assert.ok(listener, "presenter-status listener should remain registered");
+  assert.doesNotMatch(listener[0], /activeTab\s*=/);
+  assert.match(listener[0], /typeof event\.payload !== "string"/);
+  assert.match(listener[0], /!isPresenterStatus\(event\.payload\)/);
+});
+
 test("Presenter UI uses manual-copy wording off macOS", () => {
   assert.match(presenterSettings, /Manual copy on this platform/);
   assert.doesNotMatch(presenterSettings, /Insert-only on this platform/);

@@ -1,6 +1,6 @@
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::process::Command;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 use std::process::ExitStatus;
 
 use clap::{Args, Subcommand};
@@ -193,11 +193,12 @@ fn command_for(request: &PresenterRequest) -> Result<LaunchCommand, DictationErr
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn spawn_failure(error: std::io::Error) -> DictationError {
     DictationError::ApplicationLaunchError(format!("failed to launch presenter request: {error}"))
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn status_failure(status: ExitStatus) -> DictationError {
     DictationError::ApplicationLaunchError(format!(
         "presenter request launcher exited unsuccessfully: {status}"

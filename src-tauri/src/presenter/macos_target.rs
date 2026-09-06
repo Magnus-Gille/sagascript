@@ -185,8 +185,8 @@ fn validate_bundle_id(value: &str) -> Result<(), TargetError> {
     }
 }
 
-fn capture_revalidation_succeeds(snapshot_matches: bool, unchanged: bool) -> bool {
-    snapshot_matches && unchanged
+fn capture_revalidation_succeeds(snapshot_matches: bool, token_valid: bool) -> bool {
+    snapshot_matches && token_valid
 }
 
 fn decode_utf16_bounded(units: &[u16], max_utf8_bytes: usize) -> Result<String, TargetError> {
@@ -259,6 +259,33 @@ fn copy_attribute(element: AXUIElementRef, attribute: &CFString) -> Result<Owned
         return Err(map_ax_error(error));
     }
     OwnedCf::new(value)
+}
+
+// Only the optional subrole may be absent; a successful call with a null
+// value or a transport/permission failure is not proof of absence.
+fn optional_subrole_present(error: AXError, has_value: bool) -> Result<bool, TargetError> {
+    if matches!(error, AX_ERROR_ATTRIBUTE_UNSUPPORTED | AX_ERROR_NO_VALUE) && !has_value {
+        return Ok(false);
+    }
+    if error != AX_SUCCESS {
+        return Err(map_ax_error(error));
+    }
+    if !has_value { return Err(TargetError::InvalidValue); }
+    Ok(true)
+}
+
+fn copy_subrole(element: AXUIElementRef) -> Result<String, TargetError> {
+    let mut value: CFTypeRef = ptr::null();
+    let error = unsafe {
+        AXUIElementCopyAttributeValue(element, attribute_subrole().as_concrete_TypeRef(), &mut value)
+    };
+    // Retain ownership even for an unexpected non-null error result.
+    let owned = if value.is_null() { None } else { Some(OwnedCf(value)) };
+    if !optional_subrole_present(error, owned.is_some())? {
+        return Ok(String::new());
+    }
+    let value = owned.ok_or(TargetError::InvalidValue)?;
+    read_cf_string(value.as_ptr(), MAX_BUNDLE_ID_BYTES).map(|(text, _)| text)
 }
 
 fn require_ax_element(value: CFTypeRef) -> Result<(), TargetError> {
@@ -423,14 +450,7 @@ fn current_target() -> Result<CurrentTarget, TargetError> {
         copy_attribute(focused_field.as_ptr() as AXUIElementRef, &attribute_role())?.as_ptr(),
         MAX_BUNDLE_ID_BYTES,
     )?;
-    let (subrole, _) = read_cf_string(
-        copy_attribute(
-            focused_field.as_ptr() as AXUIElementRef,
-            &attribute_subrole(),
-        )?
-        .as_ptr(),
-        MAX_BUNDLE_ID_BYTES,
-    )?;
+    let subrole = copy_subrole(focused_field.as_ptr() as AXUIElementRef)?;
     validate_editable_role(&role, &subrole)?;
     let (frontmost_pid, app_id) = frontmost_application_identity()?;
     if frontmost_pid != pid {
@@ -596,8 +616,10 @@ impl TargetGuard {
                 _main_thread_only: PhantomData,
             };
             let snapshot_matches = candidate.snapshot_matches()?;
-            let unchanged = candidate.unchanged()?;
-            if !capture_revalidation_succeeds(snapshot_matches, unchanged) {
+            // snapshot_matches already traverses and verifies the current
+            // app/field identity. Avoid a third full AX traversal here, but
+            // reject any observer invalidation during the snapshot read.
+            if !capture_revalidation_succeeds(snapshot_matches, candidate.valid_token().is_ok()) {
                 return Err(TargetError::TargetChanged);
             }
             Ok(candidate)
@@ -653,7 +675,9 @@ impl TargetGuard {
         if !self.matches_current(&current) {
             return Err(TargetError::TargetChanged);
         }
-        read_value_and_selection(current.field.as_ptr() as AXUIElementRef)
+        let observation = read_value_and_selection(current.field.as_ptr() as AXUIElementRef)?;
+        self.valid_token()?;
+        Ok(observation)
     }
 }
 
@@ -670,6 +694,19 @@ mod tests {
         capture_revalidation_succeeds, decode_utf16_bounded, main_thread_and_runloop_are_valid,
         validate_bundle_id, validate_editable_role, validate_selection_range, TargetError,
     };
+
+    #[test]
+    fn optional_subrole_absence_is_not_a_transport_or_type_failure() {
+        assert_eq!(super::optional_subrole_present(super::AX_ERROR_NO_VALUE, false), Ok(false));
+        assert_eq!(super::optional_subrole_present(super::AX_ERROR_ATTRIBUTE_UNSUPPORTED, false), Ok(false));
+        assert_eq!(super::optional_subrole_present(super::AX_SUCCESS, true), Ok(true));
+        assert_eq!(super::optional_subrole_present(super::AX_SUCCESS, false), Err(TargetError::InvalidValue));
+        assert!(super::optional_subrole_present(super::AX_ERROR_API_DISABLED, false).is_err());
+        assert!(super::optional_subrole_present(-25204, false).is_err());
+        assert!(super::optional_subrole_present(-25202, false).is_err());
+        assert!(validate_editable_role("AXTextArea", "").is_ok());
+        assert_eq!(validate_editable_role("AXTextField", "AXSecureTextField"), Err(TargetError::SecureField));
+    }
 
     #[test]
     fn native_calls_require_both_main_run_loop_and_main_thread() {

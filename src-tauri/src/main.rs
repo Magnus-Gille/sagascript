@@ -416,28 +416,20 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                 })
             };
             if let Some(action) = presenter_action {
-                match action {
-                    hotkey::presenter_routing::PressAction::Start(profile) => {
-                        presenter::handle_request(
-                            app,
-                            sagascript_cli::presenter::PresenterRequest::Start {
-                                profile_id: Some(profile.id),
-                            },
-                        );
-                    }
-                    hotkey::presenter_routing::PressAction::Finish => {
-                        presenter::handle_request(
-                            app,
-                            sagascript_cli::presenter::PresenterRequest::Finish,
-                        );
-                    }
-                    hotkey::presenter_routing::PressAction::Cancel => {
-                        presenter::handle_request(
-                            app,
-                            sagascript_cli::presenter::PresenterRequest::Cancel,
-                        );
-                    }
-                    hotkey::presenter_routing::PressAction::NoOp => {}
+                let request = match action {
+                    hotkey::presenter_routing::PressAction::Start(profile) => Some(
+                        sagascript_cli::presenter::PresenterRequest::Start {
+                            profile_id: Some(profile.id),
+                        },
+                    ),
+                    hotkey::presenter_routing::PressAction::Finish =>
+                        Some(sagascript_cli::presenter::PresenterRequest::Finish),
+                    hotkey::presenter_routing::PressAction::Cancel =>
+                        Some(sagascript_cli::presenter::PresenterRequest::Cancel),
+                    hotkey::presenter_routing::PressAction::NoOp => None,
+                };
+                if let Some(request) = request {
+                    dispatch_to_main(app, move |app| presenter::handle_request(app, request));
                 }
                 return;
             }

@@ -18,7 +18,7 @@ use sagascript_core::settings::HotkeyMode;
 #[cfg(target_os = "macos")]
 use sagascript_core::settings::PresenterFinishAction;
 use tauri::{Emitter, Manager};
-use crate::{app_controller::{AppState, HotkeyDownResult}, SharedController};
+use crate::{app_controller::AppState, SharedController};
 use gate::{Action, Gate, Phase};
 
 struct Session {
@@ -121,8 +121,8 @@ fn start(app: &tauri::AppHandle, requested_profile: Option<&str>) {
         || c.settings().resolved_hotkey_profiles() != settings.resolved_hotkey_profiles() {
         return;
     }
-    match c.handle_hotkey_down_for_profile(profile.clone()) {
-        Ok(HotkeyDownResult::StartedRecording) => {
+    match c.start_presenter_recording_for_profile(profile.clone()) {
+        Ok(true) => {
             let generation = c.recording_generation();
             SESSION.with(|slot| *slot.borrow_mut() = Some(Session {
                 generation, gate: Gate::new(selected_action, target_known), text: None,
@@ -246,37 +246,61 @@ pub fn complete(app: &tauri::AppHandle, generation: u64, result: Result<String, 
     }
     #[cfg(target_os = "macos")]
     {
-        let controller: tauri::State<'_, SharedController> = app.state();
-        let auto_paste = controller.lock().unwrap().settings().auto_paste;
-        let before = session.target.as_ref().and_then(|t| {
-            if !auto_paste || !modifiers::modifiers_released()
-                || t.snapshot_matches() != Ok(true) { return None; }
-            t.observed_value_and_selection().ok()
-        });
-        let expected = before.and_then(|(original, location, length)| {
+        // A quick transcript may finish before the user releases Finish's
+        // modifiers. Wait without blocking the main thread, within the same
+        // deadline used for insertion proof. Never release the user's keys.
+        session.deadline = Some(Instant::now() + Duration::from_secs(2));
+        attempt_insertion(app, session);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        session.gate.target_changed();
+        session.gate.insertion_timed_out();
+        terminal(app, session, None);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn attempt_insertion(app: &tauri::AppHandle, mut session: Session) {
+    let generation = session.generation;
+    let controller: tauri::State<'_, SharedController> = app.state();
+    let auto_paste = controller.lock().unwrap().settings().auto_paste;
+    let before = session.target.as_ref().and_then(|target| {
+        if !auto_paste || target.snapshot_matches() != Ok(true) { return None; }
+        target.observed_value_and_selection().ok()
+    });
+    let decision = observation::decide(
+        before.is_some(), true,
+        session.deadline.is_some_and(|deadline| Instant::now() < deadline),
+        modifiers::modifiers_released(),
+    );
+    if decision == observation::Decision::Wait {
+        SESSION.with(|slot| *slot.borrow_mut() = Some(session));
+        status(app, Phase::AwaitingInsertion);
+        schedule_observation(app, generation);
+        return;
+    }
+    let expected = before.filter(|_| decision == observation::Decision::Proven)
+        .and_then(|(original, location, length)| {
             let payload = crate::paste::service::paste_payload(session.text.as_deref()?);
             let value = utf16::replace_utf16_range(&original, location, length, &payload)?;
             Some((value, location.checked_add(payload.encode_utf16().count())?, 0))
         });
-        if session.gate.may_insert(expected.is_some()) {
-            let pasted = crate::paste::PasteService::new().paste_checked(
-                session.text.as_deref().unwrap_or_default(),
-                || session.target.as_ref().is_some_and(|t| t.snapshot_matches() == Ok(true))
-                    && modifiers::modifiers_released(),
-            );
-            if pasted.is_ok() {
-                session.expected = expected;
-                session.deadline = Some(Instant::now() + Duration::from_secs(2));
-                SESSION.with(|slot| *slot.borrow_mut() = Some(session));
-                status(app, Phase::AwaitingInsertion);
-                schedule_observation(app, generation);
-                return;
-            }
-            session.gate.insertion_timed_out();
+    if session.gate.may_insert(expected.is_some()) {
+        let pasted = crate::paste::PasteService::new().paste_checked(
+            session.text.as_deref().unwrap_or_default(),
+            || session.target.as_ref().is_some_and(|t| t.snapshot_matches() == Ok(true))
+                && modifiers::modifiers_released()
+                && session.deadline.is_some_and(|deadline| Instant::now() < deadline),
+        );
+        if pasted.is_ok() {
+            session.expected = expected;
+            SESSION.with(|slot| *slot.borrow_mut() = Some(session));
+            status(app, Phase::AwaitingInsertion);
+            schedule_observation(app, generation);
+            return;
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    session.gate.target_changed();
     session.gate.insertion_timed_out();
     terminal(app, session, None);
 }
@@ -304,6 +328,10 @@ fn observe(app: &tauri::AppHandle, generation: u64) {
     if session.deadline.is_none_or(|deadline| Instant::now() >= deadline) {
         session.gate.insertion_timed_out();
         terminal(app, session, None);
+        return;
+    }
+    if session.expected.is_none() {
+        attempt_insertion(app, session);
         return;
     }
     let observation = session.target.as_ref().and_then(|t| t.observed_value_and_selection().ok());

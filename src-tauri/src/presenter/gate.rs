@@ -150,6 +150,7 @@ impl Gate {
 #[cfg(test)]
 mod tests {
     use super::{Action, Gate, Phase};
+    use crate::presenter::observation::{decide, Decision};
 
     #[test]
     fn insertion_dispatch_is_consumed_once_and_required_before_submit() {
@@ -280,5 +281,66 @@ mod tests {
             );
             assert_eq!(gate.authorize_submit(true, true, true), None);
         }
+    }
+
+    #[test]
+    fn held_modifiers_wait_then_release_proves_one_insert_and_one_submit() {
+        let mut gate = Gate::new(Action::Return, true);
+        assert!(gate.finish());
+        gate.transcribed(true, true);
+
+        assert_eq!(decide(true, false, true, false), Decision::Wait);
+        assert_eq!(gate.phase(), Phase::AwaitingInsertion);
+        assert_eq!(decide(true, true, true, false), Decision::Wait);
+
+        assert_eq!(decide(true, true, true, true), Decision::Proven);
+        assert!(gate.may_insert(true));
+        assert!(!gate.may_insert(true));
+        assert_eq!(
+            gate.authorize_submit(true, true, true),
+            Some(Action::Return)
+        );
+        assert_eq!(gate.phase(), Phase::Submitting);
+        assert_eq!(gate.authorize_submit(true, true, true), None);
+    }
+
+    #[test]
+    fn timeout_while_modifiers_are_held_never_inserts_or_submits() {
+        let mut gate = Gate::new(Action::Return, true);
+        gate.finish();
+        gate.transcribed(true, true);
+        assert_eq!(decide(true, true, true, false), Decision::Wait);
+        gate.insertion_timed_out();
+
+        assert_eq!(gate.phase(), Phase::Draft);
+        assert!(!gate.may_insert(true));
+        assert_eq!(gate.authorize_submit(true, true, true), None);
+    }
+
+    #[test]
+    fn cancel_while_waiting_never_inserts_or_submits() {
+        let mut gate = Gate::new(Action::Return, true);
+        gate.finish();
+        gate.transcribed(true, true);
+        assert_eq!(decide(true, true, true, false), Decision::Wait);
+        gate.cancel();
+
+        assert_eq!(gate.phase(), Phase::Cancelled);
+        assert!(!gate.may_insert(true));
+        assert_eq!(gate.authorize_submit(true, true, true), None);
+    }
+
+    #[test]
+    fn target_change_away_and_back_stays_uninsertable() {
+        let mut gate = Gate::new(Action::Return, true);
+        gate.finish();
+        gate.transcribed(true, true);
+        gate.target_changed();
+
+        assert_eq!(decide(false, false, true, true), Decision::Draft);
+        assert_eq!(decide(true, true, true, true), Decision::Proven);
+        assert!(!gate.may_insert(true));
+        assert_eq!(gate.authorize_submit(true, true, true), None);
+        assert_eq!(gate.phase(), Phase::Draft);
     }
 }

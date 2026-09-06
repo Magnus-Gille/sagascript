@@ -62,4 +62,13 @@ mod tests {
     fn held_modifiers_keep_a_valid_observation_waiting() {
         assert_eq!(decide(true, true, true, false), Decision::Wait);
     }
+
+    #[test]
+    fn proof_progression_waits_for_release_and_rejects_late_or_changed_targets() {
+        assert_eq!(decide(true, false, true, false), Decision::Wait);
+        assert_eq!(decide(true, true, true, false), Decision::Wait);
+        assert_eq!(decide(true, true, true, true), Decision::Proven);
+        assert_eq!(decide(true, true, false, true), Decision::Draft);
+        assert_eq!(decide(false, true, true, true), Decision::Draft);
+    }
 }

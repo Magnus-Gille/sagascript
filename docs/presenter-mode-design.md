@@ -11,11 +11,16 @@ profile shortcut starts a session, the configured Finish shortcut stops and
 transcribes it, and the optional Cancel shortcut cancels it. If Start omits a
 profile ID, the default profile is selected when present, otherwise the first
 resolved profile is used. The action and target are frozen per session and
-generation checks reject stale callbacks.
+generation checks reject stale callbacks. Presenter ownership is explicit: a
+manual Dictate-button recording retains its normal completion/cancel pipeline
+even when the configured shortcut mode is Presenter. All Presenter transports,
+including hotkeys, dispatch their coordination onto the main thread.
 
 On macOS, verified insertion additionally requires Presenter mode and
 auto-paste to be enabled, a supported Accessibility target, released shortcut
-modifiers, and observed post-insertion field state. Held modifiers, unknown or
+modifiers, and observed post-insertion field state. A single two-second budget
+allows held Finish modifiers to be released before insertion and bounds the
+subsequent observation. Modifiers still held at expiry, unknown or
 unsupported targets, target changes, missing evidence, and expired observation
 deadlines retain any recognized text as a draft rather than submitting it.
 Empty or failed transcription never submits and creates no new recognized draft.
@@ -83,6 +88,15 @@ notification support because [AXObserverAddNotification](https://developer.apple
 can report unsupported notifications. The
 [focused-element notification](https://developer.apple.com/documentation/applicationservices/kaxfocuseduielementchangednotification)
 is an observation input, not authorization to synthesize a key.
+Apple declares [accessibilitySubrole](https://developer.apple.com/documentation/appkit/nsaccessibility-c.protocol/accessibilitysubrole)
+nullable. A subrole read reporting only the documented
+[no-value or unsupported-attribute result](https://developer.apple.com/documentation/applicationservices/1462085-axuielementcopyattributevalue)
+is treated as absent; transport/permission failures, malformed null successes,
+wrong value types and explicit secure-field subroles remain rejected. The
+required text role, field-value/selection, application identity and notification
+checks still apply. Start revalidation reuses the current-target traversal
+already performed by its snapshot check; native capture latency remains to be
+measured on supported editors.
 Windows/Linux require their own verified target/field adapters before equivalent
 automatic submission can be advertised. Unsupported paths retain drafts.
 

@@ -162,7 +162,6 @@
     const presenterStatusListener = listen("presenter-status", (event) => {
       if (typeof event.payload !== "string" || !isPresenterStatus(event.payload)) return;
       presenterStatus = event.payload;
-      activeTab = "dictate";
     }).then(remember);
     // A failed background dictation may create this window after its event.
     // Recover the persisted-in-memory result without racing newer events.
