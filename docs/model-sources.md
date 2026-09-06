@@ -116,6 +116,11 @@ its weights and is not supported. Generic Base remains recommended while the
 specialist is evaluated against both Base and generic Tiny. Publisher metrics
 are screening evidence, not proof of Sagascript dictation quality or latency.
 
+The [2026-09-06 product-path screening](research/r4-finnish-screening-results.md)
+found lower aggregate WER than both baselines and lower warm latency than Base,
+but absolute error remained high. Base stays the default; the specialist remains
+an optional evaluation choice pending separate native and application acceptance.
+
 ## VAD and diarization models
 
 | Artifact/source | Revision | License | Bytes | SHA-256 |

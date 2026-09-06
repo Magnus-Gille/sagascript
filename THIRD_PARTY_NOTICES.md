@@ -17,7 +17,8 @@ dependency records to that release.
 Models are **not bundled in the installer**. Sagascript downloads a model only
 after the user chooses one; inference, audio, and transcripts remain local.
 The license shown is the license published by the linked upstream repository,
-reviewed on 2026-07-10. This shipped notice supplies the source and attribution
+reviewed on 2026-07-10 unless a later review date is shown below. This shipped
+notice supplies the source and attribution
 link; the upstream repository is authoritative for its license terms.
 
 | Model family | What Sagascript downloads | License | Upstream / attribution |

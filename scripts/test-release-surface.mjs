@@ -15,6 +15,7 @@ test("Finnish models document the generic default and pinned optional specialist
   assert.match(modelSources, /41cf309b7f50523cfca724ae90924fcd0e4794205de57a66abc3cce627103ce8/);
   assert.match(noticeGenerator, /Finnish-NLP/);
   assert.match(noticeGenerator, /Apache-2\.0/);
+  assert.match(noticeGenerator, /reviewed on 2026-07-10 unless a later review date is shown below/);
   for (const source of [modelSources, noticeGenerator]) {
     assert.doesNotMatch(source, /fi-whisper-medium|model-fi-medium-q5_0-b410f4a/);
   }
