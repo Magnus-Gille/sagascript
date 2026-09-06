@@ -25,7 +25,10 @@ identical.
 
 The JSON file contains application settings and dictation profiles. The plain
 text glossary files contain one dictionary entry per line. `glossary.txt` is
-global; `glossaries/<profile-id>.txt` is combined only with that profile.
+the legacy global hint source; `glossaries/<profile-id>.txt` is used for
+deterministic aliases only when that known profile with an explicit language is
+selected. Global aliases remain stored, visible, and editable, but are
+hint-only. No aliases are assigned automatically after language detection.
 
 Use the CLI to discover the effective paths rather than duplicating the
 resolution rules in scripts:
@@ -35,6 +38,13 @@ sagascript config path
 sagascript glossary path
 sagascript glossary path --profile swedish
 ```
+
+Use the global file for decoder hints, or pass `--profile ID` to manage a
+profile-scoped dictionary whose explicit aliases can correct that profile's
+transcript. A non-empty one-run `--hint`/`--prompt` replaces the saved global
+hint text and is itself hint-only; empty or whitespace-only input keeps the
+saved global hints. Entries are not reassigned between scopes, deleted, or
+automatically assigned a profile/language.
 
 The GUI and CLI watch and update the same files. Atomic writes preserve
 user-managed symlinks, so the files can be checked into a dotfiles repository.
