@@ -228,6 +228,25 @@ enum BatchItem {
 }
 
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
+    let stored = sagascript_core::settings::store::load();
+    let profile = args
+        .profile
+        .as_deref()
+        .map(|profile_id| resolve_profile(&stored, profile_id))
+        .transpose()?;
+    let language = match (&profile, &args.language) {
+        (Some(profile), _) => profile.language,
+        (None, Some(language)) => parse_language(language)?,
+        (None, None) => stored.language,
+    };
+
+    let glossary = effective_glossary(
+        &stored,
+        args.profile.as_deref(),
+        args.prompt.as_deref(),
+        args.prompt_file.as_deref(),
+    )?;
+
     let files = expand_inputs(&args.files, args.recursive)?;
     if files.is_empty() {
         return Err(DictationError::FileDecodeError(
@@ -245,18 +264,6 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             "--diarize is only available when transcribing one file".to_string(),
         ));
     }
-
-    let stored = sagascript_core::settings::store::load();
-    let profile = args
-        .profile
-        .as_deref()
-        .map(|profile_id| resolve_profile(&stored, profile_id))
-        .transpose()?;
-    let language = match (&profile, &args.language) {
-        (Some(profile), _) => profile.language,
-        (None, Some(language)) => parse_language(language)?,
-        (None, None) => stored.language,
-    };
     let model = resolve_effective_model(
         args.model.as_deref(),
         language,
@@ -264,22 +271,13 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         stored.whisper_model,
     )?;
 
-    // Resolve and validate this before decoding or loading a model: an invalid
-    // opt-in correction request should not spend time on transcription first.
-    let stored_prompt = stored.effective_glossary_source(args.profile.as_deref());
-    let effective_prompt = resolve_effective_prompt(
-        args.prompt.as_deref(),
-        args.prompt_file.as_deref(),
-        &stored_prompt,
-    )?;
-    let glossary = Glossary::parse(effective_prompt.as_deref().unwrap_or_default());
     let correction_vocabulary = if args.correct_hints {
-        effective_prompt.as_deref().ok_or_else(|| {
-            DictationError::SettingsError(
-                "--correct-hints requires a non-empty --hint/--prompt (or saved initial_prompt)"
+        if glossary.decoder_prompt().is_none() {
+            return Err(DictationError::SettingsError(
+                "--correct-hints requires a non-empty --hint/--prompt, saved initial_prompt, or selected profile dictionary"
                     .to_string(),
-            )
-        })?;
+            ));
+        }
         let vocabulary = glossary.single_word_terms();
         if vocabulary.is_empty() {
             return Err(DictationError::SettingsError(
@@ -1534,21 +1532,24 @@ pub fn resolve_effective_model(
     }
 }
 
-/// Resolves the effective initial prompt (a.k.a. the "hint") for a run, in
-/// precedence order:
-///   1. `--prompt-file` / `--hint-file` — the file's contents (trimmed;
-///      an empty or whitespace-only file yields no hint).
-///   2. `--hint` / `--prompt` — the inline string (an explicit empty string
-///      suppresses the hint and does *not* fall back to the saved setting).
-///   3. the saved `initial_prompt` setting (empty ⇒ no hint).
-///
-/// Returns `Ok(None)` when no source provides a non-empty prompt. Shared by
-/// `transcribe::run()` and `record::run()` so both surfaces prime the decoder
-/// identically — keep their call sites pointed here rather than re-deriving it.
-pub fn resolve_effective_prompt(
+/// Resolve a non-empty one-run hint and compose it through Settings' scoped
+/// glossary helper. The helper owns legacy-global hint-only behavior and
+/// selected explicit-profile aliases; CLI never parses those sources directly.
+pub(crate) fn effective_glossary(
+    stored: &Settings,
+    profile_id: Option<&str>,
     cli_prompt: Option<&str>,
     cli_prompt_file: Option<&Path>,
-    stored_initial_prompt: &str,
+) -> Result<Glossary, DictationError> {
+    let one_run_prompt = resolve_one_run_prompt(cli_prompt, cli_prompt_file)?;
+    let source =
+        stored.effective_glossary_source_with_prompt(profile_id, one_run_prompt.as_deref());
+    Ok(Glossary::parse(&source))
+}
+
+fn resolve_one_run_prompt(
+    cli_prompt: Option<&str>,
+    cli_prompt_file: Option<&Path>,
 ) -> Result<Option<String>, DictationError> {
     if let Some(path) = cli_prompt_file {
         let contents = std::fs::read_to_string(path).map_err(|e| {
@@ -1560,12 +1561,11 @@ pub fn resolve_effective_prompt(
         let trimmed = contents.trim();
         return Ok((!trimmed.is_empty()).then(|| trimmed.to_string()));
     }
-    if let Some(p) = cli_prompt {
-        // An explicit `--hint ""` means "no hint", not "use the saved setting".
-        return Ok((!p.is_empty()).then(|| p.to_string()));
-    }
-    let saved = stored_initial_prompt.trim();
-    Ok((!saved.is_empty()).then(|| saved.to_string()))
+    let Some(prompt) = cli_prompt else {
+        return Ok(None);
+    };
+    let trimmed = prompt.trim();
+    Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
 }
 
 pub fn parse_model(s: &str) -> Result<WhisperModel, DictationError> {
@@ -1991,38 +1991,22 @@ mod tests {
         assert_eq!(segments[0].text, " Grimner");
     }
 
-    // -- resolve_effective_prompt --
+    // -- resolve_one_run_prompt --
 
     #[test]
-    fn effective_prompt_cli_flag_wins_over_stored() {
-        let got = resolve_effective_prompt(Some("Notre Dame"), None, "saved vocab").unwrap();
+    fn one_run_prompt_inline_is_trimmed() {
+        let got = resolve_one_run_prompt(Some("  Notre Dame  "), None).unwrap();
         assert_eq!(got.as_deref(), Some("Notre Dame"));
     }
 
     #[test]
-    fn effective_prompt_falls_back_to_stored() {
-        let got = resolve_effective_prompt(None, None, "  saved vocab  ").unwrap();
-        // Stored value is trimmed.
-        assert_eq!(got.as_deref(), Some("saved vocab"));
+    fn one_run_prompt_empty_input_is_deferred_to_saved_settings() {
+        assert!(resolve_one_run_prompt(None, None).unwrap().is_none());
+        assert!(resolve_one_run_prompt(Some("   "), None).unwrap().is_none());
     }
 
     #[test]
-    fn effective_prompt_none_when_all_empty() {
-        assert!(resolve_effective_prompt(None, None, "").unwrap().is_none());
-        assert!(resolve_effective_prompt(None, None, "   ")
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
-    fn effective_prompt_explicit_empty_flag_suppresses_stored() {
-        // `--hint ""` means "no hint" — it must NOT fall through to the setting.
-        let got = resolve_effective_prompt(Some(""), None, "saved vocab").unwrap();
-        assert!(got.is_none());
-    }
-
-    #[test]
-    fn effective_prompt_file_wins_and_is_trimmed() {
+    fn one_run_prompt_file_wins_and_is_trimmed() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
             "sagascript_hint_test_{}_{}.txt",
@@ -2031,15 +2015,15 @@ mod tests {
         ));
         std::fs::write(&path, "  Estrid, Grimnir\n").unwrap();
 
-        // File beats both the inline flag and the stored setting.
-        let got = resolve_effective_prompt(Some("inline"), Some(&path), "saved").unwrap();
+        // File beats the inline flag; saved settings are composed by the core helper.
+        let got = resolve_one_run_prompt(Some("inline"), Some(&path)).unwrap();
         assert_eq!(got.as_deref(), Some("Estrid, Grimnir"));
 
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn effective_prompt_empty_file_yields_none() {
+    fn one_run_prompt_empty_file_is_deferred_to_saved_settings() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
             "sagascript_hint_test_{}_{}.txt",
@@ -2048,17 +2032,103 @@ mod tests {
         ));
         std::fs::write(&path, "   \n\t").unwrap();
 
-        let got = resolve_effective_prompt(None, Some(&path), "saved").unwrap();
+        let got = resolve_one_run_prompt(None, Some(&path)).unwrap();
         assert!(got.is_none());
 
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn effective_prompt_missing_file_errors() {
+    fn one_run_prompt_missing_file_errors() {
         let path = Path::new("/nonexistent/sagascript/hint/vocab.txt");
-        let err = resolve_effective_prompt(None, Some(path), "saved").unwrap_err();
+        let err = resolve_one_run_prompt(None, Some(path)).unwrap_err();
         assert!(matches!(err, DictationError::FileDecodeError(_)));
+    }
+
+    #[test]
+    fn scoped_glossary_keeps_global_aliases_hint_only_and_profiles_isolated() {
+        let mut settings = Settings {
+            initial_prompt: "merge = merch\nOpenRouter".to_string(),
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "swedish".to_string(),
+                    name: "Swedish".to_string(),
+                    shortcut: "F13".to_string(),
+                    language: Language::Swedish,
+                },
+                HotkeyProfile {
+                    id: "english".to_string(),
+                    name: "English".to_string(),
+                    shortcut: "F14".to_string(),
+                    language: Language::English,
+                },
+            ],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "merge = merch".to_string());
+
+        let global = effective_glossary(&settings, None, None, None).unwrap();
+        assert_eq!(global.correct_text("merch").0, "merch");
+
+        let swedish = effective_glossary(&settings, Some("swedish"), None, None).unwrap();
+        assert_eq!(swedish.correct_text("merch").0, "merge");
+
+        let english = effective_glossary(&settings, Some("english"), None, None).unwrap();
+        assert_eq!(english.correct_text("merch").0, "merch");
+    }
+
+    #[test]
+    fn one_run_prompt_replaces_global_hint_but_keeps_profile_scope() {
+        let mut settings = Settings {
+            initial_prompt: "merge = merch".to_string(),
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "F13".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "fika = coffee".to_string());
+
+        let glossary = effective_glossary(
+            &settings,
+            Some("swedish"),
+            Some("  OpenRouter = router  "),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(glossary.correct_text("merch").0, "merch");
+        assert_eq!(glossary.correct_text("coffee").0, "fika");
+
+        let empty_override = effective_glossary(&settings, Some("swedish"), Some("  \n"), None)
+            .unwrap();
+        assert_eq!(empty_override.correct_text("merch").0, "merch");
+        assert_eq!(empty_override.correct_text("coffee").0, "fika");
+    }
+
+    #[test]
+    fn auto_or_missing_profile_never_infers_alias_scope() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "F13".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "merge = merch".to_string());
+
+        let glossary = effective_glossary(&settings, None, None, None).unwrap();
+        assert_eq!(glossary.correct_text("merch").0, "merch");
     }
 
     // -- parse_language --

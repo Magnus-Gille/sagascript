@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{canonical_hotkey, validate_hotkey};
 
-use crate::download::DownloadIntegrity;
+use crate::{download::DownloadIntegrity, transcription::Glossary};
 
 #[cfg(target_os = "macos")]
 const WHISPER_CPP_REVISION: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
@@ -553,10 +553,28 @@ impl Default for Settings {
 
 impl Settings {
     /// Combine the legacy global dictionary with the selected profile's
-    /// private additions. Keeping the legacy value first preserves existing
-    /// decoder hints while the glossary matcher fails closed on conflicts.
+    /// private additions. The legacy source is hint-only: aliases from the
+    /// unscoped compatibility dictionary must not become replacements in an
+    /// explicitly selected language profile.
     pub fn effective_glossary_source(&self, profile_id: Option<&str>) -> String {
-        let global = self.initial_prompt.trim();
+        self.effective_glossary_source_with_prompt(profile_id, None)
+    }
+
+    /// Compose the glossary source for one transcription without mutating
+    /// stored settings. A non-empty one-run prompt replaces the saved global
+    /// hint source; the selected known, explicit-language profile remains the
+    /// only source of deterministic alias replacements.
+    pub fn effective_glossary_source_with_prompt(
+        &self,
+        profile_id: Option<&str>,
+        prompt: Option<&str>,
+    ) -> String {
+        let base_source = prompt
+            .filter(|candidate| !candidate.trim().is_empty())
+            .unwrap_or(self.initial_prompt.as_str());
+        let global = Glossary::parse(base_source)
+            .decoder_prompt()
+            .unwrap_or_default();
         let scoped_profile_id = profile_id.filter(|requested_id| {
             self.resolved_hotkey_profiles().iter().any(|profile| {
                 profile.id == **requested_id && profile.language != Language::Auto
@@ -568,11 +586,11 @@ impl Settings {
             .map(str::trim)
             .unwrap_or_default();
 
-        match (global.is_empty(), scoped.is_empty()) {
+        match (global.trim().is_empty(), scoped.is_empty()) {
             (true, true) => String::new(),
-            (false, true) => global.to_string(),
+            (false, true) => global,
             (true, false) => scoped.to_string(),
-            (false, false) => format!("{global}\n{scoped}"),
+            (false, false) => format!("{}\n{scoped}", global.trim()),
         }
     }
 
@@ -677,11 +695,31 @@ impl Settings {
             .find(|profile| canonical_hotkey(&profile.shortcut).ok().as_deref() == Some(target.as_str()))
     }
 
-    pub fn set_legacy_language(&mut self, language: Language) {
+    pub fn set_legacy_language(&mut self, language: Language) -> Result<(), String> {
+        let current_legacy_language = if self.hotkey_profiles.is_empty() {
+            Some(self.language)
+        } else {
+            self.hotkey_profiles
+                .iter()
+                .find(|profile| profile.id == "default")
+                .map(|profile| profile.language)
+        };
+        if current_legacy_language.is_some_and(|current| current != language)
+            && self
+                .profile_glossaries
+                .get("default")
+                .is_some_and(|source| !source.trim().is_empty())
+        {
+            return Err(
+                "Profile 'default' has a personal dictionary; clear it before changing the profile language"
+                    .to_string(),
+            );
+        }
         self.language = language;
         if let Some(profile) = self.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
             profile.language = language;
         }
+        Ok(())
     }
 
     pub fn set_legacy_hotkey(&mut self, shortcut: String) {
@@ -1159,13 +1197,76 @@ mod tests {
 
         assert_eq!(
             settings.effective_glossary_source(Some("swedish")),
-            "Codex = code x\nmergea = mördsa"
+            "Codex\nmergea = mördsa"
         );
         assert_eq!(
             settings.effective_glossary_source(Some("english")),
-            "Codex = code x\nLovable = love a ball"
+            "Codex\nLovable = love a ball"
         );
-        assert_eq!(settings.effective_glossary_source(None), "Codex = code x");
+        assert_eq!(settings.effective_glossary_source(None), "Codex");
+    }
+
+    #[test]
+    fn global_aliases_are_hint_only_and_do_not_leak_between_profiles() {
+        let mut settings = Settings {
+            initial_prompt: "merge = merch".to_string(),
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "swedish".to_string(),
+                    name: "Swedish".to_string(),
+                    shortcut: "Control+Shift+Space".to_string(),
+                    language: Language::Swedish,
+                },
+                HotkeyProfile {
+                    id: "english".to_string(),
+                    name: "English".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                },
+            ],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "merge = merch".to_string());
+
+        let swedish = Glossary::parse(&settings.effective_glossary_source(Some("swedish")));
+        let english = Glossary::parse(&settings.effective_glossary_source(Some("english")));
+        assert_eq!(swedish.correct_text("merch").0, "merge");
+        assert_eq!(english.correct_text("merch").0, "merch");
+        assert_eq!(settings.effective_glossary_source(Some("english")), "merge");
+    }
+
+    #[test]
+    fn effective_glossary_deduplicates_global_and_profile_canonicals() {
+        let mut settings = Settings {
+            initial_prompt: "Codex = code x\nmerge = merch".to_string(),
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Control+Shift+Space".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings.profile_glossaries.insert(
+            "swedish".to_string(),
+            "merge = merch\nOpenRouter = open router".to_string(),
+        );
+
+        let glossary = Glossary::parse(&settings.effective_glossary_source(Some("swedish")));
+        assert_eq!(
+            glossary.single_word_terms(),
+            vec!["Codex", "merge", "OpenRouter"]
+        );
+        assert_eq!(
+            glossary.decoder_prompt().as_deref(),
+            Some("Codex, merge, OpenRouter")
+        );
+        assert_eq!(
+            glossary.correct_text("code x merch open router").0,
+            "code x merge OpenRouter"
+        );
     }
 
     #[test]
@@ -1197,11 +1298,49 @@ mod tests {
 
         assert_eq!(
             settings.effective_glossary_source(Some("default")),
-            "Codex = code x"
+            "Codex"
         );
         assert_eq!(
             settings.effective_glossary_source(Some("removed")),
-            "Codex = code x"
+            "Codex"
+        );
+    }
+
+    #[test]
+    fn one_run_prompt_replaces_global_hints_but_keeps_selected_profile_aliases() {
+        let mut settings = Settings {
+            initial_prompt: "Global = alias".to_string(),
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Control+Shift+Space".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "Profile = misheard".to_string());
+
+        assert_eq!(
+            settings.effective_glossary_source_with_prompt(
+                Some("swedish"),
+                Some("OneRun = spelling")
+            ),
+            "OneRun\nProfile = misheard"
+        );
+        assert_eq!(
+            settings.effective_glossary_source_with_prompt(Some("swedish"), Some("  \n")),
+            "Global\nProfile = misheard"
+        );
+        assert_eq!(
+            settings.effective_glossary_source_with_prompt(None, Some("OneRun = spelling")),
+            "OneRun"
+        );
+        assert_eq!(settings.initial_prompt, "Global = alias");
+        assert_eq!(
+            settings.profile_glossaries.get("swedish").map(String::as_str),
+            Some("Profile = misheard")
         );
     }
 
@@ -1277,6 +1416,91 @@ mod tests {
         assert!(error.contains("personal dictionary"));
         assert!(error.contains("language"));
         assert_eq!(settings.language, Language::Swedish);
+    }
+
+    #[test]
+    fn legacy_language_change_with_implicit_default_dictionary_is_atomic() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        let error = settings.set_legacy_language(Language::English).unwrap_err();
+
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, Language::Swedish);
+        assert!(settings.hotkey_profiles.is_empty());
+        assert_eq!(
+            settings.profile_glossaries.get("default").map(String::as_str),
+            Some("merge = merch")
+        );
+    }
+
+    #[test]
+    fn legacy_language_change_with_explicit_default_dictionary_is_atomic() {
+        let mut settings = Settings {
+            language: Language::English,
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Control+Shift+Space".to_string(),
+                Language::Swedish,
+            )],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        let error = settings.set_legacy_language(Language::English).unwrap_err();
+
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.hotkey_profiles[0].language, Language::Swedish);
+    }
+
+    #[test]
+    fn legacy_language_change_allows_orphan_dictionary_without_default_profile() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Control+Shift+Space".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        settings.set_legacy_language(Language::English).unwrap();
+
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.hotkey_profiles[0].language, Language::Swedish);
+        assert_eq!(
+            settings.profile_glossaries.get("default").map(String::as_str),
+            Some("merge = merch")
+        );
+    }
+
+    #[test]
+    fn legacy_language_change_without_dictionary_updates_legacy_profile() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Control+Shift+Space".to_string(),
+                Language::Swedish,
+            )],
+            ..Default::default()
+        };
+
+        settings.set_legacy_language(Language::English).unwrap();
+
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.hotkey_profiles[0].language, Language::English);
     }
 
     #[test]

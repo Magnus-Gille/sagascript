@@ -130,8 +130,12 @@ export async function setAutoPaste(enabled: boolean): Promise<void> {
   return invoke("set_auto_paste", { enabled });
 }
 
-export async function setInitialPrompt(prompt: string): Promise<void> {
-  return invoke("set_initial_prompt", { prompt });
+export async function setInitialPrompt(prompt: string, expectedSource?: string): Promise<void> {
+  return invoke("set_initial_prompt", { prompt, expectedSource });
+}
+
+export async function setProfileGlossary(profileId: string, source: string, expectedSource?: string): Promise<void> {
+  return invoke("set_profile_glossary", { profileId, source, expectedSource });
 }
 
 export async function setShowOverlay(enabled: boolean): Promise<void> {
@@ -180,12 +184,13 @@ export async function getBuildInfo(): Promise<BuildInfo> {
 
 export async function transcribeFile(
   filePath: string,
-  options?: { prompt?: string; diarize?: boolean }
+  options?: { prompt?: string; diarize?: boolean; profileId?: string }
 ): Promise<string> {
   return invoke("transcribe_file", {
     filePath,
     prompt: options?.prompt ?? null,
     diarize: options?.diarize ?? false,
+    profileId: options?.profileId ?? null,
   });
 }
 

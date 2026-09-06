@@ -400,10 +400,10 @@ EXAMPLES:
     )]
     Config(config::ConfigArgs),
 
-    /// Manage the persistent personal dictionary used by live and batch transcription
+    /// Manage global hint terms and explicit profile-scoped aliases used by live and batch transcription
     #[command(
-        long_about = "Add preferred spellings and optional exact mishearings. Plain terms prime Whisper; aliases also authorize deterministic local corrections before output.",
-        after_long_help = "EXAMPLES:\n  sagascript glossary path\n  sagascript glossary path --profile swedish\n  sagascript glossary list\n  sagascript glossary add OpenRouter --alias 'open router' --alias 'open vrouter'\n  sagascript glossary add merge --alias merch --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish --apply\n  sagascript glossary remove OpenRouter\n  sagascript glossary clear --yes"
+        long_about = "Add preferred spellings and optional exact mishearings. Global and one-run terms prime Whisper as hint-only context; deterministic aliases require a selected known profile with an explicit language. No stored text is migrated or deleted.",
+        after_long_help = "EXAMPLES:\n  sagascript glossary path\n  sagascript glossary path --profile swedish\n  sagascript glossary list\n  sagascript glossary add OpenRouter\n  sagascript glossary add OpenRouter --alias 'open router' --alias 'open vrouter' --profile swedish\n  sagascript glossary add merge --alias merch --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish --apply\n  sagascript glossary remove OpenRouter --profile swedish\n  sagascript glossary clear --yes"
     )]
     Glossary(glossary::GlossaryArgs),
 

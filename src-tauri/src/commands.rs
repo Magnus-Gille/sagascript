@@ -20,11 +20,11 @@ use sagascript_core::settings::{
     validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
 };
 use sagascript_core::transcription::{
-    suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
+    model, recommended_parallel_chunks, ContextProfile, TranscribeOptions, WhisperBackend,
+    FILE_TRANSCRIBE_BEAM,
 };
 use sagascript_core::transcription::{
-    model, recommended_parallel_chunks, ContextProfile, FILE_TRANSCRIBE_BEAM, TranscribeOptions,
-    WhisperBackend,
+    suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
 };
 
 /// Build the per-transcription options from the current settings. Resolves the
@@ -76,17 +76,53 @@ pub(crate) fn build_file_transcribe_options(
 }
 
 pub(crate) fn effective_file_glossary(settings: &Settings, prompt: Option<&str>) -> Glossary {
-    let source = prompt
-        .map(str::trim)
-        .filter(|prompt| !prompt.is_empty())
-        .unwrap_or(settings.initial_prompt.trim());
-    Glossary::parse(source)
+    Glossary::parse(&settings.effective_glossary_source_with_prompt(None, prompt))
+}
+
+struct FileTranscriptionContext {
+    language: Language,
+    model: WhisperModel,
+    glossary: Glossary,
+    options: TranscribeOptions,
+}
+
+/// Freeze language, model and dictionary together before file decoding begins.
+/// A missing/Auto profile is rejected rather than silently borrowing aliases.
+fn file_transcription_context(
+    settings: &Settings,
+    profile_id: Option<&str>,
+    prompt: Option<&str>,
+) -> Result<FileTranscriptionContext, String> {
+    let language = if let Some(id) = profile_id {
+        ensure_known_profile(settings, id)?;
+        settings
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| format!("Unknown dictation profile '{id}'"))?
+            .language
+    } else {
+        settings.language
+    };
+    let glossary =
+        Glossary::parse(&settings.effective_glossary_source_with_prompt(profile_id, prompt));
+    let mut options = build_file_transcribe_options(settings, prompt.map(str::to_owned));
+    options.prompt = glossary.decoder_prompt();
+    Ok(FileTranscriptionContext {
+        language,
+        model: settings.effective_model_for(language),
+        glossary,
+        options,
+    })
 }
 
 pub(crate) fn apply_glossary(text: String, glossary: &Glossary) -> String {
     let (corrected, corrections) = glossary.correct_text(&text);
     if !corrections.is_empty() {
-        info!(correction_count = corrections.len(), "Applied personal glossary corrections");
+        info!(
+            correction_count = corrections.len(),
+            "Applied personal glossary corrections"
+        );
     }
     corrected
 }
@@ -101,7 +137,10 @@ mod glossary_options_tests {
             initial_prompt: "OpenRouter = open router | open vrouter\nmerge = merch".to_string(),
             ..Settings::default()
         };
-        assert_eq!(build_transcribe_options(&settings).prompt.as_deref(), Some("OpenRouter, merge"));
+        assert_eq!(
+            build_transcribe_options(&settings).prompt.as_deref(),
+            Some("OpenRouter, merge")
+        );
     }
 
     #[test]
@@ -146,13 +185,155 @@ mod glossary_options_tests {
             ..Settings::default()
         };
         let prompt = Some("Cloudflare = cloud flare".to_string());
-        assert_eq!(build_file_transcribe_options(&settings, prompt).prompt.as_deref(), Some("Cloudflare"));
+        assert_eq!(
+            build_file_transcribe_options(&settings, prompt)
+                .prompt
+                .as_deref(),
+            Some("Cloudflare")
+        );
     }
 
     #[test]
     fn correction_helper_applies_explicit_aliases() {
         let glossary = Glossary::parse("merge = merch");
-        assert_eq!(apply_glossary("Merch it".to_string(), &glossary), "merge it");
+        assert_eq!(
+            apply_glossary("Merch it".to_string(), &glossary),
+            "merge it"
+        );
+    }
+
+    #[test]
+    fn gui_file_global_alias_does_not_rewrite_english() {
+        let settings = Settings {
+            initial_prompt: "merge = merch".to_string(),
+            ..Settings::default()
+        };
+        let glossary = effective_file_glossary(&settings, None);
+        assert_eq!(
+            apply_glossary("company merch".into(), &glossary),
+            "company merch"
+        );
+        assert_eq!(glossary.decoder_prompt().as_deref(), Some("merge"));
+    }
+
+    fn scoped_file_settings() -> Settings {
+        let mut settings = Settings {
+            language: Language::English,
+            initial_prompt: "Codex = code x\nmerge = merch".into(),
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "swedish".into(),
+                    name: "Swedish".into(),
+                    shortcut: "Super+S".into(),
+                    language: Language::Swedish,
+                },
+                HotkeyProfile {
+                    id: "english".into(),
+                    name: "English".into(),
+                    shortcut: "Super+E".into(),
+                    language: Language::English,
+                },
+                HotkeyProfile {
+                    id: "automatic".into(),
+                    name: "Automatic".into(),
+                    shortcut: "Super+A".into(),
+                    language: Language::Auto,
+                },
+            ],
+            ..Settings::default()
+        };
+        settings.profile_glossaries.insert(
+            "swedish".into(),
+            "merge = merch\nOpenRouter = open router".into(),
+        );
+        settings
+            .profile_glossaries
+            .insert("automatic".into(), "merge = merch".into());
+        settings
+    }
+
+    #[test]
+    fn gui_file_profile_pins_language_model_and_dictionary_together() {
+        let settings = scoped_file_settings();
+        let context = file_transcription_context(&settings, Some("swedish"), None).unwrap();
+        assert_eq!(context.language, Language::Swedish);
+        assert_eq!(
+            context.model,
+            settings.effective_model_for(Language::Swedish)
+        );
+        assert_eq!(
+            apply_glossary("merch open router".into(), &context.glossary),
+            "merge OpenRouter"
+        );
+        assert_eq!(context.options.prompt, context.glossary.decoder_prompt());
+        for profile in [None, Some("english")] {
+            let context = file_transcription_context(&settings, profile, None).unwrap();
+            assert_eq!(context.language, Language::English);
+            assert_eq!(
+                apply_glossary("company merch".into(), &context.glossary),
+                "company merch"
+            );
+        }
+    }
+
+    #[test]
+    fn gui_file_override_is_hint_only_but_keeps_explicit_profile_aliases() {
+        let context = file_transcription_context(
+            &scoped_file_settings(),
+            Some("swedish"),
+            Some("Cloudflare = cloud flare"),
+        )
+        .unwrap();
+        assert_eq!(
+            apply_glossary("cloud flare merch".into(), &context.glossary),
+            "cloud flare merge"
+        );
+        assert_eq!(
+            context.options.prompt.as_deref(),
+            Some("Cloudflare, merge, OpenRouter")
+        );
+    }
+
+    #[test]
+    fn gui_file_rejects_unknown_and_auto_profile_before_io() {
+        let settings = scoped_file_settings();
+        assert!(file_transcription_context(&settings, Some("missing"), None).is_err());
+        assert!(file_transcription_context(&settings, Some("automatic"), None).is_err());
+        let auto = Settings {
+            language: Language::Auto,
+            ..settings
+        };
+        let context = file_transcription_context(&auto, None, None).unwrap();
+        assert_eq!(context.language, Language::Auto);
+        assert_eq!(apply_glossary("merch".into(), &context.glossary), "merch");
+    }
+
+    #[test]
+    fn profile_dictionary_save_validates_without_partial_mutation() {
+        let mut settings = scoped_file_settings();
+        let original = settings.profile_glossaries.clone();
+        for profile in ["missing", "automatic"] {
+            assert!(
+                set_profile_glossary_in(&mut settings, profile, "new = old".into(), None).is_err()
+            );
+            assert_eq!(settings.profile_glossaries, original);
+        }
+        set_profile_glossary_in(&mut settings, "english", "OpenAI = open a i".into(), None)
+            .unwrap();
+        assert_eq!(settings.profile_glossaries["english"], "OpenAI = open a i");
+        assert_eq!(settings.profile_glossaries["swedish"], original["swedish"]);
+        assert_eq!(settings.initial_prompt, "Codex = code x\nmerge = merch");
+    }
+
+    #[test]
+    fn scoped_file_glossary_preserves_cross_fragment_phrase_matching() {
+        let context =
+            file_transcription_context(&scoped_file_settings(), Some("swedish"), None).unwrap();
+        let (fragments, corrections) = context
+            .glossary
+            .correct_fragments(&["open", " router merch"]);
+        assert_eq!(fragments.concat(), "OpenRouter merge");
+        assert_eq!(corrections.len(), 2);
     }
 }
 
@@ -247,8 +428,8 @@ fn set_language_for_controller(
     app: &tauri::AppHandle,
     language: Language,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
-        settings.set_legacy_language(language);
+    let persisted = sagascript_core::settings::store::try_update(|settings| {
+        settings.set_legacy_language(language)
     })?;
     let mut ctrl = controller.lock().unwrap();
     ctrl.update_settings(persisted.clone());
@@ -325,8 +506,15 @@ pub async fn set_hotkey(
     shortcut: String,
 ) -> Result<(), String> {
     validate_hotkey(&shortcut)?;
-    let mut profiles = controller.lock().unwrap().settings().resolved_hotkey_profiles();
-    let profile_index = profiles.iter().position(|profile| profile.id == "default").unwrap_or(0);
+    let mut profiles = controller
+        .lock()
+        .unwrap()
+        .settings()
+        .resolved_hotkey_profiles();
+    let profile_index = profiles
+        .iter()
+        .position(|profile| profile.id == "default")
+        .unwrap_or(0);
     profiles[profile_index].shortcut = shortcut;
     set_hotkey_profiles(app, controller, health, profiles).await
 }
@@ -340,7 +528,10 @@ pub async fn set_hotkey_profiles(
 ) -> Result<(), String> {
     use tauri::Emitter;
     Settings::validate_hotkey_profiles(&profiles)?;
-    let new_shortcuts: Vec<String> = profiles.iter().map(|profile| profile.shortcut.clone()).collect();
+    let new_shortcuts: Vec<String> = profiles
+        .iter()
+        .map(|profile| profile.shortcut.clone())
+        .collect();
     let new_primary = profiles
         .iter()
         .find(|profile| profile.id == "default")
@@ -378,7 +569,10 @@ pub async fn set_hotkey_profiles(
             .update_settings(persisted.clone());
         let change = health.record(&new_primary, None, old_operational);
         if change.changed {
-            let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+            let _ = app.emit(
+                crate::events::event::HOTKEY_REGISTRATION_CHANGED,
+                &change.status,
+            );
         }
         crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
         return Ok(());
@@ -412,9 +606,14 @@ pub async fn set_hotkey_profiles(
                 OperationalHotkey::Unknown,
             );
             if change.changed {
-                let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+                let _ = app.emit(
+                    crate::events::event::HOTKEY_REGISTRATION_CHANGED,
+                    &change.status,
+                );
             }
-            return Err(format!("Failed to register hotkey profiles: {error}; cleanup failed: {cleanup_error}"));
+            return Err(format!(
+                "Failed to register hotkey profiles: {error}; cleanup failed: {cleanup_error}"
+            ));
         }
         let change = match &old_operational {
             OperationalHotkey::Registered(old_shortcuts) => match crate::hotkey::register_shortcuts(&app, old_shortcuts) {
@@ -435,7 +634,10 @@ pub async fn set_hotkey_profiles(
             OperationalHotkey::Unknown => unreachable!("unknown state returned above"),
         };
         if change.changed {
-            let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+            let _ = app.emit(
+                crate::events::event::HOTKEY_REGISTRATION_CHANGED,
+                &change.status,
+            );
         }
         return Err(format!("Failed to register hotkey profiles: {error}"));
     }
@@ -465,12 +667,29 @@ pub async fn set_hotkey_profiles(
                 None
             };
             let unknown = unregister_error.is_some();
-            let restored_operational = if unknown { OperationalHotkey::Unknown } else if rollback_error.is_some() { OperationalHotkey::Inactive } else { old_operational.clone() };
-            let health_error = unknown.then(|| "failed to unregister unpersisted hotkeys; operational state is unknown".to_string())
-                .or_else(|| rollback_error.as_ref().map(|error| format!("failed to restore previous hotkeys: {error}")));
+            let restored_operational = if unknown {
+                OperationalHotkey::Unknown
+            } else if rollback_error.is_some() {
+                OperationalHotkey::Inactive
+            } else {
+                old_operational.clone()
+            };
+            let health_error = unknown
+                .then(|| {
+                    "failed to unregister unpersisted hotkeys; operational state is unknown"
+                        .to_string()
+                })
+                .or_else(|| {
+                    rollback_error
+                        .as_ref()
+                        .map(|error| format!("failed to restore previous hotkeys: {error}"))
+                });
             let change = health.record(&old_shortcut, health_error, restored_operational);
             if change.changed {
-                let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+                let _ = app.emit(
+                    crate::events::event::HOTKEY_REGISTRATION_CHANGED,
+                    &change.status,
+                );
             }
             return Err(format!("Failed to persist hotkey profiles: {save_error}"));
         }
@@ -488,12 +707,18 @@ pub async fn set_hotkey_profiles(
         OperationalHotkey::registered_many(&new_shortcuts),
     );
     if change.changed {
-        let _ = app.emit(crate::events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
+        let _ = app.emit(
+            crate::events::event::HOTKEY_REGISTRATION_CHANGED,
+            &change.status,
+        );
     }
 
     crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
 
-    info!("Hotkey profiles changed: {} registered", new_shortcuts.len());
+    info!(
+        "Hotkey profiles changed: {} registered",
+        new_shortcuts.len()
+    );
     Ok(())
 }
 
@@ -519,8 +744,7 @@ pub async fn retry_hotkey_registration(
         let app_for_install = app.clone();
         let (installed_tx, installed_rx) = std::sync::mpsc::channel();
         app.run_on_main_thread(move || {
-            let result =
-                crate::hotkey::install_bare_function_key_monitor(&app_for_install);
+            let result = crate::hotkey::install_bare_function_key_monitor(&app_for_install);
             let _ = installed_tx.send(result);
         })
         .map_err(|error| error.to_string())?;
@@ -653,7 +877,9 @@ async fn stop_and_transcribe_impl(
         };
         let language = ctrl.language();
         let effective_model = ctrl.settings().effective_model_for(language);
-        let profile_id = ctrl.active_hotkey_profile().map(|profile| profile.id.as_str());
+        let profile_id = ctrl
+            .active_hotkey_profile()
+            .map(|profile| profile.id.as_str());
         let opts = build_transcribe_options_for_profile(ctrl.settings(), profile_id);
         let glossary = Glossary::parse(&ctrl.settings().effective_glossary_source(profile_id));
         (audio, language, effective_model, opts, glossary)
@@ -682,7 +908,8 @@ async fn stop_and_transcribe_impl(
         // exit after abort and log whether the lock was released.
         let whisper_ref = whisper.inner().clone();
         let mut fut = tokio::task::spawn_blocking(move || {
-            let mut timings = sagascript_core::transcription::whisper_backend::DictationTimings::default();
+            let mut timings =
+                sagascript_core::transcription::whisper_backend::DictationTimings::default();
             let result = whisper_ref.transcribe_live_dictation(
                 effective_model,
                 &audio,
@@ -747,7 +974,10 @@ async fn stop_and_transcribe_impl(
         .as_ref()
         .map(|transcript| transcript.effective_text.clone())
         .map_err(Clone::clone);
-    controller.lock().unwrap().finish_transcription(completion)?;
+    controller
+        .lock()
+        .unwrap()
+        .finish_transcription(completion)?;
     training_result
 }
 
@@ -783,11 +1013,7 @@ pub async fn transcribe_training_file(
             profile.language,
             ctrl.settings().effective_model_for(profile.language),
             build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id)),
-            Glossary::parse(
-                &ctrl
-                    .settings()
-                    .effective_glossary_source(Some(&profile_id)),
-            ),
+            Glossary::parse(&ctrl.settings().effective_glossary_source(Some(&profile_id))),
         )
     };
 
@@ -801,15 +1027,11 @@ pub async fn transcribe_training_file(
     let duration_seconds = (audio.len() / 16_000) as u64;
     let timeout = Duration::from_secs((duration_seconds * 6).max(TRANSCRIPTION_TIMEOUT_SECS));
     let mut task = tokio::task::spawn_blocking(move || {
-        whisper_ref.with_model(
-            effective_model,
-            ContextProfile::FlashAttention,
-            |backend| {
-                backend.transcribe_sync_with_options(&audio, language, &opts, move |progress| {
-                    let _ = progress_app.emit("transcription-progress", progress);
-                })
-            },
-        )
+        whisper_ref.with_model(effective_model, ContextProfile::FlashAttention, |backend| {
+            backend.transcribe_sync_with_options(&audio, language, &opts, move |progress| {
+                let _ = progress_app.emit("transcription-progress", progress);
+            })
+        })
     });
 
     let result = match tokio::time::timeout(timeout, &mut task).await {
@@ -1007,13 +1229,129 @@ pub async fn set_show_overlay(
 pub async fn set_initial_prompt(
     controller: State<'_, SharedController>,
     prompt: String,
+    expected_source: Option<String>,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
-        settings.initial_prompt = prompt.clone();
-    })?;
-    let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().initial_prompt = persisted.initial_prompt;
-    info!("Initial prompt set ({} chars)", prompt.len());
+    let mut conflict_source = None;
+    let persisted = sagascript_core::settings::store::try_update(|settings| {
+        let current_source = expected_source
+            .as_ref()
+            .map(|_| settings.initial_prompt.clone());
+        match set_initial_prompt_in(settings, &prompt, expected_source.as_deref()) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if error.starts_with(DICTIONARY_CHANGED_ELSEWHERE_PREFIX) {
+                    conflict_source = current_source;
+                }
+                Err(error)
+            }
+        }
+    });
+    match persisted {
+        Ok(persisted) => {
+            let mut ctrl = controller.lock().unwrap();
+            ctrl.settings_mut().initial_prompt = persisted.initial_prompt;
+            info!("Initial prompt set ({} chars)", prompt.len());
+            Ok(())
+        }
+        Err(error) => {
+            if let (Some(expected), Some(persisted_source)) =
+                (expected_source.as_deref(), conflict_source.as_deref())
+            {
+                let mut ctrl = controller.lock().unwrap();
+                reconcile_global_dictionary_after_conflict(
+                    ctrl.settings_mut(),
+                    expected,
+                    persisted_source,
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
+const DICTIONARY_CHANGED_ELSEWHERE_PREFIX: &str = "Dictionary changed elsewhere:";
+
+fn ensure_expected_dictionary_source(
+    current_source: &str,
+    expected_source: Option<&str>,
+) -> Result<(), String> {
+    if expected_source.is_some_and(|expected| {
+        !sagascript_core::settings::store::glossary_sources_match(expected, current_source)
+    }) {
+        return Err(format!(
+            "{DICTIONARY_CHANGED_ELSEWHERE_PREFIX} the persisted source no longer matches the editor baseline"
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DictionarySourceSnapshot {
+    present: bool,
+    source: String,
+}
+
+fn profile_dictionary_source_snapshot(
+    settings: &Settings,
+    profile_id: &str,
+) -> DictionarySourceSnapshot {
+    settings
+        .profile_glossaries
+        .get(profile_id)
+        .map(|source| DictionarySourceSnapshot {
+            present: true,
+            source: source.clone(),
+        })
+        .unwrap_or_else(|| DictionarySourceSnapshot {
+            present: false,
+            source: String::new(),
+        })
+}
+
+fn reconcile_global_dictionary_after_conflict(
+    settings: &mut Settings,
+    expected_source: &str,
+    persisted_source: &str,
+) {
+    if sagascript_core::settings::store::glossary_sources_match(
+        &settings.initial_prompt,
+        expected_source,
+    ) {
+        settings.initial_prompt = persisted_source.to_string();
+    }
+}
+
+fn reconcile_profile_dictionary_after_conflict(
+    settings: &mut Settings,
+    profile_id: &str,
+    expected_source: &str,
+    persisted_source: &DictionarySourceSnapshot,
+) {
+    let current_source = settings
+        .profile_glossaries
+        .get(profile_id)
+        .map(String::as_str)
+        .unwrap_or_default();
+    if !sagascript_core::settings::store::glossary_sources_match(current_source, expected_source) {
+        return;
+    }
+
+    if persisted_source.present {
+        settings
+            .profile_glossaries
+            .insert(profile_id.to_string(), persisted_source.source.clone());
+    } else {
+        settings.profile_glossaries.remove(profile_id);
+    }
+}
+
+fn set_initial_prompt_in(
+    settings: &mut Settings,
+    prompt: &str,
+    expected_source: Option<&str>,
+) -> Result<(), String> {
+    ensure_expected_dictionary_source(&settings.initial_prompt, expected_source)?;
+    settings.initial_prompt = prompt.to_string();
     Ok(())
 }
 
@@ -1025,10 +1363,283 @@ fn ensure_known_profile(settings: &Settings, profile_id: &str) -> Result<(), Str
         .ok_or_else(|| format!("Unknown dictation profile '{profile_id}'"))?;
     if profile.language == Language::Auto {
         return Err(
-            "Teach Sagascript requires a profile with an explicit language".to_string(),
+            "Personal dictionary aliases require a profile with an explicit language".to_string(),
         );
     }
     Ok(())
+}
+
+fn set_profile_glossary_in(
+    settings: &mut Settings,
+    profile_id: &str,
+    source: String,
+    expected_source: Option<&str>,
+) -> Result<(), String> {
+    ensure_known_profile(settings, profile_id)?;
+    let current_source = settings
+        .profile_glossaries
+        .get(profile_id)
+        .map(String::as_str)
+        .unwrap_or_default();
+    ensure_expected_dictionary_source(current_source, expected_source)?;
+    settings
+        .profile_glossaries
+        .insert(profile_id.to_owned(), source);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_profile_glossary(
+    controller: State<'_, SharedController>,
+    profile_id: String,
+    source: String,
+    expected_source: Option<String>,
+) -> Result<(), String> {
+    let source_len = source.chars().count();
+    let mut conflict_source = None;
+    let persisted = sagascript_core::settings::store::try_update(|settings| {
+        let current_source = expected_source
+            .as_ref()
+            .map(|_| profile_dictionary_source_snapshot(settings, &profile_id));
+        match set_profile_glossary_in(settings, &profile_id, source, expected_source.as_deref()) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if error.starts_with(DICTIONARY_CHANGED_ELSEWHERE_PREFIX) {
+                    conflict_source = current_source;
+                }
+                Err(error)
+            }
+        }
+    });
+    match persisted {
+        Ok(persisted) => {
+            controller.lock().unwrap().update_settings(persisted);
+            info!(source_len, "Profile personal dictionary updated");
+            Ok(())
+        }
+        Err(error) => {
+            if let (Some(expected), Some(persisted_source)) =
+                (expected_source.as_deref(), conflict_source.as_ref())
+            {
+                let mut ctrl = controller.lock().unwrap();
+                reconcile_profile_dictionary_after_conflict(
+                    ctrl.settings_mut(),
+                    &profile_id,
+                    expected,
+                    persisted_source,
+                );
+            }
+            Err(error)
+        }
+    }
+}
+
+#[cfg(test)]
+mod dictionary_compare_and_set_tests {
+    use super::*;
+
+    #[test]
+    fn dictionary_cas_matches_the_stores_trailing_newline_normalization() {
+        assert!(ensure_expected_dictionary_source("OpenRouter", Some("OpenRouter\n\n")).is_ok());
+        assert!(
+            ensure_expected_dictionary_source("merge = merch", Some("merge = merch\r\n")).is_ok()
+        );
+        assert!(ensure_expected_dictionary_source("", Some("\r\n")).is_ok());
+        assert!(ensure_expected_dictionary_source("OpenRouter ", Some("OpenRouter")).is_err());
+        assert!(
+            ensure_expected_dictionary_source("OpenRouter\nmerge", Some("OpenRouter merge"))
+                .is_err()
+        );
+    }
+
+    fn profile_settings() -> Settings {
+        Settings {
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "english".to_string(),
+                name: "English".to_string(),
+                shortcut: "Option+Space".to_string(),
+                language: Language::English,
+            }],
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn stale_global_source_is_rejected_without_mutation() {
+        let mut settings = Settings {
+            initial_prompt: "remote".to_string(),
+            ..Settings::default()
+        };
+        let before = settings.clone();
+
+        let error = set_initial_prompt_in(&mut settings, "local", Some("old")).unwrap_err();
+
+        assert!(error.starts_with("Dictionary changed elsewhere:"));
+        assert_eq!(settings.initial_prompt, before.initial_prompt);
+        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
+    }
+
+    #[test]
+    fn stale_profile_source_is_rejected_without_mutation() {
+        let mut settings = profile_settings();
+        settings
+            .profile_glossaries
+            .insert("english".to_string(), "remote".to_string());
+        let before = settings.clone();
+
+        let error =
+            set_profile_glossary_in(&mut settings, "english", "local".to_string(), Some("old"))
+                .unwrap_err();
+
+        assert!(error.starts_with("Dictionary changed elsewhere:"));
+        assert_eq!(settings.initial_prompt, before.initial_prompt);
+        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
+    }
+
+    #[test]
+    fn matching_expected_sources_write_both_dictionary_scopes() {
+        let mut settings = profile_settings();
+        settings.initial_prompt = "global old".to_string();
+        settings
+            .profile_glossaries
+            .insert("english".to_string(), "profile old".to_string());
+
+        set_initial_prompt_in(&mut settings, "global new", Some("global old")).unwrap();
+        set_profile_glossary_in(
+            &mut settings,
+            "english",
+            "profile new".to_string(),
+            Some("profile old"),
+        )
+        .unwrap();
+
+        assert_eq!(settings.initial_prompt, "global new");
+        assert_eq!(settings.profile_glossaries["english"], "profile new");
+    }
+
+    #[test]
+    fn omitted_expected_source_preserves_legacy_writes() {
+        let mut settings = profile_settings();
+        settings.initial_prompt = "global old".to_string();
+        settings
+            .profile_glossaries
+            .insert("english".to_string(), "profile old".to_string());
+
+        set_initial_prompt_in(&mut settings, "global new", None).unwrap();
+        set_profile_glossary_in(&mut settings, "english", "profile new".to_string(), None).unwrap();
+
+        assert_eq!(settings.initial_prompt, "global new");
+        assert_eq!(settings.profile_glossaries["english"], "profile new");
+    }
+
+    #[test]
+    fn unrelated_scope_change_does_not_block_compare_and_set() {
+        let mut settings = profile_settings();
+        settings.initial_prompt = "global changed elsewhere".to_string();
+        settings
+            .profile_glossaries
+            .insert("english".to_string(), "profile old".to_string());
+
+        set_profile_glossary_in(
+            &mut settings,
+            "english",
+            "profile new".to_string(),
+            Some("profile old"),
+        )
+        .unwrap();
+
+        assert_eq!(settings.initial_prompt, "global changed elsewhere");
+        assert_eq!(settings.profile_glossaries["english"], "profile new");
+    }
+
+    #[test]
+    fn global_conflict_refreshes_stale_controller_field_without_touching_profiles() {
+        let mut controller_settings = profile_settings();
+        controller_settings.initial_prompt = "editor baseline".to_string();
+        controller_settings
+            .profile_glossaries
+            .insert("english".to_string(), "unchanged profile".to_string());
+
+        reconcile_global_dictionary_after_conflict(
+            &mut controller_settings,
+            "editor baseline",
+            "fresh persisted source",
+        );
+
+        assert_eq!(controller_settings.initial_prompt, "fresh persisted source");
+        assert_eq!(
+            controller_settings.profile_glossaries["english"],
+            "unchanged profile"
+        );
+    }
+
+    #[test]
+    fn global_conflict_does_not_clobber_a_newer_controller_field() {
+        let mut controller_settings = profile_settings();
+        controller_settings.initial_prompt = "newer controller value".to_string();
+
+        reconcile_global_dictionary_after_conflict(
+            &mut controller_settings,
+            "editor baseline",
+            "fresh persisted source",
+        );
+
+        assert_eq!(controller_settings.initial_prompt, "newer controller value");
+    }
+
+    #[test]
+    fn profile_conflict_preserves_persisted_presence_and_rejects_newer_controller_value() {
+        let mut stale_controller = profile_settings();
+        stale_controller
+            .profile_glossaries
+            .insert("english".to_string(), "editor baseline".to_string());
+        let missing = DictionarySourceSnapshot {
+            present: false,
+            source: String::new(),
+        };
+        reconcile_profile_dictionary_after_conflict(
+            &mut stale_controller,
+            "english",
+            "editor baseline",
+            &missing,
+        );
+        assert!(!stale_controller.profile_glossaries.contains_key("english"));
+
+        stale_controller
+            .profile_glossaries
+            .insert("english".to_string(), "editor baseline".to_string());
+        let explicitly_empty = DictionarySourceSnapshot {
+            present: true,
+            source: String::new(),
+        };
+        reconcile_profile_dictionary_after_conflict(
+            &mut stale_controller,
+            "english",
+            "editor baseline",
+            &explicitly_empty,
+        );
+        assert_eq!(
+            stale_controller.profile_glossaries.get("english"),
+            Some(&String::new())
+        );
+
+        stale_controller
+            .profile_glossaries
+            .insert("english".to_string(), "newer controller value".to_string());
+        reconcile_profile_dictionary_after_conflict(
+            &mut stale_controller,
+            "english",
+            "editor baseline",
+            &DictionarySourceSnapshot {
+                present: true,
+                source: "fresh persisted source".to_string(),
+            },
+        );
+        assert_eq!(
+            stale_controller.profile_glossaries["english"],
+            "newer controller value"
+        );
+    }
 }
 
 fn apply_reviewed_training_candidates(
@@ -1057,8 +1668,7 @@ fn apply_reviewed_training_candidates(
         });
         if conflicts_with_existing_alias || conflicts_with_reviewed_alias {
             return Err(
-                "Edited preferred spelling conflicts with a personal dictionary alias"
-                    .to_string(),
+                "Edited preferred spelling conflicts with a personal dictionary alias".to_string(),
             );
         }
         let Some((index, _)) = allowed.iter().enumerate().find(|(index, original)| {
@@ -1073,8 +1683,7 @@ fn apply_reviewed_training_candidates(
                 }
         }) else {
             return Err(
-                "Dictionary suggestions changed; review the corrected transcript again"
-                    .to_string(),
+                "Dictionary suggestions changed; review the corrected transcript again".to_string(),
             );
         };
         matched[index] = true;
@@ -1088,7 +1697,10 @@ fn apply_reviewed_training_candidates(
     for candidate in accepted {
         match candidate.kind {
             GlossarySuggestionKind::Alias => {
-                scoped.upsert(candidate.canonical.clone(), vec![candidate.observed.clone()]);
+                scoped.upsert(
+                    candidate.canonical.clone(),
+                    vec![candidate.observed.clone()],
+                );
             }
             GlossarySuggestionKind::HintOnly => {
                 scoped.upsert(candidate.canonical.clone(), Vec::new());
@@ -1114,8 +1726,7 @@ fn validate_edited_training_candidate(candidate: &GlossarySuggestion) -> Result<
             .any(|character| matches!(character, '\n' | '\r' | ',' | '=' | '|'))
     {
         return Err(
-            "Edited dictionary terms must be 1-4 words without glossary delimiters"
-                .to_string(),
+            "Edited dictionary terms must be 1-4 words without glossary delimiters".to_string(),
         );
     }
     Ok(())
@@ -1147,13 +1758,7 @@ pub async fn apply_training_glossary(
 
     let accepted_count = accepted.len();
     let persisted = sagascript_core::settings::store::try_update(|settings| {
-        apply_reviewed_training_candidates(
-            settings,
-            &heard,
-            &corrected,
-            &profile_id,
-            &accepted,
-        )
+        apply_reviewed_training_candidates(settings, &heard, &corrected, &profile_id, &accepted)
     })?;
 
     controller.lock().unwrap().settings_mut().profile_glossaries = persisted.profile_glossaries;
@@ -1172,18 +1777,15 @@ mod training_glossary_tests {
         let corrected = "Jag heter Magnus Gille.";
         let candidates = suggest_glossary_candidates(heard, corrected, &Glossary::default());
 
-        apply_reviewed_training_candidates(
-            &mut settings,
-            heard,
-            corrected,
-            "default",
-            &candidates,
-        )
-        .unwrap();
+        apply_reviewed_training_candidates(&mut settings, heard, corrected, "default", &candidates)
+            .unwrap();
 
         assert_eq!(settings.initial_prompt, "");
         assert_eq!(
-            settings.profile_glossaries.get("default").map(String::as_str),
+            settings
+                .profile_glossaries
+                .get("default")
+                .map(String::as_str),
             Some("Gille = Jille")
         );
     }
@@ -1223,32 +1825,26 @@ mod training_glossary_tests {
         let mut edited = original.clone();
         edited.canonical = "Lovable.dev".to_string();
         let mut settings = Settings::default();
-        apply_reviewed_training_candidates(
-            &mut settings,
-            heard,
-            corrected,
-            "default",
-            &[edited],
-        )
-        .unwrap();
+        apply_reviewed_training_candidates(&mut settings, heard, corrected, "default", &[edited])
+            .unwrap();
         assert_eq!(
-            settings.profile_glossaries.get("default").map(String::as_str),
+            settings
+                .profile_glossaries
+                .get("default")
+                .map(String::as_str),
             Some("Lovable.dev = Love a ball")
         );
 
         let mut as_hint = original;
         as_hint.kind = GlossarySuggestionKind::HintOnly;
         let mut settings = Settings::default();
-        apply_reviewed_training_candidates(
-            &mut settings,
-            heard,
-            corrected,
-            "default",
-            &[as_hint],
-        )
-        .unwrap();
+        apply_reviewed_training_candidates(&mut settings, heard, corrected, "default", &[as_hint])
+            .unwrap();
         assert_eq!(
-            settings.profile_glossaries.get("default").map(String::as_str),
+            settings
+                .profile_glossaries
+                .get("default")
+                .map(String::as_str),
             Some("Lovable")
         );
     }
@@ -1277,17 +1873,18 @@ mod training_glossary_tests {
     }
 
     #[test]
-    fn edited_canonical_cannot_shadow_an_existing_alias() {
-        let mut settings = Settings {
-            initial_prompt: "Existing = dangerous".to_string(),
-            ..Default::default()
-        };
+    fn edited_canonical_cannot_shadow_an_existing_profile_alias() {
+        let mut settings = Settings::default();
+        settings
+            .profile_glossaries
+            .insert("default".into(), "Existing = dangerous".into());
+        let original = settings.profile_glossaries.clone();
         let heard = "Magnus Jille";
         let corrected = "Magnus Gille";
         let mut candidate = suggest_glossary_candidates(
             heard,
             corrected,
-            &Glossary::parse(&settings.initial_prompt),
+            &Glossary::parse(&settings.effective_glossary_source(Some("default"))),
         )
         .into_iter()
         .next()
@@ -1304,7 +1901,36 @@ mod training_glossary_tests {
         .unwrap_err();
 
         assert!(error.contains("conflicts"));
-        assert!(settings.profile_glossaries.is_empty());
+        assert_eq!(settings.profile_glossaries, original);
+    }
+
+    #[test]
+    fn inactive_global_alias_does_not_block_reviewed_profile_term() {
+        let mut settings = Settings {
+            initial_prompt: "Existing = dangerous".to_string(),
+            ..Default::default()
+        };
+        let heard = "Magnus Jille";
+        let corrected = "Magnus Gille";
+        let mut candidate = suggest_glossary_candidates(
+            heard,
+            corrected,
+            &Glossary::parse(&settings.effective_glossary_source(Some("default"))),
+        )
+        .into_iter()
+        .next()
+        .unwrap();
+        candidate.canonical = "Dangerous".to_string();
+        apply_reviewed_training_candidates(
+            &mut settings,
+            heard,
+            corrected,
+            "default",
+            &[candidate],
+        )
+        .unwrap();
+        assert_eq!(settings.initial_prompt, "Existing = dangerous");
+        assert_eq!(settings.profile_glossaries["default"], "Dangerous = Jille");
     }
 }
 
@@ -1370,8 +1996,19 @@ pub async fn transcribe_file(
     file_path: String,
     prompt: Option<String>,
     diarize: Option<bool>,
+    profile_id: Option<String>,
 ) -> Result<String, String> {
     use tauri::Emitter;
+
+    let FileTranscriptionContext {
+        language,
+        model: effective_model,
+        glossary,
+        options: mut opts,
+    } = {
+        let ctrl = controller.lock().unwrap();
+        file_transcription_context(ctrl.settings(), profile_id.as_deref(), prompt.as_deref())?
+    };
 
     let path = std::path::PathBuf::from(&file_path);
 
@@ -1388,23 +2025,12 @@ pub async fn transcribe_file(
     // File transcription (beam search / diarization) is far slower than live
     // dictation, so scale the timeout by the decoded duration rather than using
     // the short live-dictation timeout (which beam search could otherwise hit).
-    let file_timeout = Duration::from_secs(
-        ((audio.len() / 16_000) as u64 * 6).max(TRANSCRIPTION_TIMEOUT_SECS),
-    );
+    let file_timeout =
+        Duration::from_secs(((audio.len() / 16_000) as u64 * 6).max(TRANSCRIPTION_TIMEOUT_SECS));
 
     // Suppress unused-variable warning on `diarize` when the diarization feature is off
     #[cfg(not(feature = "diarization"))]
     let _ = &diarize;
-
-    // Get transcription settings
-    let (language, effective_model, glossary) = {
-        let ctrl = controller.lock().unwrap();
-        (
-            ctrl.language(),
-            ctrl.settings().effective_model(),
-            effective_file_glossary(ctrl.settings(), prompt.as_deref()),
-        )
-    };
 
     #[cfg(feature = "diarization")]
     let context_profile = ContextProfile::for_diarization(diarize.unwrap_or(false));
@@ -1421,10 +2047,10 @@ pub async fn transcribe_file(
     #[cfg(feature = "diarization")]
     if diarize.unwrap_or(false) {
         use sagascript_core::diarization::{
-            DiarizeConfig, TimestampedSegment,
             diarize as run_diarize,
             merge::{consolidate, merge_with_transcript},
-            model::{DiarizationModel, download_model as download_diarization_model},
+            model::{download_model as download_diarization_model, DiarizationModel},
+            DiarizeConfig, TimestampedSegment,
         };
 
         // Checking diarization in the file-transcription UI is an explicit
@@ -1456,17 +2082,13 @@ pub async fn transcribe_file(
         // Segment-level timestamps can span multiple speaker turns and would
         // cause maximum-overlap merging to collapse the GUI output to one label.
         let mut transcribe_fut = tokio::task::spawn_blocking(move || {
-            whisper_ref.with_model(
-                effective_model,
-                ContextProfile::TokenAlignment,
-                |backend| {
-                    backend.transcribe_sync_for_diarization(
-                        &audio_for_transcribe,
-                        language,
-                        prompt_ref.as_deref(),
-                    )
-                },
-            )
+            whisper_ref.with_model(effective_model, ContextProfile::TokenAlignment, |backend| {
+                backend.transcribe_sync_for_diarization(
+                    &audio_for_transcribe,
+                    language,
+                    prompt_ref.as_deref(),
+                )
+            })
         });
 
         let timeout = file_timeout;
@@ -1565,10 +2187,6 @@ pub async fn transcribe_file(
 
     // Standard (non-diarize) transcription path. File transcription defaults to
     // beam search (quality over latency).
-    let mut opts = {
-        let ctrl = controller.lock().unwrap();
-        build_file_transcribe_options(ctrl.settings(), prompt)
-    };
     opts.parallel_chunks =
         recommended_parallel_chunks(audio.len(), effective_model, opts.beam_size);
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
@@ -1813,17 +2431,15 @@ mod macos_mic {
     /// Ensure AVFoundation framework is loaded (required for AVCaptureDevice class lookup).
     fn ensure_avfoundation_loaded() {
         static LOAD: Once = Once::new();
-        LOAD.call_once(|| {
-            unsafe {
-                let ns_bundle_class = Class::get("NSBundle").expect("NSBundle class");
-                let path: *mut Object = msg_send![
-                    Class::get("NSString").expect("NSString"),
-                    stringWithUTF8String: c"/System/Library/Frameworks/AVFoundation.framework".as_ptr()
-                ];
-                let bundle: *mut Object = msg_send![ns_bundle_class, bundleWithPath: path];
-                if !bundle.is_null() {
-                    let _loaded: bool = msg_send![bundle, load];
-                }
+        LOAD.call_once(|| unsafe {
+            let ns_bundle_class = Class::get("NSBundle").expect("NSBundle class");
+            let path: *mut Object = msg_send![
+                Class::get("NSString").expect("NSString"),
+                stringWithUTF8String: c"/System/Library/Frameworks/AVFoundation.framework".as_ptr()
+            ];
+            let bundle: *mut Object = msg_send![ns_bundle_class, bundleWithPath: path];
+            if !bundle.is_null() {
+                let _loaded: bool = msg_send![bundle, load];
             }
         });
     }
@@ -1954,7 +2570,7 @@ mod macos_mic {
 
     #[cfg(test)]
     mod tests {
-        use super::{AccessRequestDecision, access_request_decision, authorization_status_label};
+        use super::{access_request_decision, authorization_status_label, AccessRequestDecision};
 
         #[test]
         fn maps_avfoundation_authorization_constants_correctly() {
@@ -1972,8 +2588,14 @@ mod macos_mic {
 
         #[test]
         fn request_decision_live_queries_undetermined_and_cached_denied() {
-            assert_eq!(access_request_decision(0), AccessRequestDecision::QuerySystem);
-            assert_eq!(access_request_decision(2), AccessRequestDecision::QuerySystem);
+            assert_eq!(
+                access_request_decision(0),
+                AccessRequestDecision::QuerySystem
+            );
+            assert_eq!(
+                access_request_decision(2),
+                AccessRequestDecision::QuerySystem
+            );
         }
 
         #[test]
