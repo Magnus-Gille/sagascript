@@ -22,6 +22,7 @@ _MODELS = {
     "tiny",
     "base.en",
     "base",
+    "fi-whisper-tiny",
     "kb-whisper-tiny",
     "kb-whisper-base",
     "kb-whisper-small",

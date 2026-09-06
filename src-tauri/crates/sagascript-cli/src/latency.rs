@@ -905,6 +905,14 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_optional_finnish_tiny_model() {
+        assert_eq!(
+            normalize_model("Finnish-Whisper Tiny".to_string(), 1).unwrap(),
+            "fi-whisper-tiny"
+        );
+    }
+
+    #[test]
     fn rejects_duplicate_pairs_unknown_names_and_bad_metrics_without_echoing_values() {
         let duplicate = format!(
             "{}\n{}\n",

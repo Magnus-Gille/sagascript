@@ -86,7 +86,8 @@ Models are downloaded from pinned publisher revisions and stored locally.
 
 NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
-Finnish uses the generic multilingual Base model by default. \
+Finnish uses the generic multilingual Base model by default; optional \
+Finnish-optimized Tiny is available as fi-whisper-tiny. \
 For best results, set a specific language.";
 
 #[cfg(not(feature = "record"))]
@@ -108,7 +109,8 @@ Models are downloaded from pinned publisher revisions and stored locally.
 
 NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
-Finnish uses the generic multilingual Base model by default. \
+Finnish uses the generic multilingual Base model by default; optional \
+Finnish-optimized Tiny is available as fi-whisper-tiny. \
 For best results, set a specific language.";
 
 #[cfg(feature = "record")]
@@ -216,7 +218,8 @@ By default, uses the language and model from your persisted settings \
 
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
-multilingual Base model by default.",
+multilingual Base model by default; optional Finnish-optimized Tiny is \
+available as fi-whisper-tiny.",
         after_long_help = "\
 EXAMPLES:
   # Basic transcription (uses configured language/model)
@@ -270,7 +273,8 @@ Use --output to save the raw audio as a WAV file without transcribing \
 
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
-multilingual Base model by default.",
+multilingual Base model by default; optional Finnish-optimized Tiny is \
+available as fi-whisper-tiny.",
         after_long_help = "\
 EXAMPLES:
   # Record until Ctrl+C, then transcribe
@@ -297,7 +301,8 @@ List all available Whisper models with their size and download status.
 
 Models are organized by language. English uses OpenAI Whisper models, \
 Swedish uses KBLab models, Norwegian uses NbAiLab models, and Finnish uses \
-generic multilingual Whisper models (Base is recommended). \
+generic multilingual Whisper models plus an optional Finnish-optimized Tiny \
+(Base is recommended). \
 Use --language to filter the list.
 
 The DOWNLOADED column shows whether each model is already available locally.",
@@ -342,7 +347,7 @@ AVAILABLE MODELS:
   English:    tiny.en, base.en
   Swedish:    kb-whisper-tiny, kb-whisper-base, kb-whisper-small
   Norwegian:  nb-whisper-tiny, nb-whisper-base, nb-whisper-small
-  Finnish:    base (generic multilingual default)
+  Finnish:    base (generic multilingual default), fi-whisper-tiny
   Multilingual: tiny, base
 
 DIARIZATION MODELS (requires --features diarization):

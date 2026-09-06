@@ -47,7 +47,8 @@ test("Finnish is exposed by every production language selector", () => {
 test("CLI Finnish language and model IDs use the core model registry", () => {
   assert.match(transcribe, /"fi" \| "finnish" => Ok\(Language::Finnish\)/);
   assert.match(transcribe, /"base" => Ok\(WhisperModel::Base\)/);
-  assert.doesNotMatch(transcribe, /fi-whisper-medium|FinnishWhisperMedium/);
+  assert.doesNotMatch(transcribe, /"fi-whisper-medium"\s*=>\s*Ok\(WhisperModel::/);
+  assert.doesNotMatch(transcribe, /WhisperModel::FinnishWhisperMedium/);
   assert.match(models, /Language::Finnish/);
   assert.match(benchmark, /"en" \| "sv" \| "no" \| "fi"/);
   assert.match(benchmark, /Language::Finnish => "fi"/);

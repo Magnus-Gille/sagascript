@@ -62,6 +62,8 @@ pub enum WhisperModel {
     #[serde(rename = "base")]
     #[default]
     Base,
+    #[serde(rename = "fi-whisper-tiny")]
+    FinnishWhisperTiny,
     #[serde(rename = "kb-whisper-tiny")]
     KbWhisperTiny,
     #[serde(rename = "kb-whisper-base")]
@@ -103,6 +105,7 @@ impl WhisperModel {
             WhisperModel::Tiny => "Whisper Tiny",
             WhisperModel::BaseEn => "Whisper Base (EN)",
             WhisperModel::Base => "Whisper Base",
+            WhisperModel::FinnishWhisperTiny => "Finnish-Whisper Tiny",
             WhisperModel::KbWhisperTiny => "KB-Whisper Tiny",
             WhisperModel::KbWhisperBase => "KB-Whisper Base",
             WhisperModel::KbWhisperSmall => "KB-Whisper Small",
@@ -128,6 +131,7 @@ impl WhisperModel {
             WhisperModel::Tiny => "OpenAI Whisper, multilingual. Fastest, less accurate",
             WhisperModel::BaseEn => "OpenAI Whisper, English-only. Balanced speed and accuracy",
             WhisperModel::Base => "OpenAI Whisper, multilingual. Balanced speed and accuracy",
+            WhisperModel::FinnishWhisperTiny => "Finnish-NLP. Finnish fine-tune; optional evaluation model",
             WhisperModel::KbWhisperTiny => "By KBLab. Swedish-optimized. Fastest, less accurate",
             WhisperModel::KbWhisperBase => "By KBLab. Swedish-optimized. Balanced speed and accuracy",
             WhisperModel::KbWhisperSmall => "By KBLab. Swedish-optimized. More accurate, slower",
@@ -161,6 +165,11 @@ impl WhisperModel {
         )
     }
 
+    #[allow(dead_code)]
+    pub fn is_finnish_optimized(&self) -> bool {
+        matches!(self, WhisperModel::FinnishWhisperTiny)
+    }
+
     /// Optimal no-speech threshold per model.
     ///
     /// Smaller English-only models (small.en) aggressively classify speech as
@@ -175,7 +184,7 @@ impl WhisperModel {
         use whisper_rs::DtwModelPreset;
         match self {
             WhisperModel::TinyEn => DtwModelPreset::TinyEn,
-            WhisperModel::Tiny | WhisperModel::KbWhisperTiny | WhisperModel::NbWhisperTiny => DtwModelPreset::Tiny,
+            WhisperModel::Tiny | WhisperModel::FinnishWhisperTiny | WhisperModel::KbWhisperTiny | WhisperModel::NbWhisperTiny => DtwModelPreset::Tiny,
             WhisperModel::BaseEn => DtwModelPreset::BaseEn,
             WhisperModel::Base | WhisperModel::KbWhisperBase | WhisperModel::NbWhisperBase => DtwModelPreset::Base,
             WhisperModel::SmallEn => DtwModelPreset::SmallEn,
@@ -211,7 +220,7 @@ impl WhisperModel {
     /// whether the configured language matches an input file.
     #[allow(dead_code)]
     pub fn is_language_optimized(&self) -> bool {
-        self.is_swedish_optimized() || self.is_norwegian_optimized()
+        self.is_swedish_optimized() || self.is_norwegian_optimized() || self.is_finnish_optimized()
     }
 
     /// Whether this model can honor an explicitly selected language without
@@ -221,18 +230,25 @@ impl WhisperModel {
     pub fn is_compatible_with(&self, language: Language) -> bool {
         match language {
             Language::English => {
-                !self.is_swedish_optimized() && !self.is_norwegian_optimized()
+                !self.is_swedish_optimized()
+                    && !self.is_norwegian_optimized()
+                    && !self.is_finnish_optimized()
             }
             Language::Swedish => {
-                !self.is_english_only() && !self.is_norwegian_optimized()
+                !self.is_english_only()
+                    && !self.is_norwegian_optimized()
+                    && !self.is_finnish_optimized()
             }
             Language::Norwegian => {
-                !self.is_english_only() && !self.is_swedish_optimized()
-            }
-            Language::Finnish => {
                 !self.is_english_only()
                     && !self.is_swedish_optimized()
-                    && !self.is_norwegian_optimized()
+                    && !self.is_finnish_optimized()
+            }
+            Language::Finnish => {
+                self.is_finnish_optimized()
+                    || (!self.is_english_only()
+                        && !self.is_swedish_optimized()
+                        && !self.is_norwegian_optimized())
             }
             Language::Auto => !self.is_english_only() && !self.is_language_optimized(),
         }
@@ -245,6 +261,7 @@ impl WhisperModel {
             WhisperModel::Tiny => "ggml-tiny.bin",
             WhisperModel::BaseEn => "ggml-base.en.bin",
             WhisperModel::Base => "ggml-base.bin",
+            WhisperModel::FinnishWhisperTiny => "ggml-model-fi-tiny.bin",
             WhisperModel::KbWhisperTiny => "kb-whisper-tiny-q5_0.bin",
             WhisperModel::KbWhisperBase => "kb-whisper-base-q5_0.bin",
             WhisperModel::KbWhisperSmall => "kb-whisper-small-q5_0.bin",
@@ -271,6 +288,7 @@ impl WhisperModel {
             WhisperModel::Tiny => "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin",
             WhisperModel::BaseEn => "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin",
             WhisperModel::Base => "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin",
+            WhisperModel::FinnishWhisperTiny => "https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/resolve/c58924b6deb4438756b3d38ecd67d65bdf20298d/ggml-model-fi-tiny.bin",
             WhisperModel::KbWhisperTiny => "https://huggingface.co/KBLab/kb-whisper-tiny/resolve/76d796af43a50fa34321efa562c9b9887a187463/ggml-model-q5_0.bin",
             WhisperModel::KbWhisperBase => "https://huggingface.co/KBLab/kb-whisper-base/resolve/1499d2d2f0c7ed545bd6f2eec85287cf8d8c8b38/ggml-model-q5_0.bin",
             WhisperModel::KbWhisperSmall => "https://huggingface.co/KBLab/kb-whisper-small/resolve/3564d61a42fc210ceaa55a22a96dd64478959c78/ggml-model-q5_0.bin",
@@ -297,6 +315,7 @@ impl WhisperModel {
             WhisperModel::Tiny => DownloadIntegrity { sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21", size: 77_691_713 },
             WhisperModel::BaseEn => DownloadIntegrity { sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002", size: 147_964_211 },
             WhisperModel::Base => DownloadIntegrity { sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe", size: 147_951_465 },
+            WhisperModel::FinnishWhisperTiny => DownloadIntegrity { sha256: "41cf309b7f50523cfca724ae90924fcd0e4794205de57a66abc3cce627103ce8", size: 77_691_730 },
             WhisperModel::KbWhisperTiny => DownloadIntegrity { sha256: "98d46b7d23e5528d006e8a42e29eb0cb39b44bed94e1329f10f57d1fd15c658b", size: 29_875_738 },
             WhisperModel::KbWhisperBase => DownloadIntegrity { sha256: "aead29b356bca8840e72a8dc2286e2d69e6702639751a1e60cb3c8eacefec546", size: 55_295_450 },
             WhisperModel::KbWhisperSmall => DownloadIntegrity { sha256: "6768836a51abc902e420c613153e6d418c90ea2774e913274d02ab23170225b7", size: 175_209_680 },
@@ -380,7 +399,8 @@ impl WhisperModel {
             | WhisperModel::NbWhisperBase
             | WhisperModel::NbWhisperSmall
             | WhisperModel::NbWhisperMedium
-            | WhisperModel::NbWhisperLarge => None,
+            | WhisperModel::NbWhisperLarge
+            | WhisperModel::FinnishWhisperTiny => None,
         }
     }
 
@@ -399,6 +419,7 @@ impl WhisperModel {
             WhisperModel::Tiny => 75,
             WhisperModel::BaseEn => 142,
             WhisperModel::Base => 142,
+            WhisperModel::FinnishWhisperTiny => 75,
             WhisperModel::KbWhisperTiny => 40,
             WhisperModel::KbWhisperBase => 60,
             WhisperModel::KbWhisperSmall => 190,
@@ -455,6 +476,7 @@ impl WhisperModel {
             Language::Finnish => &[
                 WhisperModel::Tiny,
                 WhisperModel::Base,
+                WhisperModel::FinnishWhisperTiny,
                 WhisperModel::Small,
                 WhisperModel::Medium,
                 WhisperModel::LargeV3Turbo,
@@ -943,6 +965,7 @@ mod tests {
         assert!(WhisperModel::SmallEn.is_english_only());
         assert!(WhisperModel::MediumEn.is_english_only());
         assert!(!WhisperModel::Tiny.is_english_only());
+        assert!(!WhisperModel::FinnishWhisperTiny.is_english_only());
         assert!(!WhisperModel::Base.is_english_only());
         assert!(!WhisperModel::Small.is_english_only());
         assert!(!WhisperModel::Medium.is_english_only());
@@ -955,6 +978,7 @@ mod tests {
     fn language_optimized_models_are_not_neutral_detectors() {
         assert!(WhisperModel::KbWhisperSmall.is_language_optimized());
         assert!(WhisperModel::NbWhisperBase.is_language_optimized());
+        assert!(WhisperModel::FinnishWhisperTiny.is_language_optimized());
         assert!(!WhisperModel::Base.is_language_optimized());
         assert!(!WhisperModel::MediumEn.is_language_optimized());
     }
@@ -995,6 +1019,7 @@ mod tests {
         // KB/NB fine-tunes live in other repos and have no CoreML encoder.
         assert_eq!(WhisperModel::KbWhisperBase.coreml_encoder_url(), None);
         assert_eq!(WhisperModel::NbWhisperSmall.coreml_encoder_dirname(), None);
+        assert_eq!(WhisperModel::FinnishWhisperTiny.coreml_encoder_url(), None);
     }
 
     #[test]
@@ -1006,6 +1031,7 @@ mod tests {
         assert!(WhisperModel::KbWhisperLarge.is_swedish_optimized());
         assert!(!WhisperModel::TinyEn.is_swedish_optimized());
         assert!(!WhisperModel::NbWhisperTiny.is_swedish_optimized());
+        assert!(!WhisperModel::FinnishWhisperTiny.is_swedish_optimized());
     }
 
     #[test]
@@ -1017,6 +1043,7 @@ mod tests {
         assert!(WhisperModel::NbWhisperLarge.is_norwegian_optimized());
         assert!(!WhisperModel::TinyEn.is_norwegian_optimized());
         assert!(!WhisperModel::KbWhisperTiny.is_norwegian_optimized());
+        assert!(!WhisperModel::FinnishWhisperTiny.is_norwegian_optimized());
     }
 
     #[test]
@@ -1026,6 +1053,7 @@ mod tests {
             WhisperModel::Tiny,
             WhisperModel::BaseEn,
             WhisperModel::Base,
+            WhisperModel::FinnishWhisperTiny,
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
@@ -1057,6 +1085,7 @@ mod tests {
             WhisperModel::Tiny,
             WhisperModel::BaseEn,
             WhisperModel::Base,
+            WhisperModel::FinnishWhisperTiny,
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
@@ -1125,6 +1154,7 @@ mod tests {
             WhisperModel::Tiny,
             WhisperModel::BaseEn,
             WhisperModel::Base,
+            WhisperModel::FinnishWhisperTiny,
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
@@ -1182,8 +1212,9 @@ mod tests {
         assert!(no.contains(&WhisperModel::NbWhisperLarge));
 
         let fi = WhisperModel::models_for_language(Language::Finnish);
-        assert_eq!(fi.len(), 6);
+        assert_eq!(fi.len(), 7);
         assert!(fi.contains(&WhisperModel::Base));
+        assert!(fi.contains(&WhisperModel::FinnishWhisperTiny));
         assert!(fi.contains(&WhisperModel::LargeV3TurboQ8));
 
         let auto = WhisperModel::models_for_language(Language::Auto);
@@ -1212,6 +1243,7 @@ mod tests {
             (WhisperModel::Tiny, "\"tiny\""),
             (WhisperModel::BaseEn, "\"base.en\""),
             (WhisperModel::Base, "\"base\""),
+            (WhisperModel::FinnishWhisperTiny, "\"fi-whisper-tiny\""),
             (WhisperModel::KbWhisperTiny, "\"kb-whisper-tiny\""),
             (WhisperModel::KbWhisperBase, "\"kb-whisper-base\""),
             (WhisperModel::KbWhisperSmall, "\"kb-whisper-small\""),
@@ -2049,6 +2081,7 @@ mod tests {
             WhisperModel::Tiny,
             WhisperModel::BaseEn,
             WhisperModel::Base,
+            WhisperModel::FinnishWhisperTiny,
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
@@ -2098,10 +2131,42 @@ mod tests {
     }
 
     #[test]
-    fn finnish_uses_generic_multilingual_models() {
+    fn finnish_uses_generic_default_and_optional_specialized_tiny() {
         assert_eq!(WhisperModel::recommended(Language::Finnish), WhisperModel::Base);
+        assert_eq!(
+            serde_json::to_string(&WhisperModel::FinnishWhisperTiny).unwrap(),
+            "\"fi-whisper-tiny\""
+        );
+        assert_eq!(
+            WhisperModel::FinnishWhisperTiny.ggml_filename(),
+            "ggml-model-fi-tiny.bin"
+        );
+        assert_eq!(
+            WhisperModel::FinnishWhisperTiny.download_url(),
+            "https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/resolve/c58924b6deb4438756b3d38ecd67d65bdf20298d/ggml-model-fi-tiny.bin"
+        );
+        let integrity = WhisperModel::FinnishWhisperTiny.download_integrity();
+        assert_eq!(integrity.size, 77_691_730);
+        assert_eq!(
+            integrity.sha256,
+            "41cf309b7f50523cfca724ae90924fcd0e4794205de57a66abc3cce627103ce8"
+        );
         for &model in WhisperModel::models_for_language(Language::Finnish) {
             assert!(model.is_compatible_with(Language::Finnish), "{model:?}");
+        }
+        assert!(WhisperModel::FinnishWhisperTiny.is_compatible_with(Language::Finnish));
+        #[cfg(feature = "diarization")]
+        assert_eq!(
+            WhisperModel::FinnishWhisperTiny.dtw_preset(),
+            whisper_rs::DtwModelPreset::Tiny
+        );
+        for language in [
+            Language::English,
+            Language::Swedish,
+            Language::Norwegian,
+            Language::Auto,
+        ] {
+            assert!(!WhisperModel::FinnishWhisperTiny.is_compatible_with(language));
         }
         for model in [
             WhisperModel::TinyEn,

@@ -53,7 +53,7 @@ Valid values per key:
   language             en, sv, no, fi, auto (auto uses a generic model — less accurate)
   whisper_model        tiny.en, tiny, base.en, base, kb-whisper-tiny,
                        kb-whisper-base, kb-whisper-small, nb-whisper-tiny,
-                       nb-whisper-base, nb-whisper-small
+                       nb-whisper-base, nb-whisper-small, fi-whisper-tiny
   hotkey_mode          push, toggle, presenter
   show_overlay         true, false
   auto_paste           true, false (enabling requires Accessibility approval for the installed GUI)
@@ -1111,6 +1111,7 @@ mod tests {
             "nb-whisper-tiny",
             "nb-whisper-base",
             "nb-whisper-small",
+            "fi-whisper-tiny",
         ];
         for v in valid {
             let result = parse_enum_value::<WhisperModel>(v, "whisper_model");

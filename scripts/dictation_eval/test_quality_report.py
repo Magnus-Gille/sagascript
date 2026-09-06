@@ -183,6 +183,14 @@ class QualityReportTests(unittest.TestCase):
         self.assertEqual(validated["language"], "fi")
         self.assertEqual(validated["model"], "base")
 
+    def test_finnish_specialist_tiny_model_is_accepted(self):
+        report = valid_report()
+        report["language"] = "fi"
+        report["model"] = "fi-whisper-tiny"
+        validated = validate_quality_report(report)
+        self.assertEqual(validated["language"], "fi")
+        self.assertEqual(validated["model"], "fi-whisper-tiny")
+
     def test_model_inventory_matches_rust_model_id_string_source(self):
         source_path = (
             Path(__file__).resolve().parents[2]

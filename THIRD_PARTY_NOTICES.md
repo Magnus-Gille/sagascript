@@ -25,13 +25,17 @@ link; the upstream repository is authoritative for its license terms.
 | OpenAI Whisper GGML + Core ML encoders | Tiny, Base, Small, Medium, Large v3 Turbo variants | MIT | [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) |
 | KB-Whisper | Tiny, Base, Small, Medium, Large Swedish models | Apache-2.0 | [KBLab, National Library of Sweden](https://huggingface.co/KBLab) |
 | NB-Whisper | Tiny, Base, Small, Medium, Large Norwegian models | Apache-2.0 | [NbAiLab, National Library of Norway](https://huggingface.co/NbAiLab) |
+| Finnish-NLP Whisper Tiny | Unmodified `ggml-model-fi-tiny.bin`, optional Finnish specialist | Apache-2.0 | [Finnish-NLP pinned GGML repository](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d), reviewed 2026-09-06 |
 | Silero VAD (GGML conversion) | `ggml-silero-v5.1.2.bin` | MIT | [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad) |
 | Pyannote Segmentation 3.0 (ONNX conversion) | `model.onnx` | MIT, copyright CNRS | [csukuangfj conversion repository and LICENSE](https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/blob/main/LICENSE) |
 | WeSpeaker ResNet34-LM | `voxceleb_resnet34_LM.onnx` | CC-BY-4.0 | [WeSpeaker project/model card](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) |
 
-Finnish uses the existing multilingual OpenAI Whisper Base model (MIT), not
-the English-only Base.en model. It is covered by the OpenAI Whisper row above;
-Sagascript does not distribute a separate Finnish fine-tune or derivative.
+Finnish recommends the existing multilingual OpenAI Whisper Base model (MIT),
+not the English-only Base.en model. Optional Finnish-NLP Tiny is downloaded
+unchanged from its publisher under the declared [Apache-2.0 terms](https://www.apache.org/licenses/LICENSE-2.0).
+Its [source-model card](https://huggingface.co/Finnish-NLP/whisper-tiny-finnish/tree/bc5193ed50c052c426230644d17a12c3a8f86df6)
+identifies OpenAI Whisper Tiny as the base; retain the OpenAI Whisper MIT
+attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 
 ## Rust dependencies in the macOS application and build
 

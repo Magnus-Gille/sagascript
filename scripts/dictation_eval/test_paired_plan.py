@@ -176,6 +176,17 @@ class PairedPlanTests(unittest.TestCase):
         self.assertEqual(result["configurations"][0]["language"], "fi")
         self.assertEqual(result["configurations"][0]["model"], "base")
 
+    def test_finnish_specialist_tiny_model_is_accepted(self):
+        candidate_manifest = manifest([row(1, language="fi", split="dev")])
+        candidate_configs = configs(languages=("fi",))
+        candidate_configs[0]["model"] = "fi-whisper-tiny"
+        result = make_plan(
+            candidate_manifest=candidate_manifest,
+            candidate_configs=candidate_configs,
+        )
+        self.assertEqual(result["configurations"][0]["language"], "fi")
+        self.assertEqual(result["configurations"][0]["model"], "fi-whisper-tiny")
+
     def test_shape_and_numeric_bounds_are_rejected(self):
         valid_manifest = manifest([row(1, split="dev")])
         valid_configs = configs()

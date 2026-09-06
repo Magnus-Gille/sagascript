@@ -63,13 +63,14 @@ not a checksum inferred from a filename or mutable branch.
 | NB medium `ggml-model-q5_0.bin` | 539,212,484 | `18733de634af639a43b0f8c5f5a2ea0920de4c5b32a5570ec130981581c0e5e7` |
 | NB large `ggml-model-q5_0.bin` | 1,081,140,203 | `feb5951ae694a62cfeb81fb501f6cfa8cc50d96bcddb1e4e8215f7006bac23a2` |
 
-## Finnish uses multilingual Base (2026-09-06)
+## Finnish model selection (2026-09-06)
 
 Finnish (`fi`) recommends the existing **multilingual Whisper Base** model
 (`base`, `ggml-base.bin`), not the English-only `base.en` model. Its pinned
 artifact above is 147,951,465 bytes (about 148 MB). This is the original
 multilingual model, not a Finnish fine-tune or a locally quantized derivative.
-No additional model host, custom model release, or new model license is needed.
+The optional Finnish-specialized Tiny model is described separately below;
+it does not change the default automatically.
 
 The [publisher's model repository](https://huggingface.co/ggerganov/whisper.cpp)
 declares MIT; [OpenAI's Whisper license](https://github.com/openai/whisper/blob/main/LICENSE)
@@ -86,6 +87,34 @@ native Finnish dictation and signed cold/warm latency remain acceptance checks;
 no production-readiness or measured performance advantage is claimed here.
 The existing matching Base CoreML encoder may be used on macOS through the
 normal verified download path; backend support is not measured acceleration.
+
+### Optional Finnish-specialized Tiny
+
+`fi-whisper-tiny` downloads the publisher's existing GGML file unchanged; it is
+not the retired Medium research candidate and is not a Sagascript-hosted model.
+The exact artifact metadata was checked using the publisher's Hugging Face
+tree API on 2026-09-06:
+
+| Source | Revision | Artifact | Bytes | SHA-256 |
+|---|---|---|---:|---|
+| `Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format` | `c58924b6deb4438756b3d38ecd67d65bdf20298d` | `ggml-model-fi-tiny.bin` | 77,691,730 | `41cf309b7f50523cfca724ae90924fcd0e4794205de57a66abc3cce627103ce8` |
+
+The [pinned GGML publisher card](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/blob/c58924b6deb4438756b3d38ecd67d65bdf20298d/README.md)
+declares Apache-2.0 and documents whisper.cpp usage. The same publisher's
+[Finnish Tiny source card](https://huggingface.co/Finnish-NLP/whisper-tiny-finnish/blob/bc5193ed50c052c426230644d17a12c3a8f86df6/README.md)
+declares Apache-2.0 and fine-tuning from OpenAI Whisper Tiny on Common Voice 11.
+The GGML card does not identify the exact source checkpoint or conversion
+command: do not claim a reproducible source-to-GGML derivation from these cards.
+Neither pinned repository lists a separate LICENSE or NOTICE file. Preserve
+Finnish-NLP attribution, the Apache-2.0 terms, and the underlying OpenAI Whisper
+MIT attribution for any redistribution; this application downloads the
+unmodified artifact directly from its publisher rather than bundling it.
+
+This fine-tune is compatible only with explicit Finnish selection. There is
+no verified matching CoreML encoder; using a generic Tiny encoder would change
+its weights and is not supported. Generic Base remains recommended while the
+specialist is evaluated against both Base and generic Tiny. Publisher metrics
+are screening evidence, not proof of Sagascript dictation quality or latency.
 
 ## VAD and diarization models
 

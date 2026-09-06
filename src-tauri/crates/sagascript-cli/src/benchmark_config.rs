@@ -90,6 +90,23 @@ mod tests {
     }
 
     #[test]
+    fn finnish_tiny_is_optional_while_base_remains_default() {
+        let config = resolve(
+            Language::Finnish,
+            Some("fi-whisper-tiny"),
+            Some(2),
+            false,
+        )
+        .unwrap();
+        assert_eq!(config.model, WhisperModel::FinnishWhisperTiny);
+        assert_eq!(
+            resolve(Language::Finnish, None, None, false).unwrap().model,
+            WhisperModel::Base
+        );
+        assert!(resolve(Language::English, Some("fi-whisper-tiny"), None, false).is_err());
+    }
+
+    #[test]
     fn every_model_is_rejected_for_other_explicit_languages() {
         for language in LANGUAGES {
             for other_language in LANGUAGES {
