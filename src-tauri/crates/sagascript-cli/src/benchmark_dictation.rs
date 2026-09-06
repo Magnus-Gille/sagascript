@@ -24,7 +24,7 @@ pub struct BenchmarkDictationArgs {
     #[arg(required = true, value_name = "INPUT")]
     pub input: PathBuf,
 
-    /// Explicit language to use (en, sv, no, or fi).
+    /// Explicit language to use (en, sv, no, fi, or pl).
     #[arg(
         long,
         required = true,
@@ -387,6 +387,7 @@ fn language_code(language: Language) -> &'static str {
         Language::Swedish => "sv",
         Language::Norwegian => "no",
         Language::Finnish => "fi",
+        Language::Polish => "pl",
         Language::Auto => unreachable!("benchmark language parser excludes auto"),
     }
 }
@@ -402,8 +403,8 @@ fn initial_source_audio_sha256(
 
 fn parse_benchmark_language(value: &str) -> Result<String, String> {
     match value {
-        "en" | "sv" | "no" | "fi" => Ok(value.to_string()),
-        _ => Err("language must be one of: en, sv, no, fi".to_string()),
+        "en" | "sv" | "no" | "fi" | "pl" => Ok(value.to_string()),
+        _ => Err("language must be one of: en, sv, no, fi, pl".to_string()),
     }
 }
 
@@ -603,6 +604,7 @@ mod tests {
         assert_eq!(parse_benchmark_language("sv").unwrap(), "sv");
         assert_eq!(parse_benchmark_language("no").unwrap(), "no");
         assert_eq!(parse_benchmark_language("fi").unwrap(), "fi");
+        assert_eq!(parse_benchmark_language("pl").unwrap(), "pl");
         assert!(parse_benchmark_language("auto").is_err());
         assert!(parse_benchmark_language("English").is_err());
     }

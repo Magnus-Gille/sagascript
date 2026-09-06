@@ -609,6 +609,7 @@ fn normalize_language(value: String, line: usize) -> Result<String, String> {
         (Language::Swedish, "sv"),
         (Language::Norwegian, "no"),
         (Language::Finnish, "fi"),
+        (Language::Polish, "pl"),
         (Language::Auto, "auto"),
     ];
     languages
@@ -624,6 +625,7 @@ fn normalize_model(value: String, line: usize) -> Result<String, String> {
         Language::Swedish,
         Language::Norwegian,
         Language::Finnish,
+        Language::Polish,
         Language::Auto,
     ];
     let mut known = Vec::new();
@@ -909,6 +911,14 @@ mod tests {
         assert_eq!(
             normalize_model("Finnish-Whisper Tiny".to_string(), 1).unwrap(),
             "fi-whisper-tiny"
+        );
+    }
+
+    #[test]
+    fn normalizes_optional_polish_small_model() {
+        assert_eq!(
+            normalize_model("Polish-Whisper Small".to_string(), 1).unwrap(),
+            "pl-whisper-small"
         );
     }
 

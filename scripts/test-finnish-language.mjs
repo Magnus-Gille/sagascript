@@ -35,12 +35,15 @@ const [
   ]);
 
 test("Finnish is exposed by every production language selector", () => {
-  assert.match(api, /export type Language = "en" \| "sv" \| "no" \| "fi" \| "auto";/);
+  assert.match(api, /export type Language = "en" \| "sv" \| "no" \| "fi" \| "pl" \| "auto";/);
   assert.match(settings, /<option value="fi">Finnish<\/option>/g);
   assert.match(settings, /case "fi": return "Finnish";/);
+  assert.match(settings, /<option value="pl">Polish<\/option>/);
   assert.match(overlay, /fi: "Finnish"/);
-  assert.match(onboarding, /type OnboardingLanguage = "en" \| "sv" \| "no" \| "fi";/);
+  assert.match(overlay, /pl: "Polish"/);
+  assert.match(onboarding, /type OnboardingLanguage = "en" \| "sv" \| "no" \| "fi" \| "pl";/);
   assert.match(onboarding, /selectedLanguage === "fi"/);
+  assert.match(onboarding, /selectedLanguage === "pl"/);
   assert.match(onboarding, /fi: "142 MB"/);
 });
 
@@ -50,17 +53,17 @@ test("CLI Finnish language and model IDs use the core model registry", () => {
   assert.doesNotMatch(transcribe, /"fi-whisper-medium"\s*=>\s*Ok\(WhisperModel::/);
   assert.doesNotMatch(transcribe, /WhisperModel::FinnishWhisperMedium/);
   assert.match(models, /Language::Finnish/);
-  assert.match(benchmark, /"en" \| "sv" \| "no" \| "fi"/);
+  assert.match(benchmark, /"en" \| "sv" \| "no" \| "fi" \| "pl"/);
   assert.match(benchmark, /Language::Finnish => "fi"/);
   assert.match(benchmarkConfig, /Language::Finnish/);
-  assert.match(benchmarkConfig, /en, sv, no, or fi/);
+  assert.match(benchmarkConfig, /en, sv, no, fi, or pl/);
   assert.match(latency, /\(Language::Finnish, "fi"\)/);
-  assert.match(config, /en, sv, no, fi, auto/);
-  assert.match(record, /en, sv, no, fi, auto/);
+  assert.match(config, /en, sv, no, fi, pl, auto/);
+  assert.match(record, /en, sv, no, fi, pl, auto/);
 });
 
 test("Finnish remains opt-in and does not alter generic defaults", () => {
-  assert.match(cli, /Supported languages: English \(en\), Swedish \(sv\), Norwegian \(no\), Finnish \(fi\), Auto-detect/);
+  assert.match(cli, /Supported languages: English \(en\), Swedish \(sv\), Norwegian \(no\), Finnish \(fi\), Polish \(pl\), Auto-detect/);
   assert.match(cli, /Finnish uses the generic multilingual Base model/);
   assert.doesNotMatch(cli, /fi-whisper-medium|Finnish-NLP model/);
   assert.match(onboarding, /let selectedLanguage: OnboardingLanguage = \$state\("en"\)/);

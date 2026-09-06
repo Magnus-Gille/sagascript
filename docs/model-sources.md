@@ -121,6 +121,37 @@ found lower aggregate WER than both baselines and lower warm latency than Base,
 but absolute error remained high. Base stays the default; the specialist remains
 an optional evaluation choice pending separate native and application acceptance.
 
+## Polish model candidate (2026-09-06)
+
+Polish (`pl`) initially recommends the existing multilingual **Base**, not
+English-only `base.en`. Optional `pl-whisper-small` is a BardsAI Polish fine-tune
+under evaluation, not an automatic upgrade of existing settings.
+
+| Source | Revision | Publisher artifact | Local filename | Bytes | SHA-256 |
+|---|---|---|---|---:|---|
+| `bardsai/whisper-small-pl` | `baca145d78e8dbf3f2cc9c7ccf372f650ee1209c` | `ggml-model.bin` | `ggml-model-pl-small.bin` | 487,601,967 | `e4c77eb6a61c7dbbfa72cf810ee472c546f8af2394a26e109e5ac358f7b16112` |
+
+The [pinned publisher card](https://huggingface.co/bardsai/whisper-small-pl/blob/baca145d78e8dbf3f2cc9c7ccf372f650ee1209c/README.md)
+declares Apache-2.0 and identifies OpenAI Whisper Small as its base, with Common
+Voice 11 and FLEURS training. The same publisher added this GGML artifact in
+[commit aec85131](https://huggingface.co/bardsai/whisper-small-pl/commit/aec85131b3526f97e48f227e481820cdbba96b6a).
+The pinned repository includes no separate LICENSE or NOTICE file and records no
+exact conversion command/version. Do not claim reproducible source-to-GGML
+derivation. Retain BardsAI attribution, the declared Apache-2.0 terms and the
+underlying OpenAI Whisper MIT attribution for any redistribution.
+
+Sagascript downloads this existing artifact unchanged from its publisher; it
+does not bundle, quantize or independently host these weights. There is no
+verified matching CoreML encoder. The fine-tune is allowed only with explicit
+Polish, never Auto or another language. Small architecture alignment heads are
+not evidence of measured fine-tuned timestamp quality.
+
+Publisher metrics are self-reported leads, not measured Sagascript improvement.
+The [fixed Polish screening plan](research/r4-polish-screening-plan.md) compares
+Base, generic Small and the specialist before any admission/default decision.
+Native spontaneous speech, real headset behavior and signed application latency
+remain separate acceptance; evaluation data is not shipped with the app.
+
 ## VAD and diarization models
 
 | Artifact/source | Revision | License | Bytes | SHA-256 |

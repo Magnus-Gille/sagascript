@@ -19,7 +19,7 @@ _ROW_KEYS = {
 }
 _ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,80}")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
-_LANGUAGES = ("en", "sv", "no", "fi")
+_LANGUAGES = ("en", "sv", "no", "fi", "pl")
 _DEFAULT_REQUIRED_LANGUAGES = ("en", "sv", "no")
 _SPLITS = {"dev", "heldout"}
 _ORIGINS = {"human", "synthetic", "silence"}
@@ -129,10 +129,10 @@ def validate_manifest(value: object) -> dict[str, object]:
 def coverage_report(validated: Mapping[str, object]) -> dict[str, object]:
     """Return content-free prerequisite coverage for a validated manifest.
 
-    Existing manifests retain the historical en/sv/no coverage gate. A
-    manifest containing Finnish rows explicitly opts into the Finnish gate as
-    well; merely adding Finnish to the accepted language enum does not make
-    old corpora ineligible.
+    Existing manifests retain the historical en/sv/no coverage gate.
+    Manifests containing Finnish or Polish rows explicitly opt into those
+    language gates independently; merely adding a language to the accepted
+    enum does not make old corpora ineligible.
     """
 
     manifest = validate_manifest(validated)
@@ -142,6 +142,8 @@ def coverage_report(validated: Mapping[str, object]) -> dict[str, object]:
     required_languages = _DEFAULT_REQUIRED_LANGUAGES
     if "fi" in manifest_languages:
         required_languages = (*required_languages, "fi")
+    if "pl" in manifest_languages:
+        required_languages = (*required_languages, "pl")
     languages: dict[str, dict[str, object]] = {}
     eligible = True
     for language in required_languages:

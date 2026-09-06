@@ -2,6 +2,21 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+test("Polish candidate keeps its pinned publisher artifact and attribution", async () => {
+  const [sources, generator] = await Promise.all([
+    readFile(new URL("../docs/model-sources.md", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/generate-third-party-notices.mjs", import.meta.url), "utf8"),
+  ]);
+  assert.match(sources, /pl-whisper-small/);
+  assert.match(sources, /baca145d78e8dbf3f2cc9c7ccf372f650ee1209c/);
+  assert.match(sources, /487,601,967/);
+  assert.match(sources, /e4c77eb6a61c7dbbfa72cf810ee472c546f8af2394a26e109e5ac358f7b16112/);
+  assert.match(sources, /no verified matching CoreML encoder/i);
+  assert.match(generator, /BardsAI Polish Whisper Small/);
+  assert.match(generator, /bardsai\/whisper-small-pl\/tree\/baca145d78e8dbf3f2cc9c7ccf372f650ee1209c/);
+  assert.match(generator, /Apache-2\.0/);
+});
+
 test("Finnish models document the generic default and pinned optional specialist", async () => {
   const [modelSources, noticeGenerator] = await Promise.all([
     readFile(new URL("../docs/model-sources.md", import.meta.url), "utf8"),
@@ -169,8 +184,9 @@ test("onboarding prevents duplicate setup requests and exposes language selectio
   assert.match(onboardingSource, /if \(languageSaving \|\| platform === null\) return;/);
   assert.match(onboardingSource, /disabled=\{languageSaving \|\| platform === null\}/);
   assert.match(onboardingSource, /platform === null \? "Preparing…"/);
-  assert.equal((onboardingSource.match(/aria-pressed=\{selectedLanguage ===/g) ?? []).length, 4);
+  assert.equal((onboardingSource.match(/aria-pressed=\{selectedLanguage ===/g) ?? []).length, 5);
   assert.match(onboardingSource, /selectedLanguage === "fi"/);
+  assert.match(onboardingSource, /selectedLanguage === "pl"/);
 });
 
 test("Accessibility onboarding reopens System Settings without prompting again", () => {

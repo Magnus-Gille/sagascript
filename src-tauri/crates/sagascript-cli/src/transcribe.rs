@@ -50,7 +50,7 @@ pub struct TranscribeArgs {
     #[arg(long)]
     pub recursive: bool,
 
-    /// Language for transcription [possible values: en, sv, no, fi, auto (less accurate)]
+    /// Language for transcription [possible values: en, sv, no, fi, pl, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 
@@ -1966,9 +1966,10 @@ pub fn parse_language(s: &str) -> Result<Language, DictationError> {
         "sv" | "swedish" => Ok(Language::Swedish),
         "no" | "norwegian" => Ok(Language::Norwegian),
         "fi" | "finnish" => Ok(Language::Finnish),
+        "pl" | "polish" => Ok(Language::Polish),
         "auto" => Ok(Language::Auto),
         other => Err(DictationError::SettingsError(format!(
-            "Unknown language '{other}'. Valid: en, sv, no, fi, auto"
+            "Unknown language '{other}'. Valid: en, sv, no, fi, pl, auto"
         ))),
     }
 }
@@ -2047,6 +2048,7 @@ pub fn parse_model(s: &str) -> Result<WhisperModel, DictationError> {
         "base.en" => Ok(WhisperModel::BaseEn),
         "base" => Ok(WhisperModel::Base),
         "fi-whisper-tiny" => Ok(WhisperModel::FinnishWhisperTiny),
+        "pl-whisper-small" => Ok(WhisperModel::PolishWhisperSmall),
         "kb-whisper-tiny" => Ok(WhisperModel::KbWhisperTiny),
         "kb-whisper-base" => Ok(WhisperModel::KbWhisperBase),
         "kb-whisper-small" => Ok(WhisperModel::KbWhisperSmall),
@@ -2076,6 +2078,7 @@ pub fn model_id_string(model: WhisperModel) -> &'static str {
         WhisperModel::BaseEn => "base.en",
         WhisperModel::Base => "base",
         WhisperModel::FinnishWhisperTiny => "fi-whisper-tiny",
+        WhisperModel::PolishWhisperSmall => "pl-whisper-small",
         WhisperModel::KbWhisperTiny => "kb-whisper-tiny",
         WhisperModel::KbWhisperBase => "kb-whisper-base",
         WhisperModel::KbWhisperSmall => "kb-whisper-small",
@@ -2246,6 +2249,7 @@ mod tests {
             Language::Swedish,
             Language::Norwegian,
             Language::Finnish,
+            Language::Polish,
         ] {
             assert!(language_window_plan(one_hour, language).is_empty());
             let result = detect_language_regions_with(&vec![0.1; 60 * 16_000], language, |_| {
@@ -2808,6 +2812,7 @@ mod tests {
         assert_eq!(parse_language("sv").unwrap(), Language::Swedish);
         assert_eq!(parse_language("no").unwrap(), Language::Norwegian);
         assert_eq!(parse_language("fi").unwrap(), Language::Finnish);
+        assert_eq!(parse_language("pl").unwrap(), Language::Polish);
         assert_eq!(parse_language("auto").unwrap(), Language::Auto);
     }
 
@@ -2817,6 +2822,7 @@ mod tests {
         assert_eq!(parse_language("swedish").unwrap(), Language::Swedish);
         assert_eq!(parse_language("norwegian").unwrap(), Language::Norwegian);
         assert_eq!(parse_language("finnish").unwrap(), Language::Finnish);
+        assert_eq!(parse_language("polish").unwrap(), Language::Polish);
     }
 
     #[test]
@@ -2844,6 +2850,7 @@ mod tests {
             ("base.en", WhisperModel::BaseEn),
             ("base", WhisperModel::Base),
             ("fi-whisper-tiny", WhisperModel::FinnishWhisperTiny),
+            ("pl-whisper-small", WhisperModel::PolishWhisperSmall),
             ("kb-whisper-tiny", WhisperModel::KbWhisperTiny),
             ("kb-whisper-base", WhisperModel::KbWhisperBase),
             ("kb-whisper-small", WhisperModel::KbWhisperSmall),
@@ -2892,6 +2899,7 @@ mod tests {
             (WhisperModel::BaseEn, "base.en"),
             (WhisperModel::Base, "base"),
             (WhisperModel::FinnishWhisperTiny, "fi-whisper-tiny"),
+            (WhisperModel::PolishWhisperSmall, "pl-whisper-small"),
             (WhisperModel::KbWhisperTiny, "kb-whisper-tiny"),
             (WhisperModel::KbWhisperBase, "kb-whisper-base"),
             (WhisperModel::KbWhisperSmall, "kb-whisper-small"),
@@ -2918,6 +2926,7 @@ mod tests {
             WhisperModel::BaseEn,
             WhisperModel::Base,
             WhisperModel::FinnishWhisperTiny,
+            WhisperModel::PolishWhisperSmall,
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,

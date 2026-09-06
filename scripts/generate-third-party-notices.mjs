@@ -351,6 +351,7 @@ link; the upstream repository is authoritative for its license terms.
 | KB-Whisper | Tiny, Base, Small, Medium, Large Swedish models | Apache-2.0 | [KBLab, National Library of Sweden](https://huggingface.co/KBLab) |
 | NB-Whisper | Tiny, Base, Small, Medium, Large Norwegian models | Apache-2.0 | [NbAiLab, National Library of Norway](https://huggingface.co/NbAiLab) |
 | Finnish-NLP Whisper Tiny | Unmodified \`ggml-model-fi-tiny.bin\`, optional Finnish specialist | Apache-2.0 | [Finnish-NLP pinned GGML repository](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d), reviewed 2026-09-06 |
+| BardsAI Polish Whisper Small | Unmodified publisher \`ggml-model.bin\`, optional Polish specialist | Apache-2.0 | [BardsAI pinned model repository](https://huggingface.co/bardsai/whisper-small-pl/tree/baca145d78e8dbf3f2cc9c7ccf372f650ee1209c), reviewed 2026-09-06 |
 | Silero VAD (GGML conversion) | \`ggml-silero-v5.1.2.bin\` | MIT | [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad) |
 | Pyannote Segmentation 3.0 (ONNX conversion) | \`model.onnx\` | MIT, copyright CNRS | [csukuangfj conversion repository and LICENSE](https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/blob/main/LICENSE) |
 | WeSpeaker ResNet34-LM | \`voxceleb_resnet34_LM.onnx\` | CC-BY-4.0 | [WeSpeaker project/model card](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) |
@@ -361,6 +362,12 @@ unchanged from its publisher under the declared [Apache-2.0 terms](https://www.a
 Its [source-model card](https://huggingface.co/Finnish-NLP/whisper-tiny-finnish/tree/bc5193ed50c052c426230644d17a12c3a8f86df6)
 identifies OpenAI Whisper Tiny as the base; retain the OpenAI Whisper MIT
 attribution as well. No matching CoreML encoder is supplied for the fine-tune.
+
+Polish initially recommends multilingual OpenAI Whisper Base (MIT). Optional
+BardsAI Polish Small is downloaded unchanged from its publisher under its
+declared Apache-2.0 terms. Its pinned model card identifies OpenAI Whisper Small
+as the base; retain the underlying OpenAI MIT attribution as well. No matching
+CoreML encoder or separately hosted derivative is supplied by Sagascript.
 
 ## Rust dependencies in the macOS application and build
 
