@@ -4,6 +4,7 @@ pub mod config;
 pub mod benchmark_dictation;
 pub mod glossary;
 pub mod latency;
+pub mod meeting;
 pub mod models;
 pub mod open;
 pub mod presenter;
@@ -248,6 +249,13 @@ EXAMPLES:
     )]
     LatencyReport(latency::LatencyReportArgs),
 
+    /// Inspect and export validated meeting transcript documents
+    #[command(
+        long_about = "Read a validated meeting transcript JSON document and inspect, export, rename, or merge it without modifying the input. This command never persists changes, reads source audio, runs inference, changes settings, or contacts a network service.",
+        after_long_help = "EXAMPLES:\n  sagascript meeting inspect meeting.json\n  sagascript meeting export meeting.json --format markdown\n  sagascript meeting rename meeting.json --speaker speaker-1 --label Chair\n  sagascript meeting merge meeting.json --from speaker-2 --into speaker-1"
+    )]
+    Meeting(meeting::MeetingArgs),
+
     /// Record from microphone and transcribe
     #[cfg(feature = "record")]
     #[command(
@@ -400,7 +408,8 @@ Available setting keys:
   show_overlay       Show recording overlay (true/false)
   auto_paste         Auto-paste transcription result (true/false)
   auto_select_model  Auto-select best model for language (true/false)
-  hotkey             Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows",
+  hotkey             Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows.
+                     IntlBackslash is the ISO section key (§ left of 1 on Swedish/UK Macs); macOS/Windows only",
         after_long_help = "\
 EXAMPLES:
   # Show all settings with current and default values
@@ -415,6 +424,7 @@ EXAMPLES:
   # Change the global hotkey
   sagascript config set hotkey 'Option+Space'
   sagascript config set hotkey F13
+  sagascript config set hotkey 'Command+IntlBackslash'   # Command+§ on an ISO Mac keyboard
 
   # Reset a single setting to its default
   sagascript config reset language
@@ -515,6 +525,7 @@ pub fn run(cli: Cli) {
         Command::Transcribe(args) =>
             run_inference_command("transcribe", move || transcribe::run(args)),
         Command::LatencyReport(args) => latency::run(args),
+        Command::Meeting(args) => meeting::run(args),
         #[cfg(feature = "record")]
         Command::Record(args) => run_inference_command("record", move || record::run(args)),
         Command::ListModels(args) => models::list(args),

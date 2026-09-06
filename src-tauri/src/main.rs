@@ -16,6 +16,7 @@ mod logging;
 
 mod app_controller;
 mod commands;
+mod meeting_jobs;
 mod events;
 mod hotkey;
 mod overlay;
@@ -368,6 +369,26 @@ fn startup_hotkey_candidate(requested: &str) -> (String, Option<String>) {
     }
 }
 
+fn should_use_safe_fallback(
+    shortcut: &str,
+    settings_valid: bool,
+    operational_hotkey: &hotkey::OperationalHotkey,
+) -> bool {
+    if settings_valid {
+        return false;
+    }
+
+    let (Ok(canonical_shortcut), Ok(canonical_fallback)) = (
+        sagascript_core::settings::canonical_hotkey(shortcut),
+        sagascript_core::settings::canonical_hotkey(SAFE_FALLBACK_HOTKEY),
+    ) else {
+        return false;
+    };
+
+    canonical_shortcut == canonical_fallback
+        && operational_hotkey.matches(&[SAFE_FALLBACK_HOTKEY.to_string()])
+}
+
 /// Treat macOS TCC approval as runtime authorization, never as a preference
 /// that can be inherited from another bundle identity or forced by the CLI.
 fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
@@ -405,9 +426,11 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
             let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
             let safe_fallback = {
                 let c = ctrl.lock().unwrap();
-                shortcut == SAFE_FALLBACK_HOTKEY
-                    && c.settings().validate_shortcut_configuration().is_err()
-                    && health.operational_hotkey().matches(&[SAFE_FALLBACK_HOTKEY.to_string()])
+                should_use_safe_fallback(
+                    shortcut,
+                    c.settings().validate_shortcut_configuration().is_ok(),
+                    &health.operational_hotkey(),
+                )
             };
             let presenter_action = {
                 let c = ctrl.lock().unwrap();
@@ -604,6 +627,7 @@ fn main() {
             let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
             app.manage(controller);
             app.manage(whisper);
+            app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
             // Process-wide hotkey registration health (see hotkey::health for
             // why this is deliberately independent of the AppController
             // mutex). Assumed healthy until the synchronous registration
@@ -1026,6 +1050,12 @@ fn main() {
             commands::set_vad_enabled,
             commands::get_build_info,
             commands::transcribe_file,
+            meeting_jobs::begin_meeting_file,
+            meeting_jobs::get_meeting_job,
+            meeting_jobs::cancel_meeting_job,
+            meeting_jobs::rename_meeting_speaker,
+            meeting_jobs::merge_meeting_speakers,
+            meeting_jobs::save_meeting_export,
             commands::get_supported_formats,
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,
@@ -2604,6 +2634,55 @@ mod tests {
 
         assert_eq!(candidate, requested);
         assert!(error.is_none());
+    }
+
+    #[test]
+    fn safe_fallback_requires_invalid_settings_and_exact_registered_binding() {
+        let registered = hotkey::OperationalHotkey::registered(SAFE_FALLBACK_HOTKEY);
+
+        assert!(!should_use_safe_fallback(
+            SAFE_FALLBACK_HOTKEY,
+            true,
+            &registered
+        ));
+        for shortcut in [
+            SAFE_FALLBACK_HOTKEY,
+            "shift+control+Space",
+            "Ctrl+Shift+Space",
+        ] {
+            assert!(should_use_safe_fallback(shortcut, false, &registered));
+        }
+        for shortcut in [
+            "Control+Shift+Enter",
+            "Control+Shift+Meta+Space",
+            "not-a-hotkey",
+        ] {
+            assert!(!should_use_safe_fallback(shortcut, false, &registered));
+        }
+
+        for operational_hotkey in [
+            hotkey::OperationalHotkey::Inactive,
+            hotkey::OperationalHotkey::Unknown,
+            hotkey::OperationalHotkey::registered("Control+Shift+Enter"),
+            hotkey::OperationalHotkey::registered("control+shift+space"),
+        ] {
+            assert!(!should_use_safe_fallback(
+                "shift+control+Space",
+                false,
+                &operational_hotkey
+            ));
+        }
+    }
+
+    #[test]
+    fn safe_fallback_never_activates_for_valid_settings() {
+        let registered = hotkey::OperationalHotkey::registered(SAFE_FALLBACK_HOTKEY);
+
+        assert!(!should_use_safe_fallback(
+            "shift+control+Space",
+            true,
+            &registered
+        ));
     }
 
     #[cfg(target_os = "macos")]
