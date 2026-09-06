@@ -2156,10 +2156,10 @@ mod tests {
         }
         assert!(WhisperModel::FinnishWhisperTiny.is_compatible_with(Language::Finnish));
         #[cfg(feature = "diarization")]
-        assert_eq!(
+        assert!(matches!(
             WhisperModel::FinnishWhisperTiny.dtw_preset(),
             whisper_rs::DtwModelPreset::Tiny
-        );
+        ));
         for language in [
             Language::English,
             Language::Swedish,
