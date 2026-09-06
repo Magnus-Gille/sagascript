@@ -47,6 +47,10 @@ build feature and exactly one regular input file; directories, recursive mode,
 and multiple inputs are rejected before inference. Hashing is streaming and
 limited to 2 GiB; decoded audio and transcript duration retain the four-hour
 ceiling. Legacy `--json` and `--jsonl` contracts are unchanged.
+The controlled meeting decoder rejects 64 consecutive corrupt packets instead
+of retrying indefinitely. Finite final timestamps extending into Whisper's
+padded window are clipped to the decoded duration in the meeting document;
+invalid starts and non-finite timestamps remain errors.
 
 ```sh
 sagascript transcribe meeting.m4a --diarize --meeting-json --language en --model base.en
@@ -65,7 +69,9 @@ remains the explicit cache-reuse path; this GUI MVP does not silently enable it.
 ## Document contract
 
 Schema version `1` carries source SHA-256, language/model identifiers, duration,
-stable segment IDs, text/time bounds, speaker IDs, and display labels. Validation
+stable segment IDs, text/time bounds, speaker IDs, and display labels. The
+language field uses the frozen selection; `auto` is not a detected language
+assertion. Validation
 rejects unsupported versions, duplicate IDs, unknown speakers, non-finite or
 out-of-range times, invalid labels, and excessive counts/text. New segments are
 ordered by start/end and receive stable ordinal IDs. Rename/merge returns a new
@@ -85,6 +91,9 @@ on each target platform with a real 15–30-minute meeting: import with the chos
 profile, inspect timestamps/speaker boundaries, rename, merge, export all five
 formats, cancel during different stages, and retry a failed import. Verify that
 the previous review and the recording survive failure/cancellation, then check
-normal dictation still works. A public English AMI fixture is supplementary
+normal dictation still works.
+Also test a large-model import for memory pressure: the live dictation backend
+can retain its warm model while the separately owned meeting model is loaded.
+The public English AMI fixture is supplementary
 functional/performance evidence, not spontaneous Swedish or native Voice Memo
 quality acceptance. Record the candidate's displayed version and build ID.

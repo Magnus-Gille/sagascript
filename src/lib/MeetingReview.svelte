@@ -137,7 +137,7 @@
 
   {#if error || actionError}
     <div class="error" role="alert">
-      <strong>Could not update this review.</strong>
+      <strong>Meeting notice</strong>
       <span>{error ?? actionError}</span>
       <small>Try again. Your transcript and unsaved edits remain visible here.</small>
     </div>

@@ -849,9 +849,10 @@
         jobId,
         get: getMeetingJob,
         isCurrent: () => generation === meetingPollGeneration,
-        onFailure: () => {
+        onFailure: (error: unknown) => {
           meetingPollingFailed = true;
-          meetingError = "Could not check meeting progress. Retry the status check to continue.";
+          meetingError = meetingFailureText(error, "Could not check meeting progress.")
+            + " Retry the status check to continue.";
         },
         onSnapshot: (snapshot: MeetingJobSnapshot) => {
           if (generation !== meetingPollGeneration) return;
@@ -888,7 +889,9 @@
   ): Promise<void> {
     if (transcribing) return;
     const generation = ++meetingPollGeneration;
-    ++meetingDocumentRevision;
+    // Keep the previous review and its unsaved drafts mounted until a NEW
+    // document succeeds. Pending edits finish before the import starts below;
+    // successful replacement still invalidates any stale action revision.
     transcribing = true;
     transcriptionProgress = 0;
     transcribeError = "";
@@ -961,7 +964,7 @@
         meetingPhase = "Cancelling";
         meetingError = "";
       } else {
-        meetingError = "Cancellation was not accepted. The meeting is still running; try again.";
+        meetingError = "The meeting has already finished. Its final status is being retrieved.";
       }
     } catch (error) {
       if (generation !== meetingPollGeneration || meetingJobId !== jobId) return;

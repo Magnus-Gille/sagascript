@@ -54,6 +54,11 @@ test("polling is serialized, stale generations are ignored, and cancellation wai
   assert.match(settingsSource, /await waitForMeetingActions\(\)/);
   assert.match(settingsSource, /meetingDocumentRevision/);
   assert.match(settingsSource, /\{#key meetingDocumentRevision\}/);
+  const importBody = settingsSource.split("async function startMeetingFileTranscription(")[1]
+    .split("async function handleFileTranscription(")[0];
+  assert.doesNotMatch(importBody, /\+\+meetingDocumentRevision|meetingDocumentRevision\s*\+=/,
+    "starting or failing an import must not remount the previous review's unsaved drafts");
+  assert.match(settingsSource, /meetingFailureText\(error, "Could not check meeting progress\."\)/);
   assert.match(settingsSource, /generation !== meetingPollGeneration \|\| meetingJobId !== jobId/);
 
   const snapshots = [

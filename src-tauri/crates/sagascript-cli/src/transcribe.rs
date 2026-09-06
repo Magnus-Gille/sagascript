@@ -423,7 +423,15 @@ fn meeting_transcript_from_plain_segments(
         .iter()
         .map(|segment| MeetingSegmentInput {
             start: segment.start,
-            end: segment.end,
+            // Whisper can timestamp the last padded window past the decoded
+            // audio. Clamp only finite ends here; invalid starts/non-finite
+            // values still fail the shared validator, and legacy outputs stay
+            // unchanged. Do not mutate the source diarization segments.
+            end: if segment.end.is_finite() && duration.is_finite() {
+                segment.end.min(duration)
+            } else {
+                segment.end
+            },
             text: segment.text.clone(),
             speaker: segment.speaker.clone(),
         })
@@ -2409,6 +2417,34 @@ mod tests {
         assert_eq!(document.segments[1].text, "second");
         assert_eq!(document.speakers[0].id, "SPEAKER_1");
         assert_eq!(document.speakers[0].label, "SPEAKER_1");
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_document_clamps_finite_padded_end_without_mutating_source() {
+        let segments = vec![DiarizedSegment {
+            start: 0.5, end: 1.2, speaker: "S0".into(), text: "last word".into(),
+        }];
+        let document = meeting_transcript_from_plain_segments(
+            "0".repeat(64), Language::English, WhisperModel::BaseEn, 1.0, &segments,
+        ).expect("last padded Whisper window can overshoot decoded audio");
+        assert_eq!(document.segments[0].start, 0.5);
+        assert_eq!(document.segments[0].end, 1.0);
+        assert_eq!(document.segments[0].text, "last word");
+        assert_eq!(segments[0].end, 1.2);
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_document_still_rejects_nonfinite_and_outside_starts() {
+        for (start, end) in [(0.5, f64::NAN), (0.5, f64::INFINITY), (1.1, 1.2), (-0.1, 0.5)] {
+            let segments = vec![DiarizedSegment {
+                start, end, speaker: "S0".into(), text: "invalid".into(),
+            }];
+            assert!(meeting_transcript_from_plain_segments(
+                "0".repeat(64), Language::English, WhisperModel::BaseEn, 1.0, &segments,
+            ).is_err());
+        }
     }
 
     #[cfg(feature = "diarization")]
