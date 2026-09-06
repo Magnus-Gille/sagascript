@@ -58,7 +58,7 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(rustCache, /workspaces:\s+src-tauri/);
   assert.match(
     rustCache,
-    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml'\) \}\}/,
+    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
   );
   assert.doesNotMatch(
     rustCache,
@@ -82,6 +82,33 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /\$msi\[0\]\.Name -notmatch \[regex\]::Escape\(\$version\)/);
   assert.doesNotMatch(workflow, /\$version:/);
   assert.doesNotMatch(workflow, /action-gh-release|gh release|contents: write/);
+});
+
+test("Windows x64 caches and artifacts use an explicit verified CPU baseline", () => {
+  const policyStart = workflow.indexOf("name: Configure portable x64 inference baseline");
+  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
+  assert.ok(policyStart >= 0 && policyStart < cacheStart);
+  const policy = workflow.slice(policyStart, cacheStart);
+  assert.match(policy, /if: matrix\.architecture == 'x64'/);
+  assert.match(policy, /CMAKE_PROJECT_INCLUDE=\$policy/);
+  assert.match(policy, /SAGASCRIPT_WINDOWS_X64_BASELINE=avx2/);
+  assert.match(policy, /Win32_Processor/);
+  for (const feature of ["Avx2", "Fma", "Bmi2"]) {
+    assert.ok(policy.includes(`X86.${feature}]::IsSupported`));
+  }
+  assert.match(policy, /CpuId\(1, 0\)\.Item3/);
+  assert.match(policy, /throw 'Runner does not support the packaged x64 CPU baseline'/);
+  assert.equal((workflow.match(/run: \.\/scripts\/verify-windows-x64-cpu-policy\.ps1/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.\/scripts\/verify-windows-x64-cpu-policy\.ps1 -TargetRoot/g) ?? []).length, 3);
+  const transcriptionStart = workflow.indexOf("name: Gate real Windows transcription");
+  assert.ok(transcriptionStart >= 0);
+  const transcription = workflow.slice(transcriptionStart, workflow.indexOf("name: Gate repeated English dictation"));
+  const releaseVerify = transcription.indexOf("./scripts/verify-windows-x64-cpu-policy.ps1");
+  assert.ok(releaseVerify >= 0 && releaseVerify < transcription.indexOf("& $binary transcribe"));
+  assert.match(transcription, /if \('\$\{\{ matrix\.architecture \}\}' -eq 'x64'\) \{\s+\.\/scripts\/verify-windows-x64-cpu-policy/);
+  const packagedCheck = workflow.indexOf("name: Verify packaged x64 inference CPU policy");
+  assert.ok(packagedCheck > workflow.indexOf("name: Build unsigned internal installers"));
+  assert.ok(packagedCheck < workflow.indexOf("name: Prepare and verify candidate artifacts"));
 });
 
 test("Windows candidate makes real transcription a blocking gate", () => {
