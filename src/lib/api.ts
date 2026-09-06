@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { MeetingExportFormat, MeetingTranscript } from "./meeting-types";
 
-export type Language = "en" | "sv" | "no" | "fi" | "pl" | "auto";
+export type Language = "en" | "sv" | "no" | "fi" | "auto";
 export type HotkeyMode = "push" | "toggle" | "presenter";
 
 export type PresenterFinishAction = "insert_only" | "return" | "command_return";

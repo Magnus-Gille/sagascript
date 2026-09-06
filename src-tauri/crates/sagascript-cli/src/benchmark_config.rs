@@ -18,7 +18,7 @@ pub(crate) fn resolve(
 ) -> Result<ResolvedBenchmarkConfig, DictationError> {
     if language == Language::Auto {
         return Err(DictationError::SettingsError(
-            "Benchmark language must be explicit: en, sv, no, fi, or pl".to_string(),
+            "Benchmark language must be explicit: en, sv, no, or fi".to_string(),
         ));
     }
 
@@ -55,12 +55,11 @@ pub(crate) fn resolve(
 mod tests {
     use super::*;
 
-    const LANGUAGES: [Language; 5] = [
+    const LANGUAGES: [Language; 4] = [
         Language::English,
         Language::Swedish,
         Language::Norwegian,
         Language::Finnish,
-        Language::Polish,
     ];
 
     #[test]
@@ -70,7 +69,6 @@ mod tests {
             (Language::Swedish, WhisperModel::KbWhisperBase),
             (Language::Norwegian, WhisperModel::NbWhisperBase),
             (Language::Finnish, WhisperModel::Base),
-            (Language::Polish, WhisperModel::Base),
         ];
         for (language, expected_model) in cases {
             let config = resolve(language, None, None, false).unwrap();
@@ -109,36 +107,13 @@ mod tests {
     }
 
     #[test]
-    fn polish_specialist_small_is_optional_while_base_remains_default() {
-        let config = resolve(
-            Language::Polish,
-            Some("pl-whisper-small"),
-            Some(2),
-            false,
-        )
-        .unwrap();
-        assert_eq!(config.model, WhisperModel::PolishWhisperSmall);
-        assert_eq!(
-            resolve(Language::Polish, None, None, false).unwrap().model,
-            WhisperModel::Base
-        );
-        assert!(resolve(Language::English, Some("pl-whisper-small"), None, false).is_err());
-    }
-
-    #[test]
-    fn models_for_other_languages_are_rejected_unless_shared() {
+    fn every_model_is_rejected_for_other_explicit_languages() {
         for language in LANGUAGES {
             for other_language in LANGUAGES {
                 if language == other_language {
                     continue;
                 }
                 for &model in WhisperModel::models_for_language(other_language) {
-                    // Generic models may be shared by multiple languages;
-                    // skip only models that are valid for this language so
-                    // incompatible-language coverage remains exercised.
-                    if WhisperModel::models_for_language(language).contains(&model) {
-                        continue;
-                    }
                     let result = resolve(language, Some(model_id_string(model)), None, false);
                     assert!(result.is_err(), "{model:?} accepted for {language:?}");
                 }

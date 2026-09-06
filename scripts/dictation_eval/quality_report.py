@@ -16,14 +16,13 @@ from typing import Any
 MAX_REPORT_BYTES = 16 * 1024 * 1024
 MAX_TEXT_CHARS = 100_000
 
-_LANGUAGES = {"en", "sv", "no", "fi", "pl"}
+_LANGUAGES = {"en", "sv", "no", "fi"}
 _MODELS = {
     "tiny.en",
     "tiny",
     "base.en",
     "base",
     "fi-whisper-tiny",
-    "pl-whisper-small",
     "kb-whisper-tiny",
     "kb-whisper-base",
     "kb-whisper-small",

@@ -191,14 +191,6 @@ class QualityReportTests(unittest.TestCase):
         self.assertEqual(validated["language"], "fi")
         self.assertEqual(validated["model"], "fi-whisper-tiny")
 
-    def test_polish_language_and_specialist_model_are_accepted(self):
-        report = valid_report()
-        report["language"] = "pl"
-        report["model"] = "pl-whisper-small"
-        validated = validate_quality_report(report)
-        self.assertEqual(validated["language"], "pl")
-        self.assertEqual(validated["model"], "pl-whisper-small")
-
     def test_model_inventory_matches_rust_model_id_string_source(self):
         source_path = (
             Path(__file__).resolve().parents[2]

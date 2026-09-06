@@ -27,7 +27,7 @@
   let { oncomplete }: { oncomplete: () => void | Promise<void> } = $props();
 
   type Step = "language" | "download" | "microphone" | "accessibility" | "ready";
-  type OnboardingLanguage = "en" | "sv" | "no" | "fi" | "pl";
+  type OnboardingLanguage = "en" | "sv" | "no" | "fi";
 
   let currentStep: Step = $state("language");
   let platform: string | null = $state(null);
@@ -70,7 +70,6 @@
     sv: "60 MB",
     no: "55 MB",
     fi: "142 MB",
-    pl: "142 MB",
   };
 
   // Recommended model ID per language (must match Rust serde rename)
@@ -79,7 +78,6 @@
     sv: "kb-whisper-base",
     no: "nb-whisper-base",
     fi: "base",
-    pl: "base",
   };
 
   function getSteps(): Step[] {
@@ -375,7 +373,7 @@
       hotkeyParts = settings.hotkey.split("+").map((part) => hotkeyKeyLabel(part, platform));
       // Map existing language to onboarding options (auto → en since onboarding requires a specific choice)
       const lang = settings.language;
-      if (lang === "en" || lang === "sv" || lang === "no" || lang === "fi" || lang === "pl") {
+      if (lang === "en" || lang === "sv" || lang === "no" || lang === "fi") {
         selectedLanguage = lang;
       }
     } catch {
@@ -470,15 +468,6 @@
           >
             <span class="lang-flag">FI</span>
             <span class="lang-name">Suomi</span>
-          </button>
-          <button
-            class="language-option"
-            class:selected={selectedLanguage === "pl"}
-            aria-pressed={selectedLanguage === "pl"}
-            onclick={() => selectedLanguage = "pl"}
-          >
-            <span class="lang-flag">PL</span>
-            <span class="lang-name">Polski</span>
           </button>
         </div>
         {#if languageError}
@@ -827,7 +816,6 @@
     align-items: center;
     justify-content: center;
     padding: 0 40px 40px;
-    min-width: 0;
   }
 
   .step {
@@ -835,9 +823,7 @@
     flex-direction: column;
     align-items: center;
     text-align: center;
-    width: 100%;
     max-width: 380px;
-    min-width: 0;
     animation: fadeIn 0.3s ease;
   }
 
@@ -874,11 +860,9 @@
   /* Language selector */
 
   .language-options {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 8px;
+    display: flex;
+    gap: 10px;
     margin: 20px 0 24px;
-    width: 100%;
   }
 
   .language-option {
@@ -886,14 +870,13 @@
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    padding: 14px 8px;
+    padding: 14px 20px;
     background: var(--bg-secondary);
     border: 2px solid var(--border);
     border-radius: 10px;
     cursor: pointer;
     transition: border-color 0.2s, background 0.2s;
-    min-width: 0;
-    width: 100%;
+    min-width: 90px;
   }
 
   .language-option:hover {

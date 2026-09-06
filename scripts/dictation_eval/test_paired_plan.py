@@ -33,21 +33,18 @@ def configs(*, languages=("en",), roles=("baseline",)):
             "sv": "kb-whisper-base",
             "no": "nb-whisper-base",
             "fi": "base",
-            "pl": "base",
         },
         "smaller": {
             "en": "tiny.en",
             "sv": "kb-whisper-tiny",
             "no": "nb-whisper-tiny",
             "fi": "tiny",
-            "pl": "tiny",
         },
         "decoder": {
             "en": "base.en",
             "sv": "kb-whisper-base",
             "no": "nb-whisper-base",
             "fi": "base",
-            "pl": "base",
         },
     }
     return [
@@ -189,17 +186,6 @@ class PairedPlanTests(unittest.TestCase):
         )
         self.assertEqual(result["configurations"][0]["language"], "fi")
         self.assertEqual(result["configurations"][0]["model"], "fi-whisper-tiny")
-
-    def test_polish_language_and_specialist_model_are_accepted(self):
-        candidate_manifest = manifest([row(1, language="pl", split="dev")])
-        candidate_configs = configs(languages=("pl",))
-        candidate_configs[0]["model"] = "pl-whisper-small"
-        result = make_plan(
-            candidate_manifest=candidate_manifest,
-            candidate_configs=candidate_configs,
-        )
-        self.assertEqual(result["configurations"][0]["language"], "pl")
-        self.assertEqual(result["configurations"][0]["model"], "pl-whisper-small")
 
     def test_shape_and_numeric_bounds_are_rejected(self):
         valid_manifest = manifest([row(1, split="dev")])

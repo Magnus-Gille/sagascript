@@ -33,16 +33,10 @@ def manifest(rows: list[dict[str, object]]) -> dict[str, object]:
     return {"schema_version": 1, "utterances": rows}
 
 
-def passing_rows(
-    *, include_finnish: bool = False, include_polish: bool = False
-) -> list[dict[str, object]]:
+def passing_rows(*, include_finnish: bool = False) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     number = 1
-    languages = ("en", "sv", "no")
-    if include_finnish:
-        languages += ("fi",)
-    if include_polish:
-        languages += ("pl",)
+    languages = ("en", "sv", "no") + (("fi",) if include_finnish else ())
     for language in languages:
         for split in ("dev", "heldout"):
             count = 10 if split == "dev" else 40
@@ -240,26 +234,6 @@ class CorpusManifestTests(unittest.TestCase):
         self.assertTrue(report["eligible"])
         self.assertEqual(set(report["languages"]), {"en", "sv", "no", "fi"})
         self.assertEqual(report["languages"]["fi"]["heldout_human"], 40)
-
-    def test_polish_rows_opt_into_polish_without_finnish_coverage(self):
-        report = coverage_report(
-            validate_manifest(manifest(passing_rows(include_polish=True)))
-        )
-        self.assertTrue(report["eligible"])
-        self.assertEqual(set(report["languages"]), {"en", "sv", "no", "pl"})
-        self.assertEqual(report["languages"]["pl"]["heldout_human"], 40)
-        self.assertNotIn("fi", report["languages"])
-
-    def test_finnish_and_polish_opt_in_independently(self):
-        report = coverage_report(
-            validate_manifest(
-                manifest(passing_rows(include_finnish=True, include_polish=True))
-            )
-        )
-        self.assertTrue(report["eligible"])
-        self.assertEqual(
-            set(report["languages"]), {"en", "sv", "no", "fi", "pl"}
-        )
 
     def test_dev_or_synthetic_coverage_cannot_satisfy_heldout_requirements(self):
         rows = passing_rows()
