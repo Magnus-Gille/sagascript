@@ -179,7 +179,59 @@ does not launch inference, read files, download models or make adoption claims.
 Individual benchmark captures allow 2–30 warm runs for diagnostics; paired
 experiments deliberately use the narrower 5–20-repeat range.
 
-The final deliverable still needs the paired corpus runner and result workflow,
+### Explicit private paired execution (evaluator 0.2.0)
+
+`freeze-plan` writes a new private plan after hashing an explicitly selected
+trusted executable. `run-plan` revalidates the exact frozen order and all input
+maps, hashes the executable/audio before and after each child, and retains
+every planned pair in a private ledger. It runs only `benchmark-dictation`
+with literal argv: explicit language/model/beam/repeats, the selected fallback
+flag, and `--allow-empty` only for silence. Models must already be installed.
+The supplied binary is trusted operator input: a hash binds its bytes, not its
+source provenance, and this runner is not a network/process sandbox.
+
+```sh
+python3 scripts/dictation_eval/evaluate.py freeze-plan \
+  --manifest /absolute/corpus.json --configurations /absolute/configs.json \
+  --split heldout --seed 187 --iterations 5 --source-revision FULL_SOURCE_SHA \
+  --binary /absolute/sagascript --output /absolute/new-plan.json
+python3 scripts/dictation_eval/evaluate.py run-plan \
+  --manifest /absolute/corpus.json --plan /absolute/new-plan.json \
+  --audio-map /absolute/audio-map.json --reference-map /absolute/reference-map.json \
+  --terms /absolute/terms-map.json --binary /absolute/sagascript \
+  --output-dir /absolute/new-evaluation-directory
+```
+
+Audio/reference maps contain exactly the selected split's opaque IDs mapped to
+absolute local file paths. Terms maps contain those same IDs mapped to objects
+with `specialist_terms` and `control_terms` arrays. Reference UTF-8 bytes are
+hash-checked without trimming and frozen in memory. No paths or transcripts
+are printed in successful summaries or processing-error messages.
+
+Output must not exist and its parent must already exist. Unix directory/file
+modes are0700/0600; Windows inherits the operator-selected parent's ACL.
+Each pair retains its raw transcript-bearing quality report, private stderr,
+and scored result under numeric names. Stderr can contain paths/text and must
+not be published. These diagnostics are not a public aggregate. Existing files
+are never overwritten; interruption/disk failure can leave a partial directory,
+which is retained without implicit resume or deletion. The default child
+timeout is900seconds (explicit range1–3600). Identity failure stops further
+launches while recording remaining pairs as not attempted.
+
+A nonzero child with a valid report keeps its scores and failure status rather
+than disappearing from the experiment. Failed executions yield exit1 with a
+content-free summary; invalid preflight inputs yield exit2. Summary success is
+only execution success: `decision` remains `inconclusive`. Cold means the first
+call in each new backend, not an OS-cold machine. First warm is fixed for WER;
+later warm results remain available and must not become best-of selection.
+
+Public-corpus acoustic conditions may be `unknown`. Unknown is counted and
+cannot satisfy either required quiet or noisy coverage. Do not infer acoustic
+labels from a dataset name. Freeze duration bucket cutoffs and provenance
+before choosing clips; public read/parliamentary speech is not automatically
+representative of personal dictation or unseen by model training.
+
+The final deliverable still needs the actual paired corpus and aggregate result workflow,
 baseline/candidate tables for each language, paired accuracy intervals, redacted
 worst failures, adopt/adapt/reject/inconclusive decision, implementation map and
-rollout/revert plan. These initial pure helper tests are not issue completion.
+rollout/revert plan. Tooling tests are not issue completion.

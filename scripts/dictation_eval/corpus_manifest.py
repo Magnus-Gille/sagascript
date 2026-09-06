@@ -24,6 +24,7 @@ _SPLITS = {"dev", "heldout"}
 _ORIGINS = {"human", "synthetic", "silence"}
 _DURATION_BUCKETS = ("short", "medium", "long")
 _ENVIRONMENTS = ("quiet", "noisy")
+_VALID_ENVIRONMENTS = (*_ENVIRONMENTS, "unknown")
 _COVERAGE_TAGS = ("specialist", "numbers", "negation", "ordinary")
 _ALLOWED_TAGS = set(_COVERAGE_TAGS) | {"silence"}
 
@@ -90,7 +91,9 @@ def validate_manifest(value: object) -> dict[str, object]:
         duration_bucket = _require_enum(
             row["duration_bucket"], "duration_bucket", _DURATION_BUCKETS
         )
-        environment = _require_enum(row["environment"], "environment", _ENVIRONMENTS)
+        environment = _require_enum(
+            row["environment"], "environment", _VALID_ENVIRONMENTS
+        )
         tags = row["tags"]
         if type(tags) is not list:
             raise ValueError("tags must be a list")
@@ -166,6 +169,9 @@ def coverage_report(validated: Mapping[str, object]) -> dict[str, object]:
         heldout_silence = sum(1 for row in heldout_rows if row["origin"] == "silence")
         human_speakers = len({row["speaker_id"] for row in human_rows})
         heldout_human_speakers = len({row["speaker_id"] for row in human_heldout})
+        unknown_environment_human = sum(
+            1 for row in human_heldout if row["environment"] == "unknown"
+        )
         language_eligible = (
             len(human_dev) >= 10
             and len(human_heldout) >= 40
@@ -185,6 +191,7 @@ def coverage_report(validated: Mapping[str, object]) -> dict[str, object]:
             "missing_coverage_tags": missing_tags,
             "missing_duration_buckets": missing_durations,
             "missing_environments": missing_environments,
+            "unknown_environment_human": unknown_environment_human,
             "heldout_silence": heldout_silence,
             "eligible": language_eligible,
         }

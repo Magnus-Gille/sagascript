@@ -135,6 +135,22 @@ class CorpusManifestTests(unittest.TestCase):
         valid_silence = row(1, origin="silence", tags=["silence"])
         self.assertEqual(validate_manifest(manifest([valid_silence]))["schema_version"], 1)
 
+    def test_unknown_environment_is_valid_but_not_a_required_coverage_bucket(self):
+        validated = validate_manifest(manifest([row(1, environment="unknown")]))
+        self.assertEqual(validated["utterances"][0]["environment"], "unknown")
+
+        rows = passing_rows()
+        for candidate in rows:
+            if candidate["split"] == "heldout" and candidate["origin"] == "human":
+                candidate["environment"] = "unknown"
+        report = coverage_report(validate_manifest(manifest(rows)))
+        self.assertFalse(report["eligible"])
+        for language in ("en", "sv", "no"):
+            language_report = report["languages"][language]
+            self.assertEqual(language_report["missing_environments"], ["quiet", "noisy"])
+            self.assertEqual(language_report["unknown_environment_human"], 40)
+            self.assertFalse(language_report["eligible"])
+
     def test_coverage_requires_human_heldout_evidence_and_ignores_synthetic(self):
         rows = [
             row(index, split="dev", origin="synthetic") for index in range(1, 11)

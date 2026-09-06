@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local evaluation CLI; no network, inference, settings changes, or output writes."""
+"""Local evaluation CLI with explicit private paired-runner execution."""
 
 import argparse
 import json
@@ -9,7 +9,7 @@ import sys
 from corpus_manifest import coverage_report
 
 
-VERSION = "Sagascript dictation evaluator 0.1.0 (schema 1)"
+VERSION = "Sagascript dictation evaluator 0.2.0 (schema 1)"
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_REFERENCE_BYTES = 400_000
 
@@ -66,12 +66,31 @@ def main(argv=None):
     clip.add_argument("--reference", required=True, help="Exact UTF-8 reference bytes; no trimming")
     clip.add_argument("--specialist-terms", help="Local JSON array of expected specialist phrases")
     clip.add_argument("--control-terms", help="Local JSON array of number/negation control phrases")
+    freeze = commands.add_parser("freeze-plan", help="Freeze a private paired evaluation plan")
+    freeze.add_argument("--manifest", required=True)
+    freeze.add_argument("--configurations", required=True)
+    freeze.add_argument("--split", required=True, choices=("dev", "heldout"))
+    freeze.add_argument("--seed", required=True, type=int)
+    freeze.add_argument("--iterations", type=int, default=5)
+    freeze.add_argument("--source-revision", required=True)
+    freeze.add_argument("--binary", required=True)
+    freeze.add_argument("--output", required=True)
+    run = commands.add_parser("run-plan", help="Execute a frozen plan with a trusted local binary")
+    run.add_argument("--manifest", required=True)
+    run.add_argument("--plan", required=True)
+    run.add_argument("--audio-map", required=True)
+    run.add_argument("--reference-map", required=True)
+    run.add_argument("--terms", required=True)
+    run.add_argument("--binary", required=True)
+    run.add_argument("--output-dir", required=True)
+    run.add_argument("--timeout-seconds", type=int, default=900)
     args = parser.parse_args(argv)
     try:
-        manifest_value = _read_json(args.manifest)
         if args.command == "validate-manifest":
+            manifest_value = _read_json(args.manifest)
             result = coverage_report(manifest_value)
-        else:
+        elif args.command == "score-clip":
+            manifest_value = _read_json(args.manifest)
             from clip_score import score_clip
             from quality_report import read_quality_report
 
@@ -81,14 +100,40 @@ def main(argv=None):
                 _read_json(args.specialist_terms) if args.specialist_terms else [],
                 _read_json(args.control_terms) if args.control_terms else [],
             )
+        elif args.command == "freeze-plan":
+            from runner import freeze_plan
+
+            result = freeze_plan(
+                _read_json(args.manifest),
+                _read_json(args.configurations),
+                split=args.split,
+                seed=args.seed,
+                iterations=args.iterations,
+                source_revision=args.source_revision,
+                binary_path=args.binary,
+                output_path=args.output,
+            )
+        else:
+            from runner import run_evaluation
+
+            result = run_evaluation(
+                _read_json(args.manifest),
+                _read_json(args.plan),
+                _read_json(args.audio_map),
+                _read_json(args.reference_map),
+                _read_json(args.terms),
+                args.binary,
+                args.output_dir,
+                args.timeout_seconds,
+            )
         encoded = json.dumps(result, allow_nan=False, sort_keys=True, indent=2)
-    except (ValueError, TypeError, UnicodeError, OverflowError, RecursionError):
+    except (OSError, ValueError, TypeError, UnicodeError, OverflowError, RecursionError):
         # Never print source paths, opaque IDs, transcript text, or an exception
         # representation. Fine-grained diagnostics remain in pure helper tests.
         print("Invalid local evaluation input; no result produced.", file=sys.stderr)
         return 2
     print(encoded)
-    return 0
+    return 1 if args.command == "run-plan" and result.get("failed", 0) > 0 else 0
 
 
 if __name__ == "__main__":
