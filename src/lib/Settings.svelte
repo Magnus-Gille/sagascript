@@ -6,6 +6,7 @@
     getLastTranscription,
     setLanguage,
     setHotkeyMode,
+    setPresenterConfig,
     setHotkeyProfiles,
     setAutoPaste,
     setInitialPrompt,
@@ -35,7 +36,9 @@
     type WhisperModel,
     type HotkeyStatus,
     type HotkeyProfile,
+    type PresenterConfig,
   } from "./api";
+  import PresenterSettings from "./PresenterSettings.svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -102,6 +105,39 @@
   let testResult: string = $state("");
   let testError: string = $state("");
 
+  type PresenterStatus =
+    | "listening"
+    | "transcribing"
+    | "verifying_insertion"
+    | "inserted"
+    | "submitting"
+    | "sent"
+    | "cancelled"
+    | "draft"
+    | "failed"
+    | "no_speech"
+    | "submit_uncertain";
+
+  const presenterStatusLabels: Record<PresenterStatus, string> = {
+    listening: "Presenter listening",
+    transcribing: "Presenter transcribing",
+    verifying_insertion: "Verifying insertion…",
+    inserted: "Recognized text inserted",
+    submitting: "Sending submit key…",
+    sent: "Submit key sent; delivery not confirmed",
+    cancelled: "Presenter cancelled",
+    draft: "Not sent — copy recognized text from Dictate",
+    failed: "Presenter failed",
+    no_speech: "No speech detected",
+    submit_uncertain: "Submit may have been sent — check destination before retrying",
+  };
+
+  let presenterStatus: PresenterStatus | null = $state(null);
+
+  function isPresenterStatus(value: string): value is PresenterStatus {
+    return Object.prototype.hasOwnProperty.call(presenterStatusLabels, value);
+  }
+
   onMount(() => {
     let disposed = false;
     let revision = 0;
@@ -123,9 +159,14 @@
         testError = "";
       }
     }).then(remember);
+    const presenterStatusListener = listen("presenter-status", (event) => {
+      if (typeof event.payload !== "string" || !isPresenterStatus(event.payload)) return;
+      presenterStatus = event.payload;
+      activeTab = "dictate";
+    }).then(remember);
     // A failed background dictation may create this window after its event.
     // Recover the persisted-in-memory result without racing newer events.
-    Promise.all([errorListener, resultListener, stateListener]).then(async () => {
+    Promise.all([errorListener, resultListener, stateListener, presenterStatusListener]).then(async () => {
       const initialRevision = revision;
       const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
       if (!disposed && revision === initialRevision) {
@@ -447,6 +488,11 @@
   async function onHotkeyModeChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value as HotkeyMode;
     await applySetting(() => setHotkeyMode(value));
+  }
+
+  async function onPresenterSave(config: PresenterConfig): Promise<string | null> {
+    const ok = await applySetting(() => setPresenterConfig(config));
+    return ok ? null : settingsError || "Failed to save presenter settings.";
   }
 
   async function onAutoPasteToggle() {
@@ -988,7 +1034,7 @@
       {#if activeTab === "dictate"}
         <div class="field profile-field">
           <div class="profile-heading">
-            <span class="field-label">Dictation shortcuts</span>
+            <span class="field-label">{settings.hotkey_mode === "presenter" ? "Presenter start shortcuts" : "Dictation shortcuts"}</span>
             <button class="link-btn" onclick={addProfile}>+ Add language</button>
           </div>
           {#each settings.hotkey_profiles as profile (profile.id)}
@@ -1072,8 +1118,18 @@
           <select id="hotkey-mode" value={settings.hotkey_mode} onchange={onHotkeyModeChange}>
             <option value="push">Push-to-talk</option>
             <option value="toggle">Toggle</option>
+            <option value="presenter">Presenter</option>
           </select>
         </div>
+
+        {#if settings.hotkey_mode === "presenter"}
+          <PresenterSettings
+            config={settings.presenter}
+            profileShortcuts={settings.hotkey_profiles.map((profile) => profile.shortcut)}
+            {platform}
+            onSave={onPresenterSave}
+          />
+        {/if}
 
         <div class="field-row">
           <span class="field-label">Auto-paste transcription</span>
@@ -1117,6 +1173,11 @@
           </button>
           {#if testError}
             <div class="transcribe-error">{testError}</div>
+          {/if}
+          {#if presenterStatus}
+            <div class="presenter-status" role="status" aria-live="polite">
+              {presenterStatusLabels[presenterStatus]}
+            </div>
           {/if}
           <textarea
             class="test-result"
@@ -2051,6 +2112,13 @@
   .test-record-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+  }
+
+  .presenter-status {
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
   }
 
   .recording-dot {
