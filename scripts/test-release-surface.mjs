@@ -2,6 +2,19 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+test("Finnish Base reuses the existing model source without a separate derivative", async () => {
+  const [modelSources, noticeGenerator] = await Promise.all([
+    readFile(new URL("../docs/model-sources.md", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/generate-third-party-notices.mjs", import.meta.url), "utf8"),
+  ]);
+  assert.match(modelSources, /Finnish/);
+  assert.match(modelSources, /ggml-base\.bin/);
+  assert.match(modelSources, /147,951,465/);
+  for (const source of [modelSources, noticeGenerator]) {
+    assert.doesNotMatch(source, /fi-whisper-medium|model-fi-medium-q5_0-b410f4a/);
+  }
+});
+
 const settingsSource = await readFile(
   new URL("../src/lib/Settings.svelte", import.meta.url),
   "utf8",
@@ -150,7 +163,8 @@ test("onboarding prevents duplicate setup requests and exposes language selectio
   assert.match(onboardingSource, /if \(languageSaving \|\| platform === null\) return;/);
   assert.match(onboardingSource, /disabled=\{languageSaving \|\| platform === null\}/);
   assert.match(onboardingSource, /platform === null \? "Preparing…"/);
-  assert.equal((onboardingSource.match(/aria-pressed=\{selectedLanguage ===/g) ?? []).length, 3);
+  assert.equal((onboardingSource.match(/aria-pressed=\{selectedLanguage ===/g) ?? []).length, 4);
+  assert.match(onboardingSource, /selectedLanguage === "fi"/);
 });
 
 test("Accessibility onboarding reopens System Settings without prompting again", () => {

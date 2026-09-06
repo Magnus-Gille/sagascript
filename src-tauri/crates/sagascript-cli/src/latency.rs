@@ -608,6 +608,7 @@ fn normalize_language(value: String, line: usize) -> Result<String, String> {
         (Language::English, "en"),
         (Language::Swedish, "sv"),
         (Language::Norwegian, "no"),
+        (Language::Finnish, "fi"),
         (Language::Auto, "auto"),
     ];
     languages
@@ -622,6 +623,7 @@ fn normalize_model(value: String, line: usize) -> Result<String, String> {
         Language::English,
         Language::Swedish,
         Language::Norwegian,
+        Language::Finnish,
         Language::Auto,
     ];
     let mut known = Vec::new();

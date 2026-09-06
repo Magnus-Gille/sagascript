@@ -29,6 +29,10 @@ link; the upstream repository is authoritative for its license terms.
 | Pyannote Segmentation 3.0 (ONNX conversion) | `model.onnx` | MIT, copyright CNRS | [csukuangfj conversion repository and LICENSE](https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/blob/main/LICENSE) |
 | WeSpeaker ResNet34-LM | `voxceleb_resnet34_LM.onnx` | CC-BY-4.0 | [WeSpeaker project/model card](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) |
 
+Finnish uses the existing multilingual OpenAI Whisper Base model (MIT), not
+the English-only Base.en model. It is covered by the OpenAI Whisper row above;
+Sagascript does not distribute a separate Finnish fine-tune or derivative.
+
 ## Rust dependencies in the macOS application and build
 
 | Component | Version | Declared license | Source |

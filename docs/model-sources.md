@@ -63,6 +63,30 @@ not a checksum inferred from a filename or mutable branch.
 | NB medium `ggml-model-q5_0.bin` | 539,212,484 | `18733de634af639a43b0f8c5f5a2ea0920de4c5b32a5570ec130981581c0e5e7` |
 | NB large `ggml-model-q5_0.bin` | 1,081,140,203 | `feb5951ae694a62cfeb81fb501f6cfa8cc50d96bcddb1e4e8215f7006bac23a2` |
 
+## Finnish uses multilingual Base (2026-09-06)
+
+Finnish (`fi`) recommends the existing **multilingual Whisper Base** model
+(`base`, `ggml-base.bin`), not the English-only `base.en` model. Its pinned
+artifact above is 147,951,465 bytes (about 148 MB). This is the original
+multilingual model, not a Finnish fine-tune or a locally quantized derivative.
+No additional model host, custom model release, or new model license is needed.
+
+The [publisher's model repository](https://huggingface.co/ggerganov/whisper.cpp)
+declares MIT; [OpenAI's Whisper license](https://github.com/openai/whisper/blob/main/LICENSE)
+is MIT as well. The existing OpenAI Whisper attribution in
+`THIRD_PARTY_NOTICES.md` covers this model family. Models remain separately
+downloaded from the pinned publisher revision, not bundled in the installer.
+Any future redistribution must retain the applicable copyright and permission
+notice; adding Finnish is not a claim of publisher endorsement.
+
+The owner selected Base for the initial Finnish integration instead of the
+larger research candidate. The earlier Medium comparison does not establish
+Base's Finnish accuracy or latency. Product-default decoding, spontaneous
+native Finnish dictation and signed cold/warm latency remain acceptance checks;
+no production-readiness or measured performance advantage is claimed here.
+The existing matching Base CoreML encoder may be used on macOS through the
+normal verified download path; backend support is not measured acceleration.
+
 ## VAD and diarization models
 
 | Artifact/source | Revision | License | Bytes | SHA-256 |

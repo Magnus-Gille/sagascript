@@ -19,7 +19,7 @@ use super::transcribe::{
 
 #[derive(Args)]
 pub struct RecordArgs {
-    /// Language for transcription [possible values: en, sv, no, auto (less accurate)]
+    /// Language for transcription [possible values: en, sv, no, fi, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 

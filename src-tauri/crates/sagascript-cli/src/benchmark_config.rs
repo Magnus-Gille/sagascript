@@ -18,7 +18,7 @@ pub(crate) fn resolve(
 ) -> Result<ResolvedBenchmarkConfig, DictationError> {
     if language == Language::Auto {
         return Err(DictationError::SettingsError(
-            "Benchmark language must be explicit: en, sv, or no".to_string(),
+            "Benchmark language must be explicit: en, sv, no, or fi".to_string(),
         ));
     }
 
@@ -55,7 +55,12 @@ pub(crate) fn resolve(
 mod tests {
     use super::*;
 
-    const LANGUAGES: [Language; 3] = [Language::English, Language::Swedish, Language::Norwegian];
+    const LANGUAGES: [Language; 4] = [
+        Language::English,
+        Language::Swedish,
+        Language::Norwegian,
+        Language::Finnish,
+    ];
 
     #[test]
     fn defaults_use_language_recommendations_and_default_decoder_settings() {
@@ -63,6 +68,7 @@ mod tests {
             (Language::English, WhisperModel::BaseEn),
             (Language::Swedish, WhisperModel::KbWhisperBase),
             (Language::Norwegian, WhisperModel::NbWhisperBase),
+            (Language::Finnish, WhisperModel::Base),
         ];
         for (language, expected_model) in cases {
             let config = resolve(language, None, None, false).unwrap();

@@ -50,7 +50,7 @@ Update a setting. The new value takes effect immediately — the GUI \
 hot-reloads changes made via CLI.
 
 Valid values per key:
-  language             en, sv, no, auto (auto uses a generic model — less accurate)
+  language             en, sv, no, fi, auto (auto uses a generic model — less accurate)
   whisper_model        tiny.en, tiny, base.en, base, kb-whisper-tiny,
                        kb-whisper-base, kb-whisper-small, nb-whisper-tiny,
                        nb-whisper-base, nb-whisper-small
@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn parse_enum_value_all_valid_languages() {
-        let valid = ["en", "sv", "no", "auto"];
+        let valid = ["en", "sv", "no", "fi", "auto"];
         for v in valid {
             let result = parse_enum_value::<Language>(v, "language");
             assert!(result.is_ok(), "should parse language '{v}'");

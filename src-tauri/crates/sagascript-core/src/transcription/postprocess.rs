@@ -135,7 +135,9 @@ fn music_marker(language: Language) -> &'static str {
     match language {
         Language::Swedish => "[MUSIK]",
         Language::Norwegian => "[MUSIKK]",
-        Language::English | Language::Auto => "[MUSIC]",
+        // Preserve the established annotation vocabulary for Finnish until
+        // localized annotation rules have their own speech-safety evidence.
+        Language::English | Language::Finnish | Language::Auto => "[MUSIC]",
     }
 }
 
@@ -203,6 +205,10 @@ mod tests {
         assert_eq!(
             normalize_nonspeech_markers("Musik Musik Musik", Language::Norwegian),
             "[MUSIKK]"
+        );
+        assert_eq!(
+            normalize_nonspeech_markers("[MUSIC] Pidän musiikista", Language::Finnish),
+            "[MUSIC] Pidän musiikista"
         );
     }
 

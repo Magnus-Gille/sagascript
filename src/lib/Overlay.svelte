@@ -34,7 +34,7 @@
   });
 
   function languageLabel(language: HotkeyProfile["language"]): string {
-    return ({ en: "English", sv: "Swedish", no: "Norwegian", auto: "Auto" })[language];
+    return ({ en: "English", sv: "Swedish", no: "Norwegian", fi: "Finnish", auto: "Auto" })[language];
   }
 </script>
 

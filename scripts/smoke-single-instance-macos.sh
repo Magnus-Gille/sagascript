@@ -118,7 +118,7 @@ mapfile_output=$(candidate_pids)
 # CLI dispatch happens before Tauri/plugin initialization and must remain usable
 # while the GUI owns the single-instance key.
 cli_language=$(HOME="$runtime_root/home" "$executable" config get language)
-grep -Eq '^(auto|en|sv|no)$' <<<"$cli_language"
+grep -Eq '^(auto|en|sv|no|fi)$' <<<"$cli_language"
 
 # Simulate an unclean termination. OS-backed ownership must disappear with the
 # process so a replacement launch cannot be stranded by stale state.

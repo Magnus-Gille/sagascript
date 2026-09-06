@@ -21,7 +21,7 @@ _CONFIG_KEYS = {
     "temperature_fallback",
     "role",
 }
-_LANGUAGES = {"en", "sv", "no"}
+_LANGUAGES = {"en", "sv", "no", "fi"}
 _ROLES = {"baseline", "smaller", "decoder"}
 _ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,80}")
 _SHA40_PATTERN = re.compile(r"[0-9a-f]{40}")

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type Language = "en" | "sv" | "no" | "auto";
+export type Language = "en" | "sv" | "no" | "fi" | "auto";
 export type HotkeyMode = "push" | "toggle" | "presenter";
 
 export type PresenterFinishAction = "insert_only" | "return" | "command_return";

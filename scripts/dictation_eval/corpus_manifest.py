@@ -19,7 +19,8 @@ _ROW_KEYS = {
 }
 _ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,80}")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
-_LANGUAGES = ("en", "sv", "no")
+_LANGUAGES = ("en", "sv", "no", "fi")
+_DEFAULT_REQUIRED_LANGUAGES = ("en", "sv", "no")
 _SPLITS = {"dev", "heldout"}
 _ORIGINS = {"human", "synthetic", "silence"}
 _DURATION_BUCKETS = ("short", "medium", "long")
@@ -126,14 +127,24 @@ def validate_manifest(value: object) -> dict[str, object]:
 
 
 def coverage_report(validated: Mapping[str, object]) -> dict[str, object]:
-    """Return content-free prerequisite coverage for a validated manifest."""
+    """Return content-free prerequisite coverage for a validated manifest.
+
+    Existing manifests retain the historical en/sv/no coverage gate. A
+    manifest containing Finnish rows explicitly opts into the Finnish gate as
+    well; merely adding Finnish to the accepted language enum does not make
+    old corpora ineligible.
+    """
 
     manifest = validate_manifest(validated)
     rows = manifest["utterances"]
     assert isinstance(rows, list)
+    manifest_languages = {row["language"] for row in rows}
+    required_languages = _DEFAULT_REQUIRED_LANGUAGES
+    if "fi" in manifest_languages:
+        required_languages = (*required_languages, "fi")
     languages: dict[str, dict[str, object]] = {}
     eligible = True
-    for language in _LANGUAGES:
+    for language in required_languages:
         human_dev = [
             row
             for row in rows

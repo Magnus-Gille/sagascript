@@ -20,6 +20,8 @@ pub enum Language {
     Swedish,
     #[serde(rename = "no")]
     Norwegian,
+    #[serde(rename = "fi")]
+    Finnish,
     #[serde(rename = "auto")]
     Auto,
 }
@@ -30,6 +32,7 @@ impl Language {
             Language::English => "English",
             Language::Swedish => "Swedish",
             Language::Norwegian => "Norwegian",
+            Language::Finnish => "Finnish",
             Language::Auto => "Auto-detect",
         }
     }
@@ -40,6 +43,7 @@ impl Language {
             Language::English => Some("en"),
             Language::Swedish => Some("sv"),
             Language::Norwegian => Some("no"),
+            Language::Finnish => Some("fi"),
             Language::Auto => None,
         }
     }
@@ -225,6 +229,11 @@ impl WhisperModel {
             Language::Norwegian => {
                 !self.is_english_only() && !self.is_swedish_optimized()
             }
+            Language::Finnish => {
+                !self.is_english_only()
+                    && !self.is_swedish_optimized()
+                    && !self.is_norwegian_optimized()
+            }
             Language::Auto => !self.is_english_only() && !self.is_language_optimized(),
         }
     }
@@ -255,7 +264,7 @@ impl WhisperModel {
         }
     }
 
-    /// HuggingFace download URL for model
+    /// Pinned download URL for the model artifact.
     pub fn download_url(&self) -> &'static str {
         match self {
             WhisperModel::TinyEn => "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin",
@@ -415,6 +424,7 @@ impl WhisperModel {
             Language::English => WhisperModel::BaseEn,
             Language::Swedish => WhisperModel::KbWhisperBase,
             Language::Norwegian => WhisperModel::NbWhisperBase,
+            Language::Finnish => WhisperModel::Base,
             Language::Auto => WhisperModel::Base,
         }
     }
@@ -441,6 +451,14 @@ impl WhisperModel {
                 WhisperModel::NbWhisperSmall,
                 WhisperModel::NbWhisperMedium,
                 WhisperModel::NbWhisperLarge,
+            ],
+            Language::Finnish => &[
+                WhisperModel::Tiny,
+                WhisperModel::Base,
+                WhisperModel::Small,
+                WhisperModel::Medium,
+                WhisperModel::LargeV3Turbo,
+                WhisperModel::LargeV3TurboQ8,
             ],
             Language::Auto => &[
                 WhisperModel::Tiny,
@@ -872,6 +890,7 @@ mod tests {
         assert_eq!(Language::English.display_name(), "English");
         assert_eq!(Language::Swedish.display_name(), "Swedish");
         assert_eq!(Language::Norwegian.display_name(), "Norwegian");
+        assert_eq!(Language::Finnish.display_name(), "Finnish");
         assert_eq!(Language::Auto.display_name(), "Auto-detect");
     }
 
@@ -880,6 +899,7 @@ mod tests {
         assert_eq!(Language::English.whisper_code(), Some("en"));
         assert_eq!(Language::Swedish.whisper_code(), Some("sv"));
         assert_eq!(Language::Norwegian.whisper_code(), Some("no"));
+        assert_eq!(Language::Finnish.whisper_code(), Some("fi"));
         assert_eq!(Language::Auto.whisper_code(), None);
     }
 
@@ -898,6 +918,7 @@ mod tests {
             (Language::English, "\"en\""),
             (Language::Swedish, "\"sv\""),
             (Language::Norwegian, "\"no\""),
+            (Language::Finnish, "\"fi\""),
             (Language::Auto, "\"auto\""),
         ];
         for (lang, expected) in pairs {
@@ -1131,6 +1152,7 @@ mod tests {
         assert_eq!(WhisperModel::recommended(Language::English), WhisperModel::BaseEn);
         assert_eq!(WhisperModel::recommended(Language::Swedish), WhisperModel::KbWhisperBase);
         assert_eq!(WhisperModel::recommended(Language::Norwegian), WhisperModel::NbWhisperBase);
+        assert_eq!(WhisperModel::recommended(Language::Finnish), WhisperModel::Base);
         assert_eq!(WhisperModel::recommended(Language::Auto), WhisperModel::Base);
     }
 
@@ -1158,6 +1180,11 @@ mod tests {
         assert!(no.contains(&WhisperModel::NbWhisperSmall));
         assert!(no.contains(&WhisperModel::NbWhisperMedium));
         assert!(no.contains(&WhisperModel::NbWhisperLarge));
+
+        let fi = WhisperModel::models_for_language(Language::Finnish);
+        assert_eq!(fi.len(), 6);
+        assert!(fi.contains(&WhisperModel::Base));
+        assert!(fi.contains(&WhisperModel::LargeV3TurboQ8));
 
         let auto = WhisperModel::models_for_language(Language::Auto);
         assert_eq!(auto.len(), 6);
@@ -2050,7 +2077,13 @@ mod tests {
 
     #[test]
     fn recommended_model_is_in_models_for_language() {
-        let languages = [Language::English, Language::Swedish, Language::Norwegian, Language::Auto];
+        let languages = [
+            Language::English,
+            Language::Swedish,
+            Language::Norwegian,
+            Language::Finnish,
+            Language::Auto,
+        ];
         for lang in languages {
             let recommended = WhisperModel::recommended(lang);
             let models = WhisperModel::models_for_language(lang);
@@ -2061,6 +2094,32 @@ mod tests {
                 lang,
                 models
             );
+        }
+    }
+
+    #[test]
+    fn finnish_uses_generic_multilingual_models() {
+        assert_eq!(WhisperModel::recommended(Language::Finnish), WhisperModel::Base);
+        for &model in WhisperModel::models_for_language(Language::Finnish) {
+            assert!(model.is_compatible_with(Language::Finnish), "{model:?}");
+        }
+        for model in [
+            WhisperModel::TinyEn,
+            WhisperModel::BaseEn,
+            WhisperModel::SmallEn,
+            WhisperModel::MediumEn,
+            WhisperModel::KbWhisperTiny,
+            WhisperModel::KbWhisperBase,
+            WhisperModel::KbWhisperSmall,
+            WhisperModel::KbWhisperMedium,
+            WhisperModel::KbWhisperLarge,
+            WhisperModel::NbWhisperTiny,
+            WhisperModel::NbWhisperBase,
+            WhisperModel::NbWhisperSmall,
+            WhisperModel::NbWhisperMedium,
+            WhisperModel::NbWhisperLarge,
+        ] {
+            assert!(!model.is_compatible_with(Language::Finnish), "{model:?}");
         }
     }
 }
