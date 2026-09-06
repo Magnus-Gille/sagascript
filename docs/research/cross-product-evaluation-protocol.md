@@ -82,6 +82,12 @@ release-version claim is made where a release was not independently verified.
 | FluidVoice core | README `49f13beb7c0d96b2c7be93376fb3a7513cfe5530`; [README](https://github.com/altic-dev/FluidVoice/blob/49f13beb7c0d96b2c7be93376fb3a7513cfe5530/README.md); [GPL-3.0 license](https://github.com/altic-dev/FluidVoice/blob/49f13beb7c0d96b2c7be93376fb3a7513cfe5530/LICENSE) | The README documents a local-first macOS app, live preview, global hotkey, microphone/accessibility permissions, and model choices including Parakeet, Whisper, Apple Speech, and others. It distinguishes the GPLv3 core from the separately maintained Fluid Intelligence runtime. | Desktop hotkey path is eligible after owner-permission setup. No general batch CLI was verified from the pinned README; programmatic quality/latency is `N/A` unless a supported surface is verified without relying on private runtime code. |
 | Vibe | README `e1eba11ad37dec2ef8bb5ba181394567020302c8`; [README](https://github.com/thewh1teagle/vibe/blob/e1eba11ad37dec2ef8bb5ba181394567020302c8/README.md); [MIT license](https://github.com/thewh1teagle/vibe/blob/e1eba11ad37dec2ef8bb5ba181394567020302c8/LICENSE) | The README documents local/offline file and microphone work, batch export, Whisper/Nemotron/Parakeet choices, speaker diarization, CLI support, and an HTTP API with Swagger. | File/CLI lane is a candidate. Exact command-line arguments and API request schema must be captured from this pinned revision's help/source before use; do not invent a command. Desktop lane is separate. |
 
+The matrix's Vibe README pin above is the historical capability pin for this
+protocol. The later bounded NPSC execution used Vibe revision
+[`57c93c3c5a862d630459341cd71b0326a46a8a19`](https://github.com/thewh1teagle/vibe/commit/57c93c3c5a862d630459341cd71b0326a46a8a19),
+which is recorded in the [dated aggregate report](./cross-product-evaluation-2026-09-06/README.md); this clarification does not
+rewrite the frozen capability matrix.
+
 The repository metadata checked the same day identifies the default branches as
 `main` and the licenses as Handy MIT, FluidVoice GPL-3.0, and Vibe MIT.  The
 table intentionally uses README commit revisions rather than floating `main`
