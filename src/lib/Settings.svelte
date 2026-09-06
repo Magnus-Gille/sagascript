@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import {
     getSettings,
     getLastError,
@@ -21,6 +21,12 @@
     getEffectiveModelInfo,
     downloadModel,
     transcribeFile,
+    beginMeetingFile,
+    getMeetingJob,
+    cancelMeetingJob,
+    renameMeetingSpeaker,
+    mergeMeetingSpeakers,
+    saveMeetingExport,
     getSupportedFormats,
     getPlatform,
     checkAccessibilityPermission,
@@ -36,8 +42,13 @@
     type WhisperModel,
     type HotkeyStatus,
     type HotkeyProfile,
+    type MeetingJobStatus,
+    type MeetingJobSnapshot,
     type PresenterConfig,
   } from "./api";
+  import MeetingReview from "./MeetingReview.svelte";
+  import type { MeetingExportFormat, MeetingTranscript } from "./meeting-types";
+  import { pollMeetingJob as pollMeetingJobClient } from "./meeting-job-client";
   import PresenterSettings from "./PresenterSettings.svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -188,6 +199,20 @@
   let transcribePrompt: string = $state('');
   let transcribeDiarize: boolean = $state(false);
   let transcribeProfileId: string | null = $state(null);
+  let meetingTranscript: MeetingTranscript | null = $state(null);
+  let meetingJobId: string | null = $state(null);
+  let meetingJobStatus: MeetingJobStatus | null = $state(null);
+  let meetingPhase: string = $state("");
+  let meetingError: string = $state("");
+  let meetingPollingFailed: boolean = $state(false);
+  let meetingPollGeneration = 0;
+  let meetingPollActive = false;
+  let meetingDocumentRevision = $state(0);
+  let meetingActionQueue: Promise<void> = Promise.resolve();
+
+  onDestroy(() => {
+    meetingPollGeneration += 1;
+  });
 
   // The global dictionary is retained as a decoder hint source. Explicit
   // language profiles are the only selectable sources for deterministic
@@ -788,25 +813,197 @@
     }
   }
 
+  function meetingFailureText(value: unknown, fallback: string): string {
+    return typeof value === "string" ? value : value instanceof Error ? value.message : fallback;
+  }
+
+  function meetingStageText(): string {
+    if (meetingJobStatus === "cancelling") return "Cancelling meeting…";
+    if (meetingJobStatus === "running") return meetingPhase ? `Meeting: ${meetingPhase}` : "Starting meeting…";
+    return meetingPhase || "Meeting import";
+  }
+
+  function waitForMeetingPoll(): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+
+  function waitForMeetingActions(): Promise<void> {
+    return meetingActionQueue;
+  }
+
+  function enqueueMeetingAction(action: (transcript: MeetingTranscript, revision: number) => Promise<void>): Promise<void> {
+    const queued = meetingActionQueue.then(async () => {
+      const transcript = meetingTranscript;
+      if (!transcript) return;
+      await action(transcript, meetingDocumentRevision);
+    });
+    meetingActionQueue = queued.catch(() => undefined);
+    return queued;
+  }
+
+  async function pollMeetingJob(jobId: string, generation: number): Promise<void> {
+    if (meetingPollActive) return;
+    meetingPollActive = true;
+    try {
+      await pollMeetingJobClient({
+        jobId,
+        get: getMeetingJob,
+        isCurrent: () => generation === meetingPollGeneration,
+        onFailure: (error: unknown) => {
+          meetingPollingFailed = true;
+          meetingError = meetingFailureText(error, "Could not check meeting progress.")
+            + " Retry the status check to continue.";
+        },
+        onSnapshot: (snapshot: MeetingJobSnapshot) => {
+          if (generation !== meetingPollGeneration) return;
+          meetingJobStatus = snapshot.status;
+          meetingPhase = snapshot.phase;
+          if (snapshot.status === "completed" || snapshot.status === "cancelled" || snapshot.status === "failed") {
+            meetingJobId = null;
+            transcribing = false;
+            meetingPollingFailed = false;
+            transcriptionProgress = 0;
+            if (snapshot.status === "completed" && snapshot.transcript) {
+              meetingTranscript = snapshot.transcript;
+              meetingDocumentRevision += 1;
+              meetingError = "";
+            } else if (snapshot.status === "completed") {
+              meetingError = "Meeting completed without a transcript. Try the import again.";
+            } else {
+              meetingError = snapshot.error
+                ?? (snapshot.status === "cancelled" ? "Meeting import was cancelled." : "Meeting import failed.");
+            }
+          }
+        },
+        wait: waitForMeetingPoll,
+      });
+    } finally {
+      meetingPollActive = false;
+    }
+  }
+
+  async function startMeetingFileTranscription(
+    filePath: string,
+    prompt: string | null,
+    profileId: string | null,
+  ): Promise<void> {
+    if (transcribing) return;
+    const generation = ++meetingPollGeneration;
+    // Keep the previous review and its unsaved drafts mounted until a NEW
+    // document succeeds. Pending edits finish before the import starts below;
+    // successful replacement still invalidates any stale action revision.
+    transcribing = true;
+    transcriptionProgress = 0;
+    transcribeError = "";
+    transcriptionResult = "";
+    meetingError = "";
+    meetingPollingFailed = false;
+    meetingJobId = null;
+    meetingJobStatus = "running";
+    meetingPhase = "Starting";
+    try {
+      await waitForMeetingActions();
+      if (generation !== meetingPollGeneration) return;
+      const jobId = await beginMeetingFile(filePath, prompt, profileId);
+      if (generation !== meetingPollGeneration) return;
+      if (!jobId) throw new Error("Meeting import did not return a job ID.");
+      meetingJobId = jobId;
+      meetingJobStatus = "running";
+      void pollMeetingJob(jobId, generation);
+    } catch (error) {
+      if (generation !== meetingPollGeneration) return;
+      transcribing = false;
+      meetingJobId = null;
+      meetingJobStatus = "failed";
+      meetingPhase = "Failed";
+      meetingError = meetingFailureText(error, "Could not start meeting import.");
+    }
+  }
+
   async function handleFileTranscription(filePath: string) {
     if (transcribing) return;
-    const profileId = selectedTranscribeProfile()?.id;
+    const profileId = selectedTranscribeProfile()?.id ?? null;
+    const prompt = transcribePrompt.trim() || null;
+    if (transcribeDiarize) {
+      await startMeetingFileTranscription(filePath, prompt, profileId);
+      return;
+    }
+
+    ++meetingPollGeneration;
+    ++meetingDocumentRevision;
+    meetingError = "";
+    meetingJobStatus = null;
     transcribing = true;
     transcriptionProgress = 0;
     transcribeError = "";
     transcriptionResult = "";
     try {
+      await waitForMeetingActions();
       transcriptionResult = await transcribeFile(filePath, {
-        prompt: transcribePrompt.trim() || undefined,
-        diarize: transcribeDiarize,
+        prompt: prompt ?? undefined,
+        diarize: false,
         profileId: profileId ?? undefined,
       });
-    } catch (e: any) {
-      transcribeError = typeof e === "string" ? e : e.message || "Transcription failed";
+    } catch (error: any) {
+      transcribeError = typeof error === "string" ? error : error.message || "Transcription failed";
     } finally {
       transcribing = false;
       transcriptionProgress = 0;
     }
+  }
+
+  async function cancelMeetingImport(): Promise<void> {
+    const jobId = meetingJobId;
+    const generation = meetingPollGeneration;
+    if (!jobId || meetingJobStatus === "cancelling") return;
+    try {
+      const accepted = await cancelMeetingJob(jobId);
+      if (generation !== meetingPollGeneration || meetingJobId !== jobId) return;
+      if (accepted) {
+        meetingJobStatus = "cancelling";
+        meetingPhase = "Cancelling";
+        meetingError = "";
+      } else {
+        meetingError = "The meeting has already finished. Its final status is being retrieved.";
+      }
+    } catch (error) {
+      if (generation !== meetingPollGeneration || meetingJobId !== jobId) return;
+      meetingError = meetingFailureText(error, "Could not request cancellation. The meeting is still running.");
+    }
+  }
+
+  function retryMeetingPolling(): void {
+    if (!meetingJobId || meetingPollActive) return;
+    meetingPollingFailed = false;
+    meetingError = "";
+    transcribing = true;
+    void pollMeetingJob(meetingJobId, meetingPollGeneration);
+  }
+
+  async function renameMeetingReviewSpeaker(id: string, label: string): Promise<void> {
+    await enqueueMeetingAction(async (transcript, revision) => {
+      const updated = await renameMeetingSpeaker(transcript, id, label);
+      if (revision === meetingDocumentRevision) {
+        meetingTranscript = updated;
+        meetingError = "";
+      }
+    });
+  }
+
+  async function mergeMeetingReviewSpeakers(fromId: string, intoId: string): Promise<void> {
+    await enqueueMeetingAction(async (transcript, revision) => {
+      const updated = await mergeMeetingSpeakers(transcript, fromId, intoId);
+      if (revision === meetingDocumentRevision) {
+        meetingTranscript = updated;
+        meetingError = "";
+      }
+    });
+  }
+
+  async function exportMeetingReview(format: MeetingExportFormat): Promise<void> {
+    await enqueueMeetingAction(async (transcript) => {
+      await saveMeetingExport(transcript, format);
+    });
   }
 
   function onTranscribeProfileChange(e: Event) {
@@ -1201,10 +1398,25 @@
         >
           {#if transcribing}
             <div class="spinner"></div>
-            <div class="drop-zone-text">Transcribing... {transcriptionProgress}%</div>
-            <div class="progress-bar transcription-progress">
-              <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
-            </div>
+            {#if meetingJobStatus !== null}
+              <div class="drop-zone-text">{meetingStageText()}</div>
+              {#if meetingJobId && meetingPollingFailed}
+                <button class="secondary" onclick={retryMeetingPolling}>Retry status check</button>
+              {:else if meetingJobId}
+                <button
+                  class="secondary"
+                  onclick={cancelMeetingImport}
+                  disabled={meetingJobStatus === "cancelling"}
+                >
+                  {meetingJobStatus === "cancelling" ? "Cancelling…" : "Cancel meeting"}
+                </button>
+              {/if}
+            {:else}
+              <div class="drop-zone-text">Transcribing... {transcriptionProgress}%</div>
+              <div class="progress-bar transcription-progress">
+                <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
+              </div>
+            {/if}
           {:else}
             <div class="drop-zone-icon">&#x1F4C1;</div>
             <div class="drop-zone-text">Drop an audio or video file here</div>
@@ -1221,7 +1433,7 @@
         <div class="transcribe-options">
           <div class="field">
             <label for="transcribe-profile">Profile (optional)</label>
-            <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange}>
+            <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
               <option value="">No profile (use selected language)</option>
               {#each explicitProfiles() as profile (profile.id)}
                 <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
@@ -1234,7 +1446,7 @@
             <div class="hotkey-hint">No profile keeps the selected language and global hint context.</div>
           {/if}
           <label class="diarize-option">
-            <input type="checkbox" bind:checked={transcribeDiarize} />
+            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
             Speaker diarization
           </label>
           <textarea
@@ -1243,6 +1455,7 @@
             placeholder="Extra context for this file only (optional)"
             bind:value={transcribePrompt}
             rows="2"
+            disabled={transcribing}
           ></textarea>
           <div class="hotkey-hint">Temporary hint-only context for this import. A selected profile supplies its dictionary; no profile uses global hints.</div>
         </div>
@@ -1251,9 +1464,26 @@
           <div class="transcribe-error">{transcribeError}</div>
         {/if}
 
+        {#if meetingError && !meetingTranscript}
+          <div class="transcribe-error">{meetingError}</div>
+        {/if}
+
         {#if transcriptionResult}
           <div class="result-label">Result</div>
           <textarea class="transcribe-result" readonly>{transcriptionResult}</textarea>
+        {/if}
+
+        {#if meetingTranscript}
+          {#key meetingDocumentRevision}
+            <MeetingReview
+              transcript={meetingTranscript}
+              busy={transcribing}
+              error={meetingError || null}
+              onRename={renameMeetingReviewSpeaker}
+              onMerge={mergeMeetingReviewSpeakers}
+              onExport={exportMeetingReview}
+            />
+          {/key}
         {/if}
 
       {:else if activeTab === "settings"}
@@ -1457,6 +1687,7 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+    min-width: 0;
   }
 
   .tabs {
@@ -1474,15 +1705,21 @@
     flex-wrap: wrap;
     padding: 16px 20px 12px;
     border-bottom: 1px solid var(--border);
+    min-width: 0;
   }
 
   .window-title {
+    min-width: 0;
     font-size: 18px;
     line-height: 1.2;
     color: var(--text);
   }
 
   .build-info {
+    min-width: 0;
+    flex: 1 1 auto;
+    max-width: 100%;
+    overflow-wrap: anywhere;
     color: var(--text-muted);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
@@ -1512,6 +1749,15 @@
     padding: 20px;
     flex: 1;
     overflow-y: auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .window-header > *,
+  .tabs > *,
+  .content > * {
+    min-width: 0;
+    max-width: 100%;
   }
 
   .active-config-bar {
@@ -1526,6 +1772,7 @@
     border-radius: var(--radius);
     cursor: pointer;
     transition: border-color 0.15s;
+    min-width: 0;
   }
 
   .active-config-bar:hover {
@@ -1537,6 +1784,7 @@
     flex-direction: column;
     gap: 1px;
     text-align: left;
+    min-width: 0;
   }
 
   .active-config-label {
@@ -1550,6 +1798,7 @@
   .active-config-value {
     font-size: 13px;
     color: var(--text);
+    overflow-wrap: anywhere;
   }
 
   .active-config-link {

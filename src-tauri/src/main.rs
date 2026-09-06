@@ -16,6 +16,7 @@ mod logging;
 
 mod app_controller;
 mod commands;
+mod meeting_jobs;
 mod events;
 mod hotkey;
 mod overlay;
@@ -604,6 +605,7 @@ fn main() {
             let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
             app.manage(controller);
             app.manage(whisper);
+            app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
             // Process-wide hotkey registration health (see hotkey::health for
             // why this is deliberately independent of the AppController
             // mutex). Assumed healthy until the synchronous registration
@@ -1026,6 +1028,12 @@ fn main() {
             commands::set_vad_enabled,
             commands::get_build_info,
             commands::transcribe_file,
+            meeting_jobs::begin_meeting_file,
+            meeting_jobs::get_meeting_job,
+            meeting_jobs::cancel_meeting_job,
+            meeting_jobs::rename_meeting_speaker,
+            meeting_jobs::merge_meeting_speakers,
+            meeting_jobs::save_meeting_export,
             commands::get_supported_formats,
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,

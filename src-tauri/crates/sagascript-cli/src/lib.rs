@@ -4,6 +4,7 @@ pub mod config;
 pub mod benchmark_dictation;
 pub mod glossary;
 pub mod latency;
+pub mod meeting;
 pub mod models;
 pub mod open;
 pub mod presenter;
@@ -242,6 +243,13 @@ EXAMPLES:
         after_long_help = "EXAMPLES:\n  sagascript latency-report --input /tmp/sagascript.log\n  sagascript latency-report --input /tmp/sagascript.log --budget-length short --max-warm-p95-ms 800 --min-samples 20"
     )]
     LatencyReport(latency::LatencyReportArgs),
+
+    /// Inspect and export validated meeting transcript documents
+    #[command(
+        long_about = "Read a validated meeting transcript JSON document and inspect, export, rename, or merge it without modifying the input. This command never persists changes, reads source audio, runs inference, changes settings, or contacts a network service.",
+        after_long_help = "EXAMPLES:\n  sagascript meeting inspect meeting.json\n  sagascript meeting export meeting.json --format markdown\n  sagascript meeting rename meeting.json --speaker speaker-1 --label Chair\n  sagascript meeting merge meeting.json --from speaker-2 --into speaker-1"
+    )]
+    Meeting(meeting::MeetingArgs),
 
     /// Record from microphone and transcribe
     #[cfg(feature = "record")]
@@ -505,6 +513,7 @@ pub fn run(cli: Cli) {
         Command::Transcribe(args) =>
             run_inference_command("transcribe", move || transcribe::run(args)),
         Command::LatencyReport(args) => latency::run(args),
+        Command::Meeting(args) => meeting::run(args),
         #[cfg(feature = "record")]
         Command::Record(args) => run_inference_command("record", move || record::run(args)),
         Command::ListModels(args) => models::list(args),
