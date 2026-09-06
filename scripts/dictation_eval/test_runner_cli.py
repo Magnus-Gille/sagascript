@@ -67,11 +67,12 @@ class RunnerCliTests(unittest.TestCase):
     def test_version_and_help_expose_runner_commands(self):
         version = self.run_cli("--version")
         self.assertEqual(version.returncode, 0)
-        self.assertIn("0.2.0", version.stdout)
+        self.assertIn("0.3.0", version.stdout)
         help_result = self.run_cli("--help")
         self.assertEqual(help_result.returncode, 0)
         self.assertIn("freeze-plan", help_result.stdout)
         self.assertIn("run-plan", help_result.stdout)
+        self.assertIn("summarize-run", help_result.stdout)
 
     def test_freeze_plan_subprocess_writes_private_new_file(self):
         with tempfile.TemporaryDirectory() as directory:

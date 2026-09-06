@@ -10,7 +10,7 @@ from corpus_manifest import coverage_report
 from runner import ExecutionOutputError
 
 
-VERSION = "Sagascript dictation evaluator 0.2.0 (schema 1)"
+VERSION = "Sagascript dictation evaluator 0.3.0 (schema 1)"
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_REFERENCE_BYTES = 400_000
 
@@ -85,6 +85,12 @@ def main(argv=None):
     run.add_argument("--binary", required=True)
     run.add_argument("--output-dir", required=True)
     run.add_argument("--timeout-seconds", type=int, default=900)
+    summary = commands.add_parser("summarize-run", help="Re-score and aggregate a complete private run ledger")
+    summary.add_argument("--manifest", required=True)
+    summary.add_argument("--plan", required=True)
+    summary.add_argument("--reference-map", required=True)
+    summary.add_argument("--terms", required=True)
+    summary.add_argument("--output-dir", required=True, help="Existing private run directory; read-only")
     args = parser.parse_args(argv)
     try:
         if args.command == "validate-manifest":
@@ -114,6 +120,13 @@ def main(argv=None):
                 binary_path=args.binary,
                 output_path=args.output,
             )
+        elif args.command == "summarize-run":
+            from run_summary import summarize_run
+
+            result = summarize_run(
+                _read_json(args.manifest), _read_json(args.plan),
+                _read_json(args.reference_map), _read_json(args.terms), args.output_dir,
+            )
         else:
             from runner import run_evaluation
 
@@ -138,7 +151,7 @@ def main(argv=None):
         print("Invalid local evaluation input; no result produced.", file=sys.stderr)
         return 2
     print(encoded)
-    return 1 if args.command == "run-plan" and result.get("failed", 0) > 0 else 0
+    return 1 if args.command in {"run-plan", "summarize-run"} and result.get("failed", 0) > 0 else 0
 
 
 if __name__ == "__main__":

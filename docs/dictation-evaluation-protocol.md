@@ -179,7 +179,7 @@ does not launch inference, read files, download models or make adoption claims.
 Individual benchmark captures allow 2–30 warm runs for diagnostics; paired
 experiments deliberately use the narrower 5–20-repeat range.
 
-### Explicit private paired execution (evaluator 0.2.0)
+### Explicit private paired execution (evaluator 0.3.0)
 
 `freeze-plan` writes a new private plan after hashing an explicitly selected
 trusted executable. `run-plan` revalidates the exact frozen order and all input
@@ -235,7 +235,42 @@ labels from a dataset name. Freeze duration bucket cutoffs and provenance
 before choosing clips; public read/parliamentary speech is not automatically
 representative of personal dictation or unseen by model training.
 
-The final deliverable still needs the actual paired corpus and aggregate result workflow,
+### Reproducible content-free aggregation
+
+```sh
+python3 scripts/dictation_eval/evaluate.py summarize-run \
+  --manifest /absolute/corpus.json --plan /absolute/new-plan.json \
+  --reference-map /absolute/reference-map.json --terms /absolute/terms-map.json \
+  --output-dir /absolute/new-evaluation-directory
+```
+
+This command is read-only: it does not rerun inference or rewrite evidence. It
+requires every planned ledger row and the matching private manifest, plan and
+summary, validates completed reports against the plan, and re-scores exact
+hash-bound references. Stored scores must match recomputation, including the
+Python/Unicode normalization runtime; use the original evaluator environment
+instead of silently normalizing historical results differently. Files are
+bounded regular files, not symlinks. These are consistency checks, not proof
+that operator-owned evidence was never edited or that a source built a binary.
+
+The public output excludes opaque configuration/utterance IDs, hashes, paths,
+transcripts and diagnostics. It includes declared corpus coverage, per-model
+configuration counts, pooled first-warm human-speech WER, all-warm nearest-rank
+p50/p95, cold timings, duration strata, fixed-control counts, and paired
+utterance bootstrap intervals (2,000 resamples, frozen plan seed). Synthetic
+speech and silence do not enter human-speech WER or latency; silence is retained
+as a separate negative control. Missing false-replacement annotations stay null.
+
+Any failed pair is counted and suppresses that configuration's metrics rather
+than selecting a successful subset. Comparisons require complete matching human
+utterances. p95 populations below 40 utterances are labelled exploratory. Zero
+baseline timings make relative latency comparisons unavailable, not an infinite
+gain. Completed summaries exit 0; valid ledgers containing failures exit 1;
+missing, inconsistent or malformed evidence exits 2. Every decision remains
+`inconclusive`: declared corpus coverage and inference time alone cannot satisfy
+the physical, quality or representativeness gates.
+
+The final deliverable still needs the actual paired corpus and measured results,
 baseline/candidate tables for each language, paired accuracy intervals, redacted
 worst failures, adopt/adapt/reject/inconclusive decision, implementation map and
 rollout/revert plan. Tooling tests are not issue completion.

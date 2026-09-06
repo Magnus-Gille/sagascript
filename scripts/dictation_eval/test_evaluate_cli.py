@@ -35,7 +35,7 @@ class EvaluateCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("validate-manifest", result.stdout)
         self.assertIn("score-clip", result.stdout)
-        self.assertIn("0.2.0", self.run_cli("--version").stdout)
+        self.assertIn("0.3.0", self.run_cli("--version").stdout)
 
     def test_manifest_command_emits_coverage_without_identifiers(self):
         with tempfile.TemporaryDirectory() as directory:
