@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import platform
+import unicodedata
 from collections.abc import Mapping
 from typing import Any
 
 from corpus_manifest import validate_manifest
+from normalization import normalize_text
 from quality_report import validate_quality_report
 from text_metrics import score_text
 
@@ -94,6 +97,13 @@ def score_clip(
 
     tags = row["tags"]
     assert isinstance(tags, list)
+    is_silence = "silence" in tags
+    if row["origin"] in {"human", "synthetic"} and not is_silence:
+        try:
+            if not normalize_text(reference_text):
+                raise _invalid()
+        except (TypeError, ValueError):
+            raise _invalid() from None
     if "specialist" in tags and (type(specialist_terms) is not list or not specialist_terms):
         raise _invalid()
     if ("numbers" in tags or "negation" in tags) and (
@@ -101,7 +111,6 @@ def score_clip(
     ):
         raise _invalid()
 
-    is_silence = "silence" in tags
     is_ordinary_control = "ordinary" in tags
     runs = validated_report["runs"]
     assert isinstance(runs, list)
@@ -122,6 +131,9 @@ def score_clip(
 
     return {
         "schema_version": 1,
+        "normalization_version": "nfc-casefold-nfc-words-v1",
+        "python_version": platform.python_version(),
+        "unicode_version": unicodedata.unidata_version,
         "language": validated_report["language"],
         "model": validated_report["model"],
         "decision": "inconclusive",

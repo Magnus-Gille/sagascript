@@ -135,7 +135,9 @@ as **inconclusive**, never as passing. Do not relax thresholds after seeing data
 
 ## Local evaluation command
 
-Requires Python 3.10 or newer, standard library only. No network, models,
+Requires Python 3.10 or newer, standard library only. CI explicitly selects
+Python 3.12 through a commit-pinned setup action; clip scores record the actual
+runtime Python/Unicode versions and the versioned normalization rule. No network, models,
 settings or private recordings are read implicitly. Use local JSON/UTF-8 paths
 explicitly; the command prints content-free JSON and does not write files.
 
@@ -153,7 +155,9 @@ Use `python` instead of `python3` on Windows. Term files are optional JSON
 arrays of phrases. The specialist tag requires expected terms; number/negation
 tags require controls. `score-clip` binds report language/source SHA-256 and
 exact UTF-8 reference bytes to the selected manifest row: even a changed final
-newline invalidates the reference hash. The strict report reader rejects
+newline invalidates the reference hash. Non-silence references must contain
+at least one normalized word; empty/whitespace/punctuation-only speech
+references fail instead of silently producing undefined WER. The strict report reader rejects
 unknown schemas/keys, duplicate JSON keys, nonfinite values, invalid text and
 missing/reordered runs. Schema-v1 clip scores contain only allowlisted
 configuration labels, timings, counts and per-run metrics, not IDs, hashes,
@@ -161,6 +165,19 @@ paths, build labels or text. Missing false-correction annotations remain null.
 The clip decision is always `inconclusive`; successful exit means valid inputs
 were scored, not that corpus coverage or adoption thresholds passed. Invalid
 inputs return exit code 2 with a content-free diagnostic.
+
+The pure `paired_plan.build_plan` helper validates up to three distinct
+configuration roles per language, requires a baseline for every selected
+language and deterministically shuffles every utterance/configuration pair
+exactly once using a recorded seed. A plan binds canonical manifest/config
+hashes, the declared source revision and binary SHA-256, and 5–20 warm repeats.
+It contains opaque IDs/hashes and stays local, unlike content-free score
+summaries. These are declared identities, not proof of binary provenance or
+that a configuration labeled baseline equals product defaults: the experiment
+operator must verify those before freezing and executing a plan. The helper
+does not launch inference, read files, download models or make adoption claims.
+Individual benchmark captures allow 2–30 warm runs for diagnostics; paired
+experiments deliberately use the narrower 5–20-repeat range.
 
 The final deliverable still needs the paired corpus runner and result workflow,
 baseline/candidate tables for each language, paired accuracy intervals, redacted

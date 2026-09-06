@@ -1,5 +1,7 @@
 import copy
 import hashlib
+import platform
+import unicodedata
 import unittest
 
 from clip_score import score_clip
@@ -151,6 +153,17 @@ class ClipScoreTests(unittest.TestCase):
         self.assertEqual(result["decision"], "inconclusive")
         self.assertEqual(result["schema_version"], 1)
         self.assertEqual(result["measurement_endpoint"], "live_inference_call_not_visible_text")
+        self.assertEqual(result["normalization_version"], "nfc-casefold-nfc-words-v1")
+        self.assertEqual(result["python_version"], platform.python_version())
+        self.assertEqual(result["unicode_version"], unicodedata.unidata_version)
+
+    def test_non_silence_human_and_synthetic_references_need_normalized_words(self):
+        for origin in ("human", "synthetic"):
+            for reference in ("", "   ", "?!"):
+                manifest, report = case(reference=reference, origin=origin)
+                with self.subTest(origin=origin, reference=reference):
+                    with self.assertRaises(ValueError):
+                        score_clip(manifest, "clip_1", report, reference, [], [])
 
     def test_quality_report_warm_count_bounds_are_preserved(self):
         manifest, report = case()

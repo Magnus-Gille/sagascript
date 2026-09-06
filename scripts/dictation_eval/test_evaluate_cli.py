@@ -14,6 +14,16 @@ SCRIPT = Path(__file__).with_name("evaluate.py")
 
 
 class EvaluateCliTests(unittest.TestCase):
+    def test_ci_selects_supported_python_before_all_evaluator_suites(self):
+        workflow = SCRIPT.parents[2] / ".github" / "workflows" / "ci.yml"
+        source = workflow.read_text(encoding="utf-8")
+        for name in ("check-macos", "check-linux", "check-windows"):
+            job = source.split(f"  {name}:\n", 1)[1].split("\n  check-", 1)[0]
+            setup = job.index("actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1")
+            suite = job.index("Test offline dictation evaluation tooling")
+            self.assertLess(setup, suite)
+            self.assertIn('python-version: "3.12"', job[setup:suite])
+
     def run_cli(self, *args):
         return subprocess.run(
             [sys.executable, str(SCRIPT), *map(str, args)],
