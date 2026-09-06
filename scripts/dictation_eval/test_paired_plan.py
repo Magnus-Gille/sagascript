@@ -28,9 +28,24 @@ def manifest(rows):
 
 def configs(*, languages=("en",), roles=("baseline",)):
     models = {
-        "baseline": {"en": "base.en", "sv": "kb-whisper-base", "no": "nb-whisper-base"},
-        "smaller": {"en": "tiny.en", "sv": "kb-whisper-tiny", "no": "nb-whisper-tiny"},
-        "decoder": {"en": "base.en", "sv": "kb-whisper-base", "no": "nb-whisper-base"},
+        "baseline": {
+            "en": "base.en",
+            "sv": "kb-whisper-base",
+            "no": "nb-whisper-base",
+            "fi": "base",
+        },
+        "smaller": {
+            "en": "tiny.en",
+            "sv": "kb-whisper-tiny",
+            "no": "nb-whisper-tiny",
+            "fi": "tiny",
+        },
+        "decoder": {
+            "en": "base.en",
+            "sv": "kb-whisper-base",
+            "no": "nb-whisper-base",
+            "fi": "base",
+        },
     }
     return [
         {
@@ -151,6 +166,26 @@ class PairedPlanTests(unittest.TestCase):
         no_rows = configs(languages=("sv",))
         with self.assertRaises(ValueError):
             make_plan(candidate_configs=no_rows)
+
+    def test_finnish_language_and_model_are_accepted(self):
+        candidate_manifest = manifest([row(1, language="fi", split="dev")])
+        result = make_plan(
+            candidate_manifest=candidate_manifest,
+            candidate_configs=configs(languages=("fi",)),
+        )
+        self.assertEqual(result["configurations"][0]["language"], "fi")
+        self.assertEqual(result["configurations"][0]["model"], "base")
+
+    def test_finnish_specialist_tiny_model_is_accepted(self):
+        candidate_manifest = manifest([row(1, language="fi", split="dev")])
+        candidate_configs = configs(languages=("fi",))
+        candidate_configs[0]["model"] = "fi-whisper-tiny"
+        result = make_plan(
+            candidate_manifest=candidate_manifest,
+            candidate_configs=candidate_configs,
+        )
+        self.assertEqual(result["configurations"][0]["language"], "fi")
+        self.assertEqual(result["configurations"][0]["model"], "fi-whisper-tiny")
 
     def test_shape_and_numeric_bounds_are_rejected(self):
         valid_manifest = manifest([row(1, split="dev")])

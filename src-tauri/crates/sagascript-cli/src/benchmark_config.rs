@@ -18,7 +18,7 @@ pub(crate) fn resolve(
 ) -> Result<ResolvedBenchmarkConfig, DictationError> {
     if language == Language::Auto {
         return Err(DictationError::SettingsError(
-            "Benchmark language must be explicit: en, sv, or no".to_string(),
+            "Benchmark language must be explicit: en, sv, no, or fi".to_string(),
         ));
     }
 
@@ -55,7 +55,12 @@ pub(crate) fn resolve(
 mod tests {
     use super::*;
 
-    const LANGUAGES: [Language; 3] = [Language::English, Language::Swedish, Language::Norwegian];
+    const LANGUAGES: [Language; 4] = [
+        Language::English,
+        Language::Swedish,
+        Language::Norwegian,
+        Language::Finnish,
+    ];
 
     #[test]
     fn defaults_use_language_recommendations_and_default_decoder_settings() {
@@ -63,6 +68,7 @@ mod tests {
             (Language::English, WhisperModel::BaseEn),
             (Language::Swedish, WhisperModel::KbWhisperBase),
             (Language::Norwegian, WhisperModel::NbWhisperBase),
+            (Language::Finnish, WhisperModel::Base),
         ];
         for (language, expected_model) in cases {
             let config = resolve(language, None, None, false).unwrap();
@@ -81,6 +87,23 @@ mod tests {
                 assert_eq!(config.model, model);
             }
         }
+    }
+
+    #[test]
+    fn finnish_tiny_is_optional_while_base_remains_default() {
+        let config = resolve(
+            Language::Finnish,
+            Some("fi-whisper-tiny"),
+            Some(2),
+            false,
+        )
+        .unwrap();
+        assert_eq!(config.model, WhisperModel::FinnishWhisperTiny);
+        assert_eq!(
+            resolve(Language::Finnish, None, None, false).unwrap().model,
+            WhisperModel::Base
+        );
+        assert!(resolve(Language::English, Some("fi-whisper-tiny"), None, false).is_err());
     }
 
     #[test]

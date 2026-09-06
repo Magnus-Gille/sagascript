@@ -27,7 +27,7 @@
   let { oncomplete }: { oncomplete: () => void | Promise<void> } = $props();
 
   type Step = "language" | "download" | "microphone" | "accessibility" | "ready";
-  type OnboardingLanguage = "en" | "sv" | "no";
+  type OnboardingLanguage = "en" | "sv" | "no" | "fi";
 
   let currentStep: Step = $state("language");
   let platform: string | null = $state(null);
@@ -69,6 +69,7 @@
     en: "142 MB",
     sv: "60 MB",
     no: "55 MB",
+    fi: "142 MB",
   };
 
   // Recommended model ID per language (must match Rust serde rename)
@@ -76,6 +77,7 @@
     en: "base.en",
     sv: "kb-whisper-base",
     no: "nb-whisper-base",
+    fi: "base",
   };
 
   function getSteps(): Step[] {
@@ -371,7 +373,7 @@
       hotkeyParts = settings.hotkey.split("+").map((part) => hotkeyKeyLabel(part, platform));
       // Map existing language to onboarding options (auto → en since onboarding requires a specific choice)
       const lang = settings.language;
-      if (lang === "en" || lang === "sv" || lang === "no") {
+      if (lang === "en" || lang === "sv" || lang === "no" || lang === "fi") {
         selectedLanguage = lang;
       }
     } catch {
@@ -457,6 +459,15 @@
           >
             <span class="lang-flag">NO</span>
             <span class="lang-name">Norsk</span>
+          </button>
+          <button
+            class="language-option"
+            class:selected={selectedLanguage === "fi"}
+            aria-pressed={selectedLanguage === "fi"}
+            onclick={() => selectedLanguage = "fi"}
+          >
+            <span class="lang-flag">FI</span>
+            <span class="lang-name">Suomi</span>
           </button>
         </div>
         {#if languageError}

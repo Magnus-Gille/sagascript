@@ -33,10 +33,11 @@ def manifest(rows: list[dict[str, object]]) -> dict[str, object]:
     return {"schema_version": 1, "utterances": rows}
 
 
-def passing_rows() -> list[dict[str, object]]:
+def passing_rows(*, include_finnish: bool = False) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     number = 1
-    for language in ("en", "sv", "no"):
+    languages = ("en", "sv", "no") + (("fi",) if include_finnish else ())
+    for language in languages:
         for split in ("dev", "heldout"):
             count = 10 if split == "dev" else 40
             for index in range(count):
@@ -115,6 +116,7 @@ class CorpusManifestTests(unittest.TestCase):
     def test_rejects_invalid_enums_and_silence_mismatch(self):
         fields = (
             ("language", "da"),
+            ("language", "auto"),
             ("split", "test"),
             ("origin", "generated"),
             ("duration_bucket", "tiny"),
@@ -219,6 +221,19 @@ class CorpusManifestTests(unittest.TestCase):
                 report = coverage_report(validate_manifest(manifest(rows)))
                 self.assertFalse(report["eligible"])
                 self.assertFalse(report["languages"]["en"]["eligible"])
+
+    def test_historical_languages_remain_the_default_coverage_gate(self):
+        report = coverage_report(validate_manifest(manifest(passing_rows())))
+        self.assertTrue(report["eligible"])
+        self.assertEqual(set(report["languages"]), {"en", "sv", "no"})
+
+    def test_finnish_rows_explicitly_opt_into_finnish_coverage(self):
+        report = coverage_report(
+            validate_manifest(manifest(passing_rows(include_finnish=True)))
+        )
+        self.assertTrue(report["eligible"])
+        self.assertEqual(set(report["languages"]), {"en", "sv", "no", "fi"})
+        self.assertEqual(report["languages"]["fi"]["heldout_human"], 40)
 
     def test_dev_or_synthetic_coverage_cannot_satisfy_heldout_requirements(self):
         rows = passing_rows()

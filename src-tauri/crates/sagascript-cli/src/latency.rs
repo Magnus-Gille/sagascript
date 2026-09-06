@@ -608,6 +608,7 @@ fn normalize_language(value: String, line: usize) -> Result<String, String> {
         (Language::English, "en"),
         (Language::Swedish, "sv"),
         (Language::Norwegian, "no"),
+        (Language::Finnish, "fi"),
         (Language::Auto, "auto"),
     ];
     languages
@@ -622,6 +623,7 @@ fn normalize_model(value: String, line: usize) -> Result<String, String> {
         Language::English,
         Language::Swedish,
         Language::Norwegian,
+        Language::Finnish,
         Language::Auto,
     ];
     let mut known = Vec::new();
@@ -900,6 +902,14 @@ mod tests {
         assert_eq!(group.model, None);
         assert_eq!(group.phases.key_up_to_whisper_complete_ms.missing_count, 1);
         assert_eq!(group.phases.model_load_ms.null_count, 1);
+    }
+
+    #[test]
+    fn normalizes_optional_finnish_tiny_model() {
+        assert_eq!(
+            normalize_model("Finnish-Whisper Tiny".to_string(), 1).unwrap(),
+            "fi-whisper-tiny"
+        );
     }
 
     #[test]

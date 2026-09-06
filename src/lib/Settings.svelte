@@ -1185,6 +1185,7 @@
     switch (lang) {
       case "sv": return "Swedish";
       case "no": return "Norwegian";
+      case "fi": return "Finnish";
       case "en": return "English";
       default: return "Auto-detect";
     }
@@ -1248,6 +1249,7 @@
                   <option value="en">English</option>
                   <option value="sv">Swedish</option>
                   <option value="no">Norwegian</option>
+                  <option value="fi">Finnish</option>
                   <option value="auto">Auto-detect</option>
                 </select>
               </div>
@@ -1490,6 +1492,7 @@
             <option value="en">English</option>
             <option value="sv">Swedish</option>
             <option value="no">Norwegian</option>
+            <option value="fi">Finnish</option>
             <option value="auto">Auto-detect</option>
           </select>
         </div>
