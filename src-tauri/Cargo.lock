@@ -1877,12 +1877,11 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "global-hotkey"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9247516746aa8e53411a0db9b62b0e24efbcf6a76e0ba73e5a91b512ddabed7"
+version = "0.8.0"
+source = "git+https://github.com/tauri-apps/global-hotkey?rev=35b81e58ffb6b7c333851ee4b75121616ea0ab3b#35b81e58ffb6b7c333851ee4b75121616ea0ab3b"
 dependencies = [
  "crossbeam-channel",
- "keyboard-types",
+ "keyboard-types 0.8.3",
  "objc2",
  "objc2-app-kit",
  "once_cell",
@@ -2539,6 +2538,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyboard-types"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fbe853b403ae61a04233030ae8a79d94975281ed9770a1f9e246732b534b28d"
+dependencies = [
+ "bitflags 2.11.0",
+ "serde",
+]
+
+[[package]]
 name = "kodama"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2836,7 +2845,7 @@ dependencies = [
  "crossbeam-channel",
  "dpi",
  "gtk",
- "keyboard-types",
+ "keyboard-types 0.7.0",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
@@ -5389,9 +5398,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-global-shortcut"
-version = "2.3.1"
+version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "424af23c7e88d05e4a1a6fc2c7be077912f8c76bd7900fd50aa2b7cbf5a2c405"
+checksum = "b4dd9f4c5136c09cd962da0c86dc4accd4666db2ea591cf16e6597435843bd2b"
 dependencies = [
  "global-hotkey",
  "log",

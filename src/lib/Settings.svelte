@@ -60,6 +60,7 @@
   } from "./dictation-ui-state";
   import {
     canUseBareHotkey,
+    formatHotkeyDisplay as formatShortcutDisplay,
     supportedBareFunctionKeyRange,
     tauriKeyName,
   } from "./hotkey.js";
@@ -75,7 +76,7 @@
   let profileModelErrors: Record<string, string> = $state({});
   let profileModelRefresh = 0;
 
-  let platform: string = $state("macos");
+  let platform: string = $state("unknown");
 
   // Initial data-fetch + settings-mutation error states
   let initError: string = $state("");
@@ -1039,13 +1040,7 @@
 
   /** Format a shortcut string for display (e.g. "Control+Shift+Space" → "Ctrl + Shift + Space") */
   function formatHotkeyDisplay(shortcut: string): string {
-    const m = modifierNames();
-    return shortcut
-      .replace(/Control/g, m.ctrl)
-      .replace(/Alt/g, m.alt)
-      .replace(/Super/g, m.meta)
-      .split("+")
-      .join(" + ");
+    return formatShortcutDisplay(shortcut, platform);
   }
 
   function beginHotkeyCapture(profileId: string) {
@@ -1070,9 +1065,11 @@
     // Ignore bare modifier presses — wait for a non-modifier key
     if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
 
-    const keyName = tauriKeyName(e.key);
+    const keyName = tauriKeyName(e.key, e.code, platform);
     if (!keyName) {
-      hotkeyError = `"${e.key}" is not a supported key. Use A–Z, 0–9, F1–F24, Space, Arrow keys, or Tab/Enter/Delete.`;
+      hotkeyError = e.code === "IntlBackslash"
+        ? "The ISO section key is supported only on macOS and Windows. Choose another key."
+        : `"${e.key}" is not a supported key. Use A–Z, 0–9, F1–F24, Space, Arrow keys, or Tab/Enter/Delete.`;
       return;
     }
 

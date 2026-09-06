@@ -3,9 +3,18 @@ import test from "node:test";
 
 import {
   canUseBareHotkey,
+  formatHotkeyDisplay,
+  hotkeyKeyLabel,
   supportedBareFunctionKeyRange,
   tauriKeyName,
 } from "../src/lib/hotkey.js";
+
+test("shortcut display treats modifier aliases as whole tokens", () => {
+  assert.equal(formatHotkeyDisplay("CommandOrControl+IntlBackslash", "macos"), "Cmd + §");
+  assert.equal(formatHotkeyDisplay("CommandOrControl+IntlBackslash", "windows"), "Ctrl + IntlBackslash");
+  assert.equal(formatHotkeyDisplay("CmdOrCtrl+Meta+Option+Shift+A", "linux"), "Ctrl + Win + Alt + Shift + A");
+  assert.equal(formatHotkeyDisplay("Control+Command+Space", "macos"), "Control + Cmd + Space");
+});
 
 test("F13 through F24 may omit modifiers on macOS", () => {
   for (const key of ["F13", "F14", "F19", "F20", "F21", "F24"]) {
@@ -48,4 +57,42 @@ test("malformed extended function keys never qualify as bare shortcuts", () => {
     assert.equal(canUseBareHotkey(key, "macos"), false, key);
   }
   assert.equal(canUseBareHotkey(" F13 ", "macos"), true);
+});
+
+test("the ISO section key is identified by its physical code, not its printed character", () => {
+  // Swedish/UK Apple ISO keyboards print "§" (Shift: "±"); German prints "^", French "@".
+  for (const key of ["§", "±", "^", "@", "<", ">", "\\", "Dead"]) {
+    assert.equal(tauriKeyName(key, "IntlBackslash", "macos"), "IntlBackslash", key);
+  }
+  assert.equal(tauriKeyName("§"), null);
+  assert.equal(tauriKeyName("§", "Backquote"), null);
+  assert.equal(tauriKeyName("a", "IntlBackslash", "windows"), "IntlBackslash");
+  assert.equal(tauriKeyName("a", "KeyA"), "A");
+  assert.equal(canUseBareHotkey("IntlBackslash", "macos"), false);
+});
+
+test("the section key is labelled with its Apple keycap on macOS", () => {
+  assert.equal(hotkeyKeyLabel("IntlBackslash", "macos"), "§");
+  assert.equal(hotkeyKeyLabel("IntlBackslash", "windows"), "IntlBackslash");
+  assert.equal(hotkeyKeyLabel("Space", "macos"), "Space");
+  assert.equal(hotkeyKeyLabel("F13", "linux"), "F13");
+});
+
+test("ISO physical keys fail closed on Linux and before platform detection", () => {
+  for (const platform of ["linux", null, undefined, "unknown"]) {
+    for (const key of ["§", "<", "a", "\\", " "]) {
+      assert.equal(tauriKeyName(key, "IntlBackslash", platform), null,
+        `${platform}: ${key}`);
+    }
+    assert.equal(tauriKeyName("a", "KeyA", platform), "A");
+    assert.equal(tauriKeyName(" ", "Space", platform), "Space");
+  }
+});
+
+test("ISO physical keys remain supported on macOS and Windows", () => {
+  for (const platform of ["macos", "windows"]) {
+    for (const key of ["§", "<", "a", "\\", "Dead", " "]) {
+      assert.equal(tauriKeyName(key, "IntlBackslash", platform), "IntlBackslash");
+    }
+  }
 });

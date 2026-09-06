@@ -1,12 +1,27 @@
 /**
- * Map a DOM KeyboardEvent key value to Tauri global-shortcut format.
+ * Map a DOM KeyboardEvent to Tauri global-shortcut format.
+ *
+ * `key` is the layout-dependent value (`KeyboardEvent.key`); `code` is the
+ * physical key (`KeyboardEvent.code`) and is consulted for keys whose `key`
+ * value differs between keyboard layouts.
  *
  * @param {string} key
+ * @param {string} [code]
+ * @param {string|null} [platform]
  * @returns {string | null}
  */
-export function tauriKeyName(key) {
-  if (key === " ") return "Space";
+export function tauriKeyName(key, code = "", platform = null) {
   if (["Meta", "Control", "Alt", "Shift"].includes(key)) return null;
+
+  // The ISO section key (`§` left of `1` on Swedish, UK and other Apple ISO
+  // keyboards) produces layout-specific characters such as "§", "±", "<" or
+  // "^", so it is identified by its physical code instead.
+  if (code === "IntlBackslash") {
+    if (platform === "macos" || platform === "windows") return "IntlBackslash";
+    return null;
+  }
+
+  if (key === " ") return "Space";
 
   const functionKey = /^F(\d{1,2})$/i.exec(key.trim());
   if (functionKey) {
@@ -59,4 +74,57 @@ export function supportedBareFunctionKeyRange(platform) {
   if (platform === "macos") return "F13–F24";
   if (platform === "windows") return "F13–F24";
   return null;
+}
+
+/**
+ * Human-readable label for keys whose Tauri name is not what is printed on
+ * the keycap. On Apple ISO keyboards the section key is labelled `§`.
+ *
+ * @param {string} key
+ * @param {string | null | undefined} platform
+ * @returns {string}
+ */
+export function hotkeyKeyLabel(key, platform) {
+  if (key === "IntlBackslash") return platform === "macos" ? "§" : "IntlBackslash";
+  return key;
+}
+
+/**
+ * Format a persisted shortcut without treating one modifier token as a
+ * substring of another (for example, `CommandOrControl`).
+ *
+ * @param {string} shortcut
+ * @param {string | null | undefined} platform
+ * @returns {string}
+ */
+export function formatHotkeyDisplay(shortcut, platform) {
+  const mac = platform === "macos";
+  return shortcut
+    .split("+")
+    .map((part) => {
+      const token = part.trim();
+      switch (token.toLowerCase()) {
+        case "commandorcontrol":
+        case "commandorctrl":
+        case "cmdorcontrol":
+        case "cmdorctrl":
+          return mac ? "Cmd" : "Ctrl";
+        case "control":
+        case "ctrl":
+          return mac ? "Control" : "Ctrl";
+        case "alt":
+        case "option":
+          return mac ? "Option" : "Alt";
+        case "super":
+        case "meta":
+        case "command":
+        case "cmd":
+          return mac ? "Cmd" : "Win";
+        case "shift":
+          return "Shift";
+        default:
+          return hotkeyKeyLabel(token, platform);
+      }
+    })
+    .join(" + ");
 }

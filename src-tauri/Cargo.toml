@@ -39,7 +39,7 @@ chrono = "0.4"
 sagascript-core = { path = "crates/sagascript-core", features = ["record"] }
 sagascript-cli = { path = "crates/sagascript-cli" }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
-tauri-plugin-global-shortcut = "2"
+tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
@@ -103,3 +103,16 @@ diarization = ["sagascript-core/diarization", "sagascript-cli/diarization"]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+
+# `global-hotkey` 0.8.0 (the latest crates.io release) has no mapping for the
+# ISO section key (`IntlBackslash`, the `§` key left of `1` on Swedish, UK and
+# other Apple ISO keyboards; macOS virtual key 0x0A). Upstream added it in
+# tauri-apps/global-hotkey#216, which is merged on `dev` but unreleased, so this
+# pins that commit. Drop the patch once a release containing #216 is published
+# and `tauri-plugin-global-shortcut` depends on it.
+#
+# Note: the same line of development (keyboard-types 0.8) reports the Command/
+# Win modifier as `meta` instead of `super` in shortcut events; the settings
+# validator accepts both spellings (see sagascript-core settings/hotkey.rs).
+[patch.crates-io]
+global-hotkey = { git = "https://github.com/tauri-apps/global-hotkey", rev = "35b81e58ffb6b7c333851ee4b75121616ea0ab3b" }
