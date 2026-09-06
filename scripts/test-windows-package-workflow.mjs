@@ -58,7 +58,7 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(rustCache, /workspaces:\s+src-tauri/);
   assert.match(
     rustCache,
-    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml'\) \}\}/,
+    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
   );
   assert.doesNotMatch(
     rustCache,
@@ -84,7 +84,38 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.doesNotMatch(workflow, /action-gh-release|gh release|contents: write/);
 });
 
+test("Windows x64 caches and artifacts use an explicit verified CPU baseline", () => {
+  const policyStart = workflow.indexOf("name: Configure portable x64 inference baseline");
+  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
+  assert.ok(policyStart >= 0 && policyStart < cacheStart);
+  const policy = workflow.slice(policyStart, cacheStart);
+  assert.match(policy, /if: matrix\.architecture == 'x64'/);
+  assert.match(policy, /CMAKE_PROJECT_INCLUDE=\$policy/);
+  assert.match(policy, /SAGASCRIPT_WINDOWS_X64_BASELINE=avx2/);
+  assert.match(policy, /Win32_Processor/);
+  for (const feature of ["Avx2", "Fma", "Bmi2"]) {
+    assert.ok(policy.includes(`X86.${feature}]::IsSupported`));
+  }
+  assert.match(policy, /CpuId\(1, 0\)\.Item3/);
+  assert.match(policy, /throw 'Runner does not support the packaged x64 CPU baseline'/);
+  assert.equal((workflow.match(/run: \.\/scripts\/verify-windows-x64-cpu-policy\.ps1/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.\/scripts\/verify-windows-x64-cpu-policy\.ps1 -TargetRoot/g) ?? []).length, 3);
+  const transcriptionStart = workflow.indexOf("name: Gate real Windows transcription");
+  assert.ok(transcriptionStart >= 0);
+  const transcription = workflow.slice(transcriptionStart, workflow.indexOf("name: Gate repeated English dictation"));
+  const releaseVerify = transcription.indexOf("./scripts/verify-windows-x64-cpu-policy.ps1");
+  assert.ok(releaseVerify >= 0 && releaseVerify < transcription.indexOf("& $binary transcribe"));
+  assert.match(transcription, /if \('\$\{\{ matrix\.architecture \}\}' -eq 'x64'\) \{\s+\.\/scripts\/verify-windows-x64-cpu-policy/);
+  const packagedCheck = workflow.indexOf("name: Verify packaged x64 inference CPU policy");
+  assert.ok(packagedCheck > workflow.indexOf("name: Build unsigned internal installers"));
+  assert.ok(packagedCheck < workflow.indexOf("name: Prepare and verify candidate artifacts"));
+});
+
 test("Windows candidate makes real transcription a blocking gate", () => {
+  const clipboardGate = workflow.indexOf("name: Gate native Windows clipboard transactions");
+  assert.ok(clipboardGate >= 0);
+  assert.match(workflow.slice(clipboardGate), /native_runner_clipboard_transaction_smoke -- --ignored --test-threads=1/);
+  assert.match(workflow.slice(clipboardGate), /if \(\$LASTEXITCODE -ne 0\) \{ throw "Native clipboard transaction gate failed" \}/);
   const gateStart = workflow.indexOf("name: Gate real Windows transcription");
   const buildStart = workflow.indexOf("name: Build unsigned internal installers");
   assert.ok(gateStart >= 0 && buildStart > gateStart);
@@ -126,15 +157,17 @@ test("Windows acceptance re-verifies an already-downloaded model", () => {
     'Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny")',
     firstDownload + 1,
   );
-  const transcription = acceptanceScript.indexOf("$cliExePath transcribe");
+  const transcription = acceptanceScript.indexOf('$transcriptionOutput = Invoke-Sagascript');
   assert.ok(firstDownload >= 0 && secondDownload > firstDownload);
   assert.ok(transcription > secondDownload);
   assert.match(acceptanceScript, /verification_seconds/);
 });
 
-test("Windows release guide forbids publishing unsigned candidates", () => {
-  assert.match(releaseGuide, /Do not publish those artifacts/);
-  assert.match(releaseGuide, /Microsoft Store MSIX/);
+test("Windows release guide distinguishes the unsigned beta from stable release", () => {
+  assert.match(releaseGuide, /clearly labelled \*\*unsigned Windows beta\*\*/);
+  assert.match(releaseGuide, /not a signed or stable\s+release/);
+  assert.match(releaseGuide, /windows-beta-20260905/);
+  assert.match(releaseGuide, /Microsoft Store and MSIX remain optional future work/);
   assert.match(releaseGuide, /Release[^\n]*requires every executable artifact/i);
   assert.match(releaseGuide, /SHA256SUMS-Windows-<architecture>/);
   assert.match(releaseGuide, /Sagascript-Windows-<architecture>-Portable\.exe/);

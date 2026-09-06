@@ -75,6 +75,14 @@ export async function getState(): Promise<AppState> {
   return invoke("get_state");
 }
 
+export async function getLastError(): Promise<string | null> {
+  return invoke("get_last_error");
+}
+
+export async function getLastTranscription(): Promise<string | null> {
+  return invoke("get_last_transcription");
+}
+
 export async function getSettings(): Promise<Settings> {
   return invoke("get_settings");
 }

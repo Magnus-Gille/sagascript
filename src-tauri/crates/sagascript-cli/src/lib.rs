@@ -1,4 +1,5 @@
 pub mod config;
+pub mod benchmark_dictation;
 pub mod glossary;
 pub mod latency;
 pub mod models;
@@ -171,6 +172,19 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Benchmark cold and warm in-process live dictation inference
+    #[command(
+        long_about = "\
+Benchmark the live dictation inference path on one supplied audio/video fixture.\
+ The fixture is decoded once, then transcribed once as a cold run and repeatedly\
+ through one in-process backend for warm timing samples. The command uses the\
+ recommended model for the selected language and never downloads a model or\
+ changes saved settings.",
+        after_long_help = "\
+EXAMPLES:\n  sagascript benchmark-dictation test-audio/english-jfk.wav --language en\n  sagascript benchmark-dictation sample.wav --language sv --iterations 10 --max-warm-ms 250\n  sagascript benchmark-dictation sample.wav --language en --expect-word hello"
+    )]
+    BenchmarkDictation(benchmark_dictation::BenchmarkDictationArgs),
+
     /// Transcribe audio/video files or directories
     #[command(
         long_about = "\
@@ -469,6 +483,8 @@ pub fn run(cli: Cli) {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
     let result = match cli.command.unwrap() {
+        Command::BenchmarkDictation(args) =>
+            run_inference_command("benchmark-dictation", move || benchmark_dictation::run(args)),
         Command::Transcribe(args) =>
             run_inference_command("transcribe", move || transcribe::run(args)),
         Command::LatencyReport(args) => latency::run(args),
@@ -665,6 +681,18 @@ mod tests {
 
         let command = Cli::command();
         assert_eq!(command.get_long_version(), Some(LONG_VERSION));
+    }
+
+    #[test]
+    fn benchmark_dictation_is_discoverable_with_gate_arguments() {
+        let command = Cli::command();
+        let benchmark = command
+            .find_subcommand("benchmark-dictation")
+            .expect("benchmark-dictation should be a root subcommand");
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "language"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "iterations"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "max_warm_ms"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "expect_word"));
     }
 
     // -- Completions generation --

@@ -1,14 +1,34 @@
 # Releasing Sagascript
 
-Sagascript v1 is a **macOS-only binary release**. Windows remains a
-build-from-source preview and the release workflow must not publish unsigned
-Windows installers.
+Sagascript's stable v1 binary release is macOS-only. Windows has a separate
+clearly labelled unsigned beta distributed from a GitHub prerelease; it must not
+be described as signed, stable, or fully accepted. The automated Windows
+candidate workflow remains non-publishing, and the macOS `v*` release workflow
+must not be used for the Windows beta.
 
 Production macOS releases must be signed with a **Developer ID Application**
 certificate, use hardened runtime, and be notarized and stapled. The release
 workflow refuses to publish an unsigned or unverifiable macOS artifact.
 The production signing Team ID is **`7C6WF6GFZ4`**; the verifier rejects a
 different Team ID even if the certificate is otherwise valid.
+
+## Windows beta publication
+
+The Windows beta tag is [`windows-beta-20260905`](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905).
+Publish it as a GitHub prerelease so it does not trigger the macOS `v*` release
+workflow. It should contain the exact x64 and ARM64 artifacts from [Actions run
+33963645741](https://github.com/Magnus-Gille/sagascript/actions/runs/33963645741),
+built from full source revision
+`56cf3420f7d81ac2c423bcfee6c8961de03fcfaf` and reporting app version `1.1.3`.
+The release page must retain the architecture-specific installers, portable and
+CLI executables, and matching SHA256 files.
+
+The ARM64 app was installed and uninstalled on a user Windows machine, with
+Swedish and English dictation tested. The x64 candidate passed automated CI,
+but GUI acceptance was not performed on an x64 machine. The installation test
+retained existing models and settings, so it was not a clean-state test. Keep
+these limitations visible in the prerelease notes and do not promote this
+artifact to the stable release channel.
 
 ## One-time Apple setup (repository owner)
 
@@ -54,6 +74,12 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
 6. Download the draft artifacts and perform the clean-machine checklist below.
    Publish the draft only after it passes.
 
+Windows beta publication is a separate owner action: attach only the exact
+artifacts from the accepted candidate run to the prerelease tag above, mark it
+as a prerelease, and verify the release page and checksums before linking it
+from the product website. Do not change the candidate workflow into an
+automatic publisher.
+
 The macOS build job also simulates replacing an obsolete
 `/Applications/Sagascript.app`, then runs a real Norwegian file transcription
 through `/usr/local/bin/sagascript`. This protects the supported app-bundle CLI
@@ -71,9 +97,10 @@ link from silently continuing to execute a stale binary after an upgrade.
   existing installation.
 - Test the signed artifact on Apple Silicon. Do not claim Intel support for v1;
   the diarization runtime does not provide the required Intel macOS binary.
-- Confirm the draft contains `Sagascript.dmg`, `Sagascript.app.tar.gz`, and
-  `SHA256SUMS`; no Windows installer is a v1 release artifact. Verify both
-  downloads against the published checksums before clean-machine testing.
+- Confirm the macOS draft contains `Sagascript.dmg`, `Sagascript.app.tar.gz`,
+  and `SHA256SUMS`; the unsigned Windows beta remains a separate prerelease.
+  Verify every downloaded artifact against its published checksum before
+  testing.
 - Review `THIRD_PARTY_NOTICES.md`. Run `npm run licenses:generate` and inspect
   any diff whenever either lockfile or a model source changes.
 
