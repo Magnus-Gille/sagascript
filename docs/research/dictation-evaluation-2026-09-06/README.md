@@ -6,7 +6,8 @@ Norwegian, English and Swedish bounded runs are complete. No personal settings
 were changed.
 
 The smaller models improved warm inference-call timing in all three languages,
-but all increased heldout word error rate (WER). Disabling temperature fallback
+but all increased the heldout word error rate (WER) point estimate; the Swedish
+paired interval includes zero change. Disabling temperature fallback
 did not demonstrate a reliable latency improvement. Neither this file-input
 experiment nor its timing endpoint measures Bluetooth capture, hotkey release
 to visible text, paste reliability, or complete desktop performance.
@@ -31,9 +32,15 @@ Warm percentiles use all 200 calls per configuration.
 | Swedish | Smaller / `kb-whisper-tiny` | 119 / 48 / 75 | 1014 | 23.866% | 90.499 / 204.607 |
 | Swedish | Decoder / `kb-whisper-base` | 110 / 50 / 67 | 1014 | 22.387% | 142.266 / 304.612 |
 
+Swedish WER measures disagreement with force-aligned parliamentary protocol
+text, **not verbatim audio references**. Its standalone aggregate JSON does not
+encode this provenance caveat and must be interpreted together with this report.
+
 All use explicit language and beam size 0. Baseline and smaller use temperature
 fallback; decoder uses the baseline model with fallback disabled. No glossary,
 VAD model, or remote transcription was used.
+Equal error counts do not prove that fallback never triggered: this experiment
+did not record per-call fallback decisions and cannot establish their frequency.
 
 | Language / candidate | WER change (percentage points; 95% interval) | Warm p95 gain (95% interval) |
 |---|---:|---:|
@@ -148,6 +155,9 @@ dropped or configurations tuned after seeing heldout results.
 
 Model files were independently hashed locally; registry expected hashes in a
 report alone do not prove the bytes loaded by the runtime.
+Norwegian and Swedish weights are the upstream `q5_0` variants. English uses
+the original `ggml-base.en.bin` and `ggml-tiny.en.bin` assets, not their quantized
+variants; comparisons remain within each language, not across model formats.
 
 | Model | Bytes | SHA-256 |
 |---|---:|---|
