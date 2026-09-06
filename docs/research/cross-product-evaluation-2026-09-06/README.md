@@ -79,6 +79,13 @@ decoder-disabled-fallback row has no Vibe quality result because that setting
 was unsupported. No result here changes a product default or establishes a
 ranking.
 
+The two runtime summaries above report each runtime's own aggregates. The
+paired deltas in the table come from the separate content-free
+[`cross-product-comparison.json`](cross-product-comparison.json), which joins
+the matching completed utterance rows without adding private identifiers or
+transcript text. Its exact SHA-256 is
+`4a595ccdc9af1430ead37ac384c513cc8df0aee87dbbe1a01da46101e9e03824`.
+
 ## Timing boundary and limitations
 
 Sagascript timing is `live_inference_call_not_visible_text`; its cold call is
@@ -93,6 +100,8 @@ For reference only, Sagascript/Vibe baseline warm p50/p95 were
 152.4/315.0 ms and 617.8/5631.1 ms; smaller-model warm p50/p95 were
 97.8/224.5 ms and 113.6/273.5 ms. These numbers must not be used to rank
 products or claim a cross-product latency gain because the endpoints differ.
+Vibe's baseline p95 long-tail values are retained in the aggregate; this
+report does not infer a cause for that long tail.
 The host was an M4 Mac with 32 GB RAM on AC power running macOS 26.6.2;
 actual GPU utilization and thermal state were not attested, and no competing
 local inference workload was run. A short local compile occurred during the
@@ -120,3 +129,4 @@ summaries used for this report:
 
 - [`sagascript-no-heldout.json`](sagascript-no-heldout.json)
 - [`vibe-no-heldout.json`](vibe-no-heldout.json)
+- [`cross-product-comparison.json`](cross-product-comparison.json)
