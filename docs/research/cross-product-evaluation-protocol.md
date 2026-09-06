@@ -1,10 +1,13 @@
 # Cross-product dictation evaluation protocol
 
-Status: frozen planning protocol for issue #196.  This document records the
+Status: draft, freeze-ready protocol for issue #196.  This document records the
 comparison design and the public capability evidence available on 2026-09-06;
 it contains no measurements, benchmark results, or product recommendation.
-Until the required runs and evidence ledger are complete, every comparison is
-`UNMEASURED` or `INCONCLUSIVE` and issue #196 remains open.
+The source, model, machine, order, and evaluator must be frozen before any
+data capture.  Unicode casefolding can change the post-NFC token stream, so the
+normalization/runtime version is part of that freeze.  Until the required runs
+and evidence ledger are complete, every comparison is `UNMEASURED` or
+`INCONCLUSIVE` and issue #196 remains open.
 
 ## Scope and non-goals
 
@@ -26,31 +29,45 @@ Two lanes are mandatory and must never be merged:
    diarization, and decoding settings.  An unsupported intersection is `N/A`,
    not a recognition failure.  This lane compares the inference configuration.
 2. **Product-default lane.**  Use each product's documented, practical local
-   defaults, recording the exact selected model and settings.  This lane
-   describes the user experience, not an engine-only comparison.  A product
-   default that cannot be inspected or reproduced is `INCONCLUSIVE`.
+   defaults, recording the exact selected model and settings.  “Practical
+   default” means a shipped fresh profile before tuning, for every product;
+   never silently reuse a warmed or hand-tuned profile.  This lane describes
+   the user experience, not an engine-only comparison.  A product default that
+   cannot be inspected or reproduced is `INCONCLUSIVE`.
 
-The same source utterance, language, split, order plan, timing definitions,
-and acceptance rules apply to both lanes.  Do not report a combined score.
+The same weights used by two different runtimes are a separately labelled
+`same_weights_different_runtime` subcase, not evidence of same-backend parity.
+Keep that subcase out of the same-model/settings aggregate.
+
+The same source utterance bytes, language, split, order plan, timing
+definitions, and acceptance rules apply to both lanes in the file/CLI path.
+The desktop path uses the fixed acoustic replay procedure below and is not
+byte-paired with the file/CLI path.  Do not pool file and desktop WER or report
+a combined score.
 
 ## Frozen identity and evidence record
 
-Before audio is captured, freeze a machine-readable identity record containing:
+Before audio is captured, freeze a private machine-readable identity record
+containing:
 
 - product and lane IDs;
 - repository URL, exact source revision, build command, binary/app SHA-256,
   and build date;
-- machine model, Apple Silicon generation, RAM, macOS version, power state,
-  input/output devices, sample rate, and permission state;
+- machine model, Apple Silicon generation, RAM, macOS version, AC/low-power
+  state, fixed cooldown interval, input/output devices, sample rate, and
+  permission state;
 - model identifier, exact model revision and weight SHA-256, model size,
   precision/quantization, VAD, diarization, language, beam/temperature and
   other decoder settings;
 - corpus manifest revision and every input audio SHA-256;
-- runner/protocol revision and timestamp convention.
+- runner/protocol revision, timestamp convention, and the frozen interleaved
+  product-order seed.
 
 The binary and model checksums are identity fields, not evidence that a model
 was available for every language.  A missing/unsupported model is recorded in
-the availability ledger with its primary-source reason.
+the availability ledger with its primary-source reason.  Raw audio hashes,
+utterance IDs, private paths, raw reports, and raw diagnostics stay in this
+private artifact; they are never copied into the public aggregate.
 
 ### Verified public product matrix
 
@@ -60,6 +77,7 @@ release-version claim is made where a release was not independently verified.
 
 | Product | Primary revision and license | Documented local capability | Measurement surface at this freeze |
 | --- | --- | --- | --- |
+| Sagascript | [source revision `4ea7f9168bb996b634e2e70780a9fb831f92700f`](https://github.com/Magnus-Gille/sagascript/tree/4ea7f9168bb996b634e2e70780a9fb831f92700f) on `main`, commit date 2026-09-06; source/build commands and first-run defaults are verified from the pinned Cargo/settings sources | Local Whisper model registry and CLI file transcription are documented in the repository; feature-gated diarization and its cache are part of the CLI surface. The default CLI build is `cd src-tauri && cargo build --release -p sagascript-cli` (default `record` + `diarization` features); the no-capture diarization variant is `cargo build --release -p sagascript-cli --no-default-features --features diarization`. At this revision, `Settings::default` uses English, automatic model selection, greedy beam `0`, temperature fallback on, and VAD off; language-specific recommendations come from the registry. | File/CLI and desktop paths are eligible. Freeze the exact build command, registry model tuple, and fresh-profile settings from source before running; do not infer a default from a previously warmed checkout. |
 | Handy | README `c62a5fcdef4196e0ab36ea56cd3863f8f17fd9c5`; [README](https://github.com/cjpais/Handy/blob/c62a5fcdef4196e0ab36ea56cd3863f8f17fd9c5/README.md); [MIT license](https://github.com/cjpais/Handy/blob/c62a5fcdef4196e0ab36ea56cd3863f8f17fd9c5/LICENSE) | The README documents offline local Whisper and Parakeet V3 options, VAD, and macOS/Windows/Linux desktop use. Its CLI flags control a running instance/startup (for example, toggling transcription); they are not a documented batch-ASR interface. | Desktop hotkey path is eligible after owner-permission setup. Batch/CLI quality and latency are `N/A` unless a supported surface is verified at the frozen revision. |
 | FluidVoice core | README `49f13beb7c0d96b2c7be93376fb3a7513cfe5530`; [README](https://github.com/altic-dev/FluidVoice/blob/49f13beb7c0d96b2c7be93376fb3a7513cfe5530/README.md); [GPL-3.0 license](https://github.com/altic-dev/FluidVoice/blob/49f13beb7c0d96b2c7be93376fb3a7513cfe5530/LICENSE) | The README documents a local-first macOS app, live preview, global hotkey, microphone/accessibility permissions, and model choices including Parakeet, Whisper, Apple Speech, and others. It distinguishes the GPLv3 core from the separately maintained Fluid Intelligence runtime. | Desktop hotkey path is eligible after owner-permission setup. No general batch CLI was verified from the pinned README; programmatic quality/latency is `N/A` unless a supported surface is verified without relying on private runtime code. |
 | Vibe | README `e1eba11ad37dec2ef8bb5ba181394567020302c8`; [README](https://github.com/thewh1teagle/vibe/blob/e1eba11ad37dec2ef8bb5ba181394567020302c8/README.md); [MIT license](https://github.com/thewh1teagle/vibe/blob/e1eba11ad37dec2ef8bb5ba181394567020302c8/LICENSE) | The README documents local/offline file and microphone work, batch export, Whisper/Nemotron/Parakeet choices, speaker diarization, CLI support, and an HTTP API with Swagger. | File/CLI lane is a candidate. Exact command-line arguments and API request schema must be captured from this pinned revision's help/source before use; do not invent a command. Desktop lane is separate. |
@@ -88,16 +106,20 @@ language.  Synthetic clips may exercise plumbing but never count toward human
 coverage.  A manifest that does not meet this gate remains a corpus gap, not a
 partial product win.
 
-For every run, the audio map must resolve the exact manifest SHA-256.  Keep
-reference text and recordings outside the repository; reports contain hashes,
-opaque IDs, and aggregate metrics only.  Existing checked-in test audio and
-diarization fixtures are smoke fixtures, not a substitute for the #187 held-out
-corpus or consent/provenance evidence.
+For every file/CLI run, the audio map must resolve the exact manifest SHA-256
+and the byte-identical input must be used for every product.  Keep reference
+text and recordings outside the repository.  Raw hashes and opaque utterance
+IDs are private pairing keys; the public report contains only aggregate counts
+and metrics plus public product, build, and model IDs.  Existing checked-in
+test audio and diarization fixtures are smoke fixtures, not a substitute for
+the #187 held-out corpus or consent/provenance evidence.
 
-All products receive the same clip bytes and language label.  The held-out
-assignment, utterance/configuration pairing, and randomized order are frozen
-once by the #187 paired-plan helper.  Never select a best utterance, best warm
-iteration, or successful subset after observing results.
+For the file/CLI lane, all products receive the same clip bytes and language
+label.  The held-out assignment, utterance/configuration pairing, and
+randomized order are frozen once by the #187 paired-plan helper.  Never select
+a best utterance, best warm iteration, or successful subset after observing
+results.  Desktop runs use the acoustic-replay procedure below instead of
+claiming byte identity with file inputs.
 
 ## Execution protocol
 
@@ -114,11 +136,18 @@ second runner.
 For each configuration, collect one explicitly labelled cold call followed by
 5--20 warm calls (the exact count is frozen before the run).  “Cold” means the
 first call in a new backend process, not a claim about a system-cold machine.
-The first warm call is the predeclared quality/timing observation for paired
-accuracy.  Remaining warm calls measure repeatability; they cannot be cherry-
-picked.  Keep model acquisition, decode, and end-to-end phases distinct where a
-product exposes them.  If it exposes only end-to-end timing, leave component
-fields null rather than estimating them.
+The first warm hypothesis is the only predeclared accuracy input.  Its timing
+is also retained because all 5--20 warm calls are utterance clusters for
+latency p50/p95; no warm call may be removed because its timing is unfavorable.
+Keep model acquisition, decode, and end-to-end phases distinct where a product
+exposes them.  If it exposes only end-to-end timing, leave component fields
+null rather than estimating them.
+
+Freeze the AC/thermal state, low-power state, cooldown interval, and
+interleaved product order before the first run.  Use a recorded seed and a
+blocked/interleaved order to avoid giving one product all first or coolest
+runs.  Do not invent or depend on an undocumented temperature API; record the
+declared power/thermal controls and their observed state instead.
 
 Run short, medium, and long duration buckets separately.  For each bucket,
 report p50 and p95 over the frozen paired population and preserve the utterance
@@ -131,7 +160,12 @@ latency or WER.
 Desktop measurement is an owner-operated procedure requiring the owner's
 microphone and Accessibility permissions.  Record the physical microphone or
 headset, input level, room/noise condition, app permission state, and exact
-shortcut.  Use a known editor and a visible key-down/key-up marker.  Measure
+shortcut.  Replay each private source utterance through the same calibrated
+speaker at fixed distance, level, room, microphone/headset, and acoustic
+condition.  Interleave products with the frozen seed and record acoustic
+variation privately; do not claim byte pairing with the file/CLI lane.  Do not
+install a new audio driver or virtual device merely to make a desktop product
+automatable.  Use a known editor and a visible key-down/key-up marker.  Measure
 key-release to preview-visible and key-release to final/committed text as two
 separate endpoints; record the observer/instrumentation and resolution.  A
 paste completion callback is not itself visible text and must not be reported
@@ -140,22 +174,37 @@ as such.
 Do not call, automate, or claim completion of a physical desktop action from a
 headless protocol run.  If permissions, hardware, editor instrumentation, or
 the product's live path are unavailable, record `N/A` with the exact blocker.
-Desktop results never silently stand in for a file/CLI result.
+Desktop results never silently stand in for a file/CLI result, and file and
+desktop WER are never pooled.
 
-### Failure ledger
+### Failure ledger and coverage denominators
 
-Every planned pair gets one terminal state: `completed`, `unsupported`,
-`permission_blocked`, `build_failed`, `model_unavailable`, `cli_failed`,
-`timeout`, `invalid_output`, `input_changed`, or `measurement_inconclusive`.
-The ledger stores a bounded content-free error code, stage, exit status, and
-identity hashes.  It must not include transcript text, private paths, audio,
-raw logs, or exception payloads.  Keep failed and timed-out rows in the
-machine-readable report; do not remove them before computing coverage.
+Every planned pair gets one canonical terminal status: `completed`,
+`unsupported`, `failed`, `blocked`, or `inconclusive`.  Preserve a bounded
+`reason_code` for detail: `permission_blocked` maps to `blocked`;
+`build_failed`, `model_unavailable` after a supported run was started,
+`cli_failed`, `timeout`, `invalid_output`, and `input_changed` map to
+`failed`; and `measurement_inconclusive` maps to `inconclusive`.  A verified
+unsupported language/model or absent automation surface maps to `unsupported`
+(`N/A`) before execution.  The mapping is exhaustive and appears in the
+coverage summary; no terminal state is silently dropped.
 
-An unsupported language/model or absent automation surface is `N/A`, while a
-product failure after a supported run was started is a failure.  A timeout or
-identity change invalidates that row and the affected comparison cell; it is
-not a zero-latency or zero-error observation.
+The ledger stores a bounded content-free error code, stage, and exit status.
+Raw audio hashes, utterance IDs, private paths, raw logs, diagnostics, and
+exception payloads remain private.  Sanitize any help or subprocess log before
+it is copied into a public release artifact.  Keep failed, blocked, unsupported,
+and timed-out rows in the machine-readable private report; do not remove them
+before computing coverage denominators.
+
+Complete-case paired intersections may be used for descriptive effects only.
+All planned rows, including failures and unsupported cells, remain in the
+coverage denominators and public status counts.  Predeclare
+`MAX_EXCLUSION=0` for any adoption or superiority claim on required supported
+rows: one failed/blocked/inconclusive required row makes that acceptance item
+inconclusive.  Unsupported cells are predeclared `N/A`, not silently removed.
+
+A timeout or identity change invalidates that row and the affected comparison
+cell; it is not a zero-latency or zero-error observation.
 
 ## Scoring and uncertainty
 
@@ -175,16 +224,22 @@ candidate, and every interval input in the same lane and split.  If a baseline
 denominator is zero or an expected field is missing, return an inconclusive
 interval rather than dropping the problematic resample.
 
+Any p95 stratum with fewer than 40 utterance clusters is explicitly low
+precision and exploratory.  It cannot support a threshold or superiority claim,
+even if its point estimate looks favorable.
+
 The result may state a difference and its uncertainty; it must not turn that
 difference into a recommendation until the acceptance thresholds, coverage
 gate, failure ledger, and reproducibility evidence are all satisfied.  A
 missing required endpoint makes the affected acceptance item inconclusive.
 
-## Machine-readable result template (documentation only)
+## Machine-readable public aggregate template (documentation only)
 
 This is a schema sketch for the future #187 runner/report integration, not a
-file to populate in this change.  Values named `sha256` are lowercase hashes;
-opaque IDs contain no transcript or path.
+file to populate in this change.  It is deliberately aggregate-only: raw audio
+hashes, per-utterance IDs, private paths, raw reports, and diagnostics belong
+to the private run artifact and are not public fields.  Public fields are
+limited to counts/metrics and public product, build, and model IDs.
 
 ```json
 {
@@ -192,26 +247,23 @@ opaque IDs contain no transcript or path.
   "status": "UNMEASURED",
   "product": "vibe",
   "lane": "same_model",
-  "source_revision": "<40-hex-or-opaque-revision>",
-  "binary_sha256": "<64-lowercase-hex>",
-  "model_id": "<frozen-model-id>",
-  "model_revision": "<frozen-model-revision>",
-  "model_sha256": "<64-lowercase-hex-or-null>",
-  "machine": {"hardware_id": "<owner-defined>", "os": "<frozen>"},
-  "manifest_revision": "<manifest-sha256>",
-  "configurations": [{"id": "<opaque>", "language": "en", "duration_bucket": "short"}],
-  "availability": [{"configuration_id": "<opaque>", "status": "UNMEASURED", "reason_code": "not_run"}],
+  "build_id": "<public-build-id>",
+  "model_id": "<public-model-id>",
+  "machine": {"class": "<public-hardware-class>", "os": "<frozen>"},
+  "configurations": [{"language": "en", "duration_bucket": "short"}],
+  "availability": [{"language": "en", "duration_bucket": "short", "status": "inconclusive", "reason_code": "not_run"}],
   "timing": {"cold": null, "warm": null, "endpoint": "not_run"},
   "quality": {"first_warm": null, "paired_interval": null},
-  "failure_ledger": [],
-  "coverage": {"planned": 0, "completed": 0, "inconclusive": 0}
+  "failure_reason_counts": {},
+  "coverage": {"planned": 0, "completed": 0, "unsupported": 0, "failed": 0, "blocked": 0, "inconclusive": 0}
 }
 ```
 
 The public aggregate must not contain transcript text, private audio paths,
-raw logs, or arbitrary subprocess errors.  A private local artifact may retain
-the necessary per-run evidence under the owner's existing controls, but it is
-not committed or uploaded by this protocol.
+raw logs, arbitrary subprocess errors, per-utterance IDs, or per-utterance
+hashes.  A private local artifact may retain the identity hashes, source
+utterance IDs, and bounded diagnostics needed for audit under the owner's
+existing controls, but it is not committed or uploaded by this protocol.
 
 ## Acceptance checklist
 
@@ -225,6 +277,9 @@ Before any recommendation is drafted, the report must show:
   `N/A` and reasons retained;
 - cold versus first-warm versus subsequent-warm labels, paired uncertainty,
   failure ledger, and no best-of selection;
+- coverage counts for every planned row in the canonical
+  `completed`/`unsupported`/`failed`/`blocked`/`inconclusive` mapping, with
+  `MAX_EXCLUSION=0` enforced for any required-row superiority claim;
 - file/CLI and live/desktop endpoints separated, including preview versus final
   visibility and any physical-permission blocker;
 - reproducible commands or UI procedure for every completed surface, plus the
@@ -241,5 +296,6 @@ comparative claims.
 
 - [Handy repository metadata](https://api.github.com/repos/cjpais/Handy), [FluidVoice repository metadata](https://api.github.com/repos/altic-dev/FluidVoice), and [Vibe repository metadata](https://api.github.com/repos/thewh1teagle/vibe) were read on 2026-09-06 to confirm repository identity/default branch/license metadata.  Floating metadata is not used as a benchmark identity.
 - The pinned product README and LICENSE links in the matrix are the source of the capability and license statements.  The README commit dates were 2026-08-30 (Handy), 2026-08-26 (FluidVoice), and 2026-09-05 (Vibe); the date is recorded to make later drift visible.
+- The Sagascript matrix row is pinned to main merge `4ea7f9168bb996b634e2e70780a9fb831f92700f` (2026-09-06); its Cargo feature defaults, CLI build commands, `Settings::default`, and language-specific model recommendations were read from the source at that revision.
 - [Issue #196](https://github.com/Magnus-Gille/sagascript/issues/196) is the acceptance source for the requested products, languages, corpus scale, hardware/desktop endpoints, and reuse of the #187/#163/#157 measurement surfaces.
 - [Sagascript latency measurement contract](../latency-measurement.md) is the local source document for timing terminology and report privacy.  The #187 normalization/runner contract is carried by the future shared evaluator integration rather than duplicated here.  Local source documents are referenced, not modified, by this leaf.
