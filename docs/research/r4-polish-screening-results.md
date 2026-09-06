@@ -19,19 +19,32 @@ shipping runtime change. The follow-up is documentation-only in the same PR.
 
 The [fixed plan](r4-polish-screening-plan.md) and its thresholds, corpus,
 decoding settings, pair ordering, and outputs were not changed after inference.
-The content-free summary reports are retained outside the repository:
+The run originally wrote these content-free summary reports outside the repository:
 
 - `sagascript-r4-pl-score-v2.json`
 - `sagascript-r4-pl-regression.json`
 - `sagascript-r4-pl-duration-audit.json`
 - `sagascript-r4-pl-screen.B9ZC6G/memory-check/summary.json`
 
+**Evidence availability, 2026-09-06:** after the session environment changed,
+the previous `/private/tmp` worktrees, raw run outputs, summary reports, and
+frozen evaluation binary were no longer available in the active environment.
+The committed plan, evaluation source revision, and this recorded summary
+survive in Git; the measurements below are historical recorded results, not
+independently revalidated measurements from recovered raw artifacts. Their
+arithmetic can be checked from the tables, but the corpus, output counts,
+timings, and hashes cannot currently be re-audited against those files.
+Do not use this summary to admit a model or claim reproducible acceptance.
+The conservative decision remains to ship no Polish specialist. Any future
+admission requires restored evidence or a newly planned evaluation with durable
+evidence retention; it must not be presented as a rerun of this frozen screen.
+
 The fixed corpus contained **48 clips, 37 speaker hashes, and 1,040 normalized
 reference words**, with exact decoded audio duration **516.312125 s**. The
 materialized manifest reports the rounded total **516.314 s**. There were 144
 raw model pairs and **864 transcriptions (one cold plus five warm per pair),
 zero execution failures**, no inference reruns, and no cherrypicking. Raw audio,
-references, and transcript text remain outside the repository.
+references, and transcript text were not committed to the repository.
 
 The measured run used source revision
 `68178b45ad067c6401d43a30413022c36d47be5f`; the lean CLI binary SHA-256 was
@@ -121,5 +134,6 @@ The optional-language cap is not a quota. Do not add Polish or an
 accuracy-driven default change solely from this screening. Existing generic
 Small availability for other supported selections is unchanged. Finnish remains
 the R4 language decision already selected by the owner; this Polish candidate
-is rejected for the current R4 build while the evidence and pinned artifacts
-remain available for a separately planned future evaluation.
+is rejected for the current R4 build. The committed plan and pinned identifiers
+remain available for a separately planned future evaluation; availability of
+the original local evidence and model files is not established (see above).
