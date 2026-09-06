@@ -1,0 +1,84 @@
+{
+  "accuracy_comparisons_sagascript_baseline_vibe_candidate": {
+    "no_baseline": {
+      "absolute_wer_change": -0.0022050716648291113,
+      "absolute_wer_change_interval": [
+        -0.02441613588110403,
+        0.022511848341232224
+      ],
+      "baseline_wer": 0.14553472987872107,
+      "candidate_wer": 0.14332965821389196,
+      "relative_wer_reduction": 0.015151515151515138,
+      "relative_wer_reduction_interval": [
+        -0.18750000000000022,
+        0.16000000000000003
+      ],
+      "resamples": 2000,
+      "sampling_unit": "utterance",
+      "seed": 187,
+      "utterances": 40
+    },
+    "no_smaller": {
+      "absolute_wer_change": 0.07828004410143327,
+      "absolute_wer_change_interval": [
+        0.04000000000000001,
+        0.12572087658592845
+      ],
+      "baseline_wer": 0.17971334068357223,
+      "candidate_wer": 0.2579933847850055,
+      "relative_wer_reduction": -0.4355828220858895,
+      "relative_wer_reduction_interval": [
+        -0.8580645161290326,
+        -0.18666666666666676
+      ],
+      "resamples": 2000,
+      "sampling_unit": "utterance",
+      "seed": 187,
+      "utterances": 40
+    }
+  },
+  "completed": 80,
+  "failed": 0,
+  "metrics": {
+    "no_baseline": {
+      "cold": {
+        "count": 40,
+        "p50_ms": 546.8117910000001,
+        "p95_ms": 5355.098875
+      },
+      "deletions": 60,
+      "errors": 130,
+      "insertions": 8,
+      "reference_words": 907,
+      "substitutions": 62,
+      "utterances": 40,
+      "warm": {
+        "count": 200,
+        "p50_ms": 617.7682910000003,
+        "p95_ms": 5631.148333000001
+      },
+      "wer": 0.14332965821389196
+    },
+    "no_smaller": {
+      "cold": {
+        "count": 40,
+        "p50_ms": 158.058875000017,
+        "p95_ms": 329.450125000003
+      },
+      "deletions": 107,
+      "errors": 234,
+      "insertions": 24,
+      "reference_words": 907,
+      "substitutions": 103,
+      "utterances": 40,
+      "warm": {
+        "count": 200,
+        "p50_ms": 113.6145410000172,
+        "p95_ms": 273.52470900000026
+      },
+      "wer": 0.2579933847850055
+    }
+  },
+  "planned": 120,
+  "unsupported": 40
+}

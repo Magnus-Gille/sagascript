@@ -206,7 +206,180 @@ mod tests {
     }
 
     fn identity(input: &Path) -> CacheIdentity {
-        CacheIdentity::for_input(input, "sv", "kb-whisper-large", Some("Grimnir")).unwrap()
+        identity_for(input, "sv", "kb-whisper-large", Some("Grimnir"))
+    }
+
+    fn identity_for(
+        input: &Path,
+        language: &str,
+        model: &str,
+        prompt: Option<&str>,
+    ) -> CacheIdentity {
+        CacheIdentity::for_input(input, language, model, prompt).unwrap()
+    }
+
+    fn write_minimal_cache(path: &Path, identity: CacheIdentity) {
+        write_cache_with_payload(
+            path,
+            identity,
+            r#"{"raw_segments":[],"embeddings":[]}"#,
+            Vec::new(),
+        );
+    }
+
+    fn write_cache_with_payload(
+        path: &Path,
+        identity: CacheIdentity,
+        analysis_json: &str,
+        transcript: Vec<(f64, f64, String)>,
+    ) {
+        let analysis: DiarizationAnalysis = serde_json::from_str(analysis_json).unwrap();
+        save(
+            path,
+            &DiarizationCache::new(
+                identity,
+                analysis,
+                transcript,
+                CoverageProfile::from_audio(&vec![0.1; 16_000]),
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn identity_serialization_has_explicit_fields_and_no_threshold() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        std::fs::write(&input, b"audio").unwrap();
+
+        let serialized = serde_json::to_value(identity(&input)).unwrap();
+        let object = serialized.as_object().unwrap();
+        let mut fields = object.keys().cloned().collect::<Vec<_>>();
+        fields.sort();
+        assert_eq!(
+            fields,
+            vec![
+                "input_sha256".to_string(),
+                "language".to_string(),
+                "model".to_string(),
+                "prompt_sha256".to_string(),
+                "schema_version".to_string(),
+            ]
+        );
+        assert_eq!(object["schema_version"], serde_json::json!(3));
+        assert!(!object.contains_key("threshold"));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn freshly_recomputed_identity_reuses_cached_intermediates() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        std::fs::write(&input, b"audio").unwrap();
+        let cache_path = dir.join("analysis.json");
+        let analysis_json = r#"{"raw_segments":[[0.0,1.0,0]],"embeddings":[]}"#;
+        let transcript = vec![(0.0, 1.0, "cached transcript".to_string())];
+        write_cache_with_payload(
+            &cache_path,
+            identity(&input),
+            analysis_json,
+            transcript.clone(),
+        );
+
+        let recomputed = identity_for(&input, "sv", "kb-whisper-large", Some("Grimnir"));
+        let CacheLookup::Hit(hit) = load(&cache_path, &recomputed).unwrap() else {
+            panic!("expected recomputed identity to hit");
+        };
+        assert_eq!(hit.transcript, transcript);
+        let expected_analysis: serde_json::Value = serde_json::from_str(analysis_json).unwrap();
+        assert_eq!(
+            serde_json::to_value(&hit.analysis).unwrap(),
+            expected_analysis
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn empty_and_missing_prompt_are_the_same_identity() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        std::fs::write(&input, b"audio").unwrap();
+        let cache_path = dir.join("analysis.json");
+        let without_prompt = identity_for(&input, "sv", "kb-whisper-large", None);
+        let empty_prompt = identity_for(&input, "sv", "kb-whisper-large", Some(""));
+        assert_eq!(without_prompt, empty_prompt);
+        write_minimal_cache(&cache_path, without_prompt);
+        assert!(matches!(
+            load(&cache_path, &empty_prompt).unwrap(),
+            CacheLookup::Hit(_)
+        ));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn language_model_and_prompt_changes_miss_without_reason_matching() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        std::fs::write(&input, b"audio").unwrap();
+        let cache_path = dir.join("analysis.json");
+        let baseline = identity(&input);
+        write_minimal_cache(&cache_path, baseline.clone());
+
+        for changed in [
+            identity_for(&input, "en", "kb-whisper-large", Some("Grimnir")),
+            identity_for(&input, "sv", "kb-whisper-base", Some("Grimnir")),
+            identity_for(&input, "sv", "kb-whisper-large", Some("Other")),
+            identity_for(&input, "sv", "kb-whisper-large", Some(" Grimnir")),
+        ] {
+            assert!(matches!(
+                load(&cache_path, &changed).unwrap(),
+                CacheLookup::Miss(_)
+            ));
+        }
+
+        let grimnir_hash =
+            identity_for(&input, "sv", "kb-whisper-large", Some("Grimnir")).prompt_sha256;
+        let other_hash =
+            identity_for(&input, "sv", "kb-whisper-large", Some("Other")).prompt_sha256;
+        let leading_space_hash =
+            identity_for(&input, "sv", "kb-whisper-large", Some(" Grimnir")).prompt_sha256;
+        assert_ne!(grimnir_hash, other_hash);
+        assert_ne!(grimnir_hash, leading_space_hash);
+
+        let stored_nonempty_path = dir.join("stored-nonempty.json");
+        let expected_none = identity_for(&input, "sv", "kb-whisper-large", None);
+        write_minimal_cache(
+            &stored_nonempty_path,
+            identity_for(&input, "sv", "kb-whisper-large", Some("Grimnir")),
+        );
+        assert!(matches!(
+            load(&stored_nonempty_path, &expected_none).unwrap(),
+            CacheLookup::Miss(_)
+        ));
+
+        let stored_none_path = dir.join("stored-none.json");
+        write_minimal_cache(&stored_none_path, expected_none);
+        let expected_nonempty = identity_for(&input, "sv", "kb-whisper-large", Some("Grimnir"));
+        assert!(matches!(
+            load(&stored_none_path, &expected_nonempty).unwrap(),
+            CacheLookup::Miss(_)
+        ));
+
+        assert!(matches!(
+            load(&cache_path, &baseline).unwrap(),
+            CacheLookup::Hit(_)
+        ));
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

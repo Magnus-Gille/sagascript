@@ -1,3 +1,5 @@
+pub(crate) mod benchmark_config;
+mod benchmark_quality;
 pub mod config;
 pub mod benchmark_dictation;
 pub mod glossary;
@@ -179,8 +181,15 @@ pub enum Command {
 Benchmark the live dictation inference path on one supplied audio/video fixture.\
  The fixture is decoded once, then transcribed once as a cold run and repeatedly\
  through one in-process backend for warm timing samples. The command uses the\
- recommended model for the selected language and never downloads a model or\
- changes saved settings.",
+ recommended model for the selected language unless --model is supplied, and\
+ never downloads a model or changes saved settings. Decoder overrides are\
+ local to this invocation. Timings end at the inference call, not visible text.\n\n\
+ Normal JSON output contains timings and counts, never transcript text.\
+ --quality-output explicitly writes plaintext transcripts to a NEW local file\
+ in an existing directory (0600 on Unix; parent ACL on Windows). Keep it out of\
+ shared or synced folders. Inputs are limited to 128 MiB and 120 decoded seconds\
+ for this export. --allow-empty captures silence cases without judging quality.\
+ A report's cli_checks_passed is not an accuracy or adoption verdict.",
         after_long_help = "\
 EXAMPLES:\n  sagascript benchmark-dictation test-audio/english-jfk.wav --language en\n  sagascript benchmark-dictation sample.wav --language sv --iterations 10 --max-warm-ms 250\n  sagascript benchmark-dictation sample.wav --language en --expect-word hello"
     )]
