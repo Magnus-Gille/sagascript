@@ -31,9 +31,9 @@ Two lanes are mandatory and must never be merged:
 2. **Product-default lane.**  Use each product's documented, practical local
    defaults, recording the exact selected model and settings.  “Practical
    default” means a shipped fresh profile before tuning, for every product;
-   never silently reuse a warmed or hand-tuned profile.  This lane describes
-   the user experience, not an engine-only comparison.  A product default that
-   cannot be inspected or reproduced is `INCONCLUSIVE`.
+   never silently reuse a previously configured or hand-tuned profile.  This lane
+   describes the user experience, not an engine-only comparison.  A product
+   default that cannot be inspected or reproduced is `INCONCLUSIVE`.
 
 The same weights used by two different runtimes are a separately labelled
 `same_weights_different_runtime` subcase, not evidence of same-backend parity.
@@ -187,7 +187,10 @@ Every planned pair gets one canonical terminal status: `completed`,
 `failed`; and `measurement_inconclusive` maps to `inconclusive`.  A verified
 unsupported language/model or absent automation surface maps to `unsupported`
 (`N/A`) before execution.  The mapping is exhaustive and appears in the
-coverage summary; no terminal state is silently dropped.
+coverage summary; no terminal state is silently dropped.  The uppercase
+document-level states `UNMEASURED` and `INCONCLUSIVE` describe overall
+protocol/report readiness; the lowercase values above are per-row ledger
+statuses used in machine-readable coverage.
 
 The ledger stores a bounded content-free error code, stage, and exit status.
 Raw audio hashes, utterance IDs, private paths, raw logs, diagnostics, and
@@ -228,6 +231,10 @@ Any p95 stratum with fewer than 40 utterance clusters is explicitly low
 precision and exploratory.  It cannot support a threshold or superiority claim,
 even if its point estimate looks favorable.
 
+The 40 held-out utterances per language are split across three duration buckets,
+so a per-bucket p95 may have fewer than 40 clusters and remains exploratory
+under this rule.
+
 The result may state a difference and its uncertainty; it must not turn that
 difference into a recommendation until the acceptance thresholds, coverage
 gate, failure ledger, and reproducibility evidence are all satisfied.  A
@@ -251,7 +258,7 @@ limited to counts/metrics and public product, build, and model IDs.
   "model_id": "<public-model-id>",
   "machine": {"class": "<public-hardware-class>", "os": "<frozen>"},
   "configurations": [{"language": "en", "duration_bucket": "short"}],
-  "availability": [{"language": "en", "duration_bucket": "short", "status": "inconclusive", "reason_code": "not_run"}],
+  "availability": [{"language": "en", "duration_bucket": "short", "status": "inconclusive", "reason_code": "measurement_inconclusive"}],
   "timing": {"cold": null, "warm": null, "endpoint": "not_run"},
   "quality": {"first_warm": null, "paired_interval": null},
   "failure_reason_counts": {},
