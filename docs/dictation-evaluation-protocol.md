@@ -38,8 +38,52 @@ Reuse `sagascript benchmark-dictation` for local model/inference timing and
 Neither establishes physical key-release-to-visible-editor latency. Keep
 observable text arrival, paste dispatch/completion and inference separate.
 
+### Explicit local transcript capture
+
+The benchmark defaults to content-free stdout and the language's recommended
+model. `--model`, `--beam-size` and `--disable-temperature-fallback` override only
+that invocation; no saved settings, personal glossary or model downloads are
+used. The selected model must already exist locally.
+
+To capture evaluation text deliberately, choose a **new file** in an existing
+private, non-synced directory:
+
+```sh
+sagascript benchmark-dictation fixture.wav --language en --iterations 5 \
+  --quality-output /private/local-evaluation/new-run.json
+```
+
+The report contains plaintext cold and warm transcripts, selected decoder
+settings, build identity, source-file SHA-256 and a domain-separated SHA-256 of
+the decoded 16 kHz float samples. Source bytes are hashed before and after the
+run; changed inputs abort export. Export fixtures are bounded to 128 MiB and
+120 decoded seconds, each transcript to 100,000 characters and the report to
+16 MiB. Existing destinations, including symlinks, are never overwritten.
+Unix files are created with mode 0600; Windows inherits the chosen parent ACL.
+An interrupted write may leave an incomplete file: discard it, never treat it
+as evidence or append another run. Do not commit or upload private reports.
+
+Schema v1 records `measurement_endpoint=live_inference_call_not_visible_text`
+and `cold_definition=first_call_in_new_backend_not_system_cold`. The
+`model_expected_sha256` and `model_expected_bytes` fields are registry metadata,
+not a claim that a model was loaded or independently hashed during every run;
+silence can return before model loading. Capture actual model-file integrity
+separately for an experiment. `cli_checks_passed` covers only the CLI's
+nonempty/expected-word/timing-budget checks, **not quality or adoption**. A
+failed such check still exports collected rows and returns a failing exit code.
+Inference, input-integrity or export-I/O failures do not produce a valid report.
+
+Use `--allow-empty` only with `--quality-output` for silence controls. It permits
+empty results without filtering hallucinated text; the scorer must judge both.
+It cannot be combined with `--expect-word`. Normal stdout remains content-free
+even when a separate quality report was explicitly requested.
+
 Use the same distinct utterances for each configuration. Randomize run order,
 record its seed/order, and collect at least five warm repetitions per utterance.
+Predeclare the **first warm transcript** as the accuracy observation for paired
+WER and specialist recall, never the best run. Retain every cold/warm text score
+to audit instability and any number/negation/silence failures. Later timing
+repetitions do not create additional independent accuracy observations.
 Cold observations stay separate. For warm latency intervals, resample paired
 utterance clusters with replacement and retain every repetition in each chosen
 cluster. Repetitions are not independent speakers or utterances. Compute
@@ -66,7 +110,8 @@ coverage. It requires the stated human counts and at least two human held-out
 speakers per language; synthetic rows cannot satisfy speech coverage. Its
 `eligible` field means only that declared corpus prerequisites are present,
 never that a configuration is accurate, fast, safe to adopt, or independently
-verified. No manifest or report with real speech has been produced yet.
+verified. The public JFK smoke verified local report creation and privacy
+boundaries, not a curated corpus, accuracy gain or adoption result.
 
 - English, Swedish, Norwegian: at least 10 development and 40 distinct held-out
   human utterances per language, at least two speakers, short/medium/long,
@@ -88,7 +133,36 @@ number/negation or silence failures in fixed controls. Treat uncertain gains,
 missing physical timing/annotations, inadequate corpus or unsupported provenance
 as **inconclusive**, never as passing. Do not relax thresholds after seeing data.
 
-The final deliverable still needs the CLI-driven manifest/result workflow,
+## Local evaluation command
+
+Requires Python 3.10 or newer, standard library only. No network, models,
+settings or private recordings are read implicitly. Use local JSON/UTF-8 paths
+explicitly; the command prints content-free JSON and does not write files.
+
+```sh
+python3 scripts/dictation_eval/evaluate.py --version
+python3 scripts/dictation_eval/evaluate.py validate-manifest corpus.json
+python3 scripts/dictation_eval/evaluate.py score-clip \
+  --manifest corpus.json --utterance-id clip_001 \
+  --report new-run.json --reference exact-reference.txt \
+  --specialist-terms specialist-terms.json --control-terms control-terms.json
+python3 -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
+```
+
+Use `python` instead of `python3` on Windows. Term files are optional JSON
+arrays of phrases. The specialist tag requires expected terms; number/negation
+tags require controls. `score-clip` binds report language/source SHA-256 and
+exact UTF-8 reference bytes to the selected manifest row: even a changed final
+newline invalidates the reference hash. The strict report reader rejects
+unknown schemas/keys, duplicate JSON keys, nonfinite values, invalid text and
+missing/reordered runs. Schema-v1 clip scores contain only allowlisted
+configuration labels, timings, counts and per-run metrics, not IDs, hashes,
+paths, build labels or text. Missing false-correction annotations remain null.
+The clip decision is always `inconclusive`; successful exit means valid inputs
+were scored, not that corpus coverage or adoption thresholds passed. Invalid
+inputs return exit code 2 with a content-free diagnostic.
+
+The final deliverable still needs the paired corpus runner and result workflow,
 baseline/candidate tables for each language, paired accuracy intervals, redacted
 worst failures, adopt/adapt/reject/inconclusive decision, implementation map and
 rollout/revert plan. These initial pure helper tests are not issue completion.

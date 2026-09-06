@@ -24,6 +24,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Test offline dictation evaluation tooling
+        run: python3 -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -204,6 +207,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Test offline dictation evaluation tooling
+        run: python3 -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
+
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -302,6 +308,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Test offline dictation evaluation tooling
+        run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

@@ -6,11 +6,13 @@ use serde::Serialize;
 
 use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::error::DictationError;
-use sagascript_core::settings::{Language, Settings, WhisperModel};
+use sagascript_core::settings::Language;
 use sagascript_core::transcription::model;
 use sagascript_core::transcription::whisper_backend::{DictationTimings, WhisperBackend};
 use sagascript_core::transcription::TranscribeOptions;
 
+use super::benchmark_config;
+use super::benchmark_quality;
 use super::transcribe::{model_id_string, parse_language};
 
 const SAMPLE_RATE_HZ: f64 = 16_000.0;
@@ -31,6 +33,10 @@ pub struct BenchmarkDictationArgs {
     )]
     pub language: String,
 
+    /// Explicit Whisper model ID. Defaults to the language recommendation.
+    #[arg(long, value_name = "MODEL_ID")]
+    pub model: Option<String>,
+
     /// Number of warm in-process samples to collect (2–30).
     #[arg(
         long,
@@ -43,9 +49,25 @@ pub struct BenchmarkDictationArgs {
     #[arg(long, value_name = "MS", value_parser = parse_max_warm_ms)]
     pub max_warm_ms: Option<f64>,
 
+    /// Beam search width: 0 = greedy; 2–16 = beam search.
+    #[arg(long = "beam-size", value_name = "N")]
+    pub beam_size: Option<u32>,
+
+    /// Disable temperature fallback for bounded latency measurements.
+    #[arg(long)]
+    pub disable_temperature_fallback: bool,
+
     /// Require this token in every cold and warm transcript without printing text.
     #[arg(long = "expect-word", value_name = "WORD")]
     pub expect_word: Option<String>,
+
+    /// Write an explicit local quality report containing transcript text.
+    #[arg(long, value_name = "PATH")]
+    pub quality_output: Option<PathBuf>,
+
+    /// Permit empty transcription text in an explicitly requested quality report.
+    #[arg(long, requires = "quality_output", conflicts_with = "expect_word")]
+    pub allow_empty: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,10 +99,44 @@ struct BenchmarkOutput {
     build_version: &'static str,
     language: &'static str,
     model: &'static str,
+    beam_size: u32,
+    temperature_fallback: bool,
     duration_seconds: f64,
     decode_duration_ms: f64,
     cold_run: ColdRun,
     warm_samples: WarmSamples,
+}
+
+#[derive(Debug, Serialize)]
+struct QualityRun {
+    kind: &'static str,
+    iteration: u32,
+    text: String,
+    model_ms: f64,
+    inference_ms: f64,
+    total_ms: f64,
+    model_cached: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct QualityReport {
+    schema_version: u32,
+    build_version: &'static str,
+    language: &'static str,
+    model: &'static str,
+    model_expected_sha256: &'static str,
+    model_expected_bytes: u64,
+    source_audio_sha256: String,
+    decoded_audio_sha256: String,
+    duration_seconds: f64,
+    decode_duration_ms: f64,
+    beam_size: u32,
+    temperature_fallback: bool,
+    allow_empty: bool,
+    measurement_endpoint: &'static str,
+    cold_definition: &'static str,
+    cli_checks_passed: bool,
+    runs: Vec<QualityRun>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -91,6 +147,16 @@ struct SampleTiming {
 }
 
 pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
+    if args.allow_empty && args.quality_output.is_none() {
+        return Err(DictationError::SettingsError(
+            "--allow-empty requires --quality-output".to_string(),
+        ));
+    }
+    if args.allow_empty && args.expect_word.is_some() {
+        return Err(DictationError::SettingsError(
+            "--allow-empty conflicts with --expect-word".to_string(),
+        ));
+    }
     let expected_word = match args.expect_word.as_deref().map(str::trim) {
         Some("") => {
             return Err(DictationError::SettingsError(
@@ -101,14 +167,25 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
     };
     let language = parse_language(&args.language)?;
     let language_code = language_code(language);
-    let model = WhisperModel::recommended(language);
+    let config = benchmark_config::resolve(
+        language,
+        args.model.as_deref(),
+        args.beam_size,
+        args.disable_temperature_fallback,
+    )?;
+    let model = config.model;
+    let quality_requested = args.quality_output.is_some();
+    if let Some(path) = args.quality_output.as_deref() {
+        benchmark_quality::ensure_unused_destination(path)?;
+    }
+    let source_audio_sha256 = initial_source_audio_sha256(&args)?;
 
     // This command is deliberately read-only with respect to settings and
-    // model storage. A missing recommended model is a clear preflight error;
+    // model storage. A missing selected model is a clear preflight error;
     // benchmark runs must never download it implicitly.
     if !model::is_model_downloaded(model) {
         return Err(DictationError::TranscriptionFailed(format!(
-            "Recommended model '{}' is not downloaded. Run: sagascript download-model {}",
+            "Benchmark model '{}' is not downloaded. Run: sagascript download-model {}",
             model.display_name(),
             model_id_string(model)
         )));
@@ -123,15 +200,17 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
         ));
     }
     let duration_seconds = audio.len() as f64 / SAMPLE_RATE_HZ;
+    if quality_requested && duration_seconds > 120.0 {
+        return Err(DictationError::FileDecodeError(
+            "Quality fixtures must not exceed 120 seconds".to_string(),
+        ));
+    }
+    let decoded_audio_sha256 = quality_requested.then(|| benchmark_quality::decoded_digest(&audio));
 
-    // Settings::default is the live dictation baseline. In particular this
-    // keeps greedy beam_size=0 and temperature fallback enabled, while
-    // explicitly leaving private glossary/VAD state out of the fixture run.
-    let defaults = Settings::default();
     let options = TranscribeOptions {
         prompt: None,
-        beam_size: defaults.beam_size,
-        temperature_fallback: defaults.temperature_fallback,
+        beam_size: config.beam_size,
+        temperature_fallback: config.temperature_fallback,
         vad_model_path: None,
         segment_timestamps: false,
         parallel_chunks: 1,
@@ -154,8 +233,12 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
         "cold run",
         &cold_text,
         expected_word,
+        args.allow_empty,
         &mut validation_error,
     );
+    if quality_requested {
+        ensure_quality_text_size("cold run", &cold_text)?;
+    }
 
     let cold_run = ColdRun {
         model_ms: cold_timings.model_ms,
@@ -164,6 +247,18 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
         model_cached: cold_timings.model_cached,
         text_nonempty_count: usize::from(!cold_text.trim().is_empty()),
     };
+    let mut quality_runs = Vec::with_capacity(args.iterations as usize + 1);
+    if quality_requested {
+        quality_runs.push(QualityRun {
+            kind: "cold",
+            iteration: 0,
+            text: cold_text.clone(),
+            model_ms: cold_timings.model_ms,
+            inference_ms: cold_timings.inference_ms,
+            total_ms: cold_total_ms,
+            model_cached: cold_timings.model_cached,
+        });
+    }
 
     let mut samples = Vec::with_capacity(args.iterations as usize);
     let mut warm_text_nonempty_count = 0usize;
@@ -185,8 +280,21 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
             &format!("warm run {}", iteration + 1),
             &text,
             expected_word,
+            args.allow_empty,
             &mut validation_error,
         );
+        if quality_requested {
+            ensure_quality_text_size(&format!("warm run {}", iteration + 1), &text)?;
+            quality_runs.push(QualityRun {
+                kind: "warm",
+                iteration: iteration + 1,
+                text: text.clone(),
+                model_ms: timings.model_ms,
+                inference_ms: timings.inference_ms,
+                total_ms,
+                model_cached: timings.model_cached,
+            });
+        }
         if exceeds_budget(total_ms, args.max_warm_ms) && budget_exceeded.is_none() {
             budget_exceeded = Some((
                 iteration + 1,
@@ -205,6 +313,8 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
         build_version: super::LONG_VERSION,
         language: language_code,
         model: model_id_string(model),
+        beam_size: config.beam_size,
+        temperature_fallback: config.temperature_fallback,
         duration_seconds,
         decode_duration_ms,
         cold_run,
@@ -216,6 +326,44 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
             total_ms: percentiles(&samples, |sample| sample.total_ms),
         },
     };
+
+    let validation_passed = budget_exceeded.is_none() && validation_error.is_none();
+    if let Some(path) = args.quality_output.as_deref() {
+        let source_audio_sha256 = source_audio_sha256
+            .as_ref()
+            .expect("quality output captured the initial input digest");
+        let final_source_audio_sha256 = benchmark_quality::input_digest(&args.input)?;
+        if final_source_audio_sha256 != *source_audio_sha256 {
+            return Err(DictationError::SettingsError(
+                "Input changed during benchmark; quality report was not written".to_string(),
+            ));
+        }
+        let integrity = model.download_integrity();
+        let quality_report = QualityReport {
+            schema_version: 1,
+            build_version: super::LONG_VERSION,
+            language: language_code,
+            model: model_id_string(model),
+            model_expected_sha256: integrity.sha256,
+            model_expected_bytes: integrity.size,
+            source_audio_sha256: source_audio_sha256.clone(),
+            decoded_audio_sha256: decoded_audio_sha256
+                .as_ref()
+                .expect("quality output captured the decoded audio digest")
+                .clone(),
+            duration_seconds,
+            decode_duration_ms,
+            beam_size: config.beam_size,
+            temperature_fallback: config.temperature_fallback,
+            allow_empty: args.allow_empty,
+            measurement_endpoint: "live_inference_call_not_visible_text",
+            cold_definition: "first_call_in_new_backend_not_system_cold",
+            cli_checks_passed: validation_passed,
+            runs: quality_runs,
+        };
+        benchmark_quality::write_private_new(path, &quality_report)?;
+    }
+
     println!(
         "{}",
         serde_json::to_string_pretty(&output).expect("benchmark output serializes")
@@ -240,6 +388,15 @@ fn language_code(language: Language) -> &'static str {
         Language::Norwegian => "no",
         Language::Auto => unreachable!("benchmark language parser excludes auto"),
     }
+}
+
+fn initial_source_audio_sha256(
+    args: &BenchmarkDictationArgs,
+) -> Result<Option<String>, DictationError> {
+    args.quality_output
+        .as_ref()
+        .map(|_| benchmark_quality::input_digest(&args.input))
+        .transpose()
 }
 
 fn parse_benchmark_language(value: &str) -> Result<String, String> {
@@ -274,9 +431,10 @@ fn validate_text(
     run_name: &str,
     text: &str,
     expected_word: Option<&str>,
+    allow_empty: bool,
     validation_error: &mut Option<String>,
 ) {
-    if text.trim().is_empty() {
+    if text.trim().is_empty() && !allow_empty {
         if validation_error.is_none() {
             *validation_error = Some(format!("{run_name} returned empty text"));
         }
@@ -287,6 +445,15 @@ fn validate_text(
             *validation_error = Some(format!("{run_name} did not contain the expected word"));
         }
     }
+}
+
+fn ensure_quality_text_size(run_name: &str, text: &str) -> Result<(), DictationError> {
+    if text.chars().count() > 100_000 {
+        return Err(DictationError::SettingsError(format!(
+            "{run_name} text exceeds the 100000 character quality export limit"
+        )));
+    }
+    Ok(())
 }
 
 fn percentiles(
@@ -319,6 +486,7 @@ fn percentile_sorted(values: &[f64], quantile: f64) -> f64 {
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::fs;
 
     #[derive(Debug, Parser)]
     struct BenchmarkTestCli {
@@ -338,6 +506,11 @@ mod tests {
         assert_eq!(parsed.args.input, PathBuf::from("fixture.wav"));
         assert_eq!(parsed.args.language, "en");
         assert_eq!(parsed.args.iterations, 5);
+        assert_eq!(parsed.args.model, None);
+        assert_eq!(parsed.args.beam_size, None);
+        assert!(!parsed.args.disable_temperature_fallback);
+        assert_eq!(parsed.args.quality_output, None);
+        assert!(!parsed.args.allow_empty);
 
         for value in ["2", "30"] {
             let result = BenchmarkTestCli::try_parse_from([
@@ -381,6 +554,46 @@ mod tests {
         ])
         .expect("expected-word gate should parse");
         assert_eq!(parsed.args.expect_word.as_deref(), Some("country"));
+    }
+
+    #[test]
+    fn quality_output_and_allow_empty_clap_contract_is_explicit() {
+        let parsed = BenchmarkTestCli::try_parse_from([
+            "sagascript",
+            "fixture.wav",
+            "--language",
+            "en",
+            "--quality-output",
+            "quality.json",
+            "--allow-empty",
+        ])
+        .expect("quality output should enable allow-empty");
+        assert_eq!(
+            parsed.args.quality_output,
+            Some(PathBuf::from("quality.json"))
+        );
+        assert!(parsed.args.allow_empty);
+
+        assert!(BenchmarkTestCli::try_parse_from([
+            "sagascript",
+            "fixture.wav",
+            "--language",
+            "en",
+            "--allow-empty",
+        ])
+        .is_err());
+        assert!(BenchmarkTestCli::try_parse_from([
+            "sagascript",
+            "fixture.wav",
+            "--language",
+            "en",
+            "--quality-output",
+            "quality.json",
+            "--allow-empty",
+            "--expect-word",
+            "hello",
+        ])
+        .is_err());
     }
 
     #[test]
@@ -459,14 +672,29 @@ mod tests {
     #[test]
     fn empty_and_expected_word_validation_is_recorded_without_leaking_text() {
         let mut error = None;
-        validate_text("warm run 1", "", Some("secret"), &mut error);
+        validate_text("warm run 1", "", Some("secret"), false, &mut error);
         assert_eq!(error.as_deref(), Some("warm run 1 returned empty text"));
 
         let mut error = None;
-        validate_text("warm run 2", "a public sentence", Some("secret"), &mut error);
+        validate_text(
+            "warm run 2",
+            "a public sentence",
+            Some("secret"),
+            false,
+            &mut error,
+        );
         assert_eq!(
             error.as_deref(),
             Some("warm run 2 did not contain the expected word")
+        );
+
+        let mut error = None;
+        validate_text("warm run 3", "", None, true, &mut error);
+        assert!(error.is_none());
+        validate_text("warm run 4", "", Some("secret"), true, &mut error);
+        assert_eq!(
+            error.as_deref(),
+            Some("warm run 4 did not contain the expected word")
         );
     }
 
@@ -499,6 +727,11 @@ mod tests {
             iterations: 2,
             max_warm_ms: None,
             expect_word: Some(" \t".to_string()),
+            model: None,
+            beam_size: None,
+            disable_temperature_fallback: false,
+            quality_output: None,
+            allow_empty: false,
         });
 
         assert!(matches!(
@@ -509,11 +742,54 @@ mod tests {
     }
 
     #[test]
+    fn quality_source_digest_reads_input_not_new_output_destination() {
+        let directory = std::env::temp_dir().join(format!(
+            "sagascript-benchmark-source-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&directory).expect("temporary test directory should be unique");
+        let input = directory.join("fixture.wav");
+        let output = directory.join("quality.json");
+        fs::write(&input, b"fixture bytes").expect("fixture should be writable");
+        let args = BenchmarkDictationArgs {
+            input: input.clone(),
+            language: "en".to_string(),
+            iterations: 2,
+            max_warm_ms: None,
+            expect_word: None,
+            model: None,
+            beam_size: None,
+            disable_temperature_fallback: false,
+            quality_output: Some(output.clone()),
+            allow_empty: false,
+        };
+
+        benchmark_quality::ensure_unused_destination(&output)
+            .expect("new output destination should pass preflight");
+        let digest = initial_source_audio_sha256(&args)
+            .expect("input digest should be readable")
+            .expect("quality output should request an input digest");
+        assert_eq!(digest, benchmark_quality::input_digest(&input).unwrap());
+        assert!(!output.exists(), "preflight must not create the output");
+
+        let no_quality_args = BenchmarkDictationArgs {
+            input: directory.join("missing.wav"),
+            quality_output: None,
+            ..args
+        };
+        assert_eq!(initial_source_audio_sha256(&no_quality_args).unwrap(), None);
+
+        fs::remove_dir_all(directory).expect("remove only this test's unique directory");
+    }
+
+    #[test]
     fn serialized_report_has_expected_schema_without_input_or_transcript() {
         let report = BenchmarkOutput {
             build_version: super::super::LONG_VERSION,
             language: "en",
             model: "base.en",
+            beam_size: 0,
+            temperature_fallback: true,
             duration_seconds: 11.0,
             decode_duration_ms: 4.0,
             cold_run: ColdRun {
@@ -542,6 +818,8 @@ mod tests {
         assert_eq!(json["build_version"], super::super::LONG_VERSION);
         assert_eq!(json["language"], "en");
         assert_eq!(json["model"], "base.en");
+        assert_eq!(json["beam_size"], 0);
+        assert_eq!(json["temperature_fallback"], true);
         assert_eq!(json["duration_seconds"], 11.0);
         assert_eq!(json["decode_duration_ms"], 4.0);
         assert_eq!(json["cold_run"]["text_nonempty_count"], 1);
@@ -554,5 +832,66 @@ mod tests {
         let serialized = json.to_string();
         assert!(!serialized.contains("fixture.wav"));
         assert!(!serialized.contains("private transcript"));
+    }
+
+    #[test]
+    fn quality_report_preserves_cold_and_every_warm_transcript_row() {
+        let report = QualityReport {
+            schema_version: 1,
+            build_version: super::super::LONG_VERSION,
+            language: "sv",
+            model: "kb-whisper-base",
+            model_expected_sha256: sagascript_core::settings::WhisperModel::KbWhisperBase
+                .download_integrity()
+                .sha256,
+            model_expected_bytes: 123,
+            source_audio_sha256: "b".repeat(64),
+            decoded_audio_sha256: "c".repeat(64),
+            duration_seconds: 2.5,
+            decode_duration_ms: 4.0,
+            beam_size: 2,
+            temperature_fallback: false,
+            allow_empty: true,
+            measurement_endpoint: "live_inference_call_not_visible_text",
+            cold_definition: "first_call_in_new_backend_not_system_cold",
+            cli_checks_passed: true,
+            runs: vec![
+                QualityRun {
+                    kind: "cold",
+                    iteration: 0,
+                    text: "cold text".to_string(),
+                    model_ms: 10.0,
+                    inference_ms: 20.0,
+                    total_ms: 30.0,
+                    model_cached: false,
+                },
+                QualityRun {
+                    kind: "warm",
+                    iteration: 1,
+                    text: "warm one".to_string(),
+                    model_ms: 0.0,
+                    inference_ms: 15.0,
+                    total_ms: 15.0,
+                    model_cached: true,
+                },
+                QualityRun {
+                    kind: "warm",
+                    iteration: 2,
+                    text: "warm two".to_string(),
+                    model_ms: 0.0,
+                    inference_ms: 16.0,
+                    total_ms: 16.0,
+                    model_cached: true,
+                },
+            ],
+        };
+        let json = serde_json::to_value(report).expect("quality report serializes");
+        assert_eq!(json["schema_version"], 1);
+        assert_eq!(json["cli_checks_passed"], true);
+        assert_eq!(json["runs"].as_array().unwrap().len(), 3);
+        assert_eq!(json["runs"][0]["kind"], "cold");
+        assert_eq!(json["runs"][0]["iteration"], 0);
+        assert_eq!(json["runs"][1]["kind"], "warm");
+        assert_eq!(json["runs"][2]["iteration"], 2);
     }
 }
