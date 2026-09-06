@@ -20,6 +20,8 @@ mod events;
 mod hotkey;
 mod overlay;
 mod paste;
+#[path = "paste/completion.rs"]
+mod paste_completion;
 mod platform;
 mod updates;
 
@@ -35,10 +37,10 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 /// release the warm-state lock before we log it as still stuck.
 const ABORT_GRACE_SECS: u64 = 5;
 
-/// Maximum time to wait for the main-thread paste callback to report its result.
-/// The paste operation itself remains on the main thread, but transcription state
-/// must not stay wedged if the callback is never run or never reports completion.
-const PASTE_COMPLETION_TIMEOUT_MS: u64 = 2_000;
+/// Maximum time to wait for the native paste callback to report its result.
+/// macOS paste stays on its mandatory main thread; other platforms use a
+/// blocking worker. A lost callback must not leave dictation stuck processing.
+const PASTE_COMPLETION_TIMEOUT_MS: u64 = paste_completion::COMPLETION_TIMEOUT_MS;
 
 use tauri::{
     menu::{Menu, MenuItem, Submenu},
@@ -848,7 +850,7 @@ fn main() {
                         warn!("Primary model preload skipped: {e}");
                         return;
                     }
-                    if let Err(e) = whisper.warmup(primary_language) {
+                    if let Err(e) = whisper.warmup_model(primary_model, primary_language) {
                         warn!("Primary model warmup failed: {e}");
                     } else {
                         info!(
@@ -862,7 +864,7 @@ fn main() {
                             warn!("Secondary model preload skipped: {e}");
                             continue;
                         }
-                        if let Err(e) = whisper.warmup(language) {
+                        if let Err(e) = whisper.warmup_model(model, language) {
                             warn!("Secondary model warmup failed: {e}");
                         } else {
                             info!(
@@ -1397,7 +1399,8 @@ fn stop_recording_and_transcribe(
     // (finding 2): a std::thread::sleep here freezes UI redraw and stalls
     // subsequent hotkey events. The delay is offloaded to an async task below.
     let elapsed = {
-        let c = ctrl.lock().unwrap();
+        let mut c = ctrl.lock().unwrap();
+        c.mark_release();
         c.recording_elapsed()
     };
     let min = Duration::from_millis(MIN_RECORDING_MS);
@@ -1445,10 +1448,11 @@ fn stop_recording_and_transcribe(
         };
         let key_up_to_capture_stopped_ms = elapsed_ms(key_up_at);
 
-        // Hide overlay + show the transcribing state — re-dispatched to the main
+        // Keep the recording indicator visible through processing, so key-up
+        // never leaves the user without feedback while inference/paste runs.
+        // Show the transcribing state — re-dispatched to the main
         // thread now that this runs on a worker.
         dispatch_to_main(&app_handle, |app| {
-            overlay::hide(app);
             update_tray_status(app, "transcribing");
         });
         let _ = app_handle.emit(events::event::STATE_CHANGED, "transcribing");
@@ -1468,7 +1472,10 @@ fn stop_recording_and_transcribe(
                 }));
                 c.on_no_speech_detected();
             }
-            dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
+            dispatch_to_main(&app_handle, |app| {
+                overlay::hide(app);
+                update_tray_status(app, "idle");
+            });
             let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
             return;
         }
@@ -1498,7 +1505,7 @@ fn stop_recording_and_transcribe(
         let beam_size = opts.beam_size;
         let temperature_fallback = opts.temperature_fallback;
         let vad_enabled = opts.vad_model_path.is_some();
-        let model_was_warm = !whisper.needs_reload(effective_model);
+        let mut model_was_warm = !whisper.needs_reload(effective_model);
         info!("Transcribing with model: {model_name}");
 
         // Show model loading status in tray
@@ -1507,29 +1514,45 @@ fn stop_recording_and_transcribe(
             dispatch_to_main(&app_handle, |app| update_tray_status(app, "loading_model"));
         }
 
-        // Ensure model is loaded
-        let model_load_started_at = Instant::now();
-        let model_result = whisper.ensure_model(effective_model);
-        let model_load_ms = elapsed_ms(model_load_started_at);
-        let key_up_to_model_ready_ms = model_result.is_ok().then(|| elapsed_ms(key_up_at));
+        // Model selection and inference stay in one bounded transaction on
+        // the blocking worker. Do not reintroduce a separate ensure_model call:
+        // another language could otherwise replace the selected context.
+        let mut model_load_ms = None;
+        let mut key_up_to_model_ready_ms = None;
         let mut whisper_ms = None;
-        let result = if let Err(e) = model_result {
-            Err(e)
-        } else {
+        let result = {
             // Run blocking transcription on a separate thread with a timeout. On
             // timeout we trigger a REAL abort (whisper-rs abort callback wired in
             // WhisperBackend): request_abort() flips the flag whisper.cpp checks
             // between compute steps, so the blocking task returns and releases the
             // warm state instead of running to completion and wedging the pipeline.
             let whisper_ref = whisper.inner().clone();
-            let whisper_started_at = Instant::now();
             let mut fut = tokio::task::spawn_blocking(move || {
-                whisper_ref.transcribe_live_sync_with_options(&audio, language, &opts, |_| {})
+                let mut timings = sagascript_core::transcription::whisper_backend::DictationTimings::default();
+                let result = whisper_ref.transcribe_live_dictation(effective_model, &audio, language, &opts, &mut timings);
+                (result, timings)
             });
 
             let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
-            let result = match tokio::time::timeout(timeout, &mut fut).await {
-                Ok(Ok(r)) => r,
+            match tokio::time::timeout(timeout, &mut fut).await {
+                Ok(Ok((r, timings))) => {
+                    let mut c = ctrl.lock().unwrap();
+                    if timings.model_acquisition_started {
+                        model_load_ms = Some(timings.model_ms);
+                        model_was_warm = timings.model_cached;
+                        c.record_phase("model_acquisition", Duration::from_secs_f64(timings.model_ms / 1000.0));
+                        c.record_model_cache(timings.model_cached);
+                    }
+                    key_up_to_model_ready_ms = timings.model_ready_at.map(|ready| {
+                        u64::try_from(ready.saturating_duration_since(key_up_at).as_millis())
+                            .unwrap_or(u64::MAX)
+                    });
+                    if timings.inference_started {
+                        whisper_ms = Some(timings.inference_ms);
+                        c.record_phase("inference", Duration::from_secs_f64(timings.inference_ms / 1000.0));
+                    }
+                    r
+                }
                 Ok(Err(e)) => Err(sagascript_core::error::DictationError::TranscriptionFailed(
                     format!("Task join error: {e}"),
                 )),
@@ -1551,16 +1574,16 @@ fn stop_recording_and_transcribe(
                         format!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s (inference aborted)"),
                     ))
                 }
-            };
-            whisper_ms = Some(elapsed_ms(whisper_started_at));
-            result
+            }
         };
 
-        let key_up_to_whisper_complete_ms = elapsed_ms_if_success(&result, key_up_at);
-
+        let key_up_to_whisper_complete_ms = whisper_ms
+            .and_then(|_| elapsed_ms_if_success(&result, key_up_at));
+        let postprocess_started = std::time::Instant::now();
+        let result = result.map(|text| commands::apply_glossary(text, &glossary));
+        ctrl.lock().unwrap().record_phase("postprocessing", postprocess_started.elapsed());
         match result {
             Ok(text) => {
-                let text = commands::apply_glossary(text, &glossary);
                 info!("Transcription complete: {} chars", text.len());
 
                 if text.trim().is_empty() {
@@ -1584,7 +1607,10 @@ fn stop_recording_and_transcribe(
                     c.on_no_speech_detected();
                     drop(c);
                     let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                    dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
+                    dispatch_to_main(&app_handle, |app| {
+                        overlay::hide(app);
+                        update_tray_status(app, "idle");
+                    });
                     info!("No speech detected; returning to idle without paste");
                     return;
                 }
@@ -1597,15 +1623,15 @@ fn stop_recording_and_transcribe(
 
                 let mut paste_outcome = "disabled";
                 let mut key_up_to_paste_completed_ms = None;
+                let mut paste_error = None;
                 if should_paste {
                     // Auto-paste MUST run on the main thread — enigo's macOS TIS APIs
                     // crash (SIGABRT) if called from a tokio worker thread.
                     let text_for_paste = text.clone();
+                    let paste_started = std::time::Instant::now();
                     let (paste_tx, paste_rx) = tokio::sync::oneshot::channel();
-                    if let Err(e) = app_handle.run_on_main_thread(move || {
-                        info!("Running auto-paste on main thread...");
-                        let paste_svc = crate::paste::PasteService::new();
-                        let paste_result = paste_svc
+                    let paste_task = move || {
+                        let paste_result = crate::paste::PasteService::new()
                             .paste(&text_for_paste)
                             .map_err(|error| error.to_string());
                         match &paste_result {
@@ -1613,33 +1639,36 @@ fn stop_recording_and_transcribe(
                             Err(e) => error!("Auto-paste failed: {e}"),
                         }
                         let _ = paste_tx.send(paste_result);
-                    }) {
+                    };
+                    #[cfg(target_os = "macos")]
+                    let dispatch_result = app_handle.run_on_main_thread(paste_task);
+                    #[cfg(not(target_os = "macos"))]
+                    let dispatch_result: Result<(), String> = {
+                        // Clipboard focus/paste can block on Windows. Keep its
+                        // native UI thread responsive while preserving macOS's
+                        // mandatory main-thread execution above.
+                        tokio::task::spawn_blocking(paste_task);
+                        Ok(())
+                    };
+                    if let Err(e) = dispatch_result {
                         error!("Failed to dispatch paste to main thread: {e}");
                         paste_outcome = "dispatch_failed";
+                        paste_error = Some("Could not dispatch automatic paste. Copy the recognized text from Dictate.".to_string());
                     } else {
-                        match tokio::time::timeout(
-                            Duration::from_millis(PASTE_COMPLETION_TIMEOUT_MS),
+                        let completion = paste_completion::wait(
                             paste_rx,
+                            Duration::from_millis(PASTE_COMPLETION_TIMEOUT_MS),
                         )
-                        .await
-                        {
-                            Ok(Ok(Ok(()))) => {
-                                paste_outcome = "succeeded";
-                                key_up_to_paste_completed_ms = Some(elapsed_ms(key_up_at));
-                            }
-                            Ok(Ok(Err(_))) => {
-                                paste_outcome = "failed";
-                                key_up_to_paste_completed_ms = Some(elapsed_ms(key_up_at));
-                            }
-                            Ok(Err(_)) => paste_outcome = "completion_dropped",
-                            Err(_) => {
-                                paste_outcome = "timed_out";
-                                warn!(
-                                    "Auto-paste completion timed out after {PASTE_COMPLETION_TIMEOUT_MS}ms"
-                                );
-                            }
+                        .await;
+                        paste_outcome = completion.outcome;
+                        paste_error = completion.error;
+                        if completion.call_completed {
+                            key_up_to_paste_completed_ms = Some(elapsed_ms(key_up_at));
+                        } else if paste_outcome == "timed_out" {
+                            warn!("Auto-paste completion timed out after {PASTE_COMPLETION_TIMEOUT_MS}ms");
                         }
                     }
+                    ctrl.lock().unwrap().record_phase("clipboard_focus_paste", paste_started.elapsed());
                 }
 
                 let mut c = ctrl.lock().unwrap();
@@ -1660,6 +1689,26 @@ fn stop_recording_and_transcribe(
                     "keyUpToPasteCompletedMs": key_up_to_paste_completed_ms,
                     "totalMs": elapsed_ms(key_up_at),
                 }));
+                if let Some(message) = paste_error {
+                    // Log the phase event while correlation is still active,
+                    // then finish the terminal session exactly once as error.
+                    // The successful recognition remains available for copy.
+                    c.preserve_transcription(&text);
+                    c.on_transcription_error(&message);
+                    drop(c);
+                    let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
+                    let _ = app_handle.emit(events::event::ERROR, message);
+                    let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                    let open_copy_fallback = paste_completion::should_open_copy_fallback(paste_outcome);
+                    dispatch_to_main(&app_handle, move |app| {
+                        overlay::hide(app);
+                        update_tray_status(app, "idle");
+                        if open_copy_fallback {
+                            open_settings_window(app, Some("dictate"));
+                        }
+                    });
+                    return;
+                }
                 c.on_transcription_success(&text);
                 drop(c);
 
@@ -1667,6 +1716,7 @@ fn stop_recording_and_transcribe(
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
                 let text_for_tray = text.clone();
                 dispatch_to_main(&app_handle, move |app| {
+                    overlay::hide(app);
                     update_tray_status(app, "idle");
                     update_tray_last_result(app, &text_for_tray);
                 });
@@ -1695,7 +1745,10 @@ fn stop_recording_and_transcribe(
                 drop(c);
                 let _ = app_handle.emit(events::event::ERROR, e.to_string());
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
+                dispatch_to_main(&app_handle, |app| {
+                    overlay::hide(app);
+                    update_tray_status(app, "idle");
+                });
                 info!("Error flow complete, app should remain running");
             }
         }

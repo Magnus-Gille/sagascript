@@ -73,6 +73,9 @@ block = "0.1"
 [target.'cfg(target_os = "windows")'.dependencies]
 notify = { version = "7" }
 enigo = { version = "0.6", features = ["serde"] }
+# Already used by arboard; direct access keeps generation + write under one
+# native clipboard guard rather than racing across portable API calls.
+clipboard-win = "=5.4.1"
 
 # Linux GUI build: auto-paste shells out to `xdotool` (no enigo — its X11
 # backend leaves the Control modifier unmapped). `notify` gets its default

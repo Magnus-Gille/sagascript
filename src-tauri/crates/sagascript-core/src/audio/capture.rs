@@ -1,14 +1,14 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use tracing::{error, info};
 
-use crate::error::DictationError;
 use super::resample::{resample_to_16khz, TARGET_SAMPLE_RATE};
+use crate::error::DictationError;
 
 /// Maximum recording length: 15 minutes. Capped in device-rate samples while
 /// recording (the buffer holds raw mono at the device rate), then resampled to
@@ -47,6 +47,7 @@ pub struct AudioCaptureService {
     /// thread for the current capture, if any.
     worker_error: Arc<Mutex<Option<DictationError>>>,
     capture_thread: Option<thread::JoinHandle<()>>,
+    stop_timings: (Duration, Duration),
     /// Retained audio from last capture for retry
     last_captured: Option<Vec<f32>>,
 }
@@ -71,6 +72,7 @@ impl AudioCaptureService {
             first_callback_ms: Arc::new(AtomicU64::new(STREAM_NOT_READY)),
             worker_error: Arc::new(Mutex::new(None)),
             capture_thread: None,
+            stop_timings: (Duration::ZERO, Duration::ZERO),
             last_captured: None,
         }
     }
@@ -141,6 +143,7 @@ impl AudioCaptureService {
     /// error as empty made a real failure indistinguishable from silence (and
     /// surfaced the misleading "No audio captured" to the user).
     pub fn stop_capture(&mut self) -> Result<Vec<f32>, DictationError> {
+        let started = Instant::now();
         // Signal the capture thread to stop
         {
             let mut stop = self.stop_signal.lock().unwrap();
@@ -149,8 +152,15 @@ impl AudioCaptureService {
 
         // Wait for the capture thread to finish
         if let Some(handle) = self.capture_thread.take() {
-            let _ = handle.join();
+            handle.thread().unpark();
+            handle.join().map_err(|_| {
+                DictationError::AudioCaptureError(
+                    "Microphone capture thread stopped unexpectedly".into(),
+                )
+            })?;
         }
+        self.stop_timings.0 = started.elapsed();
+        let conversion_started = Instant::now();
 
         if let Some(error) = self.worker_error.lock().unwrap().take() {
             error!("Audio capture failed: {error}");
@@ -188,8 +198,14 @@ impl AudioCaptureService {
 
         // Retain for retry
         self.last_captured = Some(samples.clone());
+        self.stop_timings.1 = conversion_started.elapsed();
 
         Ok(samples)
+    }
+
+    /// Durations for the most recent successful capture stop and conversion.
+    pub fn stop_timings(&self) -> (Duration, Duration) {
+        self.stop_timings
     }
 
     /// Get the last captured audio for retry
@@ -231,9 +247,9 @@ fn run_capture(
         .default_input_device()
         .ok_or(DictationError::MicrophonePermissionDenied)?;
 
-    let config = device
-        .default_input_config()
-        .map_err(|e| DictationError::AudioCaptureError(format!("Failed to get input config: {e}")))?;
+    let config = device.default_input_config().map_err(|e| {
+        DictationError::AudioCaptureError(format!("Failed to get input config: {e}"))
+    })?;
 
     let device_sample_rate = config.sample_rate().0;
     let device_channels = config.channels();
@@ -295,12 +311,7 @@ fn run_capture(
                             &first_callback_ms_clone,
                             elapsed_ms(capture_requested_at),
                         );
-                        process_samples_i16(
-                            data,
-                            device_channels,
-                            device_sample_rate,
-                            &buf_clone,
-                        );
+                        process_samples_i16(data, device_channels, device_sample_rate, &buf_clone);
                     },
                     err_fn,
                     None,
@@ -325,7 +336,7 @@ fn run_capture(
 
     // Spin until stop signal (the stream callback fills the buffer)
     loop {
-        thread::sleep(std::time::Duration::from_millis(10));
+        thread::park_timeout(std::time::Duration::from_millis(10));
         let stop = stop_signal.lock().unwrap();
         if *stop {
             break;
@@ -351,10 +362,7 @@ fn record_first_worker_error(
 }
 
 fn elapsed_ms(since: Instant) -> u64 {
-    since
-        .elapsed()
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64
+    since.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 fn publish_first_callback_ms(output: &AtomicU64, elapsed_ms: u64) {
@@ -366,12 +374,7 @@ fn publish_first_callback_ms(output: &AtomicU64, elapsed_ms: u64) {
     );
 }
 
-fn process_samples(
-    data: &[f32],
-    channels: u16,
-    device_rate: u32,
-    buffer: &Arc<Mutex<Vec<f32>>>,
-) {
+fn process_samples(data: &[f32], channels: u16, device_rate: u32, buffer: &Arc<Mutex<Vec<f32>>>) {
     // Realtime-safe hot path: downmix to mono and append raw device-rate samples
     // with a length cap. No resampling and no per-callback allocation here —
     // resampling to 16 kHz happens once on stop (see stop_capture).
@@ -426,8 +429,11 @@ fn process_samples_i16(
             if buf.len() >= max_samples {
                 break;
             }
-            let avg =
-                frame.iter().map(|&s| s as f32 / i16::MAX as f32).sum::<f32>() / channels as f32;
+            let avg = frame
+                .iter()
+                .map(|&s| s as f32 / i16::MAX as f32)
+                .sum::<f32>()
+                / channels as f32;
             buf.push(avg);
         }
     }
@@ -558,6 +564,7 @@ mod tests {
     fn first_callback_metric_records_only_the_first_callback() {
         let output = AtomicU64::new(STREAM_NOT_READY);
         publish_first_callback_ms(&output, 0);
+        publish_first_callback_ms(&output, 0);
         publish_first_callback_ms(&output, 12);
 
         assert_eq!(output.load(Ordering::SeqCst), 0);
@@ -566,10 +573,7 @@ mod tests {
     #[test]
     fn first_worker_error_is_retained_and_taken_once() {
         let error_slot = Arc::new(Mutex::new(None));
-        record_first_worker_error(
-            &error_slot,
-            DictationError::MicrophonePermissionDenied,
-        );
+        record_first_worker_error(&error_slot, DictationError::MicrophonePermissionDenied);
         record_first_worker_error(
             &error_slot,
             DictationError::AudioCaptureError("later error".into()),
@@ -585,13 +589,94 @@ mod tests {
     #[test]
     fn stop_capture_returns_worker_error_and_consumes_it() {
         let mut svc = AudioCaptureService::new();
-        *svc.worker_error.lock().unwrap() = Some(DictationError::AudioCaptureError(
-            "stream stopped".into(),
-        ));
+        *svc.worker_error.lock().unwrap() =
+            Some(DictationError::AudioCaptureError("stream stopped".into()));
 
-        let err = svc.stop_capture().expect_err("worker error should not become silence");
+        let err = svc
+            .stop_capture()
+            .expect_err("worker error should not become silence");
         assert_eq!(err.to_string(), "Audio capture error: stream stopped");
-        assert!(svc.stop_capture().expect("error should be consumed").is_empty());
+        assert!(svc
+            .stop_capture()
+            .expect("error should be consumed")
+            .is_empty());
+    }
+
+    #[test]
+    fn stop_capture_propagates_worker_device_failure() {
+        let mut svc = AudioCaptureService::new();
+        let worker_error = Arc::clone(&svc.worker_error);
+        svc.capture_thread = Some(thread::spawn(move || {
+            record_first_worker_error(
+                &worker_error,
+                DictationError::AudioCaptureError("device disconnected".into()),
+            );
+        }));
+        assert!(
+            matches!(svc.stop_capture(), Err(DictationError::AudioCaptureError(message)) if message == "device disconnected")
+        );
+    }
+
+    #[test]
+    fn stop_capture_propagates_worker_panic() {
+        let mut svc = AudioCaptureService::new();
+        svc.capture_thread = Some(thread::spawn(|| panic!("test capture worker failure")));
+        assert!(matches!(
+            svc.stop_capture(),
+            Err(DictationError::AudioCaptureError(_))
+        ));
+    }
+
+    #[test]
+    fn stop_capture_unparks_parked_worker_and_updates_timings() {
+        use std::sync::mpsc;
+
+        let mut svc = AudioCaptureService::new();
+        let previous_timings = (Duration::from_secs(7), Duration::from_secs(11));
+        svc.stop_timings = previous_timings;
+
+        let stop_signal = Arc::clone(&svc.stop_signal);
+        let (parked_sender, parked_receiver) = mpsc::channel();
+        let parked_thread = Arc::new(Mutex::new(None));
+        let parked_thread_for_worker = Arc::clone(&parked_thread);
+        svc.capture_thread = Some(thread::spawn(move || {
+            *parked_thread_for_worker.lock().unwrap() = Some(thread::current());
+            parked_sender.send(()).unwrap();
+            loop {
+                thread::park();
+                if *stop_signal.lock().unwrap() {
+                    break;
+                }
+            }
+        }));
+
+        parked_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("fake capture worker should be ready to park");
+
+        let (result_sender, result_receiver) = mpsc::channel();
+        let stopper = thread::spawn(move || {
+            let result = svc.stop_capture();
+            let timings = svc.stop_timings();
+            result_sender.send((result, timings)).unwrap();
+        });
+
+        let (result, timings) = match result_receiver.recv_timeout(Duration::from_secs(5)) {
+            Ok(result) => result,
+            Err(error) => {
+                if let Some(worker) = parked_thread.lock().unwrap().take() {
+                    worker.unpark();
+                }
+                let _ = stopper.join();
+                panic!("stop_capture did not release parked worker: {error}");
+            }
+        };
+        stopper.join().expect("stopper should finish");
+
+        assert!(result.is_ok());
+        assert_ne!(timings, previous_timings);
+        assert!(timings.0 < previous_timings.0);
+        assert!(timings.1 < previous_timings.1);
     }
 
     #[test]

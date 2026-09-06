@@ -1,9 +1,12 @@
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 use arboard::Clipboard;
 use std::borrow::Cow;
 #[cfg(target_os = "macos")]
 #[path = "macos_clipboard.rs"]
 mod macos_clipboard;
+#[cfg(any(target_os = "windows", test))]
+#[path = "windows_clipboard.rs"]
+mod windows_clipboard;
 // enigo is the input simulator on macOS/Windows. On Linux its X11 backend leaves
 // the Control modifier unmapped (paste silently fails), so we shell out to
 // xdotool instead and don't depend on enigo there.
@@ -40,7 +43,7 @@ impl PasteService {
         }
         let text = paste_payload(text);
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         let mut clipboard = Clipboard::new()
             .map_err(|e| DictationError::PasteError(format!("Clipboard error: {e}")))?;
 
@@ -49,8 +52,8 @@ impl PasteService {
         #[cfg(target_os = "macos")]
         let saved_pasteboard = macos_clipboard::snapshot();
 
-        // Other platforms currently use arboard's portable text API.
-        #[cfg(not(target_os = "macos"))]
+        // Linux currently uses arboard's portable text API.
+        #[cfg(target_os = "linux")]
         let saved_text = clipboard.get_text().ok();
 
         // Set new text. On macOS the native write returns the pasteboard
@@ -75,10 +78,13 @@ impl PasteService {
             }
         };
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         clipboard
             .set_text(text.as_ref())
             .map_err(|e| DictationError::PasteError(format!("Failed to set clipboard: {e}")))?;
+        #[cfg(target_os = "windows")]
+        let saved_windows = windows_clipboard::set_temporary_text(text.as_ref())
+            .map_err(|error| DictationError::PasteError(format!("Failed to set clipboard: {error}")))?;
 
         info!("Text copied to clipboard ({} chars)", text.len());
 
@@ -97,33 +103,49 @@ impl PasteService {
         }
 
         // Small delay to let the previously-focused app regain focus
-        info!("Waiting 50ms before paste simulation...");
+        #[cfg(not(target_os = "windows"))]
         std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Windows SendInput inherits physically held modifiers. In particular,
+        // releasing E before Alt would otherwise dispatch Alt+Ctrl+V. Wait on
+        // the paste worker, without releasing keys the user is still holding.
+        #[cfg(target_os = "windows")]
+        wait_for_windows_modifiers()?;
 
         // Simulate paste keystroke
         info!("Simulating paste keystroke...");
         simulate_paste()?;
 
-        // Schedule clipboard restore
-        #[cfg(not(target_os = "macos"))]
-        let saved = saved_text;
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        // Windows owns the native clipboard session on its worker thread. A
+        // dropped pending handle deliberately leaves the temporary copy in
+        // place, matching the pre-existing paste-failure behavior.
+        #[cfg(target_os = "windows")]
+        saved_windows.schedule_restore();
 
-            #[cfg(target_os = "macos")]
-            if let Some(snapshot) = saved_pasteboard {
-                // Do not clobber clipboard content copied by the user or target
-                // application while the synthetic paste was in flight.
-                let _ = macos_clipboard::restore_if_unchanged(snapshot, owned_change_count);
-            }
+        // Keep the existing delayed restore behavior for non-Windows targets.
+        #[cfg(not(target_os = "windows"))]
+        {
+            #[cfg(target_os = "linux")]
+            let saved = saved_text;
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
 
-            #[cfg(not(target_os = "macos"))]
-            if let Some(text) = saved {
-                if let Ok(mut cb) = Clipboard::new() {
-                    let _ = cb.set_text(text);
+                #[cfg(target_os = "macos")]
+                if let Some(snapshot) = saved_pasteboard {
+                    // Do not clobber clipboard content copied by the user or
+                    // target application while the synthetic paste was in
+                    // flight.
+                    let _ = macos_clipboard::restore_if_unchanged(snapshot, owned_change_count);
                 }
-            }
-        });
+
+                #[cfg(target_os = "linux")]
+                if let Some(text) = saved {
+                    if let Ok(mut cb) = Clipboard::new() {
+                        let _ = cb.set_text(text);
+                    }
+                }
+            });
+        }
 
         Ok(())
     }
@@ -180,14 +202,42 @@ fn simulate_paste() -> Result<(), DictationError> {
     enigo
         .key(modifier, Direction::Press)
         .map_err(|e| DictationError::PasteError(format!("Key press failed: {e}")))?;
-    enigo
-        .key(Key::Unicode('v'), Direction::Click)
-        .map_err(|e| DictationError::PasteError(format!("Key click failed: {e}")))?;
+    #[cfg(target_os = "windows")]
+    let paste_key = Key::Other(0x56); // VK_V, independent of layout/Unicode packets
+    #[cfg(target_os = "macos")]
+    let paste_key = Key::Unicode('v');
+    let click_result = enigo
+        .key(paste_key, Direction::Click)
+        .map_err(|e| DictationError::PasteError(format!("Key click failed: {e}")));
     enigo
         .key(modifier, Direction::Release)
         .map_err(|e| DictationError::PasteError(format!("Key release failed: {e}")))?;
 
     info!("Paste keystroke simulated");
+    click_result
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+extern "system" {
+    fn GetAsyncKeyState(key: i32) -> i16;
+    fn GetForegroundWindow() -> isize;
+}
+
+#[cfg(target_os = "windows")]
+fn wait_for_windows_modifiers() -> Result<(), DictationError> {
+    let target = unsafe { GetForegroundWindow() };
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_millis(crate::paste_completion::WINDOWS_MODIFIER_WAIT_MS);
+    while [0x10, 0x11, 0x12, 0x5B, 0x5C].iter().any(|key| unsafe { GetAsyncKeyState(*key) < 0 }) {
+        if std::time::Instant::now() >= deadline {
+            return Err(DictationError::PasteError("Release the shortcut keys and paste with Ctrl+V. The recognized text is on the clipboard.".into()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    if target == 0 || unsafe { GetForegroundWindow() } != target {
+        return Err(DictationError::PasteError("The focused window changed. Select the intended text field and paste with Ctrl+V.".into()));
+    }
     Ok(())
 }
 
