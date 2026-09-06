@@ -349,6 +349,16 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
         }
     }
 
+    // The X11 backend maps this physical key to the ordinary backslash
+    // keysym, which can resolve to a different key on non-US layouts.
+    if key == "intlbackslash" && platform == HotkeyPlatform::Other {
+        return Err(format!(
+            "Invalid hotkey '{}': IntlBackslash is supported only on macOS and Windows; \
+             it is not supported on this platform. Choose another key.",
+            value
+        ));
+    }
+
     let function_key_number = key
         .strip_prefix('f')
         .and_then(|number| number.parse::<u8>().ok());
@@ -490,12 +500,8 @@ mod tests {
     }
 
     #[test]
-    fn iso_section_key_is_accepted_with_modifiers_on_every_platform() {
-        for platform in [
-            HotkeyPlatform::MacOS,
-            HotkeyPlatform::Windows,
-            HotkeyPlatform::Other,
-        ] {
+    fn iso_section_key_is_accepted_with_modifiers_on_supported_platforms() {
+        for platform in [HotkeyPlatform::MacOS, HotkeyPlatform::Windows] {
             for shortcut in [
                 "Command+IntlBackslash",
                 "Control+intlbackslash",
@@ -516,21 +522,42 @@ mod tests {
             canonical_hotkey_for_platform("Cmd+IntlBackslash", HotkeyPlatform::MacOS),
             "super+intlbackslash"
         );
+        for platform in [HotkeyPlatform::MacOS, HotkeyPlatform::Windows] {
+            assert!(validate_hotkey_for_platform("meta+IntlBackslash", platform).is_ok());
+            assert_eq!(
+                canonical_hotkey_for_platform("meta+IntlBackslash", platform),
+                canonical_hotkey_for_platform("Super+IntlBackslash", platform)
+            );
+        }
+    }
+
+    #[test]
+    fn iso_section_key_is_rejected_on_linux_and_unknown_platforms() {
+        for shortcut in [
+            "Control+IntlBackslash",
+            " Alt + INTLBACKSLASH ",
+            "meta+intlbackslash",
+        ] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::Other).unwrap_err();
+            assert!(error.contains("not supported"), "unexpected error: {error}");
+        }
+        assert!(validate_hotkey_for_platform("Control+Backslash", HotkeyPlatform::Other).is_ok());
+        assert!(validate_hotkey_for_platform("Control+Space", HotkeyPlatform::Other).is_ok());
     }
 
     #[test]
     fn meta_is_the_event_spelling_of_the_command_modifier() {
-        // global-hotkey reports a registered `Super+IntlBackslash` shortcut
-        // back as `meta+IntlBackslash`; both must resolve to the same profile.
+        // global-hotkey reports the Super modifier as `meta`; both spellings
+        // must resolve to the same profile.
         for platform in [
             HotkeyPlatform::MacOS,
             HotkeyPlatform::Windows,
             HotkeyPlatform::Other,
         ] {
-            assert!(validate_hotkey_for_platform("meta+IntlBackslash", platform).is_ok());
+            assert!(validate_hotkey_for_platform("meta+Space", platform).is_ok());
             assert_eq!(
-                canonical_hotkey_for_platform("meta+IntlBackslash", platform),
-                canonical_hotkey_for_platform("Super+IntlBackslash", platform)
+                canonical_hotkey_for_platform("meta+Space", platform),
+                canonical_hotkey_for_platform("Super+Space", platform)
             );
             assert_eq!(
                 canonical_hotkey_for_platform("shift+meta+Space", platform),

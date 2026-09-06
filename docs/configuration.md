@@ -72,7 +72,8 @@ Sagascript names it `IntlBackslash`, so `Command+§` is written `Command+IntlBac
 sagascript config set hotkey 'Command+IntlBackslash'
 ```
 
-In Settings, pressing the key while recording a shortcut captures it automatically, and macOS shows it as `§`.
+On macOS and Windows, pressing the key while recording a shortcut in Settings captures it automatically, and macOS shows it as `§`.
+`IntlBackslash` is not supported on Linux: the current backend can register a different physical key on some layouts. Choose another shortcut on Linux.
 Like every other modified shortcut it is registered through the platform hotkey API and needs no Accessibility permission.
 The crates.io release of `global-hotkey` cannot register this key yet, so `src-tauri/Cargo.toml` pins the upstream commit that added it (tauri-apps/global-hotkey#216).
 
