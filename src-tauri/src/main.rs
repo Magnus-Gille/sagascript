@@ -20,6 +20,7 @@ mod events;
 mod hotkey;
 mod overlay;
 mod paste;
+mod presenter;
 #[path = "paste/completion.rs"]
 mod paste_completion;
 mod platform;
@@ -54,6 +55,7 @@ use app_controller::AppState;
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
 use sagascript_core::settings::HotkeyProfile;
+use sagascript_core::settings::HotkeyMode;
 #[cfg(test)]
 use sagascript_core::settings::{validate_hotkey, Language};
 use sagascript_core::transcription::{
@@ -400,18 +402,54 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
     match state {
         hotkey::BareHotkeyState::Pressed => {
             info!("Hotkey pressed: {shortcut}");
+            let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
+            let safe_fallback = {
+                let c = ctrl.lock().unwrap();
+                shortcut == SAFE_FALLBACK_HOTKEY
+                    && c.settings().validate_shortcut_configuration().is_err()
+                    && health.operational_hotkey().matches(&[SAFE_FALLBACK_HOTKEY.to_string()])
+            };
+            let presenter_action = {
+                let c = ctrl.lock().unwrap();
+                (!safe_fallback && c.settings().hotkey_mode == HotkeyMode::Presenter).then(|| {
+                    hotkey::presenter_routing::pressed_action(c.settings(), shortcut)
+                })
+            };
+            if let Some(action) = presenter_action {
+                let request = match action {
+                    hotkey::presenter_routing::PressAction::Start(profile) => Some(
+                        sagascript_cli::presenter::PresenterRequest::Start {
+                            profile_id: Some(profile.id),
+                        },
+                    ),
+                    hotkey::presenter_routing::PressAction::Finish =>
+                        Some(sagascript_cli::presenter::PresenterRequest::Finish),
+                    hotkey::presenter_routing::PressAction::Cancel =>
+                        Some(sagascript_cli::presenter::PresenterRequest::Cancel),
+                    hotkey::presenter_routing::PressAction::NoOp => None,
+                };
+                if let Some(request) = request {
+                    dispatch_to_main(app, move |app| presenter::handle_request(app, request));
+                }
+                return;
+            }
             let (result, active_profile) = {
                 let mut c = ctrl.lock().unwrap();
                 let profile = c
                     .settings()
                     .hotkey_profile_for_shortcut(shortcut)
                     .or_else(|| {
-                        (shortcut == SAFE_FALLBACK_HOTKEY)
+                        safe_fallback
                             .then(|| c.settings().resolved_hotkey_profiles()[0].clone())
                     });
                 let result = match profile {
                     Some(profile) => match c.handle_hotkey_down_for_profile(profile) {
-                        Ok(result) => result,
+                        Ok(result) => {
+                            if safe_fallback && result == HotkeyDownResult::StartedRecording {
+                                c.use_safe_fallback_lifecycle();
+                            }
+                            result
+                        },
                         Err(error) => {
                             error!("Hotkey down error: {error}");
                             let _ = app.emit(events::event::ERROR, error.to_string());
@@ -454,7 +492,20 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
     }
 }
 fn main() {
-    let gui_launch_mode = gui_launch_mode(std::env::args_os());
+    let startup_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let presenter_args = startup_args.get(1..).unwrap_or_default();
+    let presenter_request = presenter_request_from_os_args(presenter_args);
+    let gui_launch_mode = match &presenter_request {
+        Ok(Some(_)) => GuiLaunchMode::Presenter,
+        Err(_) => GuiLaunchMode::InvalidPresenter,
+        Ok(None) => gui_launch_mode(startup_args),
+    };
+
+    if gui_launch_mode == GuiLaunchMode::InvalidPresenter {
+        eprintln!("Invalid presenter request");
+        std::process::exit(2);
+    }
+    let startup_presenter_request = presenter_request.ok().flatten();
 
     // CLI mode: if a subcommand is given, run CLI and exit. The desktop
     // binary is a full CLI (CLI-first design) — the GUI only launches on a
@@ -489,6 +540,18 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            match presenter_request_from_second_instance_args(&args) {
+                Ok(Some(request)) => {
+                    let app = app.clone();
+                    dispatch_to_main(&app, move |app| presenter::handle_request(app, request));
+                    return;
+                }
+                Err(_) => {
+                    info!("Ignoring malformed second-instance presenter request");
+                    return;
+                }
+                Ok(None) => {}
+            }
             if !second_instance_requests_settings(&args) {
                 info!("Background second-instance launch ignored");
                 return;
@@ -567,11 +630,12 @@ fn main() {
             }
 
             // Read every configured dictation profile and register its shortcut.
-            let profiles = {
+            let requested_settings = {
                 let ctrl: tauri::State<'_, SharedController> = app.state();
                 let c = ctrl.lock().unwrap();
-                c.settings().resolved_hotkey_profiles()
+                c.settings().clone()
             };
+            let profiles = requested_settings.resolved_hotkey_profiles();
             let requested_primary = profiles
                 .iter()
                 .find(|profile| profile.id == "default")
@@ -585,11 +649,11 @@ fn main() {
             // dictate. Recorded in the process-wide health flag so the tray
             // and Settings UI can surface it.
             let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
-            let validation_error = sagascript_core::settings::Settings::validate_hotkey_profiles(&profiles).err();
+            let validation_error = requested_settings.validate_shortcut_configuration().err();
             let registration_shortcuts: Vec<String> = if validation_error.is_some() {
                 vec![SAFE_FALLBACK_HOTKEY.to_string()]
             } else {
-                profiles.iter().map(|profile| profile.shortcut.clone()).collect()
+                requested_settings.resolved_shortcuts()
             };
             if let Some(error) = &validation_error {
                 warn!(
@@ -823,6 +887,10 @@ fn main() {
                 }
             }
 
+            if let Some(request) = startup_presenter_request {
+                presenter::handle_request(app.handle(), request);
+            }
+
             // Preload + warm the bounded set of models selected by the hotkey
             // profiles. The primary profile is restored as active after warmup,
             // while one distinct secondary stays resident for instant bilingual
@@ -932,6 +1000,7 @@ fn main() {
             commands::set_whisper_model,
             commands::set_auto_select_model,
             commands::set_hotkey_mode,
+            commands::set_presenter_config,
             commands::set_hotkey,
             commands::set_hotkey_profiles,
             commands::retry_hotkey_registration,
@@ -1189,12 +1258,18 @@ enum GuiLaunchMode {
     Standard,
     ShowSettings,
     Background,
+    Presenter,
+    InvalidPresenter,
 }
 
 fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLaunchMode {
     let mut args = args.into_iter();
     let _program = args.next();
-    match (args.next(), args.next()) {
+    let remaining: Vec<_> = args.collect();
+    match presenter_request_from_os_args(&remaining) {
+        Ok(Some(_)) => GuiLaunchMode::Presenter,
+        Err(_) => GuiLaunchMode::InvalidPresenter,
+        Ok(None) => match (remaining.first().cloned(), remaining.get(1).cloned()) {
         (Some(argument), None)
             if argument == std::ffi::OsStr::new(sagascript_cli::open::GUI_OPEN_ARG) =>
         {
@@ -1206,10 +1281,74 @@ fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLau
             GuiLaunchMode::Background
         }
         _ => GuiLaunchMode::Standard,
+        },
     }
 }
 
+fn presenter_request_from_strings(
+    args: &[String],
+) -> Result<Option<sagascript_cli::presenter::PresenterRequest>, String> {
+    let has_private_marker = args
+        .iter()
+        .any(|argument| argument.starts_with("--presenter-"));
+    if !has_private_marker {
+        return Ok(None);
+    }
+    sagascript_cli::presenter::parse_marker(args).map(Some)
+}
+
+fn presenter_request_from_os_args(
+    args: &[std::ffi::OsString],
+) -> Result<Option<sagascript_cli::presenter::PresenterRequest>, String> {
+    // Ordinary CLI commands may legitimately carry non-UTF-8 paths on Unix.
+    // Only enter the private presenter parser when a marker is actually
+    // present; otherwise preserve the normal clap/CLI path unchanged.
+    if !args
+        .iter()
+        .any(|argument| argument.to_string_lossy().starts_with("--presenter-"))
+    {
+        return Ok(None);
+    }
+
+    let mut strings = Vec::with_capacity(args.len());
+    for argument in args {
+        let Some(argument) = argument.to_str() else {
+            return Err("presenter request contains a non-text argument".to_string());
+        };
+        strings.push(argument.to_string());
+    }
+    presenter_request_from_strings(&strings)
+}
+
+fn is_sagascript_program(argument: &str) -> bool {
+    let basename = argument
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(argument);
+    basename.eq_ignore_ascii_case("sagascript")
+        || basename.eq_ignore_ascii_case("sagascript.exe")
+}
+
+fn presenter_request_from_second_instance_args(
+    args: &[String],
+) -> Result<Option<sagascript_cli::presenter::PresenterRequest>, String> {
+    if args.len() == 2
+        && !args[0].starts_with("--presenter-")
+        && args[1].starts_with("--presenter-")
+    {
+        if !is_sagascript_program(&args[0]) {
+            return Err("presenter request has an unexpected program name".to_string());
+        }
+        return presenter_request_from_strings(&args[1..]);
+    }
+    presenter_request_from_strings(args)
+}
+
 fn second_instance_requests_settings(args: &[String]) -> bool {
+    match presenter_request_from_strings(args) {
+        Ok(Some(_)) | Err(_) => return false,
+        Ok(None) => {}
+    }
     // `tauri-plugin-single-instance` forwards the complete argv on Windows,
     // including argv[0], but transports differ across platforms and versions.
     // Treat the private background marker as a capability to stay hidden and
@@ -1225,7 +1364,9 @@ fn initial_window_request(
     has_completed_onboarding: bool,
     launch_mode: GuiLaunchMode,
 ) -> InitialWindowRequest {
-    if !has_completed_onboarding {
+    if launch_mode == GuiLaunchMode::Presenter {
+        InitialWindowRequest::Hidden
+    } else if !has_completed_onboarding {
         InitialWindowRequest::Onboarding
     } else if launch_mode == GuiLaunchMode::Background {
         InitialWindowRequest::Hidden
@@ -1399,10 +1540,10 @@ fn stop_recording_and_transcribe(
     // duration — but do NOT block the global-shortcut (UI) thread waiting for it
     // (finding 2): a std::thread::sleep here freezes UI redraw and stalls
     // subsequent hotkey events. The delay is offloaded to an async task below.
-    let elapsed = {
+    let (elapsed, generation, presenter_session) = {
         let mut c = ctrl.lock().unwrap();
         c.mark_release();
-        c.recording_elapsed()
+        (c.recording_elapsed(), c.recording_generation(), c.is_presenter_session())
     };
     let min = Duration::from_millis(MIN_RECORDING_MS);
     let remaining = if elapsed < min {
@@ -1431,11 +1572,15 @@ fn stop_recording_and_transcribe(
         let outcome = {
             let ctrl: tauri::State<'_, SharedController> = app_handle.state();
             let mut c = ctrl.lock().unwrap();
-            c.stop_recording_guarded()
+            c.stop_recording_generation(generation)
         };
         let audio = match outcome {
             StopRecordingOutcome::NotRecording => return,
             StopRecordingOutcome::Failed(msg) => {
+                if presenter_session {
+                    dispatch_to_main(&app_handle, move |app| presenter::complete(app, generation, Err(msg)));
+                    return;
+                }
                 error!("Recording stop failed: {msg}");
                 dispatch_to_main(&app_handle, |app| {
                     overlay::hide(app);
@@ -1459,6 +1604,10 @@ fn stop_recording_and_transcribe(
         let _ = app_handle.emit(events::event::STATE_CHANGED, "transcribing");
 
         if audio.is_empty() {
+            if presenter_session {
+                dispatch_to_main(&app_handle, move |app| presenter::complete(app, generation, Ok(String::new())));
+                return;
+            }
             {
                 let ctrl: tauri::State<'_, SharedController> = app_handle.state();
                 let mut c = ctrl.lock().unwrap();
@@ -1583,6 +1732,11 @@ fn stop_recording_and_transcribe(
         let postprocess_started = std::time::Instant::now();
         let result = result.map(|text| commands::apply_glossary(text, &glossary));
         ctrl.lock().unwrap().record_phase("postprocessing", postprocess_started.elapsed());
+        if presenter_session {
+            let result = result.map_err(|error| error.to_string());
+            dispatch_to_main(&app_handle, move |app| presenter::complete(app, generation, result));
+            return;
+        }
         match result {
             Ok(text) => {
                 info!("Transcription complete: {} chars", text.len());
@@ -1858,23 +2012,29 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             std::thread::sleep(Duration::from_millis(50));
 
             let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
+            let ctrl: tauri::State<'_, SharedController> = app.state();
+            // Keep a live recording's bindings/configuration intact. This is
+            // the dedicated settings-watcher thread, never the native UI or
+            // audio thread. Re-read disk after idle so queued writes coalesce.
+            let _recording_lease = loop {
+                match commands::acquire_hotkey_configuration(&ctrl) {
+                    Ok(lease) => break lease,
+                    Err(_) => std::thread::sleep(Duration::from_millis(50)),
+                }
+            };
             let _transition = health.transition_guard();
             let mut new_settings = load_settings_with_permission_gate();
-            let ctrl: tauri::State<'_, SharedController> = app.state();
             let old_settings = {
                 let c = ctrl.lock().unwrap();
                 c.settings().clone()
             };
 
-            let old_profiles = old_settings.resolved_hotkey_profiles();
-            let new_profiles = new_settings.resolved_hotkey_profiles();
-            let old_profile_shortcuts: Vec<&str> = old_profiles.iter().map(|profile| profile.shortcut.as_str()).collect();
-            let new_profile_shortcuts: Vec<&str> = new_profiles.iter().map(|profile| profile.shortcut.as_str()).collect();
-            if new_profile_shortcuts != old_profile_shortcuts {
+            let old_shortcuts = old_settings.resolved_shortcuts();
+            let new_shortcuts = new_settings.resolved_shortcuts();
+            let validation_error = new_settings.validate_shortcut_configuration().err();
+            if new_shortcuts != old_shortcuts || validation_error.is_some() {
                 info!("Settings watcher: hotkey profiles changed");
                 let old_operational = health.operational_hotkey();
-                let new_shortcuts: Vec<String> = new_profiles.iter().map(|profile| profile.shortcut.clone()).collect();
-                let validation_error = sagascript_core::settings::Settings::validate_hotkey_profiles(&new_profiles).err();
                 let unregister_error = if validation_error.is_none() {
                     match &old_operational {
                         hotkey::OperationalHotkey::Registered(shortcuts) => hotkey::unregister_shortcuts(
@@ -1896,11 +2056,15 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                     new_settings.hotkey = old_settings.hotkey.clone();
                     new_settings.language = old_settings.language;
                     new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
+                    new_settings.hotkey_mode = old_settings.hotkey_mode;
+                    new_settings.presenter = old_settings.presenter.clone();
                     health.record(&old_settings.hotkey, Some(format!("{error}; previous hotkey profiles remain active")), old_operational)
                 } else if let Some(error) = unregister_error {
                     new_settings.hotkey = old_settings.hotkey.clone();
                     new_settings.language = old_settings.language;
                     new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
+                    new_settings.hotkey_mode = old_settings.hotkey_mode;
+                    new_settings.presenter = old_settings.presenter.clone();
                     health.record(&old_settings.hotkey, Some(format!("failed to unregister previous hotkeys: {error}")), hotkey::OperationalHotkey::Unknown)
                 } else {
                     match hotkey::register_shortcuts(&app, &new_shortcuts) {
@@ -1909,6 +2073,8 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                             new_settings.hotkey = old_settings.hotkey.clone();
                             new_settings.language = old_settings.language;
                             new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
+                            new_settings.hotkey_mode = old_settings.hotkey_mode;
+                            new_settings.presenter = old_settings.presenter.clone();
                             match hotkey::unregister_shortcuts(&app, &new_shortcuts) {
                                 Err(cleanup_error) => health.record(
                                     &old_settings.hotkey,
@@ -2135,6 +2301,18 @@ mod tests {
     }
 
     #[test]
+    fn presenter_launch_stays_hidden_even_before_onboarding_is_complete() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::Presenter),
+            InitialWindowRequest::Hidden
+        );
+        assert_eq!(
+            initial_window_request(false, GuiLaunchMode::Presenter),
+            InitialWindowRequest::Hidden
+        );
+    }
+
+    #[test]
     fn incomplete_onboarding_starts_on_the_onboarding_view_even_when_headless() {
         assert_eq!(
             initial_window_request(false, GuiLaunchMode::Background),
@@ -2163,6 +2341,93 @@ mod tests {
             mode(&["sagascript", "config", sagascript_cli::open::GUI_OPEN_ARG]),
             GuiLaunchMode::Standard
         );
+        assert_eq!(
+            mode(&["sagascript", "presenter", "start"]),
+            GuiLaunchMode::Standard
+        );
+    }
+
+    #[test]
+    fn presenter_second_instance_markers_never_reveal_settings() {
+        assert!(!second_instance_requests_settings(&[
+            "sagascript".to_string(),
+            "--presenter-finish".to_string(),
+        ]));
+        assert!(!second_instance_requests_settings(&[
+            "sagascript".to_string(),
+            "--presenter-finish".to_string(),
+            "unexpected".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn second_instance_accepts_complete_argv_shape_without_using_cwd() {
+        let request = presenter_request_from_second_instance_args(&[
+            "/Applications/Sagascript.app/Contents/MacOS/sagascript".to_string(),
+            "--presenter-cancel".to_string(),
+        ])
+        .expect("complete argv marker should parse")
+        .expect("complete argv marker should produce a request");
+        assert_eq!(
+            request,
+            sagascript_cli::presenter::PresenterRequest::Cancel
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_non_text_cli_argument_stays_on_standard_cli_path() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let args = vec![
+            std::ffi::OsString::from("sagascript"),
+            std::ffi::OsString::from_vec(vec![b'/', b't', b'm', b'p', 0x80]),
+        ];
+        assert_eq!(
+            presenter_request_from_os_args(&args[1..]).expect("ordinary CLI args must be preserved"),
+            None
+        );
+        assert_eq!(gui_launch_mode(args), GuiLaunchMode::Standard);
+    }
+
+    #[test]
+    fn second_instance_rejects_unknown_program_name_before_private_marker() {
+        let args = vec!["other-tool".to_string(), "--presenter-start".to_string()];
+        assert!(presenter_request_from_second_instance_args(&args).is_err());
+        assert!(!second_instance_requests_settings(&args));
+    }
+
+    #[test]
+    fn presenter_marker_receipt_requires_one_valid_private_marker() {
+        use sagascript_cli::presenter::PresenterRequest;
+
+        let request = presenter_request_from_strings(&["--presenter-start".to_string()])
+            .expect("valid presenter marker should parse")
+            .expect("presenter marker should produce a request");
+        assert_eq!(request, PresenterRequest::Start { profile_id: None });
+        assert_eq!(
+            gui_launch_mode(["sagascript".into(), "--presenter-start".into()]),
+            GuiLaunchMode::Presenter
+        );
+    }
+
+    #[test]
+    fn malformed_or_mixed_presenter_markers_fail_closed_without_settings_reveal() {
+        for args in [
+            vec!["--presenter-finish".to_string(), "extra".to_string()],
+            vec!["--presenter-start=Bad_ID".to_string()],
+            vec!["--presenter-unknown".to_string()],
+            vec!["ordinary-cli".to_string(), "--presenter-cancel".to_string()],
+        ] {
+            assert!(presenter_request_from_strings(&args).is_err());
+            assert_eq!(
+                gui_launch_mode(
+                    std::iter::once(std::ffi::OsString::from("sagascript"))
+                        .chain(args.into_iter().map(std::ffi::OsString::from))
+                ),
+                GuiLaunchMode::InvalidPresenter
+            );
+        }
     }
 
     #[cfg(target_os = "macos")]

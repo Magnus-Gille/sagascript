@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::{canonical_hotkey, validate_hotkey};
+use super::{canonical_hotkey, validate_hotkey, PresenterConfig};
 
 use crate::{download::DownloadIntegrity, transcription::Glossary};
 
@@ -463,6 +463,8 @@ pub enum HotkeyMode {
     PushToTalk,
     #[serde(rename = "toggle")]
     Toggle,
+    #[serde(rename = "presenter")]
+    Presenter,
 }
 
 impl HotkeyMode {
@@ -471,6 +473,7 @@ impl HotkeyMode {
         match self {
             HotkeyMode::PushToTalk => "Push-to-talk",
             HotkeyMode::Toggle => "Toggle",
+            HotkeyMode::Presenter => "Presenter",
         }
     }
 }
@@ -502,6 +505,7 @@ pub struct Settings {
     pub language: Language,
     pub whisper_model: WhisperModel,
     pub hotkey_mode: HotkeyMode,
+    pub presenter: PresenterConfig,
     pub show_overlay: bool,
     pub auto_paste: bool,
     pub auto_select_model: bool,
@@ -536,6 +540,7 @@ impl Default for Settings {
             language: Language::default(),
             whisper_model: WhisperModel::default(),
             hotkey_mode: HotkeyMode::default(),
+            presenter: PresenterConfig::default(),
             show_overlay: true,
             auto_paste: true,
             auto_select_model: true,
@@ -615,6 +620,24 @@ impl Settings {
         }
     }
 
+    /// Return all shortcuts that the active hotkey mode may register.
+    /// Presenter finish/cancel shortcuts are intentionally omitted from the
+    /// ordinary modes so opting into presenter behavior is explicit.
+    pub fn resolved_shortcuts(&self) -> Vec<String> {
+        let mut shortcuts = self
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .map(|profile| profile.shortcut)
+            .collect::<Vec<_>>();
+        if self.hotkey_mode == HotkeyMode::Presenter {
+            shortcuts.push(self.presenter.finish_shortcut.clone());
+            if let Some(cancel) = &self.presenter.cancel_shortcut {
+                shortcuts.push(cancel.clone());
+            }
+        }
+        shortcuts
+    }
+
     pub fn validate_hotkey_profiles(profiles: &[HotkeyProfile]) -> Result<(), String> {
         if profiles.is_empty() {
             return Err("At least one hotkey profile is required".to_string());
@@ -644,6 +667,48 @@ impl Settings {
                 return Err(format!("Duplicate hotkey '{}'", profile.shortcut));
             }
         }
+        Ok(())
+    }
+
+    /// Validate the complete shortcut configuration. Presenter shortcuts are
+    /// checked syntactically in every mode, while collisions with profile
+    /// shortcuts matter only after presenter mode is explicitly enabled.
+    pub fn validate_shortcut_configuration(&self) -> Result<(), String> {
+        let profiles = self.resolved_hotkey_profiles();
+        Self::validate_hotkey_profiles(&profiles)?;
+        self.presenter.validate()?;
+        if self.hotkey_mode == HotkeyMode::Presenter {
+            let mut shortcuts = profiles
+                .iter()
+                .map(|profile| canonical_hotkey(&profile.shortcut))
+                .collect::<Result<HashSet<_>, _>>()?;
+            let finish = canonical_hotkey(&self.presenter.finish_shortcut)?;
+            if !shortcuts.insert(finish) {
+                return Err("Presenter finish shortcut conflicts with a profile shortcut".to_string());
+            }
+            if let Some(cancel) = &self.presenter.cancel_shortcut {
+                if !shortcuts.insert(canonical_hotkey(cancel)?) {
+                    return Err("Presenter cancel shortcut conflicts with a profile shortcut".to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn replace_presenter_config(&mut self, presenter: PresenterConfig) -> Result<(), String> {
+        presenter.validate()?;
+        let mut candidate = self.clone();
+        candidate.presenter = presenter.clone();
+        candidate.validate_shortcut_configuration()?;
+        self.presenter = presenter;
+        Ok(())
+    }
+
+    pub fn replace_hotkey_mode(&mut self, hotkey_mode: HotkeyMode) -> Result<(), String> {
+        let mut candidate = self.clone();
+        candidate.hotkey_mode = hotkey_mode;
+        candidate.validate_shortcut_configuration()?;
+        self.hotkey_mode = hotkey_mode;
         Ok(())
     }
 
@@ -682,9 +747,14 @@ impl Settings {
             ));
         }
         let legacy = profiles.iter().find(|profile| profile.id == "default").unwrap_or(&profiles[0]);
-        self.hotkey = legacy.shortcut.clone();
-        self.language = legacy.language;
-        self.hotkey_profiles = profiles;
+        let mut candidate = self.clone();
+        candidate.hotkey = legacy.shortcut.clone();
+        candidate.language = legacy.language;
+        candidate.hotkey_profiles = profiles;
+        candidate.validate_shortcut_configuration()?;
+        self.hotkey = candidate.hotkey;
+        self.language = candidate.language;
+        self.hotkey_profiles = candidate.hotkey_profiles;
         Ok(())
     }
 
@@ -722,11 +792,23 @@ impl Settings {
         Ok(())
     }
 
-    pub fn set_legacy_hotkey(&mut self, shortcut: String) {
-        self.hotkey = shortcut.clone();
-        if let Some(profile) = self.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
+    /// Try to update the legacy/default profile shortcut atomically.
+    pub fn try_set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), String> {
+        let mut candidate = self.clone();
+        candidate.hotkey = shortcut.clone();
+        if let Some(profile) = candidate.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
             profile.shortcut = shortcut;
         }
+        candidate.validate_shortcut_configuration()?;
+        self.hotkey = candidate.hotkey;
+        self.hotkey_profiles = candidate.hotkey_profiles;
+        Ok(())
+    }
+
+    /// Checked legacy/default profile shortcut update. Invalid or colliding
+    /// updates leave the complete settings value unchanged.
+    pub fn set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), String> {
+        self.try_set_legacy_hotkey(shortcut)
     }
 
     /// Build the ordered set of profile models worth loading during GUI
@@ -1139,6 +1221,7 @@ mod tests {
     fn hotkey_mode_display_names() {
         assert_eq!(HotkeyMode::PushToTalk.display_name(), "Push-to-talk");
         assert_eq!(HotkeyMode::Toggle.display_name(), "Toggle");
+        assert_eq!(HotkeyMode::Presenter.display_name(), "Presenter");
     }
 
     #[test]
@@ -1147,6 +1230,8 @@ mod tests {
         assert_eq!(json, "\"push\"");
         let json = serde_json::to_string(&HotkeyMode::Toggle).unwrap();
         assert_eq!(json, "\"toggle\"");
+        let json = serde_json::to_string(&HotkeyMode::Presenter).unwrap();
+        assert_eq!(json, "\"presenter\"");
     }
 
     // -- Settings --
@@ -1161,11 +1246,134 @@ mod tests {
         assert!(s.auto_paste);
         assert!(s.auto_select_model);
         assert_eq!(s.hotkey, "Control+Shift+Space");
+        assert_eq!(s.presenter, PresenterConfig::default());
         assert_eq!(s.initial_prompt, "");
         assert!(s.profile_glossaries.is_empty());
         assert_eq!(s.beam_size, 0);
         assert!(s.temperature_fallback);
         assert!(!s.vad_enabled);
+    }
+
+    #[test]
+    fn legacy_settings_default_presenter_without_changing_old_hotkey_fields() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"hotkey_mode":"toggle","hotkey":"Option+Space"}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.hotkey_mode, HotkeyMode::Toggle);
+        assert_eq!(settings.hotkey, "Option+Space");
+        assert_eq!(settings.presenter, PresenterConfig::default());
+    }
+
+    #[test]
+    fn presenter_config_serializes_actions_with_strict_names() {
+        let mut presenter = PresenterConfig {
+            cancel_shortcut: Some("Option+Escape".to_string()),
+            ..PresenterConfig::default()
+        };
+        presenter.app_actions.insert(
+            "com.example.editor".to_string(),
+            crate::settings::PresenterFinishAction::CommandReturn,
+        );
+        let json = serde_json::to_string(&presenter).unwrap();
+        assert!(json.contains("command_return"));
+        let roundtrip: PresenterConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, presenter);
+        assert!(serde_json::from_str::<PresenterConfig>(
+            r#"{"finish_shortcut":"Control+Shift+Enter","app_actions":{"com.example.editor":"unknown"}}"#,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn presenter_config_validates_bounded_app_identifiers() {
+        let mut presenter = PresenterConfig::default();
+        presenter.app_actions.insert("bad\napp".to_string(), Default::default());
+        assert!(presenter.validate().is_err());
+        presenter.app_actions.clear();
+        presenter.app_actions.insert("x".repeat(513), Default::default());
+        assert!(presenter.validate().is_err());
+        presenter.app_actions.clear();
+        presenter.app_actions.insert(String::new(), Default::default());
+        assert!(presenter.validate().is_err());
+        presenter.app_actions.clear();
+        for index in 0..=PresenterConfig::MAX_APP_ACTIONS {
+            presenter
+                .app_actions
+                .insert(format!("com.example.app{index}"), Default::default());
+        }
+        assert!(presenter.validate().is_err());
+    }
+
+    #[test]
+    fn presenter_mode_transition_rejects_canonical_profile_collision_atomically() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![profile(
+                "default",
+                "Control+Shift+Enter",
+                Language::English,
+            )])
+            .unwrap();
+        let before_mode = settings.hotkey_mode;
+        let error = settings.replace_hotkey_mode(HotkeyMode::Presenter).unwrap_err();
+        assert!(error.contains("profile shortcut"));
+        assert_eq!(settings.hotkey_mode, before_mode);
+        assert_eq!(settings.hotkey_profiles[0].shortcut, "Control+Shift+Enter");
+    }
+
+    #[test]
+    fn presenter_config_replacement_and_profile_edit_are_atomic_when_active() {
+        let mut settings = Settings::default();
+        settings.replace_hotkey_mode(HotkeyMode::Presenter).unwrap();
+        let old_presenter = settings.presenter.clone();
+        let mut colliding = old_presenter.clone();
+        colliding.finish_shortcut = "Control+Shift+Space".to_string();
+        assert!(settings.replace_presenter_config(colliding).is_err());
+        assert_eq!(settings.presenter, old_presenter);
+
+        let old_profiles = settings.hotkey_profiles.clone();
+        let error = settings.replace_hotkey_profiles(vec![profile(
+            "default",
+            "Ctrl+Shift+Enter",
+            Language::English,
+        )]);
+        assert!(error.is_err());
+        assert_eq!(settings.hotkey_profiles, old_profiles);
+    }
+
+    #[test]
+    fn presenter_shortcuts_are_resolved_only_when_mode_is_active() {
+        let mut settings = Settings::default();
+        settings.presenter.cancel_shortcut = Some("Option+Escape".to_string());
+        assert_eq!(
+            settings.resolved_shortcuts(),
+            vec!["Control+Shift+Space".to_string()]
+        );
+        settings.replace_hotkey_mode(HotkeyMode::Presenter).unwrap();
+        assert_eq!(
+            settings.resolved_shortcuts(),
+            vec![
+                "Control+Shift+Space".to_string(),
+                "Control+Shift+Enter".to_string(),
+                "Option+Escape".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_hotkey_collision_is_rejected_without_mutation() {
+        let mut settings = Settings::default();
+        settings.replace_hotkey_mode(HotkeyMode::Presenter).unwrap();
+        let before = settings.hotkey.clone();
+        assert!(settings
+            .set_legacy_hotkey("Ctrl+Shift+Enter".to_string())
+            .is_err());
+        assert_eq!(settings.hotkey, before);
+        assert_eq!(settings.resolved_hotkey_profiles()[0].shortcut, before);
+        assert!(settings
+            .try_set_legacy_hotkey("Ctrl+Shift+Enter".to_string())
+            .is_err());
     }
 
     #[test]
