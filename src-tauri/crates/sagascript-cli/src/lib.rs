@@ -1,7 +1,13 @@
+pub(crate) mod benchmark_config;
+mod benchmark_quality;
 pub mod config;
+pub mod benchmark_dictation;
 pub mod glossary;
+pub mod latency;
+pub mod meeting;
 pub mod models;
 pub mod open;
+pub mod presenter;
 // Live recording is optional (`record` feature, on by default) so a pure
 // batch-transcribe build (`--no-default-features`) carries no audio-capture
 // stack — on Linux, no cpal/ALSA.
@@ -170,6 +176,26 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Benchmark cold and warm in-process live dictation inference
+    #[command(
+        long_about = "\
+Benchmark the live dictation inference path on one supplied audio/video fixture.\
+ The fixture is decoded once, then transcribed once as a cold run and repeatedly\
+ through one in-process backend for warm timing samples. The command uses the\
+ recommended model for the selected language unless --model is supplied, and\
+ never downloads a model or changes saved settings. Decoder overrides are\
+ local to this invocation. Timings end at the inference call, not visible text.\n\n\
+ Normal JSON output contains timings and counts, never transcript text.\
+ --quality-output explicitly writes plaintext transcripts to a NEW local file\
+ in an existing directory (0600 on Unix; parent ACL on Windows). Keep it out of\
+ shared or synced folders. Inputs are limited to 128 MiB and 120 decoded seconds\
+ for this export. --allow-empty captures silence cases without judging quality.\
+ A report's cli_checks_passed is not an accuracy or adoption verdict.",
+        after_long_help = "\
+EXAMPLES:\n  sagascript benchmark-dictation test-audio/english-jfk.wav --language en\n  sagascript benchmark-dictation sample.wav --language sv --iterations 10 --max-warm-ms 250\n  sagascript benchmark-dictation sample.wav --language en --expect-word hello"
+    )]
+    BenchmarkDictation(benchmark_dictation::BenchmarkDictationArgs),
+
     /// Transcribe audio/video files or directories
     #[command(
         long_about = "\
@@ -210,6 +236,20 @@ EXAMPLES:
   sagascript transcribe recordings/ --recursive --jsonl"
     )]
     Transcribe(transcribe::TranscribeArgs),
+
+    /// Summarize copied live-dictation latency JSONL without launching the app
+    #[command(
+        long_about = "Summarize explicitly copied dictation_phase_timings JSONL. Valid input emits JSON and exits zero. An explicit budget failure emits the JSON report and exits nonzero; invalid input or arguments exit nonzero without JSON. This command never reads the default log directory, starts the app, captures audio, loads a model, changes settings, or contacts a remote service.",
+        after_long_help = "EXAMPLES:\n  sagascript latency-report --input /tmp/sagascript.log\n  sagascript latency-report --input /tmp/sagascript.log --budget-length short --max-warm-p95-ms 800 --min-samples 20"
+    )]
+    LatencyReport(latency::LatencyReportArgs),
+
+    /// Inspect and export validated meeting transcript documents
+    #[command(
+        long_about = "Read a validated meeting transcript JSON document and inspect, export, rename, or merge it without modifying the input. This command never persists changes, reads source audio, runs inference, changes settings, or contacts a network service.",
+        after_long_help = "EXAMPLES:\n  sagascript meeting inspect meeting.json\n  sagascript meeting export meeting.json --format markdown\n  sagascript meeting rename meeting.json --speaker speaker-1 --label Chair\n  sagascript meeting merge meeting.json --from speaker-2 --into speaker-1"
+    )]
+    Meeting(meeting::MeetingArgs),
 
     /// Record from microphone and transcribe
     #[cfg(feature = "record")]
@@ -329,6 +369,13 @@ This is a recovery path when the menu-bar status item is unavailable. On macOS, 
     )]
     Open,
 
+    /// Send a presenter start, finish, or cancel request to the installed desktop app
+    #[command(
+        long_about = "Send one private presenter request to the installed Sagascript desktop app. The command does not record audio, transcribe, insert text, or report completion; check the desktop status for the result.",
+        after_long_help = "EXAMPLES:\n  sagascript presenter start\n  sagascript presenter start swedish\n  sagascript presenter finish\n  sagascript presenter cancel"
+    )]
+    Presenter(presenter::PresenterArgs),
+
     /// Reset first-launch onboarding (re-run setup wizard on next launch)
     #[command(
         long_about = "\
@@ -380,10 +427,10 @@ EXAMPLES:
     )]
     Config(config::ConfigArgs),
 
-    /// Manage the persistent personal dictionary used by live and batch transcription
+    /// Manage global hint terms and explicit profile-scoped aliases used by live and batch transcription
     #[command(
-        long_about = "Add preferred spellings and optional exact mishearings. Plain terms prime Whisper; aliases also authorize deterministic local corrections before output.",
-        after_long_help = "EXAMPLES:\n  sagascript glossary path\n  sagascript glossary path --profile swedish\n  sagascript glossary list\n  sagascript glossary add OpenRouter --alias 'open router' --alias 'open vrouter'\n  sagascript glossary add merge --alias merch --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish --apply\n  sagascript glossary remove OpenRouter\n  sagascript glossary clear --yes"
+        long_about = "Add preferred spellings and optional exact mishearings. Global and one-run terms prime Whisper as hint-only context; deterministic aliases require a selected known profile with an explicit language. No stored text is migrated or deleted.",
+        after_long_help = "EXAMPLES:\n  sagascript glossary path\n  sagascript glossary path --profile swedish\n  sagascript glossary list\n  sagascript glossary add OpenRouter\n  sagascript glossary add OpenRouter --alias 'open router' --alias 'open vrouter' --profile swedish\n  sagascript glossary add merge --alias merch --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish --apply\n  sagascript glossary remove OpenRouter --profile swedish\n  sagascript glossary clear --yes"
     )]
     Glossary(glossary::GlossaryArgs),
 
@@ -463,14 +510,19 @@ pub fn run(cli: Cli) {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
     let result = match cli.command.unwrap() {
+        Command::BenchmarkDictation(args) =>
+            run_inference_command("benchmark-dictation", move || benchmark_dictation::run(args)),
         Command::Transcribe(args) =>
             run_inference_command("transcribe", move || transcribe::run(args)),
+        Command::LatencyReport(args) => latency::run(args),
+        Command::Meeting(args) => meeting::run(args),
         #[cfg(feature = "record")]
         Command::Record(args) => run_inference_command("record", move || record::run(args)),
         Command::ListModels(args) => models::list(args),
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
         Command::Open => open::run(),
+        Command::Presenter(args) => presenter::run(args),
         Command::ResetOnboarding => {
             sagascript_core::settings::store::update(|settings| {
                 settings.has_completed_onboarding = false;
@@ -658,6 +710,42 @@ mod tests {
 
         let command = Cli::command();
         assert_eq!(command.get_long_version(), Some(LONG_VERSION));
+    }
+
+    #[test]
+    fn benchmark_dictation_is_discoverable_with_gate_arguments() {
+        let command = Cli::command();
+        let benchmark = command
+            .find_subcommand("benchmark-dictation")
+            .expect("benchmark-dictation should be a root subcommand");
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "language"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "iterations"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "max_warm_ms"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "expect_word"));
+    }
+
+    #[test]
+    fn presenter_commands_are_discoverable_and_parse_without_launching() {
+        let command = Cli::command();
+        let presenter = command
+            .find_subcommand("presenter")
+            .expect("presenter should be a root subcommand");
+        let names: Vec<_> = presenter
+            .get_subcommands()
+            .map(|subcommand| subcommand.get_name())
+            .collect();
+        assert_eq!(names, ["start", "finish", "cancel"]);
+
+        let parsed = Cli::try_parse_from(["sagascript", "presenter", "start", "swedish"])
+            .expect("presenter start should parse");
+        assert!(matches!(
+            parsed.command,
+            Some(Command::Presenter(presenter::PresenterArgs {
+                action: presenter::PresenterAction::Start {
+                    profile_id: Some(_)
+                }
+            }))
+        ));
     }
 
     // -- Completions generation --

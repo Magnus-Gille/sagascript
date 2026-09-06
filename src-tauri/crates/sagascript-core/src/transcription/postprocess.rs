@@ -13,10 +13,12 @@ struct Token<'a> {
 /// Bare labels are only treated as annotations when Whisper repeats them at
 /// least three times in a row; this preserves genuine phrases such as
 /// "jag gillar musik" and even a spoken double repetition.
+/// Exact `[BLANK_AUDIO]` artifacts are removed from the display text.
 pub fn normalize_nonspeech_markers(text: &str, language: Language) -> String {
-    let tokens = token_spans(text);
+    let text = remove_blank_audio_markers(text);
+    let tokens = token_spans(&text);
     if tokens.is_empty() {
-        return text.to_string();
+        return text;
     }
 
     let marker = music_marker(language);
@@ -49,10 +51,58 @@ pub fn normalize_nonspeech_markers(text: &str, language: Language) -> String {
     }
 
     if cursor == 0 {
-        return text.to_string();
+        return text;
     }
     rendered.push_str(&text[cursor..]);
     rendered
+}
+
+const BLANK_AUDIO_MARKER: &str = "[BLANK_AUDIO]";
+
+fn remove_blank_audio_markers(text: &str) -> String {
+    if !text.contains(BLANK_AUDIO_MARKER) {
+        return text.to_string();
+    }
+
+    let mut rendered = String::with_capacity(text.len());
+    for (index, part) in text.split(BLANK_AUDIO_MARKER).enumerate() {
+        if index == 0 {
+            rendered.push_str(part);
+            continue;
+        }
+        // Only normalize the boundary left by a removed marker. Paragraphs
+        // and intentional spacing elsewhere must remain untouched.
+        let left_trimmed_len = rendered.trim_end().len();
+        let right_trimmed = part.trim_start();
+        let boundary = format!(
+            "{}{}",
+            &rendered[left_trimmed_len..],
+            &part[..part.len() - right_trimmed.len()]
+        );
+        rendered.truncate(left_trimmed_len);
+        let part = right_trimmed;
+        if !rendered.is_empty() && !part.is_empty() {
+            if boundary.contains('\n') {
+                rendered.push_str(if boundary.matches('\n').count() > 1 {
+                    "\n\n"
+                } else {
+                    "\n"
+                });
+            } else if !part.starts_with(['.', ',', '!', '?', ';', ':']) {
+                rendered.push(' ');
+            }
+        }
+        rendered.push_str(part);
+    }
+
+    if rendered
+        .chars()
+        .all(|character| !character.is_alphanumeric())
+    {
+        String::new()
+    } else {
+        rendered
+    }
 }
 
 fn token_spans(text: &str) -> Vec<Token<'_>> {
@@ -180,6 +230,85 @@ mod tests {
         assert_eq!(
             normalize_nonspeech_markers(transcript, Language::Swedish),
             transcript
+        );
+    }
+
+    #[test]
+    fn removes_repeated_blank_audio_markers_from_display() {
+        for language in [Language::Swedish, Language::English] {
+            assert_eq!(
+                normalize_nonspeech_markers("[BLANK_AUDIO] [BLANK_AUDIO] [BLANK_AUDIO]", language,),
+                ""
+            );
+        }
+    }
+
+    #[test]
+    fn removes_blank_audio_between_real_words() {
+        assert_eq!(
+            normalize_nonspeech_markers("One.\n\n[BLANK_AUDIO]\n\nTwo.", Language::English),
+            "One.\n\nTwo."
+        );
+        assert_eq!(
+            normalize_nonspeech_markers("First.\n\nHello [BLANK_AUDIO] world", Language::English),
+            "First.\n\nHello world"
+        );
+        assert_eq!(
+            normalize_nonspeech_markers("Hello [BLANK_AUDIO] world", Language::English),
+            "Hello world"
+        );
+        assert_eq!(
+            normalize_nonspeech_markers("Hello[BLANK_AUDIO]world", Language::English),
+            "Hello world"
+        );
+        assert_eq!(
+            normalize_nonspeech_markers("Hello  [BLANK_AUDIO]   world", Language::English),
+            "Hello world"
+        );
+    }
+
+    #[test]
+    fn removes_adjacent_and_attached_blank_audio_artifacts() {
+        assert_eq!(
+            normalize_nonspeech_markers("[BLANK_AUDIO][BLANK_AUDIO]", Language::Swedish),
+            ""
+        );
+        assert_eq!(
+            normalize_nonspeech_markers("[BLANK_AUDIO].", Language::Swedish),
+            ""
+        );
+        assert_eq!(
+            normalize_nonspeech_markers("Hello [BLANK_AUDIO].", Language::English),
+            "Hello."
+        );
+    }
+
+    #[test]
+    fn preserves_raw_segment_text_and_genuine_thanks() {
+        let raw_segment = crate::transcription::TranscriptSegment {
+            start: 0.0,
+            end: 1.0,
+            text: "Hello [BLANK_AUDIO] world".to_string(),
+            avg_logprob: None,
+            no_speech_prob: 0.0,
+        };
+        let raw_json = serde_json::to_value(&raw_segment).unwrap();
+        assert_eq!(
+            normalize_nonspeech_markers(&raw_segment.text, Language::English),
+            "Hello world"
+        );
+        assert_eq!(serde_json::to_value(&raw_segment).unwrap(), raw_json);
+        assert_eq!(
+            normalize_nonspeech_markers("Tack! Tack! Tack.", Language::Swedish),
+            "Tack! Tack! Tack."
+        );
+        assert_eq!(
+            normalize_nonspeech_markers("[BLANK_AUDIO] Tack! Tack! Tack.", Language::Swedish),
+            "Tack! Tack! Tack."
+        );
+        assert_eq!(
+            normalize_nonspeech_markers("Thank you", Language::English),
+            "Thank you"
         );
     }
 }

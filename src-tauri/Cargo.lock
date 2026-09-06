@@ -4319,6 +4319,7 @@ dependencies = [
  "block",
  "block2",
  "chrono",
+ "clipboard-win",
  "cocoa",
  "core-foundation 0.10.1",
  "dirs 6.0.0",

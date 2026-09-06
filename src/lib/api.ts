@@ -1,7 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { MeetingExportFormat, MeetingTranscript } from "./meeting-types";
 
 export type Language = "en" | "sv" | "no" | "auto";
-export type HotkeyMode = "push" | "toggle";
+export type HotkeyMode = "push" | "toggle" | "presenter";
+
+export type PresenterFinishAction = "insert_only" | "return" | "command_return";
+
+export interface PresenterConfig {
+  finish_shortcut: string;
+  cancel_shortcut: string | null;
+  app_actions: Record<string, PresenterFinishAction>;
+}
 
 export interface HotkeyProfile {
   id: string;
@@ -23,6 +32,7 @@ export interface Settings {
   language: Language;
   whisper_model: string;
   hotkey_mode: HotkeyMode;
+  presenter: PresenterConfig;
   show_overlay: boolean;
   auto_paste: boolean;
   auto_select_model: boolean;
@@ -71,8 +81,26 @@ export interface GlossarySuggestion {
   context: string;
 }
 
+export type MeetingJobStatus = "running" | "cancelling" | "completed" | "cancelled" | "failed";
+
+export interface MeetingJobSnapshot {
+  id: string;
+  status: MeetingJobStatus;
+  phase: string;
+  error: string | null;
+  transcript: MeetingTranscript | null;
+}
+
 export async function getState(): Promise<AppState> {
   return invoke("get_state");
+}
+
+export async function getLastError(): Promise<string | null> {
+  return invoke("get_last_error");
+}
+
+export async function getLastTranscription(): Promise<string | null> {
+  return invoke("get_last_transcription");
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -93,6 +121,10 @@ export async function setAutoSelectModel(enabled: boolean): Promise<void> {
 
 export async function setHotkeyMode(mode: HotkeyMode): Promise<void> {
   return invoke("set_hotkey_mode", { mode });
+}
+
+export async function setPresenterConfig(config: PresenterConfig): Promise<void> {
+  return invoke("set_presenter_config", { config });
 }
 
 export async function setHotkey(shortcut: string): Promise<void> {
@@ -122,8 +154,12 @@ export async function setAutoPaste(enabled: boolean): Promise<void> {
   return invoke("set_auto_paste", { enabled });
 }
 
-export async function setInitialPrompt(prompt: string): Promise<void> {
-  return invoke("set_initial_prompt", { prompt });
+export async function setInitialPrompt(prompt: string, expectedSource?: string): Promise<void> {
+  return invoke("set_initial_prompt", { prompt, expectedSource });
+}
+
+export async function setProfileGlossary(profileId: string, source: string, expectedSource?: string): Promise<void> {
+  return invoke("set_profile_glossary", { profileId, source, expectedSource });
 }
 
 export async function setShowOverlay(enabled: boolean): Promise<void> {
@@ -172,13 +208,53 @@ export async function getBuildInfo(): Promise<BuildInfo> {
 
 export async function transcribeFile(
   filePath: string,
-  options?: { prompt?: string; diarize?: boolean }
+  options?: { prompt?: string; diarize?: boolean; profileId?: string }
 ): Promise<string> {
   return invoke("transcribe_file", {
     filePath,
     prompt: options?.prompt ?? null,
     diarize: options?.diarize ?? false,
+    profileId: options?.profileId ?? null,
   });
+}
+
+export async function beginMeetingFile(
+  filePath: string,
+  prompt: string | null,
+  profileId: string | null,
+): Promise<string> {
+  return invoke("begin_meeting_file", { filePath, prompt, profileId });
+}
+
+export async function getMeetingJob(jobId: string): Promise<MeetingJobSnapshot> {
+  return invoke("get_meeting_job", { jobId });
+}
+
+export async function cancelMeetingJob(jobId: string): Promise<boolean> {
+  return invoke("cancel_meeting_job", { jobId });
+}
+
+export async function renameMeetingSpeaker(
+  transcript: MeetingTranscript,
+  speakerId: string,
+  label: string,
+): Promise<MeetingTranscript> {
+  return invoke("rename_meeting_speaker", { transcript, speakerId, label });
+}
+
+export async function mergeMeetingSpeakers(
+  transcript: MeetingTranscript,
+  fromId: string,
+  intoId: string,
+): Promise<MeetingTranscript> {
+  return invoke("merge_meeting_speakers", { transcript, fromId, intoId });
+}
+
+export async function saveMeetingExport(
+  transcript: MeetingTranscript,
+  format: MeetingExportFormat,
+): Promise<boolean> {
+  return invoke("save_meeting_export", { transcript, format });
 }
 
 export async function getSupportedFormats(): Promise<string[]> {

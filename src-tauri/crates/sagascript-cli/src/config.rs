@@ -2,7 +2,8 @@ use clap::{Args, Subcommand};
 
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{
-    self, validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
+    self, validate_hotkey, HotkeyMode, HotkeyProfile, Language, PresenterConfig,
+    PresenterFinishAction, Settings, WhisperModel,
 };
 
 #[derive(Args)]
@@ -17,9 +18,10 @@ pub enum ConfigAction {
     #[command(long_about = "\
 Show all settings in a table with their current values and defaults.
 
-Valid keys: language, whisper_model, hotkey_mode, show_overlay, \
+Valid keys: language, whisper_model, hotkey_mode (push, toggle, presenter), show_overlay, \
 auto_paste, auto_select_model, hotkey, initial_prompt, \
-beam_size, temperature_fallback, vad_enabled")]
+beam_size, temperature_fallback, vad_enabled. Use `sagascript config presenter` \
+for presenter finish/cancel/app actions.")]
     List,
 
     /// Get a single setting value
@@ -27,7 +29,7 @@ beam_size, temperature_fallback, vad_enabled")]
         long_about = "\
 Print the current value of a single setting to stdout.
 
-Valid keys: language, whisper_model, hotkey_mode, show_overlay, \
+Valid keys: language, whisper_model, hotkey_mode (push, toggle, presenter), show_overlay, \
 auto_paste, auto_select_model, hotkey, initial_prompt, \
 beam_size, temperature_fallback, vad_enabled",
         after_long_help = "\
@@ -52,7 +54,7 @@ Valid values per key:
   whisper_model        tiny.en, tiny, base.en, base, kb-whisper-tiny,
                        kb-whisper-base, kb-whisper-small, nb-whisper-tiny,
                        nb-whisper-base, nb-whisper-small
-  hotkey_mode          push, toggle
+  hotkey_mode          push, toggle, presenter
   show_overlay         true, false
   auto_paste           true, false (enabling requires Accessibility approval for the installed GUI)
   auto_select_model    true, false
@@ -105,6 +107,25 @@ Print the absolute path to the settings JSON file. Use `sagascript glossary \
 path` for the separate personal dictionary.")]
     Path,
 
+    /// Configure the opt-in presenter hotkey mode
+    #[command(
+        long_about = "\
+Configure presenter mode. Existing profile shortcuts start dictation; the \
+finish shortcut ends it. App actions are opt-in and default to insert-only.",
+        after_long_help = "\
+EXAMPLES:
+  sagascript config presenter show
+  sagascript config presenter finish 'Control+Shift+Enter'
+  sagascript config presenter cancel 'Control+Shift+Escape'
+  sagascript config presenter cancel
+  sagascript config presenter app com.example.editor command_return
+  sagascript config presenter remove-app com.example.editor"
+    )]
+    Presenter {
+        #[command(subcommand)]
+        action: PresenterAction,
+    },
+
     /// Manage per-shortcut dictation language profiles
     Profiles {
         #[command(subcommand)]
@@ -140,6 +161,24 @@ pub enum ProfileAction {
     Remove { id: String },
 }
 
+#[derive(Subcommand)]
+pub enum PresenterAction {
+    /// Print the presenter configuration as JSON
+    Show,
+    /// Set the global presenter finish shortcut
+    Finish { shortcut: String },
+    /// Set the presenter cancel shortcut, or omit it to disable cancel
+    Cancel { shortcut: Option<String> },
+    /// Set an explicit action for an application identifier
+    App {
+        app_id: String,
+        #[arg(value_parser = ["insert_only", "return", "command_return"])]
+        action: String,
+    },
+    /// Remove an application-specific presenter action
+    RemoveApp { app_id: String },
+}
+
 const VALID_KEYS: &[&str] = &[
     "language",
     "whisper_model",
@@ -161,8 +200,85 @@ pub fn run(args: ConfigArgs) -> Result<(), DictationError> {
         ConfigAction::Set { key, value } => cmd_set(&key, &value),
         ConfigAction::Reset { key } => cmd_reset(key.as_deref()),
         ConfigAction::Path => cmd_path(),
+        ConfigAction::Presenter { action } => cmd_presenter(action),
         ConfigAction::Profiles { action } => cmd_profiles(action),
     }
+}
+
+fn cmd_presenter(action: PresenterAction) -> Result<(), DictationError> {
+    if matches!(&action, PresenterAction::Show) {
+        let presenter = settings::store::load().presenter;
+        let json = serde_json::to_string_pretty(&presenter)
+            .map_err(|error| DictationError::SettingsError(error.to_string()))?;
+        println!("{json}");
+        return Ok(());
+    }
+
+    let summary = match &action {
+        PresenterAction::Finish { shortcut } => format!("Presenter finish shortcut = {shortcut}"),
+        PresenterAction::Cancel {
+            shortcut: Some(shortcut),
+        } => {
+            format!("Presenter cancel shortcut = {shortcut}")
+        }
+        PresenterAction::Cancel { shortcut: None } => {
+            "Presenter cancel shortcut disabled".to_string()
+        }
+        PresenterAction::App { app_id, action } => {
+            format!("Presenter action for {app_id} = {action}")
+        }
+        PresenterAction::RemoveApp { app_id } => format!("Removed presenter action for {app_id}"),
+        PresenterAction::Show => unreachable!(),
+    };
+    update_presenter_config(|presenter| apply_presenter_action(presenter, action))?;
+    eprintln!("{summary}");
+    Ok(())
+}
+
+fn apply_presenter_action(
+    presenter: &mut PresenterConfig,
+    action: PresenterAction,
+) -> Result<(), String> {
+    match action {
+        PresenterAction::Show => Err("Presenter show does not mutate settings".to_string()),
+        PresenterAction::Finish { shortcut } => {
+            validate_hotkey(&shortcut)?;
+            presenter.finish_shortcut = shortcut;
+            Ok(())
+        }
+        PresenterAction::Cancel { shortcut } => {
+            if let Some(shortcut) = &shortcut {
+                validate_hotkey(shortcut)?;
+            }
+            presenter.cancel_shortcut = shortcut;
+            Ok(())
+        }
+        PresenterAction::App { app_id, action } => {
+            let action = parse_enum_value::<PresenterFinishAction>(&action, "presenter action")
+                .map_err(|error| error.to_string())?;
+            presenter.app_actions.insert(app_id, action);
+            Ok(())
+        }
+        PresenterAction::RemoveApp { app_id } => {
+            if presenter.app_actions.remove(&app_id).is_none() {
+                return Err(format!("No presenter action configured for app '{app_id}'"));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn update_presenter_config<F>(mutate: F) -> Result<PresenterConfig, DictationError>
+where
+    F: FnOnce(&mut PresenterConfig) -> Result<(), String>,
+{
+    let updated = settings::store::try_update(|settings| {
+        let mut presenter = settings.presenter.clone();
+        mutate(&mut presenter)?;
+        settings.replace_presenter_config(presenter)
+    })
+    .map_err(DictationError::SettingsError)?;
+    Ok(updated.presenter)
 }
 
 fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
@@ -170,18 +286,36 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
         ProfileAction::List => {
             println!("{:<16} {:<20} {:<28} LANGUAGE", "ID", "NAME", "HOTKEY");
             for profile in settings::store::load().resolved_hotkey_profiles() {
-                println!("{:<16} {:<20} {:<28} {}", profile.id, profile.name, profile.shortcut, format_language(profile.language));
+                println!(
+                    "{:<16} {:<20} {:<28} {}",
+                    profile.id,
+                    profile.name,
+                    profile.shortcut,
+                    format_language(profile.language)
+                );
             }
             Ok(())
         }
-        ProfileAction::Create { id, name, hotkey, language } => {
+        ProfileAction::Create {
+            id,
+            name,
+            hotkey,
+            language,
+        } => {
             let language = parse_enum_value::<Language>(&language, "language")?;
             let hotkey_warning = bare_extended_hotkey_warning(&hotkey);
             let mut profiles = settings::store::load().resolved_hotkey_profiles();
             if profiles.iter().any(|profile| profile.id == id) {
-                return Err(DictationError::SettingsError(format!("Profile '{id}' already exists")));
+                return Err(DictationError::SettingsError(format!(
+                    "Profile '{id}' already exists"
+                )));
             }
-            profiles.push(HotkeyProfile { id: id.clone(), name, shortcut: hotkey, language });
+            profiles.push(HotkeyProfile {
+                id: id.clone(),
+                name,
+                shortcut: hotkey,
+                language,
+            });
             persist_profiles(profiles)?;
             eprintln!("Created profile {id}");
             if let Some(warning) = hotkey_warning {
@@ -189,19 +323,36 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             }
             Ok(())
         }
-        ProfileAction::Update { id, name, hotkey, language } => {
+        ProfileAction::Update {
+            id,
+            name,
+            hotkey,
+            language,
+        } => {
             if name.is_none() && hotkey.is_none() && language.is_none() {
-                return Err(DictationError::SettingsError("Specify at least one of --name, --hotkey, or --language".to_string()));
+                return Err(DictationError::SettingsError(
+                    "Specify at least one of --name, --hotkey, or --language".to_string(),
+                ));
             }
-            let hotkey_warning = hotkey
+            let hotkey_warning = hotkey.as_deref().and_then(bare_extended_hotkey_warning);
+            let language = language
                 .as_deref()
-                .and_then(bare_extended_hotkey_warning);
-            let language = language.as_deref().map(|value| parse_enum_value::<Language>(value, "language")).transpose()?;
+                .map(|value| parse_enum_value::<Language>(value, "language"))
+                .transpose()?;
             let mut profiles = settings::store::load().resolved_hotkey_profiles();
-            let profile = profiles.iter_mut().find(|profile| profile.id == id).ok_or_else(|| DictationError::SettingsError(format!("Unknown profile '{id}'")))?;
-            if let Some(name) = name { profile.name = name; }
-            if let Some(hotkey) = hotkey { profile.shortcut = hotkey; }
-            if let Some(language) = language { profile.language = language; }
+            let profile = profiles
+                .iter_mut()
+                .find(|profile| profile.id == id)
+                .ok_or_else(|| DictationError::SettingsError(format!("Unknown profile '{id}'")))?;
+            if let Some(name) = name {
+                profile.name = name;
+            }
+            if let Some(hotkey) = hotkey {
+                profile.shortcut = hotkey;
+            }
+            if let Some(language) = language {
+                profile.language = language;
+            }
             persist_profiles(profiles)?;
             eprintln!("Updated profile {id}");
             if let Some(warning) = hotkey_warning {
@@ -219,7 +370,9 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             let original_len = profiles.len();
             profiles.retain(|profile| profile.id != id);
             if profiles.len() == original_len {
-                return Err(DictationError::SettingsError(format!("Unknown profile '{id}'")));
+                return Err(DictationError::SettingsError(format!(
+                    "Unknown profile '{id}'"
+                )));
             }
             persist_profiles(profiles)?;
             eprintln!("Removed profile {id}");
@@ -269,21 +422,15 @@ fn cmd_list() -> Result<(), DictationError> {
     );
     println!(
         "{:<20} {:<24} {}",
-        "show_overlay",
-        current.show_overlay,
-        defaults.show_overlay
+        "show_overlay", current.show_overlay, defaults.show_overlay
     );
     println!(
         "{:<20} {:<24} {}",
-        "auto_paste",
-        current.auto_paste,
-        defaults.auto_paste
+        "auto_paste", current.auto_paste, defaults.auto_paste
     );
     println!(
         "{:<20} {:<24} {}",
-        "auto_select_model",
-        current.auto_select_model,
-        defaults.auto_select_model
+        "auto_select_model", current.auto_select_model, defaults.auto_select_model
     );
     println!(
         "{:<20} {:<24} {}",
@@ -321,14 +468,15 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
     // Parse before acquiring the settings lock so invalid input never writes.
     let mut validation_target = settings::store::load();
     apply_setting_value(&mut validation_target, key, value)?;
-    if key == "hotkey" {
-        Settings::validate_hotkey_profiles(&validation_target.resolved_hotkey_profiles())
+    if matches!(key, "hotkey" | "hotkey_mode") {
+        validation_target
+            .validate_shortcut_configuration()
             .map_err(DictationError::SettingsError)?;
     }
     let settings = settings::store::try_update(|settings| {
         apply_setting_value(settings, key, value).map_err(|error| error.to_string())?;
-        if key == "hotkey" {
-            Settings::validate_hotkey_profiles(&settings.resolved_hotkey_profiles())?;
+        if matches!(key, "hotkey" | "hotkey_mode") {
+            settings.validate_shortcut_configuration()?;
         }
         Ok(())
     })
@@ -365,9 +513,8 @@ fn bare_extended_hotkey_warning(shortcut: &str) -> Option<&'static str> {
         && digits
             .parse::<u8>()
             .is_ok_and(|number| (13..=24).contains(&number));
-    (cfg!(target_os = "macos") && is_bare_extended).then_some(
-        "bare F13-F24 requires Accessibility approval for the installed Sagascript app",
-    )
+    (cfg!(target_os = "macos") && is_bare_extended)
+        .then_some("bare F13-F24 requires Accessibility approval for the installed Sagascript app")
 }
 
 fn apply_setting_value(
@@ -377,13 +524,17 @@ fn apply_setting_value(
 ) -> Result<(), DictationError> {
     match key {
         "language" => {
-            settings.set_legacy_language(parse_enum_value::<Language>(value, "language")?);
+            settings
+                .set_legacy_language(parse_enum_value::<Language>(value, "language")?)
+                .map_err(DictationError::SettingsError)?;
         }
         "whisper_model" => {
             settings.whisper_model = parse_enum_value::<WhisperModel>(value, "whisper_model")?;
         }
         "hotkey_mode" => {
-            settings.hotkey_mode = parse_enum_value::<HotkeyMode>(value, "hotkey_mode")?;
+            settings
+                .replace_hotkey_mode(parse_enum_value::<HotkeyMode>(value, "hotkey_mode")?)
+                .map_err(DictationError::SettingsError)?;
         }
         "show_overlay" => {
             settings.show_overlay = parse_bool(value, "show_overlay")?;
@@ -396,7 +547,9 @@ fn apply_setting_value(
         }
         "hotkey" => {
             validate_hotkey(value).map_err(DictationError::SettingsError)?;
-            settings.set_legacy_hotkey(value.to_string());
+            settings
+                .try_set_legacy_hotkey(value.to_string())
+                .map_err(DictationError::SettingsError)?;
         }
         "initial_prompt" => settings.initial_prompt = value.to_string(),
         "beam_size" => {
@@ -423,41 +576,81 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
         let defaults = Settings::default();
         if key == "hotkey" {
             let mut profiles = settings::store::load().resolved_hotkey_profiles();
-            let index = profiles.iter().position(|profile| profile.id == "default").unwrap_or(0);
+            let index = profiles
+                .iter()
+                .position(|profile| profile.id == "default")
+                .unwrap_or(0);
             profiles[index].shortcut = defaults.hotkey;
             persist_profiles(profiles)?;
             eprintln!("Reset hotkey to {}", settings::store::load().hotkey);
             return Ok(());
         }
-        let settings = settings::store::update(|settings| match key {
+        let settings = settings::store::try_update(|settings| match key {
             "language" => settings.set_legacy_language(defaults.language),
-            "whisper_model" => settings.whisper_model = defaults.whisper_model,
-            "hotkey_mode" => settings.hotkey_mode = defaults.hotkey_mode,
-            "show_overlay" => settings.show_overlay = defaults.show_overlay,
-            "auto_paste" => settings.auto_paste = defaults.auto_paste,
-            "auto_select_model" => settings.auto_select_model = defaults.auto_select_model,
+            "whisper_model" => {
+                settings.whisper_model = defaults.whisper_model;
+                Ok(())
+            }
+            "hotkey_mode" => settings.replace_hotkey_mode(defaults.hotkey_mode),
+            "show_overlay" => {
+                settings.show_overlay = defaults.show_overlay;
+                Ok(())
+            }
+            "auto_paste" => {
+                settings.auto_paste = defaults.auto_paste;
+                Ok(())
+            }
+            "auto_select_model" => {
+                settings.auto_select_model = defaults.auto_select_model;
+                Ok(())
+            }
             "hotkey" => unreachable!("hotkey reset handled transactionally above"),
-            "initial_prompt" => settings.initial_prompt = defaults.initial_prompt,
-            "beam_size" => settings.beam_size = defaults.beam_size,
-            "temperature_fallback" => settings.temperature_fallback = defaults.temperature_fallback,
-            "vad_enabled" => settings.vad_enabled = defaults.vad_enabled,
+            "initial_prompt" => {
+                settings.initial_prompt = defaults.initial_prompt;
+                Ok(())
+            }
+            "beam_size" => {
+                settings.beam_size = defaults.beam_size;
+                Ok(())
+            }
+            "temperature_fallback" => {
+                settings.temperature_fallback = defaults.temperature_fallback;
+                Ok(())
+            }
+            "vad_enabled" => {
+                settings.vad_enabled = defaults.vad_enabled;
+                Ok(())
+            }
             _ => unreachable!(),
         })
         .map_err(DictationError::SettingsError)?;
         eprintln!("Reset {key} to {}", get_setting_value(&settings, key));
     } else {
-        settings::store::update(|current| {
-            let initial_prompt = std::mem::take(&mut current.initial_prompt);
-            let profile_glossaries = std::mem::take(&mut current.profile_glossaries);
-            *current = Settings {
-                initial_prompt,
-                profile_glossaries,
-                ..Default::default()
-            };
+        settings::store::try_update(|current| {
+            reset_all_settings(current)?;
+            Ok(())
         })
         .map_err(DictationError::SettingsError)?;
         eprintln!("All application settings reset to defaults; personal dictionaries preserved");
     }
+    Ok(())
+}
+
+fn reset_all_settings(current: &mut Settings) -> Result<(), String> {
+    let defaults = Settings::default();
+    let mut validation = current.clone();
+    validation.replace_hotkey_profiles(vec![HotkeyProfile::legacy_default(
+        defaults.hotkey.clone(),
+        defaults.language,
+    )])?;
+
+    let initial_prompt = std::mem::take(&mut current.initial_prompt);
+    let profile_glossaries = std::mem::take(&mut current.profile_glossaries);
+    *current = Settings {
+        initial_prompt,
+        profile_glossaries,
+        ..defaults
+    };
     Ok(())
 }
 
@@ -680,7 +873,10 @@ mod tests {
         let err = validate_key("bogus").unwrap_err();
         let msg = err.to_string();
         for key in VALID_KEYS {
-            assert!(msg.contains(key), "error should list valid key '{key}': {msg}");
+            assert!(
+                msg.contains(key),
+                "error should list valid key '{key}': {msg}"
+            );
         }
     }
 
@@ -707,6 +903,7 @@ mod tests {
             "has_completed_onboarding",
             "hotkey_profiles",
             "profile_glossaries",
+            "presenter",
         ];
 
         let settings = Settings::default();
@@ -739,11 +936,181 @@ mod tests {
     }
 
     #[test]
+    fn language_change_with_profile_dictionary_is_rejected_without_mutation() {
+        let mut settings = Settings::default();
+        settings.hotkey_profiles = vec![HotkeyProfile {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+            shortcut: settings.hotkey.clone(),
+            language: Language::Swedish,
+        }];
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+        let before = settings.clone();
+
+        let error = apply_setting_value(&mut settings, "language", "en").unwrap_err();
+
+        assert!(error.to_string().contains("personal dictionary"));
+        assert_eq!(settings.language, before.language);
+        assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
+        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
+    }
+
+    #[test]
+    fn reset_all_without_dictionaries_uses_defaults_and_preserves_global_source() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            initial_prompt: "Codex".to_string(),
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Option+Space".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+
+        reset_all_settings(&mut settings).unwrap();
+
+        assert_eq!(settings.language, Settings::default().language);
+        assert!(settings.hotkey_profiles.is_empty());
+        assert_eq!(settings.initial_prompt, "Codex");
+        assert!(settings.profile_glossaries.is_empty());
+    }
+
+    #[test]
+    fn reset_all_preserves_same_language_active_default_dictionary() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Option+Space".to_string(),
+                Language::English,
+            )],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        reset_all_settings(&mut settings).unwrap();
+
+        assert!(settings.hotkey_profiles.is_empty());
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(
+            settings
+                .profile_glossaries
+                .get("default")
+                .map(String::as_str),
+            Some("merge = merch")
+        );
+    }
+
+    #[test]
+    fn reset_all_rejects_default_language_change_with_active_dictionary_atomically() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Option+Space".to_string(),
+                Language::Swedish,
+            )],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+        let before = settings.clone();
+
+        let error = reset_all_settings(&mut settings).unwrap_err();
+
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, before.language);
+        assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
+        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
+    }
+
+    #[test]
+    fn reset_all_rejects_implicit_swedish_default_dictionary_atomically() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: Vec::new(),
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".into(), "merge = merch".into());
+        let before = settings.clone();
+        let error = reset_all_settings(&mut settings).unwrap_err();
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, before.language);
+        assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
+        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
+        assert_eq!(settings.initial_prompt, before.initial_prompt);
+    }
+
+    #[test]
+    fn reset_all_keeps_removed_profile_dictionary_inactive() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Option+Space".to_string(),
+                Language::English,
+            )],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("removed".to_string(), "merge = merch".to_string());
+
+        reset_all_settings(&mut settings).unwrap();
+
+        assert!(settings.hotkey_profiles.is_empty());
+        assert_eq!(
+            settings
+                .profile_glossaries
+                .get("removed")
+                .map(String::as_str),
+            Some("merge = merch")
+        );
+        assert_eq!(settings.effective_glossary_source(Some("removed")), "");
+    }
+
+    #[test]
+    fn reset_all_rejects_orphan_default_dictionary_atomically() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Option+Space".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+        let before = settings.clone();
+
+        let error = reset_all_settings(&mut settings).unwrap_err();
+
+        assert!(error.contains("inactive personal dictionary"));
+        assert_eq!(settings.language, before.language);
+        assert_eq!(settings.hotkey_profiles, before.hotkey_profiles);
+        assert_eq!(settings.initial_prompt, before.initial_prompt);
+        assert_eq!(settings.profile_glossaries, before.profile_glossaries);
+    }
+
+    #[test]
     fn parse_enum_value_all_valid_models() {
         let valid = [
-            "tiny.en", "tiny", "base.en", "base",
-            "kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small",
-            "nb-whisper-tiny", "nb-whisper-base", "nb-whisper-small",
+            "tiny.en",
+            "tiny",
+            "base.en",
+            "base",
+            "kb-whisper-tiny",
+            "kb-whisper-base",
+            "kb-whisper-small",
+            "nb-whisper-tiny",
+            "nb-whisper-base",
+            "nb-whisper-small",
         ];
         for v in valid {
             let result = parse_enum_value::<WhisperModel>(v, "whisper_model");
@@ -759,7 +1126,7 @@ mod tests {
 
     #[test]
     fn parse_enum_value_all_valid_hotkey_modes() {
-        let valid = ["push", "toggle"];
+        let valid = ["push", "toggle", "presenter"];
         for v in valid {
             let result = parse_enum_value::<HotkeyMode>(v, "hotkey_mode");
             assert!(result.is_ok(), "should parse hotkey_mode '{v}'");
@@ -770,6 +1137,113 @@ mod tests {
     fn parse_enum_value_invalid_hotkey_mode() {
         let result = parse_enum_value::<HotkeyMode>("hold", "hotkey_mode");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn presenter_action_values_are_strict_and_snake_case() {
+        assert_eq!(
+            parse_enum_value::<PresenterFinishAction>("insert_only", "presenter action").unwrap(),
+            PresenterFinishAction::InsertOnly
+        );
+        assert_eq!(
+            parse_enum_value::<PresenterFinishAction>("return", "presenter action").unwrap(),
+            PresenterFinishAction::Return
+        );
+        assert_eq!(
+            parse_enum_value::<PresenterFinishAction>("command_return", "presenter action")
+                .unwrap(),
+            PresenterFinishAction::CommandReturn
+        );
+        assert!(
+            parse_enum_value::<PresenterFinishAction>("commandReturn", "presenter action").is_err()
+        );
+        assert!(parse_enum_value::<PresenterFinishAction>("submit", "presenter action").is_err());
+    }
+
+    #[test]
+    fn presenter_hotkey_mode_mutation_is_atomic_through_cli_helper() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![HotkeyProfile::legacy_default(
+                "Control+Shift+Enter".to_string(),
+                Language::English,
+            )])
+            .unwrap();
+        let before = settings.hotkey_mode;
+        let error = apply_setting_value(&mut settings, "hotkey_mode", "presenter").unwrap_err();
+        assert!(error.to_string().contains("profile shortcut"));
+        assert_eq!(settings.hotkey_mode, before);
+    }
+
+    #[test]
+    fn presenter_legacy_hotkey_mutation_is_checked_and_atomic() {
+        let mut settings = Settings::default();
+        settings.replace_hotkey_mode(HotkeyMode::Presenter).unwrap();
+        let before = settings.hotkey.clone();
+        let error = apply_setting_value(&mut settings, "hotkey", "Ctrl+Shift+Enter").unwrap_err();
+        assert!(error.to_string().contains("profile shortcut"));
+        assert_eq!(settings.hotkey, before);
+        assert_eq!(settings.resolved_hotkey_profiles()[0].shortcut, before);
+    }
+
+    #[test]
+    fn presenter_command_help_inventory_has_all_mutations() {
+        let command = <PresenterAction as clap::Subcommand>::augment_subcommands(
+            clap::Command::new("presenter"),
+        );
+        let names: Vec<_> = command
+            .get_subcommands()
+            .map(|command| command.get_name())
+            .collect();
+        assert_eq!(names, ["show", "finish", "cancel", "app", "remove-app"]);
+    }
+
+    #[test]
+    fn apply_presenter_action_rejects_invalid_input_without_partial_mutation() {
+        let mut presenter = PresenterConfig::default();
+        let before = presenter.clone();
+        let error = apply_presenter_action(
+            &mut presenter,
+            PresenterAction::App {
+                app_id: "com.example.editor".to_string(),
+                action: "submit".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("Invalid value"));
+        assert_eq!(presenter, before);
+
+        let error = apply_presenter_action(
+            &mut presenter,
+            PresenterAction::Finish {
+                shortcut: "NotAHotkey".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert!(!error.is_empty());
+        assert_eq!(presenter, before);
+    }
+
+    #[test]
+    fn presenter_candidate_uses_fresh_state_and_core_validation_before_commit() {
+        let mut settings = Settings::default();
+        let mut candidate = settings.presenter.clone();
+        for index in 0..PresenterConfig::MAX_APP_ACTIONS {
+            candidate.app_actions.insert(
+                format!("com.example.editor{index}"),
+                PresenterFinishAction::InsertOnly,
+            );
+        }
+        apply_presenter_action(
+            &mut candidate,
+            PresenterAction::App {
+                app_id: "com.example.editor32".to_string(),
+                action: "return".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(settings.replace_presenter_config(candidate).is_err());
+        assert!(settings.presenter.app_actions.is_empty());
     }
 
     // -- parse_bool --
@@ -796,7 +1270,10 @@ mod tests {
         let err = parse_bool("yes", "auto_paste").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("yes"), "error should mention input: {msg}");
-        assert!(msg.contains("auto_paste"), "error should mention key: {msg}");
+        assert!(
+            msg.contains("auto_paste"),
+            "error should mention key: {msg}"
+        );
     }
 
     // -- get_setting_value / format helpers --
@@ -809,7 +1286,10 @@ mod tests {
         assert_eq!(get_setting_value(&settings, "show_overlay"), "true");
         assert_eq!(get_setting_value(&settings, "auto_paste"), "true");
         assert_eq!(get_setting_value(&settings, "auto_select_model"), "true");
-        assert_eq!(get_setting_value(&settings, "hotkey"), "Control+Shift+Space");
+        assert_eq!(
+            get_setting_value(&settings, "hotkey"),
+            "Control+Shift+Space"
+        );
         assert_eq!(get_setting_value(&settings, "initial_prompt"), "");
         assert_eq!(get_setting_value(&settings, "beam_size"), "0");
         assert_eq!(get_setting_value(&settings, "temperature_fallback"), "true");

@@ -1,12 +1,16 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import {
     getSettings,
+    getLastError,
+    getLastTranscription,
     setLanguage,
     setHotkeyMode,
+    setPresenterConfig,
     setHotkeyProfiles,
     setAutoPaste,
     setInitialPrompt,
+    setProfileGlossary,
     setShowOverlay,
     setWhisperModel,
     setBeamSize,
@@ -17,6 +21,12 @@
     getEffectiveModelInfo,
     downloadModel,
     transcribeFile,
+    beginMeetingFile,
+    getMeetingJob,
+    cancelMeetingJob,
+    renameMeetingSpeaker,
+    mergeMeetingSpeakers,
+    saveMeetingExport,
     getSupportedFormats,
     getPlatform,
     checkAccessibilityPermission,
@@ -32,7 +42,14 @@
     type WhisperModel,
     type HotkeyStatus,
     type HotkeyProfile,
+    type MeetingJobStatus,
+    type MeetingJobSnapshot,
+    type PresenterConfig,
   } from "./api";
+  import MeetingReview from "./MeetingReview.svelte";
+  import type { MeetingExportFormat, MeetingTranscript } from "./meeting-types";
+  import { pollMeetingJob as pollMeetingJobClient } from "./meeting-job-client";
+  import PresenterSettings from "./PresenterSettings.svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -100,6 +117,79 @@
   let testResult: string = $state("");
   let testError: string = $state("");
 
+  type PresenterStatus =
+    | "listening"
+    | "transcribing"
+    | "verifying_insertion"
+    | "inserted"
+    | "submitting"
+    | "sent"
+    | "cancelled"
+    | "draft"
+    | "failed"
+    | "no_speech"
+    | "submit_uncertain";
+
+  const presenterStatusLabels: Record<PresenterStatus, string> = {
+    listening: "Presenter listening",
+    transcribing: "Presenter transcribing",
+    verifying_insertion: "Verifying insertion…",
+    inserted: "Recognized text inserted",
+    submitting: "Sending submit key…",
+    sent: "Submit key sent; delivery not confirmed",
+    cancelled: "Presenter cancelled",
+    draft: "Not sent — copy recognized text from Dictate",
+    failed: "Presenter failed",
+    no_speech: "No speech detected",
+    submit_uncertain: "Submit may have been sent — check destination before retrying",
+  };
+
+  let presenterStatus: PresenterStatus | null = $state(null);
+
+  function isPresenterStatus(value: string): value is PresenterStatus {
+    return Object.prototype.hasOwnProperty.call(presenterStatusLabels, value);
+  }
+
+  onMount(() => {
+    let disposed = false;
+    let revision = 0;
+    const stops: Array<() => void> = [];
+    const remember = (stop: () => void) => disposed ? stop() : stops.push(stop);
+    const errorListener = listen<string>("error", (event) => {
+      revision++;
+      testError = event.payload;
+      activeTab = "dictate";
+    }).then(remember);
+    const resultListener = listen<string>("transcription-result", (event) => {
+      revision++;
+      testResult = event.payload;
+      testError = "";
+    }).then(remember);
+    const stateListener = listen<string>("state-changed", (event) => {
+      if (event.payload === "recording") {
+        revision++;
+        testError = "";
+      }
+    }).then(remember);
+    const presenterStatusListener = listen("presenter-status", (event) => {
+      if (typeof event.payload !== "string" || !isPresenterStatus(event.payload)) return;
+      presenterStatus = event.payload;
+    }).then(remember);
+    // A failed background dictation may create this window after its event.
+    // Recover the persisted-in-memory result without racing newer events.
+    Promise.all([errorListener, resultListener, stateListener, presenterStatusListener]).then(async () => {
+      const initialRevision = revision;
+      const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
+      if (!disposed && revision === initialRevision) {
+        testError = error ?? "";
+        testResult = text ?? "";
+      }
+    }).catch((error) => {
+      console.warn("Could not restore the last dictation result", error);
+    });
+    return () => { disposed = true; stops.forEach((stop) => stop()); };
+  });
+
   // Transcribe tab state
   let supportedFormats: string[] = $state([]);
   let transcribing: boolean = $state(false);
@@ -109,6 +199,144 @@
   let dragOver: boolean = $state(false);
   let transcribePrompt: string = $state('');
   let transcribeDiarize: boolean = $state(false);
+  let transcribeProfileId: string | null = $state(null);
+  let meetingTranscript: MeetingTranscript | null = $state(null);
+  let meetingJobId: string | null = $state(null);
+  let meetingJobStatus: MeetingJobStatus | null = $state(null);
+  let meetingPhase: string = $state("");
+  let meetingError: string = $state("");
+  let meetingPollingFailed: boolean = $state(false);
+  let meetingPollGeneration = 0;
+  let meetingPollActive = false;
+  let meetingDocumentRevision = $state(0);
+  let meetingActionQueue: Promise<void> = Promise.resolve();
+
+  onDestroy(() => {
+    meetingPollGeneration += 1;
+  });
+
+  // The global dictionary is retained as a decoder hint source. Explicit
+  // language profiles are the only selectable sources for deterministic
+  // glossary replacements.
+  // Empty string is the UI-only global sentinel; profile IDs may legally be
+  // "global", so that name cannot identify the global scope.
+  let glossaryScopeId: string = $state("");
+  let glossaryDraft: string = $state("");
+  let glossaryDraftInitialized = false;
+  let glossaryScopeGeneration = 0;
+  let glossaryDraftGeneration = 0;
+  let lastStoredGlossarySources: Record<string, string> = {};
+  let glossaryEditBaseline: { scopeId: string; source: string; generation: number } | null = null;
+  type RecoveredGlossaryDraft = { scopeId: string; draft: string; conflicted: boolean };
+  type GlossarySaveRequest = {
+    scopeId: string;
+    generation: number;
+    draftGeneration: number;
+    value: string;
+  };
+  let recoveredGlossaryDrafts: RecoveredGlossaryDraft[] = $state([]);
+  let glossaryConflictScopeId: string | null = $state(null);
+
+  const dictionaryConflictPrefix = "Dictionary changed elsewhere:";
+
+  function explicitProfiles(source: Settings | null = settings): HotkeyProfile[] {
+    return source?.hotkey_profiles.filter((profile) => profile.language !== "auto") ?? [];
+  }
+
+  function profileForId(profileId: string | null, source: Settings | null = settings): HotkeyProfile | null {
+    if (!profileId) return null;
+    return explicitProfiles(source).find((profile) => profile.id === profileId) ?? null;
+  }
+
+  function glossarySourceForScope(scopeId: string, source: Settings | null = settings): string {
+    if (!source || scopeId === "") return source?.initial_prompt ?? "";
+    return source.profile_glossaries[scopeId] ?? "";
+  }
+
+  function isValidGlossaryScope(scopeId: string, source: Settings | null = settings): boolean {
+    return scopeId === "" || profileForId(scopeId, source) !== null;
+  }
+
+  function glossaryScopeLabel(scopeId: string, source: Settings | null = settings): string {
+    if (scopeId === "") return "Global hints";
+    return profileForId(scopeId, source)?.name ?? scopeId;
+  }
+
+  function rememberGlossaryRecovery(scopeId: string, draft: string, conflicted = false): void {
+    const existing = recoveredGlossaryDrafts.find(
+      (recovery) => recovery.scopeId === scopeId && recovery.draft === draft,
+    );
+    if (existing) {
+      if (conflicted && !existing.conflicted) {
+        recoveredGlossaryDrafts = recoveredGlossaryDrafts.map((recovery) =>
+          recovery === existing ? { ...recovery, conflicted: true } : recovery,
+        );
+      }
+      return;
+    }
+    recoveredGlossaryDrafts = [...recoveredGlossaryDrafts, { scopeId, draft, conflicted }];
+  }
+
+  function removeGlossaryRecovery(scopeId: string, draft: string): void {
+    recoveredGlossaryDrafts = recoveredGlossaryDrafts.filter(
+      (recovery) => recovery.scopeId !== scopeId || recovery.draft !== draft,
+    );
+  }
+
+  function isCurrentGlossaryRequest(request: GlossarySaveRequest): boolean {
+    return request.generation === glossaryScopeGeneration
+      && request.scopeId === glossaryScopeId
+      && request.draftGeneration === glossaryDraftGeneration;
+  }
+
+  function selectedTranscribeProfile(): HotkeyProfile | null {
+    return profileForId(transcribeProfileId);
+  }
+
+  function transcribeLanguage(): Language {
+    return selectedTranscribeProfile()?.language ?? settings?.language ?? "auto";
+  }
+
+  // Settings can be reloaded after hotkey/profile changes. Never leave a
+  // removed or newly-Auto profile selected, and never show another scope's
+  // text after that reconciliation.
+  $effect(() => {
+    const currentSettings = settings;
+    const currentScope = glossaryScopeId;
+    const currentTranscribeProfile = transcribeProfileId;
+    if (!currentSettings) return;
+
+    const currentStored = glossarySourceForScope(currentScope, currentSettings);
+    const previousStored = lastStoredGlossarySources[currentScope];
+    if (!glossaryDraftInitialized || glossaryDraft === previousStored) {
+      glossaryDraft = currentStored;
+      glossaryDraftInitialized = true;
+    }
+    lastStoredGlossarySources[currentScope] = currentStored;
+    if (!isValidGlossaryScope(currentScope, currentSettings)) {
+      const removedProfileHasDraft = currentScope !== ""
+        && (
+          glossaryEditBaseline?.scopeId === currentScope
+          || (glossaryDraftInitialized && glossaryDraft !== (previousStored ?? currentStored))
+        );
+      if (removedProfileHasDraft) {
+        rememberGlossaryRecovery(
+          currentScope,
+          glossaryDraft,
+          glossaryConflictScopeId === currentScope && settingsError.startsWith(dictionaryConflictPrefix),
+        );
+      }
+      glossaryScopeGeneration += 1;
+      glossaryScopeId = "";
+      glossaryDraft = currentSettings.initial_prompt;
+      glossaryDraftGeneration += 1;
+      glossaryEditBaseline = null;
+      glossaryConflictScopeId = null;
+    }
+    if (currentTranscribeProfile && !profileForId(currentTranscribeProfile, currentSettings)) {
+      transcribeProfileId = null;
+    }
+  });
 
   async function refreshProfileModels(profiles: HotkeyProfile[]) {
     const generation = ++profileModelRefresh;
@@ -208,13 +436,19 @@
     (async () => {
       initError = "";
       try {
+        buildInfo = await getBuildInfo();
+      } catch (error) {
+        // Build identity is diagnostic only. Keep it independent from the
+        // settings bootstrap so it remains visible when another query fails.
+        console.warn("Failed to load build information", error);
+      }
+      try {
         settings = await getSettings();
         await refreshProfileModels(settings.hotkey_profiles);
         platform = await getPlatform();
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
         }
-        buildInfo = await getBuildInfo();
         models = await getModelInfo();
         supportedFormats = await getSupportedFormats();
         const status = await hotkeyStatus();
@@ -248,15 +482,21 @@
    * bindings re-render from state, so a native control that already shows
    * the rejected value snaps back). Never re-throws.
    */
-  async function applySetting(mutate: () => Promise<void>): Promise<boolean> {
-    settingsError = "";
+  async function applySetting(
+    mutate: () => Promise<void>,
+    errorSink?: { value: string },
+    reportError = true,
+  ): Promise<boolean> {
+    if (reportError) settingsError = "";
     try {
       await mutate();
       settings = await getSettings();
       await refreshProfileModels(settings.hotkey_profiles);
       return true;
     } catch (e: any) {
-      settingsError = typeof e === "string" ? e : e?.message || "Failed to save setting.";
+      const message = typeof e === "string" ? e : e?.message || "Failed to save setting.";
+      if (reportError) settingsError = message;
+      if (errorSink) errorSink.value = message;
       if (settings) settings = { ...settings };
       return false;
     }
@@ -273,6 +513,11 @@
   async function onHotkeyModeChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value as HotkeyMode;
     await applySetting(() => setHotkeyMode(value));
+  }
+
+  async function onPresenterSave(config: PresenterConfig): Promise<string | null> {
+    const ok = await applySetting(() => setPresenterConfig(config));
+    return ok ? null : settingsError || "Failed to save presenter settings.";
   }
 
   async function onAutoPasteToggle() {
@@ -356,10 +601,118 @@
     await applySetting(() => setShowOverlay(next));
   }
 
+  async function refreshDictionaryAfterConflict(primaryError: string, request: GlossarySaveRequest) {
+    try {
+      settings = await getSettings();
+    } catch (error) {
+      console.warn("Could not refresh the dictionary after a concurrent change", error);
+    }
+    // A stale request still refreshes the source of truth, but cannot replace
+    // a newer scope's error or draft. The recovery item carries its context.
+    if (isCurrentGlossaryRequest(request)) {
+      settingsError = primaryError;
+      glossaryConflictScopeId = request.scopeId;
+    } else {
+      rememberGlossaryRecovery(request.scopeId, request.value, true);
+    }
+  }
+
   async function onInitialPromptBlur(e: Event) {
-    if (!settings) return;
+    const request: GlossarySaveRequest = {
+      scopeId: glossaryScopeId,
+      generation: glossaryScopeGeneration,
+      draftGeneration: glossaryDraftGeneration,
+      value: (e.target as HTMLTextAreaElement).value,
+    };
+    const scopeId = request.scopeId;
+    const draftGeneration = request.draftGeneration;
     const value = (e.target as HTMLTextAreaElement).value;
-    await applySetting(() => setInitialPrompt(value));
+    const editBaseline = glossaryEditBaseline;
+    const expectedSource = editBaseline?.scopeId === scopeId
+      && editBaseline.generation <= draftGeneration
+      ? editBaseline.source
+      : lastStoredGlossarySources[scopeId] ?? glossarySourceForScope(scopeId);
+    glossaryDraft = value;
+    if (!settings || !isValidGlossaryScope(scopeId)) return;
+    if (!editBaseline && value === (lastStoredGlossarySources[scopeId] ?? glossarySourceForScope(scopeId))) return;
+
+    const saveError = { value: "" };
+    const saved = await applySetting(() => scopeId === ""
+      ? setInitialPrompt(value, expectedSource)
+      : setProfileGlossary(scopeId, value, expectedSource), saveError, false);
+    const conflict = saveError.value.startsWith(dictionaryConflictPrefix);
+    let requestIsCurrent = isCurrentGlossaryRequest(request);
+    if (conflict) {
+      await refreshDictionaryAfterConflict(saveError.value, request);
+      requestIsCurrent = isCurrentGlossaryRequest(request);
+    } else if (!saved && !requestIsCurrent) {
+      rememberGlossaryRecovery(scopeId, value);
+    }
+
+    if (requestIsCurrent) {
+      settingsError = saved ? "" : saveError.value;
+      if (saved) glossaryConflictScopeId = null;
+    }
+    if (saved) removeGlossaryRecovery(scopeId, value);
+
+    // If our own save won the CAS race while the user kept typing in the
+    // same edit lineage, advance only that lineage's baseline to our value.
+    // A reselected scope has a different baseline object and is never
+    // silently advanced from a fresh settings read.
+    if (
+      saved
+      && editBaseline
+      && glossaryEditBaseline === editBaseline
+      && editBaseline.scopeId === scopeId
+    ) {
+      if (draftGeneration === glossaryDraftGeneration) {
+        glossaryEditBaseline = null;
+      } else {
+        glossaryEditBaseline = { ...editBaseline, source: value };
+      }
+    }
+
+    // A selector change while the invoke was pending owns the textarea now;
+    // never overwrite its newer scope with this request's result.
+    if (!requestIsCurrent) return;
+    if (saved) {
+      if (glossaryEditBaseline === editBaseline) glossaryEditBaseline = null;
+    }
+  }
+
+  function onGlossaryInput(e: Event) {
+    if (!glossaryEditBaseline || glossaryEditBaseline.scopeId !== glossaryScopeId) {
+      glossaryEditBaseline = {
+        scopeId: glossaryScopeId,
+        source: lastStoredGlossarySources[glossaryScopeId] ?? glossarySourceForScope(glossaryScopeId),
+        generation: glossaryDraftGeneration + 1,
+      };
+    }
+    glossaryDraftGeneration += 1;
+    glossaryDraft = (e.target as HTMLTextAreaElement).value;
+  }
+
+  function onGlossaryScopeChange(e: Event) {
+    const nextScope = (e.target as HTMLSelectElement).value;
+    if (!settings || !isValidGlossaryScope(nextScope)) return;
+    const previousScope = glossaryScopeId;
+    const previousConflict = glossaryConflictScopeId === previousScope
+      && settingsError.startsWith(dictionaryConflictPrefix);
+    if (
+      glossaryEditBaseline?.scopeId === previousScope
+      || previousConflict
+    ) {
+      rememberGlossaryRecovery(previousScope, glossaryDraft, previousConflict);
+    }
+    glossaryScopeGeneration += 1;
+    glossaryDraftGeneration += 1;
+    glossaryEditBaseline = null;
+    if (previousConflict) {
+      settingsError = "";
+      glossaryConflictScopeId = null;
+    }
+    glossaryScopeId = nextScope;
+    glossaryDraft = glossarySourceForScope(nextScope, settings);
   }
 
   async function onBeamSizeChange(e: Event) {
@@ -461,23 +814,202 @@
     }
   }
 
+  function meetingFailureText(value: unknown, fallback: string): string {
+    return typeof value === "string" ? value : value instanceof Error ? value.message : fallback;
+  }
+
+  function meetingStageText(): string {
+    if (meetingJobStatus === "cancelling") return "Cancelling meeting…";
+    if (meetingJobStatus === "running") return meetingPhase ? `Meeting: ${meetingPhase}` : "Starting meeting…";
+    return meetingPhase || "Meeting import";
+  }
+
+  function waitForMeetingPoll(): Promise<void> {
+    return new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+
+  function waitForMeetingActions(): Promise<void> {
+    return meetingActionQueue;
+  }
+
+  function enqueueMeetingAction(action: (transcript: MeetingTranscript, revision: number) => Promise<void>): Promise<void> {
+    const queued = meetingActionQueue.then(async () => {
+      const transcript = meetingTranscript;
+      if (!transcript) return;
+      await action(transcript, meetingDocumentRevision);
+    });
+    meetingActionQueue = queued.catch(() => undefined);
+    return queued;
+  }
+
+  async function pollMeetingJob(jobId: string, generation: number): Promise<void> {
+    if (meetingPollActive) return;
+    meetingPollActive = true;
+    try {
+      await pollMeetingJobClient({
+        jobId,
+        get: getMeetingJob,
+        isCurrent: () => generation === meetingPollGeneration,
+        onFailure: (error: unknown) => {
+          meetingPollingFailed = true;
+          meetingError = meetingFailureText(error, "Could not check meeting progress.")
+            + " Retry the status check to continue.";
+        },
+        onSnapshot: (snapshot: MeetingJobSnapshot) => {
+          if (generation !== meetingPollGeneration) return;
+          meetingJobStatus = snapshot.status;
+          meetingPhase = snapshot.phase;
+          if (snapshot.status === "completed" || snapshot.status === "cancelled" || snapshot.status === "failed") {
+            meetingJobId = null;
+            transcribing = false;
+            meetingPollingFailed = false;
+            transcriptionProgress = 0;
+            if (snapshot.status === "completed" && snapshot.transcript) {
+              meetingTranscript = snapshot.transcript;
+              meetingDocumentRevision += 1;
+              meetingError = "";
+            } else if (snapshot.status === "completed") {
+              meetingError = "Meeting completed without a transcript. Try the import again.";
+            } else {
+              meetingError = snapshot.error
+                ?? (snapshot.status === "cancelled" ? "Meeting import was cancelled." : "Meeting import failed.");
+            }
+          }
+        },
+        wait: waitForMeetingPoll,
+      });
+    } finally {
+      meetingPollActive = false;
+    }
+  }
+
+  async function startMeetingFileTranscription(
+    filePath: string,
+    prompt: string | null,
+    profileId: string | null,
+  ): Promise<void> {
+    if (transcribing) return;
+    const generation = ++meetingPollGeneration;
+    // Keep the previous review and its unsaved drafts mounted until a NEW
+    // document succeeds. Pending edits finish before the import starts below;
+    // successful replacement still invalidates any stale action revision.
+    transcribing = true;
+    transcriptionProgress = 0;
+    transcribeError = "";
+    transcriptionResult = "";
+    meetingError = "";
+    meetingPollingFailed = false;
+    meetingJobId = null;
+    meetingJobStatus = "running";
+    meetingPhase = "Starting";
+    try {
+      await waitForMeetingActions();
+      if (generation !== meetingPollGeneration) return;
+      const jobId = await beginMeetingFile(filePath, prompt, profileId);
+      if (generation !== meetingPollGeneration) return;
+      if (!jobId) throw new Error("Meeting import did not return a job ID.");
+      meetingJobId = jobId;
+      meetingJobStatus = "running";
+      void pollMeetingJob(jobId, generation);
+    } catch (error) {
+      if (generation !== meetingPollGeneration) return;
+      transcribing = false;
+      meetingJobId = null;
+      meetingJobStatus = "failed";
+      meetingPhase = "Failed";
+      meetingError = meetingFailureText(error, "Could not start meeting import.");
+    }
+  }
+
   async function handleFileTranscription(filePath: string) {
     if (transcribing) return;
+    const profileId = selectedTranscribeProfile()?.id ?? null;
+    const prompt = transcribePrompt.trim() || null;
+    if (transcribeDiarize) {
+      await startMeetingFileTranscription(filePath, prompt, profileId);
+      return;
+    }
+
+    ++meetingPollGeneration;
+    ++meetingDocumentRevision;
+    meetingError = "";
+    meetingJobStatus = null;
     transcribing = true;
     transcriptionProgress = 0;
     transcribeError = "";
     transcriptionResult = "";
     try {
+      await waitForMeetingActions();
       transcriptionResult = await transcribeFile(filePath, {
-        prompt: transcribePrompt.trim() || undefined,
-        diarize: transcribeDiarize,
+        prompt: prompt ?? undefined,
+        diarize: false,
+        profileId: profileId ?? undefined,
       });
-    } catch (e: any) {
-      transcribeError = typeof e === "string" ? e : e.message || "Transcription failed";
+    } catch (error: any) {
+      transcribeError = typeof error === "string" ? error : error.message || "Transcription failed";
     } finally {
       transcribing = false;
       transcriptionProgress = 0;
     }
+  }
+
+  async function cancelMeetingImport(): Promise<void> {
+    const jobId = meetingJobId;
+    const generation = meetingPollGeneration;
+    if (!jobId || meetingJobStatus === "cancelling") return;
+    try {
+      const accepted = await cancelMeetingJob(jobId);
+      if (generation !== meetingPollGeneration || meetingJobId !== jobId) return;
+      if (accepted) {
+        meetingJobStatus = "cancelling";
+        meetingPhase = "Cancelling";
+        meetingError = "";
+      } else {
+        meetingError = "The meeting has already finished. Its final status is being retrieved.";
+      }
+    } catch (error) {
+      if (generation !== meetingPollGeneration || meetingJobId !== jobId) return;
+      meetingError = meetingFailureText(error, "Could not request cancellation. The meeting is still running.");
+    }
+  }
+
+  function retryMeetingPolling(): void {
+    if (!meetingJobId || meetingPollActive) return;
+    meetingPollingFailed = false;
+    meetingError = "";
+    transcribing = true;
+    void pollMeetingJob(meetingJobId, meetingPollGeneration);
+  }
+
+  async function renameMeetingReviewSpeaker(id: string, label: string): Promise<void> {
+    await enqueueMeetingAction(async (transcript, revision) => {
+      const updated = await renameMeetingSpeaker(transcript, id, label);
+      if (revision === meetingDocumentRevision) {
+        meetingTranscript = updated;
+        meetingError = "";
+      }
+    });
+  }
+
+  async function mergeMeetingReviewSpeakers(fromId: string, intoId: string): Promise<void> {
+    await enqueueMeetingAction(async (transcript, revision) => {
+      const updated = await mergeMeetingSpeakers(transcript, fromId, intoId);
+      if (revision === meetingDocumentRevision) {
+        meetingTranscript = updated;
+        meetingError = "";
+      }
+    });
+  }
+
+  async function exportMeetingReview(format: MeetingExportFormat): Promise<void> {
+    await enqueueMeetingAction(async (transcript) => {
+      await saveMeetingExport(transcript, format);
+    });
+  }
+
+  function onTranscribeProfileChange(e: Event) {
+    const nextProfileId = (e.target as HTMLSelectElement).value;
+    transcribeProfileId = profileForId(nextProfileId)?.id ?? null;
   }
 
   async function onPickFile() {
@@ -668,6 +1200,17 @@
 </script>
 
 <div class="settings-window">
+  <header class="window-header">
+    <h1 class="window-title">Sagascript</h1>
+    <div class="build-info" aria-label="Build information">
+      {#if buildInfo}
+        Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}
+      {:else}
+        Version information unavailable
+      {/if}
+    </div>
+  </header>
+
   <div class="tabs">
     <button class="tab" class:active={activeTab === "dictate"} onclick={() => (activeTab = "dictate")}>
       Dictate
@@ -691,7 +1234,7 @@
       {#if activeTab === "dictate"}
         <div class="field profile-field">
           <div class="profile-heading">
-            <span class="field-label">Dictation shortcuts</span>
+            <span class="field-label">{settings.hotkey_mode === "presenter" ? "Presenter start shortcuts" : "Dictation shortcuts"}</span>
             <button class="link-btn" onclick={addProfile}>+ Add language</button>
           </div>
           {#each settings.hotkey_profiles as profile (profile.id)}
@@ -775,8 +1318,18 @@
           <select id="hotkey-mode" value={settings.hotkey_mode} onchange={onHotkeyModeChange}>
             <option value="push">Push-to-talk</option>
             <option value="toggle">Toggle</option>
+            <option value="presenter">Presenter</option>
           </select>
         </div>
+
+        {#if settings.hotkey_mode === "presenter"}
+          <PresenterSettings
+            config={settings.presenter}
+            profileShortcuts={settings.hotkey_profiles.map((profile) => profile.shortcut)}
+            {platform}
+            onSave={onPresenterSave}
+          />
+        {/if}
 
         <div class="field-row">
           <span class="field-label">Auto-paste transcription</span>
@@ -821,6 +1374,11 @@
           {#if testError}
             <div class="transcribe-error">{testError}</div>
           {/if}
+          {#if presenterStatus}
+            <div class="presenter-status" role="status" aria-live="polite">
+              {presenterStatusLabels[presenterStatus]}
+            </div>
+          {/if}
           <textarea
             class="test-result"
             bind:value={testResult}
@@ -832,7 +1390,7 @@
         <button class="active-config-bar" onclick={() => (activeTab = "settings")}>
           <div class="active-config-row">
             <span class="active-config-label">Language</span>
-            <span class="active-config-value">{languageLabel(settings.language)}</span>
+            <span class="active-config-value">{languageLabel(transcribeLanguage())}</span>
           </div>
           <span class="active-config-link">Settings</span>
         </button>
@@ -844,10 +1402,25 @@
         >
           {#if transcribing}
             <div class="spinner"></div>
-            <div class="drop-zone-text">Transcribing... {transcriptionProgress}%</div>
-            <div class="progress-bar transcription-progress">
-              <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
-            </div>
+            {#if meetingJobStatus !== null}
+              <div class="drop-zone-text">{meetingStageText()}</div>
+              {#if meetingJobId && meetingPollingFailed}
+                <button class="secondary" onclick={retryMeetingPolling}>Retry status check</button>
+              {:else if meetingJobId}
+                <button
+                  class="secondary"
+                  onclick={cancelMeetingImport}
+                  disabled={meetingJobStatus === "cancelling"}
+                >
+                  {meetingJobStatus === "cancelling" ? "Cancelling…" : "Cancel meeting"}
+                </button>
+              {/if}
+            {:else}
+              <div class="drop-zone-text">Transcribing... {transcriptionProgress}%</div>
+              <div class="progress-bar transcription-progress">
+                <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
+              </div>
+            {/if}
           {:else}
             <div class="drop-zone-icon">&#x1F4C1;</div>
             <div class="drop-zone-text">Drop an audio or video file here</div>
@@ -862,8 +1435,22 @@
         </div>
 
         <div class="transcribe-options">
+          <div class="field">
+            <label for="transcribe-profile">Profile (optional)</label>
+            <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
+              <option value="">No profile (use selected language)</option>
+              {#each explicitProfiles() as profile (profile.id)}
+                <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
+              {/each}
+            </select>
+          </div>
+          {#if selectedTranscribeProfile()}
+            <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
+          {:else}
+            <div class="hotkey-hint">No profile keeps the selected language and global hint context.</div>
+          {/if}
           <label class="diarize-option">
-            <input type="checkbox" bind:checked={transcribeDiarize} />
+            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
             Speaker diarization
           </label>
           <textarea
@@ -872,17 +1459,35 @@
             placeholder="Extra context for this file only (optional)"
             bind:value={transcribePrompt}
             rows="2"
+            disabled={transcribing}
           ></textarea>
-          <div class="hotkey-hint">Temporary context for this import. Your personal dictionary is managed in Settings.</div>
+          <div class="hotkey-hint">Temporary hint-only context for this import. A selected profile supplies its dictionary; no profile uses global hints.</div>
         </div>
 
         {#if transcribeError}
           <div class="transcribe-error">{transcribeError}</div>
         {/if}
 
+        {#if meetingError && !meetingTranscript}
+          <div class="transcribe-error">{meetingError}</div>
+        {/if}
+
         {#if transcriptionResult}
           <div class="result-label">Result</div>
           <textarea class="transcribe-result" readonly>{transcriptionResult}</textarea>
+        {/if}
+
+        {#if meetingTranscript}
+          {#key meetingDocumentRevision}
+            <MeetingReview
+              transcript={meetingTranscript}
+              busy={transcribing}
+              error={meetingError || null}
+              onRename={renameMeetingReviewSpeaker}
+              onMerge={mergeMeetingReviewSpeakers}
+              onExport={exportMeetingReview}
+            />
+          {/key}
         {/if}
 
       {:else if activeTab === "settings"}
@@ -911,14 +1516,55 @@
 
         <div class="field">
           <label for="initial-prompt">Personal dictionary</label>
+          <select id="dictionary-scope" value={glossaryScopeId} onchange={onGlossaryScopeChange}>
+            <option value="">Global hints</option>
+            {#each explicitProfiles() as profile (profile.id)}
+              <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
+            {/each}
+          </select>
           <textarea
             id="initial-prompt"
             class="initial-prompt-input"
             rows="5"
-            value={settings.initial_prompt}
+            value={glossaryDraft}
             onblur={onInitialPromptBlur}
+            oninput={onGlossaryInput}
             placeholder="OpenRouter = open router | open vrouter&#10;merge = merch&#10;Cloudflare = cloud flare"
           ></textarea>
+          {#if glossaryScopeId === ""}
+            <div class="hotkey-hint glossary-migration">
+              Global entries are hint-only and remain stored. To enable deterministic alias replacements, copy an entry into the explicit-language profile that should use it.
+            </div>
+          {:else}
+            <div class="hotkey-hint glossary-migration">
+              This explicit-language profile supplies deterministic aliases for its language. Leaving this field saves this profile only; switching scope never moves entries to another dictionary.
+            </div>
+          {/if}
+          {#if glossaryConflictScopeId === glossaryScopeId && settingsError.startsWith(dictionaryConflictPrefix)}
+            <div class="hotkey-hint glossary-migration">
+              This dictionary changed elsewhere. Your draft is preserved; copy it if needed, then switch scopes and reselect this scope to reload the saved value. If it still shows the old text, close and reopen Settings.
+            </div>
+          {/if}
+          {#if recoveredGlossaryDrafts.length > 0}
+            <div class="hotkey-hint glossary-migration">
+              Unsaved drafts are preserved below for manual recovery. They are never saved or copied automatically into another dictionary.
+            </div>
+            {#each recoveredGlossaryDrafts as recovery (recovery.scopeId + "\u0000" + recovery.draft)}
+              <div class="glossary-recovery">
+                <div class="hotkey-hint">
+                  <strong>Unsaved draft</strong> for <code>{glossaryScopeLabel(recovery.scopeId)}</code>
+                  {#if recovery.conflicted} — the saved dictionary changed elsewhere.{/if}
+                </div>
+                <textarea
+                  class="initial-prompt-input"
+                  rows="3"
+                  aria-label={`Unsaved draft for ${glossaryScopeLabel(recovery.scopeId)}`}
+                  value={recovery.draft}
+                  readonly
+                ></textarea>
+              </div>
+            {/each}
+          {/if}
           <div class="hotkey-hint">
             One preferred spelling per line. Add exact mishearings after <code>=</code>, separated by <code>|</code>.
             Plain terms still guide Whisper. Saved automatically when you leave the field and used for live dictation and batch jobs.
@@ -1027,14 +1673,6 @@
     </div>
   {/if}
 
-  <div class="build-footer" aria-label="Build information">
-    {#if buildInfo}
-      Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}
-    {:else}
-      Version information unavailable
-    {/if}
-  </div>
-
   {#if downloading}
     <div class="download-status-bar">
       <div class="download-status-info">
@@ -1053,6 +1691,7 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+    min-width: 0;
   }
 
   .tabs {
@@ -1060,6 +1699,35 @@
     padding: 12px 20px 0;
     gap: 4px;
     border-bottom: 1px solid var(--border);
+  }
+
+  .window-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border);
+    min-width: 0;
+  }
+
+  .window-title {
+    min-width: 0;
+    font-size: 18px;
+    line-height: 1.2;
+    color: var(--text);
+  }
+
+  .build-info {
+    min-width: 0;
+    flex: 1 1 auto;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
   }
 
   .tab {
@@ -1085,6 +1753,15 @@
     padding: 20px;
     flex: 1;
     overflow-y: auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .window-header > *,
+  .tabs > *,
+  .content > * {
+    min-width: 0;
+    max-width: 100%;
   }
 
   .active-config-bar {
@@ -1099,6 +1776,7 @@
     border-radius: var(--radius);
     cursor: pointer;
     transition: border-color 0.15s;
+    min-width: 0;
   }
 
   .active-config-bar:hover {
@@ -1110,6 +1788,7 @@
     flex-direction: column;
     gap: 1px;
     text-align: left;
+    min-width: 0;
   }
 
   .active-config-label {
@@ -1123,6 +1802,7 @@
   .active-config-value {
     font-size: 13px;
     color: var(--text);
+    overflow-wrap: anywhere;
   }
 
   .active-config-link {
@@ -1462,15 +2142,6 @@
     transition: width 0.2s;
   }
 
-  .build-footer {
-    padding: 8px 20px 10px;
-    border-top: 1px solid var(--border);
-    color: var(--text-muted);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-    flex-shrink: 0;
-  }
-
   .initial-prompt-input {
     width: 100%;
     padding: 8px 10px;
@@ -1693,6 +2364,13 @@
   .test-record-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+  }
+
+  .presenter-status {
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
   }
 
   .recording-dot {

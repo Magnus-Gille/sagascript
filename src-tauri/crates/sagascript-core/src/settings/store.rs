@@ -516,6 +516,12 @@ fn normalize_glossary_file(contents: String) -> String {
     contents.trim_end_matches(['\r', '\n']).to_string()
 }
 
+/// Compare editor baselines using the existing glossary file round-trip rule.
+/// Only trailing CR/LF is normalized; spaces and internal line breaks matter.
+pub fn glossary_sources_match(left: &str, right: &str) -> bool {
+    left.trim_end_matches(['\r', '\n']) == right.trim_end_matches(['\r', '\n'])
+}
+
 fn glossary_file_contents(source: &str) -> String {
     let source = source.trim_end_matches(['\r', '\n']);
     if source.is_empty() {
@@ -1074,6 +1080,63 @@ mod tests {
             assert_eq!(persisted.hotkey, "Super+Q");
             let reloaded = load_from(&path);
             assert_eq!(reloaded.hotkey, "Super+Q");
+        });
+    }
+
+    #[test]
+    fn dictionary_compare_and_set_survives_external_file_round_trip() {
+        with_temp_settings(|path| {
+            let first = try_update_at(&path, |settings| {
+                settings.initial_prompt = "OpenRouter\n\n".into();
+                settings
+                    .profile_glossaries
+                    .insert("swedish".into(), "merge = merch\r\n".into());
+                settings
+                    .profile_glossaries
+                    .insert("empty".into(), String::new());
+                Ok(())
+            })
+            .unwrap();
+            let second = try_update_at(&path, |settings| {
+                if !glossary_sources_match(&settings.initial_prompt, &first.initial_prompt)
+                    || !glossary_sources_match(
+                        &settings.profile_glossaries["swedish"],
+                        &first.profile_glossaries["swedish"],
+                    )
+                {
+                    return Err("Spurious dictionary conflict after file round trip".into());
+                }
+                assert_eq!(
+                    settings.profile_glossaries.get("empty").map(String::as_str),
+                    Some("")
+                );
+                assert!(!settings.profile_glossaries.contains_key("absent"));
+                settings.initial_prompt = "OpenRouter\nCodex\n".into();
+                settings
+                    .profile_glossaries
+                    .insert("swedish".into(), "merge = merch\nCodex = code x\n".into());
+                Ok(())
+            })
+            .unwrap();
+            let loaded = load_from(&path);
+            assert!(glossary_sources_match(
+                &loaded.initial_prompt,
+                &second.initial_prompt
+            ));
+            assert!(glossary_sources_match(
+                &loaded.profile_glossaries["swedish"],
+                &second.profile_glossaries["swedish"]
+            ));
+            assert_eq!(
+                loaded.profile_glossaries.get("empty").map(String::as_str),
+                Some("")
+            );
+            assert!(!loaded.profile_glossaries.contains_key("absent"));
+            assert!(!glossary_sources_match("OpenRouter ", "OpenRouter"));
+            assert!(!glossary_sources_match(
+                "OpenRouter\nCodex",
+                "OpenRouter Codex"
+            ));
         });
     }
 

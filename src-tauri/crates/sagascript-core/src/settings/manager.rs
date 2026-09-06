@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::{canonical_hotkey, validate_hotkey};
+use super::{canonical_hotkey, validate_hotkey, PresenterConfig};
 
-use crate::download::DownloadIntegrity;
+use crate::{download::DownloadIntegrity, transcription::Glossary};
 
 #[cfg(target_os = "macos")]
 const WHISPER_CPP_REVISION: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
@@ -463,6 +463,8 @@ pub enum HotkeyMode {
     PushToTalk,
     #[serde(rename = "toggle")]
     Toggle,
+    #[serde(rename = "presenter")]
+    Presenter,
 }
 
 impl HotkeyMode {
@@ -471,6 +473,7 @@ impl HotkeyMode {
         match self {
             HotkeyMode::PushToTalk => "Push-to-talk",
             HotkeyMode::Toggle => "Toggle",
+            HotkeyMode::Presenter => "Presenter",
         }
     }
 }
@@ -502,6 +505,7 @@ pub struct Settings {
     pub language: Language,
     pub whisper_model: WhisperModel,
     pub hotkey_mode: HotkeyMode,
+    pub presenter: PresenterConfig,
     pub show_overlay: bool,
     pub auto_paste: bool,
     pub auto_select_model: bool,
@@ -536,6 +540,7 @@ impl Default for Settings {
             language: Language::default(),
             whisper_model: WhisperModel::default(),
             hotkey_mode: HotkeyMode::default(),
+            presenter: PresenterConfig::default(),
             show_overlay: true,
             auto_paste: true,
             auto_select_model: true,
@@ -553,10 +558,28 @@ impl Default for Settings {
 
 impl Settings {
     /// Combine the legacy global dictionary with the selected profile's
-    /// private additions. Keeping the legacy value first preserves existing
-    /// decoder hints while the glossary matcher fails closed on conflicts.
+    /// private additions. The legacy source is hint-only: aliases from the
+    /// unscoped compatibility dictionary must not become replacements in an
+    /// explicitly selected language profile.
     pub fn effective_glossary_source(&self, profile_id: Option<&str>) -> String {
-        let global = self.initial_prompt.trim();
+        self.effective_glossary_source_with_prompt(profile_id, None)
+    }
+
+    /// Compose the glossary source for one transcription without mutating
+    /// stored settings. A non-empty one-run prompt replaces the saved global
+    /// hint source; the selected known, explicit-language profile remains the
+    /// only source of deterministic alias replacements.
+    pub fn effective_glossary_source_with_prompt(
+        &self,
+        profile_id: Option<&str>,
+        prompt: Option<&str>,
+    ) -> String {
+        let base_source = prompt
+            .filter(|candidate| !candidate.trim().is_empty())
+            .unwrap_or(self.initial_prompt.as_str());
+        let global = Glossary::parse(base_source)
+            .decoder_prompt()
+            .unwrap_or_default();
         let scoped_profile_id = profile_id.filter(|requested_id| {
             self.resolved_hotkey_profiles().iter().any(|profile| {
                 profile.id == **requested_id && profile.language != Language::Auto
@@ -568,11 +591,11 @@ impl Settings {
             .map(str::trim)
             .unwrap_or_default();
 
-        match (global.is_empty(), scoped.is_empty()) {
+        match (global.trim().is_empty(), scoped.is_empty()) {
             (true, true) => String::new(),
-            (false, true) => global.to_string(),
+            (false, true) => global,
             (true, false) => scoped.to_string(),
-            (false, false) => format!("{global}\n{scoped}"),
+            (false, false) => format!("{}\n{scoped}", global.trim()),
         }
     }
 
@@ -595,6 +618,24 @@ impl Settings {
         } else {
             self.hotkey_profiles.clone()
         }
+    }
+
+    /// Return all shortcuts that the active hotkey mode may register.
+    /// Presenter finish/cancel shortcuts are intentionally omitted from the
+    /// ordinary modes so opting into presenter behavior is explicit.
+    pub fn resolved_shortcuts(&self) -> Vec<String> {
+        let mut shortcuts = self
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .map(|profile| profile.shortcut)
+            .collect::<Vec<_>>();
+        if self.hotkey_mode == HotkeyMode::Presenter {
+            shortcuts.push(self.presenter.finish_shortcut.clone());
+            if let Some(cancel) = &self.presenter.cancel_shortcut {
+                shortcuts.push(cancel.clone());
+            }
+        }
+        shortcuts
     }
 
     pub fn validate_hotkey_profiles(profiles: &[HotkeyProfile]) -> Result<(), String> {
@@ -626,6 +667,48 @@ impl Settings {
                 return Err(format!("Duplicate hotkey '{}'", profile.shortcut));
             }
         }
+        Ok(())
+    }
+
+    /// Validate the complete shortcut configuration. Presenter shortcuts are
+    /// checked syntactically in every mode, while collisions with profile
+    /// shortcuts matter only after presenter mode is explicitly enabled.
+    pub fn validate_shortcut_configuration(&self) -> Result<(), String> {
+        let profiles = self.resolved_hotkey_profiles();
+        Self::validate_hotkey_profiles(&profiles)?;
+        self.presenter.validate()?;
+        if self.hotkey_mode == HotkeyMode::Presenter {
+            let mut shortcuts = profiles
+                .iter()
+                .map(|profile| canonical_hotkey(&profile.shortcut))
+                .collect::<Result<HashSet<_>, _>>()?;
+            let finish = canonical_hotkey(&self.presenter.finish_shortcut)?;
+            if !shortcuts.insert(finish) {
+                return Err("Presenter finish shortcut conflicts with a profile shortcut".to_string());
+            }
+            if let Some(cancel) = &self.presenter.cancel_shortcut {
+                if !shortcuts.insert(canonical_hotkey(cancel)?) {
+                    return Err("Presenter cancel shortcut conflicts with a profile shortcut".to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn replace_presenter_config(&mut self, presenter: PresenterConfig) -> Result<(), String> {
+        presenter.validate()?;
+        let mut candidate = self.clone();
+        candidate.presenter = presenter.clone();
+        candidate.validate_shortcut_configuration()?;
+        self.presenter = presenter;
+        Ok(())
+    }
+
+    pub fn replace_hotkey_mode(&mut self, hotkey_mode: HotkeyMode) -> Result<(), String> {
+        let mut candidate = self.clone();
+        candidate.hotkey_mode = hotkey_mode;
+        candidate.validate_shortcut_configuration()?;
+        self.hotkey_mode = hotkey_mode;
         Ok(())
     }
 
@@ -664,9 +747,14 @@ impl Settings {
             ));
         }
         let legacy = profiles.iter().find(|profile| profile.id == "default").unwrap_or(&profiles[0]);
-        self.hotkey = legacy.shortcut.clone();
-        self.language = legacy.language;
-        self.hotkey_profiles = profiles;
+        let mut candidate = self.clone();
+        candidate.hotkey = legacy.shortcut.clone();
+        candidate.language = legacy.language;
+        candidate.hotkey_profiles = profiles;
+        candidate.validate_shortcut_configuration()?;
+        self.hotkey = candidate.hotkey;
+        self.language = candidate.language;
+        self.hotkey_profiles = candidate.hotkey_profiles;
         Ok(())
     }
 
@@ -677,18 +765,50 @@ impl Settings {
             .find(|profile| canonical_hotkey(&profile.shortcut).ok().as_deref() == Some(target.as_str()))
     }
 
-    pub fn set_legacy_language(&mut self, language: Language) {
+    pub fn set_legacy_language(&mut self, language: Language) -> Result<(), String> {
+        let current_legacy_language = if self.hotkey_profiles.is_empty() {
+            Some(self.language)
+        } else {
+            self.hotkey_profiles
+                .iter()
+                .find(|profile| profile.id == "default")
+                .map(|profile| profile.language)
+        };
+        if current_legacy_language.is_some_and(|current| current != language)
+            && self
+                .profile_glossaries
+                .get("default")
+                .is_some_and(|source| !source.trim().is_empty())
+        {
+            return Err(
+                "Profile 'default' has a personal dictionary; clear it before changing the profile language"
+                    .to_string(),
+            );
+        }
         self.language = language;
         if let Some(profile) = self.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
             profile.language = language;
         }
+        Ok(())
     }
 
-    pub fn set_legacy_hotkey(&mut self, shortcut: String) {
-        self.hotkey = shortcut.clone();
-        if let Some(profile) = self.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
+    /// Try to update the legacy/default profile shortcut atomically.
+    pub fn try_set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), String> {
+        let mut candidate = self.clone();
+        candidate.hotkey = shortcut.clone();
+        if let Some(profile) = candidate.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
             profile.shortcut = shortcut;
         }
+        candidate.validate_shortcut_configuration()?;
+        self.hotkey = candidate.hotkey;
+        self.hotkey_profiles = candidate.hotkey_profiles;
+        Ok(())
+    }
+
+    /// Checked legacy/default profile shortcut update. Invalid or colliding
+    /// updates leave the complete settings value unchanged.
+    pub fn set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), String> {
+        self.try_set_legacy_hotkey(shortcut)
     }
 
     /// Build the ordered set of profile models worth loading during GUI
@@ -1101,6 +1221,7 @@ mod tests {
     fn hotkey_mode_display_names() {
         assert_eq!(HotkeyMode::PushToTalk.display_name(), "Push-to-talk");
         assert_eq!(HotkeyMode::Toggle.display_name(), "Toggle");
+        assert_eq!(HotkeyMode::Presenter.display_name(), "Presenter");
     }
 
     #[test]
@@ -1109,6 +1230,8 @@ mod tests {
         assert_eq!(json, "\"push\"");
         let json = serde_json::to_string(&HotkeyMode::Toggle).unwrap();
         assert_eq!(json, "\"toggle\"");
+        let json = serde_json::to_string(&HotkeyMode::Presenter).unwrap();
+        assert_eq!(json, "\"presenter\"");
     }
 
     // -- Settings --
@@ -1123,11 +1246,134 @@ mod tests {
         assert!(s.auto_paste);
         assert!(s.auto_select_model);
         assert_eq!(s.hotkey, "Control+Shift+Space");
+        assert_eq!(s.presenter, PresenterConfig::default());
         assert_eq!(s.initial_prompt, "");
         assert!(s.profile_glossaries.is_empty());
         assert_eq!(s.beam_size, 0);
         assert!(s.temperature_fallback);
         assert!(!s.vad_enabled);
+    }
+
+    #[test]
+    fn legacy_settings_default_presenter_without_changing_old_hotkey_fields() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"hotkey_mode":"toggle","hotkey":"Option+Space"}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.hotkey_mode, HotkeyMode::Toggle);
+        assert_eq!(settings.hotkey, "Option+Space");
+        assert_eq!(settings.presenter, PresenterConfig::default());
+    }
+
+    #[test]
+    fn presenter_config_serializes_actions_with_strict_names() {
+        let mut presenter = PresenterConfig {
+            cancel_shortcut: Some("Option+Escape".to_string()),
+            ..PresenterConfig::default()
+        };
+        presenter.app_actions.insert(
+            "com.example.editor".to_string(),
+            crate::settings::PresenterFinishAction::CommandReturn,
+        );
+        let json = serde_json::to_string(&presenter).unwrap();
+        assert!(json.contains("command_return"));
+        let roundtrip: PresenterConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, presenter);
+        assert!(serde_json::from_str::<PresenterConfig>(
+            r#"{"finish_shortcut":"Control+Shift+Enter","app_actions":{"com.example.editor":"unknown"}}"#,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn presenter_config_validates_bounded_app_identifiers() {
+        let mut presenter = PresenterConfig::default();
+        presenter.app_actions.insert("bad\napp".to_string(), Default::default());
+        assert!(presenter.validate().is_err());
+        presenter.app_actions.clear();
+        presenter.app_actions.insert("x".repeat(513), Default::default());
+        assert!(presenter.validate().is_err());
+        presenter.app_actions.clear();
+        presenter.app_actions.insert(String::new(), Default::default());
+        assert!(presenter.validate().is_err());
+        presenter.app_actions.clear();
+        for index in 0..=PresenterConfig::MAX_APP_ACTIONS {
+            presenter
+                .app_actions
+                .insert(format!("com.example.app{index}"), Default::default());
+        }
+        assert!(presenter.validate().is_err());
+    }
+
+    #[test]
+    fn presenter_mode_transition_rejects_canonical_profile_collision_atomically() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![profile(
+                "default",
+                "Control+Shift+Enter",
+                Language::English,
+            )])
+            .unwrap();
+        let before_mode = settings.hotkey_mode;
+        let error = settings.replace_hotkey_mode(HotkeyMode::Presenter).unwrap_err();
+        assert!(error.contains("profile shortcut"));
+        assert_eq!(settings.hotkey_mode, before_mode);
+        assert_eq!(settings.hotkey_profiles[0].shortcut, "Control+Shift+Enter");
+    }
+
+    #[test]
+    fn presenter_config_replacement_and_profile_edit_are_atomic_when_active() {
+        let mut settings = Settings::default();
+        settings.replace_hotkey_mode(HotkeyMode::Presenter).unwrap();
+        let old_presenter = settings.presenter.clone();
+        let mut colliding = old_presenter.clone();
+        colliding.finish_shortcut = "Control+Shift+Space".to_string();
+        assert!(settings.replace_presenter_config(colliding).is_err());
+        assert_eq!(settings.presenter, old_presenter);
+
+        let old_profiles = settings.hotkey_profiles.clone();
+        let error = settings.replace_hotkey_profiles(vec![profile(
+            "default",
+            "Ctrl+Shift+Enter",
+            Language::English,
+        )]);
+        assert!(error.is_err());
+        assert_eq!(settings.hotkey_profiles, old_profiles);
+    }
+
+    #[test]
+    fn presenter_shortcuts_are_resolved_only_when_mode_is_active() {
+        let mut settings = Settings::default();
+        settings.presenter.cancel_shortcut = Some("Option+Escape".to_string());
+        assert_eq!(
+            settings.resolved_shortcuts(),
+            vec!["Control+Shift+Space".to_string()]
+        );
+        settings.replace_hotkey_mode(HotkeyMode::Presenter).unwrap();
+        assert_eq!(
+            settings.resolved_shortcuts(),
+            vec![
+                "Control+Shift+Space".to_string(),
+                "Control+Shift+Enter".to_string(),
+                "Option+Escape".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_hotkey_collision_is_rejected_without_mutation() {
+        let mut settings = Settings::default();
+        settings.replace_hotkey_mode(HotkeyMode::Presenter).unwrap();
+        let before = settings.hotkey.clone();
+        assert!(settings
+            .set_legacy_hotkey("Ctrl+Shift+Enter".to_string())
+            .is_err());
+        assert_eq!(settings.hotkey, before);
+        assert_eq!(settings.resolved_hotkey_profiles()[0].shortcut, before);
+        assert!(settings
+            .try_set_legacy_hotkey("Ctrl+Shift+Enter".to_string())
+            .is_err());
     }
 
     #[test]
@@ -1159,13 +1405,76 @@ mod tests {
 
         assert_eq!(
             settings.effective_glossary_source(Some("swedish")),
-            "Codex = code x\nmergea = mördsa"
+            "Codex\nmergea = mördsa"
         );
         assert_eq!(
             settings.effective_glossary_source(Some("english")),
-            "Codex = code x\nLovable = love a ball"
+            "Codex\nLovable = love a ball"
         );
-        assert_eq!(settings.effective_glossary_source(None), "Codex = code x");
+        assert_eq!(settings.effective_glossary_source(None), "Codex");
+    }
+
+    #[test]
+    fn global_aliases_are_hint_only_and_do_not_leak_between_profiles() {
+        let mut settings = Settings {
+            initial_prompt: "merge = merch".to_string(),
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "swedish".to_string(),
+                    name: "Swedish".to_string(),
+                    shortcut: "Control+Shift+Space".to_string(),
+                    language: Language::Swedish,
+                },
+                HotkeyProfile {
+                    id: "english".to_string(),
+                    name: "English".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                },
+            ],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "merge = merch".to_string());
+
+        let swedish = Glossary::parse(&settings.effective_glossary_source(Some("swedish")));
+        let english = Glossary::parse(&settings.effective_glossary_source(Some("english")));
+        assert_eq!(swedish.correct_text("merch").0, "merge");
+        assert_eq!(english.correct_text("merch").0, "merch");
+        assert_eq!(settings.effective_glossary_source(Some("english")), "merge");
+    }
+
+    #[test]
+    fn effective_glossary_deduplicates_global_and_profile_canonicals() {
+        let mut settings = Settings {
+            initial_prompt: "Codex = code x\nmerge = merch".to_string(),
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Control+Shift+Space".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings.profile_glossaries.insert(
+            "swedish".to_string(),
+            "merge = merch\nOpenRouter = open router".to_string(),
+        );
+
+        let glossary = Glossary::parse(&settings.effective_glossary_source(Some("swedish")));
+        assert_eq!(
+            glossary.single_word_terms(),
+            vec!["Codex", "merge", "OpenRouter"]
+        );
+        assert_eq!(
+            glossary.decoder_prompt().as_deref(),
+            Some("Codex, merge, OpenRouter")
+        );
+        assert_eq!(
+            glossary.correct_text("code x merch open router").0,
+            "code x merge OpenRouter"
+        );
     }
 
     #[test]
@@ -1197,11 +1506,49 @@ mod tests {
 
         assert_eq!(
             settings.effective_glossary_source(Some("default")),
-            "Codex = code x"
+            "Codex"
         );
         assert_eq!(
             settings.effective_glossary_source(Some("removed")),
-            "Codex = code x"
+            "Codex"
+        );
+    }
+
+    #[test]
+    fn one_run_prompt_replaces_global_hints_but_keeps_selected_profile_aliases() {
+        let mut settings = Settings {
+            initial_prompt: "Global = alias".to_string(),
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Control+Shift+Space".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "Profile = misheard".to_string());
+
+        assert_eq!(
+            settings.effective_glossary_source_with_prompt(
+                Some("swedish"),
+                Some("OneRun = spelling")
+            ),
+            "OneRun\nProfile = misheard"
+        );
+        assert_eq!(
+            settings.effective_glossary_source_with_prompt(Some("swedish"), Some("  \n")),
+            "Global\nProfile = misheard"
+        );
+        assert_eq!(
+            settings.effective_glossary_source_with_prompt(None, Some("OneRun = spelling")),
+            "OneRun"
+        );
+        assert_eq!(settings.initial_prompt, "Global = alias");
+        assert_eq!(
+            settings.profile_glossaries.get("swedish").map(String::as_str),
+            Some("Profile = misheard")
         );
     }
 
@@ -1277,6 +1624,91 @@ mod tests {
         assert!(error.contains("personal dictionary"));
         assert!(error.contains("language"));
         assert_eq!(settings.language, Language::Swedish);
+    }
+
+    #[test]
+    fn legacy_language_change_with_implicit_default_dictionary_is_atomic() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        let error = settings.set_legacy_language(Language::English).unwrap_err();
+
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, Language::Swedish);
+        assert!(settings.hotkey_profiles.is_empty());
+        assert_eq!(
+            settings.profile_glossaries.get("default").map(String::as_str),
+            Some("merge = merch")
+        );
+    }
+
+    #[test]
+    fn legacy_language_change_with_explicit_default_dictionary_is_atomic() {
+        let mut settings = Settings {
+            language: Language::English,
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Control+Shift+Space".to_string(),
+                Language::Swedish,
+            )],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        let error = settings.set_legacy_language(Language::English).unwrap_err();
+
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.hotkey_profiles[0].language, Language::Swedish);
+    }
+
+    #[test]
+    fn legacy_language_change_allows_orphan_dictionary_without_default_profile() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Control+Shift+Space".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        settings.set_legacy_language(Language::English).unwrap();
+
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.hotkey_profiles[0].language, Language::Swedish);
+        assert_eq!(
+            settings.profile_glossaries.get("default").map(String::as_str),
+            Some("merge = merch")
+        );
+    }
+
+    #[test]
+    fn legacy_language_change_without_dictionary_updates_legacy_profile() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Control+Shift+Space".to_string(),
+                Language::Swedish,
+            )],
+            ..Default::default()
+        };
+
+        settings.set_legacy_language(Language::English).unwrap();
+
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.hotkey_profiles[0].language, Language::English);
     }
 
     #[test]

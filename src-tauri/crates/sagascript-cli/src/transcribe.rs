@@ -1,14 +1,27 @@
 use std::collections::HashSet;
+#[cfg(feature = "diarization")]
+use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+#[cfg(feature = "diarization")]
+use std::time::SystemTime;
 
 use clap::Args;
+#[cfg(feature = "diarization")]
+use sha2::{Digest, Sha256};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
 use sagascript_core::audio::decoder::{decode_audio_file, SUPPORTED_EXTENSIONS};
+#[cfg(feature = "diarization")]
+use sagascript_core::audio::decoder::decode_audio_file_with_control;
+#[cfg(feature = "diarization")]
+use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
 use sagascript_core::settings::{HotkeyProfile, Language, Settings, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
     analyze_coverage, analyze_language_windows, analyze_repetition, language_mismatch_warning,
@@ -18,6 +31,9 @@ use sagascript_core::transcription::diagnostics::{
 #[cfg(feature = "diarization")]
 use sagascript_core::transcription::diagnostics::{analyze_coverage_profile, CoverageProfile};
 use sagascript_core::transcription::model;
+use sagascript_core::transcription::whisper_backend::assemble_transcript;
+#[cfg(feature = "diarization")]
+use sagascript_core::transcription::whisper_backend::contains_no_speech_marker;
 use sagascript_core::transcription::{
     normalize_nonspeech_markers, recommended_parallel_chunks, ContextProfile, Glossary,
     TranscribeOptions, TranscriptSegment, WhisperBackend,
@@ -71,6 +87,16 @@ pub struct TranscribeArgs {
     #[cfg(feature = "diarization")]
     #[arg(long)]
     pub diarize: bool,
+
+    /// Emit the validated shared meeting transcript JSON document.
+    /// Requires diarization and cannot be combined with legacy JSON outputs.
+    #[cfg(feature = "diarization")]
+    #[arg(
+        long,
+        requires = "diarize",
+        conflicts_with_all = ["json", "jsonl", "clipboard", "correct_hints"]
+    )]
+    pub meeting_json: bool,
 
     /// Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.75). Higher = fewer speakers.
     #[cfg(feature = "diarization")]
@@ -141,6 +167,288 @@ pub struct TranscribeArgs {
 struct FileTranscription {
     json: serde_json::Value,
     plain: String,
+    #[cfg(feature = "diarization")]
+    meeting: Option<MeetingTranscript>,
+}
+
+#[cfg(feature = "diarization")]
+fn assemble_diarized_plain_text(segments: &[DiarizedSegment]) -> String {
+    segments
+        .iter()
+        .filter(|segment| !contains_no_speech_marker(&segment.text))
+        .map(|segment| format!("[{}] {}", segment.speaker, segment.text.trim()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(feature = "diarization")]
+fn prepare_diarized_plain_segments(
+    segments: &[DiarizedSegment],
+    language: Language,
+    glossary: &Glossary,
+) -> Vec<DiarizedSegment> {
+    let filtered = segments
+        .iter()
+        .filter(|segment| !contains_no_speech_marker(&segment.text))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut consolidated = sagascript_core::diarization::merge::consolidate(&filtered);
+    for segment in &mut consolidated {
+        segment.text = normalize_nonspeech_markers(&segment.text, language);
+    }
+    let fragments = consolidated
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect::<Vec<_>>();
+    let (corrected_fragments, _) = glossary.correct_fragments(&fragments);
+    for (segment, text) in consolidated.iter_mut().zip(corrected_fragments) {
+        segment.text = text;
+    }
+    consolidated
+}
+
+#[cfg(feature = "diarization")]
+const MAX_MEETING_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MeetingPhase {
+    Preparing,
+    Decoding,
+    LoadingModel,
+    Analyzing,
+    Clustering,
+    Finalizing,
+}
+
+pub struct MeetingControl<'a> {
+    pub cancellation: &'a AtomicBool,
+    pub progress: &'a (dyn Fn(MeetingPhase) + Sync),
+}
+
+impl MeetingControl<'_> {
+    pub fn check(&self) -> Result<(), DictationError> {
+        if self.cancellation.load(Ordering::Acquire) {
+            return Err(DictationError::TranscriptionFailed(
+                "Meeting transcription cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "diarization")]
+fn meeting_checkpoint(
+    control: Option<&MeetingControl<'_>>,
+    phase: MeetingPhase,
+) -> Result<(), DictationError> {
+    if let Some(control) = control {
+        control.check()?;
+        (control.progress)(phase);
+        control.check()?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "diarization")]
+fn meeting_check(control: Option<&MeetingControl<'_>>) -> Result<(), DictationError> {
+    if let Some(control) = control {
+        control.check()?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "diarization")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MeetingFileMetadata {
+    len: u64,
+    modified: SystemTime,
+}
+
+#[cfg(feature = "diarization")]
+fn checked_meeting_metadata(
+    metadata: std::fs::Metadata,
+    context: &str,
+) -> Result<MeetingFileMetadata, DictationError> {
+    if !metadata.is_file() {
+        return Err(DictationError::FileDecodeError(format!(
+            "Meeting input {context} is not a regular file"
+        )));
+    }
+    if metadata.len() > MAX_MEETING_INPUT_BYTES {
+        return Err(DictationError::FileDecodeError(
+            "Meeting input exceeds the 2 GiB hashing limit".to_string(),
+        ));
+    }
+    let modified = metadata.modified().map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Meeting input {context} modification time is unavailable: {error}"
+        ))
+    })?;
+    Ok(MeetingFileMetadata {
+        len: metadata.len(),
+        modified,
+    })
+}
+
+#[cfg(feature = "diarization")]
+fn stable_file_sha256(
+    file: &Path,
+    control: Option<&MeetingControl<'_>>,
+) -> Result<String, DictationError> {
+    const CHUNK_SIZE: usize = 64 * 1024;
+    let path_before = std::fs::metadata(file).map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Failed to inspect meeting input '{}': {error}",
+            file.display()
+        ))
+    })?;
+    let path_before = checked_meeting_metadata(path_before, "path")?;
+    let mut reader = std::fs::File::open(file).map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Failed to read meeting input '{}': {error}",
+            file.display()
+        ))
+    })?;
+    let handle_before = checked_meeting_metadata(
+        reader.metadata().map_err(|error| {
+            DictationError::FileDecodeError(format!(
+                "Failed to inspect opened meeting input '{}': {error}",
+                file.display()
+            ))
+        })?,
+        "opened handle",
+    )?;
+    if path_before != handle_before {
+        return Err(DictationError::FileDecodeError(
+            "Meeting input changed while opening; refusing output".to_string(),
+        ));
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; CHUNK_SIZE];
+    let mut bytes_read = 0_u64;
+    {
+        let mut limited_reader = (&mut reader).take(MAX_MEETING_INPUT_BYTES + 1);
+        loop {
+            meeting_check(control)?;
+            let count = limited_reader.read(&mut buffer).map_err(|error| {
+                DictationError::FileDecodeError(format!(
+                    "Failed to read meeting input '{}': {error}",
+                    file.display()
+                ))
+            })?;
+            if count == 0 {
+                break;
+            }
+            bytes_read = bytes_read.checked_add(count as u64).ok_or_else(|| {
+                DictationError::FileDecodeError(
+                    "Meeting input size exceeded safe hashing bounds".to_string(),
+                )
+            })?;
+            hasher.update(&buffer[..count]);
+            meeting_check(control)?;
+        }
+    }
+    if bytes_read > MAX_MEETING_INPUT_BYTES {
+        return Err(DictationError::FileDecodeError(
+            "Meeting input exceeds the 2 GiB hashing limit".to_string(),
+        ));
+    }
+    let handle_after = checked_meeting_metadata(
+        reader.metadata().map_err(|error| {
+            DictationError::FileDecodeError(format!(
+                "Failed to inspect opened meeting input '{}': {error}",
+                file.display()
+            ))
+        })?,
+        "opened handle",
+    )?;
+    let path_after = std::fs::metadata(file).map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Failed to inspect meeting input '{}': {error}",
+            file.display()
+        ))
+    })?;
+    let path_after = checked_meeting_metadata(path_after, "path")?;
+    if bytes_read != path_before.len
+        || path_before != handle_before
+        || handle_before != handle_after
+        || path_before != path_after
+    {
+        return Err(DictationError::FileDecodeError(
+            "Meeting input changed while hashing; refusing output".to_string(),
+        ));
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+#[cfg(feature = "diarization")]
+fn verify_meeting_source_unchanged(
+    file: &Path,
+    source_sha256: &str,
+    control: Option<&MeetingControl<'_>>,
+) -> Result<(), DictationError> {
+    let after = stable_file_sha256(file, control)?;
+    if after != source_sha256 {
+        return Err(DictationError::FileDecodeError(
+            "Meeting input changed during transcription; refusing output".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "diarization")]
+fn meeting_transcript_from_plain_segments(
+    source_sha256: String,
+    language: Language,
+    model: WhisperModel,
+    duration: f64,
+    plain_segments: &[DiarizedSegment],
+) -> Result<MeetingTranscript, DictationError> {
+    let mut speakers = Vec::new();
+    let mut seen = HashSet::new();
+    for segment in plain_segments {
+        if seen.insert(segment.speaker.clone()) {
+            speakers.push(MeetingSpeaker {
+                id: segment.speaker.clone(),
+                label: segment.speaker.clone(),
+            });
+        }
+    }
+    let segments = plain_segments
+        .iter()
+        .map(|segment| MeetingSegmentInput {
+            start: segment.start,
+            // Whisper can timestamp the last padded window past the decoded
+            // audio. Clamp only finite ends here; invalid starts/non-finite
+            // values still fail the shared validator, and legacy outputs stay
+            // unchanged. Do not mutate the source diarization segments.
+            end: if segment.end.is_finite() && duration.is_finite() {
+                segment.end.min(duration)
+            } else {
+                segment.end
+            },
+            text: segment.text.clone(),
+            speaker: segment.speaker.clone(),
+        })
+        .collect();
+    MeetingTranscript::new(
+        source_sha256,
+        language.whisper_code().unwrap_or("auto"),
+        model_id_string(model),
+        duration,
+        segments,
+        speakers,
+    )
+    .map_err(|_| {
+        DictationError::TranscriptionFailed(
+            "Diarized meeting segments failed shared transcript validation".to_string(),
+        )
+    })
 }
 
 #[cfg(feature = "diarization")]
@@ -186,8 +494,143 @@ enum BatchItem {
     },
 }
 
+/// Run the diarized file pipeline and return the validated shared meeting
+/// document without loading settings, writing settings, or emitting stdout.
+#[cfg(feature = "diarization")]
+pub fn transcribe_meeting_file(
+    file: &Path,
+    stored: &Settings,
+    language: Language,
+    model: WhisperModel,
+    glossary: &Glossary,
+    backend: &WhisperBackend,
+) -> Result<MeetingTranscript, DictationError> {
+    transcribe_meeting_file_inner(file, stored, language, model, glossary, backend, None)
+}
+
+/// Run the diarized file pipeline with explicit progress and cancellation
+/// control. The caller owns the flag and must not clear it during a job.
+#[cfg(feature = "diarization")]
+pub fn transcribe_meeting_file_with_control(
+    file: &Path,
+    stored: &Settings,
+    language: Language,
+    model: WhisperModel,
+    glossary: &Glossary,
+    backend: &WhisperBackend,
+    control: &MeetingControl<'_>,
+) -> Result<MeetingTranscript, DictationError> {
+    control.check()?;
+    transcribe_meeting_file_inner(
+        file,
+        stored,
+        language,
+        model,
+        glossary,
+        backend,
+        Some(control),
+    )
+}
+
+#[cfg(feature = "diarization")]
+fn transcribe_meeting_file_inner(
+    file: &Path,
+    stored: &Settings,
+    language: Language,
+    model: WhisperModel,
+    glossary: &Glossary,
+    backend: &WhisperBackend,
+    control: Option<&MeetingControl<'_>>,
+) -> Result<MeetingTranscript, DictationError> {
+    let args = TranscribeArgs {
+        files: vec![file.to_path_buf()],
+        recursive: false,
+        language: Some(language.whisper_code().unwrap_or("auto").to_string()),
+        profile: None,
+        model: Some(model_id_string(model).to_string()),
+        json: false,
+        jsonl: false,
+        fail_fast: true,
+        clipboard: false,
+        diarize: true,
+        meeting_json: true,
+        diarize_threshold: 0.75,
+        diarize_cache: None,
+        prompt: None,
+        prompt_file: None,
+        correct_hints: false,
+        vad: false,
+        no_vad: false,
+        beam_size: None,
+        parallel: None,
+    };
+    let mut model_loaded = false;
+    let output = transcribe_file(
+        &args,
+        file,
+        backend,
+        stored,
+        language,
+        model,
+        &mut model_loaded,
+        glossary,
+        &[],
+        control,
+    )?;
+    output.meeting.ok_or_else(|| {
+        DictationError::TranscriptionFailed(
+            "Diarized meeting transcript was not produced".to_string(),
+        )
+    })
+}
+
+#[cfg(feature = "diarization")]
+fn validate_meeting_input_scope(
+    original_inputs: &[PathBuf],
+    recursive: bool,
+    expanded: &[PathBuf],
+) -> Result<(), DictationError> {
+    if recursive || original_inputs.iter().any(|path| path.is_dir()) || expanded.len() != 1 {
+        return Err(DictationError::SettingsError(
+            "--meeting-json requires one explicit regular input file; directories, --recursive, and multiple inputs are unsupported"
+                .to_string(),
+        ));
+    }
+    let metadata = std::fs::metadata(&expanded[0]).map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Failed to inspect meeting input '{}': {error}",
+            expanded[0].display()
+        ))
+    })?;
+    let _ = checked_meeting_metadata(metadata, "path")?;
+    Ok(())
+}
+
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
+    let stored = sagascript_core::settings::store::load();
+    let profile = args
+        .profile
+        .as_deref()
+        .map(|profile_id| resolve_profile(&stored, profile_id))
+        .transpose()?;
+    let language = match (&profile, &args.language) {
+        (Some(profile), _) => profile.language,
+        (None, Some(language)) => parse_language(language)?,
+        (None, None) => stored.language,
+    };
+
+    let glossary = effective_glossary(
+        &stored,
+        args.profile.as_deref(),
+        args.prompt.as_deref(),
+        args.prompt_file.as_deref(),
+    )?;
+
     let files = expand_inputs(&args.files, args.recursive)?;
+    #[cfg(feature = "diarization")]
+    if args.meeting_json {
+        validate_meeting_input_scope(&args.files, args.recursive, &files)?;
+    }
     if files.is_empty() {
         return Err(DictationError::FileDecodeError(
             "No supported audio/video files were found in the supplied inputs".to_string(),
@@ -204,18 +647,6 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             "--diarize is only available when transcribing one file".to_string(),
         ));
     }
-
-    let stored = sagascript_core::settings::store::load();
-    let profile = args
-        .profile
-        .as_deref()
-        .map(|profile_id| resolve_profile(&stored, profile_id))
-        .transpose()?;
-    let language = match (&profile, &args.language) {
-        (Some(profile), _) => profile.language,
-        (None, Some(language)) => parse_language(language)?,
-        (None, None) => stored.language,
-    };
     let model = resolve_effective_model(
         args.model.as_deref(),
         language,
@@ -223,22 +654,13 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         stored.whisper_model,
     )?;
 
-    // Resolve and validate this before decoding or loading a model: an invalid
-    // opt-in correction request should not spend time on transcription first.
-    let stored_prompt = stored.effective_glossary_source(args.profile.as_deref());
-    let effective_prompt = resolve_effective_prompt(
-        args.prompt.as_deref(),
-        args.prompt_file.as_deref(),
-        &stored_prompt,
-    )?;
-    let glossary = Glossary::parse(effective_prompt.as_deref().unwrap_or_default());
     let correction_vocabulary = if args.correct_hints {
-        effective_prompt.as_deref().ok_or_else(|| {
-            DictationError::SettingsError(
-                "--correct-hints requires a non-empty --hint/--prompt (or saved initial_prompt)"
+        if glossary.decoder_prompt().is_none() {
+            return Err(DictationError::SettingsError(
+                "--correct-hints requires a non-empty --hint/--prompt, saved initial_prompt, or selected profile dictionary"
                     .to_string(),
-            )
-        })?;
+            ));
+        }
         let vocabulary = glossary.single_word_terms();
         if vocabulary.is_empty() {
             return Err(DictationError::SettingsError(
@@ -285,12 +707,27 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
                 &mut model_loaded,
                 &glossary,
                 &correction_vocabulary,
+                None,
             )
         },
         |execution| {
             let file = execution.source;
             match execution.output {
                 Ok(output) => {
+                    #[cfg(feature = "diarization")]
+                    if args.meeting_json {
+                        let meeting = output.meeting.as_ref().ok_or_else(|| {
+                            DictationError::TranscriptionFailed(
+                                "meeting JSON was not produced by the diarized pipeline"
+                                    .to_string(),
+                            )
+                        })?;
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(meeting).expect("meeting serializes")
+                        );
+                        return Ok(());
+                    }
                     if args.clipboard {
                         copy_to_clipboard(&output.plain)?;
                         eprintln!("Copied to clipboard.");
@@ -442,8 +879,21 @@ fn transcribe_file(
     model_loaded: &mut bool,
     glossary: &Glossary,
     correction_vocabulary: &[String],
+    control: Option<&MeetingControl<'_>>,
 ) -> Result<FileTranscription, DictationError> {
+    #[cfg(not(feature = "diarization"))]
+    let _ = control;
+
     let file_started = Instant::now();
+    #[cfg(feature = "diarization")]
+    let meeting_source_sha256 = if args.meeting_json {
+        meeting_checkpoint(control, MeetingPhase::Preparing)?;
+        let source_sha256 = stable_file_sha256(file, control)?;
+        meeting_checkpoint(control, MeetingPhase::Preparing)?;
+        Some(source_sha256)
+    } else {
+        None
+    };
     #[cfg(feature = "diarization")]
     let decoder_prompt = glossary.decoder_prompt();
     #[cfg(feature = "diarization")]
@@ -497,6 +947,10 @@ fn transcribe_file(
         ));
     }
 
+    #[cfg(feature = "diarization")]
+    if args.meeting_json {
+        meeting_checkpoint(control, MeetingPhase::Decoding)?;
+    }
     let (audio, decode_resample_seconds, duration) = if cache_hit {
         #[cfg(feature = "diarization")]
         {
@@ -513,12 +967,24 @@ fn transcribe_file(
     } else {
         eprintln!("Decoding {}...", file.display());
         let decode_started = Instant::now();
+        #[cfg(feature = "diarization")]
+        let audio = if args.meeting_json {
+                let checkpoint = || meeting_check(control);
+                decode_audio_file_with_control(file, &checkpoint)?
+        } else {
+            decode_audio_file(file)?
+        };
+        #[cfg(not(feature = "diarization"))]
         let audio = decode_audio_file(file)?;
         let decode_resample_seconds = decode_started.elapsed().as_secs_f64();
         let duration = audio.len() as f64 / 16_000.0;
         eprintln!("Audio: {:.1}s, {} samples", duration, audio.len());
         (Some(audio), decode_resample_seconds, duration)
     };
+    #[cfg(feature = "diarization")]
+    if args.meeting_json {
+        meeting_checkpoint(control, MeetingPhase::Decoding)?;
+    }
     #[cfg(feature = "diarization")]
     let coverage_profile = if cache_hit {
         cached
@@ -530,6 +996,10 @@ fn transcribe_file(
         CoverageProfile::from_audio(audio.as_deref().expect("cache misses decode audio"))
     };
 
+    #[cfg(feature = "diarization")]
+    if args.meeting_json {
+        meeting_checkpoint(control, MeetingPhase::LoadingModel)?;
+    }
     let (model_load_seconds, detected_language, language_regions, language_detection_seconds) =
         if cache_hit {
             #[cfg(feature = "diarization")]
@@ -574,6 +1044,10 @@ fn transcribe_file(
                 language_detection_started.elapsed().as_secs_f64(),
             )
         };
+    #[cfg(feature = "diarization")]
+    if args.meeting_json {
+        meeting_checkpoint(control, MeetingPhase::LoadingModel)?;
+    }
     #[cfg(not(feature = "diarization"))]
     let _ = (
         model_load_seconds,
@@ -637,6 +1111,7 @@ fn transcribe_file(
                 eprintln!("Running speaker diarization and Whisper timestamps concurrently...");
                 let parallel_started = Instant::now();
                 let audio = audio.as_deref().expect("cache misses decode audio");
+                meeting_checkpoint(control, MeetingPhase::Analyzing)?;
                 let (analysis, diarization_timings, transcription) = run_diarization_analysis(
                     audio,
                     backend,
@@ -644,6 +1119,7 @@ fn transcribe_file(
                     decoder_prompt.as_deref(),
                     &config,
                 )?;
+                meeting_checkpoint(control, MeetingPhase::Analyzing)?;
                 performance.parallel_analysis_span_seconds =
                     parallel_started.elapsed().as_secs_f64();
 
@@ -684,7 +1160,9 @@ fn transcribe_file(
             transcription_timings.word_timestamp_attribution_seconds;
 
         let clustering_started = Instant::now();
+        meeting_checkpoint(control, MeetingPhase::Clustering)?;
         let speaker_segments = cluster(&analysis, &config)?;
+        meeting_checkpoint(control, MeetingPhase::Clustering)?;
         performance.diarization_clustering_seconds = clustering_started.elapsed().as_secs_f64();
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
         if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
@@ -707,6 +1185,7 @@ fn transcribe_file(
             .collect();
 
         let diarized = merge_with_transcript(&speaker_segments, &transcript);
+        let plain_segments = prepare_diarized_plain_segments(&diarized, language, glossary);
         let mut consolidated = consolidate(&diarized);
         for segment in &mut consolidated {
             segment.text = normalize_nonspeech_markers(&segment.text, language);
@@ -748,11 +1227,7 @@ fn transcribe_file(
                 .filter(|speaker| seen.insert(speaker.clone()))
                 .collect()
         };
-        let plain = consolidated
-            .iter()
-            .map(|segment| format!("[{}] {}", segment.speaker, segment.text.trim()))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let plain = assemble_diarized_plain_text(&plain_segments);
         performance.merge_diagnostics_seconds = merge_diagnostics_started.elapsed().as_secs_f64();
         let json_assembly_started = Instant::now();
         let mut json = serde_json::json!({
@@ -780,7 +1255,34 @@ fn transcribe_file(
             duration / performance.total_seconds.max(f64::EPSILON),
             performance.cache_hit
         );
-        return Ok(FileTranscription { json, plain });
+        if args.meeting_json {
+            meeting_checkpoint(control, MeetingPhase::Finalizing)?;
+            let source_sha256 = meeting_source_sha256.expect("meeting JSON records source hash");
+            verify_meeting_source_unchanged(file, &source_sha256, control)?;
+            let meeting = meeting_transcript_from_plain_segments(
+                source_sha256,
+                language,
+                model,
+                duration,
+                &plain_segments,
+            )?;
+            let json = serde_json::to_value(&meeting).map_err(|_| {
+                DictationError::TranscriptionFailed(
+                    "Diarized meeting transcript serialization failed".to_string(),
+                )
+            })?;
+            meeting_checkpoint(control, MeetingPhase::Finalizing)?;
+            return Ok(FileTranscription {
+                json,
+                plain,
+                meeting: Some(meeting),
+            });
+        }
+        return Ok(FileTranscription {
+            json,
+            plain,
+            meeting: None,
+        });
     }
 
     // Standard (non-diarized) transcription. Build options from the saved
@@ -860,14 +1362,7 @@ fn transcribe_file(
     // Keep timestamped segment text source-faithful, while the rendered
     // top-level text excludes quarantined loops and uses the same display
     // normalization as live dictation.
-    let raw_text = segments
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| !repetition.quarantines_segment(*index))
-        .map(|(_, segment)| segment.text.as_str())
-        .collect::<String>()
-        .trim()
-        .to_string();
+    let raw_text = assemble_transcript(&trusted_segments).trim().to_string();
     let text = normalize_nonspeech_markers(&raw_text, language);
     let coverage = analyze_coverage(&audio, &trusted_segments);
     let mut warnings = combined_warnings(&coverage, language, detected_language.as_ref());
@@ -911,7 +1406,12 @@ fn transcribe_file(
         "vocabulary_corrections": corrections,
     });
 
-    Ok(FileTranscription { json, plain: text })
+    Ok(FileTranscription {
+        json,
+        plain: text,
+        #[cfg(feature = "diarization")]
+        meeting: None,
+    })
 }
 
 /// Overlap the CPU/ONNX diarization analysis with Metal Whisper inference on
@@ -1503,21 +2003,24 @@ pub fn resolve_effective_model(
     }
 }
 
-/// Resolves the effective initial prompt (a.k.a. the "hint") for a run, in
-/// precedence order:
-///   1. `--prompt-file` / `--hint-file` — the file's contents (trimmed;
-///      an empty or whitespace-only file yields no hint).
-///   2. `--hint` / `--prompt` — the inline string (an explicit empty string
-///      suppresses the hint and does *not* fall back to the saved setting).
-///   3. the saved `initial_prompt` setting (empty ⇒ no hint).
-///
-/// Returns `Ok(None)` when no source provides a non-empty prompt. Shared by
-/// `transcribe::run()` and `record::run()` so both surfaces prime the decoder
-/// identically — keep their call sites pointed here rather than re-deriving it.
-pub fn resolve_effective_prompt(
+/// Resolve a non-empty one-run hint and compose it through Settings' scoped
+/// glossary helper. The helper owns legacy-global hint-only behavior and
+/// selected explicit-profile aliases; CLI never parses those sources directly.
+pub(crate) fn effective_glossary(
+    stored: &Settings,
+    profile_id: Option<&str>,
     cli_prompt: Option<&str>,
     cli_prompt_file: Option<&Path>,
-    stored_initial_prompt: &str,
+) -> Result<Glossary, DictationError> {
+    let one_run_prompt = resolve_one_run_prompt(cli_prompt, cli_prompt_file)?;
+    let source =
+        stored.effective_glossary_source_with_prompt(profile_id, one_run_prompt.as_deref());
+    Ok(Glossary::parse(&source))
+}
+
+fn resolve_one_run_prompt(
+    cli_prompt: Option<&str>,
+    cli_prompt_file: Option<&Path>,
 ) -> Result<Option<String>, DictationError> {
     if let Some(path) = cli_prompt_file {
         let contents = std::fs::read_to_string(path).map_err(|e| {
@@ -1529,12 +2032,11 @@ pub fn resolve_effective_prompt(
         let trimmed = contents.trim();
         return Ok((!trimmed.is_empty()).then(|| trimmed.to_string()));
     }
-    if let Some(p) = cli_prompt {
-        // An explicit `--hint ""` means "no hint", not "use the saved setting".
-        return Ok((!p.is_empty()).then(|| p.to_string()));
-    }
-    let saved = stored_initial_prompt.trim();
-    Ok((!saved.is_empty()).then(|| saved.to_string()))
+    let Some(prompt) = cli_prompt else {
+        return Ok(None);
+    };
+    let trimmed = prompt.trim();
+    Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
 }
 
 pub fn parse_model(s: &str) -> Result<WhisperModel, DictationError> {
@@ -1682,6 +2184,8 @@ mod tests {
                     Ok(FileTranscription {
                         json: serde_json::json!({"text": file.display().to_string()}),
                         plain: file.display().to_string(),
+                        #[cfg(feature = "diarization")]
+                        meeting: None,
                     })
                 }
             },
@@ -1783,6 +2287,282 @@ mod tests {
     }
 
     #[test]
+    fn cli_plain_assembly_matches_core_no_speech_filter() {
+        let segments = vec![
+            segment(" First.", Some(-0.1), 0.01),
+            segment("<|nospeech|>-Hej Tack! Tack! Tack!", Some(-0.1), 0.9),
+            segment(" Second.", Some(-0.1), 0.01),
+        ];
+
+        assert_eq!(assemble_transcript(&segments), " First. Second.");
+        assert_eq!(
+            segments[1].text, "<|nospeech|>-Hej Tack! Tack! Tack!",
+            "display assembly must not mutate diagnostic segment text"
+        );
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn diarized_plain_assembly_discards_no_speech_segments() {
+        let segments = vec![
+            DiarizedSegment {
+                start: 0.0,
+                end: 1.0,
+                speaker: "SPEAKER_0".to_string(),
+                text: "First.".to_string(),
+            },
+            DiarizedSegment {
+                start: 1.0,
+                end: 1.3,
+                speaker: "SPEAKER_1".to_string(),
+                text: "<|nospeech|>-Hej Tack! Tack! Tack!".to_string(),
+            },
+            DiarizedSegment {
+                start: 1.3,
+                end: 2.0,
+                speaker: "SPEAKER_1".to_string(),
+                text: "Second.".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            assemble_diarized_plain_text(&segments),
+            "[SPEAKER_0] First.\n[SPEAKER_1] Second."
+        );
+        assert!(contains_no_speech_marker(&segments[1].text));
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn diarized_plain_filter_precedes_consolidation_without_mutating_diagnostics() {
+        let segments = vec![
+            DiarizedSegment {
+                start: 0.0,
+                end: 1.0,
+                speaker: "SPEAKER_0".to_string(),
+                text: "First hello Music Music Music".to_string(),
+            },
+            DiarizedSegment {
+                start: 1.0,
+                end: 1.3,
+                speaker: "SPEAKER_0".to_string(),
+                text: "<|nospeech|>-Hej Tack! Tack! Tack!".to_string(),
+            },
+            DiarizedSegment {
+                start: 1.3,
+                end: 2.0,
+                speaker: "SPEAKER_0".to_string(),
+                text: "Second.".to_string(),
+            },
+        ];
+        let consolidated = sagascript_core::diarization::merge::consolidate(&segments);
+        let diagnostic_text = consolidated[0].text.clone();
+
+        let glossary = Glossary::parse("Greeting = hello");
+        let plain_segments =
+            prepare_diarized_plain_segments(&segments, Language::English, &glossary);
+
+        assert_eq!(consolidated.len(), 1);
+        assert_eq!(consolidated[0].text, diagnostic_text);
+        assert_eq!(
+            diagnostic_text,
+            "First hello Music Music Music <|nospeech|>-Hej Tack! Tack! Tack! Second."
+        );
+        assert_eq!(
+            assemble_diarized_plain_text(&plain_segments),
+            "[SPEAKER_0] First Greeting [MUSIC] Second."
+        );
+        assert_eq!(plain_segments.len(), 1);
+        assert!(plain_segments
+            .iter()
+            .all(|segment| !contains_no_speech_marker(&segment.text)));
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_document_uses_plain_segments_and_canonical_metadata() {
+        let segments = vec![
+            DiarizedSegment {
+                start: 1.0,
+                end: 2.0,
+                speaker: "SPEAKER_1".to_string(),
+                text: "second".to_string(),
+            },
+            DiarizedSegment {
+                start: 0.0,
+                end: 1.0,
+                speaker: "SPEAKER_0".to_string(),
+                text: "first".to_string(),
+            },
+            DiarizedSegment {
+                start: 2.0,
+                end: 3.0,
+                speaker: "SPEAKER_1".to_string(),
+                text: "third".to_string(),
+            },
+        ];
+        let document = meeting_transcript_from_plain_segments(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            Language::Swedish,
+            WhisperModel::KbWhisperBase,
+            3.0,
+            &segments,
+        )
+        .expect("plain diarized segments are valid");
+
+        assert_eq!(document.language, "sv");
+        assert_eq!(document.model, "kb-whisper-base");
+        assert_eq!(document.segments[0].id, "seg-000001");
+        assert_eq!(document.segments[0].text, "first");
+        assert_eq!(document.segments[1].text, "second");
+        assert_eq!(document.speakers[0].id, "SPEAKER_1");
+        assert_eq!(document.speakers[0].label, "SPEAKER_1");
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_document_clamps_finite_padded_end_without_mutating_source() {
+        let segments = vec![DiarizedSegment {
+            start: 0.5, end: 1.2, speaker: "S0".into(), text: "last word".into(),
+        }];
+        let document = meeting_transcript_from_plain_segments(
+            "0".repeat(64), Language::English, WhisperModel::BaseEn, 1.0, &segments,
+        ).expect("last padded Whisper window can overshoot decoded audio");
+        assert_eq!(document.segments[0].start, 0.5);
+        assert_eq!(document.segments[0].end, 1.0);
+        assert_eq!(document.segments[0].text, "last word");
+        assert_eq!(segments[0].end, 1.2);
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_document_still_rejects_nonfinite_and_outside_starts() {
+        for (start, end) in [(0.5, f64::NAN), (0.5, f64::INFINITY), (1.1, 1.2), (-0.1, 0.5)] {
+            let segments = vec![DiarizedSegment {
+                start, end, speaker: "S0".into(), text: "invalid".into(),
+            }];
+            assert!(meeting_transcript_from_plain_segments(
+                "0".repeat(64), Language::English, WhisperModel::BaseEn, 1.0, &segments,
+            ).is_err());
+        }
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_source_hash_is_bounded_and_detects_mutation() {
+        let path = std::env::temp_dir().join(format!(
+            "sagascript-meeting-hash-{}.wav",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, b"first bytes").expect("fixture write");
+        let before = stable_file_sha256(&path, None).expect("hash fixture");
+        assert_eq!(before.len(), 64);
+        assert!(before.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        std::fs::write(&path, b"other bytes").expect("mutate fixture");
+        assert!(verify_meeting_source_unchanged(&path, &before, None).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_control_precancel_checks_before_file_or_model_access() {
+        use std::sync::atomic::AtomicBool;
+
+        let cancellation = AtomicBool::new(true);
+        let progress = |_| panic!("cancelled job must not emit progress");
+        let control = MeetingControl {
+            cancellation: &cancellation,
+            progress: &progress,
+        };
+        let backend = WhisperBackend::new();
+        let error = transcribe_meeting_file_with_control(
+            Path::new("/definitely/missing/meeting.wav"),
+            &Settings::default(),
+            Language::English,
+            WhisperModel::Base,
+            &Glossary::parse(""),
+            &backend,
+            &control,
+        )
+        .expect_err("pre-cancelled job must fail");
+        assert_eq!(
+            error.to_string(),
+            "Transcription failed: Meeting transcription cancelled"
+        );
+        assert!(cancellation.load(Ordering::Acquire));
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_control_emits_ordered_phases_and_never_clears_cancellation() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        let cancellation = AtomicBool::new(false);
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&phases);
+        let progress = move |phase| observed.lock().expect("phase lock").push(phase);
+        let control = MeetingControl {
+            cancellation: &cancellation,
+            progress: &progress,
+        };
+        let expected = [
+            MeetingPhase::Preparing,
+            MeetingPhase::Decoding,
+            MeetingPhase::LoadingModel,
+            MeetingPhase::Analyzing,
+            MeetingPhase::Clustering,
+            MeetingPhase::Finalizing,
+        ];
+        for phase in expected {
+            meeting_checkpoint(Some(&control), phase).expect("checkpoint is live");
+        }
+        assert_eq!(*phases.lock().expect("phase lock"), expected);
+        assert_eq!(
+            serde_json::to_string(&MeetingPhase::LoadingModel).expect("phase serializes"),
+            "\"loading_model\""
+        );
+
+        cancellation.store(true, Ordering::Release);
+        assert!(meeting_checkpoint(Some(&control), MeetingPhase::Finalizing).is_err());
+        assert!(cancellation.load(Ordering::Acquire));
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_json_scope_requires_one_explicit_regular_file() {
+        let root =
+            std::env::temp_dir().join(format!("sagascript-meeting-scope-{}", uuid::Uuid::new_v4()));
+        let file = root.join("input.wav");
+        let second = root.join("second.wav");
+        std::fs::create_dir_all(&root).expect("fixture directory");
+        std::fs::write(&file, b"audio fixture").expect("fixture file");
+        std::fs::write(&second, b"second fixture").expect("second fixture");
+
+        assert!(validate_meeting_input_scope(
+            std::slice::from_ref(&file),
+            false,
+            std::slice::from_ref(&file)
+        )
+        .is_ok());
+        assert!(validate_meeting_input_scope(
+            &[file.clone(), second.clone()],
+            false,
+            &[file.clone(), second]
+        )
+        .is_err());
+        assert!(validate_meeting_input_scope(std::slice::from_ref(&root), false, &[]).is_err());
+        assert!(validate_meeting_input_scope(
+            std::slice::from_ref(&file),
+            true,
+            std::slice::from_ref(&file)
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn explicit_aliases_correct_without_confidence_guessing() {
         let glossary = Glossary::parse("OpenRouter = open router\nmerge = merch");
         let mut segments = vec![segment(" Open router och Merch.", None, 0.0)];
@@ -1872,38 +2652,22 @@ mod tests {
         assert_eq!(segments[0].text, " Grimner");
     }
 
-    // -- resolve_effective_prompt --
+    // -- resolve_one_run_prompt --
 
     #[test]
-    fn effective_prompt_cli_flag_wins_over_stored() {
-        let got = resolve_effective_prompt(Some("Notre Dame"), None, "saved vocab").unwrap();
+    fn one_run_prompt_inline_is_trimmed() {
+        let got = resolve_one_run_prompt(Some("  Notre Dame  "), None).unwrap();
         assert_eq!(got.as_deref(), Some("Notre Dame"));
     }
 
     #[test]
-    fn effective_prompt_falls_back_to_stored() {
-        let got = resolve_effective_prompt(None, None, "  saved vocab  ").unwrap();
-        // Stored value is trimmed.
-        assert_eq!(got.as_deref(), Some("saved vocab"));
+    fn one_run_prompt_empty_input_is_deferred_to_saved_settings() {
+        assert!(resolve_one_run_prompt(None, None).unwrap().is_none());
+        assert!(resolve_one_run_prompt(Some("   "), None).unwrap().is_none());
     }
 
     #[test]
-    fn effective_prompt_none_when_all_empty() {
-        assert!(resolve_effective_prompt(None, None, "").unwrap().is_none());
-        assert!(resolve_effective_prompt(None, None, "   ")
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
-    fn effective_prompt_explicit_empty_flag_suppresses_stored() {
-        // `--hint ""` means "no hint" — it must NOT fall through to the setting.
-        let got = resolve_effective_prompt(Some(""), None, "saved vocab").unwrap();
-        assert!(got.is_none());
-    }
-
-    #[test]
-    fn effective_prompt_file_wins_and_is_trimmed() {
+    fn one_run_prompt_file_wins_and_is_trimmed() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
             "sagascript_hint_test_{}_{}.txt",
@@ -1912,15 +2676,15 @@ mod tests {
         ));
         std::fs::write(&path, "  Estrid, Grimnir\n").unwrap();
 
-        // File beats both the inline flag and the stored setting.
-        let got = resolve_effective_prompt(Some("inline"), Some(&path), "saved").unwrap();
+        // File beats the inline flag; saved settings are composed by the core helper.
+        let got = resolve_one_run_prompt(Some("inline"), Some(&path)).unwrap();
         assert_eq!(got.as_deref(), Some("Estrid, Grimnir"));
 
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn effective_prompt_empty_file_yields_none() {
+    fn one_run_prompt_empty_file_is_deferred_to_saved_settings() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!(
             "sagascript_hint_test_{}_{}.txt",
@@ -1929,17 +2693,103 @@ mod tests {
         ));
         std::fs::write(&path, "   \n\t").unwrap();
 
-        let got = resolve_effective_prompt(None, Some(&path), "saved").unwrap();
+        let got = resolve_one_run_prompt(None, Some(&path)).unwrap();
         assert!(got.is_none());
 
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
-    fn effective_prompt_missing_file_errors() {
+    fn one_run_prompt_missing_file_errors() {
         let path = Path::new("/nonexistent/sagascript/hint/vocab.txt");
-        let err = resolve_effective_prompt(None, Some(path), "saved").unwrap_err();
+        let err = resolve_one_run_prompt(None, Some(path)).unwrap_err();
         assert!(matches!(err, DictationError::FileDecodeError(_)));
+    }
+
+    #[test]
+    fn scoped_glossary_keeps_global_aliases_hint_only_and_profiles_isolated() {
+        let mut settings = Settings {
+            initial_prompt: "merge = merch\nOpenRouter".to_string(),
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "swedish".to_string(),
+                    name: "Swedish".to_string(),
+                    shortcut: "F13".to_string(),
+                    language: Language::Swedish,
+                },
+                HotkeyProfile {
+                    id: "english".to_string(),
+                    name: "English".to_string(),
+                    shortcut: "F14".to_string(),
+                    language: Language::English,
+                },
+            ],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "merge = merch".to_string());
+
+        let global = effective_glossary(&settings, None, None, None).unwrap();
+        assert_eq!(global.correct_text("merch").0, "merch");
+
+        let swedish = effective_glossary(&settings, Some("swedish"), None, None).unwrap();
+        assert_eq!(swedish.correct_text("merch").0, "merge");
+
+        let english = effective_glossary(&settings, Some("english"), None, None).unwrap();
+        assert_eq!(english.correct_text("merch").0, "merch");
+    }
+
+    #[test]
+    fn one_run_prompt_replaces_global_hint_but_keeps_profile_scope() {
+        let mut settings = Settings {
+            initial_prompt: "merge = merch".to_string(),
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "F13".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "fika = coffee".to_string());
+
+        let glossary = effective_glossary(
+            &settings,
+            Some("swedish"),
+            Some("  OpenRouter = router  "),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(glossary.correct_text("merch").0, "merch");
+        assert_eq!(glossary.correct_text("coffee").0, "fika");
+
+        let empty_override = effective_glossary(&settings, Some("swedish"), Some("  \n"), None)
+            .unwrap();
+        assert_eq!(empty_override.correct_text("merch").0, "merch");
+        assert_eq!(empty_override.correct_text("coffee").0, "fika");
+    }
+
+    #[test]
+    fn auto_or_missing_profile_never_infers_alias_scope() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "F13".to_string(),
+                language: Language::Swedish,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "merge = merch".to_string());
+
+        let glossary = effective_glossary(&settings, None, None, None).unwrap();
+        assert_eq!(glossary.correct_text("merch").0, "merch");
     }
 
     // -- parse_language --
@@ -2206,5 +3056,27 @@ mod diarize_threshold_tests {
     fn accepts_boundary_values() {
         assert_eq!(parse_threshold("0.0").unwrap(), 0.0);
         assert_eq!(parse_threshold("2.0").unwrap(), 2.0);
+    }
+
+    #[test]
+    fn meeting_json_requires_diarize_and_conflicts_with_legacy_outputs() {
+        assert!(TestCli::try_parse_from(["sagascript", "file.wav", "--meeting-json"]).is_err());
+        let cli =
+            TestCli::try_parse_from(["sagascript", "file.wav", "--diarize", "--meeting-json"])
+                .expect("meeting JSON should parse with diarization");
+        assert!(cli.args.meeting_json);
+        for conflict in ["--json", "--jsonl", "--clipboard", "--correct-hints"] {
+            assert!(
+                TestCli::try_parse_from([
+                    "sagascript",
+                    "file.wav",
+                    "--diarize",
+                    "--meeting-json",
+                    conflict,
+                ])
+                .is_err(),
+                "meeting JSON should conflict with {conflict}"
+            );
+        }
     }
 }

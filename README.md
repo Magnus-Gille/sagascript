@@ -22,14 +22,14 @@ update.
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
 - **Configurable** -- choose your model, language, hotkey, and output behavior
 - **macOS v1** -- official releases are signed and notarized for macOS 13+ on Apple Silicon; Intel Macs are not supported by the v1 binary release
-- **Windows preview** -- the Windows port remains available for build-from-source testing; no official Windows binaries are published yet
+- **Windows beta** -- an unsigned Windows 11 preview for x64 and ARM64 is available from the [GitHub prerelease](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905)
 
 ## Building from source
 
 ### Prerequisites
 
 - **macOS**: macOS 13.0+ on Apple Silicon (Intel Macs are not supported by the v1 binary release)
-- **Windows preview**: Windows 10+ (build from source; not an official v1 release)
+- **Windows beta**: Windows 11 on x64 or ARM64; unsigned preview, not an official stable release
 - **Linux** (experimental): X11 session; GTK/WebKit dev libraries + `xdotool` — see [Linux notes](docs/linux-notes.md)
 - Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - Node.js 20+ (`brew install node` on macOS, or download from [nodejs.org](https://nodejs.org) on Windows)
@@ -51,8 +51,8 @@ cargo tauri build
 ```
 
 On macOS the `.app` bundle will be in `src-tauri/target/release/bundle/macos/`.
-Source builds can also produce Windows or experimental Linux packages; these
-are not official v1 release artifacts. See the platform notes below.
+Source builds can also produce Windows or experimental Linux packages. The
+downloadable Windows beta is documented in the platform notes below.
 
 ## CLI usage
 
@@ -83,13 +83,15 @@ sagascript config set language sv
 sagascript config get hotkey
 sagascript config path
 
-# Manage the external personal dictionary
+# Manage the external personal dictionary (global entries are hint-only)
 sagascript glossary path
-sagascript glossary add OpenRouter --alias 'open router'
+sagascript glossary add OpenRouter
 
 # Use one shortcut for English and another for Swedish
 sagascript config profiles create swedish --name Swedish --hotkey 'Option+Space' --language sv
 sagascript config profiles list
+# Enable deterministic aliases only in the explicit-language profile
+sagascript glossary add OpenRouter --alias 'open router' --profile swedish
 
 # Generate shell completions
 sagascript completions zsh > ~/.zfunc/_sagascript
@@ -139,15 +141,17 @@ release asks you to bypass Gatekeeper, do not run it; report the artifact.
 
 ### Windows
 
-Windows is currently a build-from-source preview. It needs microphone access
-for recording audio. Do not install an unsigned binary from an untrusted party.
+The [Windows beta](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905)
+is an unsigned preview for Windows 11 on x64 and ARM64. It needs microphone
+access for recording audio. Verify the release checksums before running it, and
+do not bypass SmartScreen.
 
 ## Documentation
 
 - [Installation guide](docs/installation.md) -- detailed install instructions for macOS and Windows
 - [Linux notes](docs/linux-notes.md) -- experimental Linux build, prerequisites, and known limitations
 - [Windows-specific notes](docs/windows-notes.md) -- feature comparison, known limitations, and troubleshooting
-- [Windows release track](docs/windows-release.md) -- unsigned internal candidates, zero-cost Store path, and acceptance gates
+- [Windows release track](docs/windows-release.md) -- unsigned beta distribution, verification record, and stable-release gates
 - [Configuration files](docs/configuration.md) -- XDG paths, dotfiles, migration, and personal dictionaries
 - [Third-party notices](THIRD_PARTY_NOTICES.md) -- dependency and downloadable-model licenses
 - [Model sources and integrity manifest](docs/model-sources.md) -- pinned revisions, licenses, sizes, and SHA-256 checksums

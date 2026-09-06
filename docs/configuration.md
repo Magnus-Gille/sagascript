@@ -25,7 +25,10 @@ identical.
 
 The JSON file contains application settings and dictation profiles. The plain
 text glossary files contain one dictionary entry per line. `glossary.txt` is
-global; `glossaries/<profile-id>.txt` is combined only with that profile.
+the legacy global hint source; `glossaries/<profile-id>.txt` is used for
+deterministic aliases only when that known profile with an explicit language is
+selected. Global aliases remain stored, visible, and editable, but are
+hint-only. No aliases are assigned automatically after language detection.
 
 Use the CLI to discover the effective paths rather than duplicating the
 resolution rules in scripts:
@@ -35,6 +38,13 @@ sagascript config path
 sagascript glossary path
 sagascript glossary path --profile swedish
 ```
+
+Use the global file for decoder hints, or pass `--profile ID` to manage a
+profile-scoped dictionary whose explicit aliases can correct that profile's
+transcript. A non-empty one-run `--hint`/`--prompt` replaces the saved global
+hint text and is itself hint-only; empty or whitespace-only input keeps the
+saved global hints. Entries are not reassigned between scopes, deleted, or
+automatically assigned a profile/language.
 
 The GUI and CLI watch and update the same files. Atomic writes preserve
 user-managed symlinks, so the files can be checked into a dotfiles repository.
@@ -76,6 +86,47 @@ On macOS and Windows, pressing the key while recording a shortcut in Settings ca
 `IntlBackslash` is not supported on Linux: the current backend can register a different physical key on some layouts. Choose another shortcut on Linux.
 Like every other modified shortcut it is registered through the platform hotkey API and needs no Accessibility permission.
 The crates.io release of `global-hotkey` cannot register this key yet, so `src-tauri/Cargo.toml` pins the upstream commit that added it (tauri-apps/global-hotkey#216).
+
+## Dictation latency diagnostics
+
+The macOS app writes local JSONL events to
+`~/Library/Logs/Sagascript/sagascript.log`. Match events by `dictationSession`
+when comparing a Bluetooth headset microphone with the Mac microphone.
+The new performance events contain timings, sample counts, sample rate, and
+decoder settings, but no audio, transcript text, or device names.
+
+- `capture_stopped` reports `captureRequestToStreamPlayReturnMs` and
+  `captureRequestToFirstAudioCallbackMs`. These start at the capture request,
+  not the shortcut event; they separate stream setup from first-buffer delivery.
+- `dictation_phase_timings` separates model readiness, Whisper duration, and
+  paste completion. `keyUpToCaptureStoppedMs` includes any minimum-recording
+  top-up delay (up to 300 ms); it is not a pure device-stop measurement. In
+  toggle mode, the origin is the second shortcut press instead of key-up.
+- Missing stages are `null`. Paste completion is measured only when its
+  main-thread callback reports a result. The app waits at most two seconds
+  for that result before returning to idle; a callback already dispatched may
+  still run later. `pasteOutcome` distinguishes success, failure, and timeout.
+
+Quiet cancellation and no-speech-marked Whisper output do not replace the last
+useful dictation or paste text. Capture failures are errors, not silence. If
+the input stream fails partway through a recording, the partial recording is
+not automatically transcribed or pasted. These measurements help diagnose
+startup latency; they do not establish that Bluetooth caused a delay or that
+the first spoken word was captured.
+
+Before live dictation decoding (GUI and CLI `record`), a local near-silence guard
+examines 20 ms frames of 16 kHz audio. If every frame's RMS level is below 0.0015,
+the capture returns empty text without running Whisper. A frame above this
+conservative floor keeps the entire recording, including its beginning; no
+minimum word duration is imposed. This is separate from optional Silero VAD and
+does not download a model or send audio anywhere. Explicit `[BLANK_AUDIO]`
+artifacts are also removed from display text; ordinary words such as “tack” and
+“thank you” are never blacklisted. File/diagnostic APIs and model warmup are
+unchanged. Louder microphone noise can still reach Whisper, so acceptance testing
+should include silent taps and short spoken words on each microphone in use.
+
+The tray menu and the top of Settings show the release version, build revision,
+and build date. The CLI exposes the same identity with `sagascript --version`.
 
 ## Overrides and migration
 

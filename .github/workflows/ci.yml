@@ -24,6 +24,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Select evaluation Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Test offline dictation evaluation tooling
+        run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -40,7 +48,7 @@ jobs:
       # cold multi-GB rebuild (plus minutes of save/restore) on any lockfile
       # change. rust-cache prunes before upload and stays warm across branches.
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
           shared-key: sagascript-ci
@@ -204,6 +212,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Select evaluation Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Test offline dictation evaluation tooling
+        run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
+
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -230,7 +246,7 @@ jobs:
       # Same rust-cache scheme as the macOS job (#178); the shared key spans
       # branches while rust-cache keeps OS/target entries separate.
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
           shared-key: sagascript-ci
@@ -303,6 +319,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Select evaluation Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Test offline dictation evaluation tooling
+        run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -317,7 +341,7 @@ jobs:
       # Same rust-cache scheme as the macOS job (#178); the shared key spans
       # branches while rust-cache keeps OS/target entries separate.
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
           shared-key: sagascript-ci

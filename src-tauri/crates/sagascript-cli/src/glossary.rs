@@ -12,7 +12,7 @@ use sagascript_core::transcription::{
     WhisperBackend,
 };
 
-use crate::transcribe::model_id_string;
+use crate::transcribe::{effective_glossary, model_id_string};
 
 #[derive(Args)]
 pub struct GlossaryArgs {
@@ -22,19 +22,23 @@ pub struct GlossaryArgs {
 
 #[derive(Subcommand)]
 pub enum GlossaryAction {
-    /// Print the external personal-dictionary file path
+    /// Print the external personal-dictionary file path. The global file is
+    /// legacy storage and supplies hint terms; use `--profile ID` for aliases.
     Path {
         /// Print this profile's dictionary path instead of the global path
         #[arg(long)]
         profile: Option<String>,
     },
-    /// List canonical terms and their explicit aliases
+    /// List canonical terms and their explicit aliases. The legacy global
+    /// dictionary is retained and displayed, but its aliases are hint-only;
+    /// deterministic replacement requires `--profile ID`.
     List {
         /// Show entries saved only for this dictation profile
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Add a term or merge aliases into an existing term
+    /// Add a term or merge aliases into an existing term. Global aliases are
+    /// retained for compatibility but are hint-only at transcription time.
     Add {
         /// Preferred spelling written to the transcript
         term: String,
@@ -45,14 +49,16 @@ pub enum GlossaryAction {
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Remove a canonical term and all of its aliases
+    /// Remove a canonical term and all of its aliases from the selected scope
     Remove {
         term: String,
         /// Remove from this dictation profile instead of the legacy global dictionary
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Remove every entry from the selected personal dictionary
+    /// Remove every entry from the selected personal dictionary. Clearing the
+    /// global dictionary is optional migration cleanup; it is not required to
+    /// disable its aliases.
     Clear {
         /// Confirm destructive removal of the selected dictionary
         #[arg(long)]
@@ -203,7 +209,7 @@ fn suggest(
 
     let stored = settings::store::load();
     validate_learning_profile(&stored, profile)?;
-    let glossary = Glossary::parse(&stored.effective_glossary_source(Some(profile)));
+    let glossary = effective_glossary(&stored, Some(profile), None, None)?;
     let heard = load_training_input(heard_path, &stored, profile, &glossary)?;
     let suggestions = suggest_glossary_candidates(&heard, &corrected, &glossary);
 
@@ -216,7 +222,8 @@ fn suggest(
         let reviewed = suggestions.clone();
         settings::store::try_update(|latest| {
             validate_learning_profile(latest, profile).map_err(|error| error.to_string())?;
-            let effective = Glossary::parse(&latest.effective_glossary_source(Some(profile)));
+            let effective = effective_glossary(latest, Some(profile), None, None)
+                .map_err(|error| error.to_string())?;
             let current = suggest_glossary_candidates(&heard, &corrected, &effective);
             if current != reviewed {
                 return Err(
@@ -430,5 +437,18 @@ mod tests {
             .unwrap()
             .clear();
         assert_eq!(stored.profile_glossaries.get("removed").unwrap(), "");
+    }
+
+    #[test]
+    fn legacy_global_alias_remains_stored_but_is_hint_only() {
+        let stored = settings::Settings {
+            initial_prompt: "merge = merch".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(glossary_source(&stored, None).unwrap(), "merge = merch");
+        let effective = effective_glossary(&stored, None, None, None).unwrap();
+        assert_eq!(effective.correct_text("merch").0, "merch");
+        assert!(effective.decoder_prompt().is_some());
     }
 }
