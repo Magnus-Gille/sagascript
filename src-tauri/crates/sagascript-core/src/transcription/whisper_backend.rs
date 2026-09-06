@@ -22,6 +22,65 @@ use crate::transcription::model;
 /// loops. Shared by the GUI file-transcribe command and the `transcribe` CLI.
 pub const FILE_TRANSCRIBE_BEAM: u32 = 5;
 
+#[cfg(any(test, all(target_os = "windows", target_arch = "x86_64")))]
+fn require_packaged_x64_cpu(
+    baseline: Option<&str>,
+    features: [bool; 4],
+) -> Result<(), DictationError> {
+    match baseline {
+        None => Ok(()), // Local source builds retain their own compiler policy.
+        Some("avx2") if features.into_iter().all(|supported| supported) => Ok(()),
+        Some("avx2") => Err(DictationError::TranscriptionFailed(
+            "This Windows x64 build requires AVX2, FMA, F16C and BMI2 CPU support. Use a compatible computer or a source build configured for your CPU.".into(),
+        )),
+        Some(_) => Err(DictationError::TranscriptionFailed(
+            "Unrecognized Windows x64 build CPU policy; install a verified Sagascript build.".into(),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod packaged_x64_cpu_tests {
+    use super::require_packaged_x64_cpu;
+
+    #[test]
+    fn packaged_baseline_requires_every_feature_before_native_model_loading() {
+        for bits in 0..16 {
+            let features = std::array::from_fn(|index| bits & (1 << index) != 0);
+            assert_eq!(
+                require_packaged_x64_cpu(Some("avx2"), features).is_ok(),
+                bits == 15
+            );
+            assert!(require_packaged_x64_cpu(None, features).is_ok());
+        }
+        assert!(require_packaged_x64_cpu(Some("unknown"), [true; 4]).is_err());
+    }
+
+    #[test]
+    fn unsupported_cpu_error_is_actionable_and_contains_no_model_or_audio_data() {
+        let error = require_packaged_x64_cpu(Some("avx2"), [false; 4])
+            .unwrap_err()
+            .to_string();
+        for feature in ["AVX2", "FMA", "F16C", "BMI2", "source build"] {
+            assert!(error.contains(feature));
+        }
+    }
+}
+
+/// Privacy-safe timings shared by live dictation and its CLI benchmark.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct DictationTimings {
+    pub model_ms: f64,
+    pub inference_ms: f64,
+    pub model_cached: bool,
+    #[serde(skip)]
+    pub model_acquisition_started: bool,
+    #[serde(skip)]
+    pub inference_started: bool,
+    #[serde(skip)]
+    pub model_ready_at: Option<Instant>,
+}
+
 /// Parallel file transcription is deliberately bounded: each state owns GPU
 /// buffers and a Metal command queue, so unbounded fan-out quickly wastes RAM.
 pub const MAX_PARALLEL_CHUNKS: usize = 4;
@@ -538,6 +597,14 @@ fn sanitize_segment_bounds(
     (start, end)
 }
 
+fn has_live_audio_signal(audio: &[f32]) -> Result<bool, DictationError> {
+    if audio.is_empty() {
+        return Err(DictationError::NoAudioCaptured);
+    }
+    crate::audio::speech::has_audio_signal(audio)
+        .map_err(|reason| DictationError::TranscriptionFailed(reason.to_string()))
+}
+
 /// Local transcription backend using whisper-rs (whisper.cpp bindings)
 /// Uses GGML model files with optional CoreML acceleration on macOS.
 ///
@@ -731,6 +798,27 @@ impl WhisperBackend {
         whisper_model: WhisperModel,
         profile: ContextProfile,
     ) -> Result<(), DictationError> {
+        let _load = self.lock_load_bounded()?;
+        self.load_model_inner(whisper_model, profile)
+    }
+
+    fn load_model_inner(
+        &self,
+        whisper_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> Result<(), DictationError> {
+        // Check before model-loading FFI, including default context parameters.
+        // The candidate build hook pins its native library to this same policy.
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        require_packaged_x64_cpu(
+            option_env!("SAGASCRIPT_WINDOWS_X64_BASELINE"),
+            [
+                std::is_x86_feature_detected!("avx2"),
+                std::is_x86_feature_detected!("fma"),
+                std::is_x86_feature_detected!("f16c"),
+                std::is_x86_feature_detected!("bmi2"),
+            ],
+        )?;
         let desired_key = RuntimeKey {
             model: whisper_model,
             profile,
@@ -900,7 +988,33 @@ impl WhisperBackend {
         desired_model: WhisperModel,
         profile: ContextProfile,
     ) -> Result<(), DictationError> {
-        let _load = self.load_lock.lock().unwrap();
+        let _load = self.lock_load_bounded()?;
+        self.ensure_model_inner(desired_model, profile)
+    }
+
+    /// Ensure a model/profile is active and run a callback while the model
+    /// selection remains pinned. This keeps model selection, context access,
+    /// and inference in one transaction for callers that need to use one of
+    /// the lower-level transcription entry points.
+    ///
+    /// The callback must not call `ensure_model*` or `load_model*` on this
+    /// backend, because the bounded load lock is held until it returns.
+    pub fn with_model<R>(
+        &self,
+        model: WhisperModel,
+        profile: ContextProfile,
+        callback: impl FnOnce(&Self) -> Result<R, DictationError>,
+    ) -> Result<R, DictationError> {
+        let _load = self.lock_load_bounded()?;
+        self.ensure_model_inner(model, profile)?;
+        callback(self)
+    }
+
+    fn ensure_model_inner(
+        &self,
+        desired_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> Result<(), DictationError> {
         let desired = RuntimeKey {
             model: desired_model,
             profile,
@@ -919,9 +1033,91 @@ impl WhisperBackend {
             }
             ModelAvailability::Missing => {
                 info!("Loading model runtime: {desired:?}");
-                self.load_model_with_profile(desired_model, profile)?;
+                self.load_model_inner(desired_model, profile)?;
             }
         }
+        Ok(())
+    }
+
+    fn lock_load_bounded(&self) -> Result<MutexGuard<'_, ()>, DictationError> {
+        let deadline = Instant::now() + WARM_STATE_GRACE;
+        loop {
+            match self.load_lock.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(TryLockError::Poisoned(_)) => {
+                    // This mutex protects the multi-field runtime transaction,
+                    // not merely its unit payload. A panic can leave context,
+                    // runtime identity or warm state partially updated/poisoned.
+                    // Do not recover the guard and reuse potentially invalid
+                    // native state, or misreport a permanent fault as contention.
+                    return Err(DictationError::TranscriptionFailed(
+                        "The transcription engine was interrupted and cannot safely resume; restart Sagascript before trying again.".into(),
+                    ));
+                }
+                Err(TryLockError::WouldBlock) if Instant::now() >= deadline => {
+                    return Err(DictationError::ModelBusy);
+                }
+                Err(TryLockError::WouldBlock) => std::thread::sleep(WARM_STATE_POLL_INTERVAL),
+            }
+        }
+    }
+
+    /// Keep selection and inference in one transaction: startup warmup or a
+    /// second language must not swap the active context between these steps.
+    /// Blocking; desktop callers must use spawn_blocking.
+    pub fn transcribe_dictation(
+        &self,
+        model: WhisperModel,
+        audio: &[f32],
+        language: Language,
+        options: &TranscribeOptions,
+        timings: &mut DictationTimings,
+    ) -> Result<String, DictationError> {
+        *timings = DictationTimings::default();
+        let model_started = Instant::now();
+        timings.model_acquisition_started = true;
+        let _load = match self.lock_load_bounded() {
+            Ok(load) => load,
+            Err(error) => {
+                timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
+                return Err(error);
+            }
+        };
+        timings.model_cached = !self.needs_reload(model);
+        let selection = self.ensure_model_inner(model, ContextProfile::FlashAttention);
+        timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
+        selection?;
+        timings.model_ready_at = Some(Instant::now());
+        timings.inference_started = true;
+        let inference_started = Instant::now();
+        let result = self.transcribe_sync_with_options(audio, language, options, |_| {});
+        timings.inference_ms = inference_started.elapsed().as_secs_f64() * 1000.0;
+        result
+    }
+
+    /// Transactional live-microphone transcription. The signal guard runs
+    /// before model selection so empty, invalid, and near-silent captures do
+    /// not acquire or load a model. File/diagnostic callers should continue to
+    /// use [`Self::transcribe_dictation`] so intentional warmups remain raw.
+    pub fn transcribe_live_dictation(
+        &self,
+        model: WhisperModel,
+        audio: &[f32],
+        language: Language,
+        options: &TranscribeOptions,
+        timings: &mut DictationTimings,
+    ) -> Result<String, DictationError> {
+        *timings = DictationTimings::default();
+        if !has_live_audio_signal(audio)? {
+            info!("Skipping near-silent dictation: {} samples", audio.len());
+            return Ok(String::new());
+        }
+        self.transcribe_dictation(model, audio, language, options, timings)
+    }
+
+    pub fn warmup_model(&self, model: WhisperModel, language: Language) -> Result<(), DictationError> {
+        let mut timings = DictationTimings::default();
+        self.transcribe_dictation(model, &[0.0; 1600], language, &TranscribeOptions::default(), &mut timings)?;
         Ok(())
     }
 
@@ -1126,12 +1322,7 @@ impl WhisperBackend {
         opts: &TranscribeOptions,
         on_progress: impl FnMut(i32) + Send + 'static,
     ) -> Result<String, DictationError> {
-        if audio.is_empty() {
-            return Err(DictationError::NoAudioCaptured);
-        }
-        let has_signal = crate::audio::speech::has_audio_signal(audio)
-            .map_err(|reason| DictationError::TranscriptionFailed(reason.to_string()))?;
-        if !has_signal {
+        if !has_live_audio_signal(audio)? {
             info!("Skipping near-silent dictation: {} samples", audio.len());
             return Ok(String::new());
         }
@@ -2478,6 +2669,142 @@ mod segment_confidence_tests {
                 ));
             }
         }
+    }
+
+    #[test]
+    fn live_dictation_guard_rejects_empty_and_non_finite_audio_without_model_access() {
+        let backend = WhisperBackend::new();
+        let options = TranscribeOptions::default();
+
+        let mut empty_timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: true,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+        assert!(matches!(
+            backend.transcribe_live_dictation(
+                WhisperModel::Base,
+                &[],
+                Language::English,
+                &options,
+                &mut empty_timings,
+            ),
+            Err(DictationError::NoAudioCaptured)
+        ));
+        assert_eq!(empty_timings.model_ms, 0.0);
+        assert_eq!(empty_timings.inference_ms, 0.0);
+        assert!(!empty_timings.model_cached);
+        assert!(!empty_timings.model_acquisition_started);
+        assert!(!empty_timings.inference_started);
+        assert!(empty_timings.model_ready_at.is_none());
+
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let audio = [0.0, invalid, 0.0];
+            let mut timings = DictationTimings::default();
+            assert!(matches!(
+                backend.transcribe_live_dictation(
+                    WhisperModel::Base,
+                    &audio,
+                    Language::English,
+                    &options,
+                    &mut timings,
+                ),
+                Err(DictationError::TranscriptionFailed(message))
+                    if message.contains("non-finite")
+            ));
+            assert!(!timings.model_acquisition_started);
+            assert!(!timings.inference_started);
+            assert!(timings.model_ready_at.is_none());
+        }
+    }
+
+    #[test]
+    fn live_silence_resets_timings_and_skips_model_access() {
+        let backend = WhisperBackend::new();
+        let mut timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: true,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+
+        let result = backend.transcribe_live_dictation(
+            WhisperModel::Base,
+            &[0.0; 8_000],
+            Language::English,
+            &TranscribeOptions::default(),
+            &mut timings,
+        );
+
+        assert_eq!(result.unwrap(), "");
+        assert_eq!(backend.loaded_model(), None);
+        assert_eq!(timings.model_ms, 0.0);
+        assert_eq!(timings.inference_ms, 0.0);
+        assert!(!timings.model_cached);
+        assert!(!timings.model_acquisition_started);
+        assert!(!timings.inference_started);
+        assert!(timings.model_ready_at.is_none());
+    }
+
+    #[test]
+    fn raw_dictation_resets_timings_and_marks_only_model_acquisition_on_failure() {
+        let backend = WhisperBackend::new();
+        let mut timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: false,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+
+        let poisoning = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _load = backend.load_lock.lock().unwrap();
+            panic!("poison load lock for deterministic timing test");
+        }));
+        assert!(poisoning.is_err());
+
+        let result = backend.transcribe_dictation(
+            WhisperModel::Base,
+            &[0.0; 8_000],
+            Language::English,
+            &TranscribeOptions::default(),
+            &mut timings,
+        );
+
+        assert!(matches!(result, Err(DictationError::TranscriptionFailed(ref message))
+            if message.contains("restart Sagascript")));
+        assert!(timings.model_acquisition_started);
+        assert!(!timings.inference_started);
+        assert!(timings.model_ready_at.is_none());
+        assert!(timings.model_ms.is_finite());
+        assert!(timings.model_ms >= 0.0);
+        assert_eq!(timings.inference_ms, 0.0);
+    }
+
+    #[test]
+    fn dictation_timings_keep_private_state_out_of_json_contract() {
+        let timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: true,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+        let json = serde_json::to_value(timings).unwrap();
+
+        assert_eq!(json["model_ms"], 12.0);
+        assert_eq!(json["inference_ms"], 34.0);
+        assert_eq!(json["model_cached"], true);
+        assert!(json.get("model_acquisition_started").is_none());
+        assert!(json.get("inference_started").is_none());
+        assert!(json.get("model_ready_at").is_none());
     }
 
     #[test]

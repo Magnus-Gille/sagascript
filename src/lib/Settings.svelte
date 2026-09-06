@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import {
     getSettings,
+    getLastError,
+    getLastTranscription,
     setLanguage,
     setHotkeyMode,
     setHotkeyProfiles,
@@ -98,6 +100,42 @@
   let testOwnsRecording: boolean = $state(false);
   let testResult: string = $state("");
   let testError: string = $state("");
+
+  onMount(() => {
+    let disposed = false;
+    let revision = 0;
+    const stops: Array<() => void> = [];
+    const remember = (stop: () => void) => disposed ? stop() : stops.push(stop);
+    const errorListener = listen<string>("error", (event) => {
+      revision++;
+      testError = event.payload;
+      activeTab = "dictate";
+    }).then(remember);
+    const resultListener = listen<string>("transcription-result", (event) => {
+      revision++;
+      testResult = event.payload;
+      testError = "";
+    }).then(remember);
+    const stateListener = listen<string>("state-changed", (event) => {
+      if (event.payload === "recording") {
+        revision++;
+        testError = "";
+      }
+    }).then(remember);
+    // A failed background dictation may create this window after its event.
+    // Recover the persisted-in-memory result without racing newer events.
+    Promise.all([errorListener, resultListener, stateListener]).then(async () => {
+      const initialRevision = revision;
+      const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
+      if (!disposed && revision === initialRevision) {
+        testError = error ?? "";
+        testResult = text ?? "";
+      }
+    }).catch((error) => {
+      console.warn("Could not restore the last dictation result", error);
+    });
+    return () => { disposed = true; stops.forEach((stop) => stop()); };
+  });
 
   // Transcribe tab state
   let supportedFormats: string[] = $state([]);
