@@ -1,22 +1,27 @@
 # Personal glossary architecture
 
 Sagascript keeps the legacy `initial_prompt` setting as a backward-compatible
-in-memory interface for vocabulary guidance. Its persisted source is the
-human-editable `glossary.txt` file in the XDG configuration directory. Existing
-embedded comma- or newline-separated terms are migrated and continue to be
-passed to Whisper unchanged.
+interface for vocabulary guidance. Its persisted source is the human-editable
+`glossary.txt` file in the XDG configuration directory. Existing embedded
+comma- or newline-separated terms remain stored and continue to be passed to
+Whisper as decoder hints; global aliases are no longer deterministic
+replacements.
 
-New entries learned through **Teach Sagascript** are stored in
-`glossaries/<profile-id>.txt`. At transcription time, the global dictionary is
-combined with only the active profile's entries. Conflicting aliases still fail
-closed. This prevents a correction learned for one language/profile from
-silently rewriting another profile's output.
+Entries reviewed through the CLI `glossary suggest` training workflow (and the
+underlying backend suggestion support) are stored in
+`glossaries/<profile-id>.txt`. The former GUI **Teach Sagascript** tab is not
+currently exposed. At transcription time, only a selected known profile with
+an explicit non-Auto language contributes deterministic aliases.
+The global dictionary and a one-run prompt remain hint-only; no profile means
+no deterministic aliases, including after Auto language detection. Conflicting
+aliases still fail closed. This prevents a correction learned for one
+language/profile from silently rewriting another profile's output.
 
 Removing a profile makes its scoped entries inactive but does not silently
 delete the user's vocabulary. Its old profile ID remains reserved, preventing
 a later profile from accidentally reactivating those aliases.
 
-An entry may optionally authorize deterministic correction:
+A profile-scoped entry may optionally authorize deterministic correction:
 
 ```text
 OpenRouter = open router | open vrouter
@@ -25,13 +30,15 @@ Cloudflare = cloud flare
 ```
 
 The text to the left is the canonical output. Text to the right contains exact
-aliases separated by `|`. Only entries with explicit aliases can rewrite a
-transcript. This keeps arbitrary prose and legacy prompts hint-only.
+aliases separated by `|`. Only entries with explicit aliases in the selected
+explicit-language profile can rewrite a transcript. Global entries, one-run
+prompt text, arbitrary prose, and legacy prompts remain hint-only.
 
 ## Pipeline
 
-1. Parse the persisted dictionary in `sagascript-core`.
-2. Strip aliases from the decoder prompt so Whisper sees only preferred terms.
+1. Parse the persisted global and profile sources in `sagascript-core`.
+2. Keep global and one-run terms as decoder hints; strip aliases from the
+   decoder prompt so Whisper sees preferred terms.
 3. Transcribe locally as before.
 4. Find case-insensitive, whole-word or whole-phrase alias matches in the raw
    transcript. Resolve longest matches first against the original text.
@@ -45,14 +52,29 @@ additional confidence-gated one-edit correction for plain single-word hints.
 
 ## Interfaces
 
-- **Settings → Personal dictionary** edits the persistent source.
-- **Teach** records locally, keeps raw and effective transcripts ephemeral,
-  compares the effective transcript with the user's correction, and applies
-  only explicitly reviewed candidates to the selected profile.
-- **Transcribe → Extra context for this file** remains a one-run override.
+- **Settings → Personal dictionary** edits the persistent source through a
+  Global hints scope or a selected explicit-language profile scope. The global
+  file remains visible and editable; clearing or migrating it is not required
+  to disable its aliases.
+  If that same dictionary changes through the CLI while you are editing, the
+  GUI rejects the stale save and preserves your draft. Copy your edits, then
+  switch away and reselect the scope to load the current stored text before
+  reconciling them. An unrelated profile's changes do not block your save.
+- The CLI `glossary suggest` workflow records/transcribes locally, keeps raw and
+  effective transcripts ephemeral, compares the effective transcript with the
+  user's correction, and applies only explicitly reviewed candidates to the
+  selected profile. The former GUI Teach tab is not part of the current
+  surface.
+- **Transcribe → Profile (optional)** selects the file's language and profile
+  dictionary together. With no profile, the saved/default language is used and
+  the global dictionary remains hint-only.
+- **Transcribe → Extra context for this file** remains a one-run, hint-only
+  override. It replaces the saved global hint source but never activates
+  global aliases; a selected profile's aliases remain in scope.
 - `sagascript glossary path [--profile ID]` prints the exact external file.
 - `sagascript glossary list|add|remove|clear [--profile ID]` manages either the
-  legacy global dictionary or one profile.
+  legacy global dictionary or one profile. Omitting `--profile` stores global
+  hint terms; deterministic aliases require a known explicit-language profile.
 - `sagascript glossary suggest training.wav --corrected corrected.txt --profile ID`
   transcribes audio/video locally and prints conservative candidates without
   writing. A `.txt` or `.md` transcript is also accepted. Add `--apply` to
@@ -66,7 +88,8 @@ additional confidence-gated one-edit correction for plain single-word hints.
   from the process working directory. While the override is active, Sagascript
   does not inspect or migrate legacy settings. This is useful for automation,
   end-to-end tests, and disposable training profiles.
-- `sagascript config set initial_prompt ...` remains supported for scripts.
+- `sagascript config set initial_prompt ...` remains supported for scripts as a
+  global decoder hint source; it does not activate global aliases.
 
 The CLI exposes the complete review workflow without requiring an interactive
 prompt. Run `glossary suggest` as a dry run, then either apply every displayed

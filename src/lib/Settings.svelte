@@ -9,6 +9,7 @@
     setHotkeyProfiles,
     setAutoPaste,
     setInitialPrompt,
+    setProfileGlossary,
     setShowOverlay,
     setWhisperModel,
     setBeamSize,
@@ -146,6 +147,130 @@
   let dragOver: boolean = $state(false);
   let transcribePrompt: string = $state('');
   let transcribeDiarize: boolean = $state(false);
+  let transcribeProfileId: string | null = $state(null);
+
+  // The global dictionary is retained as a decoder hint source. Explicit
+  // language profiles are the only selectable sources for deterministic
+  // glossary replacements.
+  // Empty string is the UI-only global sentinel; profile IDs may legally be
+  // "global", so that name cannot identify the global scope.
+  let glossaryScopeId: string = $state("");
+  let glossaryDraft: string = $state("");
+  let glossaryDraftInitialized = false;
+  let glossaryScopeGeneration = 0;
+  let glossaryDraftGeneration = 0;
+  let lastStoredGlossarySources: Record<string, string> = {};
+  let glossaryEditBaseline: { scopeId: string; source: string; generation: number } | null = null;
+  type RecoveredGlossaryDraft = { scopeId: string; draft: string; conflicted: boolean };
+  type GlossarySaveRequest = {
+    scopeId: string;
+    generation: number;
+    draftGeneration: number;
+    value: string;
+  };
+  let recoveredGlossaryDrafts: RecoveredGlossaryDraft[] = $state([]);
+  let glossaryConflictScopeId: string | null = $state(null);
+
+  const dictionaryConflictPrefix = "Dictionary changed elsewhere:";
+
+  function explicitProfiles(source: Settings | null = settings): HotkeyProfile[] {
+    return source?.hotkey_profiles.filter((profile) => profile.language !== "auto") ?? [];
+  }
+
+  function profileForId(profileId: string | null, source: Settings | null = settings): HotkeyProfile | null {
+    if (!profileId) return null;
+    return explicitProfiles(source).find((profile) => profile.id === profileId) ?? null;
+  }
+
+  function glossarySourceForScope(scopeId: string, source: Settings | null = settings): string {
+    if (!source || scopeId === "") return source?.initial_prompt ?? "";
+    return source.profile_glossaries[scopeId] ?? "";
+  }
+
+  function isValidGlossaryScope(scopeId: string, source: Settings | null = settings): boolean {
+    return scopeId === "" || profileForId(scopeId, source) !== null;
+  }
+
+  function glossaryScopeLabel(scopeId: string, source: Settings | null = settings): string {
+    if (scopeId === "") return "Global hints";
+    return profileForId(scopeId, source)?.name ?? scopeId;
+  }
+
+  function rememberGlossaryRecovery(scopeId: string, draft: string, conflicted = false): void {
+    const existing = recoveredGlossaryDrafts.find(
+      (recovery) => recovery.scopeId === scopeId && recovery.draft === draft,
+    );
+    if (existing) {
+      if (conflicted && !existing.conflicted) {
+        recoveredGlossaryDrafts = recoveredGlossaryDrafts.map((recovery) =>
+          recovery === existing ? { ...recovery, conflicted: true } : recovery,
+        );
+      }
+      return;
+    }
+    recoveredGlossaryDrafts = [...recoveredGlossaryDrafts, { scopeId, draft, conflicted }];
+  }
+
+  function removeGlossaryRecovery(scopeId: string, draft: string): void {
+    recoveredGlossaryDrafts = recoveredGlossaryDrafts.filter(
+      (recovery) => recovery.scopeId !== scopeId || recovery.draft !== draft,
+    );
+  }
+
+  function isCurrentGlossaryRequest(request: GlossarySaveRequest): boolean {
+    return request.generation === glossaryScopeGeneration
+      && request.scopeId === glossaryScopeId
+      && request.draftGeneration === glossaryDraftGeneration;
+  }
+
+  function selectedTranscribeProfile(): HotkeyProfile | null {
+    return profileForId(transcribeProfileId);
+  }
+
+  function transcribeLanguage(): Language {
+    return selectedTranscribeProfile()?.language ?? settings?.language ?? "auto";
+  }
+
+  // Settings can be reloaded after hotkey/profile changes. Never leave a
+  // removed or newly-Auto profile selected, and never show another scope's
+  // text after that reconciliation.
+  $effect(() => {
+    const currentSettings = settings;
+    const currentScope = glossaryScopeId;
+    const currentTranscribeProfile = transcribeProfileId;
+    if (!currentSettings) return;
+
+    const currentStored = glossarySourceForScope(currentScope, currentSettings);
+    const previousStored = lastStoredGlossarySources[currentScope];
+    if (!glossaryDraftInitialized || glossaryDraft === previousStored) {
+      glossaryDraft = currentStored;
+      glossaryDraftInitialized = true;
+    }
+    lastStoredGlossarySources[currentScope] = currentStored;
+    if (!isValidGlossaryScope(currentScope, currentSettings)) {
+      const removedProfileHasDraft = currentScope !== ""
+        && (
+          glossaryEditBaseline?.scopeId === currentScope
+          || (glossaryDraftInitialized && glossaryDraft !== (previousStored ?? currentStored))
+        );
+      if (removedProfileHasDraft) {
+        rememberGlossaryRecovery(
+          currentScope,
+          glossaryDraft,
+          glossaryConflictScopeId === currentScope && settingsError.startsWith(dictionaryConflictPrefix),
+        );
+      }
+      glossaryScopeGeneration += 1;
+      glossaryScopeId = "";
+      glossaryDraft = currentSettings.initial_prompt;
+      glossaryDraftGeneration += 1;
+      glossaryEditBaseline = null;
+      glossaryConflictScopeId = null;
+    }
+    if (currentTranscribeProfile && !profileForId(currentTranscribeProfile, currentSettings)) {
+      transcribeProfileId = null;
+    }
+  });
 
   async function refreshProfileModels(profiles: HotkeyProfile[]) {
     const generation = ++profileModelRefresh;
@@ -291,15 +416,21 @@
    * bindings re-render from state, so a native control that already shows
    * the rejected value snaps back). Never re-throws.
    */
-  async function applySetting(mutate: () => Promise<void>): Promise<boolean> {
-    settingsError = "";
+  async function applySetting(
+    mutate: () => Promise<void>,
+    errorSink?: { value: string },
+    reportError = true,
+  ): Promise<boolean> {
+    if (reportError) settingsError = "";
     try {
       await mutate();
       settings = await getSettings();
       await refreshProfileModels(settings.hotkey_profiles);
       return true;
     } catch (e: any) {
-      settingsError = typeof e === "string" ? e : e?.message || "Failed to save setting.";
+      const message = typeof e === "string" ? e : e?.message || "Failed to save setting.";
+      if (reportError) settingsError = message;
+      if (errorSink) errorSink.value = message;
       if (settings) settings = { ...settings };
       return false;
     }
@@ -399,10 +530,118 @@
     await applySetting(() => setShowOverlay(next));
   }
 
+  async function refreshDictionaryAfterConflict(primaryError: string, request: GlossarySaveRequest) {
+    try {
+      settings = await getSettings();
+    } catch (error) {
+      console.warn("Could not refresh the dictionary after a concurrent change", error);
+    }
+    // A stale request still refreshes the source of truth, but cannot replace
+    // a newer scope's error or draft. The recovery item carries its context.
+    if (isCurrentGlossaryRequest(request)) {
+      settingsError = primaryError;
+      glossaryConflictScopeId = request.scopeId;
+    } else {
+      rememberGlossaryRecovery(request.scopeId, request.value, true);
+    }
+  }
+
   async function onInitialPromptBlur(e: Event) {
-    if (!settings) return;
+    const request: GlossarySaveRequest = {
+      scopeId: glossaryScopeId,
+      generation: glossaryScopeGeneration,
+      draftGeneration: glossaryDraftGeneration,
+      value: (e.target as HTMLTextAreaElement).value,
+    };
+    const scopeId = request.scopeId;
+    const draftGeneration = request.draftGeneration;
     const value = (e.target as HTMLTextAreaElement).value;
-    await applySetting(() => setInitialPrompt(value));
+    const editBaseline = glossaryEditBaseline;
+    const expectedSource = editBaseline?.scopeId === scopeId
+      && editBaseline.generation <= draftGeneration
+      ? editBaseline.source
+      : lastStoredGlossarySources[scopeId] ?? glossarySourceForScope(scopeId);
+    glossaryDraft = value;
+    if (!settings || !isValidGlossaryScope(scopeId)) return;
+    if (!editBaseline && value === (lastStoredGlossarySources[scopeId] ?? glossarySourceForScope(scopeId))) return;
+
+    const saveError = { value: "" };
+    const saved = await applySetting(() => scopeId === ""
+      ? setInitialPrompt(value, expectedSource)
+      : setProfileGlossary(scopeId, value, expectedSource), saveError, false);
+    const conflict = saveError.value.startsWith(dictionaryConflictPrefix);
+    let requestIsCurrent = isCurrentGlossaryRequest(request);
+    if (conflict) {
+      await refreshDictionaryAfterConflict(saveError.value, request);
+      requestIsCurrent = isCurrentGlossaryRequest(request);
+    } else if (!saved && !requestIsCurrent) {
+      rememberGlossaryRecovery(scopeId, value);
+    }
+
+    if (requestIsCurrent) {
+      settingsError = saved ? "" : saveError.value;
+      if (saved) glossaryConflictScopeId = null;
+    }
+    if (saved) removeGlossaryRecovery(scopeId, value);
+
+    // If our own save won the CAS race while the user kept typing in the
+    // same edit lineage, advance only that lineage's baseline to our value.
+    // A reselected scope has a different baseline object and is never
+    // silently advanced from a fresh settings read.
+    if (
+      saved
+      && editBaseline
+      && glossaryEditBaseline === editBaseline
+      && editBaseline.scopeId === scopeId
+    ) {
+      if (draftGeneration === glossaryDraftGeneration) {
+        glossaryEditBaseline = null;
+      } else {
+        glossaryEditBaseline = { ...editBaseline, source: value };
+      }
+    }
+
+    // A selector change while the invoke was pending owns the textarea now;
+    // never overwrite its newer scope with this request's result.
+    if (!requestIsCurrent) return;
+    if (saved) {
+      if (glossaryEditBaseline === editBaseline) glossaryEditBaseline = null;
+    }
+  }
+
+  function onGlossaryInput(e: Event) {
+    if (!glossaryEditBaseline || glossaryEditBaseline.scopeId !== glossaryScopeId) {
+      glossaryEditBaseline = {
+        scopeId: glossaryScopeId,
+        source: lastStoredGlossarySources[glossaryScopeId] ?? glossarySourceForScope(glossaryScopeId),
+        generation: glossaryDraftGeneration + 1,
+      };
+    }
+    glossaryDraftGeneration += 1;
+    glossaryDraft = (e.target as HTMLTextAreaElement).value;
+  }
+
+  function onGlossaryScopeChange(e: Event) {
+    const nextScope = (e.target as HTMLSelectElement).value;
+    if (!settings || !isValidGlossaryScope(nextScope)) return;
+    const previousScope = glossaryScopeId;
+    const previousConflict = glossaryConflictScopeId === previousScope
+      && settingsError.startsWith(dictionaryConflictPrefix);
+    if (
+      glossaryEditBaseline?.scopeId === previousScope
+      || previousConflict
+    ) {
+      rememberGlossaryRecovery(previousScope, glossaryDraft, previousConflict);
+    }
+    glossaryScopeGeneration += 1;
+    glossaryDraftGeneration += 1;
+    glossaryEditBaseline = null;
+    if (previousConflict) {
+      settingsError = "";
+      glossaryConflictScopeId = null;
+    }
+    glossaryScopeId = nextScope;
+    glossaryDraft = glossarySourceForScope(nextScope, settings);
   }
 
   async function onBeamSizeChange(e: Event) {
@@ -506,6 +745,7 @@
 
   async function handleFileTranscription(filePath: string) {
     if (transcribing) return;
+    const profileId = selectedTranscribeProfile()?.id;
     transcribing = true;
     transcriptionProgress = 0;
     transcribeError = "";
@@ -514,6 +754,7 @@
       transcriptionResult = await transcribeFile(filePath, {
         prompt: transcribePrompt.trim() || undefined,
         diarize: transcribeDiarize,
+        profileId: profileId ?? undefined,
       });
     } catch (e: any) {
       transcribeError = typeof e === "string" ? e : e.message || "Transcription failed";
@@ -521,6 +762,11 @@
       transcribing = false;
       transcriptionProgress = 0;
     }
+  }
+
+  function onTranscribeProfileChange(e: Event) {
+    const nextProfileId = (e.target as HTMLSelectElement).value;
+    transcribeProfileId = profileForId(nextProfileId)?.id ?? null;
   }
 
   async function onPickFile() {
@@ -883,7 +1129,7 @@
         <button class="active-config-bar" onclick={() => (activeTab = "settings")}>
           <div class="active-config-row">
             <span class="active-config-label">Language</span>
-            <span class="active-config-value">{languageLabel(settings.language)}</span>
+            <span class="active-config-value">{languageLabel(transcribeLanguage())}</span>
           </div>
           <span class="active-config-link">Settings</span>
         </button>
@@ -913,6 +1159,20 @@
         </div>
 
         <div class="transcribe-options">
+          <div class="field">
+            <label for="transcribe-profile">Profile (optional)</label>
+            <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange}>
+              <option value="">No profile (use selected language)</option>
+              {#each explicitProfiles() as profile (profile.id)}
+                <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
+              {/each}
+            </select>
+          </div>
+          {#if selectedTranscribeProfile()}
+            <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
+          {:else}
+            <div class="hotkey-hint">No profile keeps the selected language and global hint context.</div>
+          {/if}
           <label class="diarize-option">
             <input type="checkbox" bind:checked={transcribeDiarize} />
             Speaker diarization
@@ -924,7 +1184,7 @@
             bind:value={transcribePrompt}
             rows="2"
           ></textarea>
-          <div class="hotkey-hint">Temporary context for this import. Your personal dictionary is managed in Settings.</div>
+          <div class="hotkey-hint">Temporary hint-only context for this import. A selected profile supplies its dictionary; no profile uses global hints.</div>
         </div>
 
         {#if transcribeError}
@@ -962,14 +1222,55 @@
 
         <div class="field">
           <label for="initial-prompt">Personal dictionary</label>
+          <select id="dictionary-scope" value={glossaryScopeId} onchange={onGlossaryScopeChange}>
+            <option value="">Global hints</option>
+            {#each explicitProfiles() as profile (profile.id)}
+              <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
+            {/each}
+          </select>
           <textarea
             id="initial-prompt"
             class="initial-prompt-input"
             rows="5"
-            value={settings.initial_prompt}
+            value={glossaryDraft}
             onblur={onInitialPromptBlur}
+            oninput={onGlossaryInput}
             placeholder="OpenRouter = open router | open vrouter&#10;merge = merch&#10;Cloudflare = cloud flare"
           ></textarea>
+          {#if glossaryScopeId === ""}
+            <div class="hotkey-hint glossary-migration">
+              Global entries are hint-only and remain stored. To enable deterministic alias replacements, copy an entry into the explicit-language profile that should use it.
+            </div>
+          {:else}
+            <div class="hotkey-hint glossary-migration">
+              This explicit-language profile supplies deterministic aliases for its language. Leaving this field saves this profile only; switching scope never moves entries to another dictionary.
+            </div>
+          {/if}
+          {#if glossaryConflictScopeId === glossaryScopeId && settingsError.startsWith(dictionaryConflictPrefix)}
+            <div class="hotkey-hint glossary-migration">
+              This dictionary changed elsewhere. Your draft is preserved; copy it if needed, then switch scopes and reselect this scope to reload the saved value. If it still shows the old text, close and reopen Settings.
+            </div>
+          {/if}
+          {#if recoveredGlossaryDrafts.length > 0}
+            <div class="hotkey-hint glossary-migration">
+              Unsaved drafts are preserved below for manual recovery. They are never saved or copied automatically into another dictionary.
+            </div>
+            {#each recoveredGlossaryDrafts as recovery (recovery.scopeId + "\u0000" + recovery.draft)}
+              <div class="glossary-recovery">
+                <div class="hotkey-hint">
+                  <strong>Unsaved draft</strong> for <code>{glossaryScopeLabel(recovery.scopeId)}</code>
+                  {#if recovery.conflicted} — the saved dictionary changed elsewhere.{/if}
+                </div>
+                <textarea
+                  class="initial-prompt-input"
+                  rows="3"
+                  aria-label={`Unsaved draft for ${glossaryScopeLabel(recovery.scopeId)}`}
+                  value={recovery.draft}
+                  readonly
+                ></textarea>
+              </div>
+            {/each}
+          {/if}
           <div class="hotkey-hint">
             One preferred spelling per line. Add exact mishearings after <code>=</code>, separated by <code>|</code>.
             Plain terms still guide Whisper. Saved automatically when you leave the field and used for live dictation and batch jobs.

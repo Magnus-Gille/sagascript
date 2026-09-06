@@ -949,6 +949,7 @@ fn main() {
             commands::set_auto_paste,
             commands::set_show_overlay,
             commands::set_initial_prompt,
+            commands::set_profile_glossary,
             commands::suggest_training_glossary,
             commands::apply_training_glossary,
             commands::set_beam_size,

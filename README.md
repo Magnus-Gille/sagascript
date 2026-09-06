@@ -83,13 +83,15 @@ sagascript config set language sv
 sagascript config get hotkey
 sagascript config path
 
-# Manage the external personal dictionary
+# Manage the external personal dictionary (global entries are hint-only)
 sagascript glossary path
-sagascript glossary add OpenRouter --alias 'open router'
+sagascript glossary add OpenRouter
 
 # Use one shortcut for English and another for Swedish
 sagascript config profiles create swedish --name Swedish --hotkey 'Option+Space' --language sv
 sagascript config profiles list
+# Enable deterministic aliases only in the explicit-language profile
+sagascript glossary add OpenRouter --alias 'open router' --profile swedish
 
 # Generate shell completions
 sagascript completions zsh > ~/.zfunc/_sagascript
