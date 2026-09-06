@@ -1251,6 +1251,7 @@
                   <option value="sv">Swedish</option>
                   <option value="no">Norwegian</option>
                   <option value="fi">Finnish</option>
+                  <option value="pl">Polish</option>
                   <option value="auto">Auto-detect</option>
                 </select>
               </div>

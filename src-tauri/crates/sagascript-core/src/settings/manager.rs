@@ -1949,6 +1949,45 @@ mod tests {
     }
 
     #[test]
+    fn manual_polish_specialist_falls_back_to_language_recommendations() {
+        let settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::PolishWhisperSmall,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            settings.effective_model_for(Language::Polish),
+            WhisperModel::PolishWhisperSmall
+        );
+        assert_eq!(settings.effective_model_for(Language::Auto), WhisperModel::Base);
+        assert_eq!(
+            settings.effective_model_for(Language::English),
+            WhisperModel::BaseEn
+        );
+        assert_eq!(settings.effective_model_for(Language::Finnish), WhisperModel::Base);
+        assert_eq!(
+            settings.effective_model_for(Language::Swedish),
+            WhisperModel::KbWhisperBase
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::Norwegian),
+            WhisperModel::NbWhisperBase
+        );
+    }
+
+    #[test]
+    fn auto_selection_uses_generic_polish_recommendation() {
+        let settings = Settings {
+            auto_select_model: true,
+            whisper_model: WhisperModel::PolishWhisperSmall,
+            ..Default::default()
+        };
+
+        assert_eq!(settings.effective_model_for(Language::Polish), WhisperModel::Base);
+    }
+
+    #[test]
     fn incompatible_manual_model_falls_back_for_profile_language() {
         let settings = Settings {
             auto_select_model: false,

@@ -925,7 +925,7 @@ mod tests {
         let cmd = Cli::command();
         let sub = cmd.find_subcommand("transcribe").unwrap();
         let help = get_long_help(sub);
-        assert!(help.contains("pl"));
+        assert!(help.contains("Polish"));
         assert!(help.contains("pl-whisper-small"));
     }
 

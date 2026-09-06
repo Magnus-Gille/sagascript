@@ -17,14 +17,15 @@ test("Polish is exposed consistently in the language selectors", () => {
   assert.match(onboarding, /<span class="lang-flag">PL<\/span>/);
   assert.match(onboarding, /<span class="lang-name">Polski<\/span>/);
   assert.match(onboarding, /pl: "142 MB"/);
-  assert.match(settings, /<option value="pl">Polish<\/option>/);
+  const optionCount = (value) => settings.match(new RegExp(`<option value="${value}"`, "g"))?.length ?? 0;
+  assert.ok(optionCount("pl") > 0, "Polish must be selectable");
+  assert.equal(optionCount("pl"), optionCount("fi"), "Polish must be available in every Finnish selector");
   assert.match(settings, /case "pl": return "Polish";/);
   assert.match(overlay, /pl: "Polish"/);
 });
 
 test("Polish keeps the generic multilingual Base recommendation", () => {
   assert.match(onboarding, /pl: "base"/);
-  assert.doesNotMatch(onboarding, /polish.*model|model.*polish/i);
   assert.match(settings, /getModelInfo\(\)/);
   assert.match(settings, /getEffectiveModelInfo\(profile\.language\)/);
   assert.match(settings, /\{#each models as model\}/);

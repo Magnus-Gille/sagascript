@@ -126,17 +126,17 @@ mod tests {
     }
 
     #[test]
-    fn language_specific_models_are_rejected_for_other_explicit_languages() {
+    fn models_for_other_languages_are_rejected_unless_shared() {
         for language in LANGUAGES {
             for other_language in LANGUAGES {
                 if language == other_language {
                     continue;
                 }
                 for &model in WhisperModel::models_for_language(other_language) {
-                    // Generic multilingual models are intentionally shared
-                    // across explicit languages; only specialized models
-                    // must be rejected outside their target language.
-                    if !model.is_language_optimized() {
+                    // Generic models may be shared by multiple languages;
+                    // skip only models that are valid for this language so
+                    // incompatible-language coverage remains exercised.
+                    if WhisperModel::models_for_language(language).contains(&model) {
                         continue;
                     }
                     let result = resolve(language, Some(model_id_string(model)), None, false);

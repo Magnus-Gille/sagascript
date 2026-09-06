@@ -38,12 +38,9 @@ test("Finnish is exposed by every production language selector", () => {
   assert.match(api, /export type Language = "en" \| "sv" \| "no" \| "fi" \| "pl" \| "auto";/);
   assert.match(settings, /<option value="fi">Finnish<\/option>/g);
   assert.match(settings, /case "fi": return "Finnish";/);
-  assert.match(settings, /<option value="pl">Polish<\/option>/);
   assert.match(overlay, /fi: "Finnish"/);
-  assert.match(overlay, /pl: "Polish"/);
   assert.match(onboarding, /type OnboardingLanguage = "en" \| "sv" \| "no" \| "fi" \| "pl";/);
   assert.match(onboarding, /selectedLanguage === "fi"/);
-  assert.match(onboarding, /selectedLanguage === "pl"/);
   assert.match(onboarding, /fi: "142 MB"/);
 });
 
