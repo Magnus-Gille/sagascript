@@ -34,6 +34,12 @@ function cmakeString(value) {
   return String(value).replaceAll("\\", "/").replaceAll("]", "\\]");
 }
 
+function parseFixtureOutput(output) {
+  return Object.fromEntries(
+    output.trim().split(/\r?\n/).map((line) => line.split("=")),
+  );
+}
+
 async function runFixture({
   projectName = "whisper.cpp",
   systemName = "Windows",
@@ -75,9 +81,7 @@ async function runFixture({
     let values = null;
     try {
       const output = await readFile(outputPath, "utf8");
-      values = Object.fromEntries(
-        output.trim().split("\n").map((line) => line.split("=")),
-      );
+      values = parseFixtureOutput(output);
     } catch {
       // A failing hook is expected not to produce the result file.
     }
@@ -91,6 +95,13 @@ async function runFixture({
     await rm(directory, { recursive: true, force: true });
   }
 }
+
+test("fixture output parser treats LF and CRLF equally", () => {
+  const lines = ["GGML_NATIVE=OFF", "GGML_AVX=ON"];
+  const expected = { GGML_NATIVE: "OFF", GGML_AVX: "ON" };
+  assert.deepEqual(parseFixtureOutput(`${lines.join("\n")}\n`), expected);
+  assert.deepEqual(parseFixtureOutput(`${lines.join("\r\n")}\r\n`), expected);
+});
 
 test("portable hook forces the shipped Windows x64 baseline", async () => {
   const result = await runFixture({
