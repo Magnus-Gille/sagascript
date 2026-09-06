@@ -30,8 +30,13 @@ const baselineFlags = {
   GGML_LLAMAFILE: "OFF",
 };
 
-function cmakeString(value) {
-  return String(value).replaceAll("\\", "/").replaceAll("]", "\\]");
+function cmakeBracketArgument(value) {
+  const content = String(value).replaceAll("\\", "/");
+  let equals = "";
+  while (content.includes(`]${equals}]`)) {
+    equals += "=";
+  }
+  return `[${equals}[${content}]${equals}]`;
 }
 
 function parseFixtureOutput(output) {
@@ -46,14 +51,15 @@ async function runFixture({
   processor = "AMD64",
   pointerSize = 8,
   preseed = {},
+  directoryPrefix = "sagascript-cmake-",
 }) {
-  const directory = await mkdtemp(join(tmpdir(), "sagascript-cmake-"));
+  const directory = await mkdtemp(join(tmpdir(), directoryPrefix));
   const fixturePath = join(directory, "fixture.cmake");
   const outputPath = join(directory, "result.txt");
   const assignments = [
-    `set(PROJECT_NAME [[${cmakeString(projectName)}]])`,
-    `set(CMAKE_SYSTEM_NAME [[${cmakeString(systemName)}]])`,
-    `set(CMAKE_SYSTEM_PROCESSOR [[${cmakeString(processor)}]])`,
+    `set(PROJECT_NAME ${cmakeBracketArgument(projectName)})`,
+    `set(CMAKE_SYSTEM_NAME ${cmakeBracketArgument(systemName)})`,
+    `set(CMAKE_SYSTEM_PROCESSOR ${cmakeBracketArgument(processor)})`,
   ];
   const pointerSizeSet = pointerSize !== undefined && pointerSize !== null;
   if (pointerSizeSet) {
@@ -68,8 +74,8 @@ async function runFixture({
     .join("\n");
   const script = [
     ...assignments,
-    `include([[${cmakeString(hookPath)}]])`,
-    `file(WRITE [[${cmakeString(outputPath)}]]\n${outputLines}\n)`,
+    `include(${cmakeBracketArgument(hookPath)})`,
+    `file(WRITE ${cmakeBracketArgument(outputPath)}\n${outputLines}\n)`,
   ].join("\n");
   await writeFile(fixturePath, `${script}\n`, "utf8");
 
@@ -101,6 +107,24 @@ test("fixture output parser treats LF and CRLF equally", () => {
   const expected = { GGML_NATIVE: "OFF", GGML_AVX: "ON" };
   assert.deepEqual(parseFixtureOutput(`${lines.join("\n")}\n`), expected);
   assert.deepEqual(parseFixtureOutput(`${lines.join("\r\n")}\r\n`), expected);
+});
+
+test("CMake bracket arguments choose safe delimiters and normalize paths", () => {
+  for (const value of ["plain", "a]b", "a]]b", "a]=]b", String.raw`a\\b]]c`]) {
+    const normalized = value.replaceAll("\\", "/");
+    const match = /^\[(=*)\[/.exec(cmakeBracketArgument(value));
+    assert.ok(match);
+    const equals = match[1];
+    const formatted = cmakeBracketArgument(value);
+    assert.equal(formatted, `[${equals}[${normalized}]${equals}]`);
+    assert.equal(normalized.includes(`]${equals}]`), false);
+  }
+});
+
+test("portable hook handles bracketed temporary fixture paths", async () => {
+  const result = await runFixture({ directoryPrefix: "sagascript-cmake-]]-" });
+  assert.equal(result.status, 0, result.combinedOutput);
+  assert.deepEqual(result.values, baselineFlags);
 });
 
 test("portable hook forces the shipped Windows x64 baseline", async () => {
