@@ -60,7 +60,7 @@
   } from "./dictation-ui-state";
   import {
     canUseBareHotkey,
-    hotkeyKeyLabel,
+    formatHotkeyDisplay as formatShortcutDisplay,
     supportedBareFunctionKeyRange,
     tauriKeyName,
   } from "./hotkey.js";
@@ -1040,14 +1040,7 @@
 
   /** Format a shortcut string for display (e.g. "Control+Shift+Space" → "Ctrl + Shift + Space") */
   function formatHotkeyDisplay(shortcut: string): string {
-    const m = modifierNames();
-    return shortcut
-      .replace(/Control/g, m.ctrl)
-      .replace(/Alt/g, m.alt)
-      .replace(/Super|Command|Cmd/g, m.meta)
-      .split("+")
-      .map((part) => hotkeyKeyLabel(part, platform))
-      .join(" + ");
+    return formatShortcutDisplay(shortcut, platform);
   }
 
   function beginHotkeyCapture(profileId: string) {

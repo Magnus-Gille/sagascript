@@ -3,10 +3,18 @@ import test from "node:test";
 
 import {
   canUseBareHotkey,
+  formatHotkeyDisplay,
   hotkeyKeyLabel,
   supportedBareFunctionKeyRange,
   tauriKeyName,
 } from "../src/lib/hotkey.js";
+
+test("shortcut display treats modifier aliases as whole tokens", () => {
+  assert.equal(formatHotkeyDisplay("CommandOrControl+IntlBackslash", "macos"), "Cmd + §");
+  assert.equal(formatHotkeyDisplay("CommandOrControl+IntlBackslash", "windows"), "Ctrl + IntlBackslash");
+  assert.equal(formatHotkeyDisplay("CmdOrCtrl+Meta+Option+Shift+A", "linux"), "Ctrl + Win + Alt + Shift + A");
+  assert.equal(formatHotkeyDisplay("Control+Command+Space", "macos"), "Control + Cmd + Space");
+});
 
 test("F13 through F24 may omit modifiers on macOS", () => {
   for (const key of ["F13", "F14", "F19", "F20", "F21", "F24"]) {

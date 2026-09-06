@@ -88,3 +88,43 @@ export function hotkeyKeyLabel(key, platform) {
   if (key === "IntlBackslash") return platform === "macos" ? "§" : "IntlBackslash";
   return key;
 }
+
+/**
+ * Format a persisted shortcut without treating one modifier token as a
+ * substring of another (for example, `CommandOrControl`).
+ *
+ * @param {string} shortcut
+ * @param {string | null | undefined} platform
+ * @returns {string}
+ */
+export function formatHotkeyDisplay(shortcut, platform) {
+  const mac = platform === "macos";
+  return shortcut
+    .split("+")
+    .map((part) => {
+      const token = part.trim();
+      switch (token.toLowerCase()) {
+        case "commandorcontrol":
+        case "commandorctrl":
+        case "cmdorcontrol":
+        case "cmdorctrl":
+          return mac ? "Cmd" : "Ctrl";
+        case "control":
+        case "ctrl":
+          return mac ? "Control" : "Ctrl";
+        case "alt":
+        case "option":
+          return mac ? "Option" : "Alt";
+        case "super":
+        case "meta":
+        case "command":
+        case "cmd":
+          return mac ? "Cmd" : "Win";
+        case "shift":
+          return "Shift";
+        default:
+          return hotkeyKeyLabel(token, platform);
+      }
+    })
+    .join(" + ");
+}
