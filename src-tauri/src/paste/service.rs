@@ -116,33 +116,36 @@ impl PasteService {
         info!("Simulating paste keystroke...");
         simulate_paste()?;
 
-        // Schedule clipboard restore
-        #[cfg(target_os = "linux")]
-        let saved = saved_text;
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        // Windows owns the native clipboard session on its worker thread. A
+        // dropped pending handle deliberately leaves the temporary copy in
+        // place, matching the pre-existing paste-failure behavior.
+        #[cfg(target_os = "windows")]
+        saved_windows.schedule_restore();
 
-            #[cfg(target_os = "macos")]
-            if let Some(snapshot) = saved_pasteboard {
-                // Do not clobber clipboard content copied by the user or target
-                // application while the synthetic paste was in flight.
-                let _ = macos_clipboard::restore_if_unchanged(snapshot, owned_change_count);
-            }
-
-            #[cfg(target_os = "windows")]
-            match windows_clipboard::restore_if_unchanged(saved_windows) {
-                Ok(false) => tracing::debug!("Clipboard restore skipped: generation changed or no text snapshot"),
-                Err(error) => tracing::warn!("Clipboard restore failed: {error}"),
-                Ok(true) => {}
-            }
-
+        // Keep the existing delayed restore behavior for non-Windows targets.
+        #[cfg(not(target_os = "windows"))]
+        {
             #[cfg(target_os = "linux")]
-            if let Some(text) = saved {
-                if let Ok(mut cb) = Clipboard::new() {
-                    let _ = cb.set_text(text);
+            let saved = saved_text;
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+
+                #[cfg(target_os = "macos")]
+                if let Some(snapshot) = saved_pasteboard {
+                    // Do not clobber clipboard content copied by the user or
+                    // target application while the synthetic paste was in
+                    // flight.
+                    let _ = macos_clipboard::restore_if_unchanged(snapshot, owned_change_count);
                 }
-            }
-        });
+
+                #[cfg(target_os = "linux")]
+                if let Some(text) = saved {
+                    if let Ok(mut cb) = Clipboard::new() {
+                        let _ = cb.set_text(text);
+                    }
+                }
+            });
+        }
 
         Ok(())
     }

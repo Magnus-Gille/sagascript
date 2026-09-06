@@ -77,6 +77,35 @@ stores transcript text. The installed path remains an acceptance finding until
 it has been observed on Windows; do not add it to documentation or `PATH`
 promises merely because an installer default was expected.
 
+## x64 candidate CPU baseline and cache portability
+
+New x64 candidates require AVX2, FMA, F16C and BMI2. ARM64 is unchanged.
+The x64 job records processor identity and required CPU features, then injects
+`scripts/cmake/windows-x64-portable.cmake` through `CMAKE_PROJECT_INCLUDE`.
+This is a supported forwarding path in the pinned `whisper-rs-sys`; standalone
+`GGML_*` environment variables are not forwarded, and the bundled deprecated
+`WHISPER_NATIVE=OFF` alias does not disable native probing.
+
+The hook forces the baseline and disables host-native, AVX-512, AVX-VNNI and
+AMX instructions, all-CPU-variant builds, dynamic backends and LLAMAFILE.
+The Rust cache namespace includes the workflow, policy and
+verifier content hashes, preventing reuse of the older host-native cache.
+`verify-windows-x64-cpu-policy.ps1` checks actual whisper.cpp CMake caches after
+debug compilation, before release CLI inference, and after installer builds;
+missing or mismatched configuration fails the job. The packaged core checks
+the required CPU features before native model loading and gives an actionable
+error on unsupported processors. Source builds without the package-policy
+marker retain their own compiler configuration.
+
+This correction follows candidate run `33999334679`, whose x64 CLI exited with
+`0xC000001D` (illegal instruction) during Norwegian inference after restoring
+a native cache. The preceding freshly built candidate passed. The old logs do
+not identify the CPU features or resolved CMake configuration, so a particular
+unsupported instruction or cache-origin cause is not proven. Require real
+inference on both cold and reused-cache candidates before accepting this
+correction; a static configuration check alone is not runtime proof. The
+historical beta below has not been rebuilt by this source change.
+
 ## Beta verification record
 
 The candidate uses app version `1.1.3` from full source revision

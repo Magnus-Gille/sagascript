@@ -78,6 +78,25 @@ jobs:
           "CMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Configure portable x64 inference baseline
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: |
+          # whisper-rs-sys forwards CMAKE_* but not GGML_* environment flags.
+          # Its legacy WHISPER_NATIVE=OFF alias does not disable native probing.
+          $policy = (Resolve-Path -LiteralPath 'scripts/cmake/windows-x64-portable.cmake').Path.Replace('\', '/')
+          "CMAKE_PROJECT_INCLUDE=$policy" >> $env:GITHUB_ENV
+          "SAGASCRIPT_WINDOWS_X64_BASELINE=avx2" >> $env:GITHUB_ENV
+          Get-CimInstance Win32_Processor | Select-Object Name, Manufacturer, Architecture | ConvertTo-Json -Compress
+          $features = @{
+            avx2 = [System.Runtime.Intrinsics.X86.Avx2]::IsSupported
+            fma = [System.Runtime.Intrinsics.X86.Fma]::IsSupported
+            bmi2 = [System.Runtime.Intrinsics.X86.Bmi2]::IsSupported
+            f16c = (([System.Runtime.Intrinsics.X86.X86Base]::CpuId(1, 0).Item3 -band (1 -shl 29)) -ne 0)
+          }
+          $features | ConvertTo-Json -Compress
+          if ($features.Values -contains $false) { throw 'Runner does not support the packaged x64 CPU baseline' }
+
       - name: Identify Windows runner image
         id: windows-image
         shell: pwsh
@@ -97,7 +116,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
-          shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml') }}
+          shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml', 'scripts/cmake/windows-x64-portable.cmake', 'scripts/verify-windows-x64-cpu-policy.ps1') }}
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -132,13 +151,24 @@ jobs:
       - name: Gate native Windows clipboard transactions
         shell: pwsh
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml -p sagascript --target ${{ matrix.rust_target }} native_runner_clipboard_transaction_smoke -- --ignored --test-threads=1
+          # The host triple was verified above. Reuse the workspace test binary
+          # instead of recompiling a duplicate explicit-target debug tree.
+          cargo test --manifest-path src-tauri/Cargo.toml -p sagascript native_runner_clipboard_transaction_smoke -- --ignored --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw "Native clipboard transaction gate failed" }
+
+      - name: Verify debug x64 inference CPU policy
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: ./scripts/verify-windows-x64-cpu-policy.ps1 -TargetRoot src-tauri/target -PolicyFile scripts/cmake/windows-x64-portable.cmake
 
       - name: Gate real Windows transcription
         shell: pwsh
         run: |
           cargo build --release -p sagascript-cli --manifest-path src-tauri/Cargo.toml --target ${{ matrix.rust_target }}
+          if ($LASTEXITCODE -ne 0) { throw "Release CLI build failed" }
+          if ('${{ matrix.architecture }}' -eq 'x64') {
+            ./scripts/verify-windows-x64-cpu-policy.ps1 -TargetRoot src-tauri/target -PolicyFile scripts/cmake/windows-x64-portable.cmake
+          }
           $binary = "src-tauri\target\${{ matrix.rust_target }}\release\sagascript.exe"
           $stdout = Join-Path $env:RUNNER_TEMP "transcription-smoke.json"
           $stderr = Join-Path $env:RUNNER_TEMP "transcription-smoke.stderr"
@@ -195,6 +225,11 @@ jobs:
 
       - name: Build unsigned internal installers
         run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }}
+
+      - name: Verify packaged x64 inference CPU policy
+        if: matrix.architecture == 'x64'
+        shell: pwsh
+        run: ./scripts/verify-windows-x64-cpu-policy.ps1 -TargetRoot src-tauri/target -PolicyFile scripts/cmake/windows-x64-portable.cmake
 
       - name: Prepare and verify candidate artifacts
         shell: pwsh

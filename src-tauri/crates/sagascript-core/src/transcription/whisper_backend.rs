@@ -22,6 +22,51 @@ use crate::transcription::model;
 /// loops. Shared by the GUI file-transcribe command and the `transcribe` CLI.
 pub const FILE_TRANSCRIBE_BEAM: u32 = 5;
 
+#[cfg(any(test, all(target_os = "windows", target_arch = "x86_64")))]
+fn require_packaged_x64_cpu(
+    baseline: Option<&str>,
+    features: [bool; 4],
+) -> Result<(), DictationError> {
+    match baseline {
+        None => Ok(()), // Local source builds retain their own compiler policy.
+        Some("avx2") if features.into_iter().all(|supported| supported) => Ok(()),
+        Some("avx2") => Err(DictationError::TranscriptionFailed(
+            "This Windows x64 build requires AVX2, FMA, F16C and BMI2 CPU support. Use a compatible computer or a source build configured for your CPU.".into(),
+        )),
+        Some(_) => Err(DictationError::TranscriptionFailed(
+            "Unrecognized Windows x64 build CPU policy; install a verified Sagascript build.".into(),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod packaged_x64_cpu_tests {
+    use super::require_packaged_x64_cpu;
+
+    #[test]
+    fn packaged_baseline_requires_every_feature_before_native_model_loading() {
+        for bits in 0..16 {
+            let features = std::array::from_fn(|index| bits & (1 << index) != 0);
+            assert_eq!(
+                require_packaged_x64_cpu(Some("avx2"), features).is_ok(),
+                bits == 15
+            );
+            assert!(require_packaged_x64_cpu(None, features).is_ok());
+        }
+        assert!(require_packaged_x64_cpu(Some("unknown"), [true; 4]).is_err());
+    }
+
+    #[test]
+    fn unsupported_cpu_error_is_actionable_and_contains_no_model_or_audio_data() {
+        let error = require_packaged_x64_cpu(Some("avx2"), [false; 4])
+            .unwrap_err()
+            .to_string();
+        for feature in ["AVX2", "FMA", "F16C", "BMI2", "source build"] {
+            assert!(error.contains(feature));
+        }
+    }
+}
+
 /// Privacy-safe timings shared by live dictation and its CLI benchmark.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct DictationTimings {
@@ -762,6 +807,18 @@ impl WhisperBackend {
         whisper_model: WhisperModel,
         profile: ContextProfile,
     ) -> Result<(), DictationError> {
+        // Check before model-loading FFI, including default context parameters.
+        // The candidate build hook pins its native library to this same policy.
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        require_packaged_x64_cpu(
+            option_env!("SAGASCRIPT_WINDOWS_X64_BASELINE"),
+            [
+                std::is_x86_feature_detected!("avx2"),
+                std::is_x86_feature_detected!("fma"),
+                std::is_x86_feature_detected!("f16c"),
+                std::is_x86_feature_detected!("bmi2"),
+            ],
+        )?;
         let desired_key = RuntimeKey {
             model: whisper_model,
             profile,

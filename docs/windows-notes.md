@@ -29,6 +29,12 @@ acceptance checklist live in [Windows release track](windows-release.md).
 - **No signed stable binary or auto-updater.** The beta is a manually published
   preview; build from source if you need to inspect or reproduce it.
 - **Architecture-specific builds.** Use the native ARM64 candidate on Snapdragon / Copilot+ PCs and the x64 candidate on Intel or AMD Windows PCs. CPU transcription is tested natively on both architectures in the candidate workflow.
+- **New x64 candidates require AVX2, FMA, F16C and BMI2.** The candidate
+  workflow explicitly disables build-host-native, AVX-512, AVX-VNNI and AMX
+  instructions and verifies the actual native build cache. Unsupported CPUs
+  receive an actionable error before model loading; use a source build
+  configured for older CPUs. This policy does not change ARM64 or retroactively
+  rebuild the linked historical beta.
 - **Clipboard restoration is text-only.** Sagascript restores previous plain text
   only while its temporary clipboard generation is still current. New user
   copies or clipboard managers that add formats suppress restoration. Images
