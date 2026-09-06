@@ -6,6 +6,7 @@
 pub mod audio;
 pub mod download;
 pub mod error;
+pub mod meeting;
 pub mod settings;
 pub mod transcription;
 

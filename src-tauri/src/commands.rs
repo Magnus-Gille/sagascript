@@ -79,16 +79,16 @@ pub(crate) fn effective_file_glossary(settings: &Settings, prompt: Option<&str>)
     Glossary::parse(&settings.effective_glossary_source_with_prompt(None, prompt))
 }
 
-struct FileTranscriptionContext {
-    language: Language,
-    model: WhisperModel,
-    glossary: Glossary,
+pub(crate) struct FileTranscriptionContext {
+    pub(crate) language: Language,
+    pub(crate) model: WhisperModel,
+    pub(crate) glossary: Glossary,
     options: TranscribeOptions,
 }
 
 /// Freeze language, model and dictionary together before file decoding begins.
 /// A missing/Auto profile is rejected rather than silently borrowing aliases.
-fn file_transcription_context(
+pub(crate) fn file_transcription_context(
     settings: &Settings,
     profile_id: Option<&str>,
     prompt: Option<&str>,

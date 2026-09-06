@@ -1,16 +1,27 @@
 use std::collections::HashSet;
+#[cfg(feature = "diarization")]
+use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+#[cfg(feature = "diarization")]
+use std::time::SystemTime;
 
 use clap::Args;
+#[cfg(feature = "diarization")]
+use sha2::{Digest, Sha256};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
 use sagascript_core::audio::decoder::{decode_audio_file, SUPPORTED_EXTENSIONS};
 #[cfg(feature = "diarization")]
+use sagascript_core::audio::decoder::decode_audio_file_with_control;
+#[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
+#[cfg(feature = "diarization")]
+use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
 use sagascript_core::settings::{HotkeyProfile, Language, Settings, WhisperModel};
 use sagascript_core::transcription::diagnostics::{
     analyze_coverage, analyze_language_windows, analyze_repetition, language_mismatch_warning,
@@ -76,6 +87,16 @@ pub struct TranscribeArgs {
     #[cfg(feature = "diarization")]
     #[arg(long)]
     pub diarize: bool,
+
+    /// Emit the validated shared meeting transcript JSON document.
+    /// Requires diarization and cannot be combined with legacy JSON outputs.
+    #[cfg(feature = "diarization")]
+    #[arg(
+        long,
+        requires = "diarize",
+        conflicts_with_all = ["json", "jsonl", "clipboard", "correct_hints"]
+    )]
+    pub meeting_json: bool,
 
     /// Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.75). Higher = fewer speakers.
     #[cfg(feature = "diarization")]
@@ -146,6 +167,8 @@ pub struct TranscribeArgs {
 struct FileTranscription {
     json: serde_json::Value,
     plain: String,
+    #[cfg(feature = "diarization")]
+    meeting: Option<MeetingTranscript>,
 }
 
 #[cfg(feature = "diarization")]
@@ -182,6 +205,242 @@ fn prepare_diarized_plain_segments(
         segment.text = text;
     }
     consolidated
+}
+
+#[cfg(feature = "diarization")]
+const MAX_MEETING_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MeetingPhase {
+    Preparing,
+    Decoding,
+    LoadingModel,
+    Analyzing,
+    Clustering,
+    Finalizing,
+}
+
+pub struct MeetingControl<'a> {
+    pub cancellation: &'a AtomicBool,
+    pub progress: &'a (dyn Fn(MeetingPhase) + Sync),
+}
+
+impl MeetingControl<'_> {
+    pub fn check(&self) -> Result<(), DictationError> {
+        if self.cancellation.load(Ordering::Acquire) {
+            return Err(DictationError::TranscriptionFailed(
+                "Meeting transcription cancelled".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "diarization")]
+fn meeting_checkpoint(
+    control: Option<&MeetingControl<'_>>,
+    phase: MeetingPhase,
+) -> Result<(), DictationError> {
+    if let Some(control) = control {
+        control.check()?;
+        (control.progress)(phase);
+        control.check()?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "diarization")]
+fn meeting_check(control: Option<&MeetingControl<'_>>) -> Result<(), DictationError> {
+    if let Some(control) = control {
+        control.check()?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "diarization")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MeetingFileMetadata {
+    len: u64,
+    modified: SystemTime,
+}
+
+#[cfg(feature = "diarization")]
+fn checked_meeting_metadata(
+    metadata: std::fs::Metadata,
+    context: &str,
+) -> Result<MeetingFileMetadata, DictationError> {
+    if !metadata.is_file() {
+        return Err(DictationError::FileDecodeError(format!(
+            "Meeting input {context} is not a regular file"
+        )));
+    }
+    if metadata.len() > MAX_MEETING_INPUT_BYTES {
+        return Err(DictationError::FileDecodeError(
+            "Meeting input exceeds the 2 GiB hashing limit".to_string(),
+        ));
+    }
+    let modified = metadata.modified().map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Meeting input {context} modification time is unavailable: {error}"
+        ))
+    })?;
+    Ok(MeetingFileMetadata {
+        len: metadata.len(),
+        modified,
+    })
+}
+
+#[cfg(feature = "diarization")]
+fn stable_file_sha256(
+    file: &Path,
+    control: Option<&MeetingControl<'_>>,
+) -> Result<String, DictationError> {
+    const CHUNK_SIZE: usize = 64 * 1024;
+    let path_before = std::fs::metadata(file).map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Failed to inspect meeting input '{}': {error}",
+            file.display()
+        ))
+    })?;
+    let path_before = checked_meeting_metadata(path_before, "path")?;
+    let mut reader = std::fs::File::open(file).map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Failed to read meeting input '{}': {error}",
+            file.display()
+        ))
+    })?;
+    let handle_before = checked_meeting_metadata(
+        reader.metadata().map_err(|error| {
+            DictationError::FileDecodeError(format!(
+                "Failed to inspect opened meeting input '{}': {error}",
+                file.display()
+            ))
+        })?,
+        "opened handle",
+    )?;
+    if path_before != handle_before {
+        return Err(DictationError::FileDecodeError(
+            "Meeting input changed while opening; refusing output".to_string(),
+        ));
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; CHUNK_SIZE];
+    let mut bytes_read = 0_u64;
+    {
+        let mut limited_reader = (&mut reader).take(MAX_MEETING_INPUT_BYTES + 1);
+        loop {
+            meeting_check(control)?;
+            let count = limited_reader.read(&mut buffer).map_err(|error| {
+                DictationError::FileDecodeError(format!(
+                    "Failed to read meeting input '{}': {error}",
+                    file.display()
+                ))
+            })?;
+            if count == 0 {
+                break;
+            }
+            bytes_read = bytes_read.checked_add(count as u64).ok_or_else(|| {
+                DictationError::FileDecodeError(
+                    "Meeting input size exceeded safe hashing bounds".to_string(),
+                )
+            })?;
+            hasher.update(&buffer[..count]);
+            meeting_check(control)?;
+        }
+    }
+    if bytes_read > MAX_MEETING_INPUT_BYTES {
+        return Err(DictationError::FileDecodeError(
+            "Meeting input exceeds the 2 GiB hashing limit".to_string(),
+        ));
+    }
+    let handle_after = checked_meeting_metadata(
+        reader.metadata().map_err(|error| {
+            DictationError::FileDecodeError(format!(
+                "Failed to inspect opened meeting input '{}': {error}",
+                file.display()
+            ))
+        })?,
+        "opened handle",
+    )?;
+    let path_after = std::fs::metadata(file).map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Failed to inspect meeting input '{}': {error}",
+            file.display()
+        ))
+    })?;
+    let path_after = checked_meeting_metadata(path_after, "path")?;
+    if bytes_read != path_before.len
+        || path_before != handle_before
+        || handle_before != handle_after
+        || path_before != path_after
+    {
+        return Err(DictationError::FileDecodeError(
+            "Meeting input changed while hashing; refusing output".to_string(),
+        ));
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+#[cfg(feature = "diarization")]
+fn verify_meeting_source_unchanged(
+    file: &Path,
+    source_sha256: &str,
+    control: Option<&MeetingControl<'_>>,
+) -> Result<(), DictationError> {
+    let after = stable_file_sha256(file, control)?;
+    if after != source_sha256 {
+        return Err(DictationError::FileDecodeError(
+            "Meeting input changed during transcription; refusing output".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "diarization")]
+fn meeting_transcript_from_plain_segments(
+    source_sha256: String,
+    language: Language,
+    model: WhisperModel,
+    duration: f64,
+    plain_segments: &[DiarizedSegment],
+) -> Result<MeetingTranscript, DictationError> {
+    let mut speakers = Vec::new();
+    let mut seen = HashSet::new();
+    for segment in plain_segments {
+        if seen.insert(segment.speaker.clone()) {
+            speakers.push(MeetingSpeaker {
+                id: segment.speaker.clone(),
+                label: segment.speaker.clone(),
+            });
+        }
+    }
+    let segments = plain_segments
+        .iter()
+        .map(|segment| MeetingSegmentInput {
+            start: segment.start,
+            end: segment.end,
+            text: segment.text.clone(),
+            speaker: segment.speaker.clone(),
+        })
+        .collect();
+    MeetingTranscript::new(
+        source_sha256,
+        language.whisper_code().unwrap_or("auto"),
+        model_id_string(model),
+        duration,
+        segments,
+        speakers,
+    )
+    .map_err(|_| {
+        DictationError::TranscriptionFailed(
+            "Diarized meeting segments failed shared transcript validation".to_string(),
+        )
+    })
 }
 
 #[cfg(feature = "diarization")]
@@ -227,6 +486,118 @@ enum BatchItem {
     },
 }
 
+/// Run the diarized file pipeline and return the validated shared meeting
+/// document without loading settings, writing settings, or emitting stdout.
+#[cfg(feature = "diarization")]
+pub fn transcribe_meeting_file(
+    file: &Path,
+    stored: &Settings,
+    language: Language,
+    model: WhisperModel,
+    glossary: &Glossary,
+    backend: &WhisperBackend,
+) -> Result<MeetingTranscript, DictationError> {
+    transcribe_meeting_file_inner(file, stored, language, model, glossary, backend, None)
+}
+
+/// Run the diarized file pipeline with explicit progress and cancellation
+/// control. The caller owns the flag and must not clear it during a job.
+#[cfg(feature = "diarization")]
+pub fn transcribe_meeting_file_with_control(
+    file: &Path,
+    stored: &Settings,
+    language: Language,
+    model: WhisperModel,
+    glossary: &Glossary,
+    backend: &WhisperBackend,
+    control: &MeetingControl<'_>,
+) -> Result<MeetingTranscript, DictationError> {
+    control.check()?;
+    transcribe_meeting_file_inner(
+        file,
+        stored,
+        language,
+        model,
+        glossary,
+        backend,
+        Some(control),
+    )
+}
+
+#[cfg(feature = "diarization")]
+fn transcribe_meeting_file_inner(
+    file: &Path,
+    stored: &Settings,
+    language: Language,
+    model: WhisperModel,
+    glossary: &Glossary,
+    backend: &WhisperBackend,
+    control: Option<&MeetingControl<'_>>,
+) -> Result<MeetingTranscript, DictationError> {
+    let args = TranscribeArgs {
+        files: vec![file.to_path_buf()],
+        recursive: false,
+        language: Some(language.whisper_code().unwrap_or("auto").to_string()),
+        profile: None,
+        model: Some(model_id_string(model).to_string()),
+        json: false,
+        jsonl: false,
+        fail_fast: true,
+        clipboard: false,
+        diarize: true,
+        meeting_json: true,
+        diarize_threshold: 0.75,
+        diarize_cache: None,
+        prompt: None,
+        prompt_file: None,
+        correct_hints: false,
+        vad: false,
+        no_vad: false,
+        beam_size: None,
+        parallel: None,
+    };
+    let mut model_loaded = false;
+    let output = transcribe_file(
+        &args,
+        file,
+        backend,
+        stored,
+        language,
+        model,
+        &mut model_loaded,
+        glossary,
+        &[],
+        control,
+    )?;
+    output.meeting.ok_or_else(|| {
+        DictationError::TranscriptionFailed(
+            "Diarized meeting transcript was not produced".to_string(),
+        )
+    })
+}
+
+#[cfg(feature = "diarization")]
+fn validate_meeting_input_scope(
+    original_inputs: &[PathBuf],
+    recursive: bool,
+    expanded: &[PathBuf],
+) -> Result<(), DictationError> {
+    if recursive || original_inputs.iter().any(|path| path.is_dir()) || expanded.len() != 1 {
+        return Err(DictationError::SettingsError(
+            "--meeting-json requires one explicit regular input file; directories, --recursive, and multiple inputs are unsupported"
+                .to_string(),
+        ));
+    }
+    let metadata = std::fs::metadata(&expanded[0]).map_err(|error| {
+        DictationError::FileDecodeError(format!(
+            "Failed to inspect meeting input '{}': {error}",
+            expanded[0].display()
+        ))
+    })?;
+    let _ = checked_meeting_metadata(metadata, "path")?;
+    Ok(())
+}
+
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     let stored = sagascript_core::settings::store::load();
     let profile = args
@@ -248,6 +619,10 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     )?;
 
     let files = expand_inputs(&args.files, args.recursive)?;
+    #[cfg(feature = "diarization")]
+    if args.meeting_json {
+        validate_meeting_input_scope(&args.files, args.recursive, &files)?;
+    }
     if files.is_empty() {
         return Err(DictationError::FileDecodeError(
             "No supported audio/video files were found in the supplied inputs".to_string(),
@@ -324,12 +699,27 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
                 &mut model_loaded,
                 &glossary,
                 &correction_vocabulary,
+                None,
             )
         },
         |execution| {
             let file = execution.source;
             match execution.output {
                 Ok(output) => {
+                    #[cfg(feature = "diarization")]
+                    if args.meeting_json {
+                        let meeting = output.meeting.as_ref().ok_or_else(|| {
+                            DictationError::TranscriptionFailed(
+                                "meeting JSON was not produced by the diarized pipeline"
+                                    .to_string(),
+                            )
+                        })?;
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(meeting).expect("meeting serializes")
+                        );
+                        return Ok(());
+                    }
                     if args.clipboard {
                         copy_to_clipboard(&output.plain)?;
                         eprintln!("Copied to clipboard.");
@@ -481,8 +871,21 @@ fn transcribe_file(
     model_loaded: &mut bool,
     glossary: &Glossary,
     correction_vocabulary: &[String],
+    control: Option<&MeetingControl<'_>>,
 ) -> Result<FileTranscription, DictationError> {
+    #[cfg(not(feature = "diarization"))]
+    let _ = control;
+
     let file_started = Instant::now();
+    #[cfg(feature = "diarization")]
+    let meeting_source_sha256 = if args.meeting_json {
+        meeting_checkpoint(control, MeetingPhase::Preparing)?;
+        let source_sha256 = stable_file_sha256(file, control)?;
+        meeting_checkpoint(control, MeetingPhase::Preparing)?;
+        Some(source_sha256)
+    } else {
+        None
+    };
     #[cfg(feature = "diarization")]
     let decoder_prompt = glossary.decoder_prompt();
     #[cfg(feature = "diarization")]
@@ -536,6 +939,10 @@ fn transcribe_file(
         ));
     }
 
+    #[cfg(feature = "diarization")]
+    if args.meeting_json {
+        meeting_checkpoint(control, MeetingPhase::Decoding)?;
+    }
     let (audio, decode_resample_seconds, duration) = if cache_hit {
         #[cfg(feature = "diarization")]
         {
@@ -552,12 +959,24 @@ fn transcribe_file(
     } else {
         eprintln!("Decoding {}...", file.display());
         let decode_started = Instant::now();
+        #[cfg(feature = "diarization")]
+        let audio = if args.meeting_json {
+                let checkpoint = || meeting_check(control);
+                decode_audio_file_with_control(file, &checkpoint)?
+        } else {
+            decode_audio_file(file)?
+        };
+        #[cfg(not(feature = "diarization"))]
         let audio = decode_audio_file(file)?;
         let decode_resample_seconds = decode_started.elapsed().as_secs_f64();
         let duration = audio.len() as f64 / 16_000.0;
         eprintln!("Audio: {:.1}s, {} samples", duration, audio.len());
         (Some(audio), decode_resample_seconds, duration)
     };
+    #[cfg(feature = "diarization")]
+    if args.meeting_json {
+        meeting_checkpoint(control, MeetingPhase::Decoding)?;
+    }
     #[cfg(feature = "diarization")]
     let coverage_profile = if cache_hit {
         cached
@@ -569,6 +988,10 @@ fn transcribe_file(
         CoverageProfile::from_audio(audio.as_deref().expect("cache misses decode audio"))
     };
 
+    #[cfg(feature = "diarization")]
+    if args.meeting_json {
+        meeting_checkpoint(control, MeetingPhase::LoadingModel)?;
+    }
     let (model_load_seconds, detected_language, language_regions, language_detection_seconds) =
         if cache_hit {
             #[cfg(feature = "diarization")]
@@ -613,6 +1036,10 @@ fn transcribe_file(
                 language_detection_started.elapsed().as_secs_f64(),
             )
         };
+    #[cfg(feature = "diarization")]
+    if args.meeting_json {
+        meeting_checkpoint(control, MeetingPhase::LoadingModel)?;
+    }
     #[cfg(not(feature = "diarization"))]
     let _ = (
         model_load_seconds,
@@ -676,6 +1103,7 @@ fn transcribe_file(
                 eprintln!("Running speaker diarization and Whisper timestamps concurrently...");
                 let parallel_started = Instant::now();
                 let audio = audio.as_deref().expect("cache misses decode audio");
+                meeting_checkpoint(control, MeetingPhase::Analyzing)?;
                 let (analysis, diarization_timings, transcription) = run_diarization_analysis(
                     audio,
                     backend,
@@ -683,6 +1111,7 @@ fn transcribe_file(
                     decoder_prompt.as_deref(),
                     &config,
                 )?;
+                meeting_checkpoint(control, MeetingPhase::Analyzing)?;
                 performance.parallel_analysis_span_seconds =
                     parallel_started.elapsed().as_secs_f64();
 
@@ -723,7 +1152,9 @@ fn transcribe_file(
             transcription_timings.word_timestamp_attribution_seconds;
 
         let clustering_started = Instant::now();
+        meeting_checkpoint(control, MeetingPhase::Clustering)?;
         let speaker_segments = cluster(&analysis, &config)?;
+        meeting_checkpoint(control, MeetingPhase::Clustering)?;
         performance.diarization_clustering_seconds = clustering_started.elapsed().as_secs_f64();
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
         if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
@@ -816,7 +1247,34 @@ fn transcribe_file(
             duration / performance.total_seconds.max(f64::EPSILON),
             performance.cache_hit
         );
-        return Ok(FileTranscription { json, plain });
+        if args.meeting_json {
+            meeting_checkpoint(control, MeetingPhase::Finalizing)?;
+            let source_sha256 = meeting_source_sha256.expect("meeting JSON records source hash");
+            verify_meeting_source_unchanged(file, &source_sha256, control)?;
+            let meeting = meeting_transcript_from_plain_segments(
+                source_sha256,
+                language,
+                model,
+                duration,
+                &plain_segments,
+            )?;
+            let json = serde_json::to_value(&meeting).map_err(|_| {
+                DictationError::TranscriptionFailed(
+                    "Diarized meeting transcript serialization failed".to_string(),
+                )
+            })?;
+            meeting_checkpoint(control, MeetingPhase::Finalizing)?;
+            return Ok(FileTranscription {
+                json,
+                plain,
+                meeting: Some(meeting),
+            });
+        }
+        return Ok(FileTranscription {
+            json,
+            plain,
+            meeting: None,
+        });
     }
 
     // Standard (non-diarized) transcription. Build options from the saved
@@ -940,7 +1398,12 @@ fn transcribe_file(
         "vocabulary_corrections": corrections,
     });
 
-    Ok(FileTranscription { json, plain: text })
+    Ok(FileTranscription {
+        json,
+        plain: text,
+        #[cfg(feature = "diarization")]
+        meeting: None,
+    })
 }
 
 /// Overlap the CPU/ONNX diarization analysis with Metal Whisper inference on
@@ -1713,6 +2176,8 @@ mod tests {
                     Ok(FileTranscription {
                         json: serde_json::json!({"text": file.display().to_string()}),
                         plain: file.display().to_string(),
+                        #[cfg(feature = "diarization")]
+                        meeting: None,
                     })
                 }
             },
@@ -1899,6 +2364,166 @@ mod tests {
             assemble_diarized_plain_text(&plain_segments),
             "[SPEAKER_0] First Greeting [MUSIC] Second."
         );
+        assert_eq!(plain_segments.len(), 1);
+        assert!(plain_segments
+            .iter()
+            .all(|segment| !contains_no_speech_marker(&segment.text)));
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_document_uses_plain_segments_and_canonical_metadata() {
+        let segments = vec![
+            DiarizedSegment {
+                start: 1.0,
+                end: 2.0,
+                speaker: "SPEAKER_1".to_string(),
+                text: "second".to_string(),
+            },
+            DiarizedSegment {
+                start: 0.0,
+                end: 1.0,
+                speaker: "SPEAKER_0".to_string(),
+                text: "first".to_string(),
+            },
+            DiarizedSegment {
+                start: 2.0,
+                end: 3.0,
+                speaker: "SPEAKER_1".to_string(),
+                text: "third".to_string(),
+            },
+        ];
+        let document = meeting_transcript_from_plain_segments(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            Language::Swedish,
+            WhisperModel::KbWhisperBase,
+            3.0,
+            &segments,
+        )
+        .expect("plain diarized segments are valid");
+
+        assert_eq!(document.language, "sv");
+        assert_eq!(document.model, "kb-whisper-base");
+        assert_eq!(document.segments[0].id, "seg-000001");
+        assert_eq!(document.segments[0].text, "first");
+        assert_eq!(document.segments[1].text, "second");
+        assert_eq!(document.speakers[0].id, "SPEAKER_1");
+        assert_eq!(document.speakers[0].label, "SPEAKER_1");
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_source_hash_is_bounded_and_detects_mutation() {
+        let path = std::env::temp_dir().join(format!(
+            "sagascript-meeting-hash-{}.wav",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, b"first bytes").expect("fixture write");
+        let before = stable_file_sha256(&path, None).expect("hash fixture");
+        assert_eq!(before.len(), 64);
+        assert!(before.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        std::fs::write(&path, b"other bytes").expect("mutate fixture");
+        assert!(verify_meeting_source_unchanged(&path, &before, None).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_control_precancel_checks_before_file_or_model_access() {
+        use std::sync::atomic::AtomicBool;
+
+        let cancellation = AtomicBool::new(true);
+        let progress = |_| panic!("cancelled job must not emit progress");
+        let control = MeetingControl {
+            cancellation: &cancellation,
+            progress: &progress,
+        };
+        let backend = WhisperBackend::new();
+        let error = transcribe_meeting_file_with_control(
+            Path::new("/definitely/missing/meeting.wav"),
+            &Settings::default(),
+            Language::English,
+            WhisperModel::Base,
+            &Glossary::parse(""),
+            &backend,
+            &control,
+        )
+        .expect_err("pre-cancelled job must fail");
+        assert_eq!(
+            error.to_string(),
+            "Transcription failed: Meeting transcription cancelled"
+        );
+        assert!(cancellation.load(Ordering::Acquire));
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_control_emits_ordered_phases_and_never_clears_cancellation() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        let cancellation = AtomicBool::new(false);
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&phases);
+        let progress = move |phase| observed.lock().expect("phase lock").push(phase);
+        let control = MeetingControl {
+            cancellation: &cancellation,
+            progress: &progress,
+        };
+        let expected = [
+            MeetingPhase::Preparing,
+            MeetingPhase::Decoding,
+            MeetingPhase::LoadingModel,
+            MeetingPhase::Analyzing,
+            MeetingPhase::Clustering,
+            MeetingPhase::Finalizing,
+        ];
+        for phase in expected {
+            meeting_checkpoint(Some(&control), phase).expect("checkpoint is live");
+        }
+        assert_eq!(*phases.lock().expect("phase lock"), expected);
+        assert_eq!(
+            serde_json::to_string(&MeetingPhase::LoadingModel).expect("phase serializes"),
+            "\"loading_model\""
+        );
+
+        cancellation.store(true, Ordering::Release);
+        assert!(meeting_checkpoint(Some(&control), MeetingPhase::Finalizing).is_err());
+        assert!(cancellation.load(Ordering::Acquire));
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_json_scope_requires_one_explicit_regular_file() {
+        let root =
+            std::env::temp_dir().join(format!("sagascript-meeting-scope-{}", uuid::Uuid::new_v4()));
+        let file = root.join("input.wav");
+        let second = root.join("second.wav");
+        std::fs::create_dir_all(&root).expect("fixture directory");
+        std::fs::write(&file, b"audio fixture").expect("fixture file");
+        std::fs::write(&second, b"second fixture").expect("second fixture");
+
+        assert!(validate_meeting_input_scope(
+            std::slice::from_ref(&file),
+            false,
+            std::slice::from_ref(&file)
+        )
+        .is_ok());
+        assert!(validate_meeting_input_scope(
+            &[file.clone(), second.clone()],
+            false,
+            &[file.clone(), second]
+        )
+        .is_err());
+        assert!(validate_meeting_input_scope(std::slice::from_ref(&root), false, &[]).is_err());
+        assert!(validate_meeting_input_scope(
+            std::slice::from_ref(&file),
+            true,
+            std::slice::from_ref(&file)
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2395,5 +3020,27 @@ mod diarize_threshold_tests {
     fn accepts_boundary_values() {
         assert_eq!(parse_threshold("0.0").unwrap(), 0.0);
         assert_eq!(parse_threshold("2.0").unwrap(), 2.0);
+    }
+
+    #[test]
+    fn meeting_json_requires_diarize_and_conflicts_with_legacy_outputs() {
+        assert!(TestCli::try_parse_from(["sagascript", "file.wav", "--meeting-json"]).is_err());
+        let cli =
+            TestCli::try_parse_from(["sagascript", "file.wav", "--diarize", "--meeting-json"])
+                .expect("meeting JSON should parse with diarization");
+        assert!(cli.args.meeting_json);
+        for conflict in ["--json", "--jsonl", "--clipboard", "--correct-hints"] {
+            assert!(
+                TestCli::try_parse_from([
+                    "sagascript",
+                    "file.wav",
+                    "--diarize",
+                    "--meeting-json",
+                    conflict,
+                ])
+                .is_err(),
+                "meeting JSON should conflict with {conflict}"
+            );
+        }
     }
 }

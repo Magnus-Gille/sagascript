@@ -78,6 +78,7 @@ pub struct AppController {
     training_recording: bool,
     session_data: Option<serde_json::Value>,
     release_started: Option<Instant>,
+    meeting_job: Option<String>,
 }
 
 impl AppController {
@@ -107,11 +108,32 @@ impl AppController {
             training_recording: false,
             session_data: None,
             release_started: None,
+            meeting_job: None,
         }
     }
 
     pub fn state(&self) -> AppState {
         self.state
+    }
+
+    /// Reserve the live-capture boundary while a separate file backend works.
+    /// Only the matching worker may release it, after native work has unwound.
+    pub fn begin_meeting_job(&mut self, id: &str) -> bool {
+        if self.state != AppState::Idle || self.meeting_job.is_some() {
+            return false;
+        }
+        self.meeting_job = Some(id.to_owned());
+        self.state = AppState::Transcribing;
+        true
+    }
+
+    pub fn finish_meeting_job(&mut self, id: &str) -> bool {
+        if self.meeting_job.as_deref() != Some(id) {
+            return false;
+        }
+        self.meeting_job = None;
+        self.state = AppState::Idle;
+        true
     }
 
     pub fn settings(&self) -> &Settings {
@@ -1023,6 +1045,36 @@ mod tests {
     }
 
     // -- stop_recording_guarded --
+
+    #[test]
+    fn meeting_lease_blocks_capture_and_stale_release_without_opening_microphone() {
+        let mut ctrl = default_controller();
+        assert!(ctrl.begin_meeting_job("job-a"));
+        assert!(!ctrl.begin_meeting_job("job-b"));
+        let profile = ctrl.settings().resolved_hotkey_profiles().remove(0);
+        assert!(!ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            panic!("meeting lease must prevent microphone access")
+        }).unwrap());
+        ctrl.cancel_recording();
+        assert_eq!(ctrl.state(), AppState::Transcribing);
+        assert!(!ctrl.finish_meeting_job("job-b"));
+        assert_eq!(ctrl.state(), AppState::Transcribing);
+        assert!(ctrl.finish_meeting_job("job-a"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert!(!ctrl.finish_meeting_job("job-a"));
+        assert!(ctrl.begin_meeting_job("job-b"));
+    }
+
+    #[test]
+    fn meeting_lease_never_takes_over_live_work() {
+        let mut ctrl = default_controller();
+        for state in [AppState::Recording, AppState::Transcribing, AppState::Error] {
+            ctrl.state = state;
+            assert!(!ctrl.begin_meeting_job("job-a"));
+            assert!(!ctrl.finish_meeting_job("job-a"));
+            assert_eq!(ctrl.state(), state);
+        }
+    }
 
     // Finding 3: a stop that races an in-flight transcription (state !=
     // Recording) must be a no-op — it must not transition state nor set
