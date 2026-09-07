@@ -5,6 +5,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - ".gitattributes"
       - ".github/workflows/windows-package.yml"
       - "package.json"
       - "package-lock.json"

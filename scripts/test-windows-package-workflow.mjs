@@ -52,6 +52,7 @@ const acceptanceScript = await readFile(
 
 test("Windows candidate workflow stays non-publishing and explicitly unsigned", () => {
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /- "\.gitattributes"/, "checkout normalization changes must trigger candidate builds");
   assert.match(workflow, /permissions:\s*\n\s*contents: read/);
   assert.match(workflow, /tauri build --ci --bundles nsis,msi --no-sign/);
   assert.match(workflow, /SignaturePolicy Internal/);

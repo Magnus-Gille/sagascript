@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 
 const helper = fileURLToPath(new URL("./ci-build-identity.mjs", import.meta.url));
+const fixtureManifest = fileURLToPath(new URL("../src-tauri/Cargo.toml", import.meta.url));
+const fixtureAttributes = fileURLToPath(new URL("../.gitattributes", import.meta.url));
 const repos = [];
 const envDirs = [];
 const allowedOutput = "src-tauri/gen/schemas/desktop-schema.json";
@@ -27,7 +29,7 @@ function git(cwd, args) {
   }).trim();
 }
 
-async function fixture() {
+async function fixture({ withAttributes = true } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), "sagascript-ci-identity-"));
   repos.push(cwd);
   git(cwd, ["init", "-q"]);
@@ -36,6 +38,10 @@ async function fixture() {
   git(cwd, ["config", "commit.gpgsign", "false"]);
   await mkdir(join(cwd, "src-tauri/capabilities"), { recursive: true });
   await mkdir(join(cwd, "src-tauri/gen/schemas"), { recursive: true });
+  await writeFile(join(cwd, "src-tauri/Cargo.toml"), await readFile(fixtureManifest));
+  if (withAttributes) {
+    await writeFile(join(cwd, ".gitattributes"), await readFile(fixtureAttributes));
+  }
   await writeFile(join(cwd, "src-tauri/capabilities/default.json"), "{\"permission\":true}\n");
   for (const relativePath of [
     "src-tauri/gen/schemas/acl-manifests.json",
@@ -48,6 +54,33 @@ async function fixture() {
   git(cwd, ["commit", "-qm", "fixture baseline"]);
   const sha = git(cwd, ["rev-parse", "HEAD"]);
   return { cwd, sha };
+}
+
+function configureCrlfCheckout(repo) {
+  git(repo.cwd, ["config", "core.autocrlf", "true"]);
+  git(repo.cwd, ["config", "core.eol", "crlf"]);
+}
+
+async function forceManifestCheckout(repo) {
+  const manifestPath = join(repo.cwd, "src-tauri/Cargo.toml");
+  await rm(manifestPath, { force: true });
+  git(repo.cwd, ["checkout", "--", "src-tauri/Cargo.toml"]);
+  return manifestPath;
+}
+
+function normalizeCrlf(bytes) {
+  const normalized = [];
+  for (let index = 0; index < bytes.length; index += 1) {
+    if (bytes[index] === 0x0d && bytes[index + 1] === 0x0a) {
+      continue;
+    }
+    normalized.push(bytes[index]);
+  }
+  return Buffer.from(normalized);
+}
+
+function countByte(bytes, expected) {
+  return bytes.reduce((count, byte) => count + (byte === expected ? 1 : 0), 0);
 }
 
 async function envPath() {
@@ -242,4 +275,43 @@ test("status diagnostics preserve a Unicode untracked path", async () => {
   });
   assertRejected(result);
   assert.match(result.stderr, /path="naïve\.txt" xy="\?\?"/);
+});
+
+test("legacy CRLF checkout exposes the pre-attribute line-ending hazard", async () => {
+  const repo = await fixture({ withAttributes: false });
+  configureCrlfCheckout(repo);
+  const manifestPath = await forceManifestCheckout(repo);
+  const checkedOut = await readFile(manifestPath);
+  const tauriRewrite = normalizeCrlf(checkedOut);
+  const sourceLf = await readFile(fixtureManifest);
+
+  assert.ok(countByte(checkedOut, 0x0d) > 0, "legacy checkout should contain CRLF bytes");
+  assert.notDeepEqual(checkedOut, tauriRewrite, "LF serialization must differ from the legacy checkout bytes");
+  assert.deepEqual(tauriRewrite, sourceLf, "LF serialization should restore the committed manifest bytes");
+});
+
+test("repo attributes force LF checkout and preserve strict verification", async () => {
+  const attributes = await readFile(fixtureAttributes, "utf8");
+  assert.match(attributes, /^src-tauri\/Cargo\.toml text eol=lf$/m);
+
+  const repo = await fixture();
+  configureCrlfCheckout(repo);
+  const manifestPath = await forceManifestCheckout(repo);
+  const checkedOut = await readFile(manifestPath);
+
+  assert.equal(countByte(checkedOut, 0x0d), 0, "repo attribute must force LF checkout");
+  assert.ok(countByte(checkedOut, 0x0a) > 0, "manifest should retain line endings");
+
+  const date = await initialized(repo);
+  await writeFile(manifestPath, normalizeCrlf(checkedOut));
+  assert.deepEqual(await readFile(manifestPath), checkedOut, "Tauri-style LF rewrite must be byte-identical");
+
+  const result = invoke(repo.cwd, ["--verify"], verifyEnv(repo, date));
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(git(repo.cwd, ["status", "--short"]), "");
+
+  await writeFile(manifestPath, Buffer.concat([checkedOut, Buffer.from("\n# source change\n")]));
+  const changed = invoke(repo.cwd, ["--verify"], verifyEnv(repo, date));
+  assertRejected(changed);
+  assert.match(changed.stderr, /Cargo\.toml/);
 });
