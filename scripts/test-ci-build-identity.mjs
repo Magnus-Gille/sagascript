@@ -11,14 +11,17 @@ const fixtureManifest = fileURLToPath(new URL("../src-tauri/Cargo.toml", import.
 const fixtureAttributes = fileURLToPath(new URL("../.gitattributes", import.meta.url));
 const repos = [];
 const envDirs = [];
+const fixtureEnvironments = new Map();
 const allowedOutput = "src-tauri/gen/schemas/desktop-schema.json";
 
-function git(cwd, args) {
+function git(cwd, args, extraEnv = {}) {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
     env: {
       ...process.env,
+      ...(fixtureEnvironments.get(cwd) ?? {}),
+      ...extraEnv,
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_AUTHOR_NAME: "CI Fixture",
       GIT_AUTHOR_EMAIL: "ci@example.invalid",
@@ -29,16 +32,32 @@ function git(cwd, args) {
   }).trim();
 }
 
+async function isolatedGitEnvironment() {
+  const directory = await mkdtemp(join(tmpdir(), "sagascript-ci-git-"));
+  envDirs.push(directory);
+  const globalConfig = join(directory, "global.gitconfig");
+  await writeFile(globalConfig, "");
+  return { GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: "1" };
+}
+
 async function fixture({ withAttributes = true } = {}) {
   const cwd = await mkdtemp(join(tmpdir(), "sagascript-ci-identity-"));
   repos.push(cwd);
+  fixtureEnvironments.set(cwd, await isolatedGitEnvironment());
   git(cwd, ["init", "-q"]);
   git(cwd, ["config", "user.email", "ci@example.invalid"]);
   git(cwd, ["config", "user.name", "CI Fixture"]);
   git(cwd, ["config", "commit.gpgsign", "false"]);
+  await mkdir(join(cwd, ".git/info"), { recursive: true });
+  const attributesFile = join(cwd, ".git/info/attributes");
+  const excludesFile = join(cwd, ".git/info/exclude");
+  await writeFile(attributesFile, "");
+  await writeFile(excludesFile, "");
+  git(cwd, ["config", "core.attributesfile", attributesFile.replaceAll("\\", "/")]);
+  git(cwd, ["config", "core.excludesfile", excludesFile.replaceAll("\\", "/")]);
   await mkdir(join(cwd, "src-tauri/capabilities"), { recursive: true });
   await mkdir(join(cwd, "src-tauri/gen/schemas"), { recursive: true });
-  await writeFile(join(cwd, "src-tauri/Cargo.toml"), await readFile(fixtureManifest));
+  await writeFile(join(cwd, "src-tauri/Cargo.toml"), normalizeCrlf(await readFile(fixtureManifest)));
   if (withAttributes) {
     await writeFile(join(cwd, ".gitattributes"), await readFile(fixtureAttributes));
   }
@@ -93,9 +112,28 @@ function invoke(cwd, args, extraEnv = {}) {
   return spawnSync(process.execPath, [helper, ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ...extraEnv },
+    env: { ...process.env, ...(fixtureEnvironments.get(cwd) ?? {}), ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
+}
+
+async function withEnvironment(overrides, action) {
+  const previous = new Map();
+  for (const [name, value] of Object.entries(overrides)) {
+    previous.set(name, process.env[name]);
+    process.env[name] = value;
+  }
+  try {
+    return await action();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
 }
 
 function assertRejected(result) {
@@ -125,7 +163,11 @@ function verifyEnv(repo, date, overrides = {}) {
 }
 
 afterEach(async () => {
-  await Promise.all(repos.splice(0).map((repo) => rm(repo, { recursive: true, force: true })));
+  const finishedRepos = repos.splice(0);
+  for (const repo of finishedRepos) {
+    fixtureEnvironments.delete(repo);
+  }
+  await Promise.all(finishedRepos.map((repo) => rm(repo, { recursive: true, force: true })));
   await Promise.all(envDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -283,7 +325,7 @@ test("legacy CRLF checkout exposes the pre-attribute line-ending hazard", async 
   const manifestPath = await forceManifestCheckout(repo);
   const checkedOut = await readFile(manifestPath);
   const tauriRewrite = normalizeCrlf(checkedOut);
-  const sourceLf = await readFile(fixtureManifest);
+  const sourceLf = normalizeCrlf(await readFile(fixtureManifest));
 
   assert.ok(countByte(checkedOut, 0x0d) > 0, "legacy checkout should contain CRLF bytes");
   assert.notDeepEqual(checkedOut, tauriRewrite, "LF serialization must differ from the legacy checkout bytes");
@@ -314,4 +356,37 @@ test("repo attributes force LF checkout and preserve strict verification", async
   const changed = invoke(repo.cwd, ["--verify"], verifyEnv(repo, date));
   assertRejected(changed);
   assert.match(changed.stderr, /Cargo\.toml/);
+});
+
+test("fixture Git operations ignore hostile global configuration", async () => {
+  const hostileDirectory = await mkdtemp(join(tmpdir(), "sagascript-ci-hostile-git-"));
+  envDirs.push(hostileDirectory);
+  const hostileIgnore = join(hostileDirectory, "global-ignore");
+  const hostileAttributes = join(hostileDirectory, "global-attributes");
+  const hostileGlobal = join(hostileDirectory, "global.gitconfig");
+  await writeFile(hostileIgnore, "unexpected.txt\n");
+  await writeFile(hostileAttributes, "src-tauri/Cargo.toml text eol=crlf\n");
+  await writeFile(
+    hostileGlobal,
+    "[core]\n" +
+      "\texcludesfile = \"" + hostileIgnore.replaceAll("\\", "/") + "\"\n" +
+      "\tattributesfile = \"" + hostileAttributes.replaceAll("\\", "/") + "\"\n" +
+      "\tautocrlf = true\n" +
+      "\teol = crlf\n",
+  );
+
+  await withEnvironment({ GIT_CONFIG_GLOBAL: hostileGlobal, GIT_CONFIG_NOSYSTEM: "1" }, async () => {
+    const lineEndingRepo = await fixture({ withAttributes: false });
+    const manifestPath = await forceManifestCheckout(lineEndingRepo);
+    assert.equal(countByte(await readFile(manifestPath), 0x0d), 0, "hostile global autocrlf must not leak into fixtures");
+
+    const helperRepo = await fixture();
+    await writeFile(join(helperRepo.cwd, "unexpected.txt"), "untracked\n");
+    const result = invoke(helperRepo.cwd, ["--initialize"], {
+      GITHUB_SHA: helperRepo.sha,
+      GITHUB_ENV: await envPath(),
+    });
+    assertRejected(result);
+    assert.match(result.stderr, /unexpected\.txt/);
+  });
 });
