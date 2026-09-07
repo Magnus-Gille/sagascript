@@ -27,6 +27,45 @@ choose a language, and dictate.
   mark, and future platform assets from one vector master; do not maintain a
   separate parchment/document icon family.
 
+## Current implementation checkpoint — 2026-09-07
+
+The latest published stable release remains [Sagascript v1.1.3](https://github.com/Magnus-Gille/sagascript/releases/tag/v1.1.3)
+at exact revision
+`2204cb99dc9eb24b3744182232d90dde8b9e837d`. No newer stable version has been
+selected.
+
+A signed Apple Silicon TEST build is available from exact revision
+`e4db9c6137b73c710826a21f5792ab5d31c4a798` in [Actions run
+34160445004](https://github.com/Magnus-Gille/sagascript/actions/runs/34160445004).
+The run completed with signed, hardened, notarized, and stapled Sagascript
+`1.1.3` artifacts for Team ID `7C6WF6GFZ4`; the current owner verification
+also records Gatekeeper acceptance and installation. This is TEST-build
+evidence only, not a new stable release or publication approval.
+
+The cumulative TEST implementation includes:
+
+- Explicit dictionary Save/Discard editing.
+- Separate per-profile push-to-talk and toggle shortcut slots.
+- Presenter retired while the dictation shortcuts remain.
+- Finnish Base by default with optional Finnish-NLP Tiny.
+- The meeting MVP implementation.
+
+Acceptance is still pending for repeated push-to-talk/toggle use and
+disappearance of the Recording indicator, Finnish native-speaker and installed
+Mac/Windows use, real meeting and multilingual tests, long-meeting profiling,
+native Windows verification, and [clean-machine release checks](../RELEASING.md#clean-machine-acceptance-checklist).
+See [roadmap #198](https://github.com/Magnus-Gille/sagascript/issues/198).
+
+R6 remains unimplemented and blocked pending approval: [#193](https://github.com/Magnus-Gille/sagascript/issues/193)
+and [#194](https://github.com/Magnus-Gille/sagascript/issues/194). No R6
+delivery is implied by this checkpoint. The Bluetooth warning implementation is
+tracked in [PR #219](https://github.com/Magnus-Gille/sagascript/pull/219);
+production deployment is not established by this checkpoint.
+
+Any new stable candidate needs its own exact-revision signed/notarized artifact
+checks, manual acceptance, and just-in-time publication approval. Existing TEST
+verification does not authorize stable publication.
+
 ## Work plan
 
 ### 1. Simplify the app surface
@@ -166,7 +205,10 @@ The independently verified draft artifacts were:
 This evidence applies only to that exact historical revision. It does not
 prove or authorize publication of a later candidate.
 
-## Current implementation checkpoint — 2026-09-02
+## Historical implementation checkpoint — 2026-09-02 (superseded)
+
+All statements and open gates below are the record as of September 2; current
+checkpoint above supersedes them.
 
 The accepted daily-use build is Sagascript `1.1.2` from exact source revision
 `6008bd191a9c33281fc420ca9492a0edd3fb8f48`. The installed Apple Silicon app
