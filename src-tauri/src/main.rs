@@ -57,6 +57,7 @@ use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
 use sagascript_core::settings::HotkeyProfile;
 use sagascript_core::settings::HotkeyMode;
+use sagascript_core::settings::canonical_hotkey;
 #[cfg(test)]
 use sagascript_core::settings::{validate_hotkey, Language};
 use sagascript_core::transcription::{
@@ -458,15 +459,24 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
             }
             let (result, active_profile) = {
                 let mut c = ctrl.lock().unwrap();
-                let profile = c
+                let binding = c
                     .settings()
-                    .hotkey_profile_for_shortcut(shortcut)
-                    .or_else(|| {
-                        safe_fallback
-                            .then(|| c.settings().resolved_hotkey_profiles()[0].clone())
+                    .resolved_hotkey_bindings()
+                    .into_iter()
+                    .find(|(_, configured, _)| {
+                        canonical_hotkey(configured).ok() == canonical_hotkey(shortcut).ok()
                     });
-                let result = match profile {
-                    Some(profile) => match c.handle_hotkey_down_for_profile(profile) {
+                let result = match binding {
+                    Some((profile, configured_shortcut, mode)) => {
+                        // A failed operational configuration always uses the
+                        // dedicated fallback as PTT, even if the persisted
+                        // shortcut happens to be an explicit toggle binding.
+                        let (mode, shortcut) = if safe_fallback {
+                            (HotkeyMode::PushToTalk, SAFE_FALLBACK_HOTKEY)
+                        } else {
+                            (mode, configured_shortcut.as_str())
+                        };
+                        match c.handle_hotkey_down_for_binding(profile, mode, shortcut) {
                         Ok(result) => {
                             if safe_fallback && result == HotkeyDownResult::StartedRecording {
                                 c.use_safe_fallback_lifecycle();
@@ -478,7 +488,28 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                             let _ = app.emit(events::event::ERROR, error.to_string());
                             HotkeyDownResult::NoOp
                         }
-                    },
+                        }
+                    }
+                    None if safe_fallback => {
+                        let profile = c.settings().resolved_hotkey_profiles()[0].clone();
+                        match c.handle_hotkey_down_for_binding(
+                            profile,
+                            HotkeyMode::PushToTalk,
+                            SAFE_FALLBACK_HOTKEY,
+                        ) {
+                            Ok(result) => {
+                                if result == HotkeyDownResult::StartedRecording {
+                                    c.use_safe_fallback_lifecycle();
+                                }
+                                result
+                            }
+                            Err(error) => {
+                                error!("Hotkey down error: {error}");
+                                let _ = app.emit(events::event::ERROR, error.to_string());
+                                HotkeyDownResult::NoOp
+                            }
+                        }
+                    }
                     None => {
                         warn!("Ignoring unconfigured shortcut event: {shortcut}");
                         HotkeyDownResult::NoOp
@@ -1526,8 +1557,10 @@ fn handle_hotkey_release(
     shortcut: &str,
 ) {
     let should_stop = {
-        let c = ctrl.lock().unwrap();
-        c.should_stop_profile_on_key_up(shortcut)
+        let mut c = ctrl.lock().unwrap();
+        let should_stop = c.should_stop_profile_on_key_up(shortcut);
+        c.note_hotkey_release(shortcut);
+        should_stop
     };
 
     if !should_stop {
@@ -2784,6 +2817,8 @@ mod tests {
             name: "Svenska".to_string(),
             shortcut: "Super+Shift+S".to_string(),
             language: Language::Swedish,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
         };
 
         assert_eq!(
@@ -2803,6 +2838,8 @@ mod tests {
             name: "English".to_string(),
             shortcut: "Control+Alt+Space".to_string(),
             language: Language::English,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
         };
 
         assert_eq!(

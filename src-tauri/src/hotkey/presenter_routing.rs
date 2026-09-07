@@ -66,6 +66,8 @@ mod tests {
             name: id.to_string(),
             shortcut: shortcut.to_string(),
             language,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
         }
     }
 

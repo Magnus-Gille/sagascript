@@ -76,6 +76,12 @@ pub struct AppController {
     model_ready: bool,
     active_hotkey_profile: Option<HotkeyProfile>,
     active_hotkey_mode: Option<HotkeyMode>,
+    /// Canonical shortcut that initiated the active recording.  The profile's
+    /// legacy shortcut is not sufficient once one profile may expose both a
+    /// PTT and a toggle binding.
+    active_hotkey_shortcut: Option<String>,
+    toggle_stop_requested: bool,
+    toggle_key_down: bool,
     presenter_owned: bool,
     recording_generation: u64,
     hotkey_configuration_changing: bool,
@@ -110,6 +116,9 @@ impl AppController {
             model_ready: false,
             active_hotkey_profile: None,
             active_hotkey_mode: None,
+            active_hotkey_shortcut: None,
+            toggle_stop_requested: false,
+            toggle_key_down: false,
             presenter_owned: false,
             recording_generation: 0,
             hotkey_configuration_changing: false,
@@ -196,32 +205,66 @@ impl AppController {
         &mut self,
         profile: HotkeyProfile,
     ) -> Result<HotkeyDownResult, DictationError> {
+        let mode = self.session_hotkey_mode();
+        let shortcut = profile.shortcut.clone();
+        self.handle_hotkey_down_for_binding(profile, mode, &shortcut)
+    }
+
+    /// Handle a press for a resolved per-shortcut binding.
+    ///
+    /// The mode is deliberately supplied by the binding instead of read from
+    /// current settings.  This lets one profile expose both PTT and toggle
+    /// shortcuts, and freezes the initiating mode/shortcut for the recording's
+    /// lifetime.  A toggle stop is accepted only for the same profile and the
+    /// same initiating toggle shortcut; a PTT binding can never stop it.
+    pub fn handle_hotkey_down_for_binding(
+        &mut self,
+        profile: HotkeyProfile,
+        mode: HotkeyMode,
+        shortcut: &str,
+    ) -> Result<HotkeyDownResult, DictationError> {
         info!("Hotkey DOWN");
 
-        match self.session_hotkey_mode() {
+        match mode {
             HotkeyMode::PushToTalk => {
                 // Only report StartedRecording if we actually started. Holding
                 // PTT while a prior utterance is still Transcribing must be a
                 // no-op — otherwise the overlay/tray shows a recording that
                 // never happened and never hides (finding 1).
-                if self.start_recording_for_profile(profile)? {
+                if self.start_recording_for_binding(profile, mode, shortcut)? {
                     Ok(HotkeyDownResult::StartedRecording)
                 } else {
                     Ok(HotkeyDownResult::NoOp)
                 }
             }
             HotkeyMode::Toggle => {
+                // Keep the no-argument test/compatibility helper's legacy
+                // behavior when it models a recording without the frozen
+                // binding metadata that real starts always populate.
+                let legacy_toggle_recording = self.active_hotkey_mode.is_none()
+                    && self.active_hotkey_profile.is_none()
+                    && self.active_hotkey_shortcut.is_none();
                 if self.state.is_recording()
                     && !self.training_recording
+                    && (self.active_hotkey_mode == Some(HotkeyMode::Toggle)
+                        || legacy_toggle_recording)
+                    && !self.toggle_stop_requested
+                    && !self.toggle_key_down
                     && self
                         .active_hotkey_profile
                         .as_ref()
                         .map(|active| active.id == profile.id)
                         .unwrap_or(true)
+                    && (legacy_toggle_recording || self.active_shortcut_matches(shortcut))
                 {
+                    // Global shortcut backends can deliver duplicate Pressed
+                    // notifications while a key is held.  Latch the first
+                    // accepted stop until the terminal transition clears it.
+                    self.toggle_stop_requested = true;
                     Ok(HotkeyDownResult::StopRecording)
                 } else if self.state == AppState::Idle {
-                    if self.start_recording_for_profile(profile)? {
+                    if self.start_recording_for_binding(profile, mode, shortcut)? {
+                        self.toggle_key_down = true;
                         Ok(HotkeyDownResult::StartedRecording)
                     } else {
                         Ok(HotkeyDownResult::NoOp)
@@ -233,7 +276,7 @@ impl AppController {
             HotkeyMode::Presenter => {
                 // Atomic Start is never a toggle. Finish has its own action;
                 // repeated Start, training and in-flight transcription are no-ops.
-                if self.start_recording_for_profile(profile)? {
+                if self.start_recording_for_binding(profile, mode, shortcut)? {
                     Ok(HotkeyDownResult::StartedRecording)
                 } else {
                     Ok(HotkeyDownResult::NoOp)
@@ -271,6 +314,7 @@ impl AppController {
     pub fn use_safe_fallback_lifecycle(&mut self) {
         if self.state.is_recording() && !self.training_recording {
             self.active_hotkey_mode = Some(HotkeyMode::PushToTalk);
+            self.active_hotkey_shortcut = canonical_hotkey(crate::SAFE_FALLBACK_HOTKEY).ok();
             if let Some(profile) = &mut self.active_hotkey_profile {
                 profile.shortcut = crate::SAFE_FALLBACK_HOTKEY.to_string();
             }
@@ -313,13 +357,28 @@ impl AppController {
 
     pub fn should_stop_profile_on_key_up(&self, shortcut: &str) -> bool {
         self.should_stop_on_key_up()
-            && self
-                .active_hotkey_profile
-                .as_ref()
-                .and_then(|active| {
-                    Some(canonical_hotkey(&active.shortcut).ok()? == canonical_hotkey(shortcut).ok()?)
-                })
-                .unwrap_or(false)
+            && self.active_shortcut_matches(shortcut)
+    }
+
+    /// Record the physical release edge for toggle bindings.  Toggle presses
+    /// are edge-triggered: a repeated Pressed notification while the key is
+    /// still held must not be mistaken for the second user press.
+    pub fn note_hotkey_release(&mut self, shortcut: &str) {
+        if self.active_hotkey_mode == Some(HotkeyMode::Toggle)
+            && self.active_shortcut_matches(shortcut)
+        {
+            self.toggle_key_down = false;
+        }
+    }
+
+    fn active_shortcut_matches(&self, shortcut: &str) -> bool {
+        let active = self
+            .active_hotkey_shortcut
+            .as_deref()
+            .or_else(|| self.active_hotkey_profile.as_ref().map(|profile| profile.shortcut.as_str()));
+        active
+            .and_then(|active| Some(canonical_hotkey(active).ok()? == canonical_hotkey(shortcut).ok()?))
+            .unwrap_or(false)
     }
 
     /// Start audio recording.
@@ -346,6 +405,17 @@ impl AppController {
         self.start_recording_for_profile_with_capture(profile, |audio| audio.start_capture())
     }
 
+    fn start_recording_for_binding(
+        &mut self,
+        profile: HotkeyProfile,
+        mode: HotkeyMode,
+        shortcut: &str,
+    ) -> Result<bool, DictationError> {
+        self.start_recording_for_binding_with_capture(profile, mode, shortcut, |audio| {
+            audio.start_capture()
+        })
+    }
+
     /// Start recording using the supplied capture operation.
     ///
     /// The injected capture operation keeps the startup transition testable
@@ -355,6 +425,21 @@ impl AppController {
     fn start_recording_for_profile_with_capture<F>(
         &mut self,
         profile: HotkeyProfile,
+        start_capture: F,
+    ) -> Result<bool, DictationError>
+    where
+        F: FnOnce(&mut AudioCaptureService) -> Result<(), DictationError>,
+    {
+        let mode = self.settings.hotkey_mode;
+        let shortcut = profile.shortcut.clone();
+        self.start_recording_for_binding_with_capture(profile, mode, &shortcut, start_capture)
+    }
+
+    fn start_recording_for_binding_with_capture<F>(
+        &mut self,
+        profile: HotkeyProfile,
+        mode: HotkeyMode,
+        shortcut: &str,
         start_capture: F,
     ) -> Result<bool, DictationError>
     where
@@ -401,7 +486,10 @@ impl AppController {
         );
         self.active_hotkey_profile = Some(profile);
         self.recording_generation = next_generation;
-        self.active_hotkey_mode = Some(self.settings.hotkey_mode);
+        self.active_hotkey_mode = Some(mode);
+        self.active_hotkey_shortcut = canonical_hotkey(shortcut).ok();
+        self.toggle_stop_requested = false;
+        self.toggle_key_down = false;
         self.presenter_owned = false;
         self.training_recording = false;
         self.state = AppState::Recording;
@@ -538,6 +626,9 @@ impl AppController {
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
         self.active_hotkey_profile = None;
+        self.active_hotkey_shortcut = None;
+        self.toggle_stop_requested = false;
+        self.toggle_key_down = false;
         self.training_recording = false;
         self.logging.end_dictation_session();
     }
@@ -550,6 +641,9 @@ impl AppController {
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
         self.active_hotkey_profile = None;
+        self.active_hotkey_shortcut = None;
+        self.toggle_stop_requested = false;
+        self.toggle_key_down = false;
         self.training_recording = false;
         self.logging.log(
             "info",
@@ -576,6 +670,9 @@ impl AppController {
         self.last_error = Some(error.to_string());
         self.state = AppState::Idle;
         self.active_hotkey_profile = None;
+        self.active_hotkey_shortcut = None;
+        self.toggle_stop_requested = false;
+        self.toggle_key_down = false;
         self.training_recording = false;
         self.logging.end_dictation_session();
     }
@@ -622,6 +719,9 @@ impl AppController {
         self.state = AppState::Idle;
         self.active_hotkey_profile = None;
         self.active_hotkey_mode = None;
+        self.active_hotkey_shortcut = None;
+        self.toggle_stop_requested = false;
+        self.toggle_key_down = false;
         self.training_recording = false;
         self.logging.end_dictation_session();
     }
@@ -1218,8 +1318,8 @@ mod tests {
     fn active_profile_freezes_language_and_release_identity() {
         let mut ctrl = default_controller();
         let profiles = vec![
-            HotkeyProfile { id: "default".into(), name: "English".into(), shortcut: "Control+Shift+E".into(), language: sagascript_core::settings::Language::English },
-            HotkeyProfile { id: "swedish".into(), name: "Swedish".into(), shortcut: "Option+Space".into(), language: sagascript_core::settings::Language::Swedish },
+            HotkeyProfile { id: "default".into(), name: "English".into(), shortcut: "Control+Shift+E".into(), language: sagascript_core::settings::Language::English, push_to_talk_shortcut: None, toggle_shortcut: None },
+            HotkeyProfile { id: "swedish".into(), name: "Swedish".into(), shortcut: "Option+Space".into(), language: sagascript_core::settings::Language::Swedish, push_to_talk_shortcut: None, toggle_shortcut: None },
         ];
         ctrl.settings_mut().replace_hotkey_profiles(profiles.clone()).unwrap();
         ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
@@ -1236,10 +1336,67 @@ mod tests {
         let mut ctrl = default_controller();
         ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
         ctrl.state = AppState::Recording;
-        ctrl.active_hotkey_profile = Some(HotkeyProfile { id: "english".into(), name: "English".into(), shortcut: "Control+Shift+E".into(), language: sagascript_core::settings::Language::English });
-        let swedish = HotkeyProfile { id: "swedish".into(), name: "Swedish".into(), shortcut: "Option+Space".into(), language: sagascript_core::settings::Language::Swedish };
+        ctrl.active_hotkey_profile = Some(HotkeyProfile { id: "english".into(), name: "English".into(), shortcut: "Control+Shift+E".into(), language: sagascript_core::settings::Language::English, push_to_talk_shortcut: None, toggle_shortcut: None });
+        let swedish = HotkeyProfile { id: "swedish".into(), name: "Swedish".into(), shortcut: "Option+Space".into(), language: sagascript_core::settings::Language::Swedish, push_to_talk_shortcut: None, toggle_shortcut: None };
 
         assert_eq!(ctrl.handle_hotkey_down_for_profile(swedish).unwrap(), HotkeyDownResult::NoOp);
+    }
+
+    #[test]
+    fn explicit_ptt_and_toggle_bindings_do_not_stop_each_other() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_profile = Some(profile.clone());
+        ctrl.active_hotkey_mode = Some(HotkeyMode::PushToTalk);
+        ctrl.active_hotkey_shortcut = canonical_hotkey("Super+S").ok();
+
+        assert_eq!(
+            ctrl.handle_hotkey_down_for_binding(profile, HotkeyMode::Toggle, "Super+Shift+S")
+                .unwrap(),
+            HotkeyDownResult::NoOp
+        );
+    }
+
+    #[test]
+    fn toggle_requires_release_edge_and_latches_stop_request() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_profile = Some(profile.clone());
+        ctrl.active_hotkey_mode = Some(HotkeyMode::Toggle);
+        ctrl.active_hotkey_shortcut = canonical_hotkey("Super+S").ok();
+        ctrl.toggle_key_down = true;
+
+        assert_eq!(
+            ctrl.handle_hotkey_down_for_binding(profile.clone(), HotkeyMode::Toggle, "Super+S")
+                .unwrap(),
+            HotkeyDownResult::NoOp
+        );
+        ctrl.note_hotkey_release("Super+S");
+        assert_eq!(
+            ctrl.handle_hotkey_down_for_binding(profile.clone(), HotkeyMode::Toggle, "Super+S")
+                .unwrap(),
+            HotkeyDownResult::StopRecording
+        );
+        assert_eq!(
+            ctrl.handle_hotkey_down_for_binding(profile, HotkeyMode::Toggle, "Super+S")
+                .unwrap(),
+            HotkeyDownResult::NoOp
+        );
+    }
+
+    #[test]
+    fn ptt_release_uses_frozen_binding_shortcut() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_profile = Some(profile);
+        ctrl.active_hotkey_mode = Some(HotkeyMode::PushToTalk);
+        ctrl.active_hotkey_shortcut = canonical_hotkey("Super+S").ok();
+
+        assert!(ctrl.should_stop_profile_on_key_up("Super+S"));
+        assert!(!ctrl.should_stop_profile_on_key_up("Control+Shift+Space"));
     }
 
     #[test]
@@ -1253,12 +1410,16 @@ mod tests {
                     name: "Swedish".into(),
                     shortcut: "Control+Shift+Space".into(),
                     language: sagascript_core::settings::Language::Swedish,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                 },
                 HotkeyProfile {
                     id: "english".into(),
                     name: "English".into(),
                     shortcut: "Alt+E".into(),
                     language: sagascript_core::settings::Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                 },
             ],
             ..Default::default()

@@ -138,22 +138,40 @@ pub enum ProfileAction {
     /// List all dictation profiles
     List,
     /// Create a dictation profile
+    #[command(alias = "add")]
     Create {
         id: String,
         #[arg(long)]
         name: String,
         #[arg(long)]
-        hotkey: String,
+        hotkey: Option<String>,
+        #[arg(long = "push-to-talk-shortcut", conflicts_with = "clear_push_to_talk_shortcut")]
+        push_to_talk_shortcut: Option<String>,
+        #[arg(long = "toggle-shortcut", conflicts_with = "clear_toggle_shortcut")]
+        toggle_shortcut: Option<String>,
+        #[arg(long = "clear-push-to-talk-shortcut")]
+        clear_push_to_talk_shortcut: bool,
+        #[arg(long = "clear-toggle-shortcut")]
+        clear_toggle_shortcut: bool,
         #[arg(long)]
         language: String,
     },
     /// Update a dictation profile
+    #[command(alias = "set")]
     Update {
         id: String,
         #[arg(long)]
         name: Option<String>,
         #[arg(long)]
         hotkey: Option<String>,
+        #[arg(long = "push-to-talk-shortcut", conflicts_with = "clear_push_to_talk_shortcut")]
+        push_to_talk_shortcut: Option<String>,
+        #[arg(long = "toggle-shortcut", conflicts_with = "clear_toggle_shortcut")]
+        toggle_shortcut: Option<String>,
+        #[arg(long = "clear-push-to-talk-shortcut")]
+        clear_push_to_talk_shortcut: bool,
+        #[arg(long = "clear-toggle-shortcut")]
+        clear_toggle_shortcut: bool,
         #[arg(long)]
         language: Option<String>,
     },
@@ -284,13 +302,15 @@ where
 fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
     match action {
         ProfileAction::List => {
-            println!("{:<16} {:<20} {:<28} LANGUAGE", "ID", "NAME", "HOTKEY");
+            println!("{:<16} {:<20} {:<28} {:<28} {:<28} LANGUAGE", "ID", "NAME", "LEGACY", "PUSH-TO-TALK", "TOGGLE");
             for profile in settings::store::load().resolved_hotkey_profiles() {
                 println!(
-                    "{:<16} {:<20} {:<28} {}",
+                    "{:<16} {:<20} {:<28} {:<28} {:<28} {}",
                     profile.id,
                     profile.name,
                     profile.shortcut,
+                    profile.push_to_talk_shortcut.as_deref().unwrap_or("-"),
+                    profile.toggle_shortcut.as_deref().unwrap_or("-"),
                     format_language(profile.language)
                 );
             }
@@ -300,10 +320,31 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             id,
             name,
             hotkey,
+            push_to_talk_shortcut,
+            toggle_shortcut,
+            clear_push_to_talk_shortcut,
+            clear_toggle_shortcut,
             language,
         } => {
             let language = parse_enum_value::<Language>(&language, "language")?;
-            let hotkey_warning = bare_extended_hotkey_warning(&hotkey);
+            if clear_push_to_talk_shortcut || clear_toggle_shortcut {
+                return Err(DictationError::SettingsError(
+                    "Clear shortcut options are only valid when updating a profile".to_string(),
+                ));
+            }
+            let shortcut = hotkey
+                .or_else(|| push_to_talk_shortcut.clone())
+                .or_else(|| toggle_shortcut.clone())
+                .ok_or_else(|| {
+                    DictationError::SettingsError(
+                        "Specify --hotkey or at least one explicit shortcut".to_string(),
+                    )
+                })?;
+            let hotkey_warnings = [
+                bare_extended_hotkey_warning(&shortcut),
+                push_to_talk_shortcut.as_deref().and_then(bare_extended_hotkey_warning),
+                toggle_shortcut.as_deref().and_then(bare_extended_hotkey_warning),
+            ];
             let mut profiles = settings::store::load().resolved_hotkey_profiles();
             if profiles.iter().any(|profile| profile.id == id) {
                 return Err(DictationError::SettingsError(format!(
@@ -313,12 +354,14 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             profiles.push(HotkeyProfile {
                 id: id.clone(),
                 name,
-                shortcut: hotkey,
+                shortcut,
                 language,
+                push_to_talk_shortcut,
+                toggle_shortcut,
             });
             persist_profiles(profiles)?;
             eprintln!("Created profile {id}");
-            if let Some(warning) = hotkey_warning {
+            for warning in hotkey_warnings.into_iter().flatten().collect::<std::collections::HashSet<_>>() {
                 eprintln!("Warning: {warning}");
             }
             Ok(())
@@ -327,14 +370,29 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             id,
             name,
             hotkey,
+            push_to_talk_shortcut,
+            toggle_shortcut,
+            clear_push_to_talk_shortcut,
+            clear_toggle_shortcut,
             language,
         } => {
-            if name.is_none() && hotkey.is_none() && language.is_none() {
+            if name.is_none()
+                && hotkey.is_none()
+                && push_to_talk_shortcut.is_none()
+                && toggle_shortcut.is_none()
+                && !clear_push_to_talk_shortcut
+                && !clear_toggle_shortcut
+                && language.is_none()
+            {
                 return Err(DictationError::SettingsError(
-                    "Specify at least one of --name, --hotkey, or --language".to_string(),
+                    "Specify at least one profile field or shortcut option".to_string(),
                 ));
             }
-            let hotkey_warning = hotkey.as_deref().and_then(bare_extended_hotkey_warning);
+            let hotkey_warnings = [
+                hotkey.as_deref().and_then(bare_extended_hotkey_warning),
+                push_to_talk_shortcut.as_deref().and_then(bare_extended_hotkey_warning),
+                toggle_shortcut.as_deref().and_then(bare_extended_hotkey_warning),
+            ];
             let language = language
                 .as_deref()
                 .map(|value| parse_enum_value::<Language>(value, "language"))
@@ -348,14 +406,26 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
                 profile.name = name;
             }
             if let Some(hotkey) = hotkey {
-                profile.shortcut = hotkey;
+                profile.set_primary_shortcut(hotkey);
+            }
+            if clear_push_to_talk_shortcut {
+                profile.push_to_talk_shortcut = None;
+            }
+            if clear_toggle_shortcut {
+                profile.toggle_shortcut = None;
+            }
+            if let Some(shortcut) = push_to_talk_shortcut {
+                profile.push_to_talk_shortcut = Some(shortcut);
+            }
+            if let Some(shortcut) = toggle_shortcut {
+                profile.toggle_shortcut = Some(shortcut);
             }
             if let Some(language) = language {
                 profile.language = language;
             }
             persist_profiles(profiles)?;
             eprintln!("Updated profile {id}");
-            if let Some(warning) = hotkey_warning {
+            for warning in hotkey_warnings.into_iter().flatten().collect::<std::collections::HashSet<_>>() {
                 eprintln!("Warning: {warning}");
             }
             Ok(())
@@ -943,6 +1013,8 @@ mod tests {
             name: "Default".to_string(),
             shortcut: settings.hotkey.clone(),
             language: Language::Swedish,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
         }];
         settings
             .profile_glossaries
@@ -967,6 +1039,8 @@ mod tests {
                 name: "Swedish".to_string(),
                 shortcut: "Option+Space".to_string(),
                 language: Language::Swedish,
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
             }],
             ..Default::default()
         };
@@ -1081,6 +1155,8 @@ mod tests {
                 name: "Swedish".to_string(),
                 shortcut: "Option+Space".to_string(),
                 language: Language::Swedish,
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
             }],
             ..Default::default()
         };

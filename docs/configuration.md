@@ -49,6 +49,32 @@ automatically assigned a profile/language.
 The GUI and CLI watch and update the same files. Atomic writes preserve
 user-managed symlinks, so the files can be checked into a dotfiles repository.
 
+## Push-to-talk and toggle together
+
+Each language profile can have a push-to-talk shortcut, a toggle shortcut, or
+both. Hold the push-to-talk shortcut while speaking; release it to transcribe.
+Press and release the toggle shortcut to start, then press it again to finish.
+Only the shortcut that started the recording can finish it.
+
+For example, on macOS use Command+S and Command+E for Swedish and English
+push-to-talk, with Shift+Command+S and Shift+Command+E for toggle. A programmable
+button can send the appropriate toggle combination; configuring that device
+is separate from configuring Sagascript.
+
+Set these in Settings, or use `sagascript config profiles --help` and the
+`add`/`set` commands' `--push-to-talk-shortcut` and `--toggle-shortcut` options.
+Use `sagascript config profiles list` to find the profile IDs first.
+The CLI's `--clear-push-to-talk-shortcut` and `--clear-toggle-shortcut` options
+remove explicit bindings. Clearing both restores legacy shortcut behavior;
+it does not disable the profile.
+
+Existing profiles without explicit per-mode shortcuts retain their saved
+shortcut and legacy push/toggle behavior. Opening Settings does not migrate
+or save them. Once either per-mode shortcut is configured, those explicit
+bindings determine the behavior, independently of the legacy global mode.
+Presenter remains a separate mode: it uses the profile's primary shortcut
+to start and its dedicated Finish/Cancel shortcuts, not the toggle binding.
+
 ## Extended function-key shortcuts
 
 Bare F13–F24 shortcuts are supported on macOS and Windows. Ordinary keys and

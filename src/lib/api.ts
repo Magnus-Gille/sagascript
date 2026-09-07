@@ -17,6 +17,8 @@ export interface HotkeyProfile {
   name: string;
   shortcut: string;
   language: Language;
+  push_to_talk_shortcut?: string | null;
+  toggle_shortcut?: string | null;
 }
 
 export interface WhisperModel {

@@ -153,12 +153,16 @@ mod glossary_options_tests {
                     id: "svenska".to_string(),
                     name: "Svenska".to_string(),
                     shortcut: "Control+Shift+Space".to_string(),
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                     language: Language::Swedish,
                 },
                 HotkeyProfile {
                     id: "english".to_string(),
                     name: "English".to_string(),
                     shortcut: "Control+Option+Space".to_string(),
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                     language: Language::English,
                 },
             ],
@@ -226,18 +230,24 @@ mod glossary_options_tests {
                     id: "swedish".into(),
                     name: "Swedish".into(),
                     shortcut: "Super+S".into(),
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                     language: Language::Swedish,
                 },
                 HotkeyProfile {
                     id: "english".into(),
                     name: "English".into(),
                     shortcut: "Super+E".into(),
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                     language: Language::English,
                 },
                 HotkeyProfile {
                     id: "automatic".into(),
                     name: "Automatic".into(),
                     shortcut: "Super+A".into(),
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                     language: Language::Auto,
                 },
             ],
@@ -522,7 +532,7 @@ pub async fn set_hotkey(
         .iter()
         .position(|profile| profile.id == "default")
         .unwrap_or(0);
-    profiles[profile_index].shortcut = shortcut;
+    profiles[profile_index].set_primary_shortcut(shortcut);
     set_hotkey_profiles(app, controller, health, profiles).await
 }
 
@@ -1483,6 +1493,8 @@ mod dictionary_compare_and_set_tests {
                 id: "english".to_string(),
                 name: "English".to_string(),
                 shortcut: "Option+Space".to_string(),
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
                 language: Language::English,
             }],
             ..Settings::default()

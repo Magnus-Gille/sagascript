@@ -78,4 +78,33 @@ mod tests {
         assert!(HotkeyChange::Presenter(config).prepare(&settings).is_err());
         assert!(HotkeyChange::Profiles(Vec::new()).prepare(&settings).is_err());
     }
+
+    #[test]
+    fn dual_binding_profile_change_registers_and_persists_both_shortcuts() {
+        let settings = Settings::default();
+        let mut profiles = settings.resolved_hotkey_profiles();
+        profiles[0].push_to_talk_shortcut = Some("Super+S".into());
+        profiles[0].toggle_shortcut = Some("Super+Shift+S".into());
+        let change = HotkeyChange::Profiles(profiles);
+        let registered = change.prepare(&settings).unwrap().resolved_shortcuts();
+        assert_eq!(registered, vec!["Super+S", "Super+Shift+S"]);
+        let mut fresh = settings;
+        fresh.show_overlay = false;
+        change.apply_registered(&mut fresh, &registered).unwrap();
+        assert!(!fresh.show_overlay);
+        assert_eq!(fresh.hotkey, "Super+S");
+        assert_eq!(fresh.resolved_hotkey_bindings().len(), 2);
+    }
+
+    #[test]
+    fn incomplete_dual_binding_registration_cannot_be_persisted() {
+        let settings = Settings::default();
+        let mut profiles = settings.resolved_hotkey_profiles();
+        profiles[0].push_to_talk_shortcut = Some("Super+S".into());
+        profiles[0].toggle_shortcut = Some("Super+Shift+S".into());
+        let change = HotkeyChange::Profiles(profiles);
+        let mut fresh = settings.clone();
+        assert!(change.apply_registered(&mut fresh, &["Super+S".into()]).is_err());
+        assert_eq!(fresh.resolved_hotkey_profiles(), settings.resolved_hotkey_profiles());
+    }
 }
