@@ -31,6 +31,11 @@ export default function Home() {
             <a className="button secondary" href={sourceUrl}>View source on GitHub <span aria-hidden="true">↗</span></a>
           </div>
           <p className="requirements">Apple silicon · macOS 13 or later · Local processing</p>
+          <p className="microphone-note">
+            Bluetooth headset microphones may give less reliable dictation,
+            especially with fast speech. If words are missed, try
+            a built-in microphone, if available, or a wired microphone.
+          </p>
         </div>
 
         <figure className="product-shot">
