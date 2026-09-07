@@ -2724,12 +2724,16 @@ mod tests {
                     name: "Swedish".to_string(),
                     shortcut: "F13".to_string(),
                     language: Language::Swedish,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                 },
                 HotkeyProfile {
                     id: "english".to_string(),
                     name: "English".to_string(),
                     shortcut: "F14".to_string(),
                     language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                 },
             ],
             ..Default::default()
@@ -2757,6 +2761,8 @@ mod tests {
                 name: "Swedish".to_string(),
                 shortcut: "F13".to_string(),
                 language: Language::Swedish,
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
             }],
             ..Default::default()
         };
@@ -2789,6 +2795,8 @@ mod tests {
                 name: "Swedish".to_string(),
                 shortcut: "F13".to_string(),
                 language: Language::Swedish,
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
             }],
             ..Default::default()
         };

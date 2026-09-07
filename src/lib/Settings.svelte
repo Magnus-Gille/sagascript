@@ -64,6 +64,13 @@
     supportedBareFunctionKeyRange,
     tauriKeyName,
   } from "./hotkey.js";
+  import {
+    allProfileShortcutValues,
+    displayProfileShortcut,
+    profileShortcutValues,
+    profileWithShortcut,
+    suggestedProfileShortcuts,
+  } from "./profile-shortcuts.js";
 
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);
@@ -93,6 +100,13 @@
 
   // Hotkey recorder state
   let recordingProfileId: string | null = $state(null);
+  type ExplicitShortcutSlot = "push_to_talk_shortcut" | "toggle_shortcut";
+  type ShortcutSlot = ExplicitShortcutSlot | "presenter_shortcut";
+  const shortcutControls: { slot: ExplicitShortcutSlot; label: string }[] = [
+    { slot: "push_to_talk_shortcut", label: "Push to talk" },
+    { slot: "toggle_shortcut", label: "Toggle" },
+  ];
+  let recordingShortcutSlot: ShortcutSlot | null = $state(null);
   let hotkeyCaptureGeneration = 0;
   let draftProfileId: string | null = $state(null);
   let hotkeyError: string = $state("");
@@ -107,7 +121,7 @@
   let hotkeyStatusError: string = $state("");
 
   $effect(() => {
-    if (recordingProfileId && hotkeyRecorderEl) hotkeyRecorderEl.focus();
+    if (recordingProfileId && recordingShortcutSlot && hotkeyRecorderEl) hotkeyRecorderEl.focus();
   });
 
   // Dictate test state
@@ -544,6 +558,17 @@
 
   async function onHotkeyModeChange(e: Event) {
     const value = (e.target as HTMLSelectElement).value as HotkeyMode;
+    // Freeze legacy routing before leaving ordinary mode, including across
+    // restarts while Presenter is selected. This does not change its bindings.
+    if (value === "presenter" && settings && settings.hotkey_mode !== "presenter") {
+      const mode = settings.hotkey_mode;
+      const profiles = settings.hotkey_profiles.map((profile) =>
+        profile.push_to_talk_shortcut || profile.toggle_shortcut
+          ? profile
+          : profileWithShortcut(profile, mode === "toggle" ? "toggle_shortcut" : "push_to_talk_shortcut", profile.shortcut, mode)
+      );
+      if (!(await applySetting(() => setHotkeyProfiles(profiles)))) return;
+    }
     await applySetting(() => setHotkeyMode(value));
   }
 
@@ -608,7 +633,7 @@
     if (!settings) return false;
     const shortcuts = [
       settings.hotkey,
-      ...settings.hotkey_profiles.map((profile) => profile.shortcut),
+      ...allProfileShortcutValues(settings.hotkey_profiles, settings.hotkey_mode),
     ];
     return shortcuts.some((shortcut) => canUseBareHotkey(shortcut, platform));
   }
@@ -1201,13 +1226,14 @@
     return formatShortcutDisplay(shortcut, platform);
   }
 
-  function beginHotkeyCapture(profileId: string) {
+  function beginHotkeyCapture(profileId: string, slot: ShortcutSlot) {
     hotkeyCaptureGeneration += 1;
     recordingProfileId = profileId;
+    recordingShortcutSlot = slot;
     hotkeyError = "";
   }
 
-  async function onHotkeyKeydown(e: KeyboardEvent, profileId: string) {
+  async function onHotkeyKeydown(e: KeyboardEvent, profileId: string, slot: ShortcutSlot) {
     const captureGeneration = hotkeyCaptureGeneration;
     e.preventDefault();
     e.stopPropagation();
@@ -1216,6 +1242,7 @@
     if (e.key === "Escape") {
       hotkeyCaptureGeneration += 1;
       recordingProfileId = null;
+      recordingShortcutSlot = null;
       hotkeyError = "";
       return;
     }
@@ -1279,19 +1306,45 @@
     const shortcut = parts.join("+");
     hotkeyError = "";
 
-    if (!settings) return;
-    const profiles = settings.hotkey_profiles.map((profile) =>
-      profile.id === profileId ? { ...profile, shortcut } : profile
+    const currentSettings = settings;
+    if (!currentSettings) return;
+    const profiles = currentSettings.hotkey_profiles.map((profile) =>
+      profile.id === profileId
+        ? slot === "presenter_shortcut"
+          ? profile.push_to_talk_shortcut || profile.toggle_shortcut
+            ? profileWithShortcut(profile, profile.push_to_talk_shortcut ? "push_to_talk_shortcut" : "toggle_shortcut", shortcut, "presenter")
+            : { ...profile, shortcut }
+          : profileWithShortcut(profile, slot, shortcut, currentSettings.hotkey_mode)
+        : profile
     );
     setHotkeyProfiles(profiles)
       .then(async () => {
         recordingProfileId = null;
+        recordingShortcutSlot = null;
         draftProfileId = null;
         settings = await getSettings();
+        await refreshProfileModels(settings.hotkey_profiles);
       })
       .catch((err: any) => {
         hotkeyError = typeof err === "string" ? err : err.message || "Failed to set hotkey";
       });
+  }
+
+  async function clearProfileShortcut(profileId: string, slot: ExplicitShortcutSlot) {
+    const currentSettings = settings;
+    if (!currentSettings) return;
+    const profile = currentSettings.hotkey_profiles.find((candidate) => candidate.id === profileId);
+    if (!profile || !profile.push_to_talk_shortcut || !profile.toggle_shortcut) return;
+    const profiles = currentSettings.hotkey_profiles.map((candidate) =>
+      candidate.id === profileId ? profileWithShortcut(candidate, slot, null, currentSettings.hotkey_mode) : candidate
+    );
+    if (profileId === draftProfileId) {
+      settings = { ...currentSettings, hotkey_profiles: profiles };
+      await refreshProfileModels(profiles);
+      return;
+    }
+    const saved = await applySetting(() => setHotkeyProfiles(profiles));
+    if (!saved && settingsError) hotkeyError = settingsError;
   }
 
   async function updateProfile(profileId: string, changes: Partial<HotkeyProfile>) {
@@ -1314,15 +1367,20 @@
       settings.hotkey_profiles.some((profile) => profile.id === `profile-${suffix}`)
       || Object.hasOwn(settings.profile_glossaries, `profile-${suffix}`)
     ) suffix += 1;
+    const suggested = suggestedProfileShortcuts(
+      settings.hotkey_profiles,
+      settings.hotkey,
+      platform,
+    );
     const profile: HotkeyProfile = {
       id: `profile-${suffix}`,
       name: `Profile ${suffix}`,
-      shortcut: "Control+Option+Shift+F12",
+      ...suggested,
       language: settings.language === "sv" ? "en" : "sv",
     };
     settings = { ...settings, hotkey_profiles: [...settings.hotkey_profiles, profile] };
     draftProfileId = profile.id;
-    beginHotkeyCapture(profile.id);
+    beginHotkeyCapture(profile.id, "push_to_talk_shortcut");
     void refreshProfileModels(settings.hotkey_profiles);
   }
 
@@ -1332,6 +1390,7 @@
       settings = { ...settings, hotkey_profiles: settings.hotkey_profiles.filter((profile) => profile.id !== profileId) };
       draftProfileId = null;
       recordingProfileId = null;
+      recordingShortcutSlot = null;
       return;
     }
     await applySetting(() =>
@@ -1347,6 +1406,12 @@
       case "en": return "English";
       default: return "Auto-detect";
     }
+  }
+
+  function presenterProfileShortcuts(): string[] {
+    return settings
+      ? settings.hotkey_profiles.flatMap((profile) => profileShortcutValues(profile, "presenter"))
+      : [];
   }
 
 </script>
@@ -1411,24 +1476,61 @@
                   <option value="auto">Auto-detect</option>
                 </select>
               </div>
-              <div class="profile-row">
-                {#if recordingProfileId === profile.id}
-                  <button
-                    class="hotkey-recorder recording"
-                    bind:this={hotkeyRecorderEl}
-                    onkeydown={(event) => onHotkeyKeydown(event, profile.id)}
-                    onblur={() => { recordingProfileId = null; hotkeyError = ""; }}
-                  >Press shortcut...</button>
-                {:else}
-                  <button
-                    class="hotkey-recorder"
-                    onclick={() => beginHotkeyCapture(profile.id)}
-                  >{formatHotkeyDisplay(profile.shortcut)}</button>
-                {/if}
-                {#if settings.hotkey_profiles.length > 1}
-                  <button class="profile-remove" aria-label={`Remove ${profile.name}`} onclick={() => removeProfile(profile.id)}>Remove</button>
-                {/if}
-              </div>
+              {#if settings.hotkey_mode === "presenter"}
+                <div class="presenter-start-control">
+                  <span class="shortcut-label">Presenter start</span>
+                  {#if recordingProfileId === profile.id && recordingShortcutSlot === "presenter_shortcut"}
+                    <button
+                      class="hotkey-recorder recording"
+                      bind:this={hotkeyRecorderEl}
+                      aria-label={`${profile.name} Presenter start shortcut`}
+                      onkeydown={(event) => onHotkeyKeydown(event, profile.id, "presenter_shortcut")}
+                      onblur={() => { recordingProfileId = null; recordingShortcutSlot = null; hotkeyError = ""; }}
+                    >Press shortcut...</button>
+                  {:else}
+                    <button
+                      class="hotkey-recorder"
+                      aria-label={`${profile.name} Presenter start shortcut`}
+                      onclick={() => beginHotkeyCapture(profile.id, "presenter_shortcut")}
+                    >{formatHotkeyDisplay(profile.shortcut)}</button>
+                  {/if}
+                  <div class="hotkey-hint">Presenter uses this one start shortcut. Push-to-talk and Toggle bindings are configured in Profile shortcuts mode.</div>
+                </div>
+              {:else}
+                <div class="shortcut-grid">
+                  {#each shortcutControls as shortcutControl}
+                    <div class="shortcut-control">
+                      <span class="shortcut-label">{shortcutControl.label}</span>
+                      {#if recordingProfileId === profile.id && recordingShortcutSlot === shortcutControl.slot}
+                        <button
+                          class="hotkey-recorder recording"
+                          bind:this={hotkeyRecorderEl}
+                          aria-label={`${profile.name} ${shortcutControl.label} shortcut`}
+                          onkeydown={(event) => onHotkeyKeydown(event, profile.id, shortcutControl.slot)}
+                          onblur={() => { recordingProfileId = null; recordingShortcutSlot = null; hotkeyError = ""; }}
+                        >Press shortcut...</button>
+                      {:else}
+                        <button
+                          class="hotkey-recorder"
+                          aria-label={`${profile.name} ${shortcutControl.label} shortcut`}
+                          onclick={() => beginHotkeyCapture(profile.id, shortcutControl.slot)}
+                        >{formatHotkeyDisplay(displayProfileShortcut(profile, shortcutControl.slot, settings.hotkey_mode) || "Not set")}</button>
+                      {/if}
+                      {#if profile.push_to_talk_shortcut && profile.toggle_shortcut}
+                        <button
+                          type="button"
+                          class="shortcut-clear"
+                          aria-label={`Clear ${shortcutControl.label} shortcut for ${profile.name}`}
+                          onclick={() => clearProfileShortcut(profile.id, shortcutControl.slot)}
+                        >Clear</button>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+              {#if settings.hotkey_profiles.length > 1}
+                <button class="profile-remove" aria-label={`Remove ${profile.name}`} onclick={() => removeProfile(profile.id)}>Remove</button>
+              {/if}
               {#if profileModels[profile.id]}
                 <div class="profile-engine" class:missing={!profileModels[profile.id].downloaded}>
                   <span>
@@ -1462,23 +1564,23 @@
             </div>
           {/if}
           <div class="hotkey-hint">
-            Each shortcut selects its language. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}{" "}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
+            Push to talk starts while held; Toggle starts and stops with each press. They are independent and either or both may be configured. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}{" "}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
           </div>
         </div>
 
         <div class="field">
-          <label for="hotkey-mode">Shortcut behavior</label>
+          <label for="hotkey-mode">Dictation behavior</label>
           <select id="hotkey-mode" value={settings.hotkey_mode} onchange={onHotkeyModeChange}>
-            <option value="push">Push-to-talk</option>
-            <option value="toggle">Toggle</option>
+            <option value={settings.hotkey_mode === "toggle" ? "toggle" : "push"}>Profile shortcuts</option>
             <option value="presenter">Presenter</option>
           </select>
+          <div class="hotkey-hint">Presenter is a separate opt-in mode with finish/cancel controls; it does not replace the per-profile push-to-talk and toggle bindings.</div>
         </div>
 
         {#if settings.hotkey_mode === "presenter"}
           <PresenterSettings
             config={settings.presenter}
-            profileShortcuts={settings.hotkey_profiles.map((profile) => profile.shortcut)}
+            profileShortcuts={presenterProfileShortcuts()}
             {platform}
             onSave={onPresenterSave}
           />
@@ -2086,8 +2188,44 @@
     flex: 1 1 48%;
   }
 
-  .profile-row .hotkey-recorder {
-    flex: 1;
+  .shortcut-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    align-items: end;
+  }
+
+  .shortcut-control {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .shortcut-label {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .shortcut-clear {
+    align-self: flex-start;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 0;
+  }
+
+  .shortcut-clear:hover {
+    color: var(--text);
+  }
+
+  @media (max-width: 520px) {
+    .shortcut-grid {
+      grid-template-columns: 1fr;
+    }
   }
 
   .profile-engine {

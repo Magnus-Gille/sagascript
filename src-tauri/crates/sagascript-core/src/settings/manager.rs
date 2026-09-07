@@ -525,6 +525,10 @@ pub struct HotkeyProfile {
     pub name: String,
     pub shortcut: String,
     pub language: Language,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push_to_talk_shortcut: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toggle_shortcut: Option<String>,
 }
 
 impl HotkeyProfile {
@@ -534,7 +538,20 @@ impl HotkeyProfile {
             name: "Default".to_string(),
             shortcut,
             language,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
         }
+    }
+
+    /// Update the compatibility shortcut and whichever explicit binding is
+    /// primary for this profile.
+    pub fn set_primary_shortcut(&mut self, shortcut: String) {
+        if self.push_to_talk_shortcut.is_some() {
+            self.push_to_talk_shortcut = Some(shortcut.clone());
+        } else if self.toggle_shortcut.is_some() {
+            self.toggle_shortcut = Some(shortcut.clone());
+        }
+        self.shortcut = shortcut;
     }
 }
 
@@ -660,14 +677,40 @@ impl Settings {
         }
     }
 
+    /// Return the profile bindings that should be registered at runtime.
+    /// Explicit push-to-talk/toggle bindings replace the legacy binding for a
+    /// profile. Presenter mode intentionally keeps the legacy one-binding
+    /// behavior for compatibility with its finish/cancel routing.
+    pub fn resolved_hotkey_bindings(&self) -> Vec<(HotkeyProfile, String, HotkeyMode)> {
+        self.resolved_hotkey_profiles()
+            .into_iter()
+            .flat_map(|profile| {
+                if self.hotkey_mode == HotkeyMode::Presenter {
+                    return vec![(profile.clone(), profile.shortcut.clone(), HotkeyMode::Presenter)];
+                }
+                let mut bindings = Vec::with_capacity(2);
+                if let Some(shortcut) = &profile.push_to_talk_shortcut {
+                    bindings.push((profile.clone(), shortcut.clone(), HotkeyMode::PushToTalk));
+                }
+                if let Some(shortcut) = &profile.toggle_shortcut {
+                    bindings.push((profile.clone(), shortcut.clone(), HotkeyMode::Toggle));
+                }
+                if bindings.is_empty() {
+                    bindings.push((profile.clone(), profile.shortcut.clone(), self.hotkey_mode));
+                }
+                bindings
+            })
+            .collect()
+    }
+
     /// Return all shortcuts that the active hotkey mode may register.
     /// Presenter finish/cancel shortcuts are intentionally omitted from the
     /// ordinary modes so opting into presenter behavior is explicit.
     pub fn resolved_shortcuts(&self) -> Vec<String> {
         let mut shortcuts = self
-            .resolved_hotkey_profiles()
+            .resolved_hotkey_bindings()
             .into_iter()
-            .map(|profile| profile.shortcut)
+            .map(|(_, shortcut, _)| shortcut)
             .collect::<Vec<_>>();
         if self.hotkey_mode == HotkeyMode::Presenter {
             shortcuts.push(self.presenter.finish_shortcut.clone());
@@ -702,9 +745,26 @@ impl Settings {
                 return Err(format!("Profile '{}' name must be 40 characters or fewer", profile.id));
             }
             validate_hotkey(&profile.shortcut)?;
-            let canonical = canonical_hotkey(&profile.shortcut)?;
-            if !shortcuts.insert(canonical) {
-                return Err(format!("Duplicate hotkey '{}'", profile.shortcut));
+            let has_explicit_bindings = profile.push_to_talk_shortcut.is_some() || profile.toggle_shortcut.is_some();
+            let active_shortcuts = if has_explicit_bindings {
+                profile
+                    .push_to_talk_shortcut
+                    .iter()
+                    .chain(profile.toggle_shortcut.iter())
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            } else {
+                vec![profile.shortcut.as_str()]
+            };
+            for shortcut in active_shortcuts {
+                if shortcut.trim().is_empty() {
+                    return Err(format!("Profile '{}' has an empty hotkey", profile.id));
+                }
+                validate_hotkey(shortcut)?;
+                let canonical = canonical_hotkey(shortcut)?;
+                if !shortcuts.insert(canonical) {
+                    return Err(format!("Duplicate hotkey '{}'", shortcut));
+                }
             }
         }
         Ok(())
@@ -717,11 +777,15 @@ impl Settings {
         let profiles = self.resolved_hotkey_profiles();
         Self::validate_hotkey_profiles(&profiles)?;
         self.presenter.validate()?;
+        let mut shortcuts = self
+            .resolved_hotkey_bindings()
+            .into_iter()
+            .map(|(_, shortcut, _)| canonical_hotkey(&shortcut))
+            .collect::<Result<HashSet<_>, _>>()?;
+        if shortcuts.len() != self.resolved_hotkey_bindings().len() {
+            return Err("Duplicate hotkey bindings".to_string());
+        }
         if self.hotkey_mode == HotkeyMode::Presenter {
-            let mut shortcuts = profiles
-                .iter()
-                .map(|profile| canonical_hotkey(&profile.shortcut))
-                .collect::<Result<HashSet<_>, _>>()?;
             let finish = canonical_hotkey(&self.presenter.finish_shortcut)?;
             if !shortcuts.insert(finish) {
                 return Err("Presenter finish shortcut conflicts with a profile shortcut".to_string());
@@ -753,6 +817,16 @@ impl Settings {
     }
 
     pub fn replace_hotkey_profiles(&mut self, profiles: Vec<HotkeyProfile>) -> Result<(), String> {
+        let mut profiles = profiles;
+        for profile in &mut profiles {
+            if let Some(shortcut) = profile
+                .push_to_talk_shortcut
+                .as_ref()
+                .or(profile.toggle_shortcut.as_ref())
+            {
+                profile.shortcut = shortcut.clone();
+            }
+        }
         Self::validate_hotkey_profiles(&profiles)?;
         let current_profiles = self.resolved_hotkey_profiles();
         if let Some(profile) = profiles.iter().find(|profile| {
@@ -800,9 +874,10 @@ impl Settings {
 
     pub fn hotkey_profile_for_shortcut(&self, shortcut: &str) -> Option<HotkeyProfile> {
         let target = canonical_hotkey(shortcut).ok()?;
-        self.resolved_hotkey_profiles()
+        self.resolved_hotkey_bindings()
             .into_iter()
-            .find(|profile| canonical_hotkey(&profile.shortcut).ok().as_deref() == Some(target.as_str()))
+            .find(|(_, binding, _)| canonical_hotkey(binding).ok().as_deref() == Some(target.as_str()))
+            .map(|(profile, _, _)| profile)
     }
 
     pub fn set_legacy_language(&mut self, language: Language) -> Result<(), String> {
@@ -837,7 +912,7 @@ impl Settings {
         let mut candidate = self.clone();
         candidate.hotkey = shortcut.clone();
         if let Some(profile) = candidate.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
-            profile.shortcut = shortcut;
+            profile.set_primary_shortcut(shortcut);
         }
         candidate.validate_shortcut_configuration()?;
         self.hotkey = candidate.hotkey;
@@ -1445,12 +1520,16 @@ mod tests {
                     name: "Swedish".to_string(),
                     shortcut: "Control+Shift+Space".to_string(),
                     language: Language::Swedish,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                 },
                 HotkeyProfile {
                     id: "english".to_string(),
                     name: "English".to_string(),
                     shortcut: "Control+Option+Space".to_string(),
                     language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                 },
             ],
             ..Default::default()
@@ -1483,12 +1562,16 @@ mod tests {
                     name: "Swedish".to_string(),
                     shortcut: "Control+Shift+Space".to_string(),
                     language: Language::Swedish,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                 },
                 HotkeyProfile {
                     id: "english".to_string(),
                     name: "English".to_string(),
                     shortcut: "Control+Option+Space".to_string(),
                     language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                 },
             ],
             ..Default::default()
@@ -1513,6 +1596,8 @@ mod tests {
                 name: "Swedish".to_string(),
                 shortcut: "Control+Shift+Space".to_string(),
                 language: Language::Swedish,
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
             }],
             ..Default::default()
         };
@@ -1582,6 +1667,8 @@ mod tests {
                 name: "Swedish".to_string(),
                 shortcut: "Control+Shift+Space".to_string(),
                 language: Language::Swedish,
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
             }],
             ..Default::default()
         };
@@ -1629,6 +1716,8 @@ mod tests {
                     name: "Reused".to_string(),
                     shortcut: "Control+Option+Space".to_string(),
                     language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                 },
             ])
             .unwrap_err();
@@ -1658,6 +1747,8 @@ mod tests {
                     name: "Reused".to_string(),
                     shortcut: "Control+Option+Space".to_string(),
                     language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
                 },
             ])
             .unwrap();
@@ -1736,6 +1827,8 @@ mod tests {
                 name: "Swedish".to_string(),
                 shortcut: "Control+Shift+Space".to_string(),
                 language: Language::Swedish,
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
             }],
             ..Default::default()
         };
@@ -1805,6 +1898,8 @@ mod tests {
             name: id.to_string(),
             shortcut: shortcut.to_string(),
             language,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
         }
     }
 
@@ -1837,6 +1932,106 @@ mod tests {
             loaded.hotkey_profile_for_shortcut("Alt+Space").unwrap().id,
             "swedish"
         );
+    }
+
+    #[test]
+    fn legacy_profile_binding_uses_global_push_or_toggle_mode() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![profile("default", "Control+Shift+A", Language::English)])
+            .unwrap();
+
+        settings.hotkey_mode = HotkeyMode::PushToTalk;
+        assert_eq!(settings.resolved_hotkey_bindings()[0].1, "Control+Shift+A");
+        assert_eq!(settings.resolved_hotkey_bindings()[0].2, HotkeyMode::PushToTalk);
+
+        settings.hotkey_mode = HotkeyMode::Toggle;
+        assert_eq!(settings.resolved_hotkey_bindings()[0].2, HotkeyMode::Toggle);
+    }
+
+    #[test]
+    fn explicit_profile_bindings_resolve_both_modes_independent_of_global_mode() {
+        let mut explicit = profile("default", "Control+Shift+A", Language::English);
+        explicit.push_to_talk_shortcut = Some("Control+Shift+P".to_string());
+        explicit.toggle_shortcut = Some("Control+Shift+T".to_string());
+        let mut settings = Settings {
+            hotkey_mode: HotkeyMode::Toggle,
+            ..Settings::default()
+        };
+        settings.replace_hotkey_profiles(vec![explicit]).unwrap();
+
+        let bindings = settings.resolved_hotkey_bindings();
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].1, "Control+Shift+P");
+        assert_eq!(bindings[0].2, HotkeyMode::PushToTalk);
+        assert_eq!(bindings[1].1, "Control+Shift+T");
+        assert_eq!(bindings[1].2, HotkeyMode::Toggle);
+        assert_eq!(settings.resolved_shortcuts(), vec!["Control+Shift+P", "Control+Shift+T"]);
+        assert_eq!(settings.hotkey_profile_for_shortcut("control+shift+t").unwrap().id, "default");
+        assert_eq!(settings.hotkey_profiles[0].shortcut, "Control+Shift+P");
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.hotkey_profiles, settings.hotkey_profiles);
+        assert!(json.contains("push_to_talk_shortcut"));
+        assert!(json.contains("toggle_shortcut"));
+    }
+
+    #[test]
+    fn explicit_profile_bindings_reject_empty_or_canonical_duplicates() {
+        let mut empty = profile("default", "Control+Shift+E", Language::English);
+        empty.push_to_talk_shortcut = Some("  ".to_string());
+        assert!(Settings::validate_hotkey_profiles(&[empty]).is_err());
+
+        let mut first = profile("first", "Control+Shift+F", Language::English);
+        first.push_to_talk_shortcut = Some("Option+Shift+A".to_string());
+        let mut second = profile("second", "Control+Shift+G", Language::Swedish);
+        second.toggle_shortcut = Some("shift+alt+KeyA".to_string());
+        assert!(Settings::validate_hotkey_profiles(&[first, second]).is_err());
+    }
+
+    #[test]
+    fn explicit_bindings_allow_an_additional_modifier() {
+        let mut first = profile("first", "Control+Shift+P", Language::English);
+        first.push_to_talk_shortcut = Some("Control+Shift+A".to_string());
+        let mut second = profile("second", "Control+Shift+Q", Language::Swedish);
+        second.push_to_talk_shortcut = Some("Control+Option+Shift+A".to_string());
+        assert!(Settings::validate_hotkey_profiles(&[first, second]).is_ok());
+    }
+
+    #[test]
+    fn presenter_binding_ignores_explicit_shortcuts() {
+        let mut explicit = profile("default", "Control+Shift+P", Language::English);
+        explicit.push_to_talk_shortcut = Some("Control+Shift+Q".to_string());
+        explicit.toggle_shortcut = Some("Control+Shift+R".to_string());
+        let mut settings = Settings {
+            hotkey_mode: HotkeyMode::Presenter,
+            ..Settings::default()
+        };
+        settings.replace_hotkey_profiles(vec![explicit]).unwrap();
+
+        let bindings = settings.resolved_hotkey_bindings();
+        assert_eq!(bindings, vec![(settings.hotkey_profiles[0].clone(), "Control+Shift+Q".to_string(), HotkeyMode::Presenter)]);
+        assert_eq!(settings.resolved_shortcuts()[0], "Control+Shift+Q");
+    }
+
+    #[test]
+    fn legacy_hotkey_update_tracks_explicit_primary_binding() {
+        let mut push_to_talk = profile("default", "Control+Shift+P", Language::English);
+        push_to_talk.push_to_talk_shortcut = Some("Control+Shift+Q".to_string());
+        let mut settings = Settings::default();
+        settings.replace_hotkey_profiles(vec![push_to_talk]).unwrap();
+        settings.try_set_legacy_hotkey("Control+Shift+R".to_string()).unwrap();
+        assert_eq!(settings.hotkey, "Control+Shift+R");
+        assert_eq!(settings.hotkey_profiles[0].shortcut, "Control+Shift+R");
+        assert_eq!(settings.hotkey_profiles[0].push_to_talk_shortcut.as_deref(), Some("Control+Shift+R"));
+
+        let mut toggle = profile("default", "Control+Shift+P", Language::English);
+        toggle.toggle_shortcut = Some("Control+Shift+Q".to_string());
+        let mut settings = Settings::default();
+        settings.replace_hotkey_profiles(vec![toggle]).unwrap();
+        settings.try_set_legacy_hotkey("Control+Shift+R".to_string()).unwrap();
+        assert_eq!(settings.hotkey_profiles[0].toggle_shortcut.as_deref(), Some("Control+Shift+R"));
     }
 
     #[test]

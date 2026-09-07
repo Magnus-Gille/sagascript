@@ -1310,13 +1310,68 @@ mod tests {
         ]).unwrap();
         match cli.command.unwrap() {
             Command::Config(args) => match args.action {
-                config::ConfigAction::Profiles { action: config::ProfileAction::Create { id, name, hotkey, language } } => {
+                config::ConfigAction::Profiles { action: config::ProfileAction::Create { id, name, hotkey, language, .. } } => {
                     assert_eq!(id, "swedish");
                     assert_eq!(name, "Swedish");
-                    assert_eq!(hotkey, "Option+Space");
+                    assert_eq!(hotkey.as_deref(), Some("Option+Space"));
                     assert_eq!(language, "sv");
                 }
                 _ => panic!("expected profile create"),
+            },
+            _ => panic!("expected Config"),
+        }
+    }
+
+    #[test]
+    fn parse_config_profile_add_explicit_shortcuts() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "config", "profiles", "add", "swedish",
+            "--name", "Swedish", "--push-to-talk-shortcut", "Control+Shift+P",
+            "--toggle-shortcut", "Control+Shift+T", "--language", "sv",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Config(args) => match args.action {
+                config::ConfigAction::Profiles {
+                    action: config::ProfileAction::Create {
+                        id,
+                        hotkey,
+                        push_to_talk_shortcut,
+                        toggle_shortcut,
+                        ..
+                    },
+                } => {
+                    assert_eq!(id, "swedish");
+                    assert!(hotkey.is_none());
+                    assert_eq!(push_to_talk_shortcut.as_deref(), Some("Control+Shift+P"));
+                    assert_eq!(toggle_shortcut.as_deref(), Some("Control+Shift+T"));
+                }
+                _ => panic!("expected profile add"),
+            },
+            _ => panic!("expected Config"),
+        }
+    }
+
+    #[test]
+    fn parse_config_profile_set_clear_explicit_shortcuts() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "config", "profiles", "set", "swedish",
+            "--clear-push-to-talk-shortcut", "--clear-toggle-shortcut",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Config(args) => match args.action {
+                config::ConfigAction::Profiles {
+                    action: config::ProfileAction::Update {
+                        id,
+                        clear_push_to_talk_shortcut,
+                        clear_toggle_shortcut,
+                        ..
+                    },
+                } => {
+                    assert_eq!(id, "swedish");
+                    assert!(clear_push_to_talk_shortcut);
+                    assert!(clear_toggle_shortcut);
+                }
+                _ => panic!("expected profile set"),
             },
             _ => panic!("expected Config"),
         }
