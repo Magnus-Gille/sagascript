@@ -30,19 +30,24 @@ choose a language, and dictate.
 ## Current implementation checkpoint — 2026-09-07
 
 The latest published stable release remains [Sagascript v1.1.3](https://github.com/Magnus-Gille/sagascript/releases/tag/v1.1.3)
-at exact revision
+at exact Git revision
 `2204cb99dc9eb24b3744182232d90dde8b9e837d`. No newer stable version has been
-selected.
+selected. A version label alone does not identify a release: records must pair
+the version with its exact Git revision and embedded build identity.
 
-A signed Apple Silicon TEST build is available from exact revision
+A separate signed Apple Silicon TEST build also carries version `1.1.3`, but
+was built from exact Git revision
 `e4db9c6137b73c710826a21f5792ab5d31c4a798` in [Actions run
 34160445004](https://github.com/Magnus-Gille/sagascript/actions/runs/34160445004).
 The run completed with signed, hardened, notarized, and stapled Sagascript
-`1.1.3` artifacts for Team ID `7C6WF6GFZ4`; the current owner verification
-also records Gatekeeper acceptance and installation. This is TEST-build
-evidence only, not a new stable release or publication approval.
+`1.1.3` artifacts for Team ID `7C6WF6GFZ4`; a dated agent verification recorded
+on 2026-09-07 also records Gatekeeper acceptance and installation as an
+operational check, not CI proof. This TEST artifact is distinct from the
+published stable revision above and is not a new stable release or publication
+approval.
 
-The cumulative TEST implementation includes:
+The cumulative implementation present in TEST revision
+`e4db9c6137b73c710826a21f5792ab5d31c4a798` includes:
 
 - Explicit dictionary Save/Discard editing.
 - Separate per-profile push-to-talk and toggle shortcut slots.
@@ -58,13 +63,15 @@ See [roadmap #198](https://github.com/Magnus-Gille/sagascript/issues/198).
 
 R6 remains unimplemented and blocked pending approval: [#193](https://github.com/Magnus-Gille/sagascript/issues/193)
 and [#194](https://github.com/Magnus-Gille/sagascript/issues/194). No R6
-delivery is implied by this checkpoint. The Bluetooth warning implementation is
-tracked in [PR #219](https://github.com/Magnus-Gille/sagascript/pull/219);
-production deployment is not established by this checkpoint.
+delivery is implied by this checkpoint. The Bluetooth warning is a product
+website change tracked in [PR #219](https://github.com/Magnus-Gille/sagascript/pull/219);
+it is not part of the TEST binary above, and production website deployment is
+not verified by this checkpoint.
 
 Any new stable candidate needs its own exact-revision signed/notarized artifact
-checks, manual acceptance, and just-in-time publication approval. Existing TEST
-verification does not authorize stable publication.
+checks, manual acceptance, and just-in-time publication approval. Its release
+record must include the exact Git revision and build identity; version alone is
+insufficient. Existing TEST verification does not authorize stable publication.
 
 ## Work plan
 
@@ -207,8 +214,11 @@ prove or authorize publication of a later candidate.
 
 ## Historical implementation checkpoint — 2026-09-02 (superseded)
 
-All statements and open gates below are the record as of September 2; current
-checkpoint above supersedes them.
+All statements and open gates below are the record as of September 2; the
+current checkpoint above supersedes them. In particular, the local signing
+failure at exact revision `e42d4cd4e91211a55310d0d6c4b03cf336160b7e` is
+historical evidence, not a failure of current TEST revision
+`e4db9c6137b73c710826a21f5792ab5d31c4a798`.
 
 The accepted daily-use build is Sagascript `1.1.2` from exact source revision
 `6008bd191a9c33281fc420ca9492a0edd3fb8f48`. The installed Apple Silicon app
