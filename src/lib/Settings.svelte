@@ -5,8 +5,6 @@
     getLastError,
     getLastTranscription,
     setLanguage,
-    setHotkeyMode,
-    setPresenterConfig,
     setHotkeyProfiles,
     setAutoPaste,
     setInitialPrompt,
@@ -38,18 +36,15 @@
     type Settings,
     type BuildInfo,
     type Language,
-    type HotkeyMode,
     type WhisperModel,
     type HotkeyStatus,
     type HotkeyProfile,
     type MeetingJobStatus,
     type MeetingJobSnapshot,
-    type PresenterConfig,
   } from "./api";
   import MeetingReview from "./MeetingReview.svelte";
   import type { MeetingExportFormat, MeetingTranscript } from "./meeting-types";
   import { pollMeetingJob as pollMeetingJobClient } from "./meeting-job-client";
-  import PresenterSettings from "./PresenterSettings.svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -67,7 +62,6 @@
   import {
     allProfileShortcutValues,
     displayProfileShortcut,
-    profileShortcutValues,
     profileWithShortcut,
     suggestedProfileShortcuts,
   } from "./profile-shortcuts.js";
@@ -101,12 +95,11 @@
   // Hotkey recorder state
   let recordingProfileId: string | null = $state(null);
   type ExplicitShortcutSlot = "push_to_talk_shortcut" | "toggle_shortcut";
-  type ShortcutSlot = ExplicitShortcutSlot | "presenter_shortcut";
   const shortcutControls: { slot: ExplicitShortcutSlot; label: string }[] = [
     { slot: "push_to_talk_shortcut", label: "Push to talk" },
     { slot: "toggle_shortcut", label: "Toggle" },
   ];
-  let recordingShortcutSlot: ShortcutSlot | null = $state(null);
+  let recordingShortcutSlot: ExplicitShortcutSlot | null = $state(null);
   let hotkeyCaptureGeneration = 0;
   let draftProfileId: string | null = $state(null);
   let hotkeyError: string = $state("");
@@ -132,39 +125,6 @@
   let testResult: string = $state("");
   let testError: string = $state("");
 
-  type PresenterStatus =
-    | "listening"
-    | "transcribing"
-    | "verifying_insertion"
-    | "inserted"
-    | "submitting"
-    | "sent"
-    | "cancelled"
-    | "draft"
-    | "failed"
-    | "no_speech"
-    | "submit_uncertain";
-
-  const presenterStatusLabels: Record<PresenterStatus, string> = {
-    listening: "Presenter listening",
-    transcribing: "Presenter transcribing",
-    verifying_insertion: "Verifying insertion…",
-    inserted: "Recognized text inserted",
-    submitting: "Sending submit key…",
-    sent: "Submit key sent; delivery not confirmed",
-    cancelled: "Presenter cancelled",
-    draft: "Not sent — copy recognized text from Dictate",
-    failed: "Presenter failed",
-    no_speech: "No speech detected",
-    submit_uncertain: "Submit may have been sent — check destination before retrying",
-  };
-
-  let presenterStatus: PresenterStatus | null = $state(null);
-
-  function isPresenterStatus(value: string): value is PresenterStatus {
-    return Object.prototype.hasOwnProperty.call(presenterStatusLabels, value);
-  }
-
   onMount(() => {
     let disposed = false;
     let revision = 0;
@@ -186,13 +146,9 @@
         testError = "";
       }
     }).then(remember);
-    const presenterStatusListener = listen("presenter-status", (event) => {
-      if (typeof event.payload !== "string" || !isPresenterStatus(event.payload)) return;
-      presenterStatus = event.payload;
-    }).then(remember);
     // A failed background dictation may create this window after its event.
     // Recover the persisted-in-memory result without racing newer events.
-    Promise.all([errorListener, resultListener, stateListener, presenterStatusListener]).then(async () => {
+    Promise.all([errorListener, resultListener, stateListener]).then(async () => {
       const initialRevision = revision;
       const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
       if (!disposed && revision === initialRevision) {
@@ -554,27 +510,6 @@
     if (ok) {
       models = await getModelInfo();
     }
-  }
-
-  async function onHotkeyModeChange(e: Event) {
-    const value = (e.target as HTMLSelectElement).value as HotkeyMode;
-    // Freeze legacy routing before leaving ordinary mode, including across
-    // restarts while Presenter is selected. This does not change its bindings.
-    if (value === "presenter" && settings && settings.hotkey_mode !== "presenter") {
-      const mode = settings.hotkey_mode;
-      const profiles = settings.hotkey_profiles.map((profile) =>
-        profile.push_to_talk_shortcut || profile.toggle_shortcut
-          ? profile
-          : profileWithShortcut(profile, mode === "toggle" ? "toggle_shortcut" : "push_to_talk_shortcut", profile.shortcut, mode)
-      );
-      if (!(await applySetting(() => setHotkeyProfiles(profiles)))) return;
-    }
-    await applySetting(() => setHotkeyMode(value));
-  }
-
-  async function onPresenterSave(config: PresenterConfig): Promise<string | null> {
-    const ok = await applySetting(() => setPresenterConfig(config));
-    return ok ? null : settingsError || "Failed to save presenter settings.";
   }
 
   async function onAutoPasteToggle() {
@@ -1226,14 +1161,14 @@
     return formatShortcutDisplay(shortcut, platform);
   }
 
-  function beginHotkeyCapture(profileId: string, slot: ShortcutSlot) {
+  function beginHotkeyCapture(profileId: string, slot: ExplicitShortcutSlot) {
     hotkeyCaptureGeneration += 1;
     recordingProfileId = profileId;
     recordingShortcutSlot = slot;
     hotkeyError = "";
   }
 
-  async function onHotkeyKeydown(e: KeyboardEvent, profileId: string, slot: ShortcutSlot) {
+  async function onHotkeyKeydown(e: KeyboardEvent, profileId: string, slot: ExplicitShortcutSlot) {
     const captureGeneration = hotkeyCaptureGeneration;
     e.preventDefault();
     e.stopPropagation();
@@ -1310,11 +1245,7 @@
     if (!currentSettings) return;
     const profiles = currentSettings.hotkey_profiles.map((profile) =>
       profile.id === profileId
-        ? slot === "presenter_shortcut"
-          ? profile.push_to_talk_shortcut || profile.toggle_shortcut
-            ? profileWithShortcut(profile, profile.push_to_talk_shortcut ? "push_to_talk_shortcut" : "toggle_shortcut", shortcut, "presenter")
-            : { ...profile, shortcut }
-          : profileWithShortcut(profile, slot, shortcut, currentSettings.hotkey_mode)
+        ? profileWithShortcut(profile, slot, shortcut, currentSettings.hotkey_mode)
         : profile
     );
     setHotkeyProfiles(profiles)
@@ -1408,12 +1339,6 @@
     }
   }
 
-  function presenterProfileShortcuts(): string[] {
-    return settings
-      ? settings.hotkey_profiles.flatMap((profile) => profileShortcutValues(profile, "presenter"))
-      : [];
-  }
-
 </script>
 
 <div class="settings-window">
@@ -1451,7 +1376,7 @@
       {#if activeTab === "dictate"}
         <div class="field profile-field">
           <div class="profile-heading">
-            <span class="field-label">{settings.hotkey_mode === "presenter" ? "Presenter start shortcuts" : "Dictation shortcuts"}</span>
+            <span class="field-label">Dictation shortcuts</span>
             <button class="link-btn" onclick={addProfile}>+ Add language</button>
           </div>
           {#each settings.hotkey_profiles as profile (profile.id)}
@@ -1476,58 +1401,36 @@
                   <option value="auto">Auto-detect</option>
                 </select>
               </div>
-              {#if settings.hotkey_mode === "presenter"}
-                <div class="presenter-start-control">
-                  <span class="shortcut-label">Presenter start</span>
-                  {#if recordingProfileId === profile.id && recordingShortcutSlot === "presenter_shortcut"}
-                    <button
-                      class="hotkey-recorder recording"
-                      bind:this={hotkeyRecorderEl}
-                      aria-label={`${profile.name} Presenter start shortcut`}
-                      onkeydown={(event) => onHotkeyKeydown(event, profile.id, "presenter_shortcut")}
-                      onblur={() => { recordingProfileId = null; recordingShortcutSlot = null; hotkeyError = ""; }}
-                    >Press shortcut...</button>
-                  {:else}
-                    <button
-                      class="hotkey-recorder"
-                      aria-label={`${profile.name} Presenter start shortcut`}
-                      onclick={() => beginHotkeyCapture(profile.id, "presenter_shortcut")}
-                    >{formatHotkeyDisplay(profile.shortcut)}</button>
-                  {/if}
-                  <div class="hotkey-hint">Presenter uses this one start shortcut. Push-to-talk and Toggle bindings are configured in Profile shortcuts mode.</div>
-                </div>
-              {:else}
-                <div class="shortcut-grid">
-                  {#each shortcutControls as shortcutControl}
-                    <div class="shortcut-control">
-                      <span class="shortcut-label">{shortcutControl.label}</span>
-                      {#if recordingProfileId === profile.id && recordingShortcutSlot === shortcutControl.slot}
-                        <button
-                          class="hotkey-recorder recording"
-                          bind:this={hotkeyRecorderEl}
-                          aria-label={`${profile.name} ${shortcutControl.label} shortcut`}
-                          onkeydown={(event) => onHotkeyKeydown(event, profile.id, shortcutControl.slot)}
-                          onblur={() => { recordingProfileId = null; recordingShortcutSlot = null; hotkeyError = ""; }}
-                        >Press shortcut...</button>
-                      {:else}
-                        <button
-                          class="hotkey-recorder"
-                          aria-label={`${profile.name} ${shortcutControl.label} shortcut`}
-                          onclick={() => beginHotkeyCapture(profile.id, shortcutControl.slot)}
-                        >{formatHotkeyDisplay(displayProfileShortcut(profile, shortcutControl.slot, settings.hotkey_mode) || "Not set")}</button>
-                      {/if}
-                      {#if profile.push_to_talk_shortcut && profile.toggle_shortcut}
-                        <button
-                          type="button"
-                          class="shortcut-clear"
-                          aria-label={`Clear ${shortcutControl.label} shortcut for ${profile.name}`}
-                          onclick={() => clearProfileShortcut(profile.id, shortcutControl.slot)}
-                        >Clear</button>
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-              {/if}
+              <div class="shortcut-grid">
+                {#each shortcutControls as shortcutControl}
+                  <div class="shortcut-control">
+                    <span class="shortcut-label">{shortcutControl.label}</span>
+                    {#if recordingProfileId === profile.id && recordingShortcutSlot === shortcutControl.slot}
+                      <button
+                        class="hotkey-recorder recording"
+                        bind:this={hotkeyRecorderEl}
+                        aria-label={`${profile.name} ${shortcutControl.label} shortcut`}
+                        onkeydown={(event) => onHotkeyKeydown(event, profile.id, shortcutControl.slot)}
+                        onblur={() => { recordingProfileId = null; recordingShortcutSlot = null; hotkeyError = ""; }}
+                      >Press shortcut...</button>
+                    {:else}
+                      <button
+                        class="hotkey-recorder"
+                        aria-label={`${profile.name} ${shortcutControl.label} shortcut`}
+                        onclick={() => beginHotkeyCapture(profile.id, shortcutControl.slot)}
+                      >{formatHotkeyDisplay(displayProfileShortcut(profile, shortcutControl.slot, settings.hotkey_mode) || "Not set")}</button>
+                    {/if}
+                    {#if profile.push_to_talk_shortcut && profile.toggle_shortcut}
+                      <button
+                        type="button"
+                        class="shortcut-clear"
+                        aria-label={`Clear ${shortcutControl.label} shortcut for ${profile.name}`}
+                        onclick={() => clearProfileShortcut(profile.id, shortcutControl.slot)}
+                      >Clear</button>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
               {#if settings.hotkey_profiles.length > 1}
                 <button class="profile-remove" aria-label={`Remove ${profile.name}`} onclick={() => removeProfile(profile.id)}>Remove</button>
               {/if}
@@ -1567,24 +1470,6 @@
             Push to talk starts while held; Toggle starts and stops with each press. They are independent and either or both may be configured. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}{" "}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
           </div>
         </div>
-
-        <div class="field">
-          <label for="hotkey-mode">Dictation behavior</label>
-          <select id="hotkey-mode" value={settings.hotkey_mode} onchange={onHotkeyModeChange}>
-            <option value={settings.hotkey_mode === "toggle" ? "toggle" : "push"}>Profile shortcuts</option>
-            <option value="presenter">Presenter</option>
-          </select>
-          <div class="hotkey-hint">Presenter is a separate opt-in mode with finish/cancel controls; it does not replace the per-profile push-to-talk and toggle bindings.</div>
-        </div>
-
-        {#if settings.hotkey_mode === "presenter"}
-          <PresenterSettings
-            config={settings.presenter}
-            profileShortcuts={presenterProfileShortcuts()}
-            {platform}
-            onSave={onPresenterSave}
-          />
-        {/if}
 
         <div class="field-row">
           <span class="field-label">Auto-paste transcription</span>
@@ -1628,11 +1513,6 @@
           </button>
           {#if testError}
             <div class="transcribe-error">{testError}</div>
-          {/if}
-          {#if presenterStatus}
-            <div class="presenter-status" role="status" aria-live="polite">
-              {presenterStatusLabels[presenterStatus]}
-            </div>
           {/if}
           <textarea
             class="test-result"
@@ -2776,13 +2656,6 @@
   .test-record-btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
-  }
-
-  .presenter-status {
-    margin-top: 8px;
-    color: var(--text-muted);
-    font-size: 12px;
-    line-height: 1.4;
   }
 
   .recording-dot {

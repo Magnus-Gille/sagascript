@@ -72,8 +72,6 @@ Existing profiles without explicit per-mode shortcuts retain their saved
 shortcut and legacy push/toggle behavior. Opening Settings does not migrate
 or save them. Once either per-mode shortcut is configured, those explicit
 bindings determine the behavior, independently of the legacy global mode.
-Presenter remains a separate mode: it uses the profile's primary shortcut
-to start and its dedicated Finish/Cancel shortcuts, not the toggle binding.
 
 ## Extended function-key shortcuts
 

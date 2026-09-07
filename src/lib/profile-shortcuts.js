@@ -67,7 +67,7 @@ function nonEmpty(value) {
 /**
  * @param {ShortcutProfile} profile
  * @param {"push_to_talk_shortcut"|"toggle_shortcut"} slot
- * @param {"push"|"toggle"|"presenter"} hotkeyMode
+ * @param {"push"|"toggle"} hotkeyMode
  * @returns {string}
  */
 export function displayProfileShortcut(profile, slot, hotkeyMode) {
@@ -77,7 +77,7 @@ export function displayProfileShortcut(profile, slot, hotkeyMode) {
   if (hasAnyExplicitBinding) return "";
   // Legacy settings are shown in the slot selected by the old global mode,
   // but this read-only migration view must not manufacture explicit fields.
-  if (hotkeyMode === slotPrefixToMode(slot) || (hotkeyMode === "presenter" && slot === "push_to_talk_shortcut")) {
+  if (hotkeyMode === slotPrefixToMode(slot)) {
     return nonEmpty(profile.shortcut);
   }
   return "";
@@ -93,23 +93,22 @@ function slotPrefixToMode(slot) {
 
 /**
  * Return the bindings that should be considered when checking registration
- * health and Presenter collisions. Explicit bindings replace legacy shortcut
- * routing for that profile; a profile with neither remains legacy-compatible.
+ * health. Explicit bindings replace legacy shortcut routing for that profile;
+ * a profile with neither remains legacy-compatible.
  *
  * @param {ShortcutProfile} profile
- * @param {"push"|"toggle"|"presenter"} hotkeyMode
+ * @param {"push"|"toggle"} hotkeyMode
  * @returns {string[]}
  */
 export function profileShortcutValues(profile, hotkeyMode = "push") {
   const push = nonEmpty(profile.push_to_talk_shortcut);
   const toggle = nonEmpty(profile.toggle_shortcut);
   const legacy = nonEmpty(profile.shortcut);
-  if (hotkeyMode === "presenter") return legacy ? [legacy] : [];
   if (push || toggle) return [push, toggle].filter(Boolean);
   return legacy ? [legacy] : [];
 }
 
-/** @param {ShortcutProfile[]} profiles @param {"push"|"toggle"|"presenter"} hotkeyMode @returns {string[]} */
+/** @param {ShortcutProfile[]} profiles @param {"push"|"toggle"} hotkeyMode @returns {string[]} */
 export function allProfileShortcutValues(profiles, hotkeyMode = "push") {
   return profiles.flatMap((profile) => profileShortcutValues(profile, hotkeyMode));
 }
@@ -118,7 +117,7 @@ export function allProfileShortcutValues(profiles, hotkeyMode = "push") {
  * @param {ShortcutProfile} profile
  * @param {"push_to_talk_shortcut"|"toggle_shortcut"} slot
  * @param {string|null|undefined} value
- * @param {"push"|"toggle"|"presenter"} [hotkeyMode]
+ * @param {"push"|"toggle"} [hotkeyMode]
  * @returns {ShortcutProfile}
  */
 export function profileWithShortcut(profile, slot, value, hotkeyMode = "push") {

@@ -18,7 +18,7 @@ use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 use crate::hotkey::configuration::HotkeyChange;
 use sagascript_core::audio::decoder;
 use sagascript_core::settings::{
-    validate_hotkey, HotkeyMode, HotkeyProfile, Language, PresenterConfig, Settings, WhisperModel,
+    validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
 };
 use sagascript_core::transcription::{
     model, recommended_parallel_chunks, ContextProfile, TranscribeOptions, WhisperBackend,
@@ -503,16 +503,6 @@ pub async fn set_hotkey_mode(
     mode: HotkeyMode,
 ) -> Result<(), String> {
     apply_hotkey_change(app, controller, health, HotkeyChange::Mode(mode))
-}
-
-#[tauri::command]
-pub async fn set_presenter_config(
-    app: tauri::AppHandle,
-    controller: State<'_, SharedController>,
-    health: State<'_, HotkeyHealth>,
-    config: PresenterConfig,
-) -> Result<(), String> {
-    apply_hotkey_change(app, controller, health, HotkeyChange::Presenter(config))
 }
 
 #[tauri::command]
@@ -1106,12 +1096,6 @@ pub async fn cancel_recording(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
 ) -> Result<(), String> {
-    if controller.lock().unwrap().is_presenter_session() {
-        let handle = app.clone();
-        app.run_on_main_thread(move || crate::presenter::cancel(&handle))
-            .map_err(|error| error.to_string())?;
-        return Ok(());
-    }
     let mut ctrl = controller.lock().unwrap();
     ctrl.cancel_recording();
     drop(ctrl);
