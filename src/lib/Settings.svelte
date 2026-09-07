@@ -2399,7 +2399,7 @@
 
   .dictionary-actions button:disabled,
   .dialog-actions button:disabled {
-    cursor: wait;
+    cursor: default;
     opacity: 0.6;
   }
 

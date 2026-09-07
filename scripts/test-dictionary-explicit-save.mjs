@@ -288,6 +288,23 @@ test("Discard restores the saved source without persisting", () => {
   assert.equal(state.calls.length, 0);
 });
 
+test("clean dictionary action buttons do not advertise an active wait", () => {
+  const disabledActionRule = settingsSource.match(
+    /\.dictionary-actions button:disabled,[\s\S]*?opacity:\s*0\.6;/,
+  )?.[0];
+  assert.ok(disabledActionRule, "dictionary disabled-button styling should remain explicit");
+  assert.match(
+    disabledActionRule,
+    /cursor:\s*default/,
+    "a clean disabled Save button must not show macOS's spinning wait cursor",
+  );
+  assert.doesNotMatch(
+    disabledActionRule,
+    /cursor:\s*wait/,
+    "the disabled state is also used when no save is in progress",
+  );
+});
+
 test("dirty scope navigation offers Save, Discard, and Stay", async () => {
   const exercise = createHarness();
   input(exercise, "global draft");
