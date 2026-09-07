@@ -34,7 +34,7 @@ test("dictionary scope exposes only explicit profiles and keeps migration guidan
   assert.match(settingsSource, /function explicitProfiles\(source: Settings \| null = settings\)/);
   assert.match(settingsSource, /profile\.language !== "auto"/);
   assert.match(settingsSource, /let glossaryScopeId: string = \$state\(""\)/);
-  assert.match(settingsSource, /<select id="dictionary-scope" value=\{glossaryScopeId\} onchange=\{onGlossaryScopeChange\}>/);
+  assert.match(settingsSource, /<select id="dictionary-scope" value=\{glossaryScopeId\} onchange=\{onGlossaryScopeChange\} disabled=\{glossarySaving\}>/);
   assert.match(settingsSource, /<option value="">Global hints<\/option>/);
   assert.match(settingsSource, /Global entries are hint-only and remain stored/);
   assert.match(settingsSource, /copy an entry into the explicit-language profile/);
@@ -52,7 +52,7 @@ test("scope switching is local and stale saves cannot overwrite a newer scope", 
   assert.ok(switchStart >= 0 && switchEnd > switchStart);
   const switchSource = settingsSource.slice(switchStart, switchEnd);
   assert.doesNotMatch(switchSource, /setInitialPrompt|setProfileGlossary|applySetting/);
-  assert.match(settingsSource, /let glossaryScopeGeneration = 0/);
+  assert.match(settingsSource, /let glossaryScopeGeneration = \$state\(0\)/);
   assert.match(settingsSource, /function isCurrentGlossaryRequest\(request: GlossarySaveRequest\)[\s\S]*request\.generation === glossaryScopeGeneration[\s\S]*request\.scopeId === glossaryScopeId[\s\S]*request\.draftGeneration === glossaryDraftGeneration/);
   assert.doesNotMatch(settingsSource, /else if \(!conflict && settings\)[\s\S]*glossaryDraft = glossarySourceForScope/);
 });
@@ -62,15 +62,14 @@ test("clean scopes follow persisted refreshes while dirty and newer drafts survi
   assert.match(settingsSource, /const previousStored = lastStoredGlossarySources\[currentScope\]/);
   assert.match(settingsSource, /glossaryDraft === previousStored/);
   assert.match(settingsSource, /lastStoredGlossarySources\[currentScope\] = currentStored/);
-  assert.match(settingsSource, /let glossaryDraftGeneration = 0/);
+  assert.match(settingsSource, /let glossaryDraftGeneration = \$state\(0\)/);
   assert.match(settingsSource, /glossaryDraftGeneration \+= 1/);
   assert.match(settingsSource, /draftGeneration: glossaryDraftGeneration/);
   assert.match(settingsSource, /let requestIsCurrent\s*=\s*[\s\S]*draftGeneration === glossaryDraftGeneration/);
-  assert.match(settingsSource, /if \(!requestIsCurrent\) return;/);
 });
 
 test("dictionary saves use the edit baseline and preserve concurrent conflicts", () => {
-  assert.match(settingsSource, /let glossaryEditBaseline: \{ scopeId: string; source: string; generation: number \} \| null = null/);
+  assert.match(settingsSource, /let glossaryEditBaseline: \{ scopeId: string; source: string; generation: number \} \| null = \$state\(null\)/);
   assert.match(settingsSource, /const editBaseline = glossaryEditBaseline/);
   assert.match(settingsSource, /editBaseline\.generation <= draftGeneration/);
   assert.match(settingsSource, /setInitialPrompt\(value, expectedSource\)/);
@@ -81,9 +80,7 @@ test("dictionary saves use the edit baseline and preserve concurrent conflicts",
   assert.match(settingsSource, /const conflict = saveError\.value\.startsWith\(dictionaryConflictPrefix\)/);
   assert.match(settingsSource, /glossaryEditBaseline === editBaseline/);
   assert.match(settingsSource, /glossaryEditBaseline = \{ \.\.\.editBaseline, source: value \}/);
-  assert.match(settingsSource, /if \(saved\) \{[\s\S]*glossaryEditBaseline = null;/);
   assert.match(settingsSource, /settingsError = saved \? "" : saveError\.value/);
-  assert.match(settingsSource, /if \(previousConflict\) \{[\s\S]*settingsError = ""/);
   assert.match(settingsSource, /This dictionary changed elsewhere\. Your draft is preserved[\s\S]*close and reopen Settings/);
   assert.match(settingsSource, /type RecoveredGlossaryDraft = \{ scopeId: string; draft: string; conflicted: boolean \}/);
   assert.match(settingsSource, /let recoveredGlossaryDrafts: RecoveredGlossaryDraft\[\] = \$state\(\[\]\)/);
@@ -100,15 +97,14 @@ test("late saves preserve scoped drafts without replacing newer scope state", ()
   assert.match(settingsSource, /else \{\s*rememberGlossaryRecovery\(request\.scopeId, request\.value, true\);/);
   assert.match(settingsSource, /function isCurrentGlossaryRequest\(request: GlossarySaveRequest\)/);
   assert.match(settingsSource, /requestIsCurrent = isCurrentGlossaryRequest\(request\);/);
-  assert.match(settingsSource, /if \(!requestIsCurrent\) return;/);
-  assert.match(settingsSource, /const previousConflict = glossaryConflictScopeId === previousScope/);
-  assert.match(settingsSource, /rememberGlossaryRecovery\(previousScope, glossaryDraft, previousConflict\)/);
   assert.match(settingsSource, /recoveredGlossaryDrafts as recovery \(recovery\.scopeId \+ "\\u0000" \+ recovery\.draft\)/);
 });
 
-test("clean unchanged blur does not invoke a dictionary save", () => {
-  assert.match(settingsSource, /if \(!editBaseline && value === \(lastStoredGlossarySources\[scopeId\] \?\? glossarySourceForScope\(scopeId\)\)\) return;/);
-  assert.match(settingsSource, /setProfileGlossary\(scopeId, value, expectedSource\), saveError, false/);
+test("dictionary edits use explicit Save and never persist from blur", () => {
+  assert.doesNotMatch(settingsSource, /onblur=\{onInitialPromptBlur\}/);
+  assert.match(settingsSource, /oninput=\{onGlossaryInput\}/);
+  assert.match(settingsSource, /onclick=\{\(\) => void saveGlossary\(\)\}/);
+  assert.match(settingsSource, /disabled=\{!glossaryHasUnsavedChanges\(\) \|\| glossarySaving\}/);
 });
 
 test("non-CAS dictionary failures retain the typed draft and baseline", () => {

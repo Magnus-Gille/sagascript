@@ -68,7 +68,8 @@
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);
   let models: WhisperModel[] = $state([]);
-  let activeTab: "dictate" | "transcribe" | "settings" = $state("dictate");
+  type SettingsTab = "dictate" | "transcribe" | "settings";
+  let activeTab: SettingsTab = $state("dictate");
   let downloading: string | null = $state(null);
   let downloadingName: string = $state("");
   let downloadProgress: number = $state(0);
@@ -158,7 +159,7 @@
     const errorListener = listen<string>("error", (event) => {
       revision++;
       testError = event.payload;
-      activeTab = "dictate";
+      requestTabChange("dictate");
     }).then(remember);
     const resultListener = listen<string>("transcription-result", (event) => {
       revision++;
@@ -223,10 +224,18 @@
   let glossaryScopeId: string = $state("");
   let glossaryDraft: string = $state("");
   let glossaryDraftInitialized = false;
-  let glossaryScopeGeneration = 0;
-  let glossaryDraftGeneration = 0;
+  let glossaryScopeGeneration = $state(0);
+  let glossaryDraftGeneration = $state(0);
   let lastStoredGlossarySources: Record<string, string> = {};
-  let glossaryEditBaseline: { scopeId: string; source: string; generation: number } | null = null;
+  let glossaryEditBaseline: { scopeId: string; source: string; generation: number } | null = $state(null);
+  let glossarySaving: boolean = $state(false);
+  let glossarySaveInFlight: Promise<boolean> | null = null;
+  type PendingGlossaryNavigation =
+    | { kind: "scope"; scopeId: string }
+    | { kind: "tab"; tab: SettingsTab; afterNavigate?: () => void };
+  let pendingGlossaryNavigation: PendingGlossaryNavigation | null = $state(null);
+  let glossaryDialogEl: HTMLDivElement | undefined = $state();
+  let glossaryReturnFocusEl: HTMLElement | null = null;
   type RecoveredGlossaryDraft = { scopeId: string; draft: string; conflicted: boolean };
   type GlossarySaveRequest = {
     scopeId: string;
@@ -238,6 +247,30 @@
   let glossaryConflictScopeId: string | null = $state(null);
 
   const dictionaryConflictPrefix = "Dictionary changed elsewhere:";
+
+  // The dictionary editor is intentionally local state. Settings reloads may
+  // update the saved source, but must never replace a draft that differs from
+  // the source we last saw for this scope.
+  function glossaryHasUnsavedChanges(): boolean {
+    if (glossarySaving) return true;
+    const baseline = glossaryEditBaseline;
+    const draftChanged = baseline?.scopeId === glossaryScopeId
+      && glossaryDraft !== baseline.source;
+    const conflict = glossaryConflictScopeId === glossaryScopeId
+      && settingsError.startsWith(dictionaryConflictPrefix);
+    return Boolean(draftChanged || conflict);
+  }
+
+  $effect(() => {
+    if (!pendingGlossaryNavigation || !glossaryDialogEl) return;
+    queueMicrotask(() => {
+      if (glossarySaving) {
+        glossaryDialogEl?.focus();
+      } else {
+        glossaryDialogEl?.querySelector<HTMLButtonElement>("[data-dialog-stay]")?.focus();
+      }
+    });
+  });
 
   function explicitProfiles(source: Settings | null = settings): HotkeyProfile[] {
     return source?.hotkey_profiles.filter((profile) => profile.language !== "auto") ?? [];
@@ -410,7 +443,7 @@
     listen("navigate_tab", (event: any) => {
       const t = event.payload;
       if (t === "dictate" || t === "transcribe" || t === "settings") {
-        activeTab = t;
+        requestTabChange(t);
       }
     });
 
@@ -423,8 +456,7 @@
         dragOver = false;
         const paths = event.payload.paths;
         if (paths.length > 0) {
-          activeTab = "transcribe";
-          handleFileTranscription(paths[0]);
+          requestTabChange("transcribe", () => handleFileTranscription(paths[0]));
         }
       } else {
         dragOver = false;
@@ -467,7 +499,7 @@
         const params = new URLSearchParams(window.location.search);
         const tab = params.get("tab");
         if (tab === "dictate" || tab === "transcribe" || tab === "settings") {
-          activeTab = tab;
+          requestTabChange(tab);
         }
       } catch (e: any) {
         initError = typeof e === "string" ? e : e?.message || "Failed to load settings.";
@@ -617,66 +649,81 @@
     }
   }
 
-  async function onInitialPromptBlur(e: Event) {
+  async function saveGlossary(): Promise<boolean> {
+    if (glossarySaveInFlight) return glossarySaveInFlight;
+
     const request: GlossarySaveRequest = {
       scopeId: glossaryScopeId,
       generation: glossaryScopeGeneration,
       draftGeneration: glossaryDraftGeneration,
-      value: (e.target as HTMLTextAreaElement).value,
+      value: glossaryDraft,
     };
     const scopeId = request.scopeId;
     const draftGeneration = request.draftGeneration;
-    const value = (e.target as HTMLTextAreaElement).value;
+    const value = request.value;
     const editBaseline = glossaryEditBaseline;
     const expectedSource = editBaseline?.scopeId === scopeId
       && editBaseline.generation <= draftGeneration
       ? editBaseline.source
       : lastStoredGlossarySources[scopeId] ?? glossarySourceForScope(scopeId);
-    glossaryDraft = value;
-    if (!settings || !isValidGlossaryScope(scopeId)) return;
-    if (!editBaseline && value === (lastStoredGlossarySources[scopeId] ?? glossarySourceForScope(scopeId))) return;
+
+    if (!settings || !isValidGlossaryScope(scopeId)) return false;
+    if (!glossaryHasUnsavedChanges()) {
+      if (glossaryEditBaseline?.scopeId === scopeId) glossaryEditBaseline = null;
+      return true;
+    }
 
     const saveError = { value: "" };
-    const saved = await applySetting(() => scopeId === ""
-      ? setInitialPrompt(value, expectedSource)
-      : setProfileGlossary(scopeId, value, expectedSource), saveError, false);
-    const conflict = saveError.value.startsWith(dictionaryConflictPrefix);
-    let requestIsCurrent = isCurrentGlossaryRequest(request);
-    if (conflict) {
-      await refreshDictionaryAfterConflict(saveError.value, request);
-      requestIsCurrent = isCurrentGlossaryRequest(request);
-    } else if (!saved && !requestIsCurrent) {
-      rememberGlossaryRecovery(scopeId, value);
-    }
+    const operation = (async (): Promise<boolean> => {
+      glossarySaving = true;
+      settingsError = "";
+      try {
+        const saved = await applySetting(() => scopeId === ""
+          ? setInitialPrompt(value, expectedSource)
+          : setProfileGlossary(scopeId, value, expectedSource), saveError, false);
+        const conflict = saveError.value.startsWith(dictionaryConflictPrefix);
+        let requestIsCurrent = isCurrentGlossaryRequest(request);
+        if (conflict) {
+          await refreshDictionaryAfterConflict(saveError.value, request);
+          requestIsCurrent = isCurrentGlossaryRequest(request);
+        } else if (!saved && !requestIsCurrent) {
+          rememberGlossaryRecovery(scopeId, value);
+        }
 
-    if (requestIsCurrent) {
-      settingsError = saved ? "" : saveError.value;
-      if (saved) glossaryConflictScopeId = null;
-    }
-    if (saved) removeGlossaryRecovery(scopeId, value);
+        if (requestIsCurrent) {
+          settingsError = saved ? "" : saveError.value;
+          if (saved) glossaryConflictScopeId = null;
+        }
+        if (saved) removeGlossaryRecovery(scopeId, value);
 
-    // If our own save won the CAS race while the user kept typing in the
-    // same edit lineage, advance only that lineage's baseline to our value.
-    // A reselected scope has a different baseline object and is never
-    // silently advanced from a fresh settings read.
-    if (
-      saved
-      && editBaseline
-      && glossaryEditBaseline === editBaseline
-      && editBaseline.scopeId === scopeId
-    ) {
-      if (draftGeneration === glossaryDraftGeneration) {
-        glossaryEditBaseline = null;
-      } else {
-        glossaryEditBaseline = { ...editBaseline, source: value };
+        // If our own save won the CAS race while the user kept typing in the
+        // same edit lineage, advance only that lineage's baseline to our
+        // value. A stale request never clears a newer draft.
+        if (
+          saved
+          && editBaseline
+          && glossaryEditBaseline === editBaseline
+          && editBaseline.scopeId === scopeId
+        ) {
+          if (draftGeneration === glossaryDraftGeneration) {
+            glossaryEditBaseline = null;
+          } else {
+            glossaryEditBaseline = { ...editBaseline, source: value };
+          }
+        }
+
+        // A scope removal/reload while the invoke was pending owns the
+        // textarea now; never navigate based on a stale request.
+        return saved && requestIsCurrent;
+      } finally {
+        glossarySaving = false;
       }
-    }
-
-    // A selector change while the invoke was pending owns the textarea now;
-    // never overwrite its newer scope with this request's result.
-    if (!requestIsCurrent) return;
-    if (saved) {
-      if (glossaryEditBaseline === editBaseline) glossaryEditBaseline = null;
+    })();
+    glossarySaveInFlight = operation;
+    try {
+      return await operation;
+    } finally {
+      if (glossarySaveInFlight === operation) glossarySaveInFlight = null;
     }
   }
 
@@ -692,27 +739,138 @@
     glossaryDraft = (e.target as HTMLTextAreaElement).value;
   }
 
-  function onGlossaryScopeChange(e: Event) {
-    const nextScope = (e.target as HTMLSelectElement).value;
-    if (!settings || !isValidGlossaryScope(nextScope)) return;
-    const previousScope = glossaryScopeId;
-    const previousConflict = glossaryConflictScopeId === previousScope
-      && settingsError.startsWith(dictionaryConflictPrefix);
-    if (
-      glossaryEditBaseline?.scopeId === previousScope
-      || previousConflict
-    ) {
-      rememberGlossaryRecovery(previousScope, glossaryDraft, previousConflict);
+  function discardGlossaryChanges(): void {
+    if (!settings || glossarySaving) return;
+    const currentSource = glossarySourceForScope(glossaryScopeId, settings);
+    glossaryDraftGeneration += 1;
+    glossaryDraft = currentSource;
+    glossaryDraftInitialized = true;
+    lastStoredGlossarySources[glossaryScopeId] = currentSource;
+    glossaryEditBaseline = null;
+    if (glossaryConflictScopeId === glossaryScopeId) {
+      glossaryConflictScopeId = null;
+      if (settingsError.startsWith(dictionaryConflictPrefix)) settingsError = "";
     }
+  }
+
+  function commitGlossaryScopeChange(nextScope: string): void {
+    if (!settings || !isValidGlossaryScope(nextScope)) return;
     glossaryScopeGeneration += 1;
     glossaryDraftGeneration += 1;
     glossaryEditBaseline = null;
-    if (previousConflict) {
-      settingsError = "";
-      glossaryConflictScopeId = null;
-    }
+    glossaryConflictScopeId = null;
+    settingsError = settingsError.startsWith(dictionaryConflictPrefix) ? "" : settingsError;
     glossaryScopeId = nextScope;
     glossaryDraft = glossarySourceForScope(nextScope, settings);
+    glossaryDraftInitialized = true;
+    lastStoredGlossarySources[nextScope] = glossaryDraft;
+  }
+
+  function onGlossaryScopeChange(e: Event) {
+    const nextScope = (e.target as HTMLSelectElement).value;
+    if (!settings || !isValidGlossaryScope(nextScope)) return;
+    if (nextScope === glossaryScopeId) return;
+    if (glossaryHasUnsavedChanges()) {
+      // The browser changes a select's displayed value before onchange fires.
+      // Restore the current scope until the user makes an explicit decision.
+      (e.currentTarget as HTMLSelectElement).value = glossaryScopeId;
+      promptGlossaryNavigation({ kind: "scope", scopeId: nextScope }, e.currentTarget as HTMLElement);
+      return;
+    }
+    commitGlossaryScopeChange(nextScope);
+  }
+
+  function promptGlossaryNavigation(
+    pending: PendingGlossaryNavigation,
+    returnFocusEl?: HTMLElement,
+  ): void {
+    const activeElement = returnFocusEl
+      ?? (typeof document === "undefined" ? null : document.activeElement);
+    glossaryReturnFocusEl = activeElement instanceof HTMLElement ? activeElement : null;
+    pendingGlossaryNavigation = pending;
+  }
+
+  function restoreGlossaryNavigationFocus(): void {
+    const returnFocusEl = glossaryReturnFocusEl;
+    glossaryReturnFocusEl = null;
+    queueMicrotask(() => {
+      if (returnFocusEl?.isConnected && !returnFocusEl.matches(":disabled")) {
+        returnFocusEl.focus();
+      }
+    });
+  }
+
+  function onGlossaryDialogKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!glossarySaving) stayOnGlossaryDraft();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const dialog = glossaryDialogEl;
+    if (!dialog) return;
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+      "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])",
+    )).filter((element) => !element.matches(":disabled"));
+    event.preventDefault();
+    if (focusable.length === 0) {
+      dialog.focus();
+      return;
+    }
+
+    const activeElement = typeof document === "undefined" ? null : document.activeElement;
+    const activeIndex = activeElement ? focusable.indexOf(activeElement as HTMLElement) : -1;
+    const nextIndex = activeIndex < 0
+      ? (event.shiftKey ? focusable.length - 1 : 0)
+      : (activeIndex + (event.shiftKey ? -1 : 1) + focusable.length) % focusable.length;
+    focusable[nextIndex]?.focus();
+  }
+
+  function finishPendingGlossaryNavigation(pending: PendingGlossaryNavigation): void {
+    pendingGlossaryNavigation = null;
+    restoreGlossaryNavigationFocus();
+    if (pending.kind === "scope") {
+      commitGlossaryScopeChange(pending.scopeId);
+    } else {
+      activeTab = pending.tab;
+      pending.afterNavigate?.();
+    }
+  }
+
+  async function saveAndFinishGlossaryNavigation(): Promise<void> {
+    const pending = pendingGlossaryNavigation;
+    if (!pending || glossarySaving) return;
+    if (await saveGlossary() && pendingGlossaryNavigation === pending) {
+      finishPendingGlossaryNavigation(pending);
+    }
+  }
+
+  function discardAndFinishGlossaryNavigation(): void {
+    const pending = pendingGlossaryNavigation;
+    if (!pending || glossarySaving) return;
+    discardGlossaryChanges();
+    finishPendingGlossaryNavigation(pending);
+  }
+
+  function stayOnGlossaryDraft(): void {
+    pendingGlossaryNavigation = null;
+    restoreGlossaryNavigationFocus();
+  }
+
+  function requestTabChange(nextTab: SettingsTab, afterNavigate?: () => void): void {
+    if (nextTab === activeTab) {
+      afterNavigate?.();
+      return;
+    }
+    if (glossarySaving) return;
+    if (glossaryHasUnsavedChanges()) {
+      promptGlossaryNavigation({ kind: "tab", tab: nextTab, afterNavigate });
+      return;
+    }
+    activeTab = nextTab;
+    afterNavigate?.();
   }
 
   async function onBeamSizeChange(e: Event) {
@@ -1206,13 +1364,13 @@
   </header>
 
   <div class="tabs">
-    <button class="tab" class:active={activeTab === "dictate"} onclick={() => (activeTab = "dictate")}>
+    <button class="tab" class:active={activeTab === "dictate"} onclick={() => requestTabChange("dictate")}>
       Dictate
     </button>
-    <button class="tab" class:active={activeTab === "transcribe"} onclick={() => (activeTab = "transcribe")}>
+    <button class="tab" class:active={activeTab === "transcribe"} onclick={() => requestTabChange("transcribe")}>
       Transcribe
     </button>
-    <button class="tab" class:active={activeTab === "settings"} onclick={() => (activeTab = "settings")}>
+    <button class="tab" class:active={activeTab === "settings"} onclick={() => requestTabChange("settings")}>
       Settings
     </button>
   </div>
@@ -1382,7 +1540,7 @@
         </div>
 
       {:else if activeTab === "transcribe"}
-        <button class="active-config-bar" onclick={() => (activeTab = "settings")}>
+        <button class="active-config-bar" onclick={() => requestTabChange("settings")}>
           <div class="active-config-row">
             <span class="active-config-label">Language</span>
             <span class="active-config-value">{languageLabel(transcribeLanguage())}</span>
@@ -1511,8 +1669,13 @@
         </div>
 
         <div class="field">
-          <label for="initial-prompt">Personal dictionary</label>
-          <select id="dictionary-scope" value={glossaryScopeId} onchange={onGlossaryScopeChange}>
+          <div class="dictionary-heading">
+            <label for="initial-prompt">Personal dictionary</label>
+            {#if glossaryHasUnsavedChanges()}
+              <span class="unsaved-indicator" role="status">Unsaved changes</span>
+            {/if}
+          </div>
+          <select id="dictionary-scope" value={glossaryScopeId} onchange={onGlossaryScopeChange} disabled={glossarySaving}>
             <option value="">Global hints</option>
             {#each explicitProfiles() as profile (profile.id)}
               <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
@@ -1523,17 +1686,31 @@
             class="initial-prompt-input"
             rows="5"
             value={glossaryDraft}
-            onblur={onInitialPromptBlur}
             oninput={onGlossaryInput}
+            disabled={glossarySaving}
             placeholder="OpenRouter = open router | open vrouter&#10;merge = merch&#10;Cloudflare = cloud flare"
           ></textarea>
+          <div class="dictionary-actions">
+            <button
+              type="button"
+              class="primary"
+              onclick={() => void saveGlossary()}
+              disabled={!glossaryHasUnsavedChanges() || glossarySaving}
+            >{glossarySaving ? "Saving…" : "Save changes"}</button>
+            <button
+              type="button"
+              class="secondary"
+              onclick={discardGlossaryChanges}
+              disabled={!glossaryHasUnsavedChanges() || glossarySaving}
+            >Discard changes</button>
+          </div>
           {#if glossaryScopeId === ""}
             <div class="hotkey-hint glossary-migration">
               Global entries are hint-only and remain stored. To enable deterministic alias replacements, copy an entry into the explicit-language profile that should use it.
             </div>
           {:else}
             <div class="hotkey-hint glossary-migration">
-              This explicit-language profile supplies deterministic aliases for its language. Leaving this field saves this profile only; switching scope never moves entries to another dictionary.
+              This explicit-language profile supplies deterministic aliases for its language. Save changes explicitly; switching scope never moves entries to another dictionary.
             </div>
           {/if}
           {#if glossaryConflictScopeId === glossaryScopeId && settingsError.startsWith(dictionaryConflictPrefix)}
@@ -1563,7 +1740,7 @@
           {/if}
           <div class="hotkey-hint">
             One preferred spelling per line. Add exact mishearings after <code>=</code>, separated by <code>|</code>.
-            Plain terms still guide Whisper. Saved automatically when you leave the field and used for live dictation and batch jobs.
+            Plain terms still guide Whisper. Save explicitly to use changes for live dictation and batch jobs.
           </div>
         </div>
 
@@ -1677,6 +1854,46 @@
       </div>
       <div class="download-status-track">
         <div class="download-status-fill" style="width: {downloadProgress}%"></div>
+      </div>
+    </div>
+  {/if}
+
+  {#if pendingGlossaryNavigation}
+    <div class="dialog-backdrop">
+      <div
+        class="unsaved-dialog"
+        bind:this={glossaryDialogEl}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="unsaved-dialog-title"
+        aria-describedby="unsaved-dialog-description"
+        tabindex="-1"
+        onkeydown={onGlossaryDialogKeydown}
+      >
+        <h2 id="unsaved-dialog-title">Unsaved dictionary changes</h2>
+        <p id="unsaved-dialog-description">
+          {pendingGlossaryNavigation.kind === "scope"
+            ? `Save changes before switching to ${glossaryScopeLabel(pendingGlossaryNavigation.scopeId)}?`
+            : "Save changes before leaving Settings?"}
+        </p>
+        {#if settingsError}
+          <div class="hotkey-error" role="alert">{settingsError}</div>
+        {/if}
+        <div class="dialog-actions">
+          <button
+            type="button"
+            class="primary"
+            onclick={() => void saveAndFinishGlossaryNavigation()}
+            disabled={glossarySaving}
+          >{glossarySaving ? "Saving…" : "Save"}</button>
+          <button
+            type="button"
+            class="danger"
+            onclick={discardAndFinishGlossaryNavigation}
+            disabled={glossarySaving}
+          >Discard</button>
+          <button type="button" class="secondary" data-dialog-stay onclick={stayOnGlossaryDraft} disabled={glossarySaving}>Stay</button>
+        </div>
       </div>
     </div>
   {/if}
@@ -2150,10 +2367,71 @@
     line-height: 1.5;
     resize: vertical;
     outline: none;
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   .initial-prompt-input:focus {
     border-color: var(--accent);
+  }
+
+  .dictionary-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .unsaved-indicator {
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .dictionary-actions,
+  .dialog-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+
+  .dictionary-actions button:disabled,
+  .dialog-actions button:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+
+  .dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: color-mix(in srgb, var(--bg) 78%, transparent);
+  }
+
+  .unsaved-dialog {
+    width: min(100%, 420px);
+    padding: 20px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  }
+
+  .unsaved-dialog h2 {
+    margin-bottom: 8px;
+    color: var(--text);
+    font-size: 15px;
+  }
+
+  .unsaved-dialog p {
+    color: var(--text-muted);
+    font-size: 13px;
   }
 
   .loading {

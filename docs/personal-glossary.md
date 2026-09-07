@@ -56,6 +56,10 @@ additional confidence-gated one-edit correction for plain single-word hints.
   Global hints scope or a selected explicit-language profile scope. The global
   file remains visible and editable; clearing or migrating it is not required
   to disable its aliases.
+  Edit the existing text normally, then choose **Save changes** to persist the draft.
+  Typing and leaving the text field do not save. **Discard changes** restores
+  the saved text. An **Unsaved changes** indicator identifies a pending draft;
+  switching dictionary scope or tab asks you to save, discard, or stay.
   If that same dictionary changes through the CLI while you are editing, the
   GUI rejects the stale save and preserves your draft. Copy your edits, then
   switch away and reselect the scope to load the current stored text before
