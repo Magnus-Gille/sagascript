@@ -5,6 +5,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - ".gitattributes"
       - ".github/workflows/windows-package.yml"
       - "package.json"
       - "package-lock.json"
@@ -124,6 +125,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Pin validated Windows build identity
+        run: node scripts/ci-build-identity.mjs --initialize
+
       - name: Install npm dependencies
         run: npm ci
 
@@ -160,6 +164,9 @@ jobs:
         if: matrix.architecture == 'x64'
         shell: pwsh
         run: ./scripts/verify-windows-x64-cpu-policy.ps1 -TargetRoot src-tauri/target -PolicyFile scripts/cmake/windows-x64-portable.cmake
+
+      - name: Verify source before release CLI build
+        run: node scripts/ci-build-identity.mjs --verify
 
       - name: Gate real Windows transcription
         shell: pwsh
@@ -223,6 +230,9 @@ jobs:
             }
           }
 
+      - name: Verify source before installer build
+        run: node scripts/ci-build-identity.mjs --verify
+
       - name: Build unsigned internal installers
         run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }}
 
@@ -230,6 +240,9 @@ jobs:
         if: matrix.architecture == 'x64'
         shell: pwsh
         run: ./scripts/verify-windows-x64-cpu-policy.ps1 -TargetRoot src-tauri/target -PolicyFile scripts/cmake/windows-x64-portable.cmake
+
+      - name: Verify source after installer build
+        run: node scripts/ci-build-identity.mjs --verify
 
       - name: Prepare and verify candidate artifacts
         shell: pwsh
@@ -266,6 +279,7 @@ jobs:
           ./scripts/verify-windows-release.ps1 `
             -CliExe "artifacts\Sagascript-Windows-$architecture-CLI.exe" `
             -ExpectedVersion $version `
+            -ExpectedGitHash $env:SAGASCRIPT_GIT_HASH `
             -Artifacts @(
               "artifacts\Sagascript-Windows-$architecture-Portable.exe",
               "artifacts\Sagascript-Windows-$architecture-CLI.exe",

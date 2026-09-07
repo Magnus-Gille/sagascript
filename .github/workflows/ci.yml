@@ -356,6 +356,9 @@ jobs:
           restore-keys: |
             windows-models-
 
+      - name: Test Windows build identity gates
+        run: node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs
+
       - name: Install npm dependencies
         run: npm ci
 

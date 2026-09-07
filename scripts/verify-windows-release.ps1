@@ -14,7 +14,9 @@ param(
     [ValidateSet("Internal", "Release")]
     [string]$SignaturePolicy = "Internal",
 
-    [string]$ChecksumOutput = "SHA256SUMS-Windows"
+    [string]$ChecksumOutput = "SHA256SUMS-Windows",
+
+    [string]$ExpectedGitHash
 )
 
 Set-StrictMode -Version Latest
@@ -59,6 +61,11 @@ function Invoke-CliProbe {
 if ($ExpectedVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
     throw "ExpectedVersion is not a semantic version: $ExpectedVersion"
 }
+if ($PSBoundParameters.ContainsKey("ExpectedGitHash")) {
+    if ($ExpectedGitHash -cnotmatch '^[0-9a-f]{40}$') {
+        throw "ExpectedGitHash must be exactly 40 lowercase hexadecimal characters when provided"
+    }
+}
 if ($Artifacts.Count -eq 0) {
     throw "Artifacts must contain at least one file"
 }
@@ -89,9 +96,29 @@ if (-not $pathSet.Contains($cliExePath)) {
 }
 
 $versionOutput = Invoke-CliProbe -Executable $cliExePath -Argument "--version"
-$versionPattern = "(?<![0-9.])$([regex]::Escape($ExpectedVersion))(?![0-9.])"
-if ($versionOutput -notmatch $versionPattern) {
-    throw "Version output does not contain exact version '$ExpectedVersion': $versionOutput"
+$versionOutputTrimmed = $versionOutput.Trim()
+if ($PSBoundParameters.ContainsKey("ExpectedGitHash")) {
+    $identityPattern = "\Asagascript $([regex]::Escape($ExpectedVersion)) \(git $([regex]::Escape($ExpectedGitHash)), built (\d{4}-\d{2}-\d{2})\)\z"
+    $identityMatch = [regex]::Match($versionOutputTrimmed, $identityPattern)
+    if (-not $identityMatch.Success) {
+        throw "Version output does not contain the exact clean build identity for '$ExpectedVersion' and '$ExpectedGitHash': $versionOutput"
+    }
+
+    try {
+        [void][DateTime]::ParseExact(
+            $identityMatch.Groups[1].Value,
+            "yyyy-MM-dd",
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None
+        )
+    } catch {
+        throw "Version output contains an invalid UTC build date: $($identityMatch.Groups[1].Value)"
+    }
+} else {
+    $versionPattern = "(?<![0-9.])$([regex]::Escape($ExpectedVersion))(?![0-9.])"
+    if ($versionOutput -notmatch $versionPattern) {
+        throw "Version output does not contain exact version '$ExpectedVersion': $versionOutput"
+    }
 }
 [void](Invoke-CliProbe -Executable $cliExePath -Argument "--help")
 Write-Host "Executable probes passed for Sagascript $ExpectedVersion"

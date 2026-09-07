@@ -4,6 +4,39 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+test("Windows PR CI runs build identity regression tests before compilation", async () => {
+  const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const windows = ci.slice(ci.indexOf("  check-windows:"));
+  const command = "node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs";
+  const checks = windows.indexOf(command);
+  assert.ok(checks > windows.indexOf("name: Install Node.js"));
+  assert.ok(checks < windows.indexOf("name: Cargo check"));
+});
+
+test("Windows candidates pin and verify source identity around release compilation", async () => {
+  const workflow = await readFile(
+    new URL("../.github/workflows/windows-package.yml", import.meta.url),
+    "utf8",
+  );
+  const initialize = workflow.indexOf("node scripts/ci-build-identity.mjs --initialize");
+  const installNode = workflow.indexOf("name: Install Node.js");
+  const installDependencies = workflow.indexOf("name: Install npm dependencies");
+  const rustTests = workflow.indexOf("name: Test and lint Rust workspace");
+  assert.ok(initialize > installNode && initialize < installDependencies);
+  assert.ok(initialize < rustTests);
+
+  const cliBuild = workflow.indexOf("name: Gate real Windows transcription");
+  const installerBuild = workflow.indexOf("name: Build unsigned internal installers");
+  const artifacts = workflow.indexOf("name: Prepare and verify candidate artifacts");
+  const verifies = [...workflow.matchAll(/node scripts\/ci-build-identity\.mjs --verify/g)]
+    .map((match) => match.index);
+  assert.equal(verifies.length, 3);
+  assert.ok(verifies[0] > rustTests && verifies[0] < cliBuild);
+  assert.ok(verifies[1] > cliBuild && verifies[1] < installerBuild);
+  assert.ok(verifies[2] > installerBuild && verifies[2] < artifacts);
+  assert.match(workflow.slice(artifacts), /-ExpectedGitHash \$env:SAGASCRIPT_GIT_HASH/);
+});
+
 const workflow = await readFile(
   new URL("../.github/workflows/windows-package.yml", import.meta.url),
   "utf8",
@@ -19,6 +52,7 @@ const acceptanceScript = await readFile(
 
 test("Windows candidate workflow stays non-publishing and explicitly unsigned", () => {
   assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /- "\.gitattributes"/, "checkout normalization changes must trigger candidate builds");
   assert.match(workflow, /permissions:\s*\n\s*contents: read/);
   assert.match(workflow, /tauri build --ci --bundles nsis,msi --no-sign/);
   assert.match(workflow, /SignaturePolicy Internal/);
