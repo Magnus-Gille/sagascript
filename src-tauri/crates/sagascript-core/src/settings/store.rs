@@ -1451,6 +1451,59 @@ mod tests {
     }
 
     #[test]
+    fn legacy_presenter_settings_fixture_preserves_all_user_state() {
+        with_temp_settings(|path| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(
+                &path,
+                r#"{
+                    "language":"sv",
+                    "whisper_model":"kb-whisper-small",
+                    "hotkey_mode":"presenter",
+                    "hotkey":"Option+Space",
+                    "hotkey_profiles":[{
+                        "id":"swedish",
+                        "name":"Swedish",
+                        "shortcut":"Option+Space",
+                        "language":"sv",
+                        "push_to_talk_shortcut":"Control+Shift+P",
+                        "toggle_shortcut":"Control+Shift+T"
+                    }],
+                    "initial_prompt":"OpenRouter = open router",
+                    "profile_glossaries":{"swedish":"merge = merch"},
+                    "presenter":{
+                        "finish_shortcut":"Control+Shift+Enter",
+                        "cancel_shortcut":"Option+Escape"
+                    }
+                }"#,
+            )
+            .unwrap();
+
+            let loaded = load_from(&path);
+
+            assert_eq!(loaded.language, Language::Swedish);
+            assert_eq!(loaded.whisper_model, WhisperModel::KbWhisperSmall);
+            assert_eq!(loaded.hotkey_mode, HotkeyMode::PushToTalk);
+            assert_eq!(loaded.hotkey, "Option+Space");
+            assert_eq!(loaded.hotkey_profiles.len(), 1);
+            assert_eq!(loaded.hotkey_profiles[0].id, "swedish");
+            assert_eq!(
+                loaded.hotkey_profiles[0].push_to_talk_shortcut.as_deref(),
+                Some("Control+Shift+P")
+            );
+            assert_eq!(
+                loaded.hotkey_profiles[0].toggle_shortcut.as_deref(),
+                Some("Control+Shift+T")
+            );
+            assert_eq!(loaded.initial_prompt, "OpenRouter = open router");
+            assert_eq!(
+                loaded.profile_glossaries.get("swedish").map(String::as_str),
+                Some("merge = merch")
+            );
+        });
+    }
+
+    #[test]
     fn load_from_invalid_enum_value_returns_defaults() {
         with_temp_settings(|path| {
             let dir = path.parent().unwrap();

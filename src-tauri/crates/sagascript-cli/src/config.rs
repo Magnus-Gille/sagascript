@@ -2,8 +2,7 @@ use clap::{Args, Subcommand};
 
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{
-    self, validate_hotkey, HotkeyMode, HotkeyProfile, Language, PresenterConfig,
-    PresenterFinishAction, Settings, WhisperModel,
+    self, validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
 };
 
 #[derive(Args)]
@@ -18,10 +17,9 @@ pub enum ConfigAction {
     #[command(long_about = "\
 Show all settings in a table with their current values and defaults.
 
-Valid keys: language, whisper_model, hotkey_mode (push, toggle, presenter), show_overlay, \
+Valid keys: language, whisper_model, hotkey_mode (push, toggle), show_overlay, \
 auto_paste, auto_select_model, hotkey, initial_prompt, \
-beam_size, temperature_fallback, vad_enabled. Use `sagascript config presenter` \
-for presenter finish/cancel/app actions.")]
+beam_size, temperature_fallback, vad_enabled.")]
     List,
 
     /// Get a single setting value
@@ -29,7 +27,7 @@ for presenter finish/cancel/app actions.")]
         long_about = "\
 Print the current value of a single setting to stdout.
 
-Valid keys: language, whisper_model, hotkey_mode (push, toggle, presenter), show_overlay, \
+Valid keys: language, whisper_model, hotkey_mode (push, toggle), show_overlay, \
 auto_paste, auto_select_model, hotkey, initial_prompt, \
 beam_size, temperature_fallback, vad_enabled",
         after_long_help = "\
@@ -54,7 +52,7 @@ Valid values per key:
   whisper_model        tiny.en, tiny, base.en, base, kb-whisper-tiny,
                        kb-whisper-base, kb-whisper-small, nb-whisper-tiny,
                        nb-whisper-base, nb-whisper-small, fi-whisper-tiny
-  hotkey_mode          push, toggle, presenter
+  hotkey_mode          push, toggle
   show_overlay         true, false
   auto_paste           true, false (enabling requires Accessibility approval for the installed GUI)
   auto_select_model    true, false
@@ -106,25 +104,6 @@ EXAMPLES:
 Print the absolute path to the settings JSON file. Use `sagascript glossary \
 path` for the separate personal dictionary.")]
     Path,
-
-    /// Configure the opt-in presenter hotkey mode
-    #[command(
-        long_about = "\
-Configure presenter mode. Existing profile shortcuts start dictation; the \
-finish shortcut ends it. App actions are opt-in and default to insert-only.",
-        after_long_help = "\
-EXAMPLES:
-  sagascript config presenter show
-  sagascript config presenter finish 'Control+Shift+Enter'
-  sagascript config presenter cancel 'Control+Shift+Escape'
-  sagascript config presenter cancel
-  sagascript config presenter app com.example.editor command_return
-  sagascript config presenter remove-app com.example.editor"
-    )]
-    Presenter {
-        #[command(subcommand)]
-        action: PresenterAction,
-    },
 
     /// Manage per-shortcut dictation language profiles
     Profiles {
@@ -179,24 +158,6 @@ pub enum ProfileAction {
     Remove { id: String },
 }
 
-#[derive(Subcommand)]
-pub enum PresenterAction {
-    /// Print the presenter configuration as JSON
-    Show,
-    /// Set the global presenter finish shortcut
-    Finish { shortcut: String },
-    /// Set the presenter cancel shortcut, or omit it to disable cancel
-    Cancel { shortcut: Option<String> },
-    /// Set an explicit action for an application identifier
-    App {
-        app_id: String,
-        #[arg(value_parser = ["insert_only", "return", "command_return"])]
-        action: String,
-    },
-    /// Remove an application-specific presenter action
-    RemoveApp { app_id: String },
-}
-
 const VALID_KEYS: &[&str] = &[
     "language",
     "whisper_model",
@@ -218,85 +179,8 @@ pub fn run(args: ConfigArgs) -> Result<(), DictationError> {
         ConfigAction::Set { key, value } => cmd_set(&key, &value),
         ConfigAction::Reset { key } => cmd_reset(key.as_deref()),
         ConfigAction::Path => cmd_path(),
-        ConfigAction::Presenter { action } => cmd_presenter(action),
         ConfigAction::Profiles { action } => cmd_profiles(action),
     }
-}
-
-fn cmd_presenter(action: PresenterAction) -> Result<(), DictationError> {
-    if matches!(&action, PresenterAction::Show) {
-        let presenter = settings::store::load().presenter;
-        let json = serde_json::to_string_pretty(&presenter)
-            .map_err(|error| DictationError::SettingsError(error.to_string()))?;
-        println!("{json}");
-        return Ok(());
-    }
-
-    let summary = match &action {
-        PresenterAction::Finish { shortcut } => format!("Presenter finish shortcut = {shortcut}"),
-        PresenterAction::Cancel {
-            shortcut: Some(shortcut),
-        } => {
-            format!("Presenter cancel shortcut = {shortcut}")
-        }
-        PresenterAction::Cancel { shortcut: None } => {
-            "Presenter cancel shortcut disabled".to_string()
-        }
-        PresenterAction::App { app_id, action } => {
-            format!("Presenter action for {app_id} = {action}")
-        }
-        PresenterAction::RemoveApp { app_id } => format!("Removed presenter action for {app_id}"),
-        PresenterAction::Show => unreachable!(),
-    };
-    update_presenter_config(|presenter| apply_presenter_action(presenter, action))?;
-    eprintln!("{summary}");
-    Ok(())
-}
-
-fn apply_presenter_action(
-    presenter: &mut PresenterConfig,
-    action: PresenterAction,
-) -> Result<(), String> {
-    match action {
-        PresenterAction::Show => Err("Presenter show does not mutate settings".to_string()),
-        PresenterAction::Finish { shortcut } => {
-            validate_hotkey(&shortcut)?;
-            presenter.finish_shortcut = shortcut;
-            Ok(())
-        }
-        PresenterAction::Cancel { shortcut } => {
-            if let Some(shortcut) = &shortcut {
-                validate_hotkey(shortcut)?;
-            }
-            presenter.cancel_shortcut = shortcut;
-            Ok(())
-        }
-        PresenterAction::App { app_id, action } => {
-            let action = parse_enum_value::<PresenterFinishAction>(&action, "presenter action")
-                .map_err(|error| error.to_string())?;
-            presenter.app_actions.insert(app_id, action);
-            Ok(())
-        }
-        PresenterAction::RemoveApp { app_id } => {
-            if presenter.app_actions.remove(&app_id).is_none() {
-                return Err(format!("No presenter action configured for app '{app_id}'"));
-            }
-            Ok(())
-        }
-    }
-}
-
-fn update_presenter_config<F>(mutate: F) -> Result<PresenterConfig, DictationError>
-where
-    F: FnOnce(&mut PresenterConfig) -> Result<(), String>,
-{
-    let updated = settings::store::try_update(|settings| {
-        let mut presenter = settings.presenter.clone();
-        mutate(&mut presenter)?;
-        settings.replace_presenter_config(presenter)
-    })
-    .map_err(DictationError::SettingsError)?;
-    Ok(updated.presenter)
 }
 
 fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
@@ -602,6 +486,12 @@ fn apply_setting_value(
             settings.whisper_model = parse_enum_value::<WhisperModel>(value, "whisper_model")?;
         }
         "hotkey_mode" => {
+            if value == "presenter" {
+                return Err(DictationError::SettingsError(
+                    "Invalid value 'presenter' for hotkey_mode. Supported values: push, toggle."
+                        .to_string(),
+                ));
+            }
             settings
                 .replace_hotkey_mode(parse_enum_value::<HotkeyMode>(value, "hotkey_mode")?)
                 .map_err(DictationError::SettingsError)?;
@@ -973,7 +863,6 @@ mod tests {
             "has_completed_onboarding",
             "hotkey_profiles",
             "profile_glossaries",
-            "presenter",
         ];
 
         let settings = Settings::default();
@@ -1203,7 +1092,7 @@ mod tests {
 
     #[test]
     fn parse_enum_value_all_valid_hotkey_modes() {
-        let valid = ["push", "toggle", "presenter"];
+        let valid = ["push", "toggle"];
         for v in valid {
             let result = parse_enum_value::<HotkeyMode>(v, "hotkey_mode");
             assert!(result.is_ok(), "should parse hotkey_mode '{v}'");
@@ -1217,110 +1106,14 @@ mod tests {
     }
 
     #[test]
-    fn presenter_action_values_are_strict_and_snake_case() {
-        assert_eq!(
-            parse_enum_value::<PresenterFinishAction>("insert_only", "presenter action").unwrap(),
-            PresenterFinishAction::InsertOnly
-        );
-        assert_eq!(
-            parse_enum_value::<PresenterFinishAction>("return", "presenter action").unwrap(),
-            PresenterFinishAction::Return
-        );
-        assert_eq!(
-            parse_enum_value::<PresenterFinishAction>("command_return", "presenter action")
-                .unwrap(),
-            PresenterFinishAction::CommandReturn
-        );
-        assert!(
-            parse_enum_value::<PresenterFinishAction>("commandReturn", "presenter action").is_err()
-        );
-        assert!(parse_enum_value::<PresenterFinishAction>("submit", "presenter action").is_err());
-    }
-
-    #[test]
-    fn presenter_hotkey_mode_mutation_is_atomic_through_cli_helper() {
+    fn presenter_hotkey_mode_is_rejected_through_cli_helper() {
         let mut settings = Settings::default();
-        settings
-            .replace_hotkey_profiles(vec![HotkeyProfile::legacy_default(
-                "Control+Shift+Enter".to_string(),
-                Language::English,
-            )])
-            .unwrap();
-        let before = settings.hotkey_mode;
+        let before_mode = settings.hotkey_mode;
+        let before_hotkey = settings.hotkey.clone();
         let error = apply_setting_value(&mut settings, "hotkey_mode", "presenter").unwrap_err();
-        assert!(error.to_string().contains("profile shortcut"));
-        assert_eq!(settings.hotkey_mode, before);
-    }
-
-    #[test]
-    fn presenter_legacy_hotkey_mutation_is_checked_and_atomic() {
-        let mut settings = Settings::default();
-        settings.replace_hotkey_mode(HotkeyMode::Presenter).unwrap();
-        let before = settings.hotkey.clone();
-        let error = apply_setting_value(&mut settings, "hotkey", "Ctrl+Shift+Enter").unwrap_err();
-        assert!(error.to_string().contains("profile shortcut"));
-        assert_eq!(settings.hotkey, before);
-        assert_eq!(settings.resolved_hotkey_profiles()[0].shortcut, before);
-    }
-
-    #[test]
-    fn presenter_command_help_inventory_has_all_mutations() {
-        let command = <PresenterAction as clap::Subcommand>::augment_subcommands(
-            clap::Command::new("presenter"),
-        );
-        let names: Vec<_> = command
-            .get_subcommands()
-            .map(|command| command.get_name())
-            .collect();
-        assert_eq!(names, ["show", "finish", "cancel", "app", "remove-app"]);
-    }
-
-    #[test]
-    fn apply_presenter_action_rejects_invalid_input_without_partial_mutation() {
-        let mut presenter = PresenterConfig::default();
-        let before = presenter.clone();
-        let error = apply_presenter_action(
-            &mut presenter,
-            PresenterAction::App {
-                app_id: "com.example.editor".to_string(),
-                action: "submit".to_string(),
-            },
-        )
-        .unwrap_err();
-        assert!(error.contains("Invalid value"));
-        assert_eq!(presenter, before);
-
-        let error = apply_presenter_action(
-            &mut presenter,
-            PresenterAction::Finish {
-                shortcut: "NotAHotkey".to_string(),
-            },
-        )
-        .unwrap_err();
-        assert!(!error.is_empty());
-        assert_eq!(presenter, before);
-    }
-
-    #[test]
-    fn presenter_candidate_uses_fresh_state_and_core_validation_before_commit() {
-        let mut settings = Settings::default();
-        let mut candidate = settings.presenter.clone();
-        for index in 0..PresenterConfig::MAX_APP_ACTIONS {
-            candidate.app_actions.insert(
-                format!("com.example.editor{index}"),
-                PresenterFinishAction::InsertOnly,
-            );
-        }
-        apply_presenter_action(
-            &mut candidate,
-            PresenterAction::App {
-                app_id: "com.example.editor32".to_string(),
-                action: "return".to_string(),
-            },
-        )
-        .unwrap();
-        assert!(settings.replace_presenter_config(candidate).is_err());
-        assert!(settings.presenter.app_actions.is_empty());
+        assert!(error.to_string().contains("Supported values: push, toggle"));
+        assert_eq!(settings.hotkey_mode, before_mode);
+        assert_eq!(settings.hotkey, before_hotkey);
     }
 
     // -- parse_bool --

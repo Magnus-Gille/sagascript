@@ -7,7 +7,6 @@ pub mod latency;
 pub mod meeting;
 pub mod models;
 pub mod open;
-pub mod presenter;
 // Live recording is optional (`record` feature, on by default) so a pure
 // batch-transcribe build (`--no-default-features`) carries no audio-capture
 // stack — on Linux, no cpal/ALSA.
@@ -384,13 +383,6 @@ This is a recovery path when the menu-bar status item is unavailable. On macOS, 
     )]
     Open,
 
-    /// Send a presenter start, finish, or cancel request to the installed desktop app
-    #[command(
-        long_about = "Send one private presenter request to the installed Sagascript desktop app. The command does not record audio, transcribe, insert text, or report completion; check the desktop status for the result.",
-        after_long_help = "EXAMPLES:\n  sagascript presenter start\n  sagascript presenter start swedish\n  sagascript presenter finish\n  sagascript presenter cancel"
-    )]
-    Presenter(presenter::PresenterArgs),
-
     /// Reset first-launch onboarding (re-run setup wizard on next launch)
     #[command(
         long_about = "\
@@ -537,7 +529,6 @@ pub fn run(cli: Cli) {
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
         Command::Open => open::run(),
-        Command::Presenter(args) => presenter::run(args),
         Command::ResetOnboarding => {
             sagascript_core::settings::store::update(|settings| {
                 settings.has_completed_onboarding = false;
@@ -740,27 +731,21 @@ mod tests {
     }
 
     #[test]
-    fn presenter_commands_are_discoverable_and_parse_without_launching() {
+    fn removed_presenter_command_is_not_discoverable_or_parseable() {
         let command = Cli::command();
-        let presenter = command
-            .find_subcommand("presenter")
-            .expect("presenter should be a root subcommand");
-        let names: Vec<_> = presenter
-            .get_subcommands()
-            .map(|subcommand| subcommand.get_name())
-            .collect();
-        assert_eq!(names, ["start", "finish", "cancel"]);
-
-        let parsed = Cli::try_parse_from(["sagascript", "presenter", "start", "swedish"])
-            .expect("presenter start should parse");
-        assert!(matches!(
-            parsed.command,
-            Some(Command::Presenter(presenter::PresenterArgs {
-                action: presenter::PresenterAction::Start {
-                    profile_id: Some(_)
-                }
-            }))
-        ));
+        assert!(command.find_subcommand("presenter").is_none());
+        assert!(Cli::try_parse_from(["sagascript", "presenter", "start"]).is_err());
+        for marker in [
+            "--presenter-start",
+            "--presenter-start=swedish",
+            "--presenter-finish",
+            "--presenter-cancel",
+        ] {
+            let error = Cli::try_parse_from(["sagascript", marker])
+                .err()
+                .expect("retired marker must be rejected");
+            assert_eq!(error.exit_code(), 2);
+        }
     }
 
     // -- Completions generation --

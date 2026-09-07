@@ -1,3 +1,11 @@
+# Deferred Presenter mode design (#162/#216)
+
+> **Historical design only — not a current capability.** Presenter mode is
+> deferred by issue #216 pending deliberate resumption of #162. The contract
+> below is retained for future reference; its runtime, CLI, UI, settings, and
+> status-listener behavior must not be treated as shipped behavior.
+
+---
 # Presenter mode (#162): implementation contract
 
 Status: runtime integration implemented, verification/review in progress; not

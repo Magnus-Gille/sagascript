@@ -34,7 +34,8 @@ test("explicit profile bindings replace legacy routing and keep the compatibilit
 
   const withBoth = profileWithShortcut(withPush, "toggle_shortcut", "Shift+Super+S");
   assert.deepEqual(allProfileShortcutValues([withBoth], "push"), ["Super+S", "Shift+Super+S"]);
-  assert.deepEqual(allProfileShortcutValues([withBoth], "presenter"), ["Super+S"]);
+  assert.equal(displayProfileShortcut(withBoth, "push_to_talk_shortcut", "push"), "Super+S");
+  assert.equal(displayProfileShortcut(withBoth, "toggle_shortcut", "toggle"), "Shift+Super+S");
   assert.equal(withBoth.shortcut, "Super+S");
 
   const cleared = profileWithShortcut(withBoth, "push_to_talk_shortcut", null);
