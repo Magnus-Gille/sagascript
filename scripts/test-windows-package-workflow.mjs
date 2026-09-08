@@ -5,8 +5,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 test("Windows PR CI runs build identity regression tests before compilation", async () => {
-  const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const windows = ci.slice(ci.indexOf("  check-windows:"));
+  const ci = (await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
+    .replace(/\r\n?/g, "\n");
+  const testWindowsStart = ci.indexOf("  test-windows:");
+  const buildWindowsStart = ci.indexOf("  build-windows:", testWindowsStart);
+  assert.ok(testWindowsStart >= 0 && buildWindowsStart > testWindowsStart);
+  const windows = ci.slice(testWindowsStart, buildWindowsStart);
   const command = "node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs";
   const checks = windows.indexOf(command);
   assert.ok(checks > windows.indexOf("name: Install Node.js"));

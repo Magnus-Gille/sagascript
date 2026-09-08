@@ -20,8 +20,11 @@ function section(content, startMarker, endMarker) {
 
 test("CI rust caches use the reviewed immutable action revision", () => {
   const refs = ciWorkflow.match(/uses: Swatinem\/rust-cache@[^\s]+/g) ?? [];
-  assert.equal(refs.length, 3);
-  assert.deepEqual(refs, [`uses: ${rustCacheRef}`, `uses: ${rustCacheRef}`, `uses: ${rustCacheRef}`]);
+  assert.equal(refs.length, 5);
+  assert.deepEqual(
+    refs,
+    Array.from({ length: 5 }, () => `uses: ${rustCacheRef}`),
+  );
 });
 
 test("signed test builds use the shared dependency cache without raw target dumps", () => {
