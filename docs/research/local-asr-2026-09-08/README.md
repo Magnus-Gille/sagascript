@@ -1,6 +1,6 @@
 # Local ASR inventory and decision record — 2026-09-08
 
-**Checkpoint draft — independent review pending; session paused for cmux.**
+**Research complete locally — independently reviewed; candidate measurements remain blocked.**
 
 Research spike for [#222](https://github.com/Magnus-Gille/sagascript/issues/222).
 **Decision: retain the current language defaults.** Prioritize five new families for
@@ -102,7 +102,7 @@ Each source's corpus/normalizer/decoder remains distinct in the JSON.
 | FI / previous local FLEURS DEV | tiny | 72.96 → 51.19 | -21.77 | 29.84% |
 
 Sources: [KB model card](https://huggingface.co/KBLab/kb-whisper-small),
-[NB Whisper paper, tables 1–3](https://www.isca-archive.org/interspeech_2024/kummervold24_interspeech.pdf),
+[NB Whisper paper, tables 5–7](https://www.isca-archive.org/interspeech_2024/kummervold24_interspeech.pdf),
 and [R4 Finnish screening](../r4-finnish-screening-results.md).
 The JSON additionally preserves the NB NST comparisons. Publisher benchmark
 artifact revisions, exact tensor precision, hardware and paired confidence
@@ -120,7 +120,7 @@ whereas #187 specifies first warm. Cold meant new process, not flushed OS cache.
 The original report pins source, binary, models and manifest. This was development
 data used for selection, not new held-out evidence. No accelerator identity,
 peak RAM or key-release-to-visible-text latency was measured. Finnish Tiny versus
-Base is cross-size (6.95% relative WER reduction); it does not justify a default
+Base is cross-size (6.94% relative WER reduction using the displayed rounded WER); it does not justify a default
 change or a same-budget claim.
 
 ## Matrix B: practical download, installed disk, RAM and latency budgets
@@ -207,6 +207,8 @@ Reserves and exclusions:
   `models/canary-finnish-v2.nemo` is absent from the inspected pinned repository.
   Do not silently replace it with generic Canary or choose LM settings after seeing
   the test set. Generic Canary, RASMUS and LM-assisted runs are separate configs.
+  This snapshot extracts R2 comparisons only; the requested R1/R2 reproduction
+  remains blocked until both exact checkpoints and evaluation manifests are frozen.
 - **Finnish Whisper:** actual Tiny/Medium/Large-v2/Large-v3 and GGML variants were
   inspected; no Finnish Base checkpoint was identified. Larger variants remain
   references, not automatic upgrades. **Finnish XLS-R+LM** is a distinct decoder
@@ -252,7 +254,7 @@ explicit follow-up input; no engine has been proven to fit them here.
 | EN | Retain BaseEn; research Moonshine Tiny | Research Parakeet/Nemotron/Qwen 4-bit; Granite reserve | Generic Whisper and Qwen 1.7B references; Gemma batch research |
 | SV | Retain KB Base; KB Small already optional | Research Parakeet/Nemotron/Qwen; KB Medium reference | KB Large/generic Whisper references; Meta CTC research |
 | NB | Retain NB Base; NB Small optional | Research Nemotron, with explicit Bokmål scoring | NB Large reference; Meta CTC only after runtime eligibility |
-| NN | Retain current NB Base pending NN held-out results | No demonstrated replacement; do not label Nemotron adaptation-ready as supported | NB Medium/Large references; resolve Meta NN eligibility first |
+| NN | Retain current NB Base pending NN held-out results | NB Medium Q5 (539 MB) reference; no demonstrated replacement | NB Large reference; resolve Meta NN eligibility first; Nemotron is adaptation-ready, not NN-supported |
 | FI | Retain generic Base; Finnish Tiny stays opt-in | Research Qwen/Parakeet/Nemotron | Finnish Whisper variants and Meta CTC research; RASMUS blocked; Gemma batch research |
 
 A converted Qwen artifact fitting the download tier on Apple Silicon does not prove
@@ -357,7 +359,18 @@ so the next review starts from unresolved questions rather than repeating discov
 The inventory, both comparison matrices, five-family shortlist with individual
 blockers, per-language/resource recommendations, evaluator reuse and integration/
 regression plan cover #222's research deliverables through its blocker alternative.
-Independent review and final acceptance reconciliation remain pending.
+Acceptance reconciliation against the six issue checklist items:
+
+| Requirement | Evidence / outcome |
+|---|---|
+| Dated broad inventory and justified exclusions | `inventory.json`, `publisher-metadata.json`, baseline and runtime snapshots; unknown totals/dependencies are explicit |
+| Machine-readable, qualified comparisons | `comparisons.json` and `quality-evidence.json`; publisher evidence and prior local DEV screening are distinct |
+| Shortlist measured or individually blocked | Five families in `inventory.json`, each `blocked_not_run` with concrete artifact/runtime/corpus/platform blockers; no new winner claim |
+| Recommendation by language and resource class | Both matrices and recommendation table; published effect sizes, known download costs and unmeasured RAM/latency remain separate; batch assessment covers larger models |
+| Integration and regression work identified | Integration/regression map and #187 protocol; implementation remains a separate task |
+| Recurring review proposed | Manual quarterly/event-driven refresh and pinned regression baseline; no automation enabled |
+
+Independent review outcome is recorded below in the linked verification record.
 Actual candidate measurements and adoption are deliberately unresolved follow-ups.
 No universal local winner, Windows performance result or new default is claimed.
 

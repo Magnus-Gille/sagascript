@@ -472,7 +472,7 @@
       "delta_wer_pp": -21.77,
       "relative_wer_reduction_percent": 29.84,
       "architecture_size_matched": true,
-      "precision_matched": true,
+      "precision_matched": null,
       "practical_budget_matched": false,
       "evidence_type": "prior_local_screening",
       "source": "../r4-finnish-screening-results.md",
@@ -489,7 +489,8 @@
       "baseline_warm_p95_ms": 392,
       "candidate_warm_p95_ms": 417,
       "timing_scope": "inference only",
-      "paired_ci_status": "Not reproduced here; see original screening report for uncertainty"
+      "paired_ci_status": "Not reproduced here; see original screening report for uncertainty",
+      "precision_status": "Both used unquantized GGML artifacts; matching per-tensor storage and execution precision was not verified in the prior screening."
     },
     {
       "id": "fi-base-vs-tiny",
@@ -502,7 +503,7 @@
       "delta_wer_pp": -3.82,
       "relative_wer_reduction_percent": 6.94,
       "architecture_size_matched": false,
-      "precision_matched": true,
+      "precision_matched": null,
       "practical_budget_matched": false,
       "evidence_type": "prior_local_screening",
       "source": "../r4-finnish-screening-results.md",
@@ -519,7 +520,8 @@
       "baseline_warm_p95_ms": 604,
       "candidate_warm_p95_ms": 417,
       "timing_scope": "inference only",
-      "paired_ci_status": "Not reproduced here; see original screening report for uncertainty"
+      "paired_ci_status": "Not reproduced here; see original screening report for uncertainty",
+      "precision_status": "Both used unquantized GGML artifacts; matching per-tensor storage and execution precision was not verified in the prior screening."
     },
     {
       "id": "qwen-en-fleurs",
