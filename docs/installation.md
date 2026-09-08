@@ -71,8 +71,8 @@ brew install --cask sagascript
 ## Windows
 
 > **Unsigned Windows packages:** Check the architecture and stable/beta label on
-> the release page. An architecture is promoted to stable only after its own
-> manual acceptance; the other remains beta. Stable does not mean signed.
+> the release page. For 1.2.0, ARM64 (Snapdragon) is the stable Windows variant;
+> x64 (Intel/AMD) remains beta. Stable does not mean signed.
 > Verify the matching checksum before running an installer and follow your
 > device's security policy.
 

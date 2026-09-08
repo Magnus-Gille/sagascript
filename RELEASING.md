@@ -1,8 +1,9 @@
 # Releasing Sagascript
 
-For 1.2.0, macOS Apple silicon and the physically accepted Windows architecture
-may ship as stable. The other Windows architecture stays on a clearly labelled
-beta prerelease until it has its own manual acceptance. Record the architecture,
+For 1.2.0, macOS Apple silicon and Windows ARM64 (Snapdragon) may ship as
+stable. Magnus confirmed the tested Windows machine is Snapdragon on 2026-09-08.
+Windows x64 (Intel/AMD) stays on a clearly labelled beta prerelease until it has
+its own manual acceptance. Record the architecture,
 exact source revision, candidate run, and test results in the release evidence;
 one architecture's acceptance does not cover the other.
 
