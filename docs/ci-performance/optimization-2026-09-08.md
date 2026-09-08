@@ -51,7 +51,14 @@ passed all three platforms. New debug-profile cache fingerprints required cold
 builds: macOS took 1,185 seconds, Windows 1,643 seconds, and Linux 503 seconds.
 These are not comparable to the warm baseline and are not claimed as gains.
 The parallel split introduces separate cache namespaces and also requires an
-initial population before warm measurements.
+initial population before warm measurements. Its first attempt at
+`cebb0b13c4288294afae80b18cae941cc9d7547e` passed both native build jobs, but
+validation failed because a Python workflow fixture still expected the old job
+names. The final aggregation jobs correctly failed too. The fixture now checks
+the three validation jobs and retains the Python-version and ordering assertions.
+Local verification after this correction passed all 127 Python tests and 185
+frontend tests (one additional test is skipped), plus workflow actionlint.
+The failed workflow is excluded from successful latency comparisons.
 
 The first Windows candidate attempt at `15113c01b8a626c2f59c06c939a4f17a27459a19`
 failed before native compilation: a newly added test expected LF but the Windows
@@ -63,8 +70,14 @@ A separate code-generation parallelism experiment compares release builds with
 one and sixteen codegen units while retaining optimization level 3 and thin LTO.
 An initial offline attempt failed to link ONNX Runtime and is excluded from all
 performance comparisons. Successful local CLI builds took 75.76 seconds with one
-codegen unit and 90.16 seconds with sixteen. This first comparison did not show
-an improvement; the existing release setting is retained.
+codegen unit and 90.16 seconds with sixteen. Sixteen units were 19% slower for this CLI build. A controlled app experiment,
+with workspace crates cleaned and dependency artifacts retained between builds,
+used order 1 → 16 → 16 → 1: 95.03, 73.56, 75.86, and 108.22 seconds. The means
+were 101.63 versus 74.71 seconds, a 26.5% local improvement, but the app binary
+grew from 43,777,296 to 49,891,488 bytes (14%). These trials used the same older
+source revision, not the final CI patch; runtime parity was not benchmarked.
+The mixed CLI/app results and binary growth do not justify changing the global
+release setting, which remains one codegen unit.
 
 The larger acceptance cohorts in #178 remain necessary before claiming stable
 median/tail targets or closing the issue. Signed macOS and production release
@@ -96,5 +109,7 @@ final performance assessment. Bounded tasks used native Luna agents:
 | Model cache implementation | gpt-5.6-luna / high | Cache contract and Windows workflow tests, actionlint | pass |
 | CLI duplicate-gate removal | gpt-5.6-luna / xhigh | Feature coverage test, actionlint | partial: Windows line-ending failure corrected after native CI |
 | LF/CRLF regression correction | gpt-5.6-luna / high | Both line-ending fixtures pass; conductor reran | pass |
-| Parallel validation/native lanes | gpt-5.6-luna / high | Gate parity, actionlint, full suite; conductor expanded all 16 aggregate cases and retained smoke failure policy | pass |
-| Release code-generation experiment | gpt-5.6-luna / xhigh | Successful CLI paired builds; controlled app experiment in progress | partial: CLI setting rejected as slower |
+| Parallel validation/native lanes | gpt-5.6-luna / high | Gate parity, actionlint, frontend suite; conductor expanded all 16 aggregate cases and retained smoke failure policy | partial: missed Python workflow fixture corrected after CI |
+| Python workflow fixture correction | gpt-5.6-luna / high | Red/green regression, 127 Python tests and frontend suite rerun by conductor | pass |
+| Release code-generation experiment | gpt-5.6-luna / xhigh | Paired CLI builds and four controlled app builds; logs and sizes inspected by conductor | pass: measured tradeoff, setting retained |
+| Follow-up rebuild diagnosis | gpt-5.6-luna / xhigh | Historical Cargo logs and source inspection | partial: stale worktree context corrected; exact invalidation cause remains unproven |
