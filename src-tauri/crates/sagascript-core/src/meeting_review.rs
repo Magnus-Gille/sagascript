@@ -366,6 +366,10 @@ impl MeetingReview {
     }
 
     pub fn validate(&self) -> Result<(), MeetingReviewError> {
+        self.validate_and_materialize().map(|_| ())
+    }
+
+    fn validate_and_materialize(&self) -> Result<MeetingTranscript, MeetingReviewError> {
         if self.schema_version != REVIEW_SCHEMA_VERSION {
             return Err(MeetingReviewError::UnsupportedSchema(self.schema_version));
         }
@@ -388,25 +392,24 @@ impl MeetingReview {
         if operation_count > MAX_CORRECTION_OPERATIONS {
             return Err(MeetingReviewError::OperationLimit);
         }
-        self.replay_batches()?;
+        let materialized = self.replay_batches()?;
         if self.compute_revision()? != self.revision {
             return Err(MeetingReviewError::InvalidRevision);
         }
         if serialized_size(self)? > MAX_SERIALIZED_REVIEW_BYTES {
             return Err(MeetingReviewError::SerializedSizeLimit);
         }
-        Ok(())
+        Ok(materialized)
     }
 
     /// Return the transcript obtained by replaying all retained batches.
     pub fn materialize(&self) -> Result<MeetingTranscript, MeetingReviewError> {
-        self.validate()?;
-        self.replay_batches()
+        self.validate_and_materialize()
     }
 
     /// Apply one validated correction file as one atomic undo batch.
     pub fn apply_corrections(&self, file: &CorrectionFile) -> Result<Self, MeetingReviewError> {
-        self.validate()?;
+        let mut materialized = self.validate_and_materialize()?;
         file.validate()?;
         if file.source_sha256 != self.original.source_sha256 {
             return Err(MeetingReviewError::SourceMismatch);
@@ -423,7 +426,6 @@ impl MeetingReview {
             return Err(MeetingReviewError::OperationLimit);
         }
 
-        let mut materialized = self.replay_batches()?;
         for operation in &file.operations {
             materialized = apply_operation(&materialized, operation)?;
         }
@@ -468,11 +470,11 @@ impl MeetingReview {
 
     /// Export reviewed presentation formats, or the full review envelope as JSON.
     pub fn export(&self, format: MeetingExportFormat) -> Result<String, MeetingReviewError> {
-        self.validate()?;
+        let materialized = self.validate_and_materialize()?;
         if format == MeetingExportFormat::Json {
             return serde_json::to_string(self).map_err(|_| MeetingReviewError::Serialization);
         }
-        self.materialize()?
+        materialized
             .export(format)
             .map_err(MeetingReviewError::Transcript)
     }
@@ -726,7 +728,8 @@ mod tests {
         let reset = merged.reset(&merged.revision).expect("reset");
         assert_eq!(reset.materialize().expect("materialize"), review.original);
         assert_ne!(reset.revision, review.revision);
-        assert_ne!(reset.revision, review.revision);
+        assert_eq!(reset.generation, 2);
+        assert!(reset.batches.is_empty());
     }
 
     #[test]

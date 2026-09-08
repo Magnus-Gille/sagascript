@@ -8,7 +8,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use sagascript_core::error::DictationError;
 use sagascript_core::meeting::{MeetingExportFormat, MeetingTranscript};
 use sagascript_core::meeting_media::MeetingAudio;
-use sagascript_core::meeting_review::{CorrectionFile, MeetingReview};
+use sagascript_core::meeting_review::{CorrectionFile, MeetingReview, MeetingReviewError};
 
 const MAX_INPUT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_IO_CONTEXT_CHARS: usize = 160;
@@ -307,7 +307,8 @@ fn serialize_document(document: &MeetingTranscript) -> Result<String, DictationE
 }
 
 fn serialize_review(review: &MeetingReview) -> Result<String, DictationError> {
-    serde_json::to_string(review).map_err(|_| review_transform_error(()))
+    serde_json::to_string(review)
+        .map_err(|_| review_transform_error(MeetingReviewError::Serialization))
 }
 
 fn run_audio_info(input: &Path, audio: &Path) -> Result<String, DictationError> {
@@ -341,10 +342,13 @@ fn transform_error() -> DictationError {
     )
 }
 
-fn review_transform_error<E>(_error: E) -> DictationError {
-    DictationError::TranscriptionFailed(
-        "meeting review operation rejected by validated review contract".to_string(),
-    )
+// MeetingReviewError displays only fixed contract diagnostics (plus bounded
+// schema/field names and numeric versions); it carries no paths or transcript
+// text. File and JSON parsing errors stay on the content-free paths above.
+fn review_transform_error(error: MeetingReviewError) -> DictationError {
+    DictationError::TranscriptionFailed(format!(
+        "meeting review operation rejected by validated review contract: {error}"
+    ))
 }
 
 fn media_transform_error<E>(_error: E) -> DictationError {
@@ -839,7 +843,8 @@ mod tests {
             },
         })
         .expect_err("invalid segment must fail");
-        assert!(error.to_string().contains("review contract"));
+        assert!(error.to_string().contains("unknown meeting segment"));
+        assert!(!error.to_string().contains("not applied"));
         assert_eq!(
             std::fs::read(&review_path).expect("review bytes"),
             original_review_bytes
@@ -858,7 +863,9 @@ mod tests {
             },
         })
         .expect_err("wrong revision must fail");
-        assert!(wrong_revision_error.to_string().contains("review contract"));
+        assert!(wrong_revision_error
+            .to_string()
+            .contains("correction expected revision does not match this review"));
         assert_eq!(
             std::fs::read(&review_path).expect("review bytes"),
             original_review_bytes

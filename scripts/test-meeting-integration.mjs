@@ -59,7 +59,7 @@ test("polling is serialized, stale generations are ignored, and cancellation wai
   assert.match(settingsSource, /meetingPollingFailed = true/);
   assert.match(settingsSource, /Retry status check/);
   assert.match(settingsSource, /Meeting completed without a transcript/);
-  assert.match(settingsSource, /meetingActionQueue = queued\.catch/);
+  assert.match(settingsSource, /meetingActionQueue = queued\.then\(\(\) => undefined, \(\) => undefined\)/);
   assert.match(settingsSource, /await waitForMeetingActions\(\)/);
   assert.match(settingsSource, /meetingDocumentRevision/);
   assert.match(settingsSource, /generation !== meetingPollGeneration/);
@@ -180,10 +180,17 @@ test("meeting review exposes explicit corrections, playback, and all export form
   assert.match(reviewSource, /onApply: \(operations: CorrectionOperation\[\]\) => Promise<void>/);
   assert.match(reviewSource, /onUndo: \(\) => Promise<void>/);
   assert.match(reviewSource, /onReset: \(\) => Promise<void>/);
+  assert.match(reviewSource, /onSave: \(\) => Promise<boolean>/);
+  assert.match(reviewSource, /onExport: \(format: MeetingExportFormat\) => Promise<boolean>/);
   assert.match(reviewSource, /Save review/);
   assert.match(reviewSource, /Unapplied edits are not included in saves\/exports/);
   assert.match(reviewSource, /function persistenceDisabled\(\): boolean/);
   assert.match(reviewSource, /disabled=\{persistenceDisabled\(\)\}/);
+  assert.match(reviewSource, /const hasUnsavedDrafts = \$derived\.by/);
+  assert.match(reviewSource, /function discardMerge\(speakerId: string\)/);
+  assert.match(reviewSource, /Clear merge selection/);
+  assert.match(reviewSource, /actionNotice/);
+  assert.match(reviewSource, /Audio access is temporary and is detached when you leave this review/);
   assert.match(reviewSource, /Apply/);
   assert.match(reviewSource, /Discard/);
   assert.match(reviewSource, /convertFileSrc\(attachment\.token, "meeting-audio"\)/);
@@ -195,7 +202,10 @@ test("meeting review exposes explicit corrections, playback, and all export form
   assert.match(reviewSource, /onerror=\{handleAudioError\}/);
   assert.match(reviewSource, /This audio cannot be played/);
   assert.doesNotMatch(reviewSource, />Playing:/, "paused cursor highlights must not claim playback");
-  assert.match(reviewSource, /onExport: \(format: MeetingExportFormat\) => Promise<void>/);
+  assert.match(settingsSource, /async function exportMeetingReview\(format: MeetingExportFormat\): Promise<boolean>/);
+  assert.match(settingsSource, /async function saveCurrentMeetingReview\(\): Promise<boolean>/);
+  assert.match(settingsSource, /saveMeetingReview\(review, format\)/);
+  assert.match(settingsSource, /saveMeetingReview\(review, "json"\)/);
   for (const command of [
     "create_meeting_review",
     "apply_meeting_corrections",

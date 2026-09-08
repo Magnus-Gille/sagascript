@@ -34,6 +34,27 @@ pub struct MeetingAudio {
     invalidated: bool,
 }
 
+fn read_digest_and_header<R: Read>(reader: &mut R) -> Result<(Vec<u8>, String, u64), MediaError> {
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut header = Vec::with_capacity(64);
+    let mut total = 0u64;
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        total += count as u64;
+        if total > MAX_AUDIO_BYTES {
+            return Err(MediaError::Changed);
+        }
+        let header_remaining = 64usize.saturating_sub(header.len());
+        header.extend_from_slice(&buffer[..count.min(header_remaining)]);
+        digest.update(&buffer[..count]);
+    }
+    Ok((header, format!("{:x}", digest.finalize()), total))
+}
+
 impl MeetingAudio {
     pub fn open(path: &Path, source_sha256: &str) -> Result<Self, MediaError> {
         if source_sha256.len() != 64
@@ -54,29 +75,12 @@ impl MeetingAudio {
         }
         let modified = metadata.modified()?;
         let length = metadata.len();
-        let mut digest = Sha256::new();
-        let mut buffer = [0u8; 64 * 1024];
-        let mut header = Vec::new();
-        let mut total = 0u64;
-        loop {
-            let count = file.read(&mut buffer)?;
-            if count == 0 {
-                break;
-            }
-            total += count as u64;
-            if total > MAX_AUDIO_BYTES {
-                return Err(MediaError::Changed);
-            }
-            if header.is_empty() {
-                header.extend_from_slice(&buffer[..count.min(64)]);
-            }
-            digest.update(&buffer[..count]);
-        }
+        let (header, digest, total) = read_digest_and_header(&mut file)?;
         let after = file.metadata()?;
         if total != length || after.len() != length || after.modified()? != modified {
             return Err(MediaError::Changed);
         }
-        if format!("{:x}", digest.finalize()) != source_sha256 {
+        if digest != source_sha256 {
             return Err(MediaError::SourceMismatch);
         }
         let mime = if header.starts_with(b"RIFF") && header.get(8..12) == Some(b"WAVE") {
@@ -163,6 +167,22 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    struct ShortReader {
+        bytes: Vec<u8>,
+        offset: usize,
+    }
+
+    impl Read for ShortReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.offset == self.bytes.len() || buffer.is_empty() {
+                return Ok(0);
+            }
+            buffer[0] = self.bytes[self.offset];
+            self.offset += 1;
+            Ok(1)
+        }
+    }
+
     struct TestFile {
         path: std::path::PathBuf,
         file: File,
@@ -205,6 +225,19 @@ mod tests {
         file.write_all(&bytes).unwrap();
         let hash = format!("{:x}", Sha256::digest(&bytes));
         (file, bytes, hash)
+    }
+    #[test]
+    fn short_reads_accumulate_header_before_format_detection() {
+        let bytes = b"RIFF\x24\0\0\0WAVEfmt \x10\0\0\0test audio contents".to_vec();
+        let mut reader = ShortReader {
+            bytes: bytes.clone(),
+            offset: 0,
+        };
+        let (header, digest, total) = read_digest_and_header(&mut reader).unwrap();
+        assert_eq!(header, bytes);
+        assert_eq!(total, bytes.len() as u64);
+        assert_eq!(digest, format!("{:x}", Sha256::digest(&bytes)));
+        assert!(header.starts_with(b"RIFF") && header.get(8..12) == Some(b"WAVE"));
     }
     #[test]
     fn source_bound_ranges_are_exact_and_bounded() {

@@ -168,6 +168,7 @@ fn response_for(
             .header("content-range", format!("bytes */{total}"))
             .header("accept-ranges", "bytes")
             .header("cache-control", "no-store")
+            .header("x-content-type-options", "nosniff")
             .body(Vec::new())
             .unwrap_or_else(|_| empty_response(500));
     };
@@ -204,11 +205,11 @@ pub fn protocol(
         responder.respond(empty_response(403));
         return;
     }
-    let state = context
-        .app_handle()
-        .state::<SharedMeetingAudio>()
-        .inner()
-        .clone();
+    let Some(state) = context.app_handle().try_state::<SharedMeetingAudio>() else {
+        responder.respond(empty_response(500));
+        return;
+    };
+    let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         responder.respond(response_for(&state, &request));
     });

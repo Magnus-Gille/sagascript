@@ -1,5 +1,5 @@
 //! A bounded single HTTP byte-range plan, without reading or authorizing files.
-pub const MAX_BODY: u64 = 8 * 1024 * 1024;
+pub use sagascript_core::meeting_media::MAX_RANGE_BYTES as MAX_BODY;
 #[derive(Debug, PartialEq, Eq)]
 pub struct MediaRange {
     pub start: u64,

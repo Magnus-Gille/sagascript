@@ -22,8 +22,8 @@
     onApply: (operations: CorrectionOperation[]) => Promise<void>;
     onUndo: () => Promise<void>;
     onReset: () => Promise<void>;
-    onSave: () => Promise<void>;
-    onExport: (format: MeetingExportFormat) => Promise<void>;
+    onSave: () => Promise<boolean>;
+    onExport: (format: MeetingExportFormat) => Promise<boolean>;
     onAttachAudio: () => Promise<MeetingAudioAttachment | null>;
     onDetachAudio: (token: string) => Promise<void>;
     onDraftDirtyChange?: (dirty: boolean) => void;
@@ -64,6 +64,7 @@
   let discardDraftsOnNextRevision = $state(false);
   let pendingAction: string | null = $state(null);
   let actionError: string = $state("");
+  let actionNotice: string = $state("");
   let audioEl: HTMLAudioElement | undefined = $state();
   let audioToken: string | null = $state(null);
   let audioUrl: string | null = $state(null);
@@ -168,6 +169,7 @@
   }
 
   function errorText(value: unknown): string {
+    if (typeof value === "string" && value.trim()) return value;
     return value instanceof Error ? value.message : "The requested meeting action failed.";
   }
 
@@ -175,13 +177,13 @@
     return busy || pendingAction !== null;
   }
 
-  async function runAction(name: string, action: () => Promise<void>): Promise<boolean> {
+  async function runAction(name: string, action: () => Promise<boolean | void>): Promise<boolean> {
     if (disabled()) return false;
     actionError = "";
+    actionNotice = "";
     pendingAction = name;
     try {
-      await action();
-      return true;
+      return (await action()) !== false;
     } catch (actionFailure) {
       actionError = errorText(actionFailure);
       return false;
@@ -208,6 +210,10 @@
       from_id: from,
       into_id: into,
     }]));
+  }
+
+  function discardMerge(speakerId: string): void {
+    mergeTargets[speakerId] = "";
   }
 
   async function applySegment(segment: MeetingSegment): Promise<void> {
@@ -272,24 +278,21 @@
     followPlayback = false;
   }
 
-  function hasUnsavedDrafts(): boolean {
+  const hasUnsavedDrafts = $derived.by(() => {
     if (Object.values(mergeTargets).some(Boolean)) return true;
-    for (const speaker of transcript.speakers) {
-      if ((labelDrafts[speaker.id] ?? speaker.label) !== speaker.label) return true;
-    }
-    for (const segment of transcript.segments) {
-      if ((textDrafts[segment.id] ?? segment.text) !== segment.text) return true;
-      if ((speakerDrafts[segment.id] ?? segment.speaker) !== segment.speaker) return true;
-    }
-    return false;
-  }
+    if (transcript.speakers.some((speaker) => (labelDrafts[speaker.id] ?? speaker.label) !== speaker.label)) return true;
+    return transcript.segments.some((segment) =>
+      (textDrafts[segment.id] ?? segment.text) !== segment.text
+      || (speakerDrafts[segment.id] ?? segment.speaker) !== segment.speaker,
+    );
+  });
 
   $effect(() => {
-    onDraftDirtyChange(hasUnsavedDrafts());
+    onDraftDirtyChange(hasUnsavedDrafts);
   });
 
   function persistenceDisabled(): boolean {
-    return disabled() || hasUnsavedDrafts();
+    return disabled() || hasUnsavedDrafts;
   }
 
   function handleKeyboardScroll(event: KeyboardEvent): void {
@@ -304,10 +307,18 @@
   }
 
   async function undoReview(): Promise<void> {
-    if (hasUnsavedDrafts() && !window.confirm("Undo the last correction and discard unsaved edits?")) return;
+    if (hasUnsavedDrafts && !window.confirm("Undo the last correction and discard unsaved edits?")) return;
     discardDraftsOnNextRevision = true;
     const succeeded = await runAction("undo", onUndo);
     if (!succeeded) discardDraftsOnNextRevision = false;
+  }
+
+  async function saveReview(): Promise<void> {
+    if (await runAction("save", onSave)) actionNotice = "Review saved.";
+  }
+
+  async function exportReview(format: MeetingExportFormat): Promise<void> {
+    if (await runAction("export-" + format, () => onExport(format))) actionNotice = "Export saved.";
   }
 </script>
 
@@ -334,9 +345,10 @@
       <small>Try again. Your transcript and unsaved edits remain visible here.</small>
     </div>
   {/if}
+  {#if actionNotice}<p class="success-note" role="status">{actionNotice}</p>{/if}
 
   <section class="review-actions" aria-label="Review actions">
-    <button type="button" class="primary" disabled={persistenceDisabled()} onclick={() => void runAction("save", onSave)}>
+    <button type="button" class="primary" disabled={persistenceDisabled()} onclick={() => void saveReview()}>
       {pendingAction === "save" ? "Saving…" : "Save review"}
     </button>
     <button type="button" class="secondary" disabled={disabled() || review.batches.length === 0} onclick={() => void undoReview()}>
@@ -347,7 +359,7 @@
     </button>
     <span class="revision-note">Revision {review.generation} · {review.batches.length} correction batch{review.batches.length === 1 ? "" : "es"}</span>
   </section>
-  {#if hasUnsavedDrafts()}
+  {#if hasUnsavedDrafts}
     <p class="draft-note" role="status">Unapplied edits are not included in saves/exports. Apply or discard them before saving or exporting.</p>
   {/if}
 
@@ -410,6 +422,17 @@
                 <button type="button" class="secondary" disabled={disabled() || !mergeTargets[speaker.id]} onclick={() => void mergeSpeaker(speaker.id)}>
                   Merge
                 </button>
+                {#if mergeTargets[speaker.id]}
+                  <button
+                    type="button"
+                    class="secondary"
+                    disabled={disabled()}
+                    aria-label={"Clear merge selection for " + speaker.label}
+                    onclick={() => discardMerge(speaker.id)}
+                  >
+                    Clear selection
+                  </button>
+                {/if}
               {/if}
             </div>
           </div>
@@ -433,6 +456,7 @@
         {/if}
       </div>
     </div>
+    <p class="audio-lifecycle-note">Audio access is temporary and is detached when you leave this review.</p>
     {#if audioUrl}
       <audio
         bind:this={audioEl}
@@ -511,7 +535,7 @@
     </div>
     <div class="export-actions">
       {#each exportFormats as item (item.format)}
-        <button type="button" class="secondary export-button" disabled={persistenceDisabled()} onclick={() => void runAction("export-" + item.format, () => onExport(item.format))}>
+        <button type="button" class="secondary export-button" disabled={persistenceDisabled()} onclick={() => void exportReview(item.format)}>
           {pendingAction === "export-" + item.format ? "Exporting…" : item.label}
         </button>
       {/each}

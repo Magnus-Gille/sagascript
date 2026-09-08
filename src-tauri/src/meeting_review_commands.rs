@@ -92,7 +92,6 @@ fn read_review(path: &std::path::Path) -> Result<MeetingReview, String> {
     }
     let review: MeetingReview =
         serde_json::from_slice(&bytes).map_err(|e| format!("Invalid review document: {e}"))?;
-    review.validate().map_err(|e| e.to_string())?;
     Ok(review)
 }
 

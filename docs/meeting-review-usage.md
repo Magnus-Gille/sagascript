@@ -94,9 +94,11 @@ review's current `revision` at apply time.
 
 IDs must exist in the immutable original/replayed transcript, and unknown
 fields, invalid IDs, mismatched source/original/current revisions, excessive
-operation counts, and oversized input are rejected. One correction file is
-one atomic undo batch. Failed validation emits an error and does not write a
-replacement file.
+operation counts, and oversized input are rejected. The review has a
+cumulative ceiling of 1024 correction operations across all retained batches;
+each `apply` adds to that total, while `undo` removes the latest batch and
+frees its operations. One correction file is one atomic undo batch. Failed
+validation emits an error and does not write a replacement file.
 
 ## Review envelope and limitations
 
@@ -106,11 +108,12 @@ The original and every derived revision are validated and hash-bound; the
 review does not store mutable text without its correction provenance.
 
 `undo` removes only the latest correction batch. `reset` clears all batches
-and restores the original machine transcript, including its speaker labels
-and assignments. Both advance `generation` and therefore produce a new
-revision; undo cannot be used when there is no batch. The current schema has
-no wall-clock timestamp or author field, and undo does not preserve the
-removed batch in the resulting review.
+and restores the immutable original machine transcript, including its speaker
+labels and assignments; the original remains retained in the review and is
+not lost. Both advance `generation` and therefore produce a new revision;
+undo cannot be used when there is no batch. The current schema has no
+wall-clock timestamp or author field, and undo does not preserve the removed
+batch in the resulting review.
 
 Segment IDs are scoped to the immutable original revision. This CLI does not
 automatically map corrections onto a reprocessed transcript by ordinal ID or
@@ -143,3 +146,15 @@ consumer; this CLI does not promise playback support merely because a
 container signature is accepted. Missing, moved, changed, mismatched, empty,
 oversized, or unsupported audio is rejected while transcript review/export
 remains a separate operation.
+
+### GUI audio acceptance
+
+The GUI attachment opens an explicit file picker offering WAV, FLAC, Ogg, Opus,
+M4A, MP4, and MP3; MOV/WebM are not offered by this picker. The selected file
+must also match the reviewed transcript's original source SHA-256 before a
+playback token is issued. A recognized common container is not a codec or
+playback guarantee. The media protocol deliberately rejects an oversized
+no-Range `GET` (over 8 MiB); bounded range requests are required for such
+files. Chromium HTTP and native macOS WK synthetic probes passed, but actual
+Windows Tauri/WebView2 playback and seeking remain a mandatory manual
+acceptance gate before release.

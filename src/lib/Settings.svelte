@@ -811,6 +811,7 @@
       commitGlossaryScopeChange(pending.scopeId);
     } else {
       activeTab = pending.tab;
+      meetingReviewDraftDirty = false;
       pending.afterNavigate?.();
     }
   }
@@ -842,7 +843,6 @@
     }
     if (meetingReviewDraftDirty) {
       if (!window.confirm("Leave meeting review and discard unapplied edits?")) return;
-      meetingReviewDraftDirty = false;
     }
     if (glossarySaving) return;
     if (glossaryHasUnsavedChanges()) {
@@ -850,6 +850,7 @@
       return;
     }
     activeTab = nextTab;
+    meetingReviewDraftDirty = false;
     afterNavigate?.();
   }
 
@@ -970,13 +971,13 @@
     return meetingActionQueue;
   }
 
-  function enqueueMeetingAction(action: (review: MeetingReviewDocument, revision: number) => Promise<void>): Promise<void> {
+  function enqueueMeetingAction(action: (review: MeetingReviewDocument, revision: number) => Promise<boolean | void>): Promise<boolean> {
     const queued = meetingActionQueue.then(async () => {
       const review = meetingReview;
-      if (!review) return;
-      await action(review, meetingDocumentRevision);
+      if (!review) return false;
+      return (await action(review, meetingDocumentRevision)) !== false;
     });
-    meetingActionQueue = queued.catch(() => undefined);
+    meetingActionQueue = queued.then(() => undefined, () => undefined);
     return queued;
   }
 
@@ -1148,10 +1149,8 @@
     await applyMeetingReviewOperations([{ kind: "merge_speakers", from_id: fromId, into_id: intoId }]);
   }
 
-  async function exportMeetingReview(format: MeetingExportFormat): Promise<void> {
-    await enqueueMeetingAction(async (review) => {
-      await saveMeetingReview(review, format);
-    });
+  async function exportMeetingReview(format: MeetingExportFormat): Promise<boolean> {
+    return enqueueMeetingAction((review) => saveMeetingReview(review, format));
   }
 
   async function applyMeetingReviewOperations(operations: CorrectionOperation[]): Promise<void> {
@@ -1182,10 +1181,8 @@
     });
   }
 
-  async function saveCurrentMeetingReview(): Promise<void> {
-    await enqueueMeetingAction(async (review) => {
-      await saveMeetingReview(review, "json");
-    });
+  async function saveCurrentMeetingReview(): Promise<boolean> {
+    return enqueueMeetingAction((review) => saveMeetingReview(review, "json"));
   }
 
   async function attachCurrentMeetingAudio(): Promise<MeetingAudioAttachment | null> {
