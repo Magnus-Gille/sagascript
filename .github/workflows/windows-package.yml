@@ -132,6 +132,21 @@ jobs:
           node-version: 20
           cache: npm
 
+      # Keep the candidate's larger model set under its own primary key. A
+      # regular CI cache may restore the Norwegian smoke model, but the
+      # candidate run must still save its additional base.en artifact.
+      # `download-model` verifies every restored file against the immutable
+      # manifest before using it; this path contains models only, never app
+      # settings or logs.
+      - name: Cache downloaded models
+        uses: actions/cache@v5
+        with:
+          path: ~\AppData\Roaming\Sagascript\Models
+          key: windows-models-package-${{ matrix.architecture }}-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
+          restore-keys: |
+            windows-models-package-${{ matrix.architecture }}-
+            windows-models-
+
       - name: Pin validated Windows build identity
         run: node scripts/ci-build-identity.mjs --initialize
 
