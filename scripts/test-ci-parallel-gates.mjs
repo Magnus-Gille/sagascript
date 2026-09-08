@@ -15,6 +15,80 @@ function jobBlock(jobId) {
   return remainder.slice(0, nextJob === -1 ? remainder.length : remainder.indexOf("\n") + 1 + nextJob);
 }
 
+function scopedAggregator(jobId, expectedNeeds, laneResultNames, stepName) {
+  const block = jobBlock(jobId);
+  const needs = /^    needs: \[([^\]]+)\]$/m.exec(block)?.[1]
+    .split(",")
+    .map((value) => value.trim());
+  assert.deepEqual(needs, expectedNeeds, `${jobId} must wait for scope and its applicable lane(s)`);
+  assert.match(block, /^    if: \$\{\{ always\(\) \}\}$/m);
+  assert.ok(block.includes("SCOPE_RESULT: ${{ needs.scope.result }}"));
+  assert.ok(block.includes("SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}"));
+  assert.ok(block.includes("DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}"));
+  for (const [variable, lane] of Object.entries(laneResultNames)) {
+    assert.ok(block.includes(`${variable}: \${{ needs.${lane}.result }}`));
+  }
+  const run = parseSteps(block).get(stepName);
+  assert.match(run, /test "\$SCOPE_RESULT" = success/);
+  assert.match(run, /test "\$SCOPE_TRUSTED" = true/);
+  assert.match(run, /if \[ "\$DOCS_ONLY" = true \]/);
+  return run;
+}
+
+function runScopedAggregator(run, values) {
+  execFileSync("bash", ["-euo", "pipefail", "-c", run], {
+    env: { PATH: process.env.PATH, ...values },
+    stdio: "pipe",
+  });
+}
+
+for (const [jobId, needs, laneResultNames, stepName] of [
+  ["check-macos", ["scope", "test-macos", "build-macos"], { TEST_RESULT: "test-macos", BUILD_RESULT: "build-macos" }, "Assert macOS CI lanes passed"],
+  ["check-windows", ["scope", "test-windows", "build-windows"], { TEST_RESULT: "test-windows", BUILD_RESULT: "build-windows" }, "Assert Windows CI lanes passed"],
+  ["check-linux", ["scope", "test-linux"], { LINUX_RESULT: "test-linux" }, "Assert Linux CI lane passed"],
+]) {
+  test(`${jobId} accepts only trusted docs-only skips or successful full lanes`, () => {
+    const run = scopedAggregator(jobId, needs, laneResultNames, stepName);
+    const laneVariables = Object.keys(laneResultNames);
+    const correctDocsOnly = Object.fromEntries(laneVariables.map((variable) => [variable, "skipped"]));
+    const correctFull = Object.fromEntries(laneVariables.map((variable) => [variable, "success"]));
+
+    assert.doesNotThrow(() => runScopedAggregator(run, {
+      SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: "true", ...correctDocsOnly,
+    }));
+    assert.doesNotThrow(() => runScopedAggregator(run, {
+      SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: "false", ...correctFull,
+    }));
+
+    for (const scopeResult of ["failure", "cancelled", "skipped"]) {
+      for (const docsOnly of ["true", "false"]) {
+        assert.throws(() => runScopedAggregator(run, {
+          SCOPE_RESULT: scopeResult, SCOPE_TRUSTED: "true", DOCS_ONLY: docsOnly,
+          ...(docsOnly === "true" ? correctDocsOnly : correctFull),
+        }));
+      }
+    }
+    for (const trusted of ["false", "", "untrusted"]) {
+      assert.throws(() => runScopedAggregator(run, {
+        SCOPE_RESULT: "success", SCOPE_TRUSTED: trusted, DOCS_ONLY: "true", ...correctDocsOnly,
+      }));
+    }
+    for (const docsOnly of ["", "unknown"]) {
+      assert.throws(() => runScopedAggregator(run, {
+        SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: docsOnly, ...correctFull,
+      }));
+    }
+    for (const variable of laneVariables) {
+      for (const result of ["failure", "cancelled", "skipped"]) {
+        assert.throws(() => runScopedAggregator(run, {
+          SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: "false",
+          ...correctFull, [variable]: result,
+        }));
+      }
+    }
+  });
+}
+
 function parseSteps(job) {
   const lines = job.split("\n");
   const starts = lines
@@ -108,7 +182,11 @@ for (const [platform, jobIds] of Object.entries({
   for (const lane of ["test", "build"]) {
     test(`${platform} ${lane} lane retains every baseline gate`, () => {
       const block = jobBlock(jobIds[lane]);
-      assert.doesNotMatch(block, /^    needs:/m, "validation and native builds must run independently");
+      assert.match(block, /^    needs: scope$/m, "each lane must wait only for the scope gate");
+      assert.match(
+        block,
+        /^    if: \$\{\{ needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' \}\}$/m,
+      );
       const commands = parseSteps(block);
       for (const [name, expected] of BASELINE_GATES[platform][lane]) {
         assert.equal(
@@ -149,7 +227,7 @@ function aggregator(jobId, expectedNeeds, testResultName, buildResultName) {
   const needs = /^    needs: \[([^\]]+)\]$/m.exec(block)?.[1]
     .split(",")
     .map((value) => value.trim());
-  assert.deepEqual(needs, expectedNeeds, `${jobId} must wait for both platform lanes`);
+  assert.deepEqual(needs, expectedNeeds, `${jobId} must wait for scope and its applicable lane(s)`);
   assert.match(block, /^    if: \$\{\{ always\(\) \}\}$/m);
   assert.match(block, new RegExp(`TEST_RESULT: \\\$\\{\\{ needs\\.${testResultName}\\.result \\\}\\}`));
   assert.match(block, new RegExp(`BUILD_RESULT: \\\$\\{\\{ needs\\.${buildResultName}\\.result \\\}\\}`));
@@ -161,17 +239,24 @@ function aggregator(jobId, expectedNeeds, testResultName, buildResultName) {
 
 function runAggregator(run, testResult, buildResult) {
   execFileSync("bash", ["-euo", "pipefail", "-c", run], {
-    env: { PATH: process.env.PATH, TEST_RESULT: testResult, BUILD_RESULT: buildResult },
+    env: {
+      PATH: process.env.PATH,
+      SCOPE_RESULT: "success",
+      SCOPE_TRUSTED: "true",
+      DOCS_ONLY: "false",
+      TEST_RESULT: testResult,
+      BUILD_RESULT: buildResult,
+    },
     stdio: "pipe",
   });
 }
 
 for (const [jobId, needs] of [
-  ["check-macos", ["test-macos", "build-macos"]],
-  ["check-windows", ["test-windows", "build-windows"]],
+  ["check-macos", ["scope", "test-macos", "build-macos"]],
+  ["check-windows", ["scope", "test-windows", "build-windows"]],
 ]) {
   test(`${jobId} fails closed for every non-success lane result`, () => {
-    const [testLane, buildLane] = needs;
+    const [, testLane, buildLane] = needs;
     const run = aggregator(jobId, needs, testLane, buildLane);
     for (const testResult of ["success", "failure", "cancelled", "skipped"]) {
       for (const buildResult of ["success", "failure", "cancelled", "skipped"]) {
