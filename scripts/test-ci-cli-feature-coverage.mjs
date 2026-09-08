@@ -8,12 +8,16 @@ const [cliManifest, coreManifest, ciWorkflow] = await Promise.all([
   readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
 ]);
 
-const macosWorkflow = ciWorkflow.slice(
-  ciWorkflow.indexOf("  check-macos:"),
-  ciWorkflow.indexOf("  check-linux:"),
-);
+function macosWorkflowFor(workflow) {
+  const normalized = workflow.replace(/\r\n/g, "\n");
+  return normalized.slice(
+    normalized.indexOf("  check-macos:"),
+    normalized.indexOf("  check-linux:"),
+  );
+}
 
-test("macOS CI keeps CLI diarization in defaults and gates core explicitly", () => {
+function assertMacosDiarizationCoverage(workflow) {
+  const macosWorkflow = macosWorkflowFor(workflow);
   assert.match(
     cliManifest,
     /default\s*=\s*\[\s*"record"\s*,\s*"diarization"\s*\]/,
@@ -30,4 +34,13 @@ test("macOS CI keeps CLI diarization in defaults and gates core explicitly", () 
     3,
     "core check, test, and all-target clippy gates must remain separate",
   );
-});
+}
+
+for (const [label, lineEnding] of [
+  ["LF", "\n"],
+  ["CRLF", "\r\n"],
+]) {
+  test(`macOS CI keeps CLI diarization in defaults and gates core explicitly (${label})`, () => {
+    assertMacosDiarizationCoverage(ciWorkflow.replace(/\r?\n/g, lineEnding));
+  });
+}
