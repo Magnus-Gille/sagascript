@@ -1,0 +1,673 @@
+{
+  "as_of": "2026-09-08",
+  "scope": "Fully local inference only; no hosted API candidates",
+  "artifact_metadata": "publisher-metadata.json",
+  "units": "bytes unless named otherwise; MB=1e6; GiB=2**30",
+  "null_semantics": "Unknown/not established, never zero or unavailable proof",
+  "items": [
+    {
+      "id": "qwen3",
+      "repositories": [
+        "Qwen/Qwen3-ASR-0.6B",
+        "Qwen/Qwen3-ASR-1.7B",
+        "mlx-community/Qwen3-ASR-0.6B-4bit",
+        "mlx-community/Qwen3-ASR-1.7B-4bit"
+      ],
+      "source_urls": [
+        "https://huggingface.co/Qwen/Qwen3-ASR-0.6B",
+        "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
+        "https://huggingface.co/mlx-community/Qwen3-ASR-0.6B-4bit",
+        "https://huggingface.co/mlx-community/Qwen3-ASR-1.7B-4bit"
+      ],
+      "target_languages": {
+        "en": "listed",
+        "sv": "listed",
+        "fi": "listed",
+        "nb": "not listed",
+        "nn": "not listed"
+      },
+      "architecture": "audio encoder plus autoregressive text decoder",
+      "total_parameters": {
+        "0.6B_serialized_BF16_elements": 938008576,
+        "1.7B_serialized_BF16_elements": 2349217408
+      },
+      "precision": "BF16 source; MLX 4-bit conversion (separate artifact)",
+      "macos_path": "MLX Audio, exact 0.6B 4-bit weights selected; no MLX runtime installed in inspected environment",
+      "windows_x64_path": "Transformers local path needs clean Windows validation; vLLM CUDA examples do not prove native Windows support",
+      "windows_arm64_path": "Unverified; no execution host",
+      "shortlisted": true,
+      "decision": "research",
+      "reason": "Shortlist compact multilingual alternative; 0.6B name understates serialized full-chain tensors.",
+      "measurement_status": "blocked_not_run",
+      "new_measurements": [],
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "cold_p50_ms": null,
+      "cold_p95_ms": null,
+      "warm_p50_ms": null,
+      "warm_p95_ms": null,
+      "keyup_to_visible_p95_ms": null,
+      "rtf": null,
+      "cer_percent": null,
+      "blockers": [
+        "No frozen fresh held-out corpus across en/sv/nb/nn/fi",
+        "No #187 adapter/run manifest for this engine",
+        "Exact runtime/dependency build and platform measurements not produced",
+        "Apple MLX artifact is not a Windows artifact; require explicit same-weight conversion validation",
+        "Streaming in publisher vLLM path is not evidence of streaming in MLX path"
+      ],
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "parakeet-v3",
+      "repositories": [
+        "nvidia/parakeet-tdt-0.6b-v3",
+        "mlx-community/parakeet-tdt-0.6b-v3"
+      ],
+      "source_urls": [
+        "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
+        "https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3"
+      ],
+      "target_languages": {
+        "en": "listed",
+        "sv": "listed",
+        "fi": "listed",
+        "nb": "not listed",
+        "nn": "not listed"
+      },
+      "architecture": "FastConformer TDT",
+      "total_parameters": 627057286,
+      "precision": "official GGUF Q8_0 selected; F32/MLX alternatives",
+      "macos_path": "NeMo-Speech.cpp 0.1.0 Metal or CPU release",
+      "windows_x64_path": "NeMo-Speech.cpp 0.1.0 CPU, Vulkan or CUDA release",
+      "windows_arm64_path": "Unverified; no execution host",
+      "shortlisted": true,
+      "decision": "research",
+      "reason": "Shortlist non-autoregressive multilingual path; same official Q8 artifact can be paired across macOS/Windows.",
+      "measurement_status": "blocked_not_run",
+      "new_measurements": [],
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "cold_p50_ms": null,
+      "cold_p95_ms": null,
+      "warm_p50_ms": null,
+      "warm_p95_ms": null,
+      "keyup_to_visible_p95_ms": null,
+      "rtf": null,
+      "cer_percent": null,
+      "blockers": [
+        "No frozen fresh held-out corpus across en/sv/nb/nn/fi",
+        "No #187 adapter/run manifest for this engine",
+        "Exact runtime/dependency build and platform measurements not produced",
+        "NeMo-Speech.cpp binary and Q8 weights not installed/executed for this spike"
+      ],
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "nemotron-3.5",
+      "repositories": [
+        "nvidia/nemotron-3.5-asr-streaming-0.6b",
+        "mlx-community/nemotron-3.5-asr-streaming-0.6b"
+      ],
+      "source_urls": [
+        "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+        "https://huggingface.co/mlx-community/nemotron-3.5-asr-streaming-0.6b"
+      ],
+      "target_languages": {
+        "en": "ready",
+        "sv": "broad coverage",
+        "fi": "broad coverage",
+        "nb": "broad coverage",
+        "nn": "adaptation-ready, needs fine-tuning; not ready support"
+      },
+      "architecture": "cache-aware FastConformer streaming RNNT",
+      "total_parameters": 637997088,
+      "precision": "official GGUF Q8_0 selected; F32/BF16 alternatives",
+      "macos_path": "NeMo-Speech.cpp 0.1.0 Metal/CPU; MLX alternative",
+      "windows_x64_path": "NeMo-Speech.cpp 0.1.0 CPU/Vulkan/CUDA",
+      "windows_arm64_path": "Unverified; no execution host",
+      "shortlisted": true,
+      "decision": "research",
+      "reason": "Shortlist streaming and Bokmal coverage; published chunk sizes are not final-text latency.",
+      "measurement_status": "blocked_not_run",
+      "new_measurements": [],
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "cold_p50_ms": null,
+      "cold_p95_ms": null,
+      "warm_p50_ms": null,
+      "warm_p95_ms": null,
+      "keyup_to_visible_p95_ms": null,
+      "rtf": null,
+      "cer_percent": null,
+      "blockers": [
+        "No frozen fresh held-out corpus across en/sv/nb/nn/fi",
+        "No #187 adapter/run manifest for this engine",
+        "Exact runtime/dependency build and platform measurements not produced",
+        "No partial-stability/finalization adapter; verify actual streaming capability of pinned runtime",
+        "Nynorsk needs adaptation evidence before eligibility"
+      ],
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "meta-ctc",
+      "repositories": [
+        "facebook/omniASR-CTC-300M"
+      ],
+      "source_urls": [
+        "https://huggingface.co/facebook/omniASR-CTC-300M"
+      ],
+      "target_languages": {
+        "en": "eng_Latn in language inventory",
+        "sv": "swe_Latn in language inventory",
+        "fi": "fin_Latn in language inventory",
+        "nb": "nob_Latn in language inventory",
+        "nn": "nno_Latn absent from inspected inventory; unverified"
+      },
+      "architecture": "wav2vec2 CTC; choose v2, retain pinned v1 reference",
+      "total_parameters": 325494996,
+      "precision": "official checkpoint; exact v2 tensor dtype not verified",
+      "macos_path": "official fairseq2/omnilingual-asr runtime not installed; Apple acceleration unverified",
+      "windows_x64_path": "No verified native Windows runtime for exact v2 checkpoint",
+      "windows_arm64_path": "Unverified; no execution host",
+      "shortlisted": true,
+      "decision": "research",
+      "reason": "Shortlist broad-language CTC experiment; LLM-300M is a different, larger full chain.",
+      "measurement_status": "blocked_not_run",
+      "new_measurements": [],
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "cold_p50_ms": null,
+      "cold_p95_ms": null,
+      "warm_p50_ms": null,
+      "warm_p95_ms": null,
+      "keyup_to_visible_p95_ms": null,
+      "rtf": null,
+      "cer_percent": null,
+      "blockers": [
+        "No frozen fresh held-out corpus across en/sv/nb/nn/fi",
+        "No #187 adapter/run manifest for this engine",
+        "Exact runtime/dependency build and platform measurements not produced",
+        "v2 direct checkpoint URL exists, exact bytes/hash not frozen; v1 is not a substitute result",
+        "Runtime packaging on both product platforms remains unresolved"
+      ],
+      "v2_artifact": {
+        "url": "https://dl.fbaipublicfiles.com/mms/omniASR-CTC-300M-v2.pt",
+        "bytes": null,
+        "sha256": null,
+        "source": "https://github.com/facebookresearch/omnilingual-asr",
+        "note": "Do not infer repository existence or gating from a 401 for an unverified HF v2 ID."
+      },
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "moonshine-streaming",
+      "repositories": [
+        "moonshine-ai/moonshine-streaming-tiny",
+        "moonshine-ai/moonshine-streaming-small",
+        "moonshine-ai/moonshine-streaming-medium"
+      ],
+      "source_urls": [
+        "https://huggingface.co/moonshine-ai/moonshine-streaming-tiny",
+        "https://huggingface.co/moonshine-ai/moonshine-streaming-small",
+        "https://huggingface.co/moonshine-ai/moonshine-streaming-medium"
+      ],
+      "target_languages": {
+        "en": "listed",
+        "sv": "not listed",
+        "fi": "not listed",
+        "nb": "not listed",
+        "nn": "not listed"
+      },
+      "architecture": "streaming encoder/decoder",
+      "total_parameters": {
+        "advertised_M": [
+          34,
+          123,
+          245
+        ],
+        "serialized_F32_elements": [
+          44054720,
+          140135224,
+          265898112
+        ]
+      },
+      "precision": "F32 Hugging Face Tiny selected",
+      "macos_path": "Transformers offline quality path; Moonshine SDK native streaming path requires export pin",
+      "windows_x64_path": "Moonshine SDK advertises Windows; exact export identity and dependencies not frozen",
+      "windows_arm64_path": "Unverified; no execution host",
+      "shortlisted": false,
+      "decision": "reference_or_reserve",
+      "reason": "Small English reserve; Gemma takes fifth shortlist slot after owner batch-quality clarification.",
+      "measurement_status": "blocked_not_run",
+      "new_measurements": [],
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "cold_p50_ms": null,
+      "cold_p95_ms": null,
+      "warm_p50_ms": null,
+      "warm_p95_ms": null,
+      "keyup_to_visible_p95_ms": null,
+      "rtf": null,
+      "cer_percent": null,
+      "blockers": [
+        "No frozen fresh held-out corpus across en/sv/nb/nn/fi",
+        "No #187 adapter/run manifest for this engine",
+        "Exact runtime/dependency build and platform measurements not produced",
+        "HF artifact identity must be reconciled with native SDK export before timing"
+      ],
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "canary-rasmus",
+      "repositories": [
+        "nvidia/canary-1b-v2",
+        "RASMUS/Finnish-ASR-Canary-v2"
+      ],
+      "source_urls": [
+        "https://huggingface.co/nvidia/canary-1b-v2",
+        "https://huggingface.co/RASMUS/Finnish-ASR-Canary-v2"
+      ],
+      "target_languages": {
+        "en": "Canary listed",
+        "sv": "Canary listed",
+        "fi": "Canary and RASMUS focus",
+        "nb": "not established here",
+        "nn": "not established here"
+      },
+      "architecture": "encoder-decoder Canary / Finnish fine-tune",
+      "total_parameters": {
+        "canary_serialized_F32_elements": 978998272,
+        "rasmus_complete_chain": null
+      },
+      "precision": "Canary F32; RASMUS checkpoint unverified",
+      "macos_path": "NeMo/PyTorch path; exact Apple backend unverified",
+      "windows_x64_path": "Native Windows path unverified",
+      "windows_arm64_path": "Unverified; no execution host",
+      "shortlisted": false,
+      "decision": "reference_or_reserve",
+      "reason": "Reserve: Finnish benchmark regresses on two of three card corpora; exact RASMUS checkpoint absent in pinned public file list.",
+      "measurement_status": "blocked_not_run",
+      "new_measurements": [],
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "cold_p50_ms": null,
+      "cold_p95_ms": null,
+      "warm_p50_ms": null,
+      "warm_p95_ms": null,
+      "keyup_to_visible_p95_ms": null,
+      "rtf": null,
+      "cer_percent": null,
+      "blockers": [
+        "No frozen fresh held-out corpus across en/sv/nb/nn/fi",
+        "No #187 adapter/run manifest for this engine",
+        "Exact runtime/dependency build and platform measurements not produced",
+        "RASMUS README references models/canary-finnish-v2.nemo but no .nemo/.ckpt weights in inspected repository",
+        "RASMUS number normalization and optional LM configuration need frozen, paired comparison"
+      ],
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "gemma4",
+      "repositories": [
+        "google/gemma-4-E2B-it",
+        "google/gemma-4-E4B-it",
+        "google/gemma-4-12B-it",
+        "google/gemma-4-E2B-it-qat-q4_0-gguf"
+      ],
+      "source_urls": [
+        "https://huggingface.co/google/gemma-4-E2B-it",
+        "https://huggingface.co/google/gemma-4-E4B-it",
+        "https://huggingface.co/google/gemma-4-12B-it",
+        "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf"
+      ],
+      "target_languages": {
+        "en": "audio language quality unverified locally",
+        "sv": "audio language quality unverified locally",
+        "fi": "audio language quality unverified locally",
+        "nb": "audio language quality unverified locally",
+        "nn": "audio language quality unverified locally"
+      },
+      "architecture": "multimodal decoder; E2B/E4B separate audio encoder",
+      "total_parameters": {
+        "E2B_serialized_BF16_elements": 5123178051,
+        "E4B_serialized_BF16_elements": 7996156490,
+        "12B_serialized_BF16_elements": 11959730224
+      },
+      "precision": "BF16 references; E2B QAT Q4_0 GGUF plus mmproj",
+      "macos_path": "llama.cpp mtmd audio support merged at 547765a93e5ad7b4e8ca84d78f6d83f36ad8ee25; exact build/artifact smoke test pending",
+      "windows_x64_path": "llama.cpp CPU/Vulkan/CUDA route; exact audio path on Windows unverified",
+      "windows_arm64_path": "Unverified; no execution host",
+      "shortlisted": true,
+      "decision": "research",
+      "reason": "Owner requested quality-first batch potential. E4B then 12B DEV research; larger size is not a quality rejection. Exact runtimes and new corpus remain blockers.",
+      "measurement_status": "blocked_not_run",
+      "new_measurements": [],
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "cold_p50_ms": null,
+      "cold_p95_ms": null,
+      "warm_p50_ms": null,
+      "warm_p95_ms": null,
+      "keyup_to_visible_p95_ms": null,
+      "rtf": null,
+      "cer_percent": null,
+      "blockers": [
+        "No frozen fresh held-out corpus across en/sv/nb/nn/fi",
+        "No #187 adapter/run manifest for this engine",
+        "Exact runtime/dependency build and platform measurements not produced",
+        "No frozen audio-capable CLI command/build for exact two GGUF files on either platform",
+        "Language-specific WER/CER absent; aggregate card score cannot support Nordic ranking"
+      ],
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "finnish-whisper",
+      "repositories": [
+        "Finnish-NLP/whisper-tiny-finnish",
+        "Finnish-NLP/whisper-medium-finnish",
+        "Finnish-NLP/whisper-large-v2-finnish",
+        "Finnish-NLP/whisper-large-finnish-v3",
+        "Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format"
+      ],
+      "source_urls": [
+        "https://huggingface.co/Finnish-NLP/whisper-tiny-finnish",
+        "https://huggingface.co/Finnish-NLP/whisper-medium-finnish",
+        "https://huggingface.co/Finnish-NLP/whisper-large-v2-finnish",
+        "https://huggingface.co/Finnish-NLP/whisper-large-finnish-v3",
+        "https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format"
+      ],
+      "target_languages": {
+        "fi": "fine-tuned"
+      },
+      "architecture": "Whisper tiny/medium/large-v2/large-v3",
+      "total_parameters": {
+        "canonical_approx_M": [
+          39,
+          769,
+          1550,
+          1550
+        ]
+      },
+      "precision": "source PyTorch/safetensors; GGML unquantized artifacts",
+      "macos_path": "existing Sagascript Whisper path, Tiny registered",
+      "windows_x64_path": "whisper.cpp path; exact Sagascript Windows run pending",
+      "windows_arm64_path": "Unverified; no execution host",
+      "shortlisted": false,
+      "decision": "reference_or_reserve",
+      "reason": "Retain opt-in Tiny; larger variants are reference research only. No Finnish Base checkpoint identified in inspected publisher inventory.",
+      "measurement_status": "blocked_not_run",
+      "new_measurements": [],
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "cold_p50_ms": null,
+      "cold_p95_ms": null,
+      "warm_p50_ms": null,
+      "warm_p95_ms": null,
+      "keyup_to_visible_p95_ms": null,
+      "rtf": null,
+      "cer_percent": null,
+      "blockers": [
+        "No frozen fresh held-out corpus across en/sv/nb/nn/fi",
+        "No #187 adapter/run manifest for this engine",
+        "Exact runtime/dependency build and platform measurements not produced"
+      ],
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "finnish-wav2vec2",
+      "repositories": [
+        "Finnish-NLP/wav2vec2-xlsr-300m-finnish-lm",
+        "Finnish-NLP/wav2vec2-xlsr-1b-finnish-lm-v2"
+      ],
+      "source_urls": [
+        "https://huggingface.co/Finnish-NLP/wav2vec2-xlsr-300m-finnish-lm",
+        "https://huggingface.co/Finnish-NLP/wav2vec2-xlsr-1b-finnish-lm-v2"
+      ],
+      "target_languages": {
+        "fi": "fine-tuned"
+      },
+      "architecture": "XLS-R CTC plus optional KenLM",
+      "total_parameters": {
+        "300m_serialized_F32_elements": 315474595,
+        "1b_serialized_F32_elements": 962542243
+      },
+      "precision": "F32 plus KenLM",
+      "macos_path": "Transformers/PyTorch and CTC decoder; clean Apple build unverified",
+      "windows_x64_path": "Native decoder/dependency path unverified",
+      "windows_arm64_path": "Unverified; no execution host",
+      "shortlisted": false,
+      "decision": "reference_or_reserve",
+      "reason": "Reserve: 300M weights plus LM/unigrams already 2.298 GB; scorer must separate greedy and LM configurations.",
+      "measurement_status": "blocked_not_run",
+      "new_measurements": [],
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "cold_p50_ms": null,
+      "cold_p95_ms": null,
+      "warm_p50_ms": null,
+      "warm_p95_ms": null,
+      "keyup_to_visible_p95_ms": null,
+      "rtf": null,
+      "cer_percent": null,
+      "blockers": [
+        "No frozen fresh held-out corpus across en/sv/nb/nn/fi",
+        "No #187 adapter/run manifest for this engine",
+        "Exact runtime/dependency build and platform measurements not produced"
+      ],
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "granite5",
+      "repositories": [
+        "ibm-granite/granite-speech-5.0-470m-turboctc"
+      ],
+      "source_urls": [
+        "https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc"
+      ],
+      "target_languages": {
+        "en": "listed",
+        "sv": "not listed",
+        "fi": "not listed",
+        "nb": "not listed",
+        "nn": "not listed"
+      },
+      "architecture": "CTC speech encoder",
+      "total_parameters": 472993792,
+      "precision": "mixed BF16/F32",
+      "macos_path": "publisher Transformers >=5.16 or MLX Audio >=0.5.1; exact build not installed",
+      "windows_x64_path": "Transformers path requires Windows verification",
+      "windows_arm64_path": "Unverified; no execution host",
+      "shortlisted": false,
+      "decision": "reference_or_reserve",
+      "reason": "English reserve; prioritize smaller Moonshine for the fifth family slot.",
+      "measurement_status": "blocked_not_run",
+      "new_measurements": [],
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "cold_p50_ms": null,
+      "cold_p95_ms": null,
+      "warm_p50_ms": null,
+      "warm_p95_ms": null,
+      "keyup_to_visible_p95_ms": null,
+      "rtf": null,
+      "cer_percent": null,
+      "blockers": [
+        "No frozen fresh held-out corpus across en/sv/nb/nn/fi",
+        "No #187 adapter/run manifest for this engine",
+        "Exact runtime/dependency build and platform measurements not produced"
+      ],
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "distil-whisper",
+      "source_urls": [
+        "https://huggingface.co/distil-whisper/distil-large-v3.5"
+      ],
+      "shortlisted": false,
+      "decision": "discovery_reserve",
+      "reason": "English reserve; no new Nordic coverage. Freeze exact weights/bytes/runtime if promoted.",
+      "total_parameters": null,
+      "artifact_revision": null,
+      "download_bytes": null,
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "latency_ms": null,
+      "measurement_status": "not_run_not_prioritized",
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "kyutai",
+      "source_urls": [
+        "https://huggingface.co/kyutai/stt-1b-en_fr"
+      ],
+      "shortlisted": false,
+      "decision": "discovery_reserve",
+      "reason": "1B English/French and 2.6B English paths; streaming delay and Mimicodec must join budget. Reserve behind smaller English slot.",
+      "total_parameters": null,
+      "artifact_revision": null,
+      "download_bytes": null,
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "latency_ms": null,
+      "measurement_status": "not_run_not_prioritized",
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "sensevoice",
+      "source_urls": [
+        "https://huggingface.co/FunAudioLLM/SenseVoiceSmall"
+      ],
+      "shortlisted": false,
+      "decision": "discovery_reserve",
+      "reason": "English plus Chinese/Japanese/Korean/Cantonese; no target Nordic coverage listed. English reserve.",
+      "total_parameters": null,
+      "artifact_revision": null,
+      "download_bytes": null,
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "latency_ms": null,
+      "measurement_status": "not_run_not_prioritized",
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "glm-asr",
+      "source_urls": [
+        "https://huggingface.co/zai-org/GLM-ASR-Nano-2512"
+      ],
+      "shortlisted": false,
+      "decision": "discovery_reserve",
+      "reason": "English/Chinese/Cantonese; no target Nordic coverage listed. Exact total chain not frozen.",
+      "total_parameters": null,
+      "artifact_revision": null,
+      "download_bytes": null,
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "latency_ms": null,
+      "measurement_status": "not_run_not_prioritized",
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "cohere-transcribe",
+      "source_urls": [
+        "https://huggingface.co/CohereLabs/cohere-transcribe-03-2026"
+      ],
+      "shortlisted": false,
+      "decision": "discovery_reserve",
+      "reason": "2B multilingual incl English, no target Nordic languages listed. Contact-sharing access gate not accepted; reserve.",
+      "total_parameters": null,
+      "artifact_revision": null,
+      "download_bytes": null,
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "latency_ms": null,
+      "measurement_status": "not_run_not_prioritized",
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "mms",
+      "source_urls": [
+        "https://huggingface.co/facebook/mms-1b-all"
+      ],
+      "shortlisted": false,
+      "decision": "discovery_reserve",
+      "reason": "Local multilingual weights; CC-BY-NC-4.0 does not clear product redistribution. Excluded pending license assessment.",
+      "total_parameters": null,
+      "artifact_revision": null,
+      "download_bytes": null,
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "latency_ms": null,
+      "measurement_status": "not_run_not_prioritized",
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "seamless",
+      "source_urls": [
+        "https://github.com/facebookresearch/seamless_communication"
+      ],
+      "shortlisted": false,
+      "decision": "discovery_reserve",
+      "reason": "Local speech/translation family discovered; exact variant, language coverage, license and total chain not frozen. Discovery backlog only.",
+      "total_parameters": null,
+      "artifact_revision": null,
+      "download_bytes": null,
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "latency_ms": null,
+      "measurement_status": "not_run_not_prioritized",
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "vibevoice-asr",
+      "source_urls": [
+        "https://github.com/microsoft/VibeVoice"
+      ],
+      "shortlisted": false,
+      "decision": "discovery_reserve",
+      "reason": "ASR and streaming variants must be separated from TTS; exact variant/language chain not frozen. Discovery backlog only.",
+      "total_parameters": null,
+      "artifact_revision": null,
+      "download_bytes": null,
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "latency_ms": null,
+      "measurement_status": "not_run_not_prioritized",
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "voxtral-realtime",
+      "source_urls": [
+        "https://mistral.ai/news/voxtral-transcribe-2/"
+      ],
+      "shortlisted": false,
+      "decision": "discovery_reserve",
+      "reason": "Local Realtime 4B path is distinct from hosted transcription API. No target Nordic coverage established here; larger English reserve.",
+      "total_parameters": null,
+      "artifact_revision": null,
+      "download_bytes": null,
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "latency_ms": null,
+      "measurement_status": "not_run_not_prioritized",
+      "batch_assessment": "batch-quality.md"
+    },
+    {
+      "id": "meta-llm-ssl",
+      "source_urls": [
+        "https://github.com/facebookresearch/omnilingual-asr"
+      ],
+      "shortlisted": false,
+      "decision": "discovery_reserve",
+      "reason": "LLM 300M full chain is about 1.63B, not CTC 325M. SSL encoder alone is not ASR. Larger 1B/3B/7B variants not shortlisted.",
+      "total_parameters": null,
+      "artifact_revision": null,
+      "download_bytes": null,
+      "installed_bytes": null,
+      "peak_ram_bytes": null,
+      "latency_ms": null,
+      "measurement_status": "not_run_not_prioritized",
+      "batch_assessment": "batch-quality.md"
+    }
+  ]
+}
