@@ -1,0 +1,1594 @@
+{
+  "observed_date": "2026-09-08",
+  "evidence_type": "publisher_metadata_not_download_verified",
+  "models": [
+    {
+      "repo": "Qwen/Qwen3-ASR-0.6B",
+      "revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+      "source": "https://huggingface.co/api/models/Qwen/Qwen3-ASR-0.6B?blobs=true",
+      "license": "apache-2.0",
+      "languages": null,
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 1876091704,
+          "sha256": "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/Qwen/Qwen3-ASR-0.6B/tree/5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "BF16": 938008576
+        },
+        "total": 938008576
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "Qwen/Qwen3-ASR-1.7B",
+      "revision": "7278e1e70fe206f11671096ffdd38061171dd6e5",
+      "source": "https://huggingface.co/api/models/Qwen/Qwen3-ASR-1.7B?blobs=true",
+      "license": "apache-2.0",
+      "languages": null,
+      "files": [
+        {
+          "path": "model-00001-of-00002.safetensors",
+          "bytes": 4220320824,
+          "sha256": "a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6"
+        },
+        {
+          "path": "model-00002-of-00002.safetensors",
+          "bytes": 478200688,
+          "sha256": "6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B/tree/7278e1e70fe206f11671096ffdd38061171dd6e5",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "BF16": 2349217408
+        },
+        "total": 2349217408
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "nvidia/parakeet-tdt-0.6b-v3",
+      "revision": "541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+      "source": "https://huggingface.co/api/models/nvidia/parakeet-tdt-0.6b-v3?blobs=true",
+      "license": "cc-by-4.0",
+      "languages": [
+        "en",
+        "es",
+        "fr",
+        "de",
+        "bg",
+        "hr",
+        "cs",
+        "da",
+        "nl",
+        "et",
+        "fi",
+        "el",
+        "hu",
+        "it",
+        "lv",
+        "lt",
+        "mt",
+        "pl",
+        "pt",
+        "ro",
+        "sk",
+        "sl",
+        "sv",
+        "ru",
+        "uk"
+      ],
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 2508311120,
+          "sha256": "3a2026366188c8c68598edbbff92f8d11590a08e0ae2e6775544e7b07d6a5e11"
+        },
+        {
+          "path": "parakeet-tdt-0.6b-v3.nemo",
+          "bytes": 2509332480,
+          "sha256": "3cbdc85877e668ca7b82d0d56770eb1fac76691f55d6b97545e8d61ca588d10d"
+        },
+        {
+          "path": "parakeet-tdt-0.6b-v3.q8_0.gguf",
+          "bytes": 713975456,
+          "sha256": "e3880d0aaaaf2c308ea2c35016b2b895c423eb3fda924c1b463d1c19b7f4d32e"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 1,
+      "artifact_tree": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/tree/541d1f99c6b0c3cd0b11a95167540bb8edefd82b",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 627057286
+        },
+        "total": 627057286
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+      "revision": "1c8deaecc64b91f034d73e08dd8b64625eb3395d",
+      "source": "https://huggingface.co/api/models/nvidia/nemotron-3.5-asr-streaming-0.6b?blobs=true",
+      "license": "other",
+      "languages": [
+        "en",
+        "es",
+        "de",
+        "fr",
+        "it",
+        "ar",
+        "ja",
+        "ko",
+        "pt",
+        "ru",
+        "hi",
+        "zh",
+        "vi",
+        "he",
+        "nl",
+        "cs",
+        "da",
+        "pl",
+        "no",
+        "sv",
+        "th",
+        "tr",
+        "bg",
+        "el",
+        "et",
+        "fi",
+        "hr",
+        "hu",
+        "lt",
+        "lv",
+        "ro",
+        "sk",
+        "uk",
+        "mt",
+        "sl"
+      ],
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 2552062944,
+          "sha256": "9eebdd6590289cb3030f310858f3df93256600a800a3e8200c5993d5f967e174"
+        },
+        {
+          "path": "nemotron-3.5-asr-streaming-0.6b.nemo",
+          "bytes": 2368284501,
+          "sha256": "210214ed94039bf6bfbb9a047c7fa289628db75b103e2bf6381fa78285436a74"
+        },
+        {
+          "path": "nemotron-3.5-asr-streaming-0.6b.q8_0.gguf",
+          "bytes": 741548352,
+          "sha256": "a5c435f294eea8f88ce68dd27b8c3bfea7f777cb2fbba04fcd30eaa555f429ae"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 8,
+      "artifact_tree": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b/tree/1c8deaecc64b91f034d73e08dd8b64625eb3395d",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 637997088
+        },
+        "total": 637997088
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "nvidia/canary-1b-v2",
+      "revision": "d455706339a6b32e1aa40f82c713a482a0c938e2",
+      "source": "https://huggingface.co/api/models/nvidia/canary-1b-v2?blobs=true",
+      "license": "cc-by-4.0",
+      "languages": [
+        "bg",
+        "hr",
+        "cs",
+        "da",
+        "nl",
+        "en",
+        "et",
+        "fi",
+        "fr",
+        "de",
+        "el",
+        "hu",
+        "it",
+        "lv",
+        "lt",
+        "mt",
+        "pl",
+        "pt",
+        "ro",
+        "sk",
+        "sl",
+        "es",
+        "sv",
+        "ru",
+        "uk"
+      ],
+      "files": [
+        {
+          "path": "canary-1b-v2.nemo",
+          "bytes": 6358958080,
+          "sha256": "ae5ef1bf06812a95a1594a8f5f0ee9c51f35418e5ba96939fa6b98ab00431094"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 3916173816,
+          "sha256": "4f6d381f6a939b95e9f8516212148b701e9b3805d26462c4c3e9e34f3d89b6f8"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 3,
+      "artifact_tree": "https://huggingface.co/nvidia/canary-1b-v2/tree/d455706339a6b32e1aa40f82c713a482a0c938e2",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 978998272
+        },
+        "total": 978998272
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "facebook/omniASR-CTC-300M",
+      "revision": "8e35f0cc28fa6099e0c14d56db85ce0423baa691",
+      "source": "https://huggingface.co/api/models/facebook/omniASR-CTC-300M?blobs=true",
+      "license": "apache-2.0",
+      "languages": null,
+      "files": [
+        {
+          "path": "omniASR-CTC-300M.pt",
+          "bytes": 1302113892,
+          "sha256": "4d31c6a7725a03e90cf26080c67361928755a9f43d322dd574145fbe91c76aec"
+        },
+        {
+          "path": "omniASR_tokenizer.model",
+          "bytes": 87562,
+          "sha256": "b954cc166b0c9e0271b953fa226fa27ca706a25b7029e84579fe2c60a2b451fe"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/facebook/omniASR-CTC-300M/tree/8e35f0cc28fa6099e0c14d56db85ce0423baa691",
+      "serialized_tensor_metadata": null,
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "moonshine-ai/moonshine-streaming-tiny",
+      "revision": "f8e9dfd8c562c257c151a907b7b7f2fe8ff8511a",
+      "source": "https://huggingface.co/api/models/moonshine-ai/moonshine-streaming-tiny?blobs=true",
+      "license": "mit",
+      "languages": [
+        "en"
+      ],
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 176237308,
+          "sha256": "0ab3443dabd95a4afb35f0a26155428c03b7c3c450fa6923ffdac4510ba3d040"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/moonshine-ai/moonshine-streaming-tiny/tree/f8e9dfd8c562c257c151a907b7b7f2fe8ff8511a",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 44054720
+        },
+        "total": 44054720
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "moonshine-ai/moonshine-streaming-small",
+      "revision": "2c036506f23a09c18df5a50057599ba6d9280999",
+      "source": "https://huggingface.co/api/models/moonshine-ai/moonshine-streaming-small?blobs=true",
+      "license": "mit",
+      "languages": [
+        "en"
+      ],
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 560571228,
+          "sha256": "003635df57b9a47771fd94a6290ab517d7487d0026c165ca9f2ac90411802646"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/moonshine-ai/moonshine-streaming-small/tree/2c036506f23a09c18df5a50057599ba6d9280999",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 140135224
+        },
+        "total": 140135224
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "moonshine-ai/moonshine-streaming-medium",
+      "revision": "57b843633a8c183cadf6699ffa761377a933a866",
+      "source": "https://huggingface.co/api/models/moonshine-ai/moonshine-streaming-medium?blobs=true",
+      "license": "mit",
+      "languages": [
+        "en"
+      ],
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 1063634564,
+          "sha256": "1b431906c919f373c671ffe8516a0125a4e3ffca4a69255c7fd05782abf6a103"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/moonshine-ai/moonshine-streaming-medium/tree/57b843633a8c183cadf6699ffa761377a933a866",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 265898112
+        },
+        "total": 265898112
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "google/gemma-4-E2B-it",
+      "revision": "3e22461f65e89153144f8adb70e3b8c2cc9845a7",
+      "source": "https://huggingface.co/api/models/google/gemma-4-E2B-it?blobs=true",
+      "license": "apache-2.0",
+      "languages": null,
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 10246621918,
+          "sha256": "2db5482b20d746879bb3ef79b5203e9075a2e2b98f54ec7c2f281c1477ddc550"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 1,
+      "artifact_tree": "https://huggingface.co/google/gemma-4-E2B-it/tree/3e22461f65e89153144f8adb70e3b8c2cc9845a7",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "BF16": 5123178051
+        },
+        "total": 5123178051
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "google/gemma-4-E4B-it",
+      "revision": "ee0ef6023621cff504d758262d4e04895a5af4a2",
+      "source": "https://huggingface.co/api/models/google/gemma-4-E4B-it?blobs=true",
+      "license": "apache-2.0",
+      "languages": null,
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 15992595884,
+          "sha256": "cfbd3d2f1cd71bd471c37fe2bf8546d5028d41e5736f64e1ca6c6b8893125503"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 1,
+      "artifact_tree": "https://huggingface.co/google/gemma-4-E4B-it/tree/ee0ef6023621cff504d758262d4e04895a5af4a2",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "BF16": 7996156490
+        },
+        "total": 7996156490
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "google/gemma-4-12B-it",
+      "revision": "707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+      "source": "https://huggingface.co/api/models/google/gemma-4-12B-it?blobs=true",
+      "license": "apache-2.0",
+      "languages": null,
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 23919549408,
+          "sha256": "5a84cb313260ac447237b890387116dfa8682e49a6b44bc585ae8353abbff18d"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 1,
+      "artifact_tree": "https://huggingface.co/google/gemma-4-12B-it/tree/707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "BF16": 11959730224
+        },
+        "total": 11959730224
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "google/gemma-4-E2B-it-qat-q4_0-gguf",
+      "revision": "675cff42a74c774d6cb76f76d8eacb49b48c9b93",
+      "source": "https://huggingface.co/api/models/google/gemma-4-E2B-it-qat-q4_0-gguf?blobs=true",
+      "license": "apache-2.0",
+      "languages": null,
+      "files": [
+        {
+          "path": "gemma-4-E2B-it-mmproj.gguf",
+          "bytes": 986833664,
+          "sha256": "021059cce659fe7f9170d5599761d7bbaf644b798dab9503aca30dc43e6beb14"
+        },
+        {
+          "path": "gemma-4-E2B_q4_0-it.gguf",
+          "bytes": 3349516256,
+          "sha256": "fa401b55b07ee70a54c6dae3903c783a6e65064312529ea57175cb5f8dec6634"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/tree/675cff42a74c774d6cb76f76d8eacb49b48c9b93",
+      "serialized_tensor_metadata": null,
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "mlx-community/Qwen3-ASR-0.6B-4bit",
+      "revision": "313d850181767edf09f00a9c289becca70e58cd0",
+      "source": "https://huggingface.co/api/models/mlx-community/Qwen3-ASR-0.6B-4bit?blobs=true",
+      "license": "apache-2.0",
+      "languages": null,
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 708236945,
+          "sha256": "70c7e67e588062adce4f10796e47ad42ead51c6671eda61a0987eae38ca95ddf"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/mlx-community/Qwen3-ASR-0.6B-4bit/tree/313d850181767edf09f00a9c289becca70e58cd0",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "BF16": 186441728,
+          "U32": 595984384
+        },
+        "total": 782426112
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "mlx-community/Qwen3-ASR-1.7B-4bit",
+      "revision": "78a389c776a5483b2d0d4ea5494e11012e0d6159",
+      "source": "https://huggingface.co/api/models/mlx-community/Qwen3-ASR-1.7B-4bit?blobs=true",
+      "license": "apache-2.0",
+      "languages": null,
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 1603081617,
+          "sha256": "9848eaf7a5c1589c671b35035ac27b72e248dd0c604eacae547e7e403d29db45"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/mlx-community/Qwen3-ASR-1.7B-4bit/tree/78a389c776a5483b2d0d4ea5494e11012e0d6159",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "BF16": 317601408,
+          "U32": 1720451072
+        },
+        "total": 2038052480
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "mlx-community/parakeet-tdt-0.6b-v3",
+      "revision": "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15",
+      "source": "https://huggingface.co/api/models/mlx-community/parakeet-tdt-0.6b-v3?blobs=true",
+      "license": "cc-by-4.0",
+      "languages": [
+        "en",
+        "es",
+        "fr",
+        "de",
+        "bg",
+        "hr",
+        "cs",
+        "da",
+        "nl",
+        "et",
+        "fi",
+        "el",
+        "hu",
+        "it",
+        "lv",
+        "lt",
+        "mt",
+        "pl",
+        "pt",
+        "ro",
+        "sk",
+        "sl",
+        "sv",
+        "ru",
+        "uk"
+      ],
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 2508288736,
+          "sha256": "05e01c7f396c298cf7d23f61da7b504adeab698f0aaeafd9c82d198625464592"
+        },
+        {
+          "path": "tokenizer.model",
+          "bytes": 360916,
+          "sha256": "eacec2b0a77f336d4a2ca4a25a7047575d3c2b74de47e997f4c205126ed3135e"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3/tree/ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 627052166
+        },
+        "total": 627052166
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "mlx-community/nemotron-3.5-asr-streaming-0.6b",
+      "revision": "e550040c0478027ed679b2b6b0d055502c103663",
+      "source": "https://huggingface.co/api/models/mlx-community/nemotron-3.5-asr-streaming-0.6b?blobs=true",
+      "license": "other",
+      "languages": [
+        "en",
+        "es",
+        "de",
+        "fr",
+        "it",
+        "ar",
+        "ja",
+        "ko",
+        "pt",
+        "ru",
+        "hi",
+        "zh",
+        "vi",
+        "he",
+        "nl",
+        "cs",
+        "da",
+        "pl",
+        "no",
+        "sv",
+        "th",
+        "tr",
+        "bg",
+        "el",
+        "et",
+        "fi",
+        "hr",
+        "hu",
+        "lt",
+        "lv",
+        "ro",
+        "sk",
+        "uk",
+        "mt",
+        "sl"
+      ],
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 1276058836,
+          "sha256": "1b78e4551371b1438daba0e8c9e1673bb18606994c1bcc493d85c5454d428ee5"
+        },
+        {
+          "path": "tokenizer.model",
+          "bytes": 406554,
+          "sha256": "ce3895e40806f02a26c3a225161b96ef682d6c0054bae32a245dec4258d7d291"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/mlx-community/nemotron-3.5-asr-streaming-0.6b/tree/e550040c0478027ed679b2b6b0d055502c103663",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "BF16": 637991968
+        },
+        "total": 637991968
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "RASMUS/Finnish-ASR-Canary-v2",
+      "revision": "f33586fce6e40fdec8bf56665340388602bdfc51",
+      "source": "https://huggingface.co/api/models/RASMUS/Finnish-ASR-Canary-v2?blobs=true",
+      "license": "mit",
+      "languages": [
+        "fi"
+      ],
+      "files": [],
+      "gated": false,
+      "omitted_lfs_file_count": 216,
+      "artifact_tree": "https://huggingface.co/RASMUS/Finnish-ASR-Canary-v2/tree/f33586fce6e40fdec8bf56665340388602bdfc51",
+      "serialized_tensor_metadata": null,
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "Finnish-NLP/whisper-tiny-finnish",
+      "revision": "bc5193ed50c052c426230644d17a12c3a8f86df6",
+      "source": "https://huggingface.co/api/models/Finnish-NLP/whisper-tiny-finnish?blobs=true",
+      "license": "apache-2.0",
+      "languages": null,
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 151061672,
+          "sha256": "d4dc566768bc88ade083a6550b66b321f5534cf1ac2d7aab361bf8a4b99dcb63"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 1,
+      "artifact_tree": "https://huggingface.co/Finnish-NLP/whisper-tiny-finnish/tree/bc5193ed50c052c426230644d17a12c3a8f86df6",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 37760640
+        },
+        "total": 37760640
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "Finnish-NLP/whisper-medium-finnish",
+      "revision": "d598aa7cfc766267efee73d360c28ae698835052",
+      "source": "https://huggingface.co/api/models/Finnish-NLP/whisper-medium-finnish?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "fi"
+      ],
+      "files": [
+        {
+          "path": "pytorch_model.bin",
+          "bytes": 1527847357,
+          "sha256": "a7a5037dafaec7138f43259da5b67b1e2e069b861e6bfe2345c0f513871332f4"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 3,
+      "artifact_tree": "https://huggingface.co/Finnish-NLP/whisper-medium-finnish/tree/d598aa7cfc766267efee73d360c28ae698835052",
+      "serialized_tensor_metadata": null,
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "Finnish-NLP/whisper-large-v2-finnish",
+      "revision": "41504d7e4b8177e1ac7a6c4674f70e2bd3e38c29",
+      "source": "https://huggingface.co/api/models/Finnish-NLP/whisper-large-v2-finnish?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "fi"
+      ],
+      "files": [
+        {
+          "path": "pytorch_model.bin",
+          "bytes": 3086784957,
+          "sha256": "d286a34b4c015cc8f1241351ad363887aab8f2195c7b244d1afb6e2de53577bf"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 3,
+      "artifact_tree": "https://huggingface.co/Finnish-NLP/whisper-large-v2-finnish/tree/41504d7e4b8177e1ac7a6c4674f70e2bd3e38c29",
+      "serialized_tensor_metadata": null,
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "Finnish-NLP/whisper-large-finnish-v3",
+      "revision": "b23deb0b3855c829ffe04cb1c6709757ff16d49c",
+      "source": "https://huggingface.co/api/models/Finnish-NLP/whisper-large-finnish-v3?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "fi"
+      ],
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 3219908024,
+          "sha256": "93366238e00d087254b8a44197afae96b22f77853d1e5b2aed180099196dc1a2"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 15,
+      "artifact_tree": "https://huggingface.co/Finnish-NLP/whisper-large-finnish-v3/tree/b23deb0b3855c829ffe04cb1c6709757ff16d49c",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F16": 1609879040
+        },
+        "total": 1609879040
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "Finnish-NLP/wav2vec2-xlsr-300m-finnish-lm",
+      "revision": "5ba6a32f063b1f9e866057fd9dd5a93be8f8516e",
+      "source": "https://huggingface.co/api/models/Finnish-NLP/wav2vec2-xlsr-300m-finnish-lm?blobs=true",
+      "license": "apache-2.0",
+      "languages": "fi",
+      "files": [
+        {
+          "path": "language_model/kenlm_finnish.bin",
+          "bytes": 1021613027,
+          "sha256": "79ca983c89af32b5c38560d822324bf2023c3aa2b32ed17fd1ea67aac68b5166"
+        },
+        {
+          "path": "language_model/unigrams.txt",
+          "bytes": 14815049,
+          "sha256": "c0f65403ece43fcc9eb95148060e402d7af46692f7a41a94b75ae23f40fa93d7"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 1261950932,
+          "sha256": "32eb91e2a8596ef327adfe9dc1562ab9d6784febfbcefd064310c3c1b876653c"
+        },
+        {
+          "path": "pytorch_model.bin",
+          "bytes": 1262067185,
+          "sha256": "bc7db976575d8276744c7bdd3cd361aab506598c6f5c26bbe8fc9f9aa7a13280"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 1,
+      "artifact_tree": "https://huggingface.co/Finnish-NLP/wav2vec2-xlsr-300m-finnish-lm/tree/5ba6a32f063b1f9e866057fd9dd5a93be8f8516e",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 315474595
+        },
+        "total": 315474595
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "Finnish-NLP/wav2vec2-xlsr-1b-finnish-lm-v2",
+      "revision": "779ba269387e99f73af3069141972ced8f0194b1",
+      "source": "https://huggingface.co/api/models/Finnish-NLP/wav2vec2-xlsr-1b-finnish-lm-v2?blobs=true",
+      "license": "apache-2.0",
+      "languages": "fi",
+      "files": [
+        {
+          "path": "language_model/kenlm_finnish.bin",
+          "bytes": 1021613027,
+          "sha256": "79ca983c89af32b5c38560d822324bf2023c3aa2b32ed17fd1ea67aac68b5166"
+        },
+        {
+          "path": "language_model/unigrams.txt",
+          "bytes": 14815049,
+          "sha256": "c0f65403ece43fcc9eb95148060e402d7af46692f7a41a94b75ae23f40fa93d7"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 3850270284,
+          "sha256": "90bd43ed41d3e2d6bac157e9c508ec22e43201893530145846abff96402d5fb9"
+        },
+        {
+          "path": "pytorch_model.bin",
+          "bytes": 3850492081,
+          "sha256": "c3cb38ebbc92ea1f268e9f07b2f8ae488bf22c4239cbee763be91967c1d2d546"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 1,
+      "artifact_tree": "https://huggingface.co/Finnish-NLP/wav2vec2-xlsr-1b-finnish-lm-v2/tree/779ba269387e99f73af3069141972ced8f0194b1",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 962542243
+        },
+        "total": 962542243
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format",
+      "revision": "c58924b6deb4438756b3d38ecd67d65bdf20298d",
+      "source": "https://huggingface.co/api/models/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "fi"
+      ],
+      "files": [
+        {
+          "path": "ggml-model-fi-large-v3.bin",
+          "bytes": 3095033483,
+          "sha256": "89536e66c7b521189b55cd010c71faf50c447d281a38cf3f6ba616a5f4b78d2e"
+        },
+        {
+          "path": "ggml-model-fi-large.bin",
+          "bytes": 3094623691,
+          "sha256": "f637e18d96cba00eaba9b46d83e2f9e6df44bed3835df25ea46913fd9e46a187"
+        },
+        {
+          "path": "ggml-model-fi-medium.bin",
+          "bytes": 1533763059,
+          "sha256": "a0d1126381bebc9155e6a06a36ae4bf8e87abd02eacf73fff1593719a7d6c739"
+        },
+        {
+          "path": "ggml-model-fi-tiny.bin",
+          "bytes": 77691730,
+          "sha256": "41cf309b7f50523cfca724ae90924fcd0e4794205de57a66abc3cce627103ce8"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 0,
+      "artifact_tree": "https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d",
+      "serialized_tensor_metadata": null,
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "ggerganov/whisper.cpp",
+      "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+      "source": "https://huggingface.co/api/models/ggerganov/whisper.cpp?blobs=true",
+      "license": "mit",
+      "languages": null,
+      "files": [
+        {
+          "path": "ggml-base-encoder.mlmodelc.zip",
+          "bytes": 37922638,
+          "sha256": "7e6ab77041942572f239b5b602f8aaa1c3ed29d73e3d8f20abea03a773541089"
+        },
+        {
+          "path": "ggml-base-q5_1.bin",
+          "bytes": 59707625,
+          "sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898"
+        },
+        {
+          "path": "ggml-base-q8_0.bin",
+          "bytes": 81768585,
+          "sha256": "c577b9a86e7e048a0b7eada054f4dd79a56bbfa911fbdacf900ac5b567cbb7d9"
+        },
+        {
+          "path": "ggml-base.bin",
+          "bytes": 147951465,
+          "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe"
+        },
+        {
+          "path": "ggml-base.en-encoder.mlmodelc.zip",
+          "bytes": 37950917,
+          "sha256": "8cf860309e2449e2bdc8be834cf838ab2565747ecc8c0ef914ef5975115e192b"
+        },
+        {
+          "path": "ggml-base.en-q5_1.bin",
+          "bytes": 59721011,
+          "sha256": "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f"
+        },
+        {
+          "path": "ggml-base.en-q8_0.bin",
+          "bytes": 81781811,
+          "sha256": "a4d4a0768075e13cfd7e19df3ae2dbc4a68d37d36a7dad45e8410c9a34f8c87e"
+        },
+        {
+          "path": "ggml-base.en.bin",
+          "bytes": 147964211,
+          "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+        },
+        {
+          "path": "ggml-large-v2-encoder.mlmodelc.zip",
+          "bytes": 1174643458,
+          "sha256": "c65d28737f51d09dff3b9da9d26c2ab6f5d82857c9b049ce383d64c2502a5541"
+        },
+        {
+          "path": "ggml-large-v2-q5_0.bin",
+          "bytes": 1080732091,
+          "sha256": "3a214837221e4530dbc1fe8d734f302af393eb30bd0ed046042ebf4baf70f6f2"
+        },
+        {
+          "path": "ggml-large-v2-q8_0.bin",
+          "bytes": 1656129691,
+          "sha256": "fef54e6d898246a65c8285bfa83bd1807e27fadf54d5d4e81754c47634737e8c"
+        },
+        {
+          "path": "ggml-large-v2.bin",
+          "bytes": 3094623691,
+          "sha256": "9a423fe4d40c82774b6af34115b8b935f34152246eb19e80e376071d3f999487"
+        },
+        {
+          "path": "ggml-large-v3-encoder.mlmodelc.zip",
+          "bytes": 1175711232,
+          "sha256": "47837be7594a29429ec08620043390c4d6d467f8bd362df09e9390ace76a55a4"
+        },
+        {
+          "path": "ggml-large-v3-q5_0.bin",
+          "bytes": 1081140203,
+          "sha256": "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1"
+        },
+        {
+          "path": "ggml-large-v3-turbo-encoder.mlmodelc.zip",
+          "bytes": 1173393014,
+          "sha256": "84bedfe895bd7b5de6e8e89a0803dfc5addf8c0c5bc4c937451716bf7cf7988a"
+        },
+        {
+          "path": "ggml-large-v3-turbo-q5_0.bin",
+          "bytes": 574041195,
+          "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
+        },
+        {
+          "path": "ggml-large-v3-turbo-q8_0.bin",
+          "bytes": 874188075,
+          "sha256": "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1"
+        },
+        {
+          "path": "ggml-large-v3-turbo.bin",
+          "bytes": 1624555275,
+          "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69"
+        },
+        {
+          "path": "ggml-large-v3.bin",
+          "bytes": 3095033483,
+          "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+        },
+        {
+          "path": "ggml-medium-encoder.mlmodelc.zip",
+          "bytes": 567829413,
+          "sha256": "79b0b8d436d47d3f24dd3afc91f19447dd686a4f37521b2f6d9c30a642133fbd"
+        },
+        {
+          "path": "ggml-medium-q5_0.bin",
+          "bytes": 539212467,
+          "sha256": "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f"
+        },
+        {
+          "path": "ggml-medium-q8_0.bin",
+          "bytes": 823369779,
+          "sha256": "42a1ffcbe4167d224232443396968db4d02d4e8e87e213d3ee2e03095dea6502"
+        },
+        {
+          "path": "ggml-medium.bin",
+          "bytes": 1533763059,
+          "sha256": "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208"
+        },
+        {
+          "path": "ggml-medium.en-encoder.mlmodelc.zip",
+          "bytes": 566993085,
+          "sha256": "cdc44fee3c62b5743913e3147ed75f4e8ecfb52dd7a0f0f7387094b406ff0ee6"
+        },
+        {
+          "path": "ggml-medium.en-q5_0.bin",
+          "bytes": 539225533,
+          "sha256": "76733e26ad8fe1c7a5bf7531a9d41917b2adc0f20f2e4f5531688a8c6cd88eb0"
+        },
+        {
+          "path": "ggml-medium.en-q8_0.bin",
+          "bytes": 823382461,
+          "sha256": "43fa2cd084de5a04399a896a9a7a786064e221365c01700cea4666005218f11c"
+        },
+        {
+          "path": "ggml-medium.en.bin",
+          "bytes": 1533774781,
+          "sha256": "cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356"
+        },
+        {
+          "path": "ggml-small-encoder.mlmodelc.zip",
+          "bytes": 163083239,
+          "sha256": "de43fb9fed471e95c19e60ae67575c2bf09e8fb607016da171b06ddad313988b"
+        },
+        {
+          "path": "ggml-small-q5_1.bin",
+          "bytes": 190085487,
+          "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"
+        },
+        {
+          "path": "ggml-small-q8_0.bin",
+          "bytes": 264464607,
+          "sha256": "49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f"
+        },
+        {
+          "path": "ggml-small.bin",
+          "bytes": 487601967,
+          "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+        },
+        {
+          "path": "ggml-small.en-encoder.mlmodelc.zip",
+          "bytes": 162952446,
+          "sha256": "b2ef1c506378b825b4b4341979a93e1656b5d6c129f17114cfb8fb78aabc2f89"
+        },
+        {
+          "path": "ggml-small.en-q5_1.bin",
+          "bytes": 190098681,
+          "sha256": "bfdff4894dcb76bbf647d56263ea2a96645423f1669176f4844a1bf8e478ad30"
+        },
+        {
+          "path": "ggml-small.en-q8_0.bin",
+          "bytes": 264477561,
+          "sha256": "67a179f608ea6114bd3fdb9060e762b588a3fb3bd00c4387971be4d177958067"
+        },
+        {
+          "path": "ggml-small.en.bin",
+          "bytes": 487614201,
+          "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d"
+        },
+        {
+          "path": "ggml-tiny-encoder.mlmodelc.zip",
+          "bytes": 15037446,
+          "sha256": "c88cbd2648e1f5415092bcf5256add463a0f19943e6938f46e8d4ffdebd47739"
+        },
+        {
+          "path": "ggml-tiny-q5_1.bin",
+          "bytes": 32152673,
+          "sha256": "818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7"
+        },
+        {
+          "path": "ggml-tiny-q8_0.bin",
+          "bytes": 43537433,
+          "sha256": "c2085835d3f50733e2ff6e4b41ae8a2b8d8110461e18821b09a15c40c42d1cca"
+        },
+        {
+          "path": "ggml-tiny.bin",
+          "bytes": 77691713,
+          "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
+        },
+        {
+          "path": "ggml-tiny.en-encoder.mlmodelc.zip",
+          "bytes": 15034655,
+          "sha256": "82b32eef73c94bb0c432a776a047b757d9525c26d84038a15d8798d7c8d1ee58"
+        },
+        {
+          "path": "ggml-tiny.en-q5_1.bin",
+          "bytes": 32166155,
+          "sha256": "c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b"
+        },
+        {
+          "path": "ggml-tiny.en-q8_0.bin",
+          "bytes": 43550795,
+          "sha256": "5bc2b3860aa151a4c6e7bb095e1fcce7cf12c7b020ca08dcec0c6d018bb7dd94"
+        },
+        {
+          "path": "ggml-tiny.en.bin",
+          "bytes": 77704715,
+          "sha256": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 2,
+      "artifact_tree": "https://huggingface.co/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1",
+      "serialized_tensor_metadata": null,
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "KBLab/kb-whisper-tiny",
+      "revision": "76d796af43a50fa34321efa562c9b9887a187463",
+      "source": "https://huggingface.co/api/models/KBLab/kb-whisper-tiny?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "sv"
+      ],
+      "files": [
+        {
+          "path": "ggml-model-q5_0.bin",
+          "bytes": 29875738,
+          "sha256": "98d46b7d23e5528d006e8a42e29eb0cb39b44bed94e1329f10f57d1fd15c658b"
+        },
+        {
+          "path": "ggml-model.bin",
+          "bytes": 77691730,
+          "sha256": "054187c95948ee0455d428db0c0d6c84d6c6157dab72e86857ced13233118b03"
+        },
+        {
+          "path": "model.bin",
+          "bytes": 75538384,
+          "sha256": "6edbc6036ceb79f12c30c5c5c2290383eac7a0bfec0be3163c480e79b26b16b9"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 115372576,
+          "sha256": "b8171b31c188c669d0ad9c635c9a1cfd0ea33fda8b313246a9aa13f578be4ba6"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 32,
+      "artifact_tree": "https://huggingface.co/KBLab/kb-whisper-tiny/tree/76d796af43a50fa34321efa562c9b9887a187463",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F16": 57676800
+        },
+        "total": 57676800
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "KBLab/kb-whisper-base",
+      "revision": "1499d2d2f0c7ed545bd6f2eec85287cf8d8c8b38",
+      "source": "https://huggingface.co/api/models/KBLab/kb-whisper-base?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "sv"
+      ],
+      "files": [
+        {
+          "path": "ggml-model-q5_0.bin",
+          "bytes": 55295450,
+          "sha256": "aead29b356bca8840e72a8dc2286e2d69e6702639751a1e60cb3c8eacefec546"
+        },
+        {
+          "path": "ggml-model.bin",
+          "bytes": 147951482,
+          "sha256": "f5e3cdb33e537eedfa2a749b5cae28c4c511873a1b13362f87dffbe07891d3fe"
+        },
+        {
+          "path": "model.bin",
+          "bytes": 145217646,
+          "sha256": "fa942ec92ad7747aec2e9ea8c57ad8971a3695f3c9ff440018a3667bb818a5c4"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 198325672,
+          "sha256": "1883cbed9d47a1a3e1ae12d221371957d1e898788a778c6adfa450e98ca1f7ed"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 32,
+      "artifact_tree": "https://huggingface.co/KBLab/kb-whisper-base/tree/1499d2d2f0c7ed545bd6f2eec85287cf8d8c8b38",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F16": 99148800
+        },
+        "total": 99148800
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "KBLab/kb-whisper-small",
+      "revision": "3564d61a42fc210ceaa55a22a96dd64478959c78",
+      "source": "https://huggingface.co/api/models/KBLab/kb-whisper-small?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "sv"
+      ],
+      "files": [
+        {
+          "path": "ggml-model-q5_0.bin",
+          "bytes": 175209680,
+          "sha256": "6768836a51abc902e420c613153e6d418c90ea2774e913274d02ab23170225b7"
+        },
+        {
+          "path": "ggml-model.bin",
+          "bytes": 487601984,
+          "sha256": "de6911330cbdc131362f7a955682b65c8a5a2394caba73e7ea821a9822efb8c6"
+        },
+        {
+          "path": "model.bin",
+          "bytes": 483547016,
+          "sha256": "58bf16e6878108f898c4db7983d0f4ec01c4891500f7a2b3a2c9ce98b3c0029d"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 563189936,
+          "sha256": "4fe050cc61ebda02dacb2a0fd90bb5ae61300656d9339ca6107aeb53c69594da"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 32,
+      "artifact_tree": "https://huggingface.co/KBLab/kb-whisper-small/tree/3564d61a42fc210ceaa55a22a96dd64478959c78",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F16": 281567232
+        },
+        "total": 281567232
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "KBLab/kb-whisper-medium",
+      "revision": "0abe10b9d7f75d0902656e5c06c5c4d549604dc5",
+      "source": "https://huggingface.co/api/models/KBLab/kb-whisper-medium?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "sv"
+      ],
+      "files": [
+        {
+          "path": "ggml-model-q5_0.bin",
+          "bytes": 539212484,
+          "sha256": "7f8762e0ade9e0073674c0d5acae942a0b1ea98add9baa008ee89c94eaba43d0"
+        },
+        {
+          "path": "ggml-model.bin",
+          "bytes": 1533763076,
+          "sha256": "1b7842bc1c3f79fb3bf043a0a3590961d625a49ef3ccbdceb00e738c5dd8b015"
+        },
+        {
+          "path": "model.bin",
+          "bytes": 1527906492,
+          "sha256": "4a4a32952026bcfa0bcfaa76b0b006f232ffba6a8f5bccbcb12e4a1153a40494"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 1634047376,
+          "sha256": "f5d9eaecc00a1ca51b8f5e5f3da6270b4d234b5d3c94e1015316059a644d0320"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 32,
+      "artifact_tree": "https://huggingface.co/KBLab/kb-whisper-medium/tree/0abe10b9d7f75d0902656e5c06c5c4d549604dc5",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F16": 816967680
+        },
+        "total": 816967680
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "KBLab/kb-whisper-large",
+      "revision": "d5d5984b4d8f7c4847a8ea203f1976285fb28300",
+      "source": "https://huggingface.co/api/models/KBLab/kb-whisper-large?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "sv"
+      ],
+      "files": [
+        {
+          "path": "ggml-model-q5_0.bin",
+          "bytes": 1081140203,
+          "sha256": "6d2863812d7410322bb7d8647a5c7260761300fa946714c9ed66d22bb30bcb19"
+        },
+        {
+          "path": "ggml-model.bin",
+          "bytes": 3095033483,
+          "sha256": "b66f2dda369a88f6c03fe37326d7cc37aa216f6f34e6fc1be686e497ba9c2f39"
+        },
+        {
+          "path": "model.bin",
+          "bytes": 3087284276,
+          "sha256": "69ed56887f68417f651d50fd5f225c60dfc0f9515bef85bb0f1404825c6f01de"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 3219908024,
+          "sha256": "fa89eecf05f87f15cfd7213f9f55d6fdbbd1a59e6d152f58c4e87bcc482cde3f"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 36,
+      "artifact_tree": "https://huggingface.co/KBLab/kb-whisper-large/tree/d5d5984b4d8f7c4847a8ea203f1976285fb28300",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F16": 1609879040
+        },
+        "total": 1609879040
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "NbAiLab/nb-whisper-tiny",
+      "revision": "8b38492d0e4111d5d6ad825e979cb082a2da013a",
+      "source": "https://huggingface.co/api/models/NbAiLab/nb-whisper-tiny?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "no",
+        "nb",
+        "nn",
+        "en"
+      ],
+      "files": [
+        {
+          "path": "ct2/model.bin",
+          "bytes": 151068841,
+          "sha256": "8d7acfd455ca5f01e020e7b7268a27f1527e7097eec1a2a64171479591eeb6f6"
+        },
+        {
+          "path": "ggml-model-q5_0.bin",
+          "bytes": 29875738,
+          "sha256": "e5fb42192cdf31bea624a524d035e8895030b2bb4b31d4ea2a1ebf0ea8f57237"
+        },
+        {
+          "path": "ggml-model.bin",
+          "bytes": 77691730,
+          "sha256": "2f9dd799ee36b6a9c8d642e9b1df8ecf2135efdd5a91b1d9ca0b3c0decda535f"
+        },
+        {
+          "path": "model.bin",
+          "bytes": 151068841,
+          "sha256": "8d7acfd455ca5f01e020e7b7268a27f1527e7097eec1a2a64171479591eeb6f6"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 151061672,
+          "sha256": "b7d21c4cf7c05c760cb0780e7e3b41241e6883f3bed73ced0166435b6487d9e6"
+        },
+        {
+          "path": "pytorch_model.bin",
+          "bytes": 151097190,
+          "sha256": "025552ad47ec2c39f9b977f2a57e848e799d863445f8bdcb39c78f68b2ab149c"
+        },
+        {
+          "path": "training_state.bin",
+          "bytes": 6297,
+          "sha256": "3d0e6fd33fbe5ff44e5e2c2f2edd38009b08f69680281fa16adf006c79a09c17"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 6,
+      "artifact_tree": "https://huggingface.co/NbAiLab/nb-whisper-tiny/tree/8b38492d0e4111d5d6ad825e979cb082a2da013a",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 37760640
+        },
+        "total": 37760640
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "NbAiLab/nb-whisper-base",
+      "revision": "2ab372b6baa181a22f54f18030cae3703402c59e",
+      "source": "https://huggingface.co/api/models/NbAiLab/nb-whisper-base?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "no",
+        "nb",
+        "nn",
+        "en"
+      ],
+      "files": [
+        {
+          "path": "ct2/model.bin",
+          "bytes": 290423879,
+          "sha256": "4c8483e9f7636023e740b3cbf68d27e2685a51276e797435786e7d380cf76d81"
+        },
+        {
+          "path": "ggml-model-q5_0.bin",
+          "bytes": 55295450,
+          "sha256": "dcb9f3ab963cd288974c826c1519ff73b78b2372e80d388a6ce94f29c6a5b40f"
+        },
+        {
+          "path": "ggml-model.bin",
+          "bytes": 147951482,
+          "sha256": "05fc04a7f16b634b99e0cbbe5e4e78a00469b834219e83df39ab4f8bca5c4b97"
+        },
+        {
+          "path": "model.bin",
+          "bytes": 290423879,
+          "sha256": "4c8483e9f7636023e740b3cbf68d27e2685a51276e797435786e7d380cf76d81"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 290403936,
+          "sha256": "8033df8c4c1b1a96c9e569ca645ba25d5a5cc0f604a431e4a72683d81fb60bb3"
+        },
+        {
+          "path": "pytorch_model.bin",
+          "bytes": 290455838,
+          "sha256": "3a3383d53a63f48c5e53231c8aac583366fbfc829a581f7da710f1ce3e398778"
+        },
+        {
+          "path": "training_state.bin",
+          "bytes": 6319,
+          "sha256": "c5673a9c0eea5d0a137399a1a59e79cf0a7fb754305124b292d0fa1f1b6448aa"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 6,
+      "artifact_tree": "https://huggingface.co/NbAiLab/nb-whisper-base/tree/2ab372b6baa181a22f54f18030cae3703402c59e",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 72593920
+        },
+        "total": 72593920
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "NbAiLab/nb-whisper-small",
+      "revision": "e9bb5cb83cb74c96239fd506163aa97cff2fce4c",
+      "source": "https://huggingface.co/api/models/NbAiLab/nb-whisper-small?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "no",
+        "nb",
+        "nn",
+        "en"
+      ],
+      "files": [
+        {
+          "path": "ct2/model.bin",
+          "bytes": 967072097,
+          "sha256": "c16263d0dbbbd8a486899ab2375fbe67f29f0356d40180ac8ce2443c19a908f0"
+        },
+        {
+          "path": "ggml-model-q5_0.bin",
+          "bytes": 175209680,
+          "sha256": "2a9025afb6e825fc4ae6a46671e0cb2f43e62f1dec87270deea6fe61b5285a20"
+        },
+        {
+          "path": "ggml-model.bin",
+          "bytes": 487601984,
+          "sha256": "a0fc1555f5bd51044b0ea88bb9b7891e1ee331a8087eddb0afc3a05839db48ab"
+        },
+        {
+          "path": "model.bin",
+          "bytes": 967072097,
+          "sha256": "c16263d0dbbbd8a486899ab2375fbe67f29f0356d40180ac8ce2443c19a908f0"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 966995080,
+          "sha256": "72eabc8b35e1a08f19d49554daddc30d98ea11d1eee22c87186fcf4168c86dfe"
+        },
+        {
+          "path": "pytorch_model.bin",
+          "bytes": 967096454,
+          "sha256": "6f4bb34d550b48b61c6cbba2786612cd844a621cfe1b152c3e60b79798299a90"
+        },
+        {
+          "path": "training_state.bin",
+          "bytes": 6335,
+          "sha256": "ef6f341ce686fb5a2c9064b5a0b9e2e5ad84961eff2b46f1773a6af52b6bf23c"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 5,
+      "artifact_tree": "https://huggingface.co/NbAiLab/nb-whisper-small/tree/e9bb5cb83cb74c96239fd506163aa97cff2fce4c",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 241734912
+        },
+        "total": 241734912
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "NbAiLab/nb-whisper-medium",
+      "revision": "0ed074d5985bd56ca4140159a9dbffbc3fb5117e",
+      "source": "https://huggingface.co/api/models/NbAiLab/nb-whisper-medium?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "no",
+        "nb",
+        "nn",
+        "en"
+      ],
+      "files": [
+        {
+          "path": "ct2/model.bin",
+          "bytes": 3055769749,
+          "sha256": "1721dd1dc26d7a543280aaedbc8ab2832578cef4bf834d4fdd838393f36d278a"
+        },
+        {
+          "path": "ggml-model-q5_0.bin",
+          "bytes": 539212484,
+          "sha256": "18733de634af639a43b0f8c5f5a2ea0920de4c5b32a5570ec130981581c0e5e7"
+        },
+        {
+          "path": "ggml-model.bin",
+          "bytes": 1533763076,
+          "sha256": "f73141401d203ee77fc7ddf7bf97926a8a85fe85faa6066a6920e4815f48a73d"
+        },
+        {
+          "path": "model.bin",
+          "bytes": 3055769749,
+          "sha256": "1721dd1dc26d7a543280aaedbc8ab2832578cef4bf834d4fdd838393f36d278a"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 3055544304,
+          "sha256": "8a863e51e2bf9f183efd93c3d4201a3cacf6fb25ebc8426afa2836f2b68017c0"
+        },
+        {
+          "path": "pytorch_model.bin",
+          "bytes": 3055742166,
+          "sha256": "b339e8050c288da93c36c93769555b674f5bc1e9e456dcaf67347cf5af439117"
+        },
+        {
+          "path": "training_state.bin",
+          "bytes": 6327,
+          "sha256": "4ac35cd18a35dbd0f51fa9c7d7c8dda0b3e50e8ba95dcb67677c5933c7be6afd"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 5,
+      "artifact_tree": "https://huggingface.co/NbAiLab/nb-whisper-medium/tree/0ed074d5985bd56ca4140159a9dbffbc3fb5117e",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 763857920
+        },
+        "total": 763857920
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "NbAiLab/nb-whisper-large",
+      "revision": "8c6249fdeeb4dcd05e5735a4c39640607eb6e4ac",
+      "source": "https://huggingface.co/api/models/NbAiLab/nb-whisper-large?blobs=true",
+      "license": "apache-2.0",
+      "languages": [
+        "no",
+        "nb",
+        "nn",
+        "en"
+      ],
+      "files": [
+        {
+          "path": "ct2/model.bin",
+          "bytes": 6174511117,
+          "sha256": "91a2575f6e703d0bf6d8ce228a490c40e2404e6275932c20ff137382f35f726d"
+        },
+        {
+          "path": "ggml-model-q5_0.bin",
+          "bytes": 1081140203,
+          "sha256": "feb5951ae694a62cfeb81fb501f6cfa8cc50d96bcddb1e4e8215f7006bac23a2"
+        },
+        {
+          "path": "ggml-model.bin",
+          "bytes": 3095033483,
+          "sha256": "0f2f66f22e11a7c7da3c582d8e5c89cb2c0011753ba9c7c9731e320a4ba33e76"
+        },
+        {
+          "path": "model-00001-of-00002.safetensors",
+          "bytes": 4993448880,
+          "sha256": "4bdf9a2cb1ae48dbb7de0fdc014dd2bc258f02b0e4cae9f53e4ca8aa0b0e589a"
+        },
+        {
+          "path": "model-00002-of-00002.safetensors",
+          "bytes": 1180663192,
+          "sha256": "a39147bedbb75ed1083344aeaac03d28c94347bda418cc1f21057b94a93d283c"
+        },
+        {
+          "path": "model.bin",
+          "bytes": 6174511117,
+          "sha256": "91a2575f6e703d0bf6d8ce228a490c40e2404e6275932c20ff137382f35f726d"
+        },
+        {
+          "path": "pytorch_model.bin",
+          "bytes": 6174380865,
+          "sha256": "f1682ff604dd299a54f3678b026874b678f86577e3fca047f51803d52b4655fd"
+        },
+        {
+          "path": "training_state.bin",
+          "bytes": 6331,
+          "sha256": "bfa44952157b2df6ef723e428150c301ea84424aa51a9d90036130470e3b02c8"
+        }
+      ],
+      "gated": false,
+      "omitted_lfs_file_count": 9,
+      "artifact_tree": "https://huggingface.co/NbAiLab/nb-whisper-large/tree/8c6249fdeeb4dcd05e5735a4c39640607eb6e4ac",
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 1543490560
+        },
+        "total": 1543490560
+      },
+      "tensor_count_caveat": "Serialized tensor elements; may include tied duplicates or packed quantized integers. Not necessarily independent trainable parameters."
+    },
+    {
+      "repo": "ibm-granite/granite-speech-5.0-470m-turboctc",
+      "revision": "18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0",
+      "source": "https://huggingface.co/api/models/ibm-granite/granite-speech-5.0-470m-turboctc?blobs=true",
+      "artifact_tree": "https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc/tree/18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0",
+      "license": "apache-2.0",
+      "languages": [
+        "en"
+      ],
+      "gated": false,
+      "serialized_tensor_metadata": {
+        "parameters": {
+          "F32": 65536,
+          "BF16": 472928256
+        },
+        "total": 472993792
+      },
+      "tensor_count_caveat": "Serialized tensor elements, not a claim about independent trainable parameters.",
+      "files": [
+        {
+          "path": "model.safetensors",
+          "bytes": 946180704,
+          "sha256": "8b98a8c34fd5fcb081caef719638eded31bb6d197d62053eefc5c1703aaf1ad4"
+        }
+      ]
+    }
+  ],
+  "scope": "Selected inference artifacts only; alternatives are not additive. HF LFS metadata, not downloaded or hash-verified locally. Non-LFS config/tokenizer files and runtime dependencies are not completely enumerated."
+}
