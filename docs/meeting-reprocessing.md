@@ -31,7 +31,8 @@ The lower-level invariants are in the
 4. Review every correction migration. Automatic mappings are read-only. The
    first conflict shows the old operation, original segment text/times, and
    candidate targets. Later conflicts remain visibly blocked until the earlier
-   one is resolved. Segment edits can explicitly select more than one target;
+   one is resolved. Find candidate segments by text, ID, or timestamp; filtering
+   keeps already selected targets visible. Segment edits can explicitly select more than one target;
    speaker rename and merge conflicts require selected candidate speakers.
    Empty or invalid resolutions cannot be applied.
 5. **Accept proposal** is enabled when every correction has an applied
@@ -42,6 +43,13 @@ The lower-level invariants are in the
    not reported as a successful save. Existing unsaved review edits must be
    applied or discarded before planning, execution, conflict resolution, or
    acceptance.
+
+Editing, undoing, or resetting the active review makes an older plan or proposal
+stale. Its execution/acceptance controls are disabled; saved provenance remains
+exportable. Save a proposal before acceptance if its original history is needed:
+acceptance replaces the active review, while discarding a proposal only removes
+that separate draft. Both actions require confirmation when appropriate.
+If previewing a completed job fails, its proposal is retained for retry or export.
 
 ## Work selected by each mode
 
@@ -65,6 +73,10 @@ The top-level command is `sagascript meeting reprocess`. Replace the uppercase
 placeholders below with existing local input paths and new output paths. An
 existing output path is rejected; commands do not overwrite the selected
 review, plan, proposal, or cache.
+
+Reprocessing requires the `diarization` feature, enabled in default CLI builds.
+The lean `--no-default-features` CLI omits `meeting reprocess`; document-only
+`meeting proposal` commands remain available without model inference.
 
 ### Plan
 
@@ -176,6 +188,27 @@ current analysis identity. `rediarize` may reuse a schema-4 cache whose
 analysis fingerprint or analysis parameters are stale, but only after the
 complete cached payload and metadata pass validation. A miss must be handled by
 choosing a compatible cache or explicitly planning a full recomputation.
+Unknown analysis-provenance fields cause an explicit cache miss, not reuse: a
+future analysis parameter must not accidentally permit reuse by an older binary.
+An incompatible artifact therefore needs a compatible application or a regenerated
+cache. Ordinary cache-enabled transcription can recompute on a miss; selective
+execution never silently falls back. Malformed JSON or corrupt payloads remain
+errors rather than exposing their contents in diagnostics.
+
+## Cancellation and timing interpretation
+
+Re-diarization checks model availability before decoding. Cancellation is
+cooperative between analysis stages, segmentation windows, and speaker embeddings;
+an individual running ONNX inference call cannot be interrupted. The job retains
+its worker slot until the worker has actually stopped.
+
+The total timer includes final source/cache integrity checks and orchestration
+that are not all assigned to individual phase timers, so their sum can be smaller
+than the total. Repeated integrity reads impose an I/O floor even in recluster
+mode; realistic speed claims require the long-recording benchmark below.
+Correction migration replays operations in order and may perform quadratic work
+up to the 1,024-operation limit. After acceptance, undo steps follow the migrated
+operations rather than preserving original multi-operation editing batches.
 
 ## Acceptance boundary
 

@@ -8,11 +8,18 @@
     ReprocessingResult,
     SelectedReprocessingPlan,
   } from "./meeting-reprocessing-types";
-  import { proposalIsFullyApplied } from "./meeting-reprocessing-state.js";
+  import {
+    filterCandidateSegments,
+    proposalIsCurrent,
+    proposalIsFullyApplied,
+    proposalWasExported,
+    selectedPlanIsCurrent,
+  } from "./meeting-reprocessing-state.js";
 
   interface Props {
     busy: boolean;
     draftDirty: boolean;
+    currentReviewRevision?: string | null;
     selected: SelectedReprocessingPlan | null;
     proposal: ProposalState | null;
     result: ReprocessingResult | null;
@@ -30,6 +37,7 @@
   let {
     busy,
     draftDirty,
+    currentReviewRevision = null,
     selected,
     proposal,
     result,
@@ -49,6 +57,8 @@
   let error = $state("");
   let notice = $state("");
   let proposalRevision = $state<string | null>(null);
+  let exportedProposalRevision = $state<string | null>(null);
+  let candidateSegmentQuery = $state("");
   let resolutionDrafts = $state<Record<number, ResolutionOperation[]>>({});
 
   const modeDescriptions: Record<ReprocessingMode, { label: string; detail: string }> = {
@@ -79,6 +89,8 @@
     const revision = proposal?.proposal.revision ?? null;
     if (revision === proposalRevision) return;
     proposalRevision = revision;
+    exportedProposalRevision = null;
+    candidateSegmentQuery = "";
     resolutionDrafts = {};
     error = "";
   });
@@ -124,28 +136,39 @@
   }
 
   async function execute(): Promise<void> {
-    if (draftDirty || !selected) return;
+    if (draftDirty || !selected || !selectedPlanIsCurrent(selected, currentReviewRevision)) return;
     await runAction("execute", onExecute);
   }
 
   async function accept(): Promise<void> {
     if (draftDirty || !canAccept()) return;
+    if (!proposalWasExported(proposal, exportedProposalRevision)
+      && !window.confirm("Accepting this proposal replaces the current review. Save the proposal first if you may need to recover it. Continue?")) {
+      return;
+    }
     await runAction("accept", onAccept);
   }
 
   async function save(): Promise<void> {
+    const revision = proposal?.proposal.revision ?? null;
     const saved = await runAction("save", onSave);
-    if (saved) notice = "Reprocessing proposal saved.";
+    if (saved && revision !== null && proposal?.proposal.revision === revision) {
+      exportedProposalRevision = revision;
+      notice = "Reprocessing proposal saved.";
+    }
   }
 
   async function open(): Promise<void> {
+    if (proposal && !window.confirm("Open a saved proposal and discard the current proposal resolutions?")) return;
     await runAction("open", onOpen);
   }
 
   function discard(): void {
     if (isBusy()) return;
+    if (proposal && !window.confirm("Discard this reprocessing proposal and all of its resolutions?")) return;
     error = "";
     notice = "";
+    exportedProposalRevision = null;
     onDiscard();
   }
 
@@ -164,6 +187,10 @@
 
   function candidateSegment(id: string): MeetingSegment | undefined {
     return candidateSegments().find((segment) => segment.id === id);
+  }
+
+  function filteredCandidateSegments(selectedId: string): MeetingSegment[] {
+    return filterCandidateSegments(candidateSegments(), candidateSegmentQuery, selectedId ? [selectedId] : []);
   }
 
   function formatSeconds(seconds: number): string {
@@ -262,7 +289,24 @@
   }
 
   function canAccept(): boolean {
-    return Boolean(proposal && allApplied() && !draftDirty);
+    return Boolean(
+      proposal
+      && proposalIsCurrent(proposal, currentReviewRevision)
+      && allApplied()
+      && !draftDirty,
+    );
+  }
+
+  function selectedPlanIsFresh(): boolean {
+    return selectedPlanIsCurrent(selected, currentReviewRevision);
+  }
+
+  function proposalIsFresh(): boolean {
+    return proposalIsCurrent(proposal, currentReviewRevision);
+  }
+
+  function proposalWasSaved(): boolean {
+    return proposalWasExported(proposal, exportedProposalRevision);
   }
 
   function workItems(work: RequiredWork): Array<{ label: string; required: boolean }> {
@@ -337,6 +381,9 @@
         </label>
       {/if}
     </div>
+    {#if selected && !selectedPlanIsFresh()}
+      <p class="stale-warning" role="alert">This plan was made for an older review revision. Plan again before executing; the current review remains unchanged.</p>
+    {/if}
     {#if draftDirty}
       <p class="draft-warning" role="status">Apply or discard the unsaved edits in Meeting review before planning, executing, resolving, or accepting reprocessing.</p>
     {/if}
@@ -373,7 +420,7 @@
           <span class:required={item.required} class="work-item">{item.required ? "Run" : "Skip"}: {item.label}</span>
         {/each}
       </div>
-      <button type="button" class="primary" disabled={isBusy() || draftDirty} onclick={() => void execute()}>
+      <button type="button" class="primary" disabled={isBusy() || draftDirty || !selectedPlanIsFresh()} onclick={() => void execute()}>
         {pendingAction === "execute" ? "Running…" : `Execute selected ${modeDescriptions[selected.plan.mode].label} plan`}
       </button>
     </section>
@@ -391,6 +438,11 @@
           <button type="button" class="secondary" disabled={isBusy()} onclick={() => void save()}>{pendingAction === "save" ? "Saving…" : "Save proposal"}</button>
         </div>
       </div>
+      {#if !proposalIsFresh()}
+        <p class="stale-warning" role="alert">This proposal was made from an older review revision. Save/export remains available, but accepting is disabled; generate a new proposal for the current review.</p>
+      {:else if !proposalWasSaved()}
+        <p class="proposal-save-warning" role="status">Save/export this proposal before accepting if you may need to recover the migration.</p>
+      {/if}
 
       {#if proposal.preview.steps.length === 0}
         <p class="empty">No previous correction operations need migration.</p>
@@ -423,6 +475,13 @@
               {:else if activeConflict}
                 <div class="resolution" aria-label={`Resolve conflict ${index + 1}`}>
                   <span class="subheading">Choose candidate target{step.original.kind === "edit_segment" ? "s" : ""}</span>
+                  {#if step.original.kind === "edit_segment"}
+                    <label class="field wide candidate-search">
+                      <span>Find candidate segments</span>
+                      <input type="text" value={candidateSegmentQuery} placeholder="Search text, id, or time (for example 12:34)" disabled={isBusy() || draftDirty} oninput={(event) => { candidateSegmentQuery = (event.currentTarget as HTMLInputElement).value; }} />
+                      <small>{filterCandidateSegments(candidateSegments(), candidateSegmentQuery).length} matching candidate{filterCandidateSegments(candidateSegments(), candidateSegmentQuery).length === 1 ? "" : "s"}; selected targets remain visible.</small>
+                    </label>
+                  {/if}
                   {#each resolutionRows(index, step.original) as operation, rowIndex (rowIndex)}
                     {#if operation.kind === "edit_segment"}
                       <div class="resolution-row">
@@ -433,7 +492,7 @@
                             onchange={(event) => updateResolution(index, rowIndex, { ...operation, segment_id: (event.currentTarget as HTMLSelectElement).value })}
                           >
                             <option value="">Choose a candidate segment</option>
-                            {#each candidateSegments() as segment (segment.id)}
+                            {#each filteredCandidateSegments(operation.segment_id) as segment (segment.id)}
                               <option value={segment.id}>{formatSeconds(segment.start)}–{formatSeconds(segment.end)} · {segment.text || "(empty text)"}</option>
                             {/each}
                           </select>
@@ -549,7 +608,8 @@
   input[type="number"], input[type="text"], select { box-sizing: border-box; min-height: 36px; padding: 7px 9px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); font: inherit; }
   input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .cache-option { display: flex; gap: 8px; max-width: 560px; align-items: flex-start; padding: 9px 0; } .cache-option span { display: grid; gap: 4px; }
-  .draft-warning, .selected-plan-note, .resolution-warning { margin: 12px 0; padding: 10px 12px; border-left: 3px solid var(--accent); background: rgba(255, 255, 255, .04); }
+  .draft-warning, .selected-plan-note, .resolution-warning, .stale-warning, .proposal-save-warning { margin: 12px 0; padding: 10px 12px; border-left: 3px solid var(--accent); background: rgba(255, 255, 255, .04); }
+  .stale-warning { color: var(--danger); border-left-color: var(--danger); }
   button { min-height: 36px; padding: 8px 12px; border-radius: var(--radius); font: inherit; cursor: pointer; } button:disabled { cursor: default; opacity: .55; }
   .primary { color: var(--bg); background: var(--accent); border: 1px solid var(--accent); font-weight: 700; } .secondary { color: var(--text); background: transparent; border: 1px solid var(--border); }
   .text-button { padding: 2px 0; color: var(--accent); background: transparent; border: 0; font-size: 12px; }
@@ -565,6 +625,7 @@
   .step-heading { display: flex; gap: 10px; align-items: flex-start; } .step-number { display: grid; flex: 0 0 24px; place-items: center; width: 24px; height: 24px; color: var(--bg); background: var(--accent); border-radius: 50%; font-weight: 700; } .operation-summary { margin-top: 4px; color: var(--text-muted); font-size: 12px; }
   .comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 12px 0; } .comparison > div, .candidate-detail, .mapped-list { padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); } .comparison span, .candidate-detail span, .subheading { color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; } .comparison p, .candidate-detail p, .mapped-list p { margin-top: 5px; font-size: 13px; }
   .resolution { display: grid; gap: 10px; margin-top: 12px; } .resolution-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px; border: 1px dashed var(--border); border-radius: var(--radius); } .resolution-row.two-column { grid-template-columns: repeat(2, minmax(0, 1fr)); } .field.wide { min-width: 0; } .candidate-detail { grid-column: 1 / -1; }
+  .candidate-search { max-width: 560px; } .candidate-search small { color: var(--text-muted); font-size: 11px; }
   .mapped-list { margin-top: 10px; } .mapped-list p + p { padding-top: 7px; border-top: 1px solid var(--border); } .blocked-note { margin-top: 12px; }
   .accept-row { align-items: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); } .accept-row p { margin: 0; }
   .timing-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }

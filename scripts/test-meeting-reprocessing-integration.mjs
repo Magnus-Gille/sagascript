@@ -120,6 +120,8 @@ function createHarness(controls) {
     "planCurrentMeeting",
     "executeCurrentMeetingPlan",
     "acceptCurrentMeetingProposal",
+    "retryCurrentMeetingProposalPreview",
+    "saveCurrentMeetingProposal",
   ].map(functionSource).join("\n");
   const harness = `
     let meetingReview = controls.initialReview;
@@ -167,7 +169,13 @@ function createHarness(controls) {
     async function previewMeetingProposal(...args) {
       controls.calls.push({ kind: "preview", args });
       if (controls.previewGate) await controls.previewGate;
+      if (controls.previewError) throw new Error(controls.previewError);
       return controls.previewResult;
+    }
+
+    async function saveMeetingProposal(proposal) {
+      controls.calls.push({ kind: "save", proposal });
+      return true;
     }
 
     async function createMeetingReview() {
@@ -189,6 +197,8 @@ function createHarness(controls) {
       executeCurrentMeetingPlan,
       planCurrentMeeting,
       pollMeetingJob,
+      retryCurrentMeetingProposalPreview,
+      saveCurrentMeetingProposal,
       setActionQueue: (queue) => { meetingActionQueue = queue; },
       setMeetingDocumentRevision: (value) => { meetingDocumentRevision = value; },
       setMeetingPollGeneration: (value) => { meetingPollGeneration = value; },
@@ -280,6 +290,28 @@ test("completed reprocessing stores a proposal beside, not over, the active revi
   assert.deepEqual(state.meetingReprocessingResult, controls.snapshots[0].reprocessing);
   assert.equal(state.meetingReprocessingPlan, null);
   assert.deepEqual(controls.calls.map((call) => call.kind), ["preview"]);
+});
+
+test("a failed preview preserves the completed proposal for recovery", async () => {
+  const result = { id: "recoverable-result", proposal: { revision: 9 } };
+  const controls = makeControls({
+    snapshots: [{ status: "completed", reprocessing: result }],
+    previewError: "temporary preview failure",
+  });
+  const exercise = createHarness(controls);
+  await exercise.pollMeetingJob("job-reprocess", 1);
+  await exercise.waitForMeetingReviewInit();
+  const state = exercise.snapshot();
+  assert.equal(state.meetingReview.id, "active-review");
+  assert.deepEqual(state.meetingReprocessingResult, result);
+  assert.equal(state.meetingProposal, null);
+  assert.equal(state.meetingReprocessingPlan, null);
+  assert.equal(await exercise.saveCurrentMeetingProposal(), true);
+  assert.equal(controls.calls.at(-1).proposal, result.proposal);
+  controls.previewError = null;
+  await exercise.retryCurrentMeetingProposalPreview();
+  assert.deepEqual(exercise.snapshot().meetingProposal, controls.previewResult);
+  assert.equal(exercise.snapshot().meetingReview.id, "active-review");
 });
 
 for (const [label, setState] of [

@@ -335,6 +335,18 @@ mod tests {
         }
     }
 
+    fn edit_with_speaker(
+        segment_id: &str,
+        text: &str,
+        speaker_id: &str,
+    ) -> CorrectionOperation {
+        CorrectionOperation::EditSegment {
+            segment_id: segment_id.to_owned(),
+            text: Some(text.to_owned()),
+            speaker_id: Some(speaker_id.to_owned()),
+        }
+    }
+
     fn file(review: &MeetingReview, operations: Vec<CorrectionOperation>) -> CorrectionFile {
         CorrectionFile {
             schema_version: REVIEW_SCHEMA_VERSION,
@@ -463,6 +475,139 @@ mod tests {
             accepted.materialize().expect("materialized").segments[0].text,
             "target edit"
         );
+    }
+
+    #[test]
+    fn split_conflict_accepts_explicit_multi_operation_resolution() {
+        let proposed = MeetingTranscript::new(
+            "a".repeat(64),
+            "en",
+            "tiny",
+            4.0,
+            vec![
+                MeetingSegmentInput {
+                    start: 0.0,
+                    end: 0.5,
+                    text: "hel".into(),
+                    speaker: "speaker-a".into(),
+                },
+                MeetingSegmentInput {
+                    start: 0.5,
+                    end: 1.0,
+                    text: "lo".into(),
+                    speaker: "speaker-a".into(),
+                },
+                MeetingSegmentInput {
+                    start: 1.0,
+                    end: 2.0,
+                    text: "world".into(),
+                    speaker: "speaker-a".into(),
+                },
+            ],
+            vec![MeetingSpeaker {
+                id: "speaker-a".into(),
+                label: "Alice".into(),
+            }],
+        )
+        .expect("split transcript");
+        let proposal = MeetingReprocessingProposal::new(previous_review(), proposed)
+            .expect("proposal");
+        assert_eq!(
+            proposal.preview().expect("preview").steps[0].status,
+            MigrationStatus::Conflict
+        );
+
+        let resolved = proposal
+            .resolve(
+                &proposal.revision,
+                0,
+                vec![edit("seg-000001", "he"), edit("seg-000002", "llo")],
+            )
+            .expect("multi-operation resolution");
+        let accepted = resolved
+            .accept(&resolved.previous.revision)
+            .expect("accepted proposal");
+        let materialized = accepted.materialize().expect("materialized");
+        assert_eq!(
+            materialized
+                .segments
+                .iter()
+                .map(|segment| segment.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["he", "llo", "world"]
+        );
+        assert_eq!(accepted.batches.len(), 1);
+        assert_eq!(accepted.batches[0].operations.len(), 2);
+    }
+
+    #[test]
+    fn resolving_same_index_replaces_previous_operations_without_appending() {
+        let proposal = MeetingReprocessingProposal::new(
+            previous_review(),
+            transcript(&"b".repeat(64), "changed source"),
+        )
+        .expect("proposal");
+        let first = proposal
+            .resolve(
+                &proposal.revision,
+                0,
+                vec![edit("seg-000001", "first resolution")],
+            )
+            .expect("first resolution");
+        let replacement = first
+            .resolve(
+                &first.revision,
+                0,
+                vec![edit("seg-000001", "replacement resolution")],
+            )
+            .expect("replacement resolution");
+
+        assert_eq!(
+            replacement.resolutions,
+            vec![Some(vec![edit("seg-000001", "replacement resolution")])]
+        );
+        let accepted = replacement
+            .accept(&replacement.previous.revision)
+            .expect("accepted proposal");
+        assert_eq!(accepted.batches.len(), 1);
+        assert_eq!(accepted.batches[0].operations.len(), 1);
+        assert_eq!(
+            accepted.materialize().expect("materialized").segments[0].text,
+            "replacement resolution"
+        );
+    }
+
+    #[test]
+    fn explicit_speaker_id_resolution_survives_accept() {
+        let mut proposed = transcript(&"b".repeat(64), "changed source");
+        proposed.speakers.push(MeetingSpeaker {
+            id: "speaker-b".into(),
+            label: "Bob".into(),
+        });
+        proposed.validate().expect("proposed speakers");
+        let proposal = MeetingReprocessingProposal::new(
+            previous_review(),
+            proposed,
+        )
+        .expect("proposal");
+        let resolved = proposal
+            .resolve(
+                &proposal.revision,
+                0,
+                vec![edit_with_speaker(
+                    "seg-000001",
+                    "speaker-corrected",
+                    "speaker-b",
+                )],
+            )
+            .expect("speaker resolution");
+
+        let accepted = resolved
+            .accept(&resolved.previous.revision)
+            .expect("accepted proposal");
+        let materialized = accepted.materialize().expect("materialized");
+        assert_eq!(materialized.segments[0].text, "speaker-corrected");
+        assert_eq!(materialized.segments[0].speaker, "speaker-b");
     }
 
     #[test]

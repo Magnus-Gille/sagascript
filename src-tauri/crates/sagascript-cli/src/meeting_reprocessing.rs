@@ -66,6 +66,25 @@ pub fn plan_reprocessing(
     threshold: f32,
     control: Option<&MeetingControl<'_>>,
 ) -> Result<ReprocessingPlan, DictationError> {
+    plan_reprocessing_with_model_check(
+        input,
+        mode,
+        threshold,
+        control,
+        sagascript_core::diarization::model::all_models_downloaded,
+    )
+}
+
+/// Testable planning seam. Production callers must use [`plan_reprocessing`],
+/// which supplies the real local-model availability check.
+fn plan_reprocessing_with_model_check(
+    input: &ReprocessingInput<'_>,
+    mode: ReprocessingMode,
+    threshold: f32,
+    control: Option<&MeetingControl<'_>>,
+    models_available: impl FnOnce() -> bool,
+) -> Result<ReprocessingPlan, DictationError> {
+    ensure_rediarize_models(mode, models_available)?;
     let prepared = prepare(input, mode, control)?;
     ReprocessingPlan::new(mode, prepared.context, threshold).map_err(plan_error)
 }
@@ -82,12 +101,13 @@ pub fn execute_reprocessing(
     cache_output: Option<&Path>,
     control: Option<&MeetingControl<'_>>,
 ) -> Result<ReprocessingResult, DictationError> {
-    execute_with(
+    execute_with_model_check(
         plan,
         expected_plan_revision,
         input,
         cache_output,
         control,
+        sagascript_core::diarization::model::all_models_downloaded,
         &mut NativeBackend { stored, whisper },
     )
 }
@@ -102,6 +122,7 @@ trait WorkBackend {
         &mut self,
         audio: &[f32],
         config: &DiarizeConfig,
+        control: Option<&MeetingControl<'_>>,
     ) -> Result<DiarizationAnalysis, DictationError>;
     fn full(
         &mut self,
@@ -130,8 +151,10 @@ impl WorkBackend for NativeBackend<'_> {
         &mut self,
         audio: &[f32],
         config: &DiarizeConfig,
+        control: Option<&MeetingControl<'_>>,
     ) -> Result<DiarizationAnalysis, DictationError> {
-        diarization::analyze(audio, config).map(|(analysis, _)| analysis)
+        diarization::analyze_with_control(audio, config, &|| check(control))
+            .map(|(analysis, _)| analysis)
     }
 
     fn full(
@@ -155,6 +178,7 @@ impl WorkBackend for NativeBackend<'_> {
     }
 }
 
+#[cfg(test)]
 fn execute_with(
     plan: &ReprocessingPlan,
     expected_plan_revision: &str,
@@ -163,8 +187,32 @@ fn execute_with(
     control: Option<&MeetingControl<'_>>,
     backend: &mut impl WorkBackend,
 ) -> Result<ReprocessingResult, DictationError> {
+    execute_with_model_check(
+        plan,
+        expected_plan_revision,
+        input,
+        cache_output,
+        control,
+        || true,
+        backend,
+    )
+}
+
+/// Testable execution seam. Production callers must use
+/// [`execute_reprocessing`], which supplies the real local-model availability
+/// check independently of planning.
+fn execute_with_model_check(
+    plan: &ReprocessingPlan,
+    expected_plan_revision: &str,
+    input: &ReprocessingInput<'_>,
+    cache_output: Option<&Path>,
+    control: Option<&MeetingControl<'_>>,
+    models_available: impl FnOnce() -> bool,
+    backend: &mut impl WorkBackend,
+) -> Result<ReprocessingResult, DictationError> {
     let started = Instant::now();
     plan.validate().map_err(plan_error)?;
+    ensure_rediarize_models(plan.mode, models_available)?;
     if cache_output.is_some() && plan.mode != ReprocessingMode::Full {
         return Err(failure(
             "a new cache output requires explicit full recomputation",
@@ -201,7 +249,7 @@ fn execute_with(
                 timings.decode_seconds = phase.elapsed().as_secs_f64();
                 checkpoint(control, MeetingPhase::Analyzing)?;
                 let phase = Instant::now();
-                cached.analysis = backend.analyze(&audio, &config)?;
+                cached.analysis = backend.analyze(&audio, &config, control)?;
                 timings.analysis_seconds = phase.elapsed().as_secs_f64();
                 check(control)?;
             }
@@ -341,6 +389,18 @@ fn checkpoint(
         (control.progress)(phase);
     }
     check(control)
+}
+
+fn ensure_rediarize_models(
+    mode: ReprocessingMode,
+    models_available: impl FnOnce() -> bool,
+) -> Result<(), DictationError> {
+    if mode == ReprocessingMode::Rediarize && !models_available() {
+        return Err(failure(
+            "rediarization requires both diarization models; run: sagascript download-model diarization",
+        ));
+    }
+    Ok(())
 }
 
 fn plan_error(error: impl std::fmt::Display) -> DictationError {

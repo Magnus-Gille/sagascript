@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use sagascript_core::diarization::DiarizationAnalysis;
 use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
@@ -9,7 +9,10 @@ use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::transcription::Glossary;
 use sha2::{Digest, Sha256};
 
-use super::{execute_with, plan_reprocessing, ReprocessingInput, WorkBackend};
+use super::{
+    execute_with, execute_with_model_check, plan_reprocessing, plan_reprocessing_with_model_check,
+    ReprocessingInput, WorkBackend,
+};
 use crate::diarization_cache::{self, CacheIdentity, DiarizationCache};
 use crate::transcribe::{MeetingControl, MeetingPhase};
 use sagascript_core::diarization::DiarizeConfig as CoreDiarizeConfig;
@@ -23,6 +26,7 @@ struct CountingBackend {
     fail_decode: bool,
     fail_analyze: bool,
     fail_full: bool,
+    cancel_during_analyze: bool,
 }
 
 impl WorkBackend for CountingBackend {
@@ -44,12 +48,18 @@ impl WorkBackend for CountingBackend {
         &mut self,
         _audio: &[f32],
         _config: &CoreDiarizeConfig,
+        control: Option<&MeetingControl<'_>>,
     ) -> Result<DiarizationAnalysis, DictationError> {
         self.analyze_calls += 1;
         if self.fail_analyze {
             return Err(DictationError::TranscriptionFailed(
                 "synthetic analysis failure".to_string(),
             ));
+        }
+        if self.cancel_during_analyze {
+            let control = control.expect("mid-analysis cancellation needs control");
+            control.cancellation.store(true, Ordering::Release);
+            control.check()?;
         }
         Ok(
             serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#)
@@ -196,7 +206,10 @@ fn work_modes_invoke_only_their_selected_backend_stages() {
     assert_counts(&recluster, 0, 0, 0);
 
     let rediarize_plan =
-        plan_reprocessing(&input, ReprocessingMode::Rediarize, 0.75, None).expect("rediarize plan");
+        plan_reprocessing_with_model_check(&input, ReprocessingMode::Rediarize, 0.75, None, || {
+            true
+        })
+        .expect("rediarize plan");
     let mut rediarize = CountingBackend::default();
     execute_with(
         &rediarize_plan,
@@ -270,11 +283,48 @@ fn selective_cache_misses_never_fallback_to_full_inference() {
 }
 
 #[test]
+fn missing_rediarization_models_fail_before_decode_or_analysis() {
+    let fixture = Fixture::new(true);
+    let input = fixture.input(Some(&fixture.cache));
+
+    assert!(plan_reprocessing_with_model_check(
+        &input,
+        ReprocessingMode::Rediarize,
+        0.75,
+        None,
+        || false,
+    )
+    .is_err());
+
+    let plan =
+        plan_reprocessing_with_model_check(&input, ReprocessingMode::Rediarize, 0.75, None, || {
+            true
+        })
+        .expect("synthetic rediarize plan");
+    let mut backend = CountingBackend::default();
+    let error = execute_with_model_check(
+        &plan,
+        &plan.revision,
+        &input,
+        None,
+        None,
+        || false,
+        &mut backend,
+    )
+    .expect_err("missing models must reject execution");
+    assert!(error.to_string().contains("download-model diarization"));
+    assert_counts(&backend, 0, 0, 0);
+}
+
+#[test]
 fn cancellation_and_analysis_failure_return_no_proposal_or_review_mutation() {
     let fixture = Fixture::new(true);
     let input = fixture.input(Some(&fixture.cache));
     let plan =
-        plan_reprocessing(&input, ReprocessingMode::Rediarize, 0.75, None).expect("rediarize plan");
+        plan_reprocessing_with_model_check(&input, ReprocessingMode::Rediarize, 0.75, None, || {
+            true
+        })
+        .expect("rediarize plan");
     let previous = fixture.previous.clone();
 
     let cancellation = AtomicBool::new(true);
@@ -302,5 +352,39 @@ fn cancellation_and_analysis_failure_return_no_proposal_or_review_mutation() {
     };
     assert!(execute_with(&plan, &plan.revision, &input, None, None, &mut failed,).is_err());
     assert_counts(&failed, 1, 1, 0);
+    assert_eq!(fixture.previous, previous);
+}
+
+#[test]
+fn cancellation_during_analysis_returns_no_proposal_or_review_mutation() {
+    let fixture = Fixture::new(true);
+    let input = fixture.input(Some(&fixture.cache));
+    let plan =
+        plan_reprocessing_with_model_check(&input, ReprocessingMode::Rediarize, 0.75, None, || {
+            true
+        })
+        .expect("rediarize plan");
+    let previous = fixture.previous.clone();
+    let cancellation = AtomicBool::new(false);
+    let progress = |_phase: MeetingPhase| {};
+    let control = MeetingControl {
+        cancellation: &cancellation,
+        progress: &progress,
+    };
+    let mut backend = CountingBackend {
+        cancel_during_analyze: true,
+        ..Default::default()
+    };
+
+    assert!(execute_with(
+        &plan,
+        &plan.revision,
+        &input,
+        None,
+        Some(&control),
+        &mut backend,
+    )
+    .is_err());
+    assert_counts(&backend, 1, 1, 0);
     assert_eq!(fixture.previous, previous);
 }

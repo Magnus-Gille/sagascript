@@ -140,6 +140,18 @@ impl Segmenter {
     /// accumulated global tracks over the overlap region before aggregation.
     /// See [`WindowStitcher`].
     pub fn segment(&mut self, audio: &[f32]) -> Result<FrameActivations, DictationError> {
+        self.segment_with_control(audio, &|| Ok(()))
+    }
+
+    /// Run sliding-window segmentation while polling a caller-owned control
+    /// callback between bounded inference/stitching steps. An individual ONNX
+    /// batch remains non-interruptible.
+    pub fn segment_with_control(
+        &mut self,
+        audio: &[f32],
+        check: &dyn Fn() -> Result<(), DictationError>,
+    ) -> Result<FrameActivations, DictationError> {
+        check()?;
         if audio.is_empty() {
             return Ok(FrameActivations {
                 activity: Vec::new(),
@@ -156,6 +168,7 @@ impl Segmenter {
         let mut stitcher = WindowStitcher::new(total_frames);
 
         for batch_start in (0..n_windows).step_by(SEGMENTATION_BATCH_SIZE) {
+            check()?;
             let batch_len = (n_windows - batch_start).min(SEGMENTATION_BATCH_SIZE);
             let windows = build_window_batch(audio, batch_start, batch_len);
 
@@ -181,12 +194,15 @@ impl Segmenter {
             // Preserve chronological stitching: speaker-slot alignment for a
             // window depends on the accumulated overlap from earlier windows.
             for (batch_idx, local) in decoded.iter().enumerate() {
+                check()?;
                 let win_idx = batch_start + batch_idx;
                 let win_start = win_idx * STEP_SAMPLES;
                 stitcher.add_window(frame_offset_for_sample(win_start), local);
             }
+            check()?;
         }
 
+        check()?;
         Ok(FrameActivations {
             activity: stitcher.finish(),
             frame_duration: FRAME_DURATION_S,

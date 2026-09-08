@@ -1036,6 +1036,10 @@
             transcriptionProgress = 0;
             if (snapshot.status === "completed" && snapshot.reprocessing) {
               const result = snapshot.reprocessing;
+              // Keep the completed work even if the separate preview request fails.
+              meetingReprocessingResult = result;
+              meetingReprocessingPlan = null;
+              meetingProposal = null;
               meetingReviewInit = previewMeetingProposal(result.proposal)
                 .then((state) => {
                   if (generation !== meetingPollGeneration) return;
@@ -1333,8 +1337,22 @@
   }
 
   async function saveCurrentMeetingProposal(): Promise<boolean> {
-    const proposal = meetingProposal;
-    return proposal ? saveMeetingProposal(proposal.proposal) : false;
+    const proposal = meetingProposal?.proposal ?? meetingReprocessingResult?.proposal;
+    return proposal ? saveMeetingProposal(proposal) : false;
+  }
+
+  async function retryCurrentMeetingProposalPreview(): Promise<void> {
+    const result = meetingReprocessingResult;
+    if (!result || meetingProposal || transcribing || meetingReprocessingBusy || meetingReviewInit) return;
+    const generation = meetingPollGeneration;
+    meetingReprocessingBusy = true;
+    meetingError = "";
+    try {
+      const state = await previewMeetingProposal(result.proposal);
+      if (generation === meetingPollGeneration && meetingReprocessingResult === result) meetingProposal = state;
+    } catch (error) {
+      meetingError = meetingFailureText(error, "Could not preview the proposal. Save it to retry later; the previous review is unchanged.");
+    } finally { meetingReprocessingBusy = false; }
   }
 
   async function openCurrentMeetingProposal(): Promise<void> {
@@ -1842,7 +1860,17 @@
         {/if}
 
         {#if meetingReview && meetingTranscript}
+            {#if meetingReprocessingResult && !meetingProposal}
+              <div role="status">
+                <p>The completed proposal is retained. Retry its preview or save it to open later.</p>
+                <button class="btn btn-secondary" disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
+                  onclick={() => void retryCurrentMeetingProposalPreview()}>Retry proposal preview</button>
+                <button class="btn btn-secondary" disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
+                  onclick={() => void saveCurrentMeetingProposal().catch((error) => { meetingError = meetingFailureText(error, "Could not save the proposal."); })}>Save retained proposal</button>
+              </div>
+            {/if}
             <MeetingReprocessing
+              currentReviewRevision={meetingReview.revision}
               busy={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
               draftDirty={meetingReviewDraftDirty}
               selected={meetingReprocessingPlan}

@@ -17,6 +17,9 @@ const MIN_SAMPLES: usize = fbank::N_FFT;
 /// Embedding dimension
 pub const EMBEDDING_DIM: usize = 256;
 
+type EmbeddingCallback<'a> =
+    dyn FnMut(&[f32]) -> Result<Option<[f32; EMBEDDING_DIM]>, DictationError> + 'a;
+
 /// Wraps the WeSpeaker ONNX model for speaker embedding extraction.
 pub struct Embedder {
     session: Session,
@@ -94,25 +97,50 @@ impl Embedder {
         audio: &[f32],
         segments: &[(f64, f64, usize)],
     ) -> Result<Vec<(usize, [f32; EMBEDDING_DIM])>, DictationError> {
-        let sample_rate = 16_000usize;
-        let mut result = Vec::new();
+        self.extract_embeddings_with_control(audio, segments, &|| Ok(()))
+    }
 
-        for (seg_idx, &(start_sec, end_sec, _speaker_idx)) in segments.iter().enumerate() {
-            let start_sample = (start_sec * sample_rate as f64) as usize;
-            let end_sample = ((end_sec * sample_rate as f64) as usize).min(audio.len());
+    /// Extract embeddings while polling a caller-owned control callback before
+    /// and after each segment's inference. A single ONNX invocation remains
+    /// non-interruptible.
+    pub fn extract_embeddings_with_control(
+        &mut self,
+        audio: &[f32],
+        segments: &[(f64, f64, usize)],
+        check: &dyn Fn() -> Result<(), DictationError>,
+    ) -> Result<Vec<(usize, [f32; EMBEDDING_DIM])>, DictationError> {
+        let mut embed = |slice: &[f32]| self.embed(slice);
+        extract_embeddings_for_segments(audio, segments, check, &mut embed)
+    }
+}
 
-            if end_sample <= start_sample || end_sample - start_sample < MIN_SAMPLES {
-                continue;
-            }
+fn extract_embeddings_for_segments(
+    audio: &[f32],
+    segments: &[(f64, f64, usize)],
+    check: &dyn Fn() -> Result<(), DictationError>,
+    embed: &mut EmbeddingCallback<'_>,
+) -> Result<Vec<(usize, [f32; EMBEDDING_DIM])>, DictationError> {
+    let sample_rate = 16_000usize;
+    let mut result = Vec::new();
 
-            let slice = &audio[start_sample..end_sample];
-            if let Some(embedding) = self.embed(slice)? {
-                result.push((seg_idx, embedding));
-            }
+    for (seg_idx, &(start_sec, end_sec, _speaker_idx)) in segments.iter().enumerate() {
+        check()?;
+        let start_sample = (start_sec * sample_rate as f64) as usize;
+        let end_sample = ((end_sec * sample_rate as f64) as usize).min(audio.len());
+
+        if end_sample <= start_sample || end_sample - start_sample < MIN_SAMPLES {
+            continue;
         }
 
-        Ok(result)
+        let slice = &audio[start_sample..end_sample];
+        if let Some(embedding) = embed(slice)? {
+            result.push((seg_idx, embedding));
+        }
+        check()?;
     }
+
+    check()?;
+    Ok(result)
 }
 
 /// L2-normalize a fixed-size embedding vector.
@@ -136,6 +164,7 @@ pub fn l2_normalize(mut v: [f32; EMBEDDING_DIM]) -> [f32; EMBEDDING_DIM] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn l2_normalize_unit_vector() {
@@ -201,5 +230,35 @@ mod tests {
     #[test]
     fn min_samples_matches_fbank_nfft() {
         assert_eq!(MIN_SAMPLES, fbank::N_FFT);
+    }
+
+    #[test]
+    fn controlled_extraction_cancels_between_segments_without_inference() {
+        let audio = vec![0.0f32; 48_000];
+        let segments = vec![(0.0, 1.0, 0usize), (1.0, 2.0, 0usize), (2.0, 3.0, 0usize)];
+        let checks = AtomicUsize::new(0);
+        let embeds = AtomicUsize::new(0);
+        let check = || {
+            let call = checks.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == 3 {
+                Err(DictationError::DiarizationError("cancelled".to_owned()))
+            } else {
+                Ok(())
+            }
+        };
+
+        let mut embed = |slice: &[f32]| {
+            assert_eq!(slice.len(), 16_000);
+            embeds.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        };
+        let result = extract_embeddings_for_segments(&audio, &segments, &check, &mut embed);
+
+        assert!(matches!(
+            result,
+            Err(DictationError::DiarizationError(message)) if message == "cancelled"
+        ));
+        assert_eq!(embeds.load(Ordering::SeqCst), 1);
+        assert_eq!(checks.load(Ordering::SeqCst), 3);
     }
 }

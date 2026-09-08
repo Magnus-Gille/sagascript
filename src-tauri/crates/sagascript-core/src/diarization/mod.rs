@@ -108,9 +108,21 @@ pub fn analyze(
     audio: &[f32],
     config: &DiarizeConfig,
 ) -> Result<(DiarizationAnalysis, DiarizationTimings), DictationError> {
+    analyze_with_control(audio, config, &|| Ok(()))
+}
+
+/// Run threshold-independent segmentation and embedding extraction while
+/// polling a caller-owned cancellation or progress callback at bounded
+/// pipeline boundaries. Individual ONNX calls are not interruptible.
+pub fn analyze_with_control(
+    audio: &[f32],
+    config: &DiarizeConfig,
+    check: &dyn Fn() -> Result<(), DictationError>,
+) -> Result<(DiarizationAnalysis, DiarizationTimings), DictationError> {
     use crate::diarization::model::{model_path, DiarizationModel};
 
     let total_started = Instant::now();
+    check()?;
 
     // Load models
     let seg_path = model_path(DiarizationModel::PyannoteSegmentation3);
@@ -122,25 +134,32 @@ pub fn analyze(
         &seg_path,
         DiarizationModel::PyannoteSegmentation3.download_integrity(),
     )?;
+    check()?;
     crate::download::verify_file(
         &emb_path,
         DiarizationModel::WeSpeakerResNet34LM.download_integrity(),
     )?;
+    check()?;
 
     let model_load_started = Instant::now();
+    check()?;
     let mut segmenter = segmentation::Segmenter::new(&seg_path)?;
+    check()?;
     let mut embedder = embedding::Embedder::new(&emb_path)?;
     let model_load_seconds = model_load_started.elapsed().as_secs_f64();
+    check()?;
 
     // 1. Segmentation: frame-level speaker activity
     let segmentation_started = Instant::now();
-    let frame_activations = segmenter.segment(audio)?;
+    let frame_activations = segmenter.segment_with_control(audio, check)?;
     let segmentation_seconds = segmentation_started.elapsed().as_secs_f64();
+    check()?;
 
     // 2. Convert to (start, end, local_speaker_idx) tuples
     let segment_extraction_started = Instant::now();
     let raw_segments = frame_activations.to_speaker_segments(config.min_segment, config.min_gap);
     let segment_extraction_seconds = segment_extraction_started.elapsed().as_secs_f64();
+    check()?;
 
     if raw_segments.is_empty() {
         return Ok((
@@ -160,8 +179,9 @@ pub fn analyze(
 
     // 3. Extract embeddings per segment
     let embeddings_started = Instant::now();
-    let embeddings = embedder.extract_embeddings(audio, &raw_segments)?;
+    let embeddings = embedder.extract_embeddings_with_control(audio, &raw_segments, check)?;
     let embeddings_seconds = embeddings_started.elapsed().as_secs_f64();
+    check()?;
 
     if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
         for (i, segment) in raw_segments.iter().enumerate() {
@@ -354,6 +374,7 @@ pub struct DiarizedSegment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn speaker_segment_serializes() {
@@ -450,5 +471,22 @@ mod tests {
         let raw = vec![(0.0, 0.01, 2), (0.02, 0.03, 1), (0.04, 0.05, 2)];
         let stable = stabilize_clusters_by_track(&raw, &[]);
         assert_eq!(stable, vec![(0, 0), (1, 1), (2, 0)]);
+    }
+
+    #[test]
+    fn controlled_analysis_checks_before_loading_models() {
+        let calls = AtomicUsize::new(0);
+        let check = || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(DictationError::DiarizationError("cancelled".to_owned()))
+        };
+
+        let result = analyze_with_control(&[], &DiarizeConfig::default(), &check);
+
+        assert!(matches!(
+            result,
+            Err(DictationError::DiarizationError(message)) if message == "cancelled"
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

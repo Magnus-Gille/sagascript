@@ -23,12 +23,19 @@ pub(crate) struct CacheIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct AnalysisIdentity {
     segmentation_sha256: String,
     embedding_sha256: String,
     min_segment: f64,
     min_gap: f64,
+    // Retain unknown provenance only to detect it: never reuse an analysis
+    // whose dependencies this binary does not understand.
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    unsupported: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl AnalysisIdentity {
@@ -44,11 +51,13 @@ impl AnalysisIdentity {
                 .to_string(),
             min_segment: DiarizeConfig::default().min_segment,
             min_gap: DiarizeConfig::default().min_gap,
+            unsupported: std::collections::BTreeMap::new(),
         }
     }
 
     fn is_well_formed(&self) -> bool {
-        is_lowercase_sha256(&self.segmentation_sha256)
+        self.unsupported.is_empty()
+            && is_lowercase_sha256(&self.segmentation_sha256)
             && is_lowercase_sha256(&self.embedding_sha256)
             && self.min_segment.is_finite()
             && self.min_segment >= 0.0
@@ -310,8 +319,9 @@ pub(crate) fn save_new(path: &Path, cache: &DiarizationCache) -> Result<(), Dict
             }
             Err(error) => return Err(cache_error(path, "commit new", error)),
         }
-        std::fs::remove_file(&temp_path)
-            .map_err(|error| cache_error(path, "clean temporary", error))?;
+        std::fs::remove_file(&temp_path).map_err(|error| {
+            cache_error(path, "clean temporary (output was already saved)", error)
+        })?;
         Ok(())
     })();
     if write_result.is_err() {
@@ -683,6 +693,30 @@ mod tests {
         ));
         assert!(matches!(
             load_for_rediarization(&cache_path, &old_identity).unwrap(),
+            CacheLookup::Miss(_)
+        ));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unknown_analysis_parameters_are_cache_misses_not_reused_or_parse_errors() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        std::fs::write(&input, b"audio").unwrap();
+        let cache_path = dir.join("analysis.json");
+        let expected = identity(&input);
+        write_minimal_cache(&cache_path, expected.clone());
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+        json["analysis_identity"]["future_analysis_parameter"] = serde_json::json!(true);
+        std::fs::write(&cache_path, serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(matches!(
+            load(&cache_path, &expected).unwrap(),
+            CacheLookup::Miss(_)
+        ));
+        assert!(matches!(
+            load_for_rediarization(&cache_path, &expected).unwrap(),
             CacheLookup::Miss(_)
         ));
         let _ = std::fs::remove_dir_all(dir);

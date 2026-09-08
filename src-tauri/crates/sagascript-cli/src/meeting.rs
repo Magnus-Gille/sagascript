@@ -23,7 +23,7 @@ pub struct MeetingArgs {
 pub enum MeetingAction {
     /// Plan and explicitly execute selective meeting reprocessing.
     #[cfg(feature = "diarization")]
-    Reprocess(crate::meeting_reprocessing_cli::ReprocessingArgs),
+    Reprocess(Box<crate::meeting_reprocessing_cli::ReprocessingArgs>),
     /// Preserve and explicitly migrate corrections to a new machine transcript.
     Proposal(crate::meeting_proposal::ProposalArgs),
     /// Emit the validated document as JSON.
@@ -130,7 +130,7 @@ impl From<MeetingFormat> for MeetingExportFormat {
 pub fn run(args: MeetingArgs) -> Result<(), DictationError> {
     match args.action {
         #[cfg(feature = "diarization")]
-        MeetingAction::Reprocess(args) => crate::meeting_reprocessing_cli::run(args),
+        MeetingAction::Reprocess(args) => crate::meeting_reprocessing_cli::run(*args),
         MeetingAction::Proposal(args) => crate::meeting_proposal::run(args),
         MeetingAction::Review {
             action:

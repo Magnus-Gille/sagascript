@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { proposalIsFullyApplied } from "../src/lib/meeting-reprocessing-state.js";
+import {
+  filterCandidateSegments,
+  proposalIsCurrent,
+  proposalIsFullyApplied,
+  proposalWasExported,
+  selectedPlanIsCurrent,
+} from "../src/lib/meeting-reprocessing-state.js";
 
 const source = await readFile(
   new URL("../src/lib/MeetingReprocessing.svelte", import.meta.url),
@@ -60,15 +66,61 @@ test("proposal acceptance allows empty and automatic dispositions but blocks con
   );
 });
 
+function selectedPlan(previousRevision) {
+  return { plan: { context: { previous_revision: previousRevision } } };
+}
+
+function proposalWithPrevious(previousRevision, revision = "proposal-revision") {
+  return { proposal: { previous: { revision: previousRevision }, revision } };
+}
+
+test("plans and proposals become stale when the current review revision changes", () => {
+  assert.equal(selectedPlanIsCurrent(selectedPlan("review-1"), "review-1"), true);
+  assert.equal(selectedPlanIsCurrent(selectedPlan("review-1"), "review-2"), false);
+  assert.equal(selectedPlanIsCurrent(selectedPlan("review-1"), null), false);
+  assert.equal(proposalIsCurrent(proposalWithPrevious("review-1"), "review-1"), true);
+  assert.equal(proposalIsCurrent(proposalWithPrevious("review-1"), "review-2"), false);
+  assert.equal(proposalIsCurrent(proposalWithPrevious("review-1"), null), false);
+});
+
+test("only a successful save for the current proposal revision counts as exported", () => {
+  const proposal = proposalWithPrevious("review-1", "proposal-1");
+  assert.equal(proposalWasExported(proposal, null), false);
+  assert.equal(proposalWasExported(proposal, "proposal-2"), false);
+  assert.equal(proposalWasExported(proposal, "proposal-1"), true);
+  assert.equal(proposalWasExported(null, "proposal-1"), false);
+});
+
+test("candidate filtering matches text, ids, and formatted time while retaining selected targets", () => {
+  const segments = [
+    { id: "seg-a", start: 0, end: 5.25, text: "Opening remarks" },
+    { id: "seg-b", start: 754, end: 760, text: "Budget discussion" },
+    { id: "seg-c", start: 1200, end: 1205, text: "Closing remarks" },
+  ];
+  assert.deepEqual(filterCandidateSegments(segments, "budget").map((segment) => segment.id), ["seg-b"]);
+  assert.deepEqual(filterCandidateSegments(segments, "12:34").map((segment) => segment.id), ["seg-b"]);
+  assert.deepEqual(filterCandidateSegments(segments, "seg-c").map((segment) => segment.id), ["seg-c"]);
+  assert.deepEqual(filterCandidateSegments(segments, "missing", ["seg-a"]).map((segment) => segment.id), ["seg-a"]);
+  assert.deepEqual(filterCandidateSegments(segments, "").map((segment) => segment.id), ["seg-a", "seg-b", "seg-c"]);
+});
+
+test("replacement and acceptance warn before discarding or replacing proposal state", () => {
+  assert.match(source, /Accepting this proposal replaces the current review\. Save the proposal first/);
+  assert.match(source, /Open a saved proposal and discard the current proposal resolutions/);
+  assert.match(source, /Discard this reprocessing proposal and all of its resolutions/);
+  assert.match(source, /proposalIsCurrent\(proposal, currentReviewRevision\)/);
+});
+
 test("save cancellation does not claim success and dirty drafts block mutations", () => {
   assert.match(source, /onSave: \(\) => Promise<boolean>/);
   assert.match(source, /const saved = await runAction\("save", onSave\);/);
-  assert.match(source, /if \(saved\) notice = "Reprocessing proposal saved\.";/);
+  assert.match(source, /if \(saved && revision !== null && proposal\?\.proposal\.revision === revision\)/);
+  assert.match(source, /notice = "Reprocessing proposal saved\.";/);
   assert.match(source, /disabled=\{isBusy\(\) \|\| draftDirty\} onclick=\{\(\) => void plan\(\)\}/);
-  assert.match(source, /disabled=\{isBusy\(\) \|\| draftDirty\} onclick=\{\(\) => void execute\(\)\}/);
+  assert.match(source, /disabled=\{isBusy\(\) \|\| draftDirty \|\| !selectedPlanIsFresh\(\)\} onclick=\{\(\) => void execute\(\)\}/);
   assert.match(source, /disabled=\{isBusy\(\) \|\| draftDirty \|\| !canAccept\(\)\}/);
   assert.match(source, /disabled=\{isBusy\(\) \|\| draftDirty \|\| !validResolution\(index, step\.original\)\}/);
-  assert.match(source, /if \(draftDirty \|\| !selected\) return;/);
+  assert.match(source, /if \(draftDirty \|\| !selected \|\| !selectedPlanIsCurrent\(selected, currentReviewRevision\)\) return;/);
   assert.match(source, /if \(draftDirty \|\| !canAccept\(\)\) return;/);
   assert.match(source, /return proposalIsFullyApplied\(proposal\);/);
 });
