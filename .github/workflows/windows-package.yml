@@ -85,6 +85,10 @@ jobs:
           "CMAKE_ASM_COMPILER=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Pinned Whisper's SVE implementation includes Linux-only headers.
+          # Keep other native ARM features; bypass only SVE/SME positive probes.
+          $policy = (Resolve-Path -LiteralPath 'scripts/cmake/windows-arm64-native.cmake').Path.Replace('\', '/')
+          "CMAKE_PROJECT_INCLUDE=$policy" >> $env:GITHUB_ENV
 
       - name: Configure portable x64 inference baseline
         if: matrix.architecture == 'x64'
@@ -124,7 +128,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
-          shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml', 'scripts/cmake/windows-x64-portable.cmake', 'scripts/verify-windows-x64-cpu-policy.ps1') }}
+          shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml', 'scripts/cmake/windows-x64-portable.cmake', 'scripts/cmake/windows-arm64-native.cmake', 'scripts/verify-windows-x64-cpu-policy.ps1') }}
 
       - name: Install Node.js
         uses: actions/setup-node@v6

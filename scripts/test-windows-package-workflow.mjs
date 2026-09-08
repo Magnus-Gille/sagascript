@@ -96,7 +96,7 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(rustCache, /workspaces:\s+src-tauri/);
   assert.match(
     rustCache,
-    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
+    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/cmake\/windows-arm64-native\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
   );
   assert.doesNotMatch(
     rustCache,
@@ -120,6 +120,17 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /\$msi\[0\]\.Name -notmatch \[regex\]::Escape\(\$version\)/);
   assert.doesNotMatch(workflow, /\$version:/);
   assert.doesNotMatch(workflow, /action-gh-release|gh release|contents: write/);
+});
+
+test("Windows ARM64 disables unsupported scalable vectors before restoring native cache", () => {
+  const start = workflow.indexOf("name: Configure native ARM64 C and C++ toolchain");
+  const end = workflow.indexOf("name: Configure portable x64 inference baseline", start);
+  assert.ok(start >= 0 && end > start);
+  const arm = workflow.slice(start, end);
+  assert.match(arm, /if: matrix\.architecture == 'arm64'/);
+  assert.match(arm, /scripts\/cmake\/windows-arm64-native\.cmake/);
+  assert.match(arm, /CMAKE_PROJECT_INCLUDE=\$policy/);
+  assert.ok(end < workflow.indexOf("name: Cache Rust dependencies"));
 });
 
 test("Windows x64 caches and artifacts use an explicit verified CPU baseline", () => {
