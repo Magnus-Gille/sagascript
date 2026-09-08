@@ -28,7 +28,6 @@ jobs:
     runs-on: macos-14
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -78,6 +77,8 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
 
+      # Separate invocations preserve the core no-features build; combining
+      # package flags would unify features with the CLI defaults.
       - name: Cargo test (sagascript-core, no features)
         working-directory: src-tauri
         run: cargo test -p sagascript-core
@@ -94,6 +95,8 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
 
+      # Core defaults to no features. CLI defaults already include diarization
+      # and are covered above; core needs this explicit feature matrix.
       - name: Cargo check (sagascript-core, diarization)
         working-directory: src-tauri
         run: cargo check -p sagascript-core --features diarization
@@ -108,11 +111,11 @@ jobs:
 
       - name: Svelte check
         run: npx svelte-check --tsconfig ./tsconfig.json
+
   build-macos:
     runs-on: macos-14
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -123,8 +126,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -151,6 +152,7 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
       # PR validation needs the native release binary for the smoke tests, not
       # an installer. Full packaging, signing and notarization remain gated in
       # release.yml, so skipping bundling here removes duplicate work without
@@ -340,7 +342,6 @@ jobs:
     runs-on: windows-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -390,6 +391,8 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
 
+      # Separate invocations preserve the core no-features build; combining
+      # package flags would unify features with the CLI defaults.
       - name: Cargo test (sagascript-core, no features)
         working-directory: src-tauri
         run: cargo test -p sagascript-core
@@ -405,18 +408,16 @@ jobs:
       - name: Cargo clippy (sagascript-cli)
         working-directory: src-tauri
         run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
+
   build-windows:
     runs-on: windows-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -443,6 +444,7 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
       # PR validation needs the native release binary for the smoke tests, not
       # an installer. Full packaging, signing and notarization remain gated in
       # release.yml, so skipping bundling here removes duplicate work without
@@ -510,6 +512,7 @@ jobs:
           findstr /C:"text" json_output.txt
           findstr /C:"duration_seconds" json_output.txt
           findstr /C:"language" json_output.txt
+
   check-windows:
     needs: [test-windows, build-windows]
     if: ${{ always() }}

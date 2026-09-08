@@ -107,7 +107,9 @@ for (const [platform, jobIds] of Object.entries({
 })) {
   for (const lane of ["test", "build"]) {
     test(`${platform} ${lane} lane retains every baseline gate`, () => {
-      const commands = parseSteps(jobBlock(jobIds[lane]));
+      const block = jobBlock(jobIds[lane]);
+      assert.doesNotMatch(block, /^    needs:/m, "validation and native builds must run independently");
+      const commands = parseSteps(block);
       for (const [name, expected] of BASELINE_GATES[platform][lane]) {
         assert.equal(
           commands.get(name),
@@ -118,6 +120,18 @@ for (const [platform, jobIds] of Object.entries({
     });
   }
 }
+
+test("parallel lanes preserve blocking checks and existing Windows smoke exceptions", () => {
+  for (const jobId of ["test-macos", "test-windows", "build-macos"]) {
+    assert.doesNotMatch(jobBlock(jobId), /continue-on-error:/);
+  }
+  const windows = jobBlock("build-windows");
+  assert.equal((windows.match(/continue-on-error: true/g) ?? []).length, 2);
+  for (const name of ["Smoke test — download model and transcribe", "Smoke test — transcribe with JSON output"]) {
+    const step = windows.slice(windows.indexOf(`      - name: ${name}`)).split(/\n      - name:/)[0];
+    assert.match(step, /continue-on-error: true/);
+  }
+});
 
 test("model caches are isolated to native lanes", () => {
   assert.doesNotMatch(jobBlock("test-macos"), /name: Cache downloaded models/);
@@ -159,16 +173,15 @@ for (const [jobId, needs] of [
   test(`${jobId} fails closed for every non-success lane result`, () => {
     const [testLane, buildLane] = needs;
     const run = aggregator(jobId, needs, testLane, buildLane);
-    assert.doesNotThrow(() => runAggregator(run, "success", "success"));
-    for (const status of ["failure", "cancelled", "skipped"]) {
-      assert.throws(
-        () => runAggregator(run, status, "success"),
-        `${jobId} must reject ${status} test lane result`,
-      );
-      assert.throws(
-        () => runAggregator(run, "success", status),
-        `${jobId} must reject ${status} build lane result`,
-      );
+    for (const testResult of ["success", "failure", "cancelled", "skipped"]) {
+      for (const buildResult of ["success", "failure", "cancelled", "skipped"]) {
+        const invoke = () => runAggregator(run, testResult, buildResult);
+        if (testResult === "success" && buildResult === "success") {
+          assert.doesNotThrow(invoke);
+        } else {
+          assert.throws(invoke, `${jobId} must reject ${testResult}/${buildResult}`);
+        }
+      }
     }
   });
 }
