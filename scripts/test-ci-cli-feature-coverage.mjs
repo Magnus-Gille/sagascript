@@ -11,8 +11,8 @@ const [cliManifest, coreManifest, ciWorkflow] = await Promise.all([
 function macosWorkflowFor(workflow) {
   const normalized = workflow.replace(/\r\n/g, "\n");
   return normalized.slice(
-    normalized.indexOf("  check-macos:"),
-    normalized.indexOf("  check-linux:"),
+    normalized.indexOf("  test-macos:"),
+    normalized.indexOf("  build-macos:"),
   );
 }
 
