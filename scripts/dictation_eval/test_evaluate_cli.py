@@ -18,7 +18,7 @@ class EvaluateCliTests(unittest.TestCase):
     def test_ci_selects_supported_python_before_all_evaluator_suites(self):
         workflow = SCRIPT.parents[2] / ".github" / "workflows" / "ci.yml"
         source = workflow.read_text(encoding="utf-8").replace("\r\n", "\n")
-        for name in ("test-macos", "check-linux", "test-windows"):
+        for name in ("test-macos", "test-linux", "test-windows"):
             marker = f"  {name}:\n"
             start = source.index(marker) + len(marker)
             next_job = re.search(r"^  [A-Za-z0-9_-]+:\s*$", source[start:], re.MULTILINE)
