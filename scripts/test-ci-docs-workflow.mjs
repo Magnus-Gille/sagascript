@@ -6,11 +6,15 @@ import { join } from "node:path";
 import test from "node:test";
 
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-function job(id) {
-  return workflow.split(`\n  ${id}:\n`)[1].split(/\n  [a-z][a-z0-9-]*:\n/)[0];
+function normalizeWorkflow(source) {
+  return source.replace(/\r\n?/g, "\n");
 }
-function script(id) {
-  return job(id).split("        run: |\n")[1].split(/\n      - /)[0]
+function job(id, source = workflow) {
+  const normalized = normalizeWorkflow(source);
+  return normalized.split(`\n  ${id}:\n`)[1].split(/\n  [a-z][a-z0-9-]*:\n/)[0];
+}
+function script(id, source = workflow) {
+  return job(id, source).split("        run: |\n")[1].split(/\n      - /)[0]
     .split("\n").map(line => line.replace(/^          /, "")).join("\n");
 }
 function shell(command, env, cwd) {
@@ -100,4 +104,22 @@ test("scope bootstrap and unavailable commits select full CI; known docs and pus
   result = classify({ PR_HEAD_SHA: base }); // Empty comparison cannot pass docs gates.
   assert.notEqual(result.status, 0);
   assert.doesNotMatch(result.output, /docs_only=true/);
+});
+
+test("CRLF workflow text still parses and executes scope and aggregate scripts", () => {
+  const crlfWorkflow = normalizeWorkflow(workflow).replaceAll("\n", "\r\n");
+  const scope = script("scope", crlfWorkflow);
+  const aggregateEnvironment = {
+    SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: "false",
+    TEST_RESULT: "success", BUILD_RESULT: "success", LINUX_RESULT: "success",
+  };
+
+  const scopeResult = shell(scope, { EVENT_NAME: "push", GITHUB_OUTPUT: "" });
+  assert.equal(scopeResult.status, 0, scopeResult.stderr);
+  assert.match(scopeResult.stdout, /push-event-requires-full-ci/);
+
+  for (const id of ["check-macos", "check-linux", "check-windows"]) {
+    const result = shell(script(id, crlfWorkflow), aggregateEnvironment);
+    assert.equal(result.status, 0, `${id}: ${result.stderr}`);
+  }
 });
