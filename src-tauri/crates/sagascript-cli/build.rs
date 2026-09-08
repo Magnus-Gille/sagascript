@@ -57,10 +57,22 @@ fn emit_git_rerun_triggers() {
     }
 }
 
+fn has_complete_ci_metadata() -> bool {
+    ["SAGASCRIPT_GIT_HASH", "SAGASCRIPT_BUILD_DATE"]
+        .into_iter()
+        .all(|key| std::env::var(key).is_ok_and(|value| !value.is_empty()))
+}
+
 fn main() {
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_GIT_HASH");
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_BUILD_DATE");
-    emit_git_rerun_triggers();
+    // CI supplies the complete source identity. Avoid watching Git paths in
+    // that mode: hosted checkouts commonly omit packed-refs, and Cargo treats
+    // a missing watched path as dirty on every invocation. Local builds keep
+    // the Git watches because they still derive identity from the checkout.
+    if !has_complete_ci_metadata() {
+        emit_git_rerun_triggers();
+    }
     emit_source_rerun_triggers();
 
     let git_hash = metadata_value("SAGASCRIPT_GIT_HASH", local_git_hash);
