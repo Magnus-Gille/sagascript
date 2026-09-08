@@ -1,0 +1,6 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicerdicer/tauri-v2-schema/refs/heads/main/tauri.conf.schema.json",
+  "build": {
+    "beforeBuildCommand": "node scripts/reuse-frontend.mjs"
+  }
+}
