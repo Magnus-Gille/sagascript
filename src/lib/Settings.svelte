@@ -22,9 +22,14 @@
     beginMeetingFile,
     getMeetingJob,
     cancelMeetingJob,
-    renameMeetingSpeaker,
-    mergeMeetingSpeakers,
-    saveMeetingExport,
+    createMeetingReview,
+    applyMeetingCorrections,
+    undoMeetingReview,
+    resetMeetingReview,
+    openMeetingReview,
+    saveMeetingReview,
+    attachMeetingAudio,
+    detachMeetingAudio,
     getSupportedFormats,
     getPlatform,
     checkAccessibilityPermission,
@@ -43,7 +48,14 @@
     type MeetingJobSnapshot,
   } from "./api";
   import MeetingReview from "./MeetingReview.svelte";
-  import type { MeetingExportFormat, MeetingTranscript } from "./meeting-types";
+  import type {
+    CorrectionOperation,
+    MeetingAudioAttachment,
+    MeetingExportFormat,
+    MeetingReview as MeetingReviewDocument,
+    MeetingReviewState,
+    MeetingTranscript,
+  } from "./meeting-types";
   import { pollMeetingJob as pollMeetingJobClient } from "./meeting-job-client";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
@@ -171,6 +183,7 @@
   let transcribePrompt: string = $state('');
   let transcribeDiarize: boolean = $state(false);
   let transcribeProfileId: string | null = $state(null);
+  let meetingReview: MeetingReviewDocument | null = $state(null);
   let meetingTranscript: MeetingTranscript | null = $state(null);
   let meetingJobId: string | null = $state(null);
   let meetingJobStatus: MeetingJobStatus | null = $state(null);
@@ -180,7 +193,10 @@
   let meetingPollGeneration = 0;
   let meetingPollActive = false;
   let meetingDocumentRevision = $state(0);
+  let meetingReviewResetKey = $state(0);
+  let meetingReviewDraftDirty = $state(false);
   let meetingActionQueue: Promise<void> = Promise.resolve();
+  let meetingReviewInit: Promise<void> | null = $state(null);
 
   onDestroy(() => {
     meetingPollGeneration += 1;
@@ -795,6 +811,7 @@
       commitGlossaryScopeChange(pending.scopeId);
     } else {
       activeTab = pending.tab;
+      meetingReviewDraftDirty = false;
       pending.afterNavigate?.();
     }
   }
@@ -824,12 +841,16 @@
       afterNavigate?.();
       return;
     }
+    if (meetingReviewDraftDirty) {
+      if (!window.confirm("Leave meeting review and discard unapplied edits?")) return;
+    }
     if (glossarySaving) return;
     if (glossaryHasUnsavedChanges()) {
       promptGlossaryNavigation({ kind: "tab", tab: nextTab, afterNavigate });
       return;
     }
     activeTab = nextTab;
+    meetingReviewDraftDirty = false;
     afterNavigate?.();
   }
 
@@ -950,14 +971,28 @@
     return meetingActionQueue;
   }
 
-  function enqueueMeetingAction(action: (transcript: MeetingTranscript, revision: number) => Promise<void>): Promise<void> {
+  function enqueueMeetingAction(action: (review: MeetingReviewDocument, revision: number) => Promise<boolean | void>): Promise<boolean> {
     const queued = meetingActionQueue.then(async () => {
-      const transcript = meetingTranscript;
-      if (!transcript) return;
-      await action(transcript, meetingDocumentRevision);
+      const review = meetingReview;
+      if (!review) return false;
+      return (await action(review, meetingDocumentRevision)) !== false;
     });
-    meetingActionQueue = queued.catch(() => undefined);
+    meetingActionQueue = queued.then(() => undefined, () => undefined);
     return queued;
+  }
+
+  function acceptMeetingReview(state: MeetingReviewState, generation: number, replaceDocument = false): void {
+    if (generation !== meetingPollGeneration) return;
+    meetingReview = state.review;
+    meetingTranscript = state.transcript;
+    meetingDocumentRevision += 1;
+    if (replaceDocument) meetingReviewResetKey += 1;
+    meetingError = "";
+  }
+
+  async function initializeMeetingReview(transcript: MeetingTranscript, generation: number): Promise<void> {
+    const state = await createMeetingReview(transcript);
+    acceptMeetingReview(state, generation, true);
   }
 
   async function pollMeetingJob(jobId: string, generation: number): Promise<void> {
@@ -983,9 +1018,15 @@
             meetingPollingFailed = false;
             transcriptionProgress = 0;
             if (snapshot.status === "completed" && snapshot.transcript) {
-              meetingTranscript = snapshot.transcript;
-              meetingDocumentRevision += 1;
-              meetingError = "";
+              meetingReviewInit = initializeMeetingReview(snapshot.transcript, generation)
+                .catch((error) => {
+                  if (generation === meetingPollGeneration) {
+                    meetingError = meetingFailureText(error, "Could not initialize the meeting review.");
+                  }
+                })
+                .finally(() => {
+                  if (generation === meetingPollGeneration) meetingReviewInit = null;
+                });
             } else if (snapshot.status === "completed") {
               meetingError = "Meeting completed without a transcript. Try the import again.";
             } else {
@@ -1007,6 +1048,7 @@
     profileId: string | null,
   ): Promise<void> {
     if (transcribing) return;
+    if (meetingReview && !window.confirm("Start a new meeting review and replace the current review if it completes?")) return;
     const generation = ++meetingPollGeneration;
     // Keep the previous review and its unsaved drafts mounted until a NEW
     // document succeeds. Pending edits finish before the import starts below;
@@ -1100,29 +1142,89 @@
   }
 
   async function renameMeetingReviewSpeaker(id: string, label: string): Promise<void> {
-    await enqueueMeetingAction(async (transcript, revision) => {
-      const updated = await renameMeetingSpeaker(transcript, id, label);
-      if (revision === meetingDocumentRevision) {
-        meetingTranscript = updated;
-        meetingError = "";
-      }
-    });
+    await applyMeetingReviewOperations([{ kind: "rename_speaker", speaker_id: id, label }]);
   }
 
   async function mergeMeetingReviewSpeakers(fromId: string, intoId: string): Promise<void> {
-    await enqueueMeetingAction(async (transcript, revision) => {
-      const updated = await mergeMeetingSpeakers(transcript, fromId, intoId);
-      if (revision === meetingDocumentRevision) {
-        meetingTranscript = updated;
-        meetingError = "";
-      }
+    await applyMeetingReviewOperations([{ kind: "merge_speakers", from_id: fromId, into_id: intoId }]);
+  }
+
+  async function exportMeetingReview(format: MeetingExportFormat): Promise<boolean> {
+    return enqueueMeetingAction((review) => saveMeetingReview(review, format));
+  }
+
+  async function applyMeetingReviewOperations(operations: CorrectionOperation[]): Promise<void> {
+    await enqueueMeetingAction(async (review, revision) => {
+      const corrections = {
+        schema_version: 1,
+        source_sha256: review.original.source_sha256,
+        original_revision: review.original_revision,
+        expected_revision: review.revision,
+        operations,
+      };
+      const state = await applyMeetingCorrections(review, corrections);
+      if (revision === meetingDocumentRevision) acceptMeetingReview(state, meetingPollGeneration);
     });
   }
 
-  async function exportMeetingReview(format: MeetingExportFormat): Promise<void> {
-    await enqueueMeetingAction(async (transcript) => {
-      await saveMeetingExport(transcript, format);
+  async function undoMeetingReviewChanges(): Promise<void> {
+    await enqueueMeetingAction(async (review, revision) => {
+      const state = await undoMeetingReview(review, review.revision);
+      if (revision === meetingDocumentRevision) acceptMeetingReview(state, meetingPollGeneration);
     });
+  }
+
+  async function resetMeetingReviewChanges(): Promise<void> {
+    await enqueueMeetingAction(async (review, revision) => {
+      const state = await resetMeetingReview(review, review.revision);
+      if (revision === meetingDocumentRevision) acceptMeetingReview(state, meetingPollGeneration);
+    });
+  }
+
+  async function saveCurrentMeetingReview(): Promise<boolean> {
+    return enqueueMeetingAction((review) => saveMeetingReview(review, "json"));
+  }
+
+  async function attachCurrentMeetingAudio(): Promise<MeetingAudioAttachment | null> {
+    const review = meetingReview;
+    const transcript = meetingTranscript;
+    const generation = meetingPollGeneration;
+    const resetKey = meetingReviewResetKey;
+    if (!review || !transcript) return null;
+    const attachment = await attachMeetingAudio(transcript.source_sha256);
+    const stillCurrent =
+      generation === meetingPollGeneration
+      && resetKey === meetingReviewResetKey
+      && meetingReview?.original_revision === review.original_revision
+      && meetingTranscript?.source_sha256 === transcript.source_sha256;
+    if (!stillCurrent) {
+      if (attachment) await detachMeetingAudio(attachment.token).catch(() => undefined);
+      return null;
+    }
+    return attachment;
+  }
+
+  function onMeetingReviewDraftDirtyChange(dirty: boolean): void {
+    meetingReviewDraftDirty = dirty;
+  }
+
+  async function detachCurrentMeetingAudio(token: string): Promise<void> {
+    await detachMeetingAudio(token);
+  }
+
+  async function openSavedMeetingReview(): Promise<void> {
+    if (transcribing) return;
+    if (meetingReview && !window.confirm("Open a saved review and replace the current review if it succeeds?")) return;
+    const generation = ++meetingPollGeneration;
+    meetingError = "";
+    try {
+      await waitForMeetingActions();
+      const state = await openMeetingReview();
+      if (generation !== meetingPollGeneration || !state) return;
+      acceptMeetingReview(state, generation, true);
+    } catch (error) {
+      if (generation === meetingPollGeneration) meetingError = meetingFailureText(error, "Could not open the meeting review.");
+    }
   }
 
   function onTranscribeProfileChange(e: Event) {
@@ -1562,6 +1664,9 @@
             <button class="primary open-file-btn" onclick={onPickFile}>
               Open File...
             </button>
+            <button class="secondary" onclick={() => void openSavedMeetingReview()} disabled={meetingReviewInit !== null}>
+              Open saved review...
+            </button>
           {/if}
         </div>
 
@@ -1612,17 +1717,22 @@
           <textarea class="transcribe-result" readonly>{transcriptionResult}</textarea>
         {/if}
 
-        {#if meetingTranscript}
-          {#key meetingDocumentRevision}
+        {#if meetingReview && meetingTranscript}
             <MeetingReview
+              review={meetingReview}
               transcript={meetingTranscript}
               busy={transcribing}
               error={meetingError || null}
-              onRename={renameMeetingReviewSpeaker}
-              onMerge={mergeMeetingReviewSpeakers}
+              onApply={applyMeetingReviewOperations}
+              onUndo={undoMeetingReviewChanges}
+              onReset={resetMeetingReviewChanges}
+              onSave={saveCurrentMeetingReview}
               onExport={exportMeetingReview}
+              onAttachAudio={attachCurrentMeetingAudio}
+              onDetachAudio={detachCurrentMeetingAudio}
+              onDraftDirtyChange={onMeetingReviewDraftDirtyChange}
+              resetDraftKey={meetingReviewResetKey}
             />
-          {/key}
         {/if}
 
       {:else if activeTab === "settings"}

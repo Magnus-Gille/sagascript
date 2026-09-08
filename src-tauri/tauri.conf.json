@@ -12,7 +12,7 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' meeting-audio: http://meeting-audio.localhost https://meeting-audio.localhost"
     },
     "withGlobalTauri": true,
     "macOSPrivateApi": true

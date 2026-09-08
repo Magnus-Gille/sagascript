@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { MeetingExportFormat, MeetingTranscript } from "./meeting-types";
+import type {
+  CorrectionFile,
+  MeetingAudioAttachment,
+  MeetingExportFormat,
+  MeetingReview,
+  MeetingReviewState,
+  MeetingTranscript,
+} from "./meeting-types";
 
 export type Language = "en" | "sv" | "no" | "fi" | "auto";
 export type HotkeyMode = "push" | "toggle";
@@ -244,6 +251,50 @@ export async function saveMeetingExport(
   format: MeetingExportFormat,
 ): Promise<boolean> {
   return invoke("save_meeting_export", { transcript, format });
+}
+
+export async function createMeetingReview(transcript: MeetingTranscript): Promise<MeetingReviewState> {
+  return invoke("create_meeting_review", { transcript });
+}
+
+export async function applyMeetingCorrections(
+  review: MeetingReview,
+  corrections: CorrectionFile,
+): Promise<MeetingReviewState> {
+  return invoke("apply_meeting_corrections", { review, corrections });
+}
+
+export async function undoMeetingReview(
+  review: MeetingReview,
+  expectedRevision: string,
+): Promise<MeetingReviewState> {
+  return invoke("undo_meeting_review", { review, expectedRevision });
+}
+
+export async function resetMeetingReview(
+  review: MeetingReview,
+  expectedRevision: string,
+): Promise<MeetingReviewState> {
+  return invoke("reset_meeting_review", { review, expectedRevision });
+}
+
+export async function openMeetingReview(): Promise<MeetingReviewState | null> {
+  return invoke("open_meeting_review");
+}
+
+export async function saveMeetingReview(
+  review: MeetingReview,
+  format: MeetingExportFormat,
+): Promise<boolean> {
+  return invoke("save_meeting_review", { review, format });
+}
+
+export async function attachMeetingAudio(sourceSha256: string): Promise<MeetingAudioAttachment | null> {
+  return invoke("attach_meeting_audio", { sourceSha256 });
+}
+
+export async function detachMeetingAudio(token: string): Promise<void> {
+  return invoke("detach_meeting_audio", { token });
 }
 
 export async function getSupportedFormats(): Promise<string[]> {

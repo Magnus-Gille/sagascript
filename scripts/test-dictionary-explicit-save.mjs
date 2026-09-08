@@ -94,6 +94,7 @@ function createHarness({ failure = null } = {}) {
     "discardAndFinishGlossaryNavigation",
     "stayOnGlossaryDraft",
     "requestTabChange",
+    "onMeetingReviewDraftDirtyChange",
   ].map(functionSource).join("\n");
   const harness = `
     let settings = {
@@ -106,6 +107,8 @@ function createHarness({ failure = null } = {}) {
     };
     let settingsError = "";
     let activeTab = "settings";
+    let meetingReviewDraftDirty = false;
+    let meetingReviewConfirm = false;
     let glossaryScopeId = "";
     let glossaryDraft = settings.initial_prompt;
     let glossaryDraftInitialized = true;
@@ -123,6 +126,7 @@ function createHarness({ failure = null } = {}) {
     const calls = [];
     const dictionaryConflictPrefix = "Dictionary changed elsewhere:";
     const failure = ${JSON.stringify(failure)};
+    const window = { confirm: () => meetingReviewConfirm };
 
     function explicitProfiles(source = settings) {
       return source?.hotkey_profiles.filter((profile) => profile.language !== "auto") ?? [];
@@ -202,10 +206,14 @@ function createHarness({ failure = null } = {}) {
       discardAndFinishGlossaryNavigation,
       stayOnGlossaryDraft,
       requestTabChange,
+      onMeetingReviewDraftDirtyChange,
+      setMeetingReviewConfirm: (value) => { meetingReviewConfirm = value; },
+      setGlossarySaving: (value) => { glossarySaving = value; },
       snapshot: () => ({
         settings,
         settingsError,
         activeTab,
+        meetingReviewDraftDirty,
         glossaryScopeId,
         glossaryDraft,
         glossaryDraftGeneration,
@@ -342,6 +350,79 @@ test("dirty tab navigation offers the same decisions", () => {
   exercise.requestTabChange("dictate");
   exercise.discardAndFinishGlossaryNavigation();
   assert.equal(exercise.snapshot().activeTab, "dictate");
+});
+
+test("cancelling dirty meeting navigation preserves the dictionary draft flow", () => {
+  const exercise = createHarness();
+  input(exercise, "global draft");
+  exercise.onMeetingReviewDraftDirtyChange(true);
+  exercise.setMeetingReviewConfirm(false);
+
+  exercise.requestTabChange("dictate");
+
+  const state = exercise.snapshot();
+  assert.equal(state.activeTab, "settings");
+  assert.equal(state.meetingReviewDraftDirty, true);
+  assert.equal(state.pendingGlossaryNavigation, null);
+  assert.equal(state.glossaryDraft, "global draft");
+  assert.notEqual(state.glossaryEditBaseline, null);
+});
+
+test("accepting dirty meeting navigation still offers the dictionary decision", () => {
+  const exercise = createHarness();
+  input(exercise, "global draft");
+  exercise.onMeetingReviewDraftDirtyChange(true);
+  exercise.setMeetingReviewConfirm(true);
+
+  exercise.requestTabChange("dictate");
+
+  const state = exercise.snapshot();
+  assert.equal(state.activeTab, "settings");
+  assert.equal(state.meetingReviewDraftDirty, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(state.pendingGlossaryNavigation)), {
+    kind: "tab",
+    tab: "dictate",
+  });
+  exercise.stayOnGlossaryDraft();
+  const stayed = exercise.snapshot();
+  assert.equal(stayed.activeTab, "settings");
+  assert.equal(stayed.meetingReviewDraftDirty, true);
+  assert.equal(stayed.glossaryDraft, "global draft");
+  assert.notEqual(stayed.glossaryEditBaseline, null);
+
+  exercise.setGlossarySaving(true);
+  exercise.requestTabChange("dictate");
+  const blocked = exercise.snapshot();
+  assert.equal(blocked.activeTab, "settings");
+  assert.equal(blocked.meetingReviewDraftDirty, true);
+});
+
+test("committed tab navigation clears the meeting-review guard", () => {
+  const exercise = createHarness();
+  exercise.onMeetingReviewDraftDirtyChange(true);
+  exercise.setMeetingReviewConfirm(true);
+
+  exercise.requestTabChange("dictate");
+
+  const state = exercise.snapshot();
+  assert.equal(state.activeTab, "dictate");
+  assert.equal(state.meetingReviewDraftDirty, false);
+});
+
+test("committed glossary-mediated tab navigation clears the meeting-review guard", () => {
+  const exercise = createHarness();
+  input(exercise, "global draft");
+  exercise.onMeetingReviewDraftDirtyChange(true);
+  exercise.setMeetingReviewConfirm(true);
+
+  exercise.requestTabChange("dictate");
+  assert.equal(exercise.snapshot().pendingGlossaryNavigation.kind, "tab");
+
+  exercise.discardAndFinishGlossaryNavigation();
+
+  const state = exercise.snapshot();
+  assert.equal(state.activeTab, "dictate");
+  assert.equal(state.meetingReviewDraftDirty, false);
 });
 
 for (const failure of ["write failed", "Dictionary changed elsewhere: current source"]) {

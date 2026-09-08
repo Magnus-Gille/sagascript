@@ -20,6 +20,15 @@ const typesSource = await readFile(
   new URL("../src/lib/meeting-types.ts", import.meta.url),
   "utf8",
 );
+const typesModule = ts.transpileModule(typesSource, {
+  compilerOptions: {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+  },
+}).outputText;
+const { initialMeetingDrafts, reconcileMeetingDrafts } = await import(
+  `data:text/javascript;base64,${Buffer.from(typesModule).toString("base64")}`
+);
 const pollingModule = ts.transpileModule(pollingSource, {
   compilerOptions: {
     module: ts.ModuleKind.ESNext,
@@ -50,10 +59,10 @@ test("polling is serialized, stale generations are ignored, and cancellation wai
   assert.match(settingsSource, /meetingPollingFailed = true/);
   assert.match(settingsSource, /Retry status check/);
   assert.match(settingsSource, /Meeting completed without a transcript/);
-  assert.match(settingsSource, /meetingActionQueue = queued\.catch/);
+  assert.match(settingsSource, /meetingActionQueue = queued\.then\(\(\) => undefined, \(\) => undefined\)/);
   assert.match(settingsSource, /await waitForMeetingActions\(\)/);
   assert.match(settingsSource, /meetingDocumentRevision/);
-  assert.match(settingsSource, /\{#key meetingDocumentRevision\}/);
+  assert.match(settingsSource, /generation !== meetingPollGeneration/);
   const importBody = settingsSource.split("async function startMeetingFileTranscription(")[1]
     .split("async function handleFileTranscription(")[0];
   assert.doesNotMatch(importBody, /\+\+meetingDocumentRevision|meetingDocumentRevision\s*\+=/,
@@ -161,20 +170,118 @@ test("polling is serialized, stale generations are ignored, and cancellation wai
   assert.equal(missingTranscriptError, "Meeting completed without a transcript.");
 });
 
-test("meeting review exposes typed schema, callback-only edits, and all export formats", () => {
+test("meeting review exposes explicit corrections, playback, and all export formats", () => {
   for (const field of ["schema_version", "source_sha256", "language", "model", "duration_seconds", "segments", "speakers"]) {
     assert.match(typesSource, new RegExp(`\\b${field}\\b`));
   }
   for (const format of ["plain", "markdown", "json", "srt", "vtt"]) {
     assert.match(reviewSource, new RegExp(`format: "${format}"`));
   }
-  assert.match(reviewSource, /onRename: \(id: string, label: string\) => Promise<void>/);
-  assert.match(reviewSource, /onMerge: \(from: string, into: string\) => Promise<void>/);
-  assert.match(reviewSource, /onExport: \(format: MeetingExportFormat\) => Promise<void>/);
-  for (const command of ["rename_meeting_speaker", "merge_meeting_speakers", "save_meeting_export"]) {
+  assert.match(reviewSource, /onApply: \(operations: CorrectionOperation\[\]\) => Promise<void>/);
+  assert.match(reviewSource, /onUndo: \(\) => Promise<void>/);
+  assert.match(reviewSource, /onReset: \(\) => Promise<void>/);
+  assert.match(reviewSource, /onSave: \(\) => Promise<boolean>/);
+  assert.match(reviewSource, /onExport: \(format: MeetingExportFormat\) => Promise<boolean>/);
+  assert.match(reviewSource, /Save review/);
+  assert.match(reviewSource, /Unapplied edits are not included in saves\/exports/);
+  assert.match(reviewSource, /function persistenceDisabled\(\): boolean/);
+  assert.match(reviewSource, /disabled=\{persistenceDisabled\(\)\}/);
+  assert.match(reviewSource, /const hasUnsavedDrafts = \$derived\.by/);
+  assert.match(reviewSource, /function discardMerge\(speakerId: string\)/);
+  assert.match(reviewSource, /Clear merge selection/);
+  assert.match(reviewSource, /actionNotice/);
+  assert.match(reviewSource, /Audio access is temporary and is detached when you leave this review/);
+  assert.match(reviewSource, /Apply/);
+  assert.match(reviewSource, /Discard/);
+  assert.match(reviewSource, /convertFileSrc\(attachment\.token, "meeting-audio"\)/);
+  assert.match(reviewSource, /onwheel=\{disableFollow\}/);
+  assert.match(reviewSource, /ontouchmove=\{disableFollow\}/);
+  assert.match(reviewSource, /svelte:window onkeydown=\{handleKeyboardScroll\}/);
+  assert.match(reviewSource, /activeSegmentsAtTime/);
+  assert.match(reviewSource, /audioUrl \? activeSegmentsAtTime/);
+  assert.match(reviewSource, /onerror=\{handleAudioError\}/);
+  assert.match(reviewSource, /This audio cannot be played/);
+  assert.doesNotMatch(reviewSource, />Playing:/, "paused cursor highlights must not claim playback");
+  assert.match(settingsSource, /async function exportMeetingReview\(format: MeetingExportFormat\): Promise<boolean>/);
+  assert.match(settingsSource, /async function saveCurrentMeetingReview\(\): Promise<boolean>/);
+  assert.match(settingsSource, /saveMeetingReview\(review, format\)/);
+  assert.match(settingsSource, /saveMeetingReview\(review, "json"\)/);
+  for (const command of [
+    "create_meeting_review",
+    "apply_meeting_corrections",
+    "undo_meeting_review",
+    "reset_meeting_review",
+    "open_meeting_review",
+    "save_meeting_review",
+    "attach_meeting_audio",
+    "detach_meeting_audio",
+  ]) {
     assert.match(apiSource, new RegExp(`invoke\\("${command}"`));
   }
-  assert.match(reviewSource, /draftSourceSha !== transcript\.source_sha256/);
+  assert.match(settingsSource, /createMeetingReview\(transcript\)/);
+  assert.match(settingsSource, /meetingReviewInit = initializeMeetingReview/);
+  assert.match(settingsSource, /Open saved review/);
+  assert.match(reviewSource, /reconcileMeetingDrafts/);
+  assert.match(reviewSource, /resetDraftKey/);
+  assert.match(reviewSource, /onDraftDirtyChange\?: \(dirty: boolean\) => void/);
+  assert.match(reviewSource, /committedResetKey === resetDraftKey/);
+  assert.match(reviewSource, /Undo the last correction and discard unsaved edits/);
+  assert.match(settingsSource, /replace the current review if it succeeds/);
+  assert.match(settingsSource, /meetingReviewDraftDirty/);
+  assert.match(settingsSource, /onDraftDirtyChange=\{onMeetingReviewDraftDirtyChange\}/);
+  assert.match(settingsSource, /Leave meeting review and discard unapplied edits/);
+  assert.match(settingsSource, /const stillCurrent =/);
+  assert.match(settingsSource, /if \(!stillCurrent\)[\s\S]*detachMeetingAudio\(attachment\.token\)/);
+  assert.match(reviewSource, /review\.original\.segments/);
   assert.doesNotMatch(reviewSource, /{@html/);
   assert.doesNotMatch(reviewSource, /localStorage|fetch\(|AudioContext|MediaRecorder/);
+  assert.doesNotMatch(reviewSource, /\.play\(\)/, "editing and timestamp controls must not autoplay audio");
+});
+
+test("review draft reconciliation preserves dirty segment B while applying segment A and another speaker rename", () => {
+  const transcript = {
+    schema_version: 1,
+    source_sha256: "source-a",
+    language: "en",
+    model: "model",
+    duration_seconds: 4,
+    segments: [
+      { id: "a", start: 0, end: 1, text: "A original", speaker: "s1" },
+      { id: "b", start: 1, end: 2, text: "B original", speaker: "s2" },
+    ],
+    speakers: [
+      { id: "s1", label: "Speaker 1" },
+      { id: "s2", label: "Speaker 2" },
+    ],
+  };
+  const drafts = initialMeetingDrafts(transcript);
+  drafts.texts.a = "A saved";
+  drafts.texts.b = "B still being edited";
+  const afterSegmentA = {
+    ...transcript,
+    segments: [{ ...transcript.segments[0], text: "A saved" }, transcript.segments[1]],
+  };
+  const reconciledA = reconcileMeetingDrafts(
+    transcript,
+    afterSegmentA,
+    drafts,
+    [{ kind: "edit_segment", segment_id: "a", text: "A saved" }],
+  );
+  assert.equal(reconciledA.texts.a, "A saved");
+  assert.equal(reconciledA.texts.b, "B still being edited");
+
+  reconciledA.labels.s2 = "Unsubmitted speaker name";
+  const afterSpeakerRename = {
+    ...afterSegmentA,
+    speakers: [{ id: "s1", label: "Alice" }, afterSegmentA.speakers[1]],
+  };
+  const reconciledB = reconcileMeetingDrafts(
+    afterSegmentA,
+    afterSpeakerRename,
+    reconciledA,
+    [{ kind: "rename_speaker", speaker_id: "s1", label: "Alice" }],
+  );
+  assert.equal(reconciledB.labels.s1, "Alice");
+  assert.equal(reconciledB.labels.s2, "Unsubmitted speaker name");
+  assert.equal(reconciledB.texts.b, "B still being edited");
 });
