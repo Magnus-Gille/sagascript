@@ -39,6 +39,7 @@ ctrlc = { version = "3", optional = true }
 # ~23 MB of statically-linked ONNX Runtime; the lean batch build
 # (`--no-default-features`) strips it along with `record`.
 default = ["record", "diarization"]
+meeting-mode = []
 record = ["sagascript-core/record", "dep:ctrlc"]
 diarization = ["sagascript-core/diarization"]
 

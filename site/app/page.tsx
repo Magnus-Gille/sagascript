@@ -20,17 +20,23 @@ export default function Home() {
 
       <section className="hero" id="top">
         <div className="hero-copy">
-          <p className="eyebrow"><span /> Local dictation for macOS</p>
+          <p className="eyebrow"><span /> Local dictation for macOS and Windows</p>
           <h1>Speak. Get text.<br />Keep it local.</h1>
           <p className="lede">
-            Sagascript turns your voice into text in any Mac app. Press your
+            Sagascript turns your voice into text in your apps. Press your
             shortcut, speak, and the words appear where you are working.
           </p>
           <div className="hero-actions">
             <a className="button primary" href={releaseUrl}>Download for Mac <span aria-hidden="true">↘</span></a>
+            <a className="button secondary" href="https://github.com/Magnus-Gille/sagascript/releases">Download for Windows <span aria-hidden="true">↘</span></a>
             <a className="button secondary" href={sourceUrl}>View source on GitHub <span aria-hidden="true">↗</span></a>
           </div>
-          <p className="requirements">Apple silicon · macOS 13 or later · Local processing</p>
+          <p className="requirements">Mac: Apple silicon · macOS 13 or later. Windows: unsigned installers; check architecture and channel in the release notes.</p>
+          <p className="microphone-note">
+            Bluetooth headset microphones may give less reliable dictation,
+            especially with fast speech. If words are missed, try
+            a built-in microphone, if available, or a wired microphone.
+          </p>
         </div>
 
         <figure className="product-shot">
@@ -48,12 +54,22 @@ export default function Home() {
       </section>
 
       <section className="statement" aria-label="Privacy statement">
-        <p>Your recordings stay on your Mac.</p>
+        <p>Your recordings stay on your computer.</p>
         <span>
           Transcription happens locally. Internet access is only used when you
           choose a language that needs its speech engine, download another
           engine, or check for an update.
         </span>
+      </section>
+
+      <section className="release-news" id="releases" aria-labelledby="release-heading">
+        <p className="eyebrow"><span /> Version 1.2.0</p>
+        <h2 id="release-heading">More control over dictation.</h2>
+        <p>Set independent push-to-talk and toggle shortcuts for each language profile.
+          Save or discard dictionary edits explicitly. Finnish is now available with
+          multilingual Whisper Base and an optional FinnishNLP Tiny engine.</p>
+        <p>Transcription stays local. Meeting mode is planned for the next release.</p>
+        <a href="https://github.com/Magnus-Gille/sagascript/releases/tag/v1.2.0">Read the full release notes →</a>
       </section>
 
       <section className="how" id="how">
@@ -65,12 +81,12 @@ export default function Home() {
           <li>
             <span className="step-number">01</span>
             <h3>Install</h3>
-            <p>Open the DMG, drag Sagascript to Applications, and launch it from there.</p>
+            <p>Mac: open the DMG and drag Sagascript to Applications. Windows: choose the installer for your architecture. Unsigned Windows installers may show a SmartScreen warning.</p>
           </li>
           <li>
             <span className="step-number">02</span>
             <h3>Choose a language</h3>
-            <p>Sagascript prepares the right local speech engine and guides you through Mac permissions.</p>
+            <p>Sagascript prepares the right local speech engine and guides you through the required permissions.</p>
           </li>
           <li>
             <span className="step-number">03</span>
@@ -97,7 +113,7 @@ export default function Home() {
       </section>
 
       <section className="final-cta">
-        <p className="eyebrow"><span /> Sagascript for Mac</p>
+        <p className="eyebrow"><span /> Sagascript for macOS and Windows</p>
         <h2>Your voice.<br />Your words.<br />Your machine.</h2>
         <a className="button primary" href={releaseUrl}>Download the latest release <span aria-hidden="true">↘</span></a>
       </section>

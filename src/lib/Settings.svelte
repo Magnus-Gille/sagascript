@@ -169,6 +169,8 @@
   let transcribeError: string = $state("");
   let dragOver: boolean = $state(false);
   let transcribePrompt: string = $state('');
+  // Meeting review is deferred; keep the existing file-diarization result flow.
+  const meetingModeEnabled = false;
   let transcribeDiarize: boolean = $state(false);
   let transcribeProfileId: string | null = $state(null);
   let meetingTranscript: MeetingTranscript | null = $state(null);
@@ -1043,7 +1045,7 @@
     if (transcribing) return;
     const profileId = selectedTranscribeProfile()?.id ?? null;
     const prompt = transcribePrompt.trim() || null;
-    if (transcribeDiarize) {
+    if (meetingModeEnabled && transcribeDiarize) {
       await startMeetingFileTranscription(filePath, prompt, profileId);
       return;
     }
@@ -1060,7 +1062,7 @@
       await waitForMeetingActions();
       transcriptionResult = await transcribeFile(filePath, {
         prompt: prompt ?? undefined,
-        diarize: false,
+        diarize: transcribeDiarize,
         profileId: profileId ?? undefined,
       });
     } catch (error: any) {

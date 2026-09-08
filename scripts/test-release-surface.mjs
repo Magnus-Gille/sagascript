@@ -273,6 +273,17 @@ test("product page explains the complete privacy boundary without implying fixed
   assert.match(sitePageSource, /View source on GitHub/);
 });
 
+test("product page gives Bluetooth microphone guidance", () => {
+  const bluetoothGuidance = sitePageSource
+    .match(/<p className="microphone-note">([\s\S]*?)<\/p>/)?.[1]
+    ?.replace(/\s+/g, " ")
+    .trim();
+  assert.equal(
+    bluetoothGuidance,
+    "Bluetooth headset microphones may give less reliable dictation, especially with fast speech. If words are missed, try a built-in microphone, if available, or a wired microphone.",
+  );
+});
+
 test("app and website use the exact canonical single-S geometry", () => {
   const canonicalPath = brandMarkSource.match(/<path\s+d="([^"]+)"/)?.[1];
   assert.ok(canonicalPath, "Canonical S path is missing");

@@ -4,7 +4,11 @@ pub mod config;
 pub mod benchmark_dictation;
 pub mod glossary;
 pub mod latency;
+#[cfg(feature = "meeting-mode")]
 pub mod meeting;
+
+/// The new meeting workflow is excluded from stable default builds.
+pub const MEETING_MODE_ENABLED: bool = cfg!(feature = "meeting-mode");
 pub mod models;
 pub mod open;
 // Live recording is optional (`record` feature, on by default) so a pure
@@ -251,6 +255,7 @@ EXAMPLES:
     )]
     LatencyReport(latency::LatencyReportArgs),
 
+    #[cfg(feature = "meeting-mode")]
     /// Inspect and export validated meeting transcript documents
     #[command(
         long_about = "Read a validated meeting transcript JSON document and inspect, export, rename, or merge it without modifying the input. This command never persists changes, reads source audio, runs inference, changes settings, or contacts a network service.",
@@ -522,6 +527,7 @@ pub fn run(cli: Cli) {
         Command::Transcribe(args) =>
             run_inference_command("transcribe", move || transcribe::run(args)),
         Command::LatencyReport(args) => latency::run(args),
+        #[cfg(feature = "meeting-mode")]
         Command::Meeting(args) => meeting::run(args),
         #[cfg(feature = "record")]
         Command::Record(args) => run_inference_command("record", move || record::run(args)),
@@ -658,6 +664,14 @@ fn render_manpage_tree(cmd: &clap::Command, dir: &PathBuf) -> Result<(), io::Err
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(not(feature = "meeting-mode"))]
+    fn stable_release_does_not_expose_meeting_commands() {
+        use clap::{CommandFactory, Parser};
+        assert!(!super::Cli::command().get_subcommands().any(|c| c.get_name() == "meeting"));
+        assert!(super::Cli::try_parse_from(["sagascript", "meeting", "inspect", "input.json"]).is_err());
+    }
+
     use super::*;
 
     #[cfg(target_os = "windows")]

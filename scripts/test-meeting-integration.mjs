@@ -30,13 +30,14 @@ const { pollMeetingJob } = await import(
   `data:text/javascript;base64,${Buffer.from(pollingModule).toString("base64")}`
 );
 
-test("diarized imports use the job API while ordinary imports keep transcribeFile", () => {
+test("meeting preview is gated while stable imports retain ordinary diarization", () => {
+  assert.match(settingsSource, /const meetingModeEnabled = false/);
   assert.match(apiSource, /invoke\("begin_meeting_file", \{ filePath, prompt, profileId \}\)/);
   assert.match(apiSource, /invoke\("get_meeting_job", \{ jobId \}\)/);
   assert.match(apiSource, /invoke\("cancel_meeting_job", \{ jobId \}\)/);
-  assert.match(settingsSource, /if \(transcribeDiarize\) \{\s*await startMeetingFileTranscription/s);
+  assert.match(settingsSource, /if \(meetingModeEnabled && transcribeDiarize\) \{\s*await startMeetingFileTranscription/s);
   assert.match(settingsSource, /beginMeetingFile\(filePath, prompt, profileId\)/);
-  assert.match(settingsSource, /transcribeFile\(filePath, \{[\s\S]*?diarize: false/);
+  assert.match(settingsSource, /transcribeFile\(filePath, \{[\s\S]*?diarize: transcribeDiarize/);
   assert.match(settingsSource, /disabled=\{transcribing\}/);
 });
 

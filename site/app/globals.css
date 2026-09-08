@@ -111,3 +111,8 @@ footer > div:last-child { display: flex; gap: 24px; }
   html { scroll-behavior: auto; }
   .button { transition: none; }
 }
+
+.release-news { width: min(100% - 40px, 1400px); margin: 0 auto; padding: 60px 0; border-bottom: 1px solid var(--line); }
+.release-news h2 { max-width: 850px; margin-bottom: 24px; font-size: clamp(32px, 5vw, 56px); }
+.release-news p:not(.eyebrow) { max-width: 800px; color: var(--muted); line-height: 1.7; }
+.release-news a { display: inline-block; margin-top: 12px; text-decoration: underline; text-underline-offset: 4px; }

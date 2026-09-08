@@ -59,6 +59,9 @@ pub async fn begin_meeting_file(
     prompt: Option<String>,
     profile_id: Option<String>,
 ) -> Result<String, String> {
+    if !sagascript_cli::MEETING_MODE_ENABLED {
+        return Err("Meeting mode is not available in this release.".into());
+    }
     #[cfg(not(feature = "diarization"))]
     {
         let _ = (app, jobs, controller, file_path, prompt, profile_id);

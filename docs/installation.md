@@ -70,10 +70,11 @@ brew install --cask sagascript
 
 ## Windows
 
-> **Unsigned beta:** Sagascript provides a [Windows beta prerelease](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905)
-> for Windows 11 on x64 and ARM64. It is a public preview, not a signed
-> or stable release. Verify the matching checksum before running it and do not
-> bypass SmartScreen.
+> **Unsigned Windows packages:** Check the architecture and stable/beta label on
+> the release page. An architecture is promoted to stable only after its own
+> manual acceptance; the other remains beta. Stable does not mean signed.
+> Verify the matching checksum before running an installer and follow your
+> device's security policy.
 
 ### System requirements
 
@@ -84,21 +85,23 @@ brew install --cask sagascript
 
 ### Download and install
 
-1. Open the [Windows beta prerelease](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905).
+1. Open the [latest stable release](https://github.com/Magnus-Gille/sagascript/releases/latest).
+   If your architecture is still beta, use the explicitly labelled Windows
+   prerelease in the [release list](https://github.com/Magnus-Gille/sagascript/releases).
 2. Download `Sagascript-Windows-x64-Setup.exe` on an Intel/AMD PC or
    `Sagascript-Windows-arm64-Setup.exe` on a native ARM64 PC.
 3. Download the matching `SHA256SUMS-Windows-<architecture>` file and verify
    the installer checksum before running it.
 4. Complete the installer, then launch Sagascript from the Start menu.
 
-The beta is unsigned, so Windows may show a SmartScreen warning. Follow your
+The Windows packages are unsigned, so Windows may show a SmartScreen warning. Follow your
 device's security policy. If you need a signed stable installation, wait for
 the signed Windows release; building from source does not provide a publisher
 signature.
 
-The prerelease also contains matching MSI, portable desktop, and CLI files.
+Windows release packages also include matching MSI, portable desktop, and CLI files.
 The CLI is separate from the desktop executable and will not be automatically
-added to `PATH` by this beta.
+added to `PATH` by these installers.
 
 ## Building from source
 
@@ -137,4 +140,4 @@ cargo tauri build
 - **Windows:** Local source builds produce an NSIS installer in
   `src-tauri/target/release/bundle/nsis/` and an MSI in
   `src-tauri/target/release/bundle/msi/`. These packages are suitable for
-  development and are separate from the beta artifacts.
+  development and are separate from the published release artifacts.
