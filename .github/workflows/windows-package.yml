@@ -191,6 +191,10 @@ jobs:
         shell: pwsh
         run: ./scripts/verify-windows-x64-cpu-policy.ps1 -TargetRoot src-tauri/target -PolicyFile scripts/cmake/windows-x64-portable.cmake
 
+      - name: Verify debug ARM64 native CPU flags
+        if: matrix.architecture == 'arm64'
+        run: node scripts/report-windows-arm64-native.mjs src-tauri/target
+
       - name: Verify source before release CLI build
         run: node scripts/ci-build-identity.mjs --verify
 
@@ -270,6 +274,10 @@ jobs:
         if: matrix.architecture == 'x64'
         shell: pwsh
         run: ./scripts/verify-windows-x64-cpu-policy.ps1 -TargetRoot src-tauri/target -PolicyFile scripts/cmake/windows-x64-portable.cmake
+
+      - name: Verify packaged ARM64 native CPU flags
+        if: matrix.architecture == 'arm64'
+        run: node scripts/report-windows-arm64-native.mjs src-tauri/target
 
       - name: Verify source after installer build
         run: node scripts/ci-build-identity.mjs --verify

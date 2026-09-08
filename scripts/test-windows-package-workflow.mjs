@@ -236,3 +236,16 @@ test("third-party notice comparison accepts Windows checkout line endings", () =
   );
   assert.match(output, /newline normalization passed/);
 });
+
+test("ARM64 candidate records generated debug and release CPU flags", () => {
+  for (const [name, after, before] of [
+    ["Verify debug ARM64 native CPU flags", "name: Test and lint Rust workspace", "name: Gate real Windows transcription"],
+    ["Verify packaged ARM64 native CPU flags", "name: Build unsigned internal installers", "name: Prepare and verify candidate artifacts"],
+  ]) {
+    const start = workflow.indexOf(`name: ${name}`);
+    assert.ok(start > workflow.indexOf(after) && start < workflow.indexOf(before));
+    const step = workflow.slice(start, workflow.indexOf("\n      - name:", start));
+    assert.match(step, /if: matrix\.architecture == 'arm64'/);
+    assert.match(step, /node scripts\/report-windows-arm64-native\.mjs src-tauri\/target/);
+  }
+});

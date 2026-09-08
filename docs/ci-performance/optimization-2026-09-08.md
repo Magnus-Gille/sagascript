@@ -140,6 +140,14 @@ both architecture packages, and the existing transcription gates before merge;
 its result is recorded in PR #226. This compatibility correction is not claimed
 as a compilation or inference speed improvement.
 
+Successful Cargo logs hide CMake output, so ARM64 candidates additionally inspect
+the generated Ninja compiler flags after debug and installer compilation. The
+check prints each selected cache and unique `-mcpu` settings, rejects missing or
+SVE/SME-enabled evidence, and requires explicit `native+...+nosve+nosme` flags.
+The preceding exact-head CI run [34230248675](https://github.com/Magnus-Gille/sagascript/actions/runs/34230248675)
+passed all seven jobs in 8m40s (24m03s summed runner time); this verification run
+does not replace the original cached comparison above.
+
 Merging this PR activates the main-push CI workflow. Windows candidates remain
 PR/manual-triggered, signed macOS test builds remain manual, and application
 releases remain tag-triggered. No application release is needed for these CI
@@ -165,3 +173,4 @@ final performance assessment. Bounded tasks used native Luna agents:
 | ARM64 image diagnosis | gpt-5.6-luna / xhigh | Pinned CMake/header source and old/new compiler logs checked | pass |
 | ARM64 regression tests | gpt-5.6-luna / high | Red/green CMake tests; conductor corrected native flag name and strengthened diagnostics/module coverage | partial |
 | Cleanup inventory and evidence archive | gpt-5.6-luna / high | Clean status, patch-ID equivalence, source/copy SHA-256 checks repeated by conductor | pass |
+| ARM64 generated-build evidence | gpt-5.6-luna / high | Realistic Ninja fixtures and workflow regression tests; conductor corrected actual flag format and per-flag validation | partial |
