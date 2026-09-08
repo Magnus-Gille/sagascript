@@ -15,7 +15,7 @@ pub struct ReviewState {
 }
 
 impl ReviewState {
-    fn from_review(review: MeetingReview) -> Result<Self, String> {
+    pub(crate) fn from_review(review: MeetingReview) -> Result<Self, String> {
         let transcript = review.materialize().map_err(|e| e.to_string())?;
         Ok(Self { review, transcript })
     }

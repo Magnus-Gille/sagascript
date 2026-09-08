@@ -89,6 +89,7 @@ export interface MeetingJobSnapshot {
   phase: string;
   error: string | null;
   transcript: MeetingTranscript | null;
+  reprocessing?: import("./meeting-reprocessing-types").ReprocessingResult | null;
 }
 
 export async function getState(): Promise<AppState> {

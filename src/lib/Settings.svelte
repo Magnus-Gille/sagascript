@@ -1,4 +1,12 @@
 <script lang="ts">
+  import MeetingReprocessing from "./MeetingReprocessing.svelte";
+  import {
+    planMeetingReprocessing, beginMeetingReprocessing, previewMeetingProposal,
+    resolveMeetingProposal, acceptMeetingProposal, saveMeetingProposal, openMeetingProposal,
+  } from "./meeting-reprocessing-api";
+  import type {
+    ReprocessingMode, SelectedReprocessingPlan, ProposalState, ReprocessingResult,
+  } from "./meeting-reprocessing-types";
   import { onDestroy, onMount } from "svelte";
   import {
     getSettings,
@@ -195,6 +203,10 @@
   let meetingDocumentRevision = $state(0);
   let meetingReviewResetKey = $state(0);
   let meetingReviewDraftDirty = $state(false);
+  let meetingReprocessingPlan = $state<SelectedReprocessingPlan | null>(null);
+  let meetingProposal = $state<ProposalState | null>(null);
+  let meetingReprocessingResult = $state<ReprocessingResult | null>(null);
+  let meetingReprocessingBusy = $state(false);
   let meetingActionQueue: Promise<void> = Promise.resolve();
   let meetingReviewInit: Promise<void> | null = $state(null);
 
@@ -986,7 +998,12 @@
     meetingReview = state.review;
     meetingTranscript = state.transcript;
     meetingDocumentRevision += 1;
-    if (replaceDocument) meetingReviewResetKey += 1;
+    if (replaceDocument) {
+      meetingReviewResetKey += 1;
+      meetingReprocessingPlan = null;
+      meetingProposal = null;
+      meetingReprocessingResult = null;
+    }
     meetingError = "";
   }
 
@@ -1017,7 +1034,26 @@
             transcribing = false;
             meetingPollingFailed = false;
             transcriptionProgress = 0;
-            if (snapshot.status === "completed" && snapshot.transcript) {
+            if (snapshot.status === "completed" && snapshot.reprocessing) {
+              const result = snapshot.reprocessing;
+              // Keep the completed work even if the separate preview request fails.
+              meetingReprocessingResult = result;
+              meetingReprocessingPlan = null;
+              meetingProposal = null;
+              meetingReviewInit = previewMeetingProposal(result.proposal)
+                .then((state) => {
+                  if (generation !== meetingPollGeneration) return;
+                  meetingProposal = state;
+                  meetingReprocessingResult = result;
+                  meetingReprocessingPlan = null;
+                })
+                .catch((error) => {
+                  if (generation === meetingPollGeneration) {
+                    meetingError = meetingFailureText(error, "Could not preview the proposal. The previous review is unchanged.");
+                  }
+                })
+                .finally(() => { if (generation === meetingPollGeneration) meetingReviewInit = null; });
+            } else if (snapshot.status === "completed" && snapshot.transcript) {
               meetingReviewInit = initializeMeetingReview(snapshot.transcript, generation)
                 .catch((error) => {
                   if (generation === meetingPollGeneration) {
@@ -1225,6 +1261,112 @@
     } catch (error) {
       if (generation === meetingPollGeneration) meetingError = meetingFailureText(error, "Could not open the meeting review.");
     }
+  }
+
+  async function planCurrentMeeting(mode: ReprocessingMode, threshold: number, saveCache: boolean): Promise<void> {
+    if (transcribing || meetingReprocessingBusy || meetingReviewDraftDirty) return;
+    meetingReprocessingBusy = true;
+    try {
+      await enqueueMeetingAction(async (review, revision) => {
+        const generation = meetingPollGeneration;
+        const selected = await planMeetingReprocessing(review, mode, threshold, saveCache,
+          transcribePrompt.trim() || null, selectedTranscribeProfile()?.id ?? null);
+        if (selected && revision === meetingDocumentRevision && generation === meetingPollGeneration) {
+          meetingReprocessingPlan = selected;
+        }
+      });
+    } finally { meetingReprocessingBusy = false; }
+  }
+
+  async function executeCurrentMeetingPlan(): Promise<void> {
+    if (transcribing || meetingReprocessingBusy || meetingReviewDraftDirty || !meetingReprocessingPlan) return;
+    await waitForMeetingActions();
+    const selected = meetingReprocessingPlan;
+    const review = meetingReview;
+    if (!review || !selected || transcribing || meetingReprocessingBusy || meetingReviewDraftDirty) return;
+    if (selected.plan.context.previous_revision !== review.revision) {
+      throw new Error("The review changed. Prepare a new plan; your corrections have been kept.");
+    }
+    const generation = ++meetingPollGeneration;
+    transcribing = true;
+    meetingError = "";
+    meetingPollingFailed = false;
+    meetingJobStatus = "running";
+    meetingPhase = "Preparing reprocessing";
+    try {
+      const id = await beginMeetingReprocessing(selected, review,
+        transcribePrompt.trim() || null, selectedTranscribeProfile()?.id ?? null);
+      if (!id) throw new Error("Reprocessing did not return a job ID.");
+      meetingJobId = id;
+      void pollMeetingJob(id, generation);
+    } catch (error) {
+      transcribing = false;
+      meetingJobId = null;
+      meetingJobStatus = "failed";
+      meetingError = meetingFailureText(error, "Reprocessing failed; the previous review is unchanged.");
+      throw error;
+    }
+  }
+
+  async function resolveCurrentMeetingProposal(index: number, operations: CorrectionOperation[]): Promise<void> {
+    const state = meetingProposal;
+    if (!state || transcribing || meetingReprocessingBusy) return;
+    meetingReprocessingBusy = true;
+    try {
+      const next = await resolveMeetingProposal(state.proposal, index, operations);
+      if (meetingProposal?.proposal.revision === state.proposal.revision) meetingProposal = next;
+    } finally { meetingReprocessingBusy = false; }
+  }
+
+  async function acceptCurrentMeetingProposal(): Promise<void> {
+    if (transcribing || meetingReprocessingBusy || meetingReviewDraftDirty) return;
+    meetingReprocessingBusy = true;
+    try {
+      await enqueueMeetingAction(async (review, revision) => {
+        const proposal = meetingProposal;
+        const generation = meetingPollGeneration;
+        if (!proposal || meetingReviewDraftDirty) return false;
+        const state = await acceptMeetingProposal(proposal.proposal, review);
+        if (revision !== meetingDocumentRevision || generation !== meetingPollGeneration
+          || meetingReviewDraftDirty || proposal.proposal.revision !== meetingProposal?.proposal.revision) {
+          throw new Error("The review changed before acceptance. It has not been replaced.");
+        }
+        acceptMeetingReview(state, generation, true);
+      });
+    } finally { meetingReprocessingBusy = false; }
+  }
+
+  async function saveCurrentMeetingProposal(): Promise<boolean> {
+    const proposal = meetingProposal?.proposal ?? meetingReprocessingResult?.proposal;
+    return proposal ? saveMeetingProposal(proposal) : false;
+  }
+
+  async function retryCurrentMeetingProposalPreview(): Promise<void> {
+    const result = meetingReprocessingResult;
+    if (!result || meetingProposal || transcribing || meetingReprocessingBusy || meetingReviewInit) return;
+    const generation = meetingPollGeneration;
+    meetingReprocessingBusy = true;
+    meetingError = "";
+    try {
+      const state = await previewMeetingProposal(result.proposal);
+      if (generation === meetingPollGeneration && meetingReprocessingResult === result) meetingProposal = state;
+    } catch (error) {
+      meetingError = meetingFailureText(error, "Could not preview the proposal. Save it to retry later; the previous review is unchanged.");
+    } finally { meetingReprocessingBusy = false; }
+  }
+
+  async function openCurrentMeetingProposal(): Promise<void> {
+    if (transcribing || meetingReprocessingBusy) return;
+    meetingReprocessingBusy = true;
+    const generation = meetingPollGeneration;
+    try {
+      const state = await openMeetingProposal();
+      if (state && generation === meetingPollGeneration) {
+        meetingProposal = state;
+        meetingReprocessingResult = null;
+        meetingReprocessingPlan = null;
+      }
+    } finally { meetingReprocessingBusy = false; }
   }
 
   function onTranscribeProfileChange(e: Event) {
@@ -1718,10 +1860,34 @@
         {/if}
 
         {#if meetingReview && meetingTranscript}
+            {#if meetingReprocessingResult && !meetingProposal}
+              <div role="status">
+                <p>The completed proposal is retained. Retry its preview or save it to open later.</p>
+                <button class="btn btn-secondary" disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
+                  onclick={() => void retryCurrentMeetingProposalPreview()}>Retry proposal preview</button>
+                <button class="btn btn-secondary" disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
+                  onclick={() => void saveCurrentMeetingProposal().catch((error) => { meetingError = meetingFailureText(error, "Could not save the proposal."); })}>Save retained proposal</button>
+              </div>
+            {/if}
+            <MeetingReprocessing
+              currentReviewRevision={meetingReview.revision}
+              busy={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
+              draftDirty={meetingReviewDraftDirty}
+              selected={meetingReprocessingPlan}
+              proposal={meetingProposal}
+              result={meetingReprocessingResult}
+              onPlan={planCurrentMeeting}
+              onExecute={executeCurrentMeetingPlan}
+              onResolve={resolveCurrentMeetingProposal}
+              onAccept={acceptCurrentMeetingProposal}
+              onSave={saveCurrentMeetingProposal}
+              onOpen={openCurrentMeetingProposal}
+              onDiscard={() => { meetingProposal = null; meetingReprocessingResult = null; meetingReprocessingPlan = null; }}
+            />
             <MeetingReview
               review={meetingReview}
               transcript={meetingTranscript}
-              busy={transcribing}
+              busy={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
               error={meetingError || null}
               onApply={applyMeetingReviewOperations}
               onUndo={undoMeetingReviewChanges}

@@ -34,6 +34,24 @@ pub struct MeetingSnapshot {
     phase: String,
     error: Option<String>,
     transcript: Option<MeetingTranscript>,
+    #[cfg(feature = "diarization")]
+    reprocessing: Option<sagascript_cli::meeting_reprocessing::ReprocessingResult>,
+}
+
+enum JobOutput {
+    Import(MeetingTranscript),
+    #[cfg(feature = "diarization")]
+    Reprocessing(Box<sagascript_cli::meeting_reprocessing::ReprocessingResult>),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReprocessingRequest {
+    pub plan: sagascript_core::meeting_reprocess_plan::ReprocessingPlan,
+    pub expected_revision: String,
+    pub previous: sagascript_core::meeting_review::MeetingReview,
+    pub cache_path: Option<String>,
+    pub cache_output: Option<String>,
 }
 
 struct MeetingJob {
@@ -59,9 +77,48 @@ pub async fn begin_meeting_file(
     prompt: Option<String>,
     profile_id: Option<String>,
 ) -> Result<String, String> {
+    begin_job(app, jobs, controller, file_path, prompt, profile_id, None).await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri injects the application/window/state arguments.
+pub async fn begin_meeting_reprocessing(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    jobs: State<'_, SharedMeetingJobs>,
+    controller: State<'_, SharedController>,
+    file_path: String,
+    prompt: Option<String>,
+    profile_id: Option<String>,
+    request: ReprocessingRequest,
+) -> Result<String, String> {
+    crate::meeting_review_commands::require_settings(&window)?;
+    begin_job(
+        app,
+        jobs,
+        controller,
+        file_path,
+        prompt,
+        profile_id,
+        Some(request),
+    )
+    .await
+}
+
+async fn begin_job(
+    app: tauri::AppHandle,
+    jobs: State<'_, SharedMeetingJobs>,
+    controller: State<'_, SharedController>,
+    file_path: String,
+    prompt: Option<String>,
+    profile_id: Option<String>,
+    request: Option<ReprocessingRequest>,
+) -> Result<String, String> {
     #[cfg(not(feature = "diarization"))]
     {
-        let _ = (app, jobs, controller, file_path, prompt, profile_id);
+        let _ = (
+            app, jobs, controller, file_path, prompt, profile_id, request,
+        );
         Err("This build has no speaker diarization support.".into())
     }
     #[cfg(feature = "diarization")]
@@ -89,6 +146,7 @@ pub async fn begin_meeting_file(
                 phase: "preparing".into(),
                 error: None,
                 transcript: None,
+                reprocessing: None,
             },
             backend: Some(backend.clone()),
             cancelled: cancelled.clone(),
@@ -127,16 +185,42 @@ pub async fn begin_meeting_file(
                     cancellation: &processing_cancel,
                     progress: &progress,
                 };
-                transcribe_meeting_file_with_control(
-                    std::path::Path::new(&file_path),
-                    &settings,
-                    context.language,
-                    context.model,
-                    &context.glossary,
-                    &processing_backend,
-                    &control,
-                )
-                .map_err(|error| error.to_string())
+                if let Some(request) = request {
+                    use sagascript_cli::meeting_reprocessing::{
+                        execute_reprocessing, ReprocessingInput,
+                    };
+                    let input = ReprocessingInput {
+                        audio: std::path::Path::new(&file_path),
+                        cache: request.cache_path.as_deref().map(std::path::Path::new),
+                        previous: &request.previous,
+                        language: context.language,
+                        model: context.model,
+                        glossary: &context.glossary,
+                    };
+                    execute_reprocessing(
+                        &request.plan,
+                        &request.expected_revision,
+                        &input,
+                        &settings,
+                        &processing_backend,
+                        request.cache_output.as_deref().map(std::path::Path::new),
+                        Some(&control),
+                    )
+                    .map(|result| JobOutput::Reprocessing(Box::new(result)))
+                    .map_err(|error| error.to_string())
+                } else {
+                    transcribe_meeting_file_with_control(
+                        std::path::Path::new(&file_path),
+                        &settings,
+                        context.language,
+                        context.model,
+                        &context.glossary,
+                        &processing_backend,
+                        &control,
+                    )
+                    .map(JobOutput::Import)
+                    .map_err(|error| error.to_string())
+                }
             });
             let started = Instant::now();
             let mut tick = tokio::time::interval(Duration::from_millis(100));
@@ -201,11 +285,15 @@ pub async fn begin_meeting_file(
 
 fn finish_snapshot(
     snapshot: &mut MeetingSnapshot,
-    result: Result<MeetingTranscript, String>,
+    result: Result<JobOutput, String>,
     cancelled: bool,
     timed_out: bool,
 ) {
     snapshot.transcript = None;
+    #[cfg(feature = "diarization")]
+    {
+        snapshot.reprocessing = None;
+    }
     snapshot.error = None;
     if timed_out {
         snapshot.status = JobStatus::Failed;
@@ -217,9 +305,14 @@ fn finish_snapshot(
         snapshot.status = JobStatus::Cancelled;
     } else {
         match result {
-            Ok(document) => {
+            Ok(JobOutput::Import(document)) => {
                 snapshot.status = JobStatus::Completed;
                 snapshot.transcript = Some(document);
+            }
+            #[cfg(feature = "diarization")]
+            Ok(JobOutput::Reprocessing(result)) => {
+                snapshot.status = JobStatus::Completed;
+                snapshot.reprocessing = Some(*result);
             }
             Err(error) => {
                 snapshot.status = JobStatus::Failed;

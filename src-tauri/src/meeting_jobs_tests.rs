@@ -65,6 +65,31 @@ fn snapshot(id: &str, status: JobStatus) -> MeetingSnapshot {
         phase: "preparing".into(),
         error: Some("old error".into()),
         transcript: Some(valid_transcript()),
+        #[cfg(feature = "diarization")]
+        reprocessing: None,
+    }
+}
+
+#[cfg(feature = "diarization")]
+fn reprocessing_result() -> sagascript_cli::meeting_reprocessing::ReprocessingResult {
+    let previous = sagascript_core::meeting_review::MeetingReview::new(valid_transcript())
+        .expect("valid synthetic review");
+    let proposal = sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal::new(
+        previous.clone(),
+        previous.original.clone(),
+    )
+    .expect("valid synthetic proposal");
+    sagascript_cli::meeting_reprocessing::ReprocessingResult {
+        proposal,
+        required_work: sagascript_core::meeting_reprocess_plan::RequiredWork {
+            decode_audio: false,
+            transcription: false,
+            language_detection: false,
+            segmentation: false,
+            embeddings: false,
+            clustering: true,
+        },
+        timings: Default::default(),
     }
 }
 
@@ -95,28 +120,61 @@ fn finish_snapshot_applies_cancel_timeout_and_errors_without_stale_data() {
     let document = valid_transcript();
 
     let mut cancelled = snapshot("cancelled", JobStatus::Running);
-    finish_snapshot(&mut cancelled, Ok(document.clone()), true, false);
+    #[cfg(feature = "diarization")]
+    {
+        cancelled.reprocessing = Some(reprocessing_result());
+    }
+    finish_snapshot(
+        &mut cancelled,
+        Ok(JobOutput::Import(document.clone())),
+        true,
+        false,
+    );
     assert_eq!(cancelled.status, JobStatus::Cancelled);
     assert!(cancelled.error.is_none());
     assert!(cancelled.transcript.is_none());
+    #[cfg(feature = "diarization")]
+    assert!(cancelled.reprocessing.is_none());
 
     let mut timed_out = snapshot("timed-out", JobStatus::Running);
-    finish_snapshot(&mut timed_out, Ok(document.clone()), true, true);
+    #[cfg(feature = "diarization")]
+    {
+        timed_out.reprocessing = Some(reprocessing_result());
+    }
+    finish_snapshot(
+        &mut timed_out,
+        Ok(JobOutput::Import(document.clone())),
+        true,
+        true,
+    );
     assert_eq!(timed_out.status, JobStatus::Failed);
     assert_eq!(
         timed_out.error.as_deref(),
         Some("Meeting import timed out and has stopped. Try a shorter file or a smaller model.")
     );
     assert!(timed_out.transcript.is_none());
+    #[cfg(feature = "diarization")]
+    assert!(timed_out.reprocessing.is_none());
 
     let mut failed = snapshot("failed", JobStatus::Running);
+    #[cfg(feature = "diarization")]
+    {
+        failed.reprocessing = Some(reprocessing_result());
+    }
     finish_snapshot(&mut failed, Err("backend failed".into()), false, false);
     assert_eq!(failed.status, JobStatus::Failed);
     assert_eq!(failed.error.as_deref(), Some("backend failed"));
     assert!(failed.transcript.is_none());
+    #[cfg(feature = "diarization")]
+    assert!(failed.reprocessing.is_none());
 
     let mut completed = snapshot("completed", JobStatus::Running);
-    finish_snapshot(&mut completed, Ok(document.clone()), false, false);
+    finish_snapshot(
+        &mut completed,
+        Ok(JobOutput::Import(document.clone())),
+        false,
+        false,
+    );
     assert_eq!(completed.status, JobStatus::Completed);
     assert_eq!(completed.error, None);
     assert_eq!(completed.transcript, Some(document));
@@ -142,6 +200,32 @@ fn cancel_job_rejects_foreign_ids_and_transitions_only_matching_running_jobs() {
     let terminal = terminal.as_ref().expect("terminal job remains");
     assert_eq!(terminal.snapshot.status, JobStatus::Completed);
     assert!(!terminal.cancelled.load(Ordering::SeqCst));
+}
+
+#[cfg(feature = "diarization")]
+#[test]
+fn completed_reprocessing_stores_proposal_without_transcript() {
+    let mut completed = snapshot("reprocessing", JobStatus::Running);
+    let result = reprocessing_result();
+    let expected_proposal = result.proposal.clone();
+
+    finish_snapshot(
+        &mut completed,
+        Ok(JobOutput::Reprocessing(Box::new(result))),
+        false,
+        false,
+    );
+
+    assert_eq!(completed.status, JobStatus::Completed);
+    assert!(completed.error.is_none());
+    assert!(completed.transcript.is_none());
+    assert_eq!(
+        completed
+            .reprocessing
+            .expect("completed reprocessing result")
+            .proposal,
+        expected_proposal
+    );
 }
 
 #[test]
