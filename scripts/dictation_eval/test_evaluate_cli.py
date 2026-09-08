@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -16,9 +17,13 @@ SCRIPT = Path(__file__).with_name("evaluate.py")
 class EvaluateCliTests(unittest.TestCase):
     def test_ci_selects_supported_python_before_all_evaluator_suites(self):
         workflow = SCRIPT.parents[2] / ".github" / "workflows" / "ci.yml"
-        source = workflow.read_text(encoding="utf-8")
-        for name in ("check-macos", "check-linux", "check-windows"):
-            job = source.split(f"  {name}:\n", 1)[1].split("\n  check-", 1)[0]
+        source = workflow.read_text(encoding="utf-8").replace("\r\n", "\n")
+        for name in ("test-macos", "check-linux", "test-windows"):
+            marker = f"  {name}:\n"
+            start = source.index(marker) + len(marker)
+            next_job = re.search(r"^  [A-Za-z0-9_-]+:\s*$", source[start:], re.MULTILINE)
+            end = start + next_job.start() if next_job else len(source)
+            job = source[start:end]
             setup = job.index("actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1")
             suite = job.index("Test offline dictation evaluation tooling")
             self.assertLess(setup, suite)

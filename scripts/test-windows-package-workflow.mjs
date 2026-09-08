@@ -5,8 +5,12 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 test("Windows PR CI runs build identity regression tests before compilation", async () => {
-  const ci = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const windows = ci.slice(ci.indexOf("  check-windows:"));
+  const ci = (await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
+    .replace(/\r\n?/g, "\n");
+  const testWindowsStart = ci.indexOf("  test-windows:");
+  const buildWindowsStart = ci.indexOf("  build-windows:", testWindowsStart);
+  assert.ok(testWindowsStart >= 0 && buildWindowsStart > testWindowsStart);
+  const windows = ci.slice(testWindowsStart, buildWindowsStart);
   const command = "node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs";
   const checks = windows.indexOf(command);
   assert.ok(checks > windows.indexOf("name: Install Node.js"));
@@ -92,7 +96,7 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(rustCache, /workspaces:\s+src-tauri/);
   assert.match(
     rustCache,
-    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
+    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/cmake\/windows-arm64-native\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
   );
   assert.doesNotMatch(
     rustCache,
@@ -116,6 +120,17 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
   assert.match(workflow, /\$msi\[0\]\.Name -notmatch \[regex\]::Escape\(\$version\)/);
   assert.doesNotMatch(workflow, /\$version:/);
   assert.doesNotMatch(workflow, /action-gh-release|gh release|contents: write/);
+});
+
+test("Windows ARM64 disables unsupported scalable vectors before restoring native cache", () => {
+  const start = workflow.indexOf("name: Configure native ARM64 C and C++ toolchain");
+  const end = workflow.indexOf("name: Configure portable x64 inference baseline", start);
+  assert.ok(start >= 0 && end > start);
+  const arm = workflow.slice(start, end);
+  assert.match(arm, /if: matrix\.architecture == 'arm64'/);
+  assert.match(arm, /scripts\/cmake\/windows-arm64-native\.cmake/);
+  assert.match(arm, /CMAKE_PROJECT_INCLUDE=\$policy/);
+  assert.ok(end < workflow.indexOf("name: Cache Rust dependencies"));
 });
 
 test("Windows x64 caches and artifacts use an explicit verified CPU baseline", () => {
@@ -220,4 +235,17 @@ test("third-party notice comparison accepts Windows checkout line endings", () =
     { encoding: "utf8" },
   );
   assert.match(output, /newline normalization passed/);
+});
+
+test("ARM64 candidate records generated debug and release CPU flags", () => {
+  for (const [name, after, before] of [
+    ["Verify debug ARM64 native CPU flags", "name: Test and lint Rust workspace", "name: Gate real Windows transcription"],
+    ["Verify packaged ARM64 native CPU flags", "name: Build unsigned internal installers", "name: Prepare and verify candidate artifacts"],
+  ]) {
+    const start = workflow.indexOf(`name: ${name}`);
+    assert.ok(start > workflow.indexOf(after) && start < workflow.indexOf(before));
+    const step = workflow.slice(start, workflow.indexOf("\n      - name:", start));
+    assert.match(step, /if: matrix\.architecture == 'arm64'/);
+    assert.match(step, /node scripts\/report-windows-arm64-native\.mjs src-tauri\/target/);
+  }
 });

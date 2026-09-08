@@ -16,8 +16,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Keep source/line backtraces for CI failures without full variable/type debug
+# information in every dependency and PDB. Release profiles are unchanged.
+# rust-cache includes CARGO_* environment variables in its compatibility key.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
 jobs:
-  check-macos:
+  test-macos:
     runs-on: macos-14
 
     steps:
@@ -43,27 +50,11 @@ jobs:
           node-version: 20
           cache: npm
 
-      # Per-crate fingerprints shared across branches (#178): the previous
-      # `actions/cache` over `src-tauri/target` keyed on `Cargo.lock` forced a
-      # cold multi-GB rebuild (plus minutes of save/restore) on any lockfile
-      # change. rust-cache prunes before upload and stays warm across branches.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
-          shared-key: sagascript-ci
-
-      # Tier-2 smokes re-download `nb-whisper-tiny` every run (#178). The key
-      # tracks model-definition sources; restore-keys plus idempotent
-      # `download-model` (skips artifacts already at the expected size) cover
-      # all other cases.
-      - name: Cache downloaded models
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Application Support/Sagascript/Models
-          key: macos-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
-          restore-keys: |
-            macos-models-
+          shared-key: sagascript-ci-checks
 
       - name: Install npm dependencies
         run: npm ci
@@ -86,10 +77,8 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
 
-      # Workspace members. Bare cargo commands above cover only the root (app)
-      # package; these cover sagascript-core and sagascript-cli explicitly.
-      # NOTE: core is tested in its own invocation so its no-features build is
-      # exercised — combining -p flags would unify features across packages.
+      # Separate invocations preserve the core no-features build; combining
+      # package flags would unify features with the CLI defaults.
       - name: Cargo test (sagascript-core, no features)
         working-directory: src-tauri
         run: cargo test -p sagascript-core
@@ -106,47 +95,71 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
 
-      # `diarization` feature coverage (#68): gates ~1,771 lines of speaker
-      # diarization code (crates/sagascript-core/src/diarization/) and its
-      # CLI wiring (--diarize / --diarize-threshold in sagascript-cli) that
-      # otherwise never compile in CI. All diarization unit tests are pure
-      # (math/serialization/clustering logic) — none load an ONNX model file
-      # at runtime, so this layer needs no downloaded artifacts. The macOS
-      # model-backed smoke tests below are also release-critical and fail the
-      # job on inference regressions.
+      # Core defaults to no features. CLI defaults already include diarization
+      # and are covered above; core needs this explicit feature matrix.
       - name: Cargo check (sagascript-core, diarization)
         working-directory: src-tauri
         run: cargo check -p sagascript-core --features diarization
-
-      - name: Cargo check (sagascript-cli, diarization)
-        working-directory: src-tauri
-        run: cargo check -p sagascript-cli --features diarization
 
       - name: Cargo test (sagascript-core, diarization)
         working-directory: src-tauri
         run: cargo test -p sagascript-core --features diarization
 
-      - name: Cargo test (sagascript-cli, diarization)
-        working-directory: src-tauri
-        run: cargo test -p sagascript-cli --features diarization
-
       - name: Cargo clippy (sagascript-core, diarization)
         working-directory: src-tauri
         run: cargo clippy -p sagascript-core --features diarization --all-targets -- -D warnings
 
-      - name: Cargo clippy (sagascript-cli, diarization)
-        working-directory: src-tauri
-        run: cargo clippy -p sagascript-cli --features diarization --all-targets -- -D warnings
-
       - name: Svelte check
         run: npx svelte-check --tsconfig ./tsconfig.json
+
+  build-macos:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select evaluation Python runtime
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          shared-key: sagascript-ci-native
+
+      - name: Cache downloaded models
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Application Support/Sagascript/Models
+          key: macos-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
+          restore-keys: |
+            macos-models-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
 
       # PR validation needs the native release binary for the smoke tests, not
       # an installer. Full packaging, signing and notarization remain gated in
       # release.yml, so skipping bundling here removes duplicate work without
       # weakening native macOS coverage.
+
       - name: Build native release binary (no installer)
-        run: npx tauri build --no-bundle
+        run: npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle
 
       - name: Verify native release binary
         run: |
@@ -204,6 +217,19 @@ jobs:
           $BINARY transcribe --json --language no --model nb-whisper-tiny \
             test-audio/norwegian-short-3s.mp3 > "$STDOUT" 2> "$STDERR"
           python3 scripts/verify-json-cli-streams.py "$STDOUT" "$STDERR"
+
+  check-macos:
+    needs: [test-macos, build-macos]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    env:
+      TEST_RESULT: ${{ needs.test-macos.result }}
+      BUILD_RESULT: ${{ needs.build-macos.result }}
+    steps:
+      - name: Assert macOS CI lanes passed
+        run: |
+          test "$TEST_RESULT" = success
+          test "$BUILD_RESULT" = success
 
   check-linux:
     runs-on: ubuntu-24.04
@@ -312,7 +338,7 @@ jobs:
           fi
           echo "OK: no cpal/ALSA in batch-only tree"
 
-  check-windows:
+  test-windows:
     runs-on: windows-latest
 
     steps:
@@ -338,23 +364,11 @@ jobs:
           node-version: 20
           cache: npm
 
-      # Same rust-cache scheme as the macOS job (#178); the shared key spans
-      # branches while rust-cache keeps OS/target entries separate.
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
-          shared-key: sagascript-ci
-
-      # Tier-2 smokes re-download `nb-whisper-tiny` every run (#178). Same
-      # scheme as macOS; `%APPDATA%` is `~\AppData\Roaming` on the runner.
-      - name: Cache downloaded models
-        uses: actions/cache@v5
-        with:
-          path: ~\AppData\Roaming\Sagascript\Models
-          key: windows-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
-          restore-keys: |
-            windows-models-
+          shared-key: sagascript-ci-checks
 
       - name: Test Windows build identity gates
         run: node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs
@@ -377,8 +391,8 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
 
-      # Workspace members (see the macOS job for why these are separate
-      # invocations: combined -p flags would unify features across packages).
+      # Separate invocations preserve the core no-features build; combining
+      # package flags would unify features with the CLI defaults.
       - name: Cargo test (sagascript-core, no features)
         working-directory: src-tauri
         run: cargo test -p sagascript-core
@@ -395,12 +409,49 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -p sagascript-cli --all-targets -- -D warnings
 
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          shared-key: sagascript-ci-native
+
+      - name: Cache downloaded models
+        uses: actions/cache@v5
+        with:
+          path: ~\AppData\Roaming\Sagascript\Models
+          key: windows-models-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
+          restore-keys: |
+            windows-models-
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
       # PR validation needs the native release binary for the smoke tests, not
       # an installer. Full packaging, signing and notarization remain gated in
       # release.yml, so skipping bundling here removes duplicate work without
       # weakening native Windows coverage.
+
       - name: Build native release binary (no installer)
-        run: npx tauri build --no-bundle
+        run: npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle
 
       - name: Verify native release binary
         run: |
@@ -461,3 +512,16 @@ jobs:
           findstr /C:"text" json_output.txt
           findstr /C:"duration_seconds" json_output.txt
           findstr /C:"language" json_output.txt
+
+  check-windows:
+    needs: [test-windows, build-windows]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    env:
+      TEST_RESULT: ${{ needs.test-windows.result }}
+      BUILD_RESULT: ${{ needs.build-windows.result }}
+    steps:
+      - name: Assert Windows CI lanes passed
+        run: |
+          test "$TEST_RESULT" = success
+          test "$BUILD_RESULT" = success

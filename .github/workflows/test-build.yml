@@ -99,7 +99,7 @@ jobs:
         run: |
           : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
           : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
-          npx tauri build --target aarch64-apple-darwin
+          npx tauri build --config scripts/tauri-ci-prebuilt.json --target aarch64-apple-darwin
 
       - name: Notarize and staple disk image
         env:

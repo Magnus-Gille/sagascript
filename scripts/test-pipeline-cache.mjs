@@ -20,8 +20,11 @@ function section(content, startMarker, endMarker) {
 
 test("CI rust caches use the reviewed immutable action revision", () => {
   const refs = ciWorkflow.match(/uses: Swatinem\/rust-cache@[^\s]+/g) ?? [];
-  assert.equal(refs.length, 3);
-  assert.deepEqual(refs, [`uses: ${rustCacheRef}`, `uses: ${rustCacheRef}`, `uses: ${rustCacheRef}`]);
+  assert.equal(refs.length, 5);
+  assert.deepEqual(
+    refs,
+    Array.from({ length: 5 }, () => `uses: ${rustCacheRef}`),
+  );
 });
 
 test("signed test builds use the shared dependency cache without raw target dumps", () => {
@@ -62,10 +65,46 @@ test("Windows native cache is isolated by runner image and toolchain namespace",
   assert.match(cache, /workspaces:\s+src-tauri/);
   assert.match(
     cache,
-    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
+    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/cmake\/windows-arm64-native\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
   );
   assert.ok(
     windowsWorkflow.indexOf("name: Remove cached installer bundles") > cacheStart,
     "installer cleanup must remain after the native build gates",
+  );
+});
+
+test("Windows candidates cache only verified models with a candidate primary key", () => {
+  const modelCacheStart = windowsWorkflow.indexOf("name: Cache downloaded models");
+  const identityStart = windowsWorkflow.indexOf("name: Pin validated Windows build identity");
+  const rustCacheStart = windowsWorkflow.indexOf("name: Cache Rust dependencies");
+  assert.ok(modelCacheStart > rustCacheStart && identityStart > modelCacheStart);
+
+  const cache = section(windowsWorkflow, "name: Cache downloaded models", "name: Pin validated Windows build identity");
+  assert.match(cache, /uses: actions\/cache@v5/);
+  assert.match(cache, /path: ~\\AppData\\Roaming\\Sagascript\\Models/);
+  assert.equal((cache.match(/^\s*path:/gm) ?? []).length, 1, "cache must contain one exact model path");
+  assert.equal(
+    cache.match(/^\s*path:\s*(.+)$/m)?.[1],
+    "~\\AppData\\Roaming\\Sagascript\\Models",
+    "cache must exclude settings and logs from the model path",
+  );
+  assert.match(
+    cache,
+    /key: windows-models-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ hashFiles\('src-tauri\/crates\/sagascript-core\/src\/settings\/manager\.rs', 'src-tauri\/crates\/sagascript-core\/src\/transcription\/model\.rs', 'src-tauri\/crates\/sagascript-core\/src\/diarization\/model\.rs'\) \}\}/,
+  );
+  assert.match(
+    cache,
+    /restore-keys:[\s\S]*windows-models-package-\$\{\{ matrix\.architecture \}\}-[\s\S]*windows-models-/,
+  );
+  const nativeGate = windowsWorkflow.indexOf("name: Gate real Windows transcription");
+  const englishGate = windowsWorkflow.indexOf("name: Gate repeated English dictation");
+  assert.ok(nativeGate > modelCacheStart && englishGate > nativeGate);
+  assert.ok(
+    windowsWorkflow.indexOf("& $binary download-model nb-whisper-tiny", nativeGate) > modelCacheStart,
+    "native smoke must verify restored models after cache restore",
+  );
+  assert.ok(
+    windowsWorkflow.indexOf("& $binary download-model base.en", englishGate) > modelCacheStart,
+    "English benchmark must verify restored base.en after cache restore",
   );
 });

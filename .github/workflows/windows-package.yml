@@ -20,6 +20,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Keep source/line backtraces for CI failures without full variable/type debug
+# information in every dependency and PDB. Release profiles are unchanged.
+# rust-cache includes CARGO_* environment variables in its compatibility key.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
 jobs:
   build-windows-candidate:
     name: Build Windows ${{ matrix.architecture }} candidate
@@ -78,6 +85,10 @@ jobs:
           "CMAKE_ASM_COMPILER=clang-cl" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # Pinned Whisper's SVE implementation includes Linux-only headers.
+          # Keep other native ARM features; bypass only SVE/SME positive probes.
+          $policy = (Resolve-Path -LiteralPath 'scripts/cmake/windows-arm64-native.cmake').Path.Replace('\', '/')
+          "CMAKE_PROJECT_INCLUDE=$policy" >> $env:GITHUB_ENV
 
       - name: Configure portable x64 inference baseline
         if: matrix.architecture == 'x64'
@@ -117,13 +128,28 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
-          shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml', 'scripts/cmake/windows-x64-portable.cmake', 'scripts/verify-windows-x64-cpu-policy.ps1') }}
+          shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml', 'scripts/cmake/windows-x64-portable.cmake', 'scripts/cmake/windows-arm64-native.cmake', 'scripts/verify-windows-x64-cpu-policy.ps1') }}
 
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
+
+      # Keep the candidate's larger model set under its own primary key. A
+      # regular CI cache may restore the Norwegian smoke model, but the
+      # candidate run must still save its additional base.en artifact.
+      # `download-model` verifies every restored file against the immutable
+      # manifest before using it; this path contains models only, never app
+      # settings or logs.
+      - name: Cache downloaded models
+        uses: actions/cache@v5
+        with:
+          path: ~\AppData\Roaming\Sagascript\Models
+          key: windows-models-package-${{ matrix.architecture }}-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
+          restore-keys: |
+            windows-models-package-${{ matrix.architecture }}-
+            windows-models-
 
       - name: Pin validated Windows build identity
         run: node scripts/ci-build-identity.mjs --initialize
@@ -165,10 +191,16 @@ jobs:
         shell: pwsh
         run: ./scripts/verify-windows-x64-cpu-policy.ps1 -TargetRoot src-tauri/target -PolicyFile scripts/cmake/windows-x64-portable.cmake
 
+      - name: Verify debug ARM64 native CPU flags
+        if: matrix.architecture == 'arm64'
+        run: node scripts/report-windows-arm64-native.mjs src-tauri/target
+
       - name: Verify source before release CLI build
         run: node scripts/ci-build-identity.mjs --verify
 
       - name: Gate real Windows transcription
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         shell: pwsh
         run: |
           cargo build --release -p sagascript-cli --manifest-path src-tauri/Cargo.toml --target ${{ matrix.rust_target }}
@@ -234,12 +266,18 @@ jobs:
         run: node scripts/ci-build-identity.mjs --verify
 
       - name: Build unsigned internal installers
-        run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }}
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
+        run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }} --config scripts/tauri-ci-prebuilt.json
 
       - name: Verify packaged x64 inference CPU policy
         if: matrix.architecture == 'x64'
         shell: pwsh
         run: ./scripts/verify-windows-x64-cpu-policy.ps1 -TargetRoot src-tauri/target -PolicyFile scripts/cmake/windows-x64-portable.cmake
+
+      - name: Verify packaged ARM64 native CPU flags
+        if: matrix.architecture == 'arm64'
+        run: node scripts/report-windows-arm64-native.mjs src-tauri/target
 
       - name: Verify source after installer build
         run: node scripts/ci-build-identity.mjs --verify
