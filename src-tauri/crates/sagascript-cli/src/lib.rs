@@ -5,6 +5,11 @@ pub mod benchmark_dictation;
 pub mod glossary;
 pub mod latency;
 pub mod meeting;
+pub mod meeting_proposal;
+#[cfg(feature = "diarization")]
+pub mod meeting_reprocessing;
+#[cfg(feature = "diarization")]
+pub mod meeting_reprocessing_cli;
 pub mod models;
 pub mod open;
 // Live recording is optional (`record` feature, on by default) so a pure
@@ -253,7 +258,7 @@ EXAMPLES:
 
     /// Inspect, correct and export validated meeting transcript documents
     #[command(
-        long_about = "Read validated meeting transcript or review JSON documents and inspect, correct, undo, reset, or export them without modifying the input. Review audio-info and audio-range read only an explicitly selected, source-hash-matched local recording; audio-range emits bounded raw bytes for a player pipeline. No command persists changes, implicitly plays or copies audio, runs inference, changes settings, or contacts a network service.",
+        long_about = "Read validated meeting transcript or review JSON documents and inspect, correct, undo, reset, or export them without modifying the input. Proposal commands preserve previous corrections while comparing a new machine transcript; explicit --output destinations create new private files and never overwrite existing files. Review audio-info and audio-range read only an explicitly selected, source-hash-matched local recording; audio-range emits bounded raw bytes for a player pipeline. Document commands do not implicitly play or copy audio, run inference, change settings, or contact a network service.",
         after_long_help = "EXAMPLES:\n  sagascript meeting inspect meeting.json\n  sagascript meeting export meeting.json --format markdown\n  sagascript meeting rename meeting.json --speaker speaker-1 --label Chair\n  sagascript meeting merge meeting.json --from speaker-2 --into speaker-1"
     )]
     Meeting(meeting::MeetingArgs),

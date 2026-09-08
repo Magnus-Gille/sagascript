@@ -21,6 +21,11 @@ pub struct MeetingArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum MeetingAction {
+    /// Plan and explicitly execute selective meeting reprocessing.
+    #[cfg(feature = "diarization")]
+    Reprocess(crate::meeting_reprocessing_cli::ReprocessingArgs),
+    /// Preserve and explicitly migrate corrections to a new machine transcript.
+    Proposal(crate::meeting_proposal::ProposalArgs),
     /// Emit the validated document as JSON.
     Inspect { input: PathBuf },
     /// Export the validated document without modifying the input.
@@ -124,6 +129,9 @@ impl From<MeetingFormat> for MeetingExportFormat {
 
 pub fn run(args: MeetingArgs) -> Result<(), DictationError> {
     match args.action {
+        #[cfg(feature = "diarization")]
+        MeetingAction::Reprocess(args) => crate::meeting_reprocessing_cli::run(args),
+        MeetingAction::Proposal(args) => crate::meeting_proposal::run(args),
         MeetingAction::Review {
             action:
                 MeetingReviewAction::AudioRange {
@@ -145,6 +153,15 @@ pub fn run(args: MeetingArgs) -> Result<(), DictationError> {
 
 fn execute(args: MeetingArgs) -> Result<String, DictationError> {
     let operation = match args.action {
+        #[cfg(feature = "diarization")]
+        MeetingAction::Reprocess(_) => {
+            return Err(DictationError::SettingsError("reprocessing requires its explicit plan/execute command path".into()));
+        }
+        MeetingAction::Proposal(_) => {
+            return Err(DictationError::SettingsError(
+                "meeting proposal requires its explicit document command path".into(),
+            ));
+        }
         MeetingAction::Inspect { input } => (input, Operation::Inspect),
         MeetingAction::Export { input, format } => (input, Operation::Export(format)),
         MeetingAction::Rename {

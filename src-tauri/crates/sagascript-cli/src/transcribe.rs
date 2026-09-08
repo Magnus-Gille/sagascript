@@ -14,9 +14,9 @@ use sha2::{Digest, Sha256};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use sagascript_core::audio::decoder::{decode_audio_file, SUPPORTED_EXTENSIONS};
 #[cfg(feature = "diarization")]
 use sagascript_core::audio::decoder::decode_audio_file_with_control;
+use sagascript_core::audio::decoder::{decode_audio_file, SUPPORTED_EXTENSIONS};
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
@@ -171,6 +171,20 @@ struct FileTranscription {
     meeting: Option<MeetingTranscript>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CachePolicy {
+    Normal,
+    #[cfg(feature = "diarization")]
+    RefreshNew,
+}
+
+impl CachePolicy {
+    #[cfg(feature = "diarization")]
+    fn reads_existing_cache(self) -> bool {
+        matches!(self, Self::Normal)
+    }
+}
+
 #[cfg(feature = "diarization")]
 fn assemble_diarized_plain_text(segments: &[DiarizedSegment]) -> String {
     segments
@@ -182,7 +196,7 @@ fn assemble_diarized_plain_text(segments: &[DiarizedSegment]) -> String {
 }
 
 #[cfg(feature = "diarization")]
-fn prepare_diarized_plain_segments(
+pub(crate) fn prepare_diarized_plain_segments(
     segments: &[DiarizedSegment],
     language: Language,
     glossary: &Glossary,
@@ -292,7 +306,7 @@ fn checked_meeting_metadata(
 }
 
 #[cfg(feature = "diarization")]
-fn stable_file_sha256(
+pub(crate) fn stable_file_sha256(
     file: &Path,
     control: Option<&MeetingControl<'_>>,
 ) -> Result<String, DictationError> {
@@ -387,7 +401,7 @@ fn stable_file_sha256(
 }
 
 #[cfg(feature = "diarization")]
-fn verify_meeting_source_unchanged(
+pub(crate) fn verify_meeting_source_unchanged(
     file: &Path,
     source_sha256: &str,
     control: Option<&MeetingControl<'_>>,
@@ -402,7 +416,7 @@ fn verify_meeting_source_unchanged(
 }
 
 #[cfg(feature = "diarization")]
-fn meeting_transcript_from_plain_segments(
+pub(crate) fn meeting_transcript_from_plain_segments(
     source_sha256: String,
     language: Language,
     model: WhisperModel,
@@ -505,7 +519,18 @@ pub fn transcribe_meeting_file(
     glossary: &Glossary,
     backend: &WhisperBackend,
 ) -> Result<MeetingTranscript, DictationError> {
-    transcribe_meeting_file_inner(file, stored, language, model, glossary, backend, None)
+    transcribe_meeting_file_inner(
+        file,
+        stored,
+        language,
+        model,
+        glossary,
+        backend,
+        None,
+        0.75,
+        None,
+        CachePolicy::Normal,
+    )
 }
 
 /// Run the diarized file pipeline with explicit progress and cancellation
@@ -529,10 +554,79 @@ pub fn transcribe_meeting_file_with_control(
         glossary,
         backend,
         Some(control),
+        0.75,
+        None,
+        CachePolicy::Normal,
+    )
+}
+
+/// Run a full diarized meeting recomputation. This path never reads an
+/// existing cache; an optional output is committed only if its destination
+/// does not already exist.
+#[cfg(feature = "diarization")]
+#[allow(clippy::too_many_arguments)]
+pub fn transcribe_meeting_file_full(
+    file: &Path,
+    stored: &Settings,
+    language: Language,
+    model: WhisperModel,
+    glossary: &Glossary,
+    backend: &WhisperBackend,
+    control: Option<&MeetingControl<'_>>,
+    threshold: f32,
+    cache_output: Option<&Path>,
+) -> Result<MeetingTranscript, DictationError> {
+    if !threshold.is_finite() {
+        return Err(DictationError::SettingsError(
+            "diarize threshold must be a finite number".to_string(),
+        ));
+    }
+    if !(0.0..=2.0).contains(&threshold) {
+        return Err(DictationError::SettingsError(
+            "diarize threshold must be between 0.0 and 2.0".to_string(),
+        ));
+    }
+    if let Some(cache_output) = cache_output {
+        if paths_refer_to_same_file(file, cache_output) {
+            return Err(DictationError::SettingsError(
+                "--diarize-cache must not point to the input recording".to_string(),
+            ));
+        }
+        match std::fs::symlink_metadata(cache_output) {
+            Ok(_) => {
+                return Err(DictationError::FileDecodeError(format!(
+                    "Diarization cache output already exists: {}",
+                    cache_output.display()
+                )))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(DictationError::FileDecodeError(format!(
+                    "Failed to inspect diarization cache output '{}': {error}",
+                    cache_output.display()
+                )))
+            }
+        }
+    }
+    if let Some(control) = control {
+        control.check()?;
+    }
+    transcribe_meeting_file_inner(
+        file,
+        stored,
+        language,
+        model,
+        glossary,
+        backend,
+        control,
+        threshold,
+        cache_output,
+        CachePolicy::RefreshNew,
     )
 }
 
 #[cfg(feature = "diarization")]
+#[allow(clippy::too_many_arguments)]
 fn transcribe_meeting_file_inner(
     file: &Path,
     stored: &Settings,
@@ -541,6 +635,9 @@ fn transcribe_meeting_file_inner(
     glossary: &Glossary,
     backend: &WhisperBackend,
     control: Option<&MeetingControl<'_>>,
+    threshold: f32,
+    cache_output: Option<&Path>,
+    cache_policy: CachePolicy,
 ) -> Result<MeetingTranscript, DictationError> {
     let args = TranscribeArgs {
         files: vec![file.to_path_buf()],
@@ -554,8 +651,8 @@ fn transcribe_meeting_file_inner(
         clipboard: false,
         diarize: true,
         meeting_json: true,
-        diarize_threshold: 0.75,
-        diarize_cache: None,
+        diarize_threshold: threshold,
+        diarize_cache: cache_output.map(Path::to_path_buf),
         prompt: None,
         prompt_file: None,
         correct_hints: false,
@@ -576,6 +673,7 @@ fn transcribe_meeting_file_inner(
         glossary,
         &[],
         control,
+        cache_policy,
     )?;
     output.meeting.ok_or_else(|| {
         DictationError::TranscriptionFailed(
@@ -708,6 +806,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
                 &glossary,
                 &correction_vocabulary,
                 None,
+                CachePolicy::Normal,
             )
         },
         |execution| {
@@ -880,9 +979,10 @@ fn transcribe_file(
     glossary: &Glossary,
     correction_vocabulary: &[String],
     control: Option<&MeetingControl<'_>>,
+    cache_policy: CachePolicy,
 ) -> Result<FileTranscription, DictationError> {
     #[cfg(not(feature = "diarization"))]
-    let _ = control;
+    let _ = (control, cache_policy);
 
     let file_started = Instant::now();
     #[cfg(feature = "diarization")]
@@ -910,28 +1010,40 @@ fn transcribe_file(
     let cache_lookup_started = Instant::now();
     #[cfg(feature = "diarization")]
     let cache_identity = if args.diarize && args.diarize_cache.is_some() {
-        Some(crate::diarization_cache::CacheIdentity::for_input(
-            file,
-            language.whisper_code().unwrap_or("auto"),
-            model_id_string(model),
-            decoder_prompt.as_deref(),
-        )?)
+        Some(match meeting_source_sha256.as_deref() {
+            Some(source_sha256) => crate::diarization_cache::CacheIdentity::for_source_sha256(
+                source_sha256,
+                language.whisper_code().unwrap_or("auto"),
+                model_id_string(model),
+                decoder_prompt.as_deref(),
+            )?,
+            None => crate::diarization_cache::CacheIdentity::for_input(
+                file,
+                language.whisper_code().unwrap_or("auto"),
+                model_id_string(model),
+                decoder_prompt.as_deref(),
+            )?,
+        })
     } else {
         None
     };
     #[cfg(feature = "diarization")]
-    let cached = match (args.diarize_cache.as_deref(), cache_identity.as_ref()) {
-        (Some(path), Some(identity)) => match crate::diarization_cache::load(path, identity)? {
-            crate::diarization_cache::CacheLookup::Hit(cached) => {
-                eprintln!("Reusing diarization cache: {}", path.display());
-                Some(cached)
-            }
-            crate::diarization_cache::CacheLookup::Miss(reason) => {
-                eprintln!("Diarization cache miss ({reason}); computing analysis.");
-                None
-            }
-        },
-        _ => None,
+    let cached = if cache_policy.reads_existing_cache() {
+        match (args.diarize_cache.as_deref(), cache_identity.as_ref()) {
+            (Some(path), Some(identity)) => match crate::diarization_cache::load(path, identity)? {
+                crate::diarization_cache::CacheLookup::Hit(cached) => {
+                    eprintln!("Reusing diarization cache: {}", path.display());
+                    Some(cached)
+                }
+                crate::diarization_cache::CacheLookup::Miss(reason) => {
+                    eprintln!("Diarization cache miss ({reason}); computing analysis.");
+                    None
+                }
+            },
+            _ => None,
+        }
+    } else {
+        None
     };
     #[cfg(feature = "diarization")]
     let cache_lookup_seconds = cache_lookup_started.elapsed().as_secs_f64();
@@ -969,8 +1081,8 @@ fn transcribe_file(
         let decode_started = Instant::now();
         #[cfg(feature = "diarization")]
         let audio = if args.meeting_json {
-                let checkpoint = || meeting_check(control);
-                decode_audio_file_with_control(file, &checkpoint)?
+            let checkpoint = || meeting_check(control);
+            decode_audio_file_with_control(file, &checkpoint)?
         } else {
             decode_audio_file(file)?
         };
@@ -1127,17 +1239,20 @@ fn transcribe_file(
                     (args.diarize_cache.as_deref(), cache_identity.clone())
                 {
                     let cache_write_started = Instant::now();
-                    crate::diarization_cache::save(
-                        path,
-                        &crate::diarization_cache::DiarizationCache::new(
-                            identity,
-                            analysis.clone(),
-                            transcription.segments.clone(),
-                            coverage_profile.clone(),
-                            detected_language.clone(),
-                            language_regions.clone(),
-                        ),
-                    )?;
+                    let cache = crate::diarization_cache::DiarizationCache::new(
+                        identity,
+                        analysis.clone(),
+                        transcription.segments.clone(),
+                        coverage_profile.clone(),
+                        detected_language.clone(),
+                        language_regions.clone(),
+                    );
+                    match cache_policy {
+                        CachePolicy::Normal => crate::diarization_cache::save(path, &cache)?,
+                        CachePolicy::RefreshNew => {
+                            crate::diarization_cache::save_new(path, &cache)?
+                        }
+                    }
                     performance.cache_write_seconds = cache_write_started.elapsed().as_secs_f64();
                     eprintln!("Saved reusable diarization cache: {}", path.display());
                 }
@@ -1321,9 +1436,9 @@ fn transcribe_file(
         segment_timestamps: true,
         parallel_chunks: 1,
     };
-    opts.parallel_chunks = args.parallel.unwrap_or_else(|| {
-        recommended_parallel_chunks(audio.len(), model, opts.beam_size)
-    });
+    opts.parallel_chunks = args
+        .parallel
+        .unwrap_or_else(|| recommended_parallel_chunks(audio.len(), model, opts.beam_size));
     if opts.beam_size >= 2 {
         eprintln!("Beam search: width {}", opts.beam_size);
     }
@@ -1941,6 +2056,17 @@ mod parallel_chunks_tests {
     }
 }
 
+#[cfg(all(test, feature = "diarization"))]
+mod cache_policy_tests {
+    use super::CachePolicy;
+
+    #[test]
+    fn refresh_new_never_routes_to_existing_cache_loader() {
+        assert!(CachePolicy::Normal.reads_existing_cache());
+        assert!(!CachePolicy::RefreshNew.reads_existing_cache());
+    }
+}
+
 pub(crate) fn resolve_profile(
     settings: &Settings,
     profile_id: &str,
@@ -2431,11 +2557,19 @@ mod tests {
     #[test]
     fn meeting_document_clamps_finite_padded_end_without_mutating_source() {
         let segments = vec![DiarizedSegment {
-            start: 0.5, end: 1.2, speaker: "S0".into(), text: "last word".into(),
+            start: 0.5,
+            end: 1.2,
+            speaker: "S0".into(),
+            text: "last word".into(),
         }];
         let document = meeting_transcript_from_plain_segments(
-            "0".repeat(64), Language::English, WhisperModel::BaseEn, 1.0, &segments,
-        ).expect("last padded Whisper window can overshoot decoded audio");
+            "0".repeat(64),
+            Language::English,
+            WhisperModel::BaseEn,
+            1.0,
+            &segments,
+        )
+        .expect("last padded Whisper window can overshoot decoded audio");
         assert_eq!(document.segments[0].start, 0.5);
         assert_eq!(document.segments[0].end, 1.0);
         assert_eq!(document.segments[0].text, "last word");
@@ -2445,13 +2579,26 @@ mod tests {
     #[cfg(feature = "diarization")]
     #[test]
     fn meeting_document_still_rejects_nonfinite_and_outside_starts() {
-        for (start, end) in [(0.5, f64::NAN), (0.5, f64::INFINITY), (1.1, 1.2), (-0.1, 0.5)] {
+        for (start, end) in [
+            (0.5, f64::NAN),
+            (0.5, f64::INFINITY),
+            (1.1, 1.2),
+            (-0.1, 0.5),
+        ] {
             let segments = vec![DiarizedSegment {
-                start, end, speaker: "S0".into(), text: "invalid".into(),
+                start,
+                end,
+                speaker: "S0".into(),
+                text: "invalid".into(),
             }];
             assert!(meeting_transcript_from_plain_segments(
-                "0".repeat(64), Language::English, WhisperModel::BaseEn, 1.0, &segments,
-            ).is_err());
+                "0".repeat(64),
+                Language::English,
+                WhisperModel::BaseEn,
+                1.0,
+                &segments,
+            )
+            .is_err());
         }
     }
 
@@ -2781,8 +2928,8 @@ mod tests {
         assert_eq!(glossary.correct_text("merch").0, "merch");
         assert_eq!(glossary.correct_text("coffee").0, "fika");
 
-        let empty_override = effective_glossary(&settings, Some("swedish"), Some("  \n"), None)
-            .unwrap();
+        let empty_override =
+            effective_glossary(&settings, Some("swedish"), Some("  \n"), None).unwrap();
         assert_eq!(empty_override.correct_text("merch").0, "merch");
         assert_eq!(empty_override.correct_text("coffee").0, "fika");
     }

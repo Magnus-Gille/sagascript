@@ -18,6 +18,7 @@ mod app_controller;
 mod commands;
 mod meeting_jobs;
 mod meeting_review_commands;
+mod meeting_reprocessing_commands;
 mod meeting_media_range;
 mod meeting_media;
 mod events;
@@ -1033,6 +1034,13 @@ fn main() {
             commands::get_build_info,
             commands::transcribe_file,
             meeting_jobs::begin_meeting_file,
+            meeting_jobs::begin_meeting_reprocessing,
+            meeting_reprocessing_commands::plan_meeting_reprocessing,
+            meeting_reprocessing_commands::preview_meeting_proposal,
+            meeting_reprocessing_commands::resolve_meeting_proposal,
+            meeting_reprocessing_commands::accept_meeting_proposal,
+            meeting_reprocessing_commands::save_meeting_proposal,
+            meeting_reprocessing_commands::open_meeting_proposal,
             meeting_jobs::get_meeting_job,
             meeting_jobs::cancel_meeting_job,
             meeting_jobs::rename_meeting_speaker,
