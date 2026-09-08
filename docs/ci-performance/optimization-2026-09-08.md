@@ -1,7 +1,7 @@
 # CI optimization experiment — September 8, 2026
 
 Tracking: [issue #178](https://github.com/Magnus-Gille/sagascript/issues/178),
-[draft PR #226](https://github.com/Magnus-Gille/sagascript/pull/226).
+[PR #226](https://github.com/Magnus-Gille/sagascript/pull/226).
 
 ## Baseline and changes
 
@@ -97,6 +97,54 @@ as runner-cost tradeoffs. The conductor also added explicit assertions that
 macOS checks remain blocking and only the two existing Windows smoke exceptions
 remain nonblocking.
 
+## Cached comparison and merge review
+
+The nearest main control, [34216174578 attempt 1](https://github.com/Magnus-Gille/sagascript/actions/runs/34216174578/attempts/1),
+used `b661415f6db99e64bad95cfdd766e7c359733b1a`. The corrected cached PR repeat,
+[34224809046 attempt 2](https://github.com/Magnus-Gille/sagascript/actions/runs/34224809046/attempts/2),
+used `fcd1599f840f4005c97416c076538d8ad71eaaf5` and passed all seven jobs.
+
+| Metric | Main control | Cached PR repeat |
+|---|---:|---:|
+| First job start to last job end | 10m58s | 8m01s |
+| Summed runner time | 18m55s | 23m24s |
+| macOS native build step | 2m15s | 3m12s |
+| Windows native build step | 5m08s | 5m39s |
+
+This is **26.9% less waiting** and **23.7% more runner time**. Native compilation
+itself did not get faster. Summed runner time is not billed cost. This single
+cached comparison is not a stable percentile result: triggers differ (main push
+versus PR rerun), although application Rust source and these three runner images
+were unchanged. The corrected first attempt passed in 15m31s with cold validation
+caches. Issue #178 remains open for faster compilation, packaging, lower runner
+time, and the larger acceptance cohorts.
+
+The [unsigned candidate repeat](https://github.com/Magnus-Gille/sagascript/actions/runs/34224809050)
+passed x64 in 18m51s, versus 16m48s at a different older application revision;
+this does not establish a packaging gain. ARM64 failed after the image changed
+from `20260830.155.1` (Clang 20.1.6) to `20260906.161.1` (Clang 22.1.8).
+Both ARM attempts missed their image-scoped Rust cache. The new native probe
+selected SVE, which makes pinned `whisper-rs-sys` 0.14.1 include Linux-only
+`sys/prctl.h` on Windows. The preceding cold candidate
+[34221630681](https://github.com/Magnus-Gille/sagascript/actions/runs/34221630681)
+passed both architectures. The image compatibility failure is not a timing sample.
+
+The merge-review correction adds a Windows ARM64-only CMake hook that forces
+only the pinned SVE/SME positive probe caches off. It preserves native tuning and
+dotprod/i8mm probes, and lets upstream test the corresponding disabling flags.
+The hook has Windows/ARM64/pointer-size guards and participates in the native
+cache key. Regression tests exercise the actual CMake source-run check module
+and reject wrong targets. Dependency updates must re-audit these internal probe
+names. The native candidate run must confirm `+nosve+nosme` in generated flags,
+both architecture packages, and the existing transcription gates before merge;
+its result is recorded in PR #226. This compatibility correction is not claimed
+as a compilation or inference speed improvement.
+
+Merging this PR activates the main-push CI workflow. Windows candidates remain
+PR/manual-triggered, signed macOS test builds remain manual, and application
+releases remain tag-triggered. No application release is needed for these CI
+changes. Reverting the PR restores the prior workflow and tooling behavior.
+
 ## Delegated work
 
 The conductor integrates changes, checks results, and owns publication and the
@@ -113,3 +161,7 @@ final performance assessment. Bounded tasks used native Luna agents:
 | Python workflow fixture correction | gpt-5.6-luna / high | Red/green regression, 127 Python tests and frontend suite rerun by conductor | pass |
 | Release code-generation experiment | gpt-5.6-luna / xhigh | Paired CLI builds and four controlled app builds; logs and sizes inspected by conductor | pass: measured tradeoff, setting retained |
 | Follow-up rebuild diagnosis | gpt-5.6-luna / xhigh | Historical Cargo logs and source inspection | partial: stale worktree context corrected; exact invalidation cause remains unproven |
+| Merge review: gate parity and frontend reuse | gpt-5.6-luna / high | Focused tests plus conductor inspection; fresh independent Claude Sonnet 5 review | pass |
+| ARM64 image diagnosis | gpt-5.6-luna / xhigh | Pinned CMake/header source and old/new compiler logs checked | pass |
+| ARM64 regression tests | gpt-5.6-luna / high | Red/green CMake tests; conductor corrected native flag name and strengthened diagnostics/module coverage | partial |
+| Cleanup inventory and evidence archive | gpt-5.6-luna / high | Clean status, patch-ID equivalence, source/copy SHA-256 checks repeated by conductor | pass |
