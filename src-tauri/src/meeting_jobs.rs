@@ -303,7 +303,7 @@ pub enum ExportFormat {
 }
 
 impl ExportFormat {
-    fn details(self) -> (MeetingExportFormat, &'static str) {
+    pub(crate) fn details(self) -> (MeetingExportFormat, &'static str) {
         match self {
             Self::Plain => (MeetingExportFormat::Plain, "txt"),
             Self::Markdown => (MeetingExportFormat::Markdown, "md"),
@@ -347,7 +347,7 @@ pub async fn save_meeting_export(
 
 /// A user-selected NEW destination only; never truncate an existing recording
 /// or document, even if a native dialog offered replacement. Publish atomically.
-fn write_new_export(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_new_export(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let parent = path.parent().ok_or("Choose a local export folder.")?;
     let temporary = parent.join(format!(".sagascript-export-{}.tmp", uuid::Uuid::new_v4()));

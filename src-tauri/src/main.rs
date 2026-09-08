@@ -17,6 +17,9 @@ mod logging;
 mod app_controller;
 mod commands;
 mod meeting_jobs;
+mod meeting_review_commands;
+mod meeting_media_range;
+mod meeting_media;
 mod events;
 mod hotkey;
 mod overlay;
@@ -556,6 +559,7 @@ fn main() {
     info!("Sagascript starting...");
 
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("meeting-audio", meeting_media::protocol)
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if !second_instance_requests_settings(&args) {
                 info!("Background second-instance launch ignored");
@@ -610,6 +614,7 @@ fn main() {
             app.manage(controller);
             app.manage(whisper);
             app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
+            app.manage(meeting_media::SharedMeetingAudio::default());
             // Process-wide hotkey registration health (see hotkey::health for
             // why this is deliberately independent of the AppController
             // mutex). Assumed healthy until the synchronous registration
@@ -1033,6 +1038,14 @@ fn main() {
             meeting_jobs::rename_meeting_speaker,
             meeting_jobs::merge_meeting_speakers,
             meeting_jobs::save_meeting_export,
+            meeting_review_commands::create_meeting_review,
+            meeting_review_commands::apply_meeting_corrections,
+            meeting_review_commands::undo_meeting_review,
+            meeting_review_commands::reset_meeting_review,
+            meeting_review_commands::open_meeting_review,
+            meeting_review_commands::save_meeting_review,
+            meeting_media::attach_meeting_audio,
+            meeting_media::detach_meeting_audio,
             commands::get_supported_formats,
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,

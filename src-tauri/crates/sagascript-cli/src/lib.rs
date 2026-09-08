@@ -251,9 +251,9 @@ EXAMPLES:
     )]
     LatencyReport(latency::LatencyReportArgs),
 
-    /// Inspect and export validated meeting transcript documents
+    /// Inspect, correct and export validated meeting transcript documents
     #[command(
-        long_about = "Read a validated meeting transcript JSON document and inspect, export, rename, or merge it without modifying the input. This command never persists changes, reads source audio, runs inference, changes settings, or contacts a network service.",
+        long_about = "Read validated meeting transcript or review JSON documents and inspect, correct, undo, reset, or export them without modifying the input. Review audio-info and audio-range read only an explicitly selected, source-hash-matched local recording; audio-range emits bounded raw bytes for a player pipeline. No command persists changes, implicitly plays or copies audio, runs inference, changes settings, or contacts a network service.",
         after_long_help = "EXAMPLES:\n  sagascript meeting inspect meeting.json\n  sagascript meeting export meeting.json --format markdown\n  sagascript meeting rename meeting.json --speaker speaker-1 --label Chair\n  sagascript meeting merge meeting.json --from speaker-2 --into speaker-1"
     )]
     Meeting(meeting::MeetingArgs),

@@ -7,6 +7,8 @@ pub mod audio;
 pub mod download;
 pub mod error;
 pub mod meeting;
+pub mod meeting_media;
+pub mod meeting_review;
 pub mod settings;
 pub mod transcription;
 
