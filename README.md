@@ -173,3 +173,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and ho
 ## License
 
 [MIT](LICENSE)
+
+<!-- Issue 227: temporary docs-only CI timing probe; do not merge. -->
