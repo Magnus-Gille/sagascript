@@ -245,7 +245,7 @@ jobs:
       - name: Build unsigned internal installers
         env:
           CARGO_LOG: cargo::core::compiler::fingerprint=info
-        run: npx tauri build --config scripts/tauri-ci-prebuilt.json --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }}
+        run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }} --config scripts/tauri-ci-prebuilt.json
 
       - name: Verify packaged x64 inference CPU policy
         if: matrix.architecture == 'x64'
