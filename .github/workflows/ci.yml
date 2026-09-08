@@ -16,6 +16,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Keep source/line backtraces for CI failures without full variable/type debug
+# information in every dependency and PDB. Release profiles are unchanged.
+# rust-cache includes CARGO_* environment variables in its compatibility key.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
 jobs:
   check-macos:
     runs-on: macos-14
@@ -146,7 +153,7 @@ jobs:
       # release.yml, so skipping bundling here removes duplicate work without
       # weakening native macOS coverage.
       - name: Build native release binary (no installer)
-        run: npx tauri build --no-bundle
+        run: npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle
 
       - name: Verify native release binary
         run: |
@@ -400,7 +407,7 @@ jobs:
       # release.yml, so skipping bundling here removes duplicate work without
       # weakening native Windows coverage.
       - name: Build native release binary (no installer)
-        run: npx tauri build --no-bundle
+        run: npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle
 
       - name: Verify native release binary
         run: |

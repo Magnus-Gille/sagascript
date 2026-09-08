@@ -20,6 +20,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
+# Keep source/line backtraces for CI failures without full variable/type debug
+# information in every dependency and PDB. Release profiles are unchanged.
+# rust-cache includes CARGO_* environment variables in its compatibility key.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+
 jobs:
   build-windows-candidate:
     name: Build Windows ${{ matrix.architecture }} candidate
@@ -169,6 +176,8 @@ jobs:
         run: node scripts/ci-build-identity.mjs --verify
 
       - name: Gate real Windows transcription
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
         shell: pwsh
         run: |
           cargo build --release -p sagascript-cli --manifest-path src-tauri/Cargo.toml --target ${{ matrix.rust_target }}
@@ -234,7 +243,9 @@ jobs:
         run: node scripts/ci-build-identity.mjs --verify
 
       - name: Build unsigned internal installers
-        run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }}
+        env:
+          CARGO_LOG: cargo::core::compiler::fingerprint=info
+        run: npx tauri build --config scripts/tauri-ci-prebuilt.json --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }}
 
       - name: Verify packaged x64 inference CPU policy
         if: matrix.architecture == 'x64'
