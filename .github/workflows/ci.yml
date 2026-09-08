@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, codex/issue-227-ci-benchmark-base]
 
 # Cancel superseded PR runs (#178): pushes to a PR share one group, so a fix
 # cancels the stale run instead of burning runner-minutes compiling it twice.
