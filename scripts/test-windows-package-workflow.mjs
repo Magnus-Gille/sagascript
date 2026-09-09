@@ -133,6 +133,47 @@ test("Windows ARM64 disables unsupported scalable vectors before restoring nativ
   assert.ok(end < workflow.indexOf("name: Cache Rust dependencies"));
 });
 
+test("Windows ARM64 pins and validates the LLVM toolchain before native configuration", () => {
+  const pinStart = workflow.indexOf("name: Install pinned LLVM for ARM64 bindgen");
+  const nativeStart = workflow.indexOf("name: Configure native ARM64 C and C++ toolchain");
+  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
+  assert.ok(pinStart >= 0 && nativeStart > pinStart && cacheStart > nativeStart);
+
+  const pin = workflow.slice(pinStart, nativeStart);
+  assert.match(pin, /if: matrix\.architecture == 'arm64'/);
+  assert.match(
+    pin,
+    /https:\/\/github\.com\/llvm\/llvm-project\/releases\/download\/llvmorg-20\.1\.8\/LLVM-20\.1\.8-woa64\.exe/,
+  );
+  assert.match(pin, /7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e/);
+
+  const download = pin.indexOf("Invoke-WebRequest");
+  const verifyHash = pin.indexOf("Get-FileHash");
+  const execute = pin.indexOf("Start-Process");
+  assert.ok(download >= 0 && verifyHash > download && execute > verifyHash);
+  assert.match(pin, /-Algorithm SHA256/);
+  assert.match(pin, /if \(\$actualHash -ne \$expectedHash\)/);
+  assert.match(pin, /-ArgumentList @\('\/S', "\/D=\$installRoot"\)/);
+  assert.match(pin, /if \(\$process\.ExitCode -ne 0\)/);
+  assert.match(pin, /\[guid\]::NewGuid\(\)/);
+
+  assert.match(pin, /clang-cl\.exe/);
+  assert.match(pin, /libclang\.dll/);
+  assert.match(pin, /Test-Path -LiteralPath \$clangPath -PathType Leaf/);
+  assert.match(pin, /Test-Path -LiteralPath \$libclangPath -PathType Leaf/);
+  assert.match(pin, /clang version 20\\\.1\\\.8/);
+  assert.match(pin, /Write-Output \$clangVersion/);
+  assert.match(pin, /\[regex\]::Match\(\$clangVersion/);
+  assert.match(pin, /Target:\\s\*\(\?<target>\\S\+\)/);
+  assert.match(pin, /aarch64-pc-windows-msvc/);
+  assert.match(pin, /\$targetMatch\.Groups\['target'\]\.Value -ne 'aarch64-pc-windows-msvc'/);
+  assert.doesNotMatch(pin, /-dumpmachine/);
+  assert.match(pin, /\$llvmBin \| Out-File -FilePath \$env:GITHUB_PATH/);
+  assert.match(pin, /LIBCLANG_PATH=\$llvmBin/);
+  assert.match(pin, /rust-bindgen#3264/);
+  assert.doesNotMatch(pin, /WHISPER_DONT_GENERATE_BINDINGS|disable ABI asserts/);
+});
+
 test("Windows x64 caches and artifacts use an explicit verified CPU baseline", () => {
   const policyStart = workflow.indexOf("name: Configure portable x64 inference baseline");
   const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
