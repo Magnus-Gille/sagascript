@@ -68,6 +68,57 @@ jobs:
             throw "Expected native ${{ matrix.architecture }} runner, got $runnerArchitecture"
           }
 
+      - name: Install pinned LLVM for ARM64 bindgen
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          # Upstream rust-bindgen#3264: LLVM 22 is incompatible with bindgen 0.71.
+          $llvmUrl = 'https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-woa64.exe'
+          $expectedHash = '7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e'
+          $installerPath = Join-Path $env:RUNNER_TEMP 'LLVM-20.1.8-woa64.exe'
+          $installRoot = Join-Path $env:RUNNER_TEMP ('sagascript-llvm-20.1.8-' + [guid]::NewGuid().ToString('N'))
+          $llvmBin = Join-Path $installRoot 'bin'
+
+          Invoke-WebRequest -Uri $llvmUrl -OutFile $installerPath
+          $actualHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) {
+            throw "LLVM installer SHA256 mismatch: expected $expectedHash, got $actualHash"
+          }
+
+          New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+          # NSIS requires /D to be the final, unquoted argument.
+          $process = Start-Process -FilePath $installerPath -ArgumentList @('/S', "/D=$installRoot") -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "LLVM installer failed with exit code $($process.ExitCode)"
+          }
+
+          $clangPath = Join-Path $llvmBin 'clang-cl.exe'
+          $libclangPath = Join-Path $llvmBin 'libclang.dll'
+          if (-not (Test-Path -LiteralPath $clangPath -PathType Leaf)) {
+            throw "Pinned LLVM clang-cl.exe is missing: $clangPath"
+          }
+          if (-not (Test-Path -LiteralPath $libclangPath -PathType Leaf)) {
+            throw "Pinned LLVM libclang.dll is missing: $libclangPath"
+          }
+
+          $clangVersionOutput = & $clangPath --version 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Pinned clang-cl --version failed with exit code $LASTEXITCODE"
+          }
+          $clangVersion = ($clangVersionOutput -join "`n").Trim()
+          Write-Output $clangVersion
+          if ($clangVersion -notmatch '(?m)^clang version 20\.1\.8(?:\s|$)') {
+            throw "Expected clang version 20.1.8, got: $clangVersion"
+          }
+
+          $targetMatch = [regex]::Match($clangVersion, '(?m)^Target:\s*(?<target>\S+)\s*$')
+          if (-not $targetMatch.Success -or $targetMatch.Groups['target'].Value -ne 'aarch64-pc-windows-msvc') {
+            throw "Expected native clang target aarch64-pc-windows-msvc in clang version output"
+          }
+
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Configure native ARM64 C and C++ toolchain
         if: matrix.architecture == 'arm64'
         shell: pwsh
