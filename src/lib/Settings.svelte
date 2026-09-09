@@ -115,9 +115,17 @@
   // Hotkey recorder state
   let recordingProfileId: string | null = $state(null);
   type ExplicitShortcutSlot = "push_to_talk_shortcut" | "toggle_shortcut";
-  const shortcutControls: { slot: ExplicitShortcutSlot; label: string }[] = [
-    { slot: "push_to_talk_shortcut", label: "Push to talk" },
-    { slot: "toggle_shortcut", label: "Toggle" },
+  const shortcutControls: { slot: ExplicitShortcutSlot; label: string; helper: string }[] = [
+    {
+      slot: "push_to_talk_shortcut",
+      label: "Hold to record",
+      helper: "Hold the shortcut while speaking. Release to stop.",
+    },
+    {
+      slot: "toggle_shortcut",
+      label: "Press to start/stop",
+      helper: "Press the shortcut to start recording. Press it again to stop.",
+    },
   ];
   let recordingShortcutSlot: ExplicitShortcutSlot | null = $state(null);
   let hotkeyCaptureGeneration = 0;
@@ -1664,6 +1672,7 @@
                         onclick={() => beginHotkeyCapture(profile.id, shortcutControl.slot)}
                       >{formatHotkeyDisplay(displayProfileShortcut(profile, shortcutControl.slot, settings.hotkey_mode) || "Not set")}</button>
                     {/if}
+                    <div class="shortcut-helper">{shortcutControl.helper}</div>
                     {#if profile.push_to_talk_shortcut && profile.toggle_shortcut}
                       <button
                         type="button"
@@ -1711,7 +1720,7 @@
             </div>
           {/if}
           <div class="hotkey-hint">
-            Push to talk starts while held; Toggle starts and stops with each press. They are independent and either or both may be configured. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}{" "}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
+            Each shortcut above is independent and either or both may be configured. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}{" "}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}
           </div>
         </div>
 
@@ -2362,6 +2371,12 @@
     color: var(--text-muted);
     font-size: 11px;
     font-weight: 600;
+  }
+
+  .shortcut-helper {
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.35;
   }
 
   .shortcut-clear {

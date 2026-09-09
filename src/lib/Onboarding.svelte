@@ -735,7 +735,13 @@
                 <kbd>{part}</kbd>
               {/each}
             </div>
-            <p class="hotkey-hint">Hold to record, release to transcribe</p>
+            <p class="hotkey-hint hotkey-mode-intro">Configure separate shortcuts for these recording modes in Dictate.</p>
+            <div class="hotkey-mode-copy">
+              <p class="hotkey-mode-label">Hold to record</p>
+              <p class="hotkey-hint">Hold the shortcut while speaking. Release to stop.</p>
+              <p class="hotkey-mode-label">Press to start/stop</p>
+              <p class="hotkey-hint">Press the shortcut to start recording. Press it again to stop.</p>
+            </div>
           </div>
         {:else}
           <p class="description">
@@ -1038,6 +1044,19 @@
     font-size: 12px;
     color: var(--text-muted);
     margin: 0;
+  }
+
+  .hotkey-mode-copy {
+    display: grid;
+    gap: 2px;
+    text-align: left;
+  }
+
+  .hotkey-mode-label {
+    font-size: 12px;
+    color: var(--text);
+    font-weight: 600;
+    margin: 4px 0 0;
   }
 
   strong {
