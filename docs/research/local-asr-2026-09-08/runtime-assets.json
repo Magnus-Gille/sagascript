@@ -1,0 +1,54 @@
+{
+  "observed_date": "2026-09-08",
+  "runtime": "NVIDIA/NeMo-Speech.cpp",
+  "release": "v0.1.0",
+  "published_at": "2026-08-19T16:06:22Z",
+  "source": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.1.0",
+  "evidence_type": "publisher_release_metadata_not_executed",
+  "assets": [
+    {
+      "name": "nemo-speech-0.1.0-macos-aarch64-cpu.tar.gz",
+      "url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.1.0/nemo-speech-0.1.0-macos-aarch64-cpu.tar.gz",
+      "bytes": 3299661,
+      "sha256": "971661d38d4bf97a63c528d13041a964316d25068d8df045e5b4839848092f25"
+    },
+    {
+      "name": "nemo-speech-0.1.0-macos-aarch64-metal.tar.gz",
+      "url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.1.0/nemo-speech-0.1.0-macos-aarch64-metal.tar.gz",
+      "bytes": 3465028,
+      "sha256": "f1dff4f9dd9c96214f8cb78b982812459132df8a4ad1a42409fd94de4a366244"
+    },
+    {
+      "name": "nemo-speech-0.1.0-macos-x86_64-cpu.tar.gz",
+      "url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.1.0/nemo-speech-0.1.0-macos-x86_64-cpu.tar.gz",
+      "bytes": 3618245,
+      "sha256": "042a4612e07460fab6a39b5d862aa1e39d0ac3eaedfdb979f3f5fc12de510c20"
+    },
+    {
+      "name": "nemo-speech-0.1.0-windows-x86_64-cpu.zip",
+      "url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.1.0/nemo-speech-0.1.0-windows-x86_64-cpu.zip",
+      "bytes": 4730421,
+      "sha256": "5e4ea81046012edcd77fd8848de8eefb5a4ba38cc26f52eb544ab184695a75d6"
+    },
+    {
+      "name": "nemo-speech-0.1.0-windows-x86_64-cuda.zip",
+      "url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.1.0/nemo-speech-0.1.0-windows-x86_64-cuda.zip",
+      "bytes": 106044768,
+      "sha256": "ba024204e76ca2fa4eefa8787506c3c49e418147f627f60cf9206a582b60089c"
+    },
+    {
+      "name": "nemo-speech-0.1.0-windows-x86_64-vulkan.zip",
+      "url": "https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.1.0/nemo-speech-0.1.0-windows-x86_64-vulkan.zip",
+      "bytes": 21967184,
+      "sha256": "b5e7b04a637da4eb25a60253e2db65774998e8dfb48c08b4db763009b82ac7ac"
+    }
+  ],
+  "windows_arm64_asset_available": false,
+  "installed_bytes": null,
+  "dependency_bytes": null,
+  "notes": [
+    "Model bytes are additional. CUDA/Vulkan drivers and host dependencies are not included.",
+    "Release archives advertise these platforms; binaries were not downloaded or executed.",
+    "Platform text normalization differs: use raw decoder output for paired scoring."
+  ]
+}

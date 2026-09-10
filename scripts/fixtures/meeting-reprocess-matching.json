@@ -1,0 +1,186 @@
+[
+  {
+    "name": "unchanged",
+    "before": [
+      [
+        0,
+        5,
+        "hello"
+      ],
+      [
+        6,
+        10,
+        "world"
+      ]
+    ],
+    "after": [
+      [
+        6,
+        10,
+        "world"
+      ],
+      [
+        0,
+        5,
+        "hello"
+      ]
+    ],
+    "expected": [
+      1,
+      0
+    ]
+  },
+  {
+    "name": "shifted",
+    "before": [
+      [
+        0,
+        5,
+        "test"
+      ]
+    ],
+    "after": [
+      [
+        1,
+        6,
+        "test"
+      ]
+    ],
+    "expected": [
+      null
+    ]
+  },
+  {
+    "name": "split",
+    "before": [
+      [
+        0,
+        10,
+        "example"
+      ]
+    ],
+    "after": [
+      [
+        0,
+        5,
+        "exampl"
+      ],
+      [
+        5,
+        10,
+        "e"
+      ]
+    ],
+    "expected": [
+      null
+    ]
+  },
+  {
+    "name": "joined",
+    "before": [
+      [
+        0,
+        5,
+        "join"
+      ],
+      [
+        6,
+        10,
+        "me"
+      ]
+    ],
+    "after": [
+      [
+        0,
+        12,
+        "joinme"
+      ]
+    ],
+    "expected": [
+      null,
+      null
+    ]
+  },
+  {
+    "name": "repeated_distinct_times",
+    "before": [
+      [
+        0,
+        5,
+        "same"
+      ],
+      [
+        10,
+        15,
+        "same"
+      ]
+    ],
+    "after": [
+      [
+        0,
+        5,
+        "same"
+      ],
+      [
+        10,
+        15,
+        "same"
+      ]
+    ],
+    "expected": [
+      0,
+      1
+    ]
+  },
+  {
+    "name": "duplicate_before",
+    "before": [
+      [
+        0,
+        5,
+        "dup"
+      ],
+      [
+        0,
+        5,
+        "dup"
+      ]
+    ],
+    "after": [
+      [
+        0,
+        5,
+        "dup"
+      ]
+    ],
+    "expected": [
+      null,
+      null
+    ]
+  },
+  {
+    "name": "duplicate_after",
+    "before": [
+      [
+        0,
+        5,
+        "single"
+      ]
+    ],
+    "after": [
+      [
+        0,
+        5,
+        "single"
+      ],
+      [
+        0,
+        5,
+        "single"
+      ]
+    ],
+    "expected": [
+      null
+    ]
+  }
+]

@@ -15,6 +15,8 @@ pub mod event {
     /// Hotkey registration health changed (registered OK <-> failed to
     /// register). Payload: `{ ok: bool, error: string | null, shortcut: string }`.
     pub const HOTKEY_REGISTRATION_CHANGED: &str = "hotkey-registration-changed";
+    /// Dictation profile selected by the shortcut that started recording.
+    pub const ACTIVE_HOTKEY_PROFILE_CHANGED: &str = "active-hotkey-profile-changed";
 }
 
 #[cfg(test)]
@@ -31,6 +33,7 @@ mod tests {
             MODEL_READY,
             TRANSCRIPTION_PROGRESS,
             HOTKEY_REGISTRATION_CHANGED,
+            ACTIVE_HOTKEY_PROFILE_CHANGED,
         ];
         for name in events {
             assert!(!name.is_empty());
@@ -55,6 +58,7 @@ mod tests {
             MODEL_READY,
             TRANSCRIPTION_PROGRESS,
             HOTKEY_REGISTRATION_CHANGED,
+            ACTIVE_HOTKEY_PROFILE_CHANGED,
         ];
         for (i, a) in events.iter().enumerate() {
             for (j, b) in events.iter().enumerate() {

@@ -37,6 +37,8 @@ pub mod transcription {
     pub const FAILED: &str = "transcription_failed";
     pub const MODEL_LOADING: &str = "model_loading";
     pub const MODEL_LOADED: &str = "model_loaded";
+    pub const NO_SPEECH: &str = "no_speech_detected";
+    pub const PHASE_TIMINGS: &str = "dictation_phase_timings";
 }
 
 #[allow(dead_code)]

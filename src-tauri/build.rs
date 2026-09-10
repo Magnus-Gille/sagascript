@@ -14,6 +14,33 @@ fn metadata_value(key: &str, fallback: impl FnOnce() -> String) -> String {
     std::env::var(key).ok().unwrap_or_else(fallback)
 }
 
+fn local_git_hash() -> String {
+    let hash =
+        command_output(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
+    let dirty = command_output(&["status", "--porcelain=v1", "--untracked-files=all"])
+        .is_some_and(|status| !status.is_empty());
+    if dirty {
+        format!("{hash}-dirty")
+    } else {
+        hash
+    }
+}
+
+fn emit_source_rerun_triggers() {
+    // Watch source trees that affect the binary's identity without watching
+    // the package root, which would include target/ and cause rebuild loops.
+    for path in [
+        "src",
+        "crates",
+        "../src",
+        "../package-lock.json",
+        "Cargo.lock",
+        "Cargo.toml",
+    ] {
+        println!("cargo:rerun-if-changed={path}");
+    }
+}
+
 fn emit_git_rerun_triggers() {
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_GIT_HASH");
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_BUILD_DATE");
@@ -21,6 +48,7 @@ fn emit_git_rerun_triggers() {
 
     if let Some(git_dir) = command_output(&["rev-parse", "--absolute-git-dir"]) {
         println!("cargo:rerun-if-changed={git_dir}/HEAD");
+        println!("cargo:rerun-if-changed={git_dir}/index");
         if let Some(reference) = command_output(&["symbolic-ref", "-q", "HEAD"]) {
             if let Some(reference_path) =
                 command_output(&["rev-parse", "--git-path", reference.as_str()])
@@ -36,10 +64,9 @@ fn emit_git_rerun_triggers() {
 
 fn main() {
     emit_git_rerun_triggers();
+    emit_source_rerun_triggers();
 
-    let git_hash = metadata_value("SAGASCRIPT_GIT_HASH", || {
-        command_output(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".to_string())
-    });
+    let git_hash = metadata_value("SAGASCRIPT_GIT_HASH", local_git_hash);
     let build_date = metadata_value("SAGASCRIPT_BUILD_DATE", || {
         chrono::Utc::now().format("%Y-%m-%d").to_string()
     });

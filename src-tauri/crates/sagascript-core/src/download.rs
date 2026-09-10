@@ -364,7 +364,11 @@ fn verify_file_detailed(
 
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
+    // Keep the multi-megabyte artifact hash buffer off the thread stack. The
+    // CLI verifier runs on the process's main/Tokio thread on Windows, whose
+    // stack is small enough for this allocation to trigger STATUS_STACK_OVERFLOW
+    // (especially on ARM64).
+    let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
         let read = reader.read(&mut buffer).map_err(|e| {
             VerificationFailure::Other(DictationError::ModelDownloadFailed(format!(
@@ -656,6 +660,35 @@ mod tests {
         assert!(verify_file(&path, expected).is_ok());
         std::fs::write(&path, b"tampered model").unwrap();
         assert!(verify_file(&path, expected).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn verify_file_works_on_a_small_stack() {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.bin");
+        std::fs::write(&path, b"verified model").unwrap();
+        let expected = DownloadIntegrity {
+            sha256: "6c736b3dfa943bf4e7c61df78d1dfcad9a3d8b56369f0559670497b19127e74d",
+            size: 14,
+        };
+
+        // This is intentionally below the verifier's former 1 MiB stack
+        // buffer. A regression therefore fails on Windows with a stack
+        // overflow instead of depending on the host process stack size.
+        let result = std::thread::Builder::new()
+            .name("sagascript-small-stack-verification".to_string())
+            .stack_size(256 * 1024)
+            .spawn({
+                let path = path.clone();
+                move || verify_file(&path, expected)
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+
+        assert!(result.is_ok());
         let _ = std::fs::remove_dir_all(dir);
     }
 

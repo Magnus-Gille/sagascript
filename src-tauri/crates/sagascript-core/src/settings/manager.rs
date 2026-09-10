@@ -1,6 +1,10 @@
+use std::collections::{BTreeMap, HashSet};
+
 use serde::{Deserialize, Serialize};
 
-use crate::download::DownloadIntegrity;
+use super::{canonical_hotkey, validate_hotkey};
+
+use crate::{download::DownloadIntegrity, transcription::Glossary};
 
 #[cfg(target_os = "macos")]
 const WHISPER_CPP_REVISION: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
@@ -16,6 +20,8 @@ pub enum Language {
     Swedish,
     #[serde(rename = "no")]
     Norwegian,
+    #[serde(rename = "fi")]
+    Finnish,
     #[serde(rename = "auto")]
     Auto,
 }
@@ -26,6 +32,7 @@ impl Language {
             Language::English => "English",
             Language::Swedish => "Swedish",
             Language::Norwegian => "Norwegian",
+            Language::Finnish => "Finnish",
             Language::Auto => "Auto-detect",
         }
     }
@@ -36,6 +43,7 @@ impl Language {
             Language::English => Some("en"),
             Language::Swedish => Some("sv"),
             Language::Norwegian => Some("no"),
+            Language::Finnish => Some("fi"),
             Language::Auto => None,
         }
     }
@@ -54,6 +62,8 @@ pub enum WhisperModel {
     #[serde(rename = "base")]
     #[default]
     Base,
+    #[serde(rename = "fi-whisper-tiny")]
+    FinnishWhisperTiny,
     #[serde(rename = "kb-whisper-tiny")]
     KbWhisperTiny,
     #[serde(rename = "kb-whisper-base")]
@@ -95,6 +105,7 @@ impl WhisperModel {
             WhisperModel::Tiny => "Whisper Tiny",
             WhisperModel::BaseEn => "Whisper Base (EN)",
             WhisperModel::Base => "Whisper Base",
+            WhisperModel::FinnishWhisperTiny => "Finnish-Whisper Tiny",
             WhisperModel::KbWhisperTiny => "KB-Whisper Tiny",
             WhisperModel::KbWhisperBase => "KB-Whisper Base",
             WhisperModel::KbWhisperSmall => "KB-Whisper Small",
@@ -120,6 +131,7 @@ impl WhisperModel {
             WhisperModel::Tiny => "OpenAI Whisper, multilingual. Fastest, less accurate",
             WhisperModel::BaseEn => "OpenAI Whisper, English-only. Balanced speed and accuracy",
             WhisperModel::Base => "OpenAI Whisper, multilingual. Balanced speed and accuracy",
+            WhisperModel::FinnishWhisperTiny => "Finnish-NLP. Finnish fine-tune; optional evaluation model",
             WhisperModel::KbWhisperTiny => "By KBLab. Swedish-optimized. Fastest, less accurate",
             WhisperModel::KbWhisperBase => "By KBLab. Swedish-optimized. Balanced speed and accuracy",
             WhisperModel::KbWhisperSmall => "By KBLab. Swedish-optimized. More accurate, slower",
@@ -153,6 +165,11 @@ impl WhisperModel {
         )
     }
 
+    #[allow(dead_code)]
+    pub fn is_finnish_optimized(&self) -> bool {
+        matches!(self, WhisperModel::FinnishWhisperTiny)
+    }
+
     /// Optimal no-speech threshold per model.
     ///
     /// Smaller English-only models (small.en) aggressively classify speech as
@@ -167,7 +184,7 @@ impl WhisperModel {
         use whisper_rs::DtwModelPreset;
         match self {
             WhisperModel::TinyEn => DtwModelPreset::TinyEn,
-            WhisperModel::Tiny | WhisperModel::KbWhisperTiny | WhisperModel::NbWhisperTiny => DtwModelPreset::Tiny,
+            WhisperModel::Tiny | WhisperModel::FinnishWhisperTiny | WhisperModel::KbWhisperTiny | WhisperModel::NbWhisperTiny => DtwModelPreset::Tiny,
             WhisperModel::BaseEn => DtwModelPreset::BaseEn,
             WhisperModel::Base | WhisperModel::KbWhisperBase | WhisperModel::NbWhisperBase => DtwModelPreset::Base,
             WhisperModel::SmallEn => DtwModelPreset::SmallEn,
@@ -198,6 +215,45 @@ impl WhisperModel {
         )
     }
 
+    /// Fine-tuned language-specific models are intentionally biased toward
+    /// their target language, so they must not be used to independently check
+    /// whether the configured language matches an input file.
+    #[allow(dead_code)]
+    pub fn is_language_optimized(&self) -> bool {
+        self.is_swedish_optimized() || self.is_norwegian_optimized() || self.is_finnish_optimized()
+    }
+
+    /// Whether this model can honor an explicitly selected language without
+    /// being biased toward a different language. Multilingual models support
+    /// every explicit language and auto-detection; language-specific models
+    /// support only their own language.
+    pub fn is_compatible_with(&self, language: Language) -> bool {
+        match language {
+            Language::English => {
+                !self.is_swedish_optimized()
+                    && !self.is_norwegian_optimized()
+                    && !self.is_finnish_optimized()
+            }
+            Language::Swedish => {
+                !self.is_english_only()
+                    && !self.is_norwegian_optimized()
+                    && !self.is_finnish_optimized()
+            }
+            Language::Norwegian => {
+                !self.is_english_only()
+                    && !self.is_swedish_optimized()
+                    && !self.is_finnish_optimized()
+            }
+            Language::Finnish => {
+                self.is_finnish_optimized()
+                    || (!self.is_english_only()
+                        && !self.is_swedish_optimized()
+                        && !self.is_norwegian_optimized())
+            }
+            Language::Auto => !self.is_english_only() && !self.is_language_optimized(),
+        }
+    }
+
     /// GGML model filename
     pub fn ggml_filename(&self) -> &'static str {
         match self {
@@ -205,6 +261,7 @@ impl WhisperModel {
             WhisperModel::Tiny => "ggml-tiny.bin",
             WhisperModel::BaseEn => "ggml-base.en.bin",
             WhisperModel::Base => "ggml-base.bin",
+            WhisperModel::FinnishWhisperTiny => "ggml-model-fi-tiny.bin",
             WhisperModel::KbWhisperTiny => "kb-whisper-tiny-q5_0.bin",
             WhisperModel::KbWhisperBase => "kb-whisper-base-q5_0.bin",
             WhisperModel::KbWhisperSmall => "kb-whisper-small-q5_0.bin",
@@ -224,13 +281,14 @@ impl WhisperModel {
         }
     }
 
-    /// HuggingFace download URL for model
+    /// Pinned download URL for the model artifact.
     pub fn download_url(&self) -> &'static str {
         match self {
             WhisperModel::TinyEn => "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin",
             WhisperModel::Tiny => "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin",
             WhisperModel::BaseEn => "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin",
             WhisperModel::Base => "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin",
+            WhisperModel::FinnishWhisperTiny => "https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/resolve/c58924b6deb4438756b3d38ecd67d65bdf20298d/ggml-model-fi-tiny.bin",
             WhisperModel::KbWhisperTiny => "https://huggingface.co/KBLab/kb-whisper-tiny/resolve/76d796af43a50fa34321efa562c9b9887a187463/ggml-model-q5_0.bin",
             WhisperModel::KbWhisperBase => "https://huggingface.co/KBLab/kb-whisper-base/resolve/1499d2d2f0c7ed545bd6f2eec85287cf8d8c8b38/ggml-model-q5_0.bin",
             WhisperModel::KbWhisperSmall => "https://huggingface.co/KBLab/kb-whisper-small/resolve/3564d61a42fc210ceaa55a22a96dd64478959c78/ggml-model-q5_0.bin",
@@ -257,6 +315,7 @@ impl WhisperModel {
             WhisperModel::Tiny => DownloadIntegrity { sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21", size: 77_691_713 },
             WhisperModel::BaseEn => DownloadIntegrity { sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002", size: 147_964_211 },
             WhisperModel::Base => DownloadIntegrity { sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe", size: 147_951_465 },
+            WhisperModel::FinnishWhisperTiny => DownloadIntegrity { sha256: "41cf309b7f50523cfca724ae90924fcd0e4794205de57a66abc3cce627103ce8", size: 77_691_730 },
             WhisperModel::KbWhisperTiny => DownloadIntegrity { sha256: "98d46b7d23e5528d006e8a42e29eb0cb39b44bed94e1329f10f57d1fd15c658b", size: 29_875_738 },
             WhisperModel::KbWhisperBase => DownloadIntegrity { sha256: "aead29b356bca8840e72a8dc2286e2d69e6702639751a1e60cb3c8eacefec546", size: 55_295_450 },
             WhisperModel::KbWhisperSmall => DownloadIntegrity { sha256: "6768836a51abc902e420c613153e6d418c90ea2774e913274d02ab23170225b7", size: 175_209_680 },
@@ -340,7 +399,8 @@ impl WhisperModel {
             | WhisperModel::NbWhisperBase
             | WhisperModel::NbWhisperSmall
             | WhisperModel::NbWhisperMedium
-            | WhisperModel::NbWhisperLarge => None,
+            | WhisperModel::NbWhisperLarge
+            | WhisperModel::FinnishWhisperTiny => None,
         }
     }
 
@@ -359,6 +419,7 @@ impl WhisperModel {
             WhisperModel::Tiny => 75,
             WhisperModel::BaseEn => 142,
             WhisperModel::Base => 142,
+            WhisperModel::FinnishWhisperTiny => 75,
             WhisperModel::KbWhisperTiny => 40,
             WhisperModel::KbWhisperBase => 60,
             WhisperModel::KbWhisperSmall => 190,
@@ -384,6 +445,7 @@ impl WhisperModel {
             Language::English => WhisperModel::BaseEn,
             Language::Swedish => WhisperModel::KbWhisperBase,
             Language::Norwegian => WhisperModel::NbWhisperBase,
+            Language::Finnish => WhisperModel::Base,
             Language::Auto => WhisperModel::Base,
         }
     }
@@ -411,6 +473,15 @@ impl WhisperModel {
                 WhisperModel::NbWhisperMedium,
                 WhisperModel::NbWhisperLarge,
             ],
+            Language::Finnish => &[
+                WhisperModel::Tiny,
+                WhisperModel::Base,
+                WhisperModel::FinnishWhisperTiny,
+                WhisperModel::Small,
+                WhisperModel::Medium,
+                WhisperModel::LargeV3Turbo,
+                WhisperModel::LargeV3TurboQ8,
+            ],
             Language::Auto => &[
                 WhisperModel::Tiny,
                 WhisperModel::Base,
@@ -427,7 +498,7 @@ impl WhisperModel {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HotkeyMode {
-    #[serde(rename = "push")]
+    #[serde(rename = "push", alias = "presenter")]
     #[default]
     PushToTalk,
     #[serde(rename = "toggle")]
@@ -444,6 +515,43 @@ impl HotkeyMode {
     }
 }
 
+/// One global shortcut and the transcription language selected when it fires.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HotkeyProfile {
+    pub id: String,
+    pub name: String,
+    pub shortcut: String,
+    pub language: Language,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push_to_talk_shortcut: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toggle_shortcut: Option<String>,
+}
+
+impl HotkeyProfile {
+    pub fn legacy_default(shortcut: String, language: Language) -> Self {
+        Self {
+            id: "default".to_string(),
+            name: "Default".to_string(),
+            shortcut,
+            language,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
+        }
+    }
+
+    /// Update the compatibility shortcut and whichever explicit binding is
+    /// primary for this profile.
+    pub fn set_primary_shortcut(&mut self, shortcut: String) {
+        if self.push_to_talk_shortcut.is_some() {
+            self.push_to_talk_shortcut = Some(shortcut.clone());
+        } else if self.toggle_shortcut.is_some() {
+            self.toggle_shortcut = Some(shortcut.clone());
+        }
+        self.shortcut = shortcut;
+    }
+}
+
 /// All user-configurable settings, persisted as JSON
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -456,9 +564,15 @@ pub struct Settings {
     pub auto_select_model: bool,
     /// Hotkey shortcut string (e.g. "Control+Shift+Space")
     pub hotkey: String,
+    /// Explicit dictation profiles. Empty means a legacy settings file; callers
+    /// use `resolved_hotkey_profiles()` to synthesize its default profile.
+    pub hotkey_profiles: Vec<HotkeyProfile>,
     /// Optional initial prompt that primes the decoder with domain vocabulary
     /// (names, jargon, spellings) for more accurate transcription. Empty = none.
     pub initial_prompt: String,
+    /// Additional personal dictionary entries scoped to a dictation profile.
+    /// The legacy `initial_prompt` remains the global compatibility layer.
+    pub profile_glossaries: BTreeMap<String, String>,
     /// Beam search width. 0 = greedy decoding (fastest); >=2 enables beam search
     /// (more accurate on hard audio, several times slower).
     pub beam_size: u32,
@@ -483,7 +597,9 @@ impl Default for Settings {
             auto_paste: true,
             auto_select_model: true,
             hotkey: "Control+Shift+Space".to_string(),
+            hotkey_profiles: Vec::new(),
             initial_prompt: String::new(),
+            profile_glossaries: BTreeMap::new(),
             beam_size: 0,
             temperature_fallback: true,
             vad_enabled: false,
@@ -493,13 +609,324 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Combine the legacy global dictionary with the selected profile's
+    /// private additions. The legacy source is hint-only: aliases from the
+    /// unscoped compatibility dictionary must not become replacements in an
+    /// explicitly selected language profile.
+    pub fn effective_glossary_source(&self, profile_id: Option<&str>) -> String {
+        self.effective_glossary_source_with_prompt(profile_id, None)
+    }
+
+    /// Compose the glossary source for one transcription without mutating
+    /// stored settings. A non-empty one-run prompt replaces the saved global
+    /// hint source; the selected known, explicit-language profile remains the
+    /// only source of deterministic alias replacements.
+    pub fn effective_glossary_source_with_prompt(
+        &self,
+        profile_id: Option<&str>,
+        prompt: Option<&str>,
+    ) -> String {
+        let base_source = prompt
+            .filter(|candidate| !candidate.trim().is_empty())
+            .unwrap_or(self.initial_prompt.as_str());
+        let global = Glossary::parse(base_source)
+            .decoder_prompt()
+            .unwrap_or_default();
+        let scoped_profile_id = profile_id.filter(|requested_id| {
+            self.resolved_hotkey_profiles().iter().any(|profile| {
+                profile.id == **requested_id && profile.language != Language::Auto
+            })
+        });
+        let scoped = scoped_profile_id
+            .and_then(|id| self.profile_glossaries.get(id))
+            .map(String::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+
+        match (global.trim().is_empty(), scoped.is_empty()) {
+            (true, true) => String::new(),
+            (false, true) => global,
+            (true, false) => scoped.to_string(),
+            (false, false) => format!("{}\n{scoped}", global.trim()),
+        }
+    }
+
     /// Returns the effective model considering auto-selection
     pub fn effective_model(&self) -> WhisperModel {
-        if self.auto_select_model {
-            WhisperModel::recommended(self.language)
+        self.effective_model_for(self.language)
+    }
+
+    pub fn effective_model_for(&self, language: Language) -> WhisperModel {
+        if self.auto_select_model || !self.whisper_model.is_compatible_with(language) {
+            WhisperModel::recommended(language)
         } else {
             self.whisper_model
         }
+    }
+
+    pub fn resolved_hotkey_profiles(&self) -> Vec<HotkeyProfile> {
+        if self.hotkey_profiles.is_empty() {
+            vec![HotkeyProfile::legacy_default(self.hotkey.clone(), self.language)]
+        } else {
+            self.hotkey_profiles.clone()
+        }
+    }
+
+    /// Return the profile bindings that should be registered at runtime.
+    /// Explicit push-to-talk/toggle bindings replace the legacy binding for a
+    /// profile.
+    pub fn resolved_hotkey_bindings(&self) -> Vec<(HotkeyProfile, String, HotkeyMode)> {
+        self.resolved_hotkey_profiles()
+            .into_iter()
+            .flat_map(|profile| {
+                let mut bindings = Vec::with_capacity(2);
+                if let Some(shortcut) = &profile.push_to_talk_shortcut {
+                    bindings.push((profile.clone(), shortcut.clone(), HotkeyMode::PushToTalk));
+                }
+                if let Some(shortcut) = &profile.toggle_shortcut {
+                    bindings.push((profile.clone(), shortcut.clone(), HotkeyMode::Toggle));
+                }
+                if bindings.is_empty() {
+                    bindings.push((profile.clone(), profile.shortcut.clone(), self.hotkey_mode));
+                }
+                bindings
+            })
+            .collect()
+    }
+
+    /// Return all shortcuts that the active hotkey mode may register.
+    pub fn resolved_shortcuts(&self) -> Vec<String> {
+        self
+            .resolved_hotkey_bindings()
+            .into_iter()
+            .map(|(_, shortcut, _)| shortcut)
+            .collect()
+    }
+
+    pub fn validate_hotkey_profiles(profiles: &[HotkeyProfile]) -> Result<(), String> {
+        if profiles.is_empty() {
+            return Err("At least one hotkey profile is required".to_string());
+        }
+        let mut ids = HashSet::new();
+        let mut shortcuts = HashSet::new();
+        for profile in profiles {
+            if profile.id.is_empty()
+                || profile.id.len() > 32
+                || !profile.id.starts_with(|c: char| c.is_ascii_alphanumeric())
+                || !profile.id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+            {
+                return Err(format!("Invalid profile id '{}': use lowercase letters, numbers, '-' or '_'", profile.id));
+            }
+            if !ids.insert(profile.id.clone()) {
+                return Err(format!("Duplicate profile id '{}'", profile.id));
+            }
+            if profile.name.trim().is_empty() {
+                return Err(format!("Profile '{}' must have a name", profile.id));
+            }
+            if profile.name.chars().count() > 40 {
+                return Err(format!("Profile '{}' name must be 40 characters or fewer", profile.id));
+            }
+            validate_hotkey(&profile.shortcut)?;
+            let has_explicit_bindings = profile.push_to_talk_shortcut.is_some() || profile.toggle_shortcut.is_some();
+            let active_shortcuts = if has_explicit_bindings {
+                profile
+                    .push_to_talk_shortcut
+                    .iter()
+                    .chain(profile.toggle_shortcut.iter())
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+            } else {
+                vec![profile.shortcut.as_str()]
+            };
+            for shortcut in active_shortcuts {
+                if shortcut.trim().is_empty() {
+                    return Err(format!("Profile '{}' has an empty hotkey", profile.id));
+                }
+                validate_hotkey(shortcut)?;
+                let canonical = canonical_hotkey(shortcut)?;
+                if !shortcuts.insert(canonical) {
+                    return Err(format!("Duplicate hotkey '{}'", shortcut));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate the complete shortcut configuration.
+    pub fn validate_shortcut_configuration(&self) -> Result<(), String> {
+        let profiles = self.resolved_hotkey_profiles();
+        Self::validate_hotkey_profiles(&profiles)?;
+        let shortcuts = self
+            .resolved_hotkey_bindings()
+            .into_iter()
+            .map(|(_, shortcut, _)| canonical_hotkey(&shortcut))
+            .collect::<Result<HashSet<_>, _>>()?;
+        if shortcuts.len() != self.resolved_hotkey_bindings().len() {
+            return Err("Duplicate hotkey bindings".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn replace_hotkey_mode(&mut self, hotkey_mode: HotkeyMode) -> Result<(), String> {
+        let mut candidate = self.clone();
+        candidate.hotkey_mode = hotkey_mode;
+        candidate.validate_shortcut_configuration()?;
+        self.hotkey_mode = hotkey_mode;
+        Ok(())
+    }
+
+    pub fn replace_hotkey_profiles(&mut self, profiles: Vec<HotkeyProfile>) -> Result<(), String> {
+        let mut profiles = profiles;
+        for profile in &mut profiles {
+            if let Some(shortcut) = profile
+                .push_to_talk_shortcut
+                .as_ref()
+                .or(profile.toggle_shortcut.as_ref())
+            {
+                profile.shortcut = shortcut.clone();
+            }
+        }
+        Self::validate_hotkey_profiles(&profiles)?;
+        let current_profiles = self.resolved_hotkey_profiles();
+        if let Some(profile) = profiles.iter().find(|profile| {
+            current_profiles.iter().any(|current| {
+                current.id == profile.id
+                    && current.language != profile.language
+                    && self
+                        .profile_glossaries
+                        .get(&profile.id)
+                        .is_some_and(|source| !source.trim().is_empty())
+            })
+        }) {
+            return Err(format!(
+                "Profile '{}' has a personal dictionary; clear it before changing the profile language",
+                profile.id
+            ));
+        }
+        let current_ids: HashSet<&str> = current_profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect();
+        if let Some(profile) = profiles.iter().find(|profile| {
+            !current_ids.contains(profile.id.as_str())
+                && self
+                    .profile_glossaries
+                    .get(&profile.id)
+                    .is_some_and(|source| !source.trim().is_empty())
+        }) {
+            return Err(format!(
+                "Profile id '{}' has an inactive personal dictionary; choose a new id to avoid reactivating old aliases",
+                profile.id
+            ));
+        }
+        let legacy = profiles.iter().find(|profile| profile.id == "default").unwrap_or(&profiles[0]);
+        let mut candidate = self.clone();
+        candidate.hotkey = legacy.shortcut.clone();
+        candidate.language = legacy.language;
+        candidate.hotkey_profiles = profiles;
+        candidate.validate_shortcut_configuration()?;
+        self.hotkey = candidate.hotkey;
+        self.language = candidate.language;
+        self.hotkey_profiles = candidate.hotkey_profiles;
+        Ok(())
+    }
+
+    pub fn hotkey_profile_for_shortcut(&self, shortcut: &str) -> Option<HotkeyProfile> {
+        let target = canonical_hotkey(shortcut).ok()?;
+        self.resolved_hotkey_bindings()
+            .into_iter()
+            .find(|(_, binding, _)| canonical_hotkey(binding).ok().as_deref() == Some(target.as_str()))
+            .map(|(profile, _, _)| profile)
+    }
+
+    pub fn set_legacy_language(&mut self, language: Language) -> Result<(), String> {
+        let current_legacy_language = if self.hotkey_profiles.is_empty() {
+            Some(self.language)
+        } else {
+            self.hotkey_profiles
+                .iter()
+                .find(|profile| profile.id == "default")
+                .map(|profile| profile.language)
+        };
+        if current_legacy_language.is_some_and(|current| current != language)
+            && self
+                .profile_glossaries
+                .get("default")
+                .is_some_and(|source| !source.trim().is_empty())
+        {
+            return Err(
+                "Profile 'default' has a personal dictionary; clear it before changing the profile language"
+                    .to_string(),
+            );
+        }
+        self.language = language;
+        if let Some(profile) = self.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
+            profile.language = language;
+        }
+        Ok(())
+    }
+
+    /// Try to update the legacy/default profile shortcut atomically.
+    pub fn try_set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), String> {
+        let mut candidate = self.clone();
+        candidate.hotkey = shortcut.clone();
+        if let Some(profile) = candidate.hotkey_profiles.iter_mut().find(|profile| profile.id == "default") {
+            profile.set_primary_shortcut(shortcut);
+        }
+        candidate.validate_shortcut_configuration()?;
+        self.hotkey = candidate.hotkey;
+        self.hotkey_profiles = candidate.hotkey_profiles;
+        Ok(())
+    }
+
+    /// Checked legacy/default profile shortcut update. Invalid or colliding
+    /// updates leave the complete settings value unchanged.
+    pub fn set_legacy_hotkey(&mut self, shortcut: String) -> Result<(), String> {
+        self.try_set_legacy_hotkey(shortcut)
+    }
+
+    /// Build the ordered set of profile models worth loading during GUI
+    /// startup. The primary profile is always first and always included because
+    /// normal dictation requires it. Additional distinct models must fit both
+    /// the resident-entry limit and advertised model-size budget.
+    pub fn warm_model_plan(
+        &self,
+        max_models: usize,
+        max_total_mb: u32,
+    ) -> Vec<(WhisperModel, Language)> {
+        let profiles = self.resolved_hotkey_profiles();
+        let Some(primary_index) = profiles
+            .iter()
+            .position(|profile| profile.id == "default")
+            .or_else(|| (!profiles.is_empty()).then_some(0))
+        else {
+            return Vec::new();
+        };
+
+        let capacity = max_models.max(1);
+        let ordered_indices = std::iter::once(primary_index)
+            .chain((0..profiles.len()).filter(|index| *index != primary_index));
+        let mut plan = Vec::with_capacity(capacity.min(profiles.len()));
+        let mut total_mb = 0u32;
+
+        for index in ordered_indices {
+            let profile = &profiles[index];
+            let model = self.effective_model_for(profile.language);
+            if plan.iter().any(|(resident, _)| *resident == model) {
+                continue;
+            }
+
+            let is_primary = plan.is_empty();
+            let next_total = total_mb.saturating_add(model.size_mb());
+            if !is_primary && (plan.len() >= capacity || next_total > max_total_mb) {
+                continue;
+            }
+
+            plan.push((model, profile.language));
+            total_mb = next_total;
+        }
+
+        plan
     }
 }
 
@@ -519,6 +946,7 @@ mod tests {
         assert_eq!(Language::English.display_name(), "English");
         assert_eq!(Language::Swedish.display_name(), "Swedish");
         assert_eq!(Language::Norwegian.display_name(), "Norwegian");
+        assert_eq!(Language::Finnish.display_name(), "Finnish");
         assert_eq!(Language::Auto.display_name(), "Auto-detect");
     }
 
@@ -527,6 +955,7 @@ mod tests {
         assert_eq!(Language::English.whisper_code(), Some("en"));
         assert_eq!(Language::Swedish.whisper_code(), Some("sv"));
         assert_eq!(Language::Norwegian.whisper_code(), Some("no"));
+        assert_eq!(Language::Finnish.whisper_code(), Some("fi"));
         assert_eq!(Language::Auto.whisper_code(), None);
     }
 
@@ -545,6 +974,7 @@ mod tests {
             (Language::English, "\"en\""),
             (Language::Swedish, "\"sv\""),
             (Language::Norwegian, "\"no\""),
+            (Language::Finnish, "\"fi\""),
             (Language::Auto, "\"auto\""),
         ];
         for (lang, expected) in pairs {
@@ -569,12 +999,22 @@ mod tests {
         assert!(WhisperModel::SmallEn.is_english_only());
         assert!(WhisperModel::MediumEn.is_english_only());
         assert!(!WhisperModel::Tiny.is_english_only());
+        assert!(!WhisperModel::FinnishWhisperTiny.is_english_only());
         assert!(!WhisperModel::Base.is_english_only());
         assert!(!WhisperModel::Small.is_english_only());
         assert!(!WhisperModel::Medium.is_english_only());
         assert!(!WhisperModel::LargeV3Turbo.is_english_only());
         assert!(!WhisperModel::KbWhisperTiny.is_english_only());
         assert!(!WhisperModel::NbWhisperBase.is_english_only());
+    }
+
+    #[test]
+    fn language_optimized_models_are_not_neutral_detectors() {
+        assert!(WhisperModel::KbWhisperSmall.is_language_optimized());
+        assert!(WhisperModel::NbWhisperBase.is_language_optimized());
+        assert!(WhisperModel::FinnishWhisperTiny.is_language_optimized());
+        assert!(!WhisperModel::Base.is_language_optimized());
+        assert!(!WhisperModel::MediumEn.is_language_optimized());
     }
 
     #[cfg(target_os = "macos")]
@@ -613,6 +1053,7 @@ mod tests {
         // KB/NB fine-tunes live in other repos and have no CoreML encoder.
         assert_eq!(WhisperModel::KbWhisperBase.coreml_encoder_url(), None);
         assert_eq!(WhisperModel::NbWhisperSmall.coreml_encoder_dirname(), None);
+        assert_eq!(WhisperModel::FinnishWhisperTiny.coreml_encoder_url(), None);
     }
 
     #[test]
@@ -624,6 +1065,7 @@ mod tests {
         assert!(WhisperModel::KbWhisperLarge.is_swedish_optimized());
         assert!(!WhisperModel::TinyEn.is_swedish_optimized());
         assert!(!WhisperModel::NbWhisperTiny.is_swedish_optimized());
+        assert!(!WhisperModel::FinnishWhisperTiny.is_swedish_optimized());
     }
 
     #[test]
@@ -635,6 +1077,7 @@ mod tests {
         assert!(WhisperModel::NbWhisperLarge.is_norwegian_optimized());
         assert!(!WhisperModel::TinyEn.is_norwegian_optimized());
         assert!(!WhisperModel::KbWhisperTiny.is_norwegian_optimized());
+        assert!(!WhisperModel::FinnishWhisperTiny.is_norwegian_optimized());
     }
 
     #[test]
@@ -644,6 +1087,7 @@ mod tests {
             WhisperModel::Tiny,
             WhisperModel::BaseEn,
             WhisperModel::Base,
+            WhisperModel::FinnishWhisperTiny,
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
@@ -675,6 +1119,7 @@ mod tests {
             WhisperModel::Tiny,
             WhisperModel::BaseEn,
             WhisperModel::Base,
+            WhisperModel::FinnishWhisperTiny,
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
@@ -743,6 +1188,7 @@ mod tests {
             WhisperModel::Tiny,
             WhisperModel::BaseEn,
             WhisperModel::Base,
+            WhisperModel::FinnishWhisperTiny,
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
@@ -770,6 +1216,7 @@ mod tests {
         assert_eq!(WhisperModel::recommended(Language::English), WhisperModel::BaseEn);
         assert_eq!(WhisperModel::recommended(Language::Swedish), WhisperModel::KbWhisperBase);
         assert_eq!(WhisperModel::recommended(Language::Norwegian), WhisperModel::NbWhisperBase);
+        assert_eq!(WhisperModel::recommended(Language::Finnish), WhisperModel::Base);
         assert_eq!(WhisperModel::recommended(Language::Auto), WhisperModel::Base);
     }
 
@@ -798,6 +1245,12 @@ mod tests {
         assert!(no.contains(&WhisperModel::NbWhisperMedium));
         assert!(no.contains(&WhisperModel::NbWhisperLarge));
 
+        let fi = WhisperModel::models_for_language(Language::Finnish);
+        assert_eq!(fi.len(), 7);
+        assert!(fi.contains(&WhisperModel::Base));
+        assert!(fi.contains(&WhisperModel::FinnishWhisperTiny));
+        assert!(fi.contains(&WhisperModel::LargeV3TurboQ8));
+
         let auto = WhisperModel::models_for_language(Language::Auto);
         assert_eq!(auto.len(), 6);
         assert!(auto.contains(&WhisperModel::Tiny));
@@ -824,6 +1277,7 @@ mod tests {
             (WhisperModel::Tiny, "\"tiny\""),
             (WhisperModel::BaseEn, "\"base.en\""),
             (WhisperModel::Base, "\"base\""),
+            (WhisperModel::FinnishWhisperTiny, "\"fi-whisper-tiny\""),
             (WhisperModel::KbWhisperTiny, "\"kb-whisper-tiny\""),
             (WhisperModel::KbWhisperBase, "\"kb-whisper-base\""),
             (WhisperModel::KbWhisperSmall, "\"kb-whisper-small\""),
@@ -868,6 +1322,9 @@ mod tests {
         assert_eq!(json, "\"push\"");
         let json = serde_json::to_string(&HotkeyMode::Toggle).unwrap();
         assert_eq!(json, "\"toggle\"");
+        let legacy: HotkeyMode = serde_json::from_str("\"presenter\"").unwrap();
+        assert_eq!(legacy, HotkeyMode::PushToTalk);
+        assert_eq!(serde_json::to_string(&legacy).unwrap(), "\"push\"");
     }
 
     // -- Settings --
@@ -883,9 +1340,373 @@ mod tests {
         assert!(s.auto_select_model);
         assert_eq!(s.hotkey, "Control+Shift+Space");
         assert_eq!(s.initial_prompt, "");
+        assert!(s.profile_glossaries.is_empty());
         assert_eq!(s.beam_size, 0);
         assert!(s.temperature_fallback);
         assert!(!s.vad_enabled);
+    }
+
+    #[test]
+    fn legacy_settings_presenter_mode_migrates_to_push_without_changing_old_hotkey_fields() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"hotkey_mode":"presenter","hotkey":"Option+Space"}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.hotkey_mode, HotkeyMode::PushToTalk);
+        assert_eq!(settings.hotkey, "Option+Space");
+    }
+
+    #[test]
+    fn effective_glossary_combines_global_and_selected_profile_only() {
+        let mut settings = Settings {
+            initial_prompt: "Codex = code x".to_string(),
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "swedish".to_string(),
+                    name: "Swedish".to_string(),
+                    shortcut: "Control+Shift+Space".to_string(),
+                    language: Language::Swedish,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+                HotkeyProfile {
+                    id: "english".to_string(),
+                    name: "English".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+            ],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "mergea = mördsa".to_string());
+        settings
+            .profile_glossaries
+            .insert("english".to_string(), "Lovable = love a ball".to_string());
+
+        assert_eq!(
+            settings.effective_glossary_source(Some("swedish")),
+            "Codex\nmergea = mördsa"
+        );
+        assert_eq!(
+            settings.effective_glossary_source(Some("english")),
+            "Codex\nLovable = love a ball"
+        );
+        assert_eq!(settings.effective_glossary_source(None), "Codex");
+    }
+
+    #[test]
+    fn global_aliases_are_hint_only_and_do_not_leak_between_profiles() {
+        let mut settings = Settings {
+            initial_prompt: "merge = merch".to_string(),
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "swedish".to_string(),
+                    name: "Swedish".to_string(),
+                    shortcut: "Control+Shift+Space".to_string(),
+                    language: Language::Swedish,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+                HotkeyProfile {
+                    id: "english".to_string(),
+                    name: "English".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+            ],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "merge = merch".to_string());
+
+        let swedish = Glossary::parse(&settings.effective_glossary_source(Some("swedish")));
+        let english = Glossary::parse(&settings.effective_glossary_source(Some("english")));
+        assert_eq!(swedish.correct_text("merch").0, "merge");
+        assert_eq!(english.correct_text("merch").0, "merch");
+        assert_eq!(settings.effective_glossary_source(Some("english")), "merge");
+    }
+
+    #[test]
+    fn effective_glossary_deduplicates_global_and_profile_canonicals() {
+        let mut settings = Settings {
+            initial_prompt: "Codex = code x\nmerge = merch".to_string(),
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Control+Shift+Space".to_string(),
+                language: Language::Swedish,
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
+            }],
+            ..Default::default()
+        };
+        settings.profile_glossaries.insert(
+            "swedish".to_string(),
+            "merge = merch\nOpenRouter = open router".to_string(),
+        );
+
+        let glossary = Glossary::parse(&settings.effective_glossary_source(Some("swedish")));
+        assert_eq!(
+            glossary.single_word_terms(),
+            vec!["Codex", "merge", "OpenRouter"]
+        );
+        assert_eq!(
+            glossary.decoder_prompt().as_deref(),
+            Some("Codex, merge, OpenRouter")
+        );
+        assert_eq!(
+            glossary.correct_text("code x merch open router").0,
+            "code x merge OpenRouter"
+        );
+    }
+
+    #[test]
+    fn effective_glossary_uses_scoped_source_without_legacy_global_entries() {
+        let mut settings = Settings::default();
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "Magnus Gille = Magnus Jille".to_string());
+
+        assert_eq!(
+            settings.effective_glossary_source(Some("default")),
+            "Magnus Gille = Magnus Jille"
+        );
+    }
+
+    #[test]
+    fn effective_glossary_ignores_unknown_and_auto_profile_entries() {
+        let mut settings = Settings {
+            language: Language::Auto,
+            initial_prompt: "Codex = code x".to_string(),
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+        settings
+            .profile_glossaries
+            .insert("removed".to_string(), "Lovable = love a ball".to_string());
+
+        assert_eq!(
+            settings.effective_glossary_source(Some("default")),
+            "Codex"
+        );
+        assert_eq!(
+            settings.effective_glossary_source(Some("removed")),
+            "Codex"
+        );
+    }
+
+    #[test]
+    fn one_run_prompt_replaces_global_hints_but_keeps_selected_profile_aliases() {
+        let mut settings = Settings {
+            initial_prompt: "Global = alias".to_string(),
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Control+Shift+Space".to_string(),
+                language: Language::Swedish,
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("swedish".to_string(), "Profile = misheard".to_string());
+
+        assert_eq!(
+            settings.effective_glossary_source_with_prompt(
+                Some("swedish"),
+                Some("OneRun = spelling")
+            ),
+            "OneRun\nProfile = misheard"
+        );
+        assert_eq!(
+            settings.effective_glossary_source_with_prompt(Some("swedish"), Some("  \n")),
+            "Global\nProfile = misheard"
+        );
+        assert_eq!(
+            settings.effective_glossary_source_with_prompt(None, Some("OneRun = spelling")),
+            "OneRun"
+        );
+        assert_eq!(settings.initial_prompt, "Global = alias");
+        assert_eq!(
+            settings.profile_glossaries.get("swedish").map(String::as_str),
+            Some("Profile = misheard")
+        );
+    }
+
+    #[test]
+    fn removed_profile_glossary_stays_inert_and_reserves_its_old_id() {
+        let mut settings = Settings::default();
+        settings
+            .profile_glossaries
+            .insert("removed".to_string(), "Lovable = love a ball".to_string());
+
+        let error = settings
+            .replace_hotkey_profiles(vec![
+                HotkeyProfile::legacy_default(
+                    "Control+Shift+Space".to_string(),
+                    Language::Swedish,
+                ),
+                HotkeyProfile {
+                    id: "removed".to_string(),
+                    name: "Reused".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+            ])
+            .unwrap_err();
+
+        assert!(error.contains("inactive personal dictionary"));
+        assert_eq!(
+            settings.profile_glossaries.get("removed").map(String::as_str),
+            Some("Lovable = love a ball")
+        );
+    }
+
+    #[test]
+    fn empty_removed_profile_glossary_does_not_reserve_its_old_id() {
+        let mut settings = Settings::default();
+        settings
+            .profile_glossaries
+            .insert("removed".to_string(), "  \n".to_string());
+
+        settings
+            .replace_hotkey_profiles(vec![
+                HotkeyProfile::legacy_default(
+                    "Control+Shift+Space".to_string(),
+                    Language::Swedish,
+                ),
+                HotkeyProfile {
+                    id: "removed".to_string(),
+                    name: "Reused".to_string(),
+                    shortcut: "Control+Option+Space".to_string(),
+                    language: Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+            ])
+            .unwrap();
+    }
+
+    #[test]
+    fn profile_with_dictionary_cannot_change_language_in_place() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "mergea = mördsa".to_string());
+
+        let error = settings
+            .replace_hotkey_profiles(vec![HotkeyProfile::legacy_default(
+                "Control+Shift+Space".to_string(),
+                Language::English,
+            )])
+            .unwrap_err();
+
+        assert!(error.contains("personal dictionary"));
+        assert!(error.contains("language"));
+        assert_eq!(settings.language, Language::Swedish);
+    }
+
+    #[test]
+    fn legacy_language_change_with_implicit_default_dictionary_is_atomic() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        let error = settings.set_legacy_language(Language::English).unwrap_err();
+
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, Language::Swedish);
+        assert!(settings.hotkey_profiles.is_empty());
+        assert_eq!(
+            settings.profile_glossaries.get("default").map(String::as_str),
+            Some("merge = merch")
+        );
+    }
+
+    #[test]
+    fn legacy_language_change_with_explicit_default_dictionary_is_atomic() {
+        let mut settings = Settings {
+            language: Language::English,
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Control+Shift+Space".to_string(),
+                Language::Swedish,
+            )],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        let error = settings.set_legacy_language(Language::English).unwrap_err();
+
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.hotkey_profiles[0].language, Language::Swedish);
+    }
+
+    #[test]
+    fn legacy_language_change_allows_orphan_dictionary_without_default_profile() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![HotkeyProfile {
+                id: "swedish".to_string(),
+                name: "Swedish".to_string(),
+                shortcut: "Control+Shift+Space".to_string(),
+                language: Language::Swedish,
+                push_to_talk_shortcut: None,
+                toggle_shortcut: None,
+            }],
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".to_string(), "merge = merch".to_string());
+
+        settings.set_legacy_language(Language::English).unwrap();
+
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.hotkey_profiles[0].language, Language::Swedish);
+        assert_eq!(
+            settings.profile_glossaries.get("default").map(String::as_str),
+            Some("merge = merch")
+        );
+    }
+
+    #[test]
+    fn legacy_language_change_without_dictionary_updates_legacy_profile() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![HotkeyProfile::legacy_default(
+                "Control+Shift+Space".to_string(),
+                Language::Swedish,
+            )],
+            ..Default::default()
+        };
+
+        settings.set_legacy_language(Language::English).unwrap();
+
+        assert_eq!(settings.language, Language::English);
+        assert_eq!(settings.hotkey_profiles[0].language, Language::English);
     }
 
     #[test]
@@ -906,16 +1727,336 @@ mod tests {
     }
 
     #[test]
-    fn settings_effective_model_without_auto_select() {
-        let s = Settings { auto_select_model: false, whisper_model: WhisperModel::KbWhisperSmall, language: Language::English, ..Default::default() }; // language shouldn't matter
+    fn settings_effective_model_without_auto_select_uses_compatible_manual_model() {
+        let s = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::KbWhisperSmall,
+            language: Language::Swedish,
+            ..Default::default()
+        };
 
         assert_eq!(s.effective_model(), WhisperModel::KbWhisperSmall);
+    }
+
+    fn profile(id: &str, shortcut: &str, language: Language) -> HotkeyProfile {
+        HotkeyProfile {
+            id: id.to_string(),
+            name: id.to_string(),
+            shortcut: shortcut.to_string(),
+            language,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
+        }
+    }
+
+    #[test]
+    fn legacy_settings_resolve_to_one_default_hotkey_profile() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"language":"sv","hotkey":"Option+Space"}"#,
+        )
+        .unwrap();
+        let profiles = settings.resolved_hotkey_profiles();
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, "default");
+        assert_eq!(profiles[0].shortcut, "Option+Space");
+        assert_eq!(profiles[0].language, Language::Swedish);
+    }
+
+    #[test]
+    fn hotkey_profiles_roundtrip_and_lookup_aliases() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("default", "Control+Shift+A", Language::English),
+                profile("swedish", "Option+Space", Language::Swedish),
+            ])
+            .unwrap();
+        let json = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.hotkey_profiles, settings.hotkey_profiles);
+        assert_eq!(
+            loaded.hotkey_profile_for_shortcut("Alt+Space").unwrap().id,
+            "swedish"
+        );
+    }
+
+    #[test]
+    fn legacy_profile_binding_uses_global_push_or_toggle_mode() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![profile("default", "Control+Shift+A", Language::English)])
+            .unwrap();
+
+        settings.hotkey_mode = HotkeyMode::PushToTalk;
+        assert_eq!(settings.resolved_hotkey_bindings()[0].1, "Control+Shift+A");
+        assert_eq!(settings.resolved_hotkey_bindings()[0].2, HotkeyMode::PushToTalk);
+
+        settings.hotkey_mode = HotkeyMode::Toggle;
+        assert_eq!(settings.resolved_hotkey_bindings()[0].2, HotkeyMode::Toggle);
+    }
+
+    #[test]
+    fn explicit_profile_bindings_resolve_both_modes_independent_of_global_mode() {
+        let mut explicit = profile("default", "Control+Shift+A", Language::English);
+        explicit.push_to_talk_shortcut = Some("Control+Shift+P".to_string());
+        explicit.toggle_shortcut = Some("Control+Shift+T".to_string());
+        let mut settings = Settings {
+            hotkey_mode: HotkeyMode::Toggle,
+            ..Settings::default()
+        };
+        settings.replace_hotkey_profiles(vec![explicit]).unwrap();
+
+        let bindings = settings.resolved_hotkey_bindings();
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].1, "Control+Shift+P");
+        assert_eq!(bindings[0].2, HotkeyMode::PushToTalk);
+        assert_eq!(bindings[1].1, "Control+Shift+T");
+        assert_eq!(bindings[1].2, HotkeyMode::Toggle);
+        assert_eq!(settings.resolved_shortcuts(), vec!["Control+Shift+P", "Control+Shift+T"]);
+        assert_eq!(settings.hotkey_profile_for_shortcut("control+shift+t").unwrap().id, "default");
+        assert_eq!(settings.hotkey_profiles[0].shortcut, "Control+Shift+P");
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let loaded: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.hotkey_profiles, settings.hotkey_profiles);
+        assert!(json.contains("push_to_talk_shortcut"));
+        assert!(json.contains("toggle_shortcut"));
+    }
+
+    #[test]
+    fn explicit_profile_bindings_reject_empty_or_canonical_duplicates() {
+        let mut empty = profile("default", "Control+Shift+E", Language::English);
+        empty.push_to_talk_shortcut = Some("  ".to_string());
+        assert!(Settings::validate_hotkey_profiles(&[empty]).is_err());
+
+        let mut first = profile("first", "Control+Shift+F", Language::English);
+        first.push_to_talk_shortcut = Some("Option+Shift+A".to_string());
+        let mut second = profile("second", "Control+Shift+G", Language::Swedish);
+        second.toggle_shortcut = Some("shift+alt+KeyA".to_string());
+        assert!(Settings::validate_hotkey_profiles(&[first, second]).is_err());
+    }
+
+    #[test]
+    fn explicit_bindings_allow_an_additional_modifier() {
+        let mut first = profile("first", "Control+Shift+P", Language::English);
+        first.push_to_talk_shortcut = Some("Control+Shift+A".to_string());
+        let mut second = profile("second", "Control+Shift+Q", Language::Swedish);
+        second.push_to_talk_shortcut = Some("Control+Option+Shift+A".to_string());
+        assert!(Settings::validate_hotkey_profiles(&[first, second]).is_ok());
+    }
+
+    #[test]
+    fn legacy_hotkey_update_tracks_explicit_primary_binding() {
+        let mut push_to_talk = profile("default", "Control+Shift+P", Language::English);
+        push_to_talk.push_to_talk_shortcut = Some("Control+Shift+Q".to_string());
+        let mut settings = Settings::default();
+        settings.replace_hotkey_profiles(vec![push_to_talk]).unwrap();
+        settings.try_set_legacy_hotkey("Control+Shift+R".to_string()).unwrap();
+        assert_eq!(settings.hotkey, "Control+Shift+R");
+        assert_eq!(settings.hotkey_profiles[0].shortcut, "Control+Shift+R");
+        assert_eq!(settings.hotkey_profiles[0].push_to_talk_shortcut.as_deref(), Some("Control+Shift+R"));
+
+        let mut toggle = profile("default", "Control+Shift+P", Language::English);
+        toggle.toggle_shortcut = Some("Control+Shift+Q".to_string());
+        let mut settings = Settings::default();
+        settings.replace_hotkey_profiles(vec![toggle]).unwrap();
+        settings.try_set_legacy_hotkey("Control+Shift+R".to_string()).unwrap();
+        assert_eq!(settings.hotkey_profiles[0].toggle_shortcut.as_deref(), Some("Control+Shift+R"));
+    }
+
+    #[test]
+    fn replacing_profiles_syncs_legacy_fields_from_default() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("swedish", "Option+Space", Language::Swedish),
+                profile("default", "Control+Shift+E", Language::English),
+            ])
+            .unwrap();
+        assert_eq!(settings.hotkey, "Control+Shift+E");
+        assert_eq!(settings.language, Language::English);
+    }
+
+    #[test]
+    fn profile_validation_rejects_invalid_and_duplicate_values() {
+        assert!(Settings::validate_hotkey_profiles(&[]).is_err());
+        assert!(Settings::validate_hotkey_profiles(&[profile("Bad ID", "Option+A", Language::English)]).is_err());
+        assert!(Settings::validate_hotkey_profiles(&[profile("default", "Space", Language::English)]).is_err());
+
+        let mut blank = profile("default", "Option+A", Language::English);
+        blank.name = "  ".to_string();
+        assert!(Settings::validate_hotkey_profiles(&[blank]).is_err());
+
+        let duplicate_ids = vec![
+            profile("same", "Option+A", Language::English),
+            profile("same", "Option+B", Language::Swedish),
+        ];
+        assert!(Settings::validate_hotkey_profiles(&duplicate_ids).is_err());
+
+        let duplicate_aliases = vec![
+            profile("one", "Option+Shift+A", Language::English),
+            profile("two", "shift+alt+KeyA", Language::Swedish),
+        ];
+        assert!(Settings::validate_hotkey_profiles(&duplicate_aliases).is_err());
+
+        let duplicate_bare_function_keys = vec![
+            profile("one", "F13", Language::English),
+            profile("two", "f13", Language::Swedish),
+        ];
+        assert!(Settings::validate_hotkey_profiles(&duplicate_bare_function_keys).is_err());
+    }
+
+    #[test]
+    fn effective_model_can_be_selected_for_profile_language() {
+        let settings = Settings { auto_select_model: true, ..Default::default() };
+        assert_eq!(settings.effective_model_for(Language::Swedish), WhisperModel::KbWhisperBase);
+        assert_eq!(settings.effective_model_for(Language::Norwegian), WhisperModel::NbWhisperBase);
+    }
+
+    #[test]
+    fn incompatible_manual_model_falls_back_for_profile_language() {
+        let settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::KbWhisperBase,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            settings.effective_model_for(Language::Swedish),
+            WhisperModel::KbWhisperBase
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::English),
+            WhisperModel::BaseEn
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::Norwegian),
+            WhisperModel::NbWhisperBase
+        );
+    }
+
+    #[test]
+    fn compatible_manual_multilingual_model_is_shared_across_profiles() {
+        let settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::Medium,
+            ..Default::default()
+        };
+
+        for language in [Language::English, Language::Swedish, Language::Norwegian, Language::Auto] {
+            assert_eq!(settings.effective_model_for(language), WhisperModel::Medium);
+        }
+    }
+
+    #[test]
+    fn warm_model_plan_includes_swedish_and_english_base_models() {
+        let mut settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::KbWhisperBase,
+            ..Default::default()
+        };
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            settings.warm_model_plan(2, 384),
+            vec![
+                (WhisperModel::KbWhisperBase, Language::Swedish),
+                (WhisperModel::BaseEn, Language::English),
+            ]
+        );
+    }
+
+    #[test]
+    fn warm_model_plan_deduplicates_multilingual_model() {
+        let mut settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::Base,
+            ..Default::default()
+        };
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            settings.warm_model_plan(2, 384),
+            vec![(WhisperModel::Base, Language::Swedish)]
+        );
+    }
+
+    #[test]
+    fn warm_model_plan_moves_default_profile_to_front() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("english", "Super+E", Language::English),
+                profile("default", "Super+S", Language::Swedish),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            settings.warm_model_plan(2, 384),
+            vec![
+                (WhisperModel::KbWhisperBase, Language::Swedish),
+                (WhisperModel::BaseEn, Language::English),
+            ]
+        );
+    }
+
+    #[test]
+    fn warm_model_plan_budget_and_zero_capacity_keep_primary() {
+        let mut settings = Settings::default();
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ])
+            .unwrap();
+
+        let primary = vec![(WhisperModel::KbWhisperBase, Language::Swedish)];
+        assert_eq!(settings.warm_model_plan(2, 100), primary);
+        assert_eq!(settings.warm_model_plan(0, 1_000), primary);
+    }
+
+    #[test]
+    fn english_only_manual_model_is_not_reused_for_other_languages() {
+        let settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::MediumEn,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            settings.effective_model_for(Language::English),
+            WhisperModel::MediumEn
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::Swedish),
+            WhisperModel::KbWhisperBase
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::Norwegian),
+            WhisperModel::NbWhisperBase
+        );
+        assert_eq!(
+            settings.effective_model_for(Language::Auto),
+            WhisperModel::Base
+        );
     }
 
     #[test]
     fn settings_serde_roundtrip() {
         let original = Settings::default();
         let json = serde_json::to_string(&original).unwrap();
+        assert!(json.contains(r#""hotkey_mode":"push""#));
+        assert!(!json.contains("presenter"));
         let deserialized: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.language, original.language);
         assert_eq!(deserialized.whisper_model, original.whisper_model);
@@ -967,6 +2108,7 @@ mod tests {
             WhisperModel::Tiny,
             WhisperModel::BaseEn,
             WhisperModel::Base,
+            WhisperModel::FinnishWhisperTiny,
             WhisperModel::KbWhisperTiny,
             WhisperModel::KbWhisperBase,
             WhisperModel::KbWhisperSmall,
@@ -995,7 +2137,13 @@ mod tests {
 
     #[test]
     fn recommended_model_is_in_models_for_language() {
-        let languages = [Language::English, Language::Swedish, Language::Norwegian, Language::Auto];
+        let languages = [
+            Language::English,
+            Language::Swedish,
+            Language::Norwegian,
+            Language::Finnish,
+            Language::Auto,
+        ];
         for lang in languages {
             let recommended = WhisperModel::recommended(lang);
             let models = WhisperModel::models_for_language(lang);
@@ -1006,6 +2154,64 @@ mod tests {
                 lang,
                 models
             );
+        }
+    }
+
+    #[test]
+    fn finnish_uses_generic_default_and_optional_specialized_tiny() {
+        assert_eq!(WhisperModel::recommended(Language::Finnish), WhisperModel::Base);
+        assert_eq!(
+            serde_json::to_string(&WhisperModel::FinnishWhisperTiny).unwrap(),
+            "\"fi-whisper-tiny\""
+        );
+        assert_eq!(
+            WhisperModel::FinnishWhisperTiny.ggml_filename(),
+            "ggml-model-fi-tiny.bin"
+        );
+        assert_eq!(
+            WhisperModel::FinnishWhisperTiny.download_url(),
+            "https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/resolve/c58924b6deb4438756b3d38ecd67d65bdf20298d/ggml-model-fi-tiny.bin"
+        );
+        let integrity = WhisperModel::FinnishWhisperTiny.download_integrity();
+        assert_eq!(integrity.size, 77_691_730);
+        assert_eq!(
+            integrity.sha256,
+            "41cf309b7f50523cfca724ae90924fcd0e4794205de57a66abc3cce627103ce8"
+        );
+        for &model in WhisperModel::models_for_language(Language::Finnish) {
+            assert!(model.is_compatible_with(Language::Finnish), "{model:?}");
+        }
+        assert!(WhisperModel::FinnishWhisperTiny.is_compatible_with(Language::Finnish));
+        #[cfg(feature = "diarization")]
+        assert!(matches!(
+            WhisperModel::FinnishWhisperTiny.dtw_preset(),
+            whisper_rs::DtwModelPreset::Tiny
+        ));
+        for language in [
+            Language::English,
+            Language::Swedish,
+            Language::Norwegian,
+            Language::Auto,
+        ] {
+            assert!(!WhisperModel::FinnishWhisperTiny.is_compatible_with(language));
+        }
+        for model in [
+            WhisperModel::TinyEn,
+            WhisperModel::BaseEn,
+            WhisperModel::SmallEn,
+            WhisperModel::MediumEn,
+            WhisperModel::KbWhisperTiny,
+            WhisperModel::KbWhisperBase,
+            WhisperModel::KbWhisperSmall,
+            WhisperModel::KbWhisperMedium,
+            WhisperModel::KbWhisperLarge,
+            WhisperModel::NbWhisperTiny,
+            WhisperModel::NbWhisperBase,
+            WhisperModel::NbWhisperSmall,
+            WhisperModel::NbWhisperMedium,
+            WhisperModel::NbWhisperLarge,
+        ] {
+            assert!(!model.is_compatible_with(Language::Finnish), "{model:?}");
         }
     }
 }

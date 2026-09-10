@@ -4,15 +4,12 @@
   "windows": ["*"],
   "permissions": [
     "core:default",
-    "global-shortcut:default",
-    "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister",
-    "global-shortcut:allow-is-registered",
     "autostart:default",
     "dialog:default",
     "dialog:allow-open",
     "core:event:allow-listen",
     "core:webview:allow-webview-position",
-    "core:window:default"
+    "core:window:default",
+    "core:window:allow-hide"
   ]
 }

@@ -76,6 +76,52 @@ const COREML_INTEGRITY_MARKER: &str = ".sagascript-archive-sha256";
 #[cfg(target_os = "macos")]
 const COREML_ORPHAN_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
+/// Runtime acceleration selected for a Whisper model on this build target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct AccelerationProfile {
+    pub backend: &'static str,
+    pub coreml_status: &'static str,
+}
+
+/// Report the backend whisper.cpp will use after any optional Core ML load.
+///
+/// KB/NB fine-tunes intentionally have no Core ML bundle: their encoder
+/// weights differ from upstream Whisper, so substituting an upstream compiled
+/// encoder would change inference. On macOS they fall back to the Metal GPU
+/// backend; the native "failed to load Core ML" message is therefore not a
+/// failed Metal initialization and is not the source of multi-minute latency.
+pub fn acceleration_profile(model: WhisperModel) -> AccelerationProfile {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(dirname) = model.coreml_encoder_dirname() else {
+            return AccelerationProfile {
+                backend: "metal",
+                coreml_status: "unsupported_for_fine_tune",
+            };
+        };
+        let active = models_dir().join(dirname).exists();
+        if active {
+            AccelerationProfile {
+                backend: "coreml+metal",
+                coreml_status: "active",
+            }
+        } else {
+            AccelerationProfile {
+                backend: "metal",
+                coreml_status: "encoder_not_installed",
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = model;
+        AccelerationProfile {
+            backend: "cpu",
+            coreml_status: "not_available_on_platform",
+        }
+    }
+}
+
 /// Full path to the Silero VAD model in the models directory.
 pub fn vad_model_path() -> PathBuf {
     models_dir().join(VAD_MODEL_FILENAME)
@@ -579,5 +625,26 @@ mod migrate_legacy_models_dir_tests {
         );
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn fine_tuned_models_report_the_supported_fallback_backend() {
+        let profile = acceleration_profile(WhisperModel::KbWhisperLarge);
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            profile,
+            AccelerationProfile {
+                backend: "metal",
+                coreml_status: "unsupported_for_fine_tune",
+            }
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            profile,
+            AccelerationProfile {
+                backend: "cpu",
+                coreml_status: "not_available_on_platform",
+            }
+        );
     }
 }

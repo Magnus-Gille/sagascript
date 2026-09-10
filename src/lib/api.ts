@@ -1,7 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
+import type {
+  CorrectionFile,
+  MeetingAudioAttachment,
+  MeetingExportFormat,
+  MeetingReview,
+  MeetingReviewState,
+  MeetingTranscript,
+} from "./meeting-types";
 
-export type Language = "en" | "sv" | "no" | "auto";
+export type Language = "en" | "sv" | "no" | "fi" | "auto";
 export type HotkeyMode = "push" | "toggle";
+
+export interface HotkeyProfile {
+  id: string;
+  name: string;
+  shortcut: string;
+  language: Language;
+  push_to_talk_shortcut?: string | null;
+  toggle_shortcut?: string | null;
+}
 
 export interface WhisperModel {
   id: string;
@@ -20,7 +37,9 @@ export interface Settings {
   auto_paste: boolean;
   auto_select_model: boolean;
   hotkey: string;
+  hotkey_profiles: HotkeyProfile[];
   initial_prompt: string;
+  profile_glossaries: Record<string, string>;
   beam_size: number;
   temperature_fallback: boolean;
   vad_enabled: boolean;
@@ -47,10 +66,42 @@ export interface HotkeyStatus {
   ok: boolean;
   error: string | null;
   shortcut: string;
+  shortcuts: string[];
+}
+
+export interface TrainingTranscript {
+  raw_text: string;
+  effective_text: string;
+}
+
+export interface GlossarySuggestion {
+  observed: string;
+  canonical: string;
+  kind: "alias" | "hint_only";
+  context: string;
+}
+
+export type MeetingJobStatus = "running" | "cancelling" | "completed" | "cancelled" | "failed";
+
+export interface MeetingJobSnapshot {
+  id: string;
+  status: MeetingJobStatus;
+  phase: string;
+  error: string | null;
+  transcript: MeetingTranscript | null;
+  reprocessing?: import("./meeting-reprocessing-types").ReprocessingResult | null;
 }
 
 export async function getState(): Promise<AppState> {
   return invoke("get_state");
+}
+
+export async function getLastError(): Promise<string | null> {
+  return invoke("get_last_error");
+}
+
+export async function getLastTranscription(): Promise<string | null> {
+  return invoke("get_last_transcription");
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -77,18 +128,35 @@ export async function setHotkey(shortcut: string): Promise<void> {
   return invoke("set_hotkey", { shortcut });
 }
 
+export async function setHotkeyProfiles(profiles: HotkeyProfile[]): Promise<void> {
+  return invoke("set_hotkey_profiles", { profiles });
+}
+
+export async function getActiveHotkeyProfile(): Promise<HotkeyProfile | null> {
+  return invoke("get_active_hotkey_profile");
+}
+
 /** Whether the hotkey is actually registered right now (not just the saved
  * setting) — reads the backend's process-wide registration-health flag. */
 export async function hotkeyStatus(): Promise<HotkeyStatus> {
   return invoke("hotkey_status");
 }
 
+/** Retry the shortcuts persisted by either the GUI or CLI. */
+export async function retryHotkeyRegistration(): Promise<void> {
+  return invoke("retry_hotkey_registration");
+}
+
 export async function setAutoPaste(enabled: boolean): Promise<void> {
   return invoke("set_auto_paste", { enabled });
 }
 
-export async function setInitialPrompt(prompt: string): Promise<void> {
-  return invoke("set_initial_prompt", { prompt });
+export async function setInitialPrompt(prompt: string, expectedSource?: string): Promise<void> {
+  return invoke("set_initial_prompt", { prompt, expectedSource });
+}
+
+export async function setProfileGlossary(profileId: string, source: string, expectedSource?: string): Promise<void> {
+  return invoke("set_profile_glossary", { profileId, source, expectedSource });
 }
 
 export async function setShowOverlay(enabled: boolean): Promise<void> {
@@ -109,6 +177,10 @@ export async function setVadEnabled(enabled: boolean): Promise<void> {
 
 export async function getModelInfo(): Promise<WhisperModel[]> {
   return invoke("get_model_info");
+}
+
+export async function getEffectiveModelInfo(language: Language): Promise<WhisperModel> {
+  return invoke("get_effective_model_info", { language });
 }
 
 export async function getLoadedModel(): Promise<LoadedModelInfo> {
@@ -133,13 +205,97 @@ export async function getBuildInfo(): Promise<BuildInfo> {
 
 export async function transcribeFile(
   filePath: string,
-  options?: { prompt?: string; diarize?: boolean }
+  options?: { prompt?: string; diarize?: boolean; profileId?: string }
 ): Promise<string> {
   return invoke("transcribe_file", {
     filePath,
     prompt: options?.prompt ?? null,
     diarize: options?.diarize ?? false,
+    profileId: options?.profileId ?? null,
   });
+}
+
+export async function beginMeetingFile(
+  filePath: string,
+  prompt: string | null,
+  profileId: string | null,
+): Promise<string> {
+  return invoke("begin_meeting_file", { filePath, prompt, profileId });
+}
+
+export async function getMeetingJob(jobId: string): Promise<MeetingJobSnapshot> {
+  return invoke("get_meeting_job", { jobId });
+}
+
+export async function cancelMeetingJob(jobId: string): Promise<boolean> {
+  return invoke("cancel_meeting_job", { jobId });
+}
+
+export async function renameMeetingSpeaker(
+  transcript: MeetingTranscript,
+  speakerId: string,
+  label: string,
+): Promise<MeetingTranscript> {
+  return invoke("rename_meeting_speaker", { transcript, speakerId, label });
+}
+
+export async function mergeMeetingSpeakers(
+  transcript: MeetingTranscript,
+  fromId: string,
+  intoId: string,
+): Promise<MeetingTranscript> {
+  return invoke("merge_meeting_speakers", { transcript, fromId, intoId });
+}
+
+export async function saveMeetingExport(
+  transcript: MeetingTranscript,
+  format: MeetingExportFormat,
+): Promise<boolean> {
+  return invoke("save_meeting_export", { transcript, format });
+}
+
+export async function createMeetingReview(transcript: MeetingTranscript): Promise<MeetingReviewState> {
+  return invoke("create_meeting_review", { transcript });
+}
+
+export async function applyMeetingCorrections(
+  review: MeetingReview,
+  corrections: CorrectionFile,
+): Promise<MeetingReviewState> {
+  return invoke("apply_meeting_corrections", { review, corrections });
+}
+
+export async function undoMeetingReview(
+  review: MeetingReview,
+  expectedRevision: string,
+): Promise<MeetingReviewState> {
+  return invoke("undo_meeting_review", { review, expectedRevision });
+}
+
+export async function resetMeetingReview(
+  review: MeetingReview,
+  expectedRevision: string,
+): Promise<MeetingReviewState> {
+  return invoke("reset_meeting_review", { review, expectedRevision });
+}
+
+export async function openMeetingReview(): Promise<MeetingReviewState | null> {
+  return invoke("open_meeting_review");
+}
+
+export async function saveMeetingReview(
+  review: MeetingReview,
+  format: MeetingExportFormat,
+): Promise<boolean> {
+  return invoke("save_meeting_review", { review, format });
+}
+
+export async function attachMeetingAudio(sourceSha256: string): Promise<MeetingAudioAttachment | null> {
+  return invoke("attach_meeting_audio", { sourceSha256 });
+}
+
+export async function detachMeetingAudio(token: string): Promise<void> {
+  return invoke("detach_meeting_audio", { token });
 }
 
 export async function getSupportedFormats(): Promise<string[]> {
@@ -150,8 +306,44 @@ export async function startRecording(): Promise<void> {
   return invoke("start_recording");
 }
 
+export async function startTrainingRecording(profileId: string): Promise<void> {
+  return invoke("start_training_recording", { profileId });
+}
+
+export async function cancelRecording(): Promise<void> {
+  return invoke("cancel_recording");
+}
+
 export async function stopAndTranscribe(): Promise<string> {
   return invoke("stop_and_transcribe");
+}
+
+export async function stopAndTranscribeTraining(): Promise<TrainingTranscript> {
+  return invoke("stop_and_transcribe_training");
+}
+
+export async function transcribeTrainingFile(
+  filePath: string,
+  profileId: string
+): Promise<TrainingTranscript> {
+  return invoke("transcribe_training_file", { filePath, profileId });
+}
+
+export async function suggestTrainingGlossary(
+  heard: string,
+  corrected: string,
+  profileId: string
+): Promise<GlossarySuggestion[]> {
+  return invoke("suggest_training_glossary", { heard, corrected, profileId });
+}
+
+export async function applyTrainingGlossary(
+  heard: string,
+  corrected: string,
+  profileId: string,
+  accepted: GlossarySuggestion[]
+): Promise<void> {
+  return invoke("apply_training_glossary", { heard, corrected, profileId, accepted });
 }
 
 // -- Permission / platform queries (for onboarding) --
@@ -162,6 +354,10 @@ export async function checkAccessibilityPermission(): Promise<boolean> {
 
 export async function requestAccessibilityPermission(): Promise<void> {
   return invoke("request_accessibility_permission");
+}
+
+export async function openAccessibilitySettings(): Promise<void> {
+  return invoke("open_accessibility_settings");
 }
 
 export async function microphoneStatus(): Promise<string> {

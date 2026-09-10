@@ -17,7 +17,8 @@ dependency records to that release.
 Models are **not bundled in the installer**. Sagascript downloads a model only
 after the user chooses one; inference, audio, and transcripts remain local.
 The license shown is the license published by the linked upstream repository,
-reviewed on 2026-07-10. This shipped notice supplies the source and attribution
+reviewed on 2026-07-10 unless a later review date is shown below. This shipped
+notice supplies the source and attribution
 link; the upstream repository is authoritative for its license terms.
 
 | Model family | What Sagascript downloads | License | Upstream / attribution |
@@ -25,9 +26,17 @@ link; the upstream repository is authoritative for its license terms.
 | OpenAI Whisper GGML + Core ML encoders | Tiny, Base, Small, Medium, Large v3 Turbo variants | MIT | [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) |
 | KB-Whisper | Tiny, Base, Small, Medium, Large Swedish models | Apache-2.0 | [KBLab, National Library of Sweden](https://huggingface.co/KBLab) |
 | NB-Whisper | Tiny, Base, Small, Medium, Large Norwegian models | Apache-2.0 | [NbAiLab, National Library of Norway](https://huggingface.co/NbAiLab) |
+| Finnish-NLP Whisper Tiny | Unmodified `ggml-model-fi-tiny.bin`, optional Finnish specialist | Apache-2.0 | [Finnish-NLP pinned GGML repository](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d), reviewed 2026-09-06 |
 | Silero VAD (GGML conversion) | `ggml-silero-v5.1.2.bin` | MIT | [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad) |
 | Pyannote Segmentation 3.0 (ONNX conversion) | `model.onnx` | MIT, copyright CNRS | [csukuangfj conversion repository and LICENSE](https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/blob/main/LICENSE) |
 | WeSpeaker ResNet34-LM | `voxceleb_resnet34_LM.onnx` | CC-BY-4.0 | [WeSpeaker project/model card](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) |
+
+Finnish recommends the existing multilingual OpenAI Whisper Base model (MIT),
+not the English-only Base.en model. Optional Finnish-NLP Tiny is downloaded
+unchanged from its publisher under the declared [Apache-2.0 terms](https://www.apache.org/licenses/LICENSE-2.0).
+Its [source-model card](https://huggingface.co/Finnish-NLP/whisper-tiny-finnish/tree/bc5193ed50c052c426230644d17a12c3a8f86df6)
+identifies OpenAI Whisper Tiny as the base; retain the OpenAI Whisper MIT
+attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 
 ## Rust dependencies in the macOS application and build
 
@@ -164,7 +173,7 @@ link; the upstream repository is authoritative for its license terms.
 | getrandom | 0.3.4 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/getrandom) |
 | getrandom | 0.4.1 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/getrandom) |
 | glob | 0.3.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/glob) |
-| global-hotkey | 0.7.0 | Apache-2.0 OR MIT | [upstream](https://github.com/amrbashir/global-hotkey) |
+| global-hotkey | 0.8.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/global-hotkey) |
 | h2 | 0.4.13 | MIT | [upstream](https://github.com/hyperium/h2) |
 | half | 2.7.1 | MIT OR Apache-2.0 | [upstream](https://github.com/VoidStarKat/half-rs) |
 | hashbrown | 0.12.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/hashbrown) |
@@ -208,6 +217,7 @@ link; the upstream repository is authoritative for its license terms.
 | json-patch | 3.0.1 | MIT/Apache-2.0 | [upstream](https://github.com/idubrov/json-patch) |
 | jsonptr | 0.6.3 | MIT OR Apache-2.0 | [upstream](https://github.com/chanced/jsonptr) |
 | keyboard-types | 0.7.0 | MIT OR Apache-2.0 | [upstream](https://github.com/pyfisch/keyboard-types) |
+| keyboard-types | 0.8.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-windowing/keyboard-types) |
 | kodama | 0.2.3 | MIT | [upstream](https://github.com/diffeo/kodama) |
 | kuchikiki | 0.8.8-speedreader | MIT | [upstream](https://github.com/brave/kuchikiki) |
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang-nursery/lazy-static.rs) |
@@ -404,7 +414,8 @@ link; the upstream repository is authoritative for its license terms.
 | tauri-plugin-autostart | 2.5.1 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-plugin-dialog | 2.6.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-plugin-fs | 2.4.5 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
-| tauri-plugin-global-shortcut | 2.3.1 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
+| tauri-plugin-global-shortcut | 2.3.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
+| tauri-plugin-single-instance | 2.4.4 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-runtime | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-runtime-wry | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-utils | 2.8.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
@@ -566,7 +577,6 @@ link; the upstream repository is authoritative for its license terms.
 | @tauri-apps/cli-win32-x64-msvc | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://www.npmjs.com/package/@tauri-apps/cli-win32-x64-msvc/v/2.10.0) |
 | @tauri-apps/plugin-autostart | 2.5.1 | MIT OR Apache-2.0 | [upstream](https://www.npmjs.com/package/@tauri-apps/plugin-autostart/v/2.5.1) |
 | @tauri-apps/plugin-dialog | 2.6.0 | MIT OR Apache-2.0 | [upstream](https://www.npmjs.com/package/@tauri-apps/plugin-dialog/v/2.6.0) |
-| @tauri-apps/plugin-global-shortcut | 2.3.1 | MIT OR Apache-2.0 | [upstream](https://www.npmjs.com/package/@tauri-apps/plugin-global-shortcut/v/2.3.1) |
 | @tsconfig/svelte | 5.0.8 | MIT | [upstream](https://www.npmjs.com/package/@tsconfig/svelte/v/5.0.8) |
 | @types/estree | 1.0.9 | MIT | [upstream](https://www.npmjs.com/package/@types/estree/v/1.0.9) |
 | @types/trusted-types | 2.0.7 | MIT | [upstream](https://www.npmjs.com/package/@types/trusted-types/v/2.0.7) |
@@ -589,10 +599,10 @@ link; the upstream repository is authoritative for its license terms.
 | magic-string | 0.30.21 | MIT | [upstream](https://www.npmjs.com/package/magic-string/v/0.30.21) |
 | mri | 1.2.0 | MIT | [upstream](https://www.npmjs.com/package/mri/v/1.2.0) |
 | ms | 2.1.3 | MIT | [upstream](https://www.npmjs.com/package/ms/v/2.1.3) |
-| nanoid | 3.3.15 | MIT | [upstream](https://www.npmjs.com/package/nanoid/v/3.3.15) |
+| nanoid | 3.3.18 | MIT | [upstream](https://www.npmjs.com/package/nanoid/v/3.3.18) |
 | picocolors | 1.1.1 | ISC | [upstream](https://www.npmjs.com/package/picocolors/v/1.1.1) |
 | picomatch | 4.0.5 | MIT | [upstream](https://www.npmjs.com/package/picomatch/v/4.0.5) |
-| postcss | 8.5.16 | MIT | [upstream](https://www.npmjs.com/package/postcss/v/8.5.16) |
+| postcss | 8.5.26 | MIT | [upstream](https://www.npmjs.com/package/postcss/v/8.5.26) |
 | readdirp | 4.1.2 | MIT | [upstream](https://www.npmjs.com/package/readdirp/v/4.1.2) |
 | rollup | 4.62.2 | MIT | [upstream](https://www.npmjs.com/package/rollup/v/4.62.2) |
 | sade | 1.8.1 | MIT | [upstream](https://www.npmjs.com/package/sade/v/1.8.1) |
@@ -3161,7 +3171,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 31dbbab009f1
 
-Components: Rust keyboard-types@0.7.0
+Components: Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3
 
 Source filenames: LICENSE-MIT
 
@@ -3189,7 +3199,7 @@ THE SOFTWARE.
 
 ### 33dc6a453e22
 
-Components: npm nanoid@3.3.15
+Components: npm nanoid@3.3.18
 
 Source filenames: LICENSE
 
@@ -3708,7 +3718,7 @@ third-party/chromium/LICENSE.
 
 ### 3b3a242fa170
 
-Components: Rust global-hotkey@0.7.0
+Components: Rust global-hotkey@0.8.0
 
 Source filenames: LICENSE.spdx
 
@@ -5491,7 +5501,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 4bf96504d6e8
 
-Components: Rust arboard@3.6.1, Rust fdeflate@0.3.7, Rust half@2.7.1, Rust image@0.25.9, Rust miniz_oxide@0.8.9, Rust pin-project-lite@0.2.16, Rust portable-atomic@1.13.1, Rust raw-window-handle@0.6.2, Rust sync_wrapper@1.0.2, Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, Rust time-core@0.1.8, Rust time-macros@0.2.27, Rust time@0.3.47, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
+Components: Rust arboard@3.6.1, Rust fdeflate@0.3.7, Rust half@2.7.1, Rust image@0.25.9, Rust miniz_oxide@0.8.9, Rust pin-project-lite@0.2.16, Rust portable-atomic@1.13.1, Rust raw-window-handle@0.6.2, Rust sync_wrapper@1.0.2, Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-plugin-single-instance@2.4.4, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, Rust time-core@0.1.8, Rust time-macros@0.2.27, Rust time@0.3.47, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
 
 Source filenames: LICENSE, LICENSE-APACHE, LICENSE-APACHE.md, LICENSE-APACHE.txt, LICENSE-Apache, LICENSE_APACHE-2.0
 
@@ -9306,7 +9316,7 @@ THE SOFTWARE.
 
 ### 859a90323b68
 
-Components: Rust global-hotkey@0.7.0, Rust muda@0.17.1, Rust tray-icon@0.21.3
+Components: Rust global-hotkey@0.8.0, Rust muda@0.17.1, Rust tray-icon@0.21.3
 
 Source filenames: LICENSE-MIT
 
@@ -10200,7 +10210,7 @@ limitations under the License.
 
 ### 89ff9689dcf9
 
-Components: Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
+Components: Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
 
 Source filenames: LICENSE_MIT
 
@@ -12954,7 +12964,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 954f335b8baf
 
-Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust base64@0.21.7, Rust base64@0.22.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.7.0, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust mime@0.3.17, Rust muda@0.17.1, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.14, Rust regex-syntax@0.8.9, Rust regex@1.12.3, Rust rustc_version@0.4.1, Rust rustix@1.1.3, Rust rustls@0.23.36, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust smallvec@1.15.1, Rust socket2@0.6.2, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tempfile@3.25.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.2
+Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust base64@0.21.7, Rust base64@0.22.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.8.0, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust mime@0.3.17, Rust muda@0.17.1, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.14, Rust regex-syntax@0.8.9, Rust regex@1.12.3, Rust rustc_version@0.4.1, Rust rustix@1.1.3, Rust rustls@0.23.36, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust smallvec@1.15.1, Rust socket2@0.6.2, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tempfile@3.25.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.2
 
 Source filenames: LICENSE-APACHE
 
@@ -13944,7 +13954,7 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ### a2764f26c504
 
-Components: npm postcss@8.5.16
+Components: npm postcss@8.5.26
 
 Source filenames: LICENSE
 
@@ -15723,6 +15733,36 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+~~~~
+
+### b7f455413bfe
+
+Components: Rust tauri-plugin-single-instance@2.4.4
+
+Source filenames: LICENSE_MIT
+
+~~~~text
+MIT License
+
+Copyright (c) 2017 - Present The Tauri Programme in the Commons Conservancy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ~~~~
 
 ### b8778b155bfd
@@ -19229,7 +19269,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 ### eb8a6c846304
 
-Components: Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.1, npm @tauri-apps/plugin-autostart@2.5.1, npm @tauri-apps/plugin-dialog@2.6.0, npm @tauri-apps/plugin-global-shortcut@2.3.1
+Components: Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-plugin-single-instance@2.4.4, npm @tauri-apps/plugin-autostart@2.5.1, npm @tauri-apps/plugin-dialog@2.6.0
 
 Source filenames: LICENSE.spdx
 

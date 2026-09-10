@@ -1,13 +1,13 @@
 :root {
-  --bg: #1a1a2e;
-  --bg-secondary: #16213e;
-  --text: #e0e0e0;
-  --text-muted: #8892b0;
-  --accent: #64ffda;
-  --accent-dim: rgba(100, 255, 218, 0.1);
-  --border: #2a2a4a;
+  --bg: #111113;
+  --bg-secondary: #1a1a1d;
+  --text: #f2f2ef;
+  --text-muted: #9a9a9f;
+  --accent: #72e6cf;
+  --accent-dim: rgba(114, 230, 207, 0.1);
+  --border: #303034;
   --danger: #ff6b6b;
-  --radius: 8px;
+  --radius: 7px;
 }
 
 * {

@@ -63,6 +63,46 @@ fn check_decode_size_cap(
 /// Uses symphonia to probe the file format, find the first audio track,
 /// decode all packets, then resample and mix to mono.
 pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
+    decode_audio_file_inner(path, None)
+}
+
+/// Decode an audio or video file while checking a caller-owned cancellation or
+/// progress callback at bounded decoder boundaries. Codec and resampler FFI
+/// calls themselves are not interruptible.
+pub fn decode_audio_file_with_control(
+    path: &Path,
+    checkpoint: &dyn Fn() -> Result<(), DictationError>,
+) -> Result<Vec<f32>, DictationError> {
+    decode_audio_file_inner(path, Some(checkpoint))
+}
+
+const MAX_CONSECUTIVE_DECODE_ERRORS: usize = 64;
+
+fn note_decode_progress(consecutive_errors: &mut usize) {
+    *consecutive_errors = 0;
+}
+
+fn note_decode_error(
+    consecutive_errors: &mut usize,
+    kind: &str,
+) -> Result<(), DictationError> {
+    *consecutive_errors = consecutive_errors.saturating_add(1);
+    if *consecutive_errors >= MAX_CONSECUTIVE_DECODE_ERRORS {
+        return Err(DictationError::FileDecodeError(format!(
+            "Audio decoding aborted after too many consecutive {kind} errors"
+        )));
+    }
+    Ok(())
+}
+
+fn decode_audio_file_inner(
+    path: &Path,
+    checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
+) -> Result<Vec<f32>, DictationError> {
+    if let Some(checkpoint) = checkpoint {
+        checkpoint()?;
+    }
+
     // Validate extension
     let ext = path
         .extension()
@@ -134,9 +174,13 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
 
     let mut all_samples: Vec<f32> = Vec::new();
     let mut actual_channels: usize = codec_channels.max(1);
+    let mut consecutive_errors = 0usize;
 
     // Decode all packets
     loop {
+        if let Some(checkpoint) = checkpoint {
+            checkpoint()?;
+        }
         let packet = match format.next_packet() {
             Ok(p) => p,
             Err(symphonia::core::errors::Error::IoError(ref e))
@@ -147,6 +191,9 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
             Err(e) => {
                 // Log non-fatal decode errors and continue
                 info!("Decode warning (skipping packet): {e}");
+                if checkpoint.is_some() {
+                    note_decode_error(&mut consecutive_errors, "format")?;
+                }
                 continue;
             }
         };
@@ -157,17 +204,37 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
         }
 
         let decoded = match decoder.decode(&packet) {
-            Ok(d) => d,
+            Ok(d) => {
+                note_decode_progress(&mut consecutive_errors);
+                d
+            }
             Err(e) => {
                 info!("Decode warning (skipping packet): {e}");
+                if checkpoint.is_some() {
+                    note_decode_error(&mut consecutive_errors, "codec")?;
+                }
                 continue;
             }
         };
 
+        if let Some(checkpoint) = checkpoint {
+            checkpoint()?;
+        }
         let spec = *decoded.spec();
         // Use actual channel count from decoded frame spec (more reliable than codec_params)
         actual_channels = spec.channels.count().max(1);
         let num_frames = decoded.capacity();
+
+        if let Some(checkpoint) = checkpoint {
+            let frame_samples = num_frames.checked_mul(actual_channels).ok_or_else(|| {
+                DictationError::FileDecodeError("Decoded audio frame is too large".to_string())
+            })?;
+            let projected_samples = all_samples.len().checked_add(frame_samples).ok_or_else(|| {
+                DictationError::FileDecodeError("Decoded audio is too large".to_string())
+            })?;
+            check_decode_size_cap(projected_samples, actual_channels, sample_rate)?;
+            checkpoint()?;
+        }
 
         let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
         sample_buf.copy_interleaved_ref(decoded);
@@ -196,9 +263,15 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
     );
 
     // Mix to mono and resample
+    if let Some(checkpoint) = checkpoint {
+        checkpoint()?;
+    }
     let mono = mix_to_mono(&all_samples, actual_channels);
     let resampled = resample_to_16khz(mono, sample_rate)
         .map_err(|e| DictationError::TranscriptionFailed(format!("Resample failed: {e}")))?;
+    if let Some(checkpoint) = checkpoint {
+        checkpoint()?;
+    }
 
     info!(
         "Resampled to {} samples ({:.1}s at 16kHz)",
@@ -213,6 +286,7 @@ pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn supported_extensions_list() {
@@ -261,6 +335,73 @@ mod tests {
             }
             other => panic!("expected FileDecodeError, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn controlled_decode_checks_before_opening() {
+        let calls = AtomicUsize::new(0);
+        let checkpoint = || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(DictationError::FileDecodeError(
+                "meeting decode cancelled".to_string(),
+            ))
+        };
+        let path = PathBuf::from("/tmp/no-such-controlled-meeting-input.wav");
+
+        let result = decode_audio_file_with_control(&path, &checkpoint);
+        assert!(matches!(
+            result,
+            Err(DictationError::FileDecodeError(message))
+                if message == "meeting decode cancelled"
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn controlled_decode_can_cancel_after_a_decoded_packet() {
+        let path = std::env::temp_dir().join(format!(
+            "sagascript-controlled-decode-{}.wav",
+            uuid::Uuid::new_v4()
+        ));
+        let samples = vec![0.0_f32; 16_000];
+        std::fs::write(&path, crate::audio::wav::encode_wav(&samples))
+            .expect("write controlled decode fixture");
+
+        let calls = AtomicUsize::new(0);
+        let checkpoint = || {
+            let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == 4 {
+                Err(DictationError::FileDecodeError(
+                    "meeting decode cancelled after packet".to_string(),
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        let result = decode_audio_file_with_control(&path, &checkpoint);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(matches!(
+            result,
+            Err(DictationError::FileDecodeError(message))
+                if message == "meeting decode cancelled after packet"
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn consecutive_decode_error_budget_is_bounded_and_resets_on_progress() {
+        let mut consecutive_errors = 0;
+        for _ in 0..(MAX_CONSECUTIVE_DECODE_ERRORS - 1) {
+            assert!(note_decode_error(&mut consecutive_errors, "codec").is_ok());
+        }
+        let error = note_decode_error(&mut consecutive_errors, "codec")
+            .expect_err("the controlled decoder must stop after 64 errors");
+        assert!(matches!(error, DictationError::FileDecodeError(message) if message.contains("64") || message.contains("too many")));
+
+        note_decode_progress(&mut consecutive_errors);
+        assert_eq!(consecutive_errors, 0);
+        assert!(note_decode_error(&mut consecutive_errors, "format").is_ok());
     }
 
     #[test]

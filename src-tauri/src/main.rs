@@ -16,16 +16,24 @@ mod logging;
 
 mod app_controller;
 mod commands;
+mod meeting_jobs;
+mod meeting_review_commands;
+mod meeting_reprocessing_commands;
+mod meeting_media_range;
+mod meeting_media;
 mod events;
 mod hotkey;
 mod overlay;
 mod paste;
+#[path = "paste/completion.rs"]
+mod paste_completion;
 mod platform;
+mod updates;
 
 use tracing_subscriber::EnvFilter;
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Maximum time to wait for whisper inference before aborting (seconds)
 const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
@@ -34,27 +42,355 @@ const TRANSCRIPTION_TIMEOUT_SECS: u64 = 60;
 /// release the warm-state lock before we log it as still stuck.
 const ABORT_GRACE_SECS: u64 = 5;
 
+/// Maximum time to wait for the native paste callback to report its result.
+/// macOS paste stays on its mandatory main thread; other platforms use a
+/// blocking worker. A lost callback must not leave dictation stuck processing.
+const PASTE_COMPLETION_TIMEOUT_MS: u64 = paste_completion::COMPLETION_TIMEOUT_MS;
+
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, Submenu},
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::ShortcutState;
 use tracing::{error, info, warn};
 
+use app_controller::AppState;
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
-use sagascript_core::transcription::WhisperBackend;
+use sagascript_core::settings::HotkeyProfile;
+use sagascript_core::settings::HotkeyMode;
+use sagascript_core::settings::canonical_hotkey;
+#[cfg(test)]
+use sagascript_core::settings::{validate_hotkey, Language};
+use sagascript_core::transcription::{
+    WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS, WhisperBackend,
+};
 
 /// Minimum recording duration before we allow stop (300ms)
 const MIN_RECORDING_MS: u64 = 300;
+const SAFE_FALLBACK_HOTKEY: &str = "Control+Shift+Space";
+const BUILD_IDENTITY: &str = concat!(
+    "Version ",
+    env!("CARGO_PKG_VERSION"),
+    " · Build ",
+    env!("GIT_HASH"),
+    " · ",
+    env!("BUILD_DATE"),
+);
+#[cfg(target_os = "macos")]
+const TRAY_AUTOSAVE_NAME: &str = "ai.gille.sagascript.main";
+#[cfg(target_os = "macos")]
+const DEFAULT_TRAY_PREFERRED_POSITION: f64 = 340.0;
 
 /// Shared tray status menu item for updating from anywhere
 type SharedStatusItem = Mutex<Option<MenuItem<tauri::Wry>>>;
 
+struct ProfileMenuState {
+    submenu: Submenu<tauri::Wry>,
+    items: Vec<MenuItem<tauri::Wry>>,
+    selected_profile_id: Option<String>,
+}
+
+type SharedProfileMenuState = Mutex<Option<ProfileMenuState>>;
+
+fn format_menu_shortcut(shortcut: &str) -> String {
+    let parts: Vec<(&str, String)> = shortcut
+        .split('+')
+        .map(|part| {
+            let original = part.trim();
+            let normalized = match original.to_ascii_lowercase().as_str() {
+                "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" => {
+                    if cfg!(target_os = "macos") { "command" } else { "control" }
+                }
+                _ => original,
+            };
+            (original, normalized.to_ascii_lowercase())
+        })
+        .collect();
+    let mut label = String::new();
+    for (aliases, symbol) in [
+        (&["control", "ctrl"][..], "⌃"),
+        (&["alt", "option"][..], "⌥"),
+        (&["shift"][..], "⇧"),
+        (&["super", "command", "cmd"][..], "⌘"),
+    ] {
+        if parts
+            .iter()
+            .any(|(_, normalized)| aliases.contains(&normalized.as_str()))
+        {
+            label.push_str(symbol);
+        }
+    }
+    for (original, normalized) in parts {
+        if matches!(
+            normalized.as_str(),
+            "control" | "ctrl" | "alt" | "option" | "shift" | "super" | "command" | "cmd"
+        ) {
+            continue;
+        }
+        label.push_str(match normalized.as_str() {
+            "space" => "Space",
+            "arrowup" | "up" => "↑",
+            "arrowdown" | "down" => "↓",
+            "arrowleft" | "left" => "←",
+            "arrowright" | "right" => "→",
+            _ => original,
+        });
+    }
+    label
+}
+
+fn profile_menu_label(profile: &HotkeyProfile, selected: bool) -> String {
+    format!(
+        "{}{} — {} · {}",
+        if selected { "✓ " } else { "" },
+        profile.name,
+        profile.language.display_name(),
+        format_menu_shortcut(&profile.shortcut)
+    )
+}
+
+fn create_profile_menu_items(
+    app: &impl tauri::Manager<tauri::Wry>,
+    profiles: &[HotkeyProfile],
+    selected_profile_id: Option<&str>,
+) -> tauri::Result<Vec<MenuItem<tauri::Wry>>> {
+    let mut items = Vec::with_capacity(profiles.len() + 1);
+    for profile in profiles {
+        items.push(MenuItem::with_id(
+            app,
+            format!("profile_shortcut_{}", profile.id),
+            profile_menu_label(profile, selected_profile_id == Some(profile.id.as_str())),
+            false,
+            None::<&str>,
+        )?);
+    }
+    items.push(MenuItem::with_id(
+        app,
+        "manage_profiles",
+        "Edit Profiles…",
+        true,
+        None::<&str>,
+    )?);
+    Ok(items)
+}
+
+pub(crate) fn update_profiles_menu(app: &tauri::AppHandle, profiles: &[HotkeyProfile]) {
+    let state: tauri::State<'_, SharedProfileMenuState> = app.state();
+    let mut state = state.lock().unwrap();
+    let Some(state) = state.as_mut() else {
+        return;
+    };
+
+    let selected_profile_id = state
+        .selected_profile_id
+        .as_deref()
+        .filter(|selected| profiles.iter().any(|profile| profile.id == *selected))
+        .map(str::to_string)
+        .or_else(|| profiles.first().map(|profile| profile.id.clone()));
+
+    for item in state.items.drain(..) {
+        if let Err(error) = state.submenu.remove(&item) {
+            error!("Failed to remove stale tray profile item: {error}");
+        }
+    }
+    match create_profile_menu_items(app, profiles, selected_profile_id.as_deref()) {
+        Ok(items) => {
+            for item in &items {
+                if let Err(error) = state.submenu.append(item) {
+                    error!("Failed to add tray profile item: {error}");
+                }
+            }
+            state.items = items;
+            state.selected_profile_id = selected_profile_id;
+        }
+        Err(error) => error!("Failed to rebuild tray profiles menu: {error}"),
+    }
+}
+
+fn select_profile_menu(app: &tauri::AppHandle, profile: &HotkeyProfile) {
+    let profiles = {
+        let controller: tauri::State<'_, SharedController> = app.state();
+        let profiles = controller.lock().unwrap().settings().resolved_hotkey_profiles();
+        profiles
+    };
+    {
+        let state: tauri::State<'_, SharedProfileMenuState> = app.state();
+        let mut state = state.lock().unwrap();
+        if let Some(state) = state.as_mut() {
+            state.selected_profile_id = Some(profile.id.clone());
+        }
+    }
+    update_profiles_menu(app, &profiles);
+}
+
+#[derive(Clone)]
+struct UpdateMenuItems {
+    status: MenuItem<tauri::Wry>,
+    check: MenuItem<tauri::Wry>,
+}
+
+struct UpdateMenuState {
+    items: Option<UpdateMenuItems>,
+    checking: bool,
+    available_version: Option<semver::Version>,
+}
+
+type SharedUpdateMenuState = Mutex<UpdateMenuState>;
+
+const UPDATE_CHECK_ACTION: &str = "Check for Updates…";
+
+fn update_status_text(result: &updates::UpdateCheck) -> String {
+    match result {
+        updates::UpdateCheck::Available { version } => {
+            format!("Update available — v{version}")
+        }
+        updates::UpdateCheck::UpToDate => "Sagascript is up to date".to_string(),
+    }
+}
+
+fn update_action_text(result: &updates::UpdateCheck) -> String {
+    match result {
+        updates::UpdateCheck::Available { version } => {
+            format!("Download Sagascript v{version}…")
+        }
+        updates::UpdateCheck::UpToDate => "Check Again…".to_string(),
+    }
+}
+
+fn stable_release_url(version: &semver::Version) -> String {
+    format!("https://github.com/Magnus-Gille/sagascript/releases/tag/v{version}")
+}
+
+fn open_update_release(version: &semver::Version) -> Result<(), String> {
+    let url = stable_release_url(version);
+
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "linux")]
+    let mut command = std::process::Command::new("xdg-open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    };
+
+    command
+        .arg(&url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("failed to open {url}: {error}"))
+}
+
+fn check_for_updates(app: tauri::AppHandle) {
+    let items = {
+        let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+        let mut state = state.lock().unwrap();
+        if state.checking {
+            return;
+        }
+        let Some(items) = state.items.clone() else {
+            return;
+        };
+        state.checking = true;
+        items
+    };
+
+    if let Err(error) = items.status.set_text("Checking for updates…") {
+        error!("Failed to update tray update status: {error}");
+    }
+    if let Err(error) = items.check.set_enabled(false) {
+        error!("Failed to disable update action: {error}");
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let result = updates::check_for_update(env!("CARGO_PKG_VERSION")).await;
+        let (status_text, action_text, available_version, check_error) = match result {
+            Ok(result) => {
+                let available_version = match &result {
+                    updates::UpdateCheck::Available { version } => Some(version.clone()),
+                    updates::UpdateCheck::UpToDate => None,
+                };
+                (
+                    update_status_text(&result),
+                    update_action_text(&result),
+                    available_version,
+                    None,
+                )
+            }
+            Err(error) => (
+                "Couldn't check for updates".to_string(),
+                "Try Again…".to_string(),
+                None,
+                Some(error),
+            ),
+        };
+        if let Some(error) = check_error {
+            warn!("Update check failed: {error}");
+        }
+
+        let items = {
+            let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+            let mut state = state.lock().unwrap();
+            state.checking = false;
+            state.available_version = available_version;
+            state.items.clone()
+        };
+        let Some(items) = items else {
+            return;
+        };
+        if let Err(error) = items.status.set_text(status_text) {
+            error!("Failed to set tray update status: {error}");
+        }
+        if let Err(error) = items.check.set_text(action_text) {
+            error!("Failed to set tray update action: {error}");
+        }
+        if let Err(error) = items.check.set_enabled(true) {
+            error!("Failed to re-enable update action: {error}");
+        }
+    });
+}
+
 #[cfg(any(target_os = "macos", test))]
 fn auto_paste_permitted(requested: bool, accessibility_trusted: bool) -> bool {
     !requested || accessibility_trusted
+}
+
+/// Select the shortcut that is safe to register at startup. Invalid persisted
+/// values remain visible in Settings, but never become active; the default
+/// stays operational so an upgrade cannot strand dictation entirely.
+#[cfg(test)]
+fn startup_hotkey_candidate(requested: &str) -> (String, Option<String>) {
+    match validate_hotkey(requested) {
+        Ok(()) => (requested.to_string(), None),
+        Err(error) => {
+            let fallback = sagascript_core::settings::Settings::default().hotkey;
+            debug_assert!(validate_hotkey(&fallback).is_ok());
+            (fallback, Some(error))
+        }
+    }
+}
+
+fn should_use_safe_fallback(
+    shortcut: &str,
+    settings_valid: bool,
+    operational_hotkey: &hotkey::OperationalHotkey,
+) -> bool {
+    if settings_valid {
+        return false;
+    }
+
+    let (Ok(canonical_shortcut), Ok(canonical_fallback)) = (
+        sagascript_core::settings::canonical_hotkey(shortcut),
+        sagascript_core::settings::canonical_hotkey(SAFE_FALLBACK_HOTKEY),
+    ) else {
+        return false;
+    };
+
+    canonical_shortcut == canonical_fallback
+        && operational_hotkey.matches(&[SAFE_FALLBACK_HOTKEY.to_string()])
 }
 
 /// Treat macOS TCC approval as runtime authorization, never as a preference
@@ -85,110 +421,239 @@ fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
     settings
 }
 
+fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::BareHotkeyState) {
+    let ctrl: tauri::State<'_, SharedController> = app.state();
+
+    match state {
+        hotkey::BareHotkeyState::Pressed => {
+            info!("Hotkey pressed: {shortcut}");
+            let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
+            let safe_fallback = {
+                let c = ctrl.lock().unwrap();
+                should_use_safe_fallback(
+                    shortcut,
+                    c.settings().validate_shortcut_configuration().is_ok(),
+                    &health.operational_hotkey(),
+                )
+            };
+            let (result, active_profile) = {
+                let mut c = ctrl.lock().unwrap();
+                let binding = c
+                    .settings()
+                    .resolved_hotkey_bindings()
+                    .into_iter()
+                    .find(|(_, configured, _)| {
+                        canonical_hotkey(configured).ok() == canonical_hotkey(shortcut).ok()
+                    });
+                let result = match binding {
+                    Some((profile, configured_shortcut, mode)) => {
+                        // A failed operational configuration always uses the
+                        // dedicated fallback as PTT, even if the persisted
+                        // shortcut happens to be an explicit toggle binding.
+                        let (mode, shortcut) = if safe_fallback {
+                            (HotkeyMode::PushToTalk, SAFE_FALLBACK_HOTKEY)
+                        } else {
+                            (mode, configured_shortcut.as_str())
+                        };
+                        match c.handle_hotkey_down_for_binding(profile, mode, shortcut) {
+                        Ok(result) => {
+                            if safe_fallback && result == HotkeyDownResult::StartedRecording {
+                                c.use_safe_fallback_lifecycle();
+                            }
+                            result
+                        },
+                        Err(error) => {
+                            error!("Hotkey down error: {error}");
+                            let _ = app.emit(events::event::ERROR, error.to_string());
+                            HotkeyDownResult::NoOp
+                        }
+                        }
+                    }
+                    None if safe_fallback => {
+                        let profile = c.settings().resolved_hotkey_profiles()[0].clone();
+                        match c.handle_hotkey_down_for_binding(
+                            profile,
+                            HotkeyMode::PushToTalk,
+                            SAFE_FALLBACK_HOTKEY,
+                        ) {
+                            Ok(result) => {
+                                if result == HotkeyDownResult::StartedRecording {
+                                    c.use_safe_fallback_lifecycle();
+                                }
+                                result
+                            }
+                            Err(error) => {
+                                error!("Hotkey down error: {error}");
+                                let _ = app.emit(events::event::ERROR, error.to_string());
+                                HotkeyDownResult::NoOp
+                            }
+                        }
+                    }
+                    None => {
+                        warn!("Ignoring unconfigured shortcut event: {shortcut}");
+                        HotkeyDownResult::NoOp
+                    }
+                };
+                (result, c.active_hotkey_profile().cloned())
+            };
+            match result {
+                HotkeyDownResult::StartedRecording => {
+                    let show_overlay = {
+                        let c = ctrl.lock().unwrap();
+                        c.settings().show_overlay
+                    };
+                    let _ = app.emit(events::event::STATE_CHANGED, "recording");
+                    if let Some(profile) = active_profile {
+                        select_profile_menu(app, &profile);
+                        let _ = app.emit(events::event::ACTIVE_HOTKEY_PROFILE_CHANGED, profile);
+                    }
+                    update_tray_status(app, "recording");
+                    if show_overlay {
+                        overlay::show(app);
+                    }
+                }
+                HotkeyDownResult::StopRecording => {
+                    stop_recording_and_transcribe(app, &ctrl);
+                }
+                HotkeyDownResult::NoOp => {}
+            }
+        }
+        hotkey::BareHotkeyState::Released => {
+            info!("Hotkey released: {shortcut}");
+            handle_hotkey_release(app, &ctrl, shortcut);
+        }
+    }
+}
 fn main() {
+    let startup_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let gui_launch_mode = gui_launch_mode(startup_args);
+
     // CLI mode: if a subcommand is given, run CLI and exit. The desktop
     // binary is a full CLI (CLI-first design) — the GUI only launches on a
-    // bare invocation.
-    if let Some(parsed) = sagascript_cli::try_parse() {
-        // CLI mode uses warn-level logging to keep stdout clean
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
-            )
-            .with_writer(std::io::stderr)
-            .init();
-        sagascript_cli::run(parsed);
-        return;
+    // bare invocation. The private GUI-open marker is consumed here rather
+    // than passed to clap so `sagascript open` can explicitly reveal Settings.
+    if gui_launch_mode == GuiLaunchMode::Standard {
+        if let Some(parsed) = sagascript_cli::try_parse() {
+            // CLI mode uses warn-level logging to keep stdout clean
+            let configured_filter = std::env::var("RUST_LOG").ok();
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
+                    configured_filter.as_deref(),
+                    "warn",
+                )))
+                .with_writer(std::io::stderr)
+                .init();
+            sagascript_cli::run(parsed);
+            return;
+        }
     }
 
     // GUI mode: initialize tracing (console logging)
+    let configured_filter = std::env::var("RUST_LOG").ok();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(EnvFilter::new(sagascript_cli::effective_log_filter(
+            configured_filter.as_deref(),
+            "info",
+        )))
         .init();
 
     info!("Sagascript starting...");
 
-    let settings = load_settings_with_permission_gate();
-    info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
-    let initial_hotkey = settings.hotkey.clone();
-    let controller = Mutex::new(AppController::new(settings));
-    let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
-    // Process-wide hotkey registration health (see hotkey::health for why this
-    // is deliberately independent of the AppController mutex). Assumed healthy
-    // until the first real registration attempt in `.setup()` below proves
-    // otherwise — there's no observable window in between since that attempt
-    // runs synchronously before the event loop starts.
-    let hotkey_health = hotkey::HotkeyHealth::new(&initial_hotkey);
-
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("meeting-audio", meeting_media::protocol)
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !second_instance_requests_settings(&args) {
+                info!("Background second-instance launch ignored");
+                return;
+            }
+
+            // The callback is delivered by the single-instance transport,
+            // which is not guaranteed to be the Tauri main thread (notably on
+            // macOS). Queue all state/UI work onto the main thread. This also
+            // makes the Windows WM_COPYDATA callback return promptly instead
+            // of keeping the secondary process blocked on a window operation.
+            let app = app.clone();
+            dispatch_to_main(&app, move |app| {
+                let should_reveal = app
+                    .try_state::<SharedController>()
+                    .map(|ctrl| should_reveal_for_reopen(ctrl.lock().unwrap().state()))
+                    .unwrap_or(true);
+                if should_reveal {
+                    info!("Second-instance launch requested Settings");
+                    open_settings_window(app, None);
+                } else {
+                    info!("Ignoring second-instance launch while dictation is active");
+                }
+            });
+        }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    let ctrl: tauri::State<'_, SharedController> = app.state();
-
-                    match event.state {
-                        ShortcutState::Pressed => {
-                            info!("Hotkey pressed: {shortcut}");
-                            let result = {
-                                let mut c = ctrl.lock().unwrap();
-                                match c.handle_hotkey_down() {
-                                    Ok(r) => r,
-                                    Err(e) => {
-                                        error!("Hotkey down error: {e}");
-                                        HotkeyDownResult::NoOp
-                                    }
-                                }
-                            };
-                            match result {
-                                HotkeyDownResult::StartedRecording => {
-                                    let show_overlay = {
-                                        let c = ctrl.lock().unwrap();
-                                        c.settings().show_overlay
-                                    };
-                                    let _ = app.emit(events::event::STATE_CHANGED, "recording");
-                                    update_tray_status(app, "recording");
-                                    if show_overlay {
-                                        overlay::show(app);
-                                    }
-                                }
-                                HotkeyDownResult::StopRecording => {
-                                    stop_recording_and_transcribe(app, &ctrl);
-                                }
-                                HotkeyDownResult::NoOp => {}
-                            }
-                        }
-                        ShortcutState::Released => {
-                            info!("Hotkey released: {shortcut}");
-                            handle_hotkey_release(app, &ctrl);
-                        }
-                    }
+                    let state = match event.state {
+                        ShortcutState::Pressed => hotkey::BareHotkeyState::Pressed,
+                        ShortcutState::Released => hotkey::BareHotkeyState::Released,
+                    };
+                    handle_hotkey_event(app, &shortcut.to_string(), state);
                 })
                 .build(),
         )
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec![sagascript_cli::open::GUI_BACKGROUND_ARG]),
         ))
         .plugin(tauri_plugin_dialog::init())
-        .manage(controller)
-        .manage(whisper)
-        .manage(hotkey_health)
-        .manage(Mutex::new(None::<MenuItem<tauri::Wry>>) as SharedStatusItem)
-        .setup(|app| {
+        .setup(move |app| {
+            // `tauri-plugin-single-instance` is initialized before Tauri calls
+            // setup. Keep backend construction here so a secondary process is
+            // rejected before it loads settings, opens audio resources, or
+            // creates a Whisper backend.
+            let settings = load_settings_with_permission_gate();
+            info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
+            let initial_hotkey = settings.hotkey.clone();
+            let controller: SharedController = Mutex::new(AppController::new(settings));
+            let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
+            app.manage(controller);
+            app.manage(whisper);
+            app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
+            app.manage(meeting_media::SharedMeetingAudio::default());
+            // Process-wide hotkey registration health (see hotkey::health for
+            // why this is deliberately independent of the AppController
+            // mutex). Assumed healthy until the synchronous registration
+            // attempt below proves otherwise.
+            app.manage(hotkey::HotkeyHealth::new(&initial_hotkey));
+            let status_item: SharedStatusItem = Mutex::new(None);
+            let profile_menu: SharedProfileMenuState = Mutex::new(None);
+            let update_menu: SharedUpdateMenuState = Mutex::new(UpdateMenuState {
+                items: None,
+                checking: false,
+                available_version: None,
+            });
+            app.manage(status_item);
+            app.manage(profile_menu);
+            app.manage(update_menu);
+
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
-            platform::macos::set_activation_policy_accessory();
+            {
+                platform::macos::set_activation_policy_accessory();
+                if let Err(error) = hotkey::install_bare_function_key_monitor(app.handle()) {
+                    error!("Failed to install F13-F24 event monitor: {error}");
+                }
+            }
 
-            // Read hotkey from already-loaded settings and register it
-            let shortcut = {
+            // Read every configured dictation profile and register its shortcut.
+            let requested_settings = {
                 let ctrl: tauri::State<'_, SharedController> = app.state();
                 let c = ctrl.lock().unwrap();
-                let shortcut = c.settings().hotkey.clone();
-                drop(c);
-                shortcut
+                c.settings().clone()
             };
+            let profiles = requested_settings.resolved_hotkey_profiles();
+            let requested_primary = profiles
+                .iter()
+                .find(|profile| profile.id == "default")
+                .unwrap_or(&profiles[0])
+                .shortcut
+                .clone();
 
             // Register global shortcut. Failure here (combo already claimed by
             // Spotlight/Raycast/etc.) used to be log-only: the app would look
@@ -196,29 +661,59 @@ fn main() {
             // dictate. Recorded in the process-wide health flag so the tray
             // and Settings UI can surface it.
             let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
-            match app.global_shortcut().register(shortcut.as_str()) {
-                Ok(()) => {
-                    info!("Hotkey registered: {shortcut}");
-                    let change = health.record(
-                        &shortcut,
-                        None,
-                        hotkey::OperationalHotkey::registered(&shortcut),
-                    );
-                    if change.changed {
-                        let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
-                    }
+            let validation_error = requested_settings.validate_shortcut_configuration().err();
+            let registration_shortcuts: Vec<String> = if validation_error.is_some() {
+                vec![SAFE_FALLBACK_HOTKEY.to_string()]
+            } else {
+                requested_settings.resolved_shortcuts()
+            };
+            if let Some(error) = &validation_error {
+                warn!(
+                    "Refusing invalid saved hotkey profiles: {error}; trying safe fallback '{SAFE_FALLBACK_HOTKEY}'"
+                );
+            }
+            let registration_error = hotkey::register_shortcuts(app.handle(), &registration_shortcuts)
+                .err()
+                .map(|error| error.to_string());
+            let cleanup_error = registration_error.as_ref().and_then(|_| {
+                hotkey::unregister_shortcuts(app.handle(), &registration_shortcuts)
+                    .err()
+                    .map(|error| error.to_string())
+            });
+            if let Some(error) = &registration_error {
+                error!("Failed to register hotkey profiles: {error}");
+            } else {
+                info!("Registered {} hotkey profile(s)", registration_shortcuts.len());
+            }
+            let (health_error, operational_hotkey) = match (validation_error, registration_error, cleanup_error) {
+                (validation, Some(registration), Some(cleanup)) => (
+                    Some(format!("{}registration failed: {registration}; partial-registration cleanup failed: {cleanup}", validation.map(|error| format!("{error}; ")).unwrap_or_default())),
+                    hotkey::OperationalHotkey::Unknown,
+                ),
+                (None, None, None) => (
+                    None,
+                    hotkey::OperationalHotkey::registered_many(&registration_shortcuts),
+                ),
+                (Some(validation), None, None) => (
+                    Some(format!(
+                        "{validation}; using safe fallback '{SAFE_FALLBACK_HOTKEY}'"
+                    )),
+                    hotkey::OperationalHotkey::registered_many(&registration_shortcuts),
+                ),
+                (None, Some(registration), None) => {
+                    (Some(registration), hotkey::OperationalHotkey::Inactive)
                 }
-                Err(e) => {
-                    error!("Failed to register hotkey: {e}");
-                    let change = health.record(
-                        &shortcut,
-                        Some(e.to_string()),
-                        hotkey::OperationalHotkey::Inactive,
-                    );
-                    if change.changed {
-                        let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
-                    }
-                }
+                (Some(validation), Some(registration), None) => (
+                    Some(format!(
+                        "{validation}; fallback '{SAFE_FALLBACK_HOTKEY}' also failed: {registration}"
+                    )),
+                    hotkey::OperationalHotkey::Inactive,
+                ),
+                (_, None, Some(_)) => unreachable!("cleanup only runs after registration failure"),
+            };
+            let change = health.record(&requested_primary, health_error, operational_hotkey);
+            if change.changed {
+                let _ = app.emit(events::event::HOTKEY_REGISTRATION_CHANGED, &change.status);
             }
 
             // Build tray menu
@@ -229,23 +724,88 @@ fn main() {
                 MenuItem::with_id(app, "transcribe_file", "Transcribe File...", true, None::<&str>)?;
             let status =
                 MenuItem::with_id(app, "status", "Sagascript - Idle", false, None::<&str>)?;
+            let profiles = {
+                let ctrl: tauri::State<'_, SharedController> = app.state();
+                let profiles = ctrl.lock().unwrap().settings().resolved_hotkey_profiles();
+                profiles
+            };
+            let selected_profile_id = profiles.first().map(|profile| profile.id.clone());
+            let profile_items =
+                create_profile_menu_items(app, &profiles, selected_profile_id.as_deref())?;
+            let profiles_menu = Submenu::new(app, "Profiles", true)?;
+            for item in &profile_items {
+                profiles_menu.append(item)?;
+            }
+            let update_status = MenuItem::with_id(
+                app,
+                "update_status",
+                "Updates: not checked",
+                false,
+                None::<&str>,
+            )?;
+            let check_for_updates_item = MenuItem::with_id(
+                app,
+                "check_for_updates",
+                UPDATE_CHECK_ACTION,
+                true,
+                None::<&str>,
+            )?;
+            let build_info_item =
+                MenuItem::with_id(app, "build_info", BUILD_IDENTITY, false, None::<&str>)?;
 
             // Store status item so we can update it after transcription
             {
                 let status_state: tauri::State<'_, SharedStatusItem> = app.state();
                 *status_state.lock().unwrap() = Some(status.clone());
             }
+            {
+                let profile_state: tauri::State<'_, SharedProfileMenuState> = app.state();
+                *profile_state.lock().unwrap() = Some(ProfileMenuState {
+                    submenu: profiles_menu.clone(),
+                    items: profile_items,
+                    selected_profile_id,
+                });
+            }
+            {
+                let update_state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+                update_state.lock().unwrap().items = Some(UpdateMenuItems {
+                    status: update_status.clone(),
+                    check: check_for_updates_item.clone(),
+                });
+            }
 
-            let menu = Menu::with_items(app, &[&status, &settings_item, &transcribe_file_item, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &status,
+                    &profiles_menu,
+                    &update_status,
+                    &check_for_updates_item,
+                    &build_info_item,
+                    &settings_item,
+                    &transcribe_file_item,
+                    &quit,
+                ],
+            )?;
 
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+            #[cfg(target_os = "macos")]
+            seed_macos_tray_preferred_position();
 
-            let _tray = TrayIconBuilder::with_id("main")
+            let tray_builder = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .tooltip("Sagascript")
-                .icon(tray_icon)
-                .icon_as_template(true)
-                .on_menu_event(move |app, event| match event.id().as_ref() {
+                // macOS 26 can register an image-backed status item but paint
+                // it blank. Compact native text stays visible: S while idle,
+                // then a state marker while recording or transcribing.
+                .title("S");
+            #[cfg(target_os = "windows")]
+            let tray_builder = match app.default_window_icon() {
+                Some(icon) => tray_builder.icon(icon.clone()),
+                None => return Err("Windows tray icon is missing from the app bundle".into()),
+            };
+            let tray = tray_builder
+                .on_menu_event(move |app, event| {
+                    match event.id().as_ref() {
                     "quit" => {
                         info!("Quit requested");
                         app.exit(0);
@@ -256,9 +816,43 @@ fn main() {
                     "transcribe_file" => {
                         open_settings_window(app, Some("transcribe"));
                     }
+                    "manage_profiles" => {
+                        open_settings_window(app, Some("dictate"));
+                    }
+                    "check_for_updates" => {
+                        let available_version = {
+                            let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+                            let version = state.lock().unwrap().available_version.clone();
+                            version
+                        };
+                        if let Some(version) = available_version {
+                            if let Err(error) = open_update_release(&version) {
+                                error!("Failed to open update release: {error}");
+                            } else {
+                                let items = {
+                                    let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+                                    let mut state = state.lock().unwrap();
+                                    state.available_version = None;
+                                    state.items.clone()
+                                };
+                                if let Some(items) = items {
+                                    if let Err(error) = items.check.set_text("Check Again…") {
+                                        error!("Failed to reset update action after opening release: {error}");
+                                    }
+                                }
+                            }
+                        } else {
+                            check_for_updates(app.clone());
+                        }
+                    }
                     _ => {}
+                }
                 })
                 .build(app)?;
+
+            #[cfg(target_os = "macos")]
+            configure_macos_tray_identity(&tray)?;
+            tray.set_visible(true)?;
 
             info!("Tray icon created");
 
@@ -273,49 +867,99 @@ fn main() {
                 let app_dir = app.path().app_data_dir().ok();
                 if let Some(dir) = app_dir {
                     let legacy = dir.join("flowdictate-settings.json");
-                    let new_path = dir.join("sagascript-settings.json");
-                    migrate_legacy_settings(&legacy, &new_path);
+                    let new_path = sagascript_core::settings::store::settings_path();
+                    migrate_legacy_settings_unless_overridden(
+                        &legacy,
+                        &new_path,
+                        sagascript_core::settings::store::settings_path_is_overridden(),
+                    );
                 }
             }
 
             // Watch settings file for external changes (e.g. `sagascript config set`)
             start_settings_watcher(app.handle().clone());
 
-            // Auto-open onboarding on first launch
+            // Only the login-item marker stays headless after onboarding.
+            // A normal Finder/Spotlight launch is deliberate and opens
+            // Settings; hotkey recording/transcription never enters this path.
             {
                 let settings = sagascript_core::settings::store::load();
-                if !settings.has_completed_onboarding {
-                    info!("First launch detected, opening onboarding");
-                    open_settings_window(app.handle(), Some("onboarding"));
+                match initial_window_request(settings.has_completed_onboarding, gui_launch_mode) {
+                    InitialWindowRequest::Hidden => {
+                        info!("Background launch complete; Settings remains hidden");
+                    }
+                    InitialWindowRequest::Settings => {
+                        info!("Foreground GUI launch requested");
+                        open_settings_window(app.handle(), None);
+                    }
+                    InitialWindowRequest::Onboarding => {
+                        info!("First launch detected, opening onboarding");
+                        open_settings_window(app.handle(), Some("onboarding"));
+                    }
                 }
             }
 
-            // Preload + warm the whisper model in the background so the first
-            // dictation of the session doesn't pay model-load and Metal/CoreML
-            // kernel-compile latency. Best-effort: if the model isn't downloaded
-            // yet (fresh install) we just skip and load lazily on first use.
+            // Preload + warm the bounded set of models selected by the hotkey
+            // profiles. The primary profile is restored as active after warmup,
+            // while one distinct secondary stays resident for instant bilingual
+            // switching. Missing models are never downloaded implicitly.
             {
                 let whisper: tauri::State<'_, SharedWhisper> = app.state();
                 let whisper = whisper.inner().clone();
-                let (model, language, vad_enabled) = {
+                let (warm_plan, vad_enabled) = {
                     let ctrl: tauri::State<'_, SharedController> = app.state();
                     let c = ctrl.lock().unwrap();
                     (
-                        c.settings().effective_model(),
-                        c.language(),
+                        c.settings().warm_model_plan(
+                            WARM_MODEL_CACHE_MAX_MODELS,
+                            WARM_MODEL_CACHE_BUDGET_MB,
+                        ),
                         c.settings().vad_enabled,
                     )
                 };
                 std::thread::spawn(move || {
-                    if let Err(e) = whisper.ensure_model(model) {
-                        warn!("Model preload skipped: {e}");
+                    let Some(&(primary_model, primary_language)) = warm_plan.first() else {
+                        return;
+                    };
+
+                    if let Err(e) = whisper.ensure_model(primary_model) {
+                        warn!("Primary model preload skipped: {e}");
                         return;
                     }
-                    if let Err(e) = whisper.warmup(language) {
-                        warn!("Model warmup failed: {e}");
+                    if let Err(e) = whisper.warmup_model(primary_model, primary_language) {
+                        warn!("Primary model warmup failed: {e}");
                     } else {
-                        info!("Model preloaded and warmed: {}", model.display_name());
+                        info!(
+                            "Primary model preloaded and warmed: {}",
+                            primary_model.display_name()
+                        );
                     }
+
+                    for &(model, language) in warm_plan.iter().skip(1) {
+                        if let Err(e) = whisper.ensure_model(model) {
+                            warn!("Secondary model preload skipped: {e}");
+                            continue;
+                        }
+                        if let Err(e) = whisper.warmup_model(model, language) {
+                            warn!("Secondary model warmup failed: {e}");
+                        } else {
+                            info!(
+                                "Secondary model preloaded and warmed: {}",
+                                model.display_name()
+                            );
+                        }
+                    }
+
+                    if whisper.loaded_model() != Some(primary_model) {
+                        if let Err(e) = whisper.ensure_model(primary_model) {
+                            warn!("Could not restore primary model after warmup: {e}");
+                        }
+                    }
+
+                    info!(
+                        "Warm resident models ready: {:?}",
+                        whisper.resident_models()
+                    );
                 });
 
                 // Startup is verification-only: model repair/download remains
@@ -355,6 +999,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::get_settings,
+            commands::get_active_hotkey_profile,
             commands::get_last_transcription,
             commands::get_last_error,
             commands::is_model_ready,
@@ -364,24 +1009,55 @@ fn main() {
             commands::set_auto_select_model,
             commands::set_hotkey_mode,
             commands::set_hotkey,
+            commands::set_hotkey_profiles,
+            commands::retry_hotkey_registration,
             commands::hotkey_status,
             commands::start_recording,
+            commands::start_training_recording,
             commands::stop_and_transcribe,
+            commands::stop_and_transcribe_training,
+            commands::transcribe_training_file,
             commands::cancel_recording,
             commands::is_model_downloaded,
             commands::get_model_info,
+            commands::get_effective_model_info,
             commands::download_model,
             commands::set_auto_paste,
             commands::set_show_overlay,
             commands::set_initial_prompt,
+            commands::set_profile_glossary,
+            commands::suggest_training_glossary,
+            commands::apply_training_glossary,
             commands::set_beam_size,
             commands::set_temperature_fallback,
             commands::set_vad_enabled,
             commands::get_build_info,
             commands::transcribe_file,
+            meeting_jobs::begin_meeting_file,
+            meeting_jobs::begin_meeting_reprocessing,
+            meeting_reprocessing_commands::plan_meeting_reprocessing,
+            meeting_reprocessing_commands::preview_meeting_proposal,
+            meeting_reprocessing_commands::resolve_meeting_proposal,
+            meeting_reprocessing_commands::accept_meeting_proposal,
+            meeting_reprocessing_commands::save_meeting_proposal,
+            meeting_reprocessing_commands::open_meeting_proposal,
+            meeting_jobs::get_meeting_job,
+            meeting_jobs::cancel_meeting_job,
+            meeting_jobs::rename_meeting_speaker,
+            meeting_jobs::merge_meeting_speakers,
+            meeting_jobs::save_meeting_export,
+            meeting_review_commands::create_meeting_review,
+            meeting_review_commands::apply_meeting_corrections,
+            meeting_review_commands::undo_meeting_review,
+            meeting_review_commands::reset_meeting_review,
+            meeting_review_commands::open_meeting_review,
+            meeting_review_commands::save_meeting_review,
+            meeting_media::attach_meeting_audio,
+            meeting_media::detach_meeting_audio,
             commands::get_supported_formats,
             commands::check_accessibility_permission,
             commands::request_accessibility_permission,
+            commands::open_accessibility_settings,
             commands::microphone_status,
             commands::request_microphone_access,
             commands::open_microphone_settings,
@@ -391,14 +1067,93 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Sagascript")
         .run(|_app_handle, event| {
-            // Prevent app from exiting when all windows are closed (tray-only app),
-            // but allow explicit exit requests (e.g. from tray "Quit" menu)
-            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
-                if code.is_none() {
-                    api.prevent_exit();
+            match event {
+                // Prevent app from exiting when all windows are closed (tray-only app),
+                // but allow explicit exit requests (e.g. from tray "Quit" menu)
+                tauri::RunEvent::ExitRequested {
+                    api, code: None, ..
+                } => api.prevent_exit(),
+                // Finder/Spotlight sends Reopen when the already-running app is
+                // launched again. A miniaturized NSWindow may still count as
+                // "visible", so always run the full reveal path.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    let state = {
+                        let ctrl: tauri::State<'_, SharedController> = _app_handle.state();
+                        let state = ctrl.lock().unwrap().state();
+                        state
+                    };
+                    if should_reveal_for_reopen(state) {
+                        info!("Application reopen requested");
+                        open_settings_window(_app_handle, None);
+                    } else {
+                        info!("Ignoring application reopen while dictation is {state:?}");
+                    }
                 }
+                _ => {}
             }
         });
+}
+
+/// Match the key AppKit uses to persist a named status item's menu-bar slot.
+#[cfg(target_os = "macos")]
+fn tray_preferred_position_key(autosave_name: &str) -> String {
+    format!("NSStatusItem Preferred Position {autosave_name}")
+}
+
+#[cfg(target_os = "macos")]
+fn initial_tray_preferred_position(has_saved_position: bool) -> Option<f64> {
+    (!has_saved_position).then_some(DEFAULT_TRAY_PREFERRED_POSITION)
+}
+
+/// Seed a usable first position on crowded, notched menu bars. AppKit normally
+/// puts a brand-new status item at the far-left edge of the status area, where
+/// it may report `isVisible = true` while sitting behind the camera cutout.
+/// Once the user moves the item, AppKit owns this value and we never overwrite
+/// it.
+#[cfg(target_os = "macos")]
+fn seed_macos_tray_preferred_position() {
+    use objc2_foundation::{NSString, NSUserDefaults};
+
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let key_string = tray_preferred_position_key(TRAY_AUTOSAVE_NAME);
+    let key = NSString::from_str(&key_string);
+    let Some(position) =
+        initial_tray_preferred_position(defaults.objectForKey(&key).is_some())
+    else {
+        return;
+    };
+
+    defaults.setDouble_forKey(position, &key);
+    info!(position, "Seeded initial macOS tray position");
+}
+
+/// Give AppKit a stable identity for the status item before making it visible.
+/// Without an autosave name macOS 26 places every fresh item in the default
+/// leftmost slot, which can sit behind a MacBook camera cutout.
+#[cfg(target_os = "macos")]
+fn configure_macos_tray_identity(tray: &tauri::tray::TrayIcon) -> tauri::Result<()> {
+    let configured = tray.with_inner_tray_icon(|inner| {
+        let Some(status_item) = inner.ns_status_item() else {
+            return false;
+        };
+
+        let autosave_name = objc2_foundation::NSString::from_str(TRAY_AUTOSAVE_NAME);
+        // Tauri constructs the native item visible. Toggle it inside the same
+        // main-thread callback so the stable name is in place before AppKit
+        // performs the visible placement pass.
+        status_item.setVisible(false);
+        status_item.setAutosaveName(Some(&autosave_name));
+        status_item.setVisible(true);
+
+        status_item.autosaveName().to_string() == TRAY_AUTOSAVE_NAME
+    })?;
+
+    if configured {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("failed to assign the macOS tray autosave name").into())
+    }
 }
 
 /// Pure state -> (tooltip, title, menu_text) mapping for the tray, extracted
@@ -410,17 +1165,13 @@ fn main() {
 /// warning sticky.
 fn tray_label(state: &str, hotkey_failed: bool) -> (&'static str, &'static str, &'static str) {
     if hotkey_failed {
-        return (
-            "Sagascript - Hotkey unavailable",
-            "\u{26A0}",
-            "Hotkey unavailable",
-        );
+        return ("Sagascript - Hotkey unavailable", "!", "Hotkey unavailable");
     }
     match state {
-        "recording" => ("Sagascript - Recording...", "Rec", "Recording..."),
-        "loading_model" => ("Sagascript - Loading model...", "Loading...", "Loading model..."),
-        "transcribing" => ("Sagascript - Transcribing...", "...", "Transcribing..."),
-        _ => ("Sagascript", "", "Idle"),
+        "recording" => ("Sagascript - Recording...", "●", "Recording..."),
+        "loading_model" => ("Sagascript - Loading model...", "…", "Loading model..."),
+        "transcribing" => ("Sagascript - Transcribing...", "…", "Transcribing..."),
+        _ => ("Sagascript", "S", "Idle"),
     }
 }
 
@@ -464,6 +1215,17 @@ fn migrate_legacy_settings(legacy: &std::path::Path, new_path: &std::path::Path)
             new_path.display()
         ),
     }
+}
+
+fn migrate_legacy_settings_unless_overridden(
+    legacy: &std::path::Path,
+    new_path: &std::path::Path,
+    settings_path_is_overridden: bool,
+) {
+    if settings_path_is_overridden {
+        return;
+    }
+    migrate_legacy_settings(legacy, new_path);
 }
 
 /// Truncate transcription text for tray display, cutting on a char boundary.
@@ -512,10 +1274,139 @@ fn set_status_menu_text(app: &tauri::AppHandle, text: &str) {
     }
 }
 
-/// Open or focus the main window, optionally navigating to a specific tab
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitialWindowRequest {
+    Hidden,
+    Settings,
+    Onboarding,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuiLaunchMode {
+    Standard,
+    ShowSettings,
+    Background,
+}
+
+fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLaunchMode {
+    let mut args = args.into_iter();
+    let _program = args.next();
+    let remaining: Vec<_> = args.collect();
+    match (remaining.first().cloned(), remaining.get(1).cloned()) {
+        (Some(argument), None)
+            if argument == std::ffi::OsStr::new(sagascript_cli::open::GUI_OPEN_ARG) =>
+        {
+            GuiLaunchMode::ShowSettings
+        }
+        (Some(argument), None)
+            if argument == std::ffi::OsStr::new(sagascript_cli::open::GUI_BACKGROUND_ARG) =>
+        {
+            GuiLaunchMode::Background
+        }
+        _ => GuiLaunchMode::Standard,
+    }
+}
+
+fn second_instance_requests_settings(args: &[String]) -> bool {
+    // Retired private markers must never trigger UI or recording actions.
+    if args.iter().any(|argument| argument.starts_with("--presenter-")) {
+        return false;
+    }
+    // `tauri-plugin-single-instance` forwards the complete argv on Windows,
+    // including argv[0], but transports differ across platforms and versions.
+    // Treat the private background marker as a capability to stay hidden and
+    // let every other relaunch (including a bare Start-menu launch) reveal
+    // Settings. Looking for the marker anywhere is robust to either argv
+    // shape and to a future plugin adding metadata arguments.
+    !args
+        .iter()
+        .any(|argument| argument == sagascript_cli::open::GUI_BACKGROUND_ARG)
+}
+
+fn initial_window_request(
+    has_completed_onboarding: bool,
+    launch_mode: GuiLaunchMode,
+) -> InitialWindowRequest {
+    if !has_completed_onboarding {
+        InitialWindowRequest::Onboarding
+    } else if launch_mode == GuiLaunchMode::Background {
+        InitialWindowRequest::Hidden
+    } else {
+        InitialWindowRequest::Settings
+    }
+}
+
+fn should_reveal_for_reopen(state: AppState) -> bool {
+    !state.is_busy()
+}
+
+trait MainWindowVisibility {
+    fn activate_app(&self);
+    fn reset_to_normal_level(&self) -> Result<(), String>;
+    fn unminimize(&self) -> Result<(), String>;
+    fn show(&self) -> Result<(), String>;
+    fn set_focus(&self) -> Result<(), String>;
+}
+
+impl MainWindowVisibility for tauri::WebviewWindow {
+    fn activate_app(&self) {
+        #[cfg(target_os = "macos")]
+        if let Err(error) = self
+            .app_handle()
+            .run_on_main_thread(platform::macos::activate_app)
+        {
+            warn!("Failed to schedule foreground application activation: {error}");
+        }
+    }
+
+    fn reset_to_normal_level(&self) -> Result<(), String> {
+        tauri::WebviewWindow::set_always_on_top(self, false).map_err(|error| error.to_string())
+    }
+
+    fn unminimize(&self) -> Result<(), String> {
+        tauri::WebviewWindow::unminimize(self).map_err(|error| error.to_string())
+    }
+
+    fn show(&self) -> Result<(), String> {
+        tauri::WebviewWindow::show(self).map_err(|error| error.to_string())
+    }
+
+    fn set_focus(&self) -> Result<(), String> {
+        tauri::WebviewWindow::set_focus(self).map_err(|error| error.to_string())
+    }
+}
+
+fn reveal_existing_main_window(window: &impl MainWindowVisibility) -> Result<(), String> {
+    if let Err(error) = window.reset_to_normal_level() {
+        warn!("Failed to restore normal main-window level: {error}");
+    }
+    window
+        .unminimize()
+        .map_err(|error| format!("failed to restore main window: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("failed to show main window: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("failed to focus main window: {error}"))?;
+    // Queue activation after presentation. During initial `.setup()` a direct
+    // AppKit activation happens before Tauri's event loop is ready and macOS
+    // leaves the onboarding window behind the previously active application.
+    window.activate_app();
+    Ok(())
+}
+
+/// Open or focus the main window, optionally navigating to a specific tab.
+/// Errors are surfaced in the application log instead of being silently lost.
 fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
     info!("Opening main window (tab: {:?})", tab);
 
+    if let Err(error) = try_open_settings_window(app, tab) {
+        error!("Failed to open main window: {error}");
+    }
+}
+
+fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result<(), String> {
     // Build a URL with optional query parameter
     let url = match tab {
         Some("onboarding") => "index.html?onboarding=true".to_string(),
@@ -526,10 +1417,11 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
     if let Some(window) = app.get_webview_window("settings") {
         // If switching tab on existing window, emit an event
         if let Some(t) = tab {
-            let _ = window.emit("navigate_tab", t);
+            if let Err(error) = window.emit("navigate_tab", t) {
+                warn!("Failed to navigate main window to '{t}': {error}");
+            }
         }
-        let _ = window.show();
-        let _ = window.set_focus();
+        reveal_existing_main_window(&window)
     } else {
         // Cap default height to 80% of screen so it fits on small displays (e.g. 768p laptops)
         let default_height = if let Ok(Some(monitor)) = app.primary_monitor() {
@@ -539,7 +1431,7 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
             660.0
         };
 
-        let _window = tauri::WebviewWindowBuilder::new(
+        let window = tauri::WebviewWindowBuilder::new(
             app,
             "settings",
             tauri::WebviewUrl::App(url.into()),
@@ -548,9 +1440,13 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
         .inner_size(500.0, default_height)
         .min_inner_size(500.0, 400.0)
         .resizable(true)
+        .always_on_top(false)
         .center()
         .focused(true)
-        .build();
+        .build()
+        .map_err(|error| format!("failed to create main window: {error}"))?;
+
+        reveal_existing_main_window(&window)
     }
 }
 
@@ -558,10 +1454,13 @@ fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
 fn handle_hotkey_release(
     app: &tauri::AppHandle,
     ctrl: &tauri::State<'_, SharedController>,
+    shortcut: &str,
 ) {
     let should_stop = {
-        let c = ctrl.lock().unwrap();
-        c.should_stop_on_key_up()
+        let mut c = ctrl.lock().unwrap();
+        let should_stop = c.should_stop_profile_on_key_up(shortcut);
+        c.note_hotkey_release(shortcut);
+        should_stop
     };
 
     if !should_stop {
@@ -571,9 +1470,9 @@ fn handle_hotkey_release(
     stop_recording_and_transcribe(app, ctrl);
 }
 
-/// Run a UI closure on the macOS main thread. NSStatusItem / NSWindow (tray,
-/// overlay) APIs must not be touched from a worker thread; best-effort — logs
-/// if the dispatch itself fails.
+/// Run a UI closure on Tauri's main thread. Native tray/window APIs must not be
+/// touched from a transport or worker thread; best-effort — logs if dispatch
+/// itself fails.
 fn dispatch_to_main<F>(app: &tauri::AppHandle, f: F)
 where
     F: FnOnce(&tauri::AppHandle) + Send + 'static,
@@ -584,19 +1483,30 @@ where
     }
 }
 
+fn elapsed_ms(start: Instant) -> u64 {
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn elapsed_ms_if_success<T, E>(result: &Result<T, E>, start: Instant) -> Option<u64> {
+    result.as_ref().ok().map(|_| elapsed_ms(start))
+}
+
 /// Stop recording, enforce minimum duration, and spawn transcription.
 /// Shared by both push-to-talk (on key-up) and toggle (on second key-down).
 fn stop_recording_and_transcribe(
     app: &tauri::AppHandle,
     ctrl: &tauri::State<'_, SharedController>,
 ) {
+    let key_up_at = Instant::now();
+
     // Compute how long we still need to hold to satisfy the minimum recording
     // duration — but do NOT block the global-shortcut (UI) thread waiting for it
     // (finding 2): a std::thread::sleep here freezes UI redraw and stalls
     // subsequent hotkey events. The delay is offloaded to an async task below.
-    let elapsed = {
-        let c = ctrl.lock().unwrap();
-        c.recording_elapsed()
+    let (elapsed, generation) = {
+        let mut c = ctrl.lock().unwrap();
+        c.mark_release();
+        (c.recording_elapsed(), c.recording_generation())
     };
     let min = Duration::from_millis(MIN_RECORDING_MS);
     let remaining = if elapsed < min {
@@ -625,7 +1535,7 @@ fn stop_recording_and_transcribe(
         let outcome = {
             let ctrl: tauri::State<'_, SharedController> = app_handle.state();
             let mut c = ctrl.lock().unwrap();
-            c.stop_recording_guarded()
+            c.stop_recording_generation(generation)
         };
         let audio = match outcome {
             StopRecordingOutcome::NotRecording => return,
@@ -641,11 +1551,13 @@ fn stop_recording_and_transcribe(
             }
             StopRecordingOutcome::Stopped(audio) => audio,
         };
+        let key_up_to_capture_stopped_ms = elapsed_ms(key_up_at);
 
-        // Hide overlay + show the transcribing state — re-dispatched to the main
+        // Keep the recording indicator visible through processing, so key-up
+        // never leaves the user without feedback while inference/paste runs.
+        // Show the transcribing state — re-dispatched to the main
         // thread now that this runs on a worker.
         dispatch_to_main(&app_handle, |app| {
-            overlay::hide(app);
             update_tray_status(app, "transcribing");
         });
         let _ = app_handle.emit(events::event::STATE_CHANGED, "transcribing");
@@ -653,9 +1565,22 @@ fn stop_recording_and_transcribe(
         if audio.is_empty() {
             {
                 let ctrl: tauri::State<'_, SharedController> = app_handle.state();
-                ctrl.lock().unwrap().on_transcription_error("No audio captured");
+                let mut c = ctrl.lock().unwrap();
+                c.log_dictation_performance(serde_json::json!({
+                    "outcome": "no_speech",
+                    "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
+                    "keyUpToModelReadyMs": null,
+                    "modelLoadMs": null,
+                    "whisperMs": null,
+                    "keyUpToPasteCompletedMs": null,
+                    "totalMs": elapsed_ms(key_up_at),
+                }));
+                c.on_no_speech_detected();
             }
-            dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
+            dispatch_to_main(&app_handle, |app| {
+                overlay::hide(app);
+                update_tray_status(app, "idle");
+            });
             let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
             return;
         }
@@ -667,27 +1592,40 @@ fn stop_recording_and_transcribe(
         let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 
         // Extract what we need for transcription (lock briefly)
-        let (language, effective_model, opts) = {
+        let (language, effective_model, opts, glossary) = {
             let c = ctrl.lock().unwrap();
+            let profile_id = c.active_hotkey_profile().map(|profile| profile.id.as_str());
             (
                 c.language(),
-                c.settings().effective_model(),
-                commands::build_transcribe_options(c.settings()),
+                c.settings().effective_model_for(c.language()),
+                commands::build_transcribe_options_for_profile(c.settings(), profile_id),
+                sagascript_core::transcription::Glossary::parse(
+                    &c.settings().effective_glossary_source(profile_id),
+                ),
             )
         };
 
-        info!("Transcribing with model: {}", effective_model.display_name());
+        let model_name = effective_model.display_name().to_string();
+        let language_name = language.display_name().to_string();
+        let beam_size = opts.beam_size;
+        let temperature_fallback = opts.temperature_fallback;
+        let vad_enabled = opts.vad_model_path.is_some();
+        let mut model_was_warm = !whisper.needs_reload(effective_model);
+        info!("Transcribing with model: {model_name}");
 
         // Show model loading status in tray
-        if whisper.needs_reload(effective_model) {
+        if !model_was_warm {
             let _ = app_handle.emit(events::event::STATE_CHANGED, "loading_model");
             dispatch_to_main(&app_handle, |app| update_tray_status(app, "loading_model"));
         }
 
-        // Ensure model is loaded
-        let result = if let Err(e) = whisper.ensure_model(effective_model) {
-            Err(e)
-        } else {
+        // Model selection and inference stay in one bounded transaction on
+        // the blocking worker. Do not reintroduce a separate ensure_model call:
+        // another language could otherwise replace the selected context.
+        let mut model_load_ms = None;
+        let mut key_up_to_model_ready_ms = None;
+        let mut whisper_ms = None;
+        let result = {
             // Run blocking transcription on a separate thread with a timeout. On
             // timeout we trigger a REAL abort (whisper-rs abort callback wired in
             // WhisperBackend): request_abort() flips the flag whisper.cpp checks
@@ -695,12 +1633,31 @@ fn stop_recording_and_transcribe(
             // warm state instead of running to completion and wedging the pipeline.
             let whisper_ref = whisper.inner().clone();
             let mut fut = tokio::task::spawn_blocking(move || {
-                whisper_ref.transcribe_sync_with_options(&audio, language, &opts, |_| {})
+                let mut timings = sagascript_core::transcription::whisper_backend::DictationTimings::default();
+                let result = whisper_ref.transcribe_live_dictation(effective_model, &audio, language, &opts, &mut timings);
+                (result, timings)
             });
 
             let timeout = Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS);
             match tokio::time::timeout(timeout, &mut fut).await {
-                Ok(Ok(r)) => r,
+                Ok(Ok((r, timings))) => {
+                    let mut c = ctrl.lock().unwrap();
+                    if timings.model_acquisition_started {
+                        model_load_ms = Some(timings.model_ms);
+                        model_was_warm = timings.model_cached;
+                        c.record_phase("model_acquisition", Duration::from_secs_f64(timings.model_ms / 1000.0));
+                        c.record_model_cache(timings.model_cached);
+                    }
+                    key_up_to_model_ready_ms = timings.model_ready_at.map(|ready| {
+                        u64::try_from(ready.saturating_duration_since(key_up_at).as_millis())
+                            .unwrap_or(u64::MAX)
+                    });
+                    if timings.inference_started {
+                        whisper_ms = Some(timings.inference_ms);
+                        c.record_phase("inference", Duration::from_secs_f64(timings.inference_ms / 1000.0));
+                    }
+                    r
+                }
                 Ok(Err(e)) => Err(sagascript_core::error::DictationError::TranscriptionFailed(
                     format!("Task join error: {e}"),
                 )),
@@ -725,9 +1682,43 @@ fn stop_recording_and_transcribe(
             }
         };
 
+        let key_up_to_whisper_complete_ms = whisper_ms
+            .and_then(|_| elapsed_ms_if_success(&result, key_up_at));
+        let postprocess_started = std::time::Instant::now();
+        let result = result.map(|text| commands::apply_glossary(text, &glossary));
+        ctrl.lock().unwrap().record_phase("postprocessing", postprocess_started.elapsed());
         match result {
             Ok(text) => {
                 info!("Transcription complete: {} chars", text.len());
+
+                if text.trim().is_empty() {
+                    let mut c = ctrl.lock().unwrap();
+                    c.log_dictation_performance(serde_json::json!({
+                        "outcome": "no_speech",
+                        "model": model_name,
+                        "language": language_name,
+                        "modelWasWarm": model_was_warm,
+                        "beamSize": beam_size,
+                        "temperatureFallback": temperature_fallback,
+                        "vadEnabled": vad_enabled,
+                        "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
+                        "modelLoadMs": model_load_ms,
+                        "keyUpToModelReadyMs": key_up_to_model_ready_ms,
+                        "whisperMs": whisper_ms,
+                        "keyUpToWhisperCompleteMs": key_up_to_whisper_complete_ms,
+                        "keyUpToPasteCompletedMs": null,
+                        "totalMs": elapsed_ms(key_up_at),
+                    }));
+                    c.on_no_speech_detected();
+                    drop(c);
+                    let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                    dispatch_to_main(&app_handle, |app| {
+                        overlay::hide(app);
+                        update_tray_status(app, "idle");
+                    });
+                    info!("No speech detected; returning to idle without paste");
+                    return;
+                }
 
                 // Check if auto-paste is enabled (lock briefly)
                 let should_paste = {
@@ -735,23 +1726,94 @@ fn stop_recording_and_transcribe(
                     c.settings().auto_paste
                 };
 
+                let mut paste_outcome = "disabled";
+                let mut key_up_to_paste_completed_ms = None;
+                let mut paste_error = None;
                 if should_paste {
                     // Auto-paste MUST run on the main thread — enigo's macOS TIS APIs
                     // crash (SIGABRT) if called from a tokio worker thread.
                     let text_for_paste = text.clone();
-                    if let Err(e) = app_handle.run_on_main_thread(move || {
-                        info!("Running auto-paste on main thread...");
-                        let paste_svc = crate::paste::PasteService::new();
-                        match paste_svc.paste(&text_for_paste) {
+                    let paste_started = std::time::Instant::now();
+                    let (paste_tx, paste_rx) = tokio::sync::oneshot::channel();
+                    let paste_task = move || {
+                        let paste_result = crate::paste::PasteService::new()
+                            .paste(&text_for_paste)
+                            .map_err(|error| error.to_string());
+                        match &paste_result {
                             Ok(()) => info!("Auto-paste completed successfully"),
                             Err(e) => error!("Auto-paste failed: {e}"),
                         }
-                    }) {
+                        let _ = paste_tx.send(paste_result);
+                    };
+                    #[cfg(target_os = "macos")]
+                    let dispatch_result = app_handle.run_on_main_thread(paste_task);
+                    #[cfg(not(target_os = "macos"))]
+                    let dispatch_result: Result<(), String> = {
+                        // Clipboard focus/paste can block on Windows. Keep its
+                        // native UI thread responsive while preserving macOS's
+                        // mandatory main-thread execution above.
+                        tokio::task::spawn_blocking(paste_task);
+                        Ok(())
+                    };
+                    if let Err(e) = dispatch_result {
                         error!("Failed to dispatch paste to main thread: {e}");
+                        paste_outcome = "dispatch_failed";
+                        paste_error = Some("Could not dispatch automatic paste. Copy the recognized text from Dictate.".to_string());
+                    } else {
+                        let completion = paste_completion::wait(
+                            paste_rx,
+                            Duration::from_millis(PASTE_COMPLETION_TIMEOUT_MS),
+                        )
+                        .await;
+                        paste_outcome = completion.outcome;
+                        paste_error = completion.error;
+                        if completion.call_completed {
+                            key_up_to_paste_completed_ms = Some(elapsed_ms(key_up_at));
+                        } else if paste_outcome == "timed_out" {
+                            warn!("Auto-paste completion timed out after {PASTE_COMPLETION_TIMEOUT_MS}ms");
+                        }
                     }
+                    ctrl.lock().unwrap().record_phase("clipboard_focus_paste", paste_started.elapsed());
                 }
 
                 let mut c = ctrl.lock().unwrap();
+                c.log_dictation_performance(serde_json::json!({
+                    "outcome": "success",
+                    "model": model_name,
+                    "language": language_name,
+                    "modelWasWarm": model_was_warm,
+                    "beamSize": beam_size,
+                    "temperatureFallback": temperature_fallback,
+                    "vadEnabled": vad_enabled,
+                    "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
+                    "modelLoadMs": model_load_ms,
+                    "keyUpToModelReadyMs": key_up_to_model_ready_ms,
+                    "whisperMs": whisper_ms,
+                    "keyUpToWhisperCompleteMs": key_up_to_whisper_complete_ms,
+                    "pasteOutcome": paste_outcome,
+                    "keyUpToPasteCompletedMs": key_up_to_paste_completed_ms,
+                    "totalMs": elapsed_ms(key_up_at),
+                }));
+                if let Some(message) = paste_error {
+                    // Log the phase event while correlation is still active,
+                    // then finish the terminal session exactly once as error.
+                    // The successful recognition remains available for copy.
+                    c.preserve_transcription(&text);
+                    c.on_transcription_error(&message);
+                    drop(c);
+                    let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
+                    let _ = app_handle.emit(events::event::ERROR, message);
+                    let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                    let open_copy_fallback = paste_completion::should_open_copy_fallback(paste_outcome);
+                    dispatch_to_main(&app_handle, move |app| {
+                        overlay::hide(app);
+                        update_tray_status(app, "idle");
+                        if open_copy_fallback {
+                            open_settings_window(app, Some("dictate"));
+                        }
+                    });
+                    return;
+                }
                 c.on_transcription_success(&text);
                 drop(c);
 
@@ -759,6 +1821,7 @@ fn stop_recording_and_transcribe(
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
                 let text_for_tray = text.clone();
                 dispatch_to_main(&app_handle, move |app| {
+                    overlay::hide(app);
                     update_tray_status(app, "idle");
                     update_tray_last_result(app, &text_for_tray);
                 });
@@ -767,36 +1830,64 @@ fn stop_recording_and_transcribe(
             Err(e) => {
                 error!("Transcription failed: {e}");
                 let mut c = ctrl.lock().unwrap();
+                c.log_dictation_performance(serde_json::json!({
+                    "outcome": "error",
+                    "model": model_name,
+                    "language": language_name,
+                    "modelWasWarm": model_was_warm,
+                    "beamSize": beam_size,
+                    "temperatureFallback": temperature_fallback,
+                    "vadEnabled": vad_enabled,
+                    "keyUpToCaptureStoppedMs": key_up_to_capture_stopped_ms,
+                    "modelLoadMs": model_load_ms,
+                    "keyUpToModelReadyMs": key_up_to_model_ready_ms,
+                    "whisperMs": whisper_ms,
+                    "keyUpToWhisperCompleteMs": key_up_to_whisper_complete_ms,
+                    "keyUpToPasteCompletedMs": null,
+                    "totalMs": elapsed_ms(key_up_at),
+                }));
                 c.on_transcription_error(&e.to_string());
                 drop(c);
                 let _ = app_handle.emit(events::event::ERROR, e.to_string());
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
+                dispatch_to_main(&app_handle, |app| {
+                    overlay::hide(app);
+                    update_tray_status(app, "idle");
+                });
                 info!("Error flow complete, app should remain running");
             }
         }
     });
 }
 
-/// Whether a filesystem event may reflect creation or replacement of the settings file.
-fn settings_event_may_affect(
+/// Whether a filesystem event may reflect creation or replacement of a user
+/// configuration file.
+fn configuration_event_may_affect(
     event: &notify::Event,
     settings_path: &std::path::Path,
+    global_glossary_path: &std::path::Path,
+    profile_glossary_dir: &std::path::Path,
 ) -> bool {
-    let relevant_kind = matches!(
+    let created_or_modified = matches!(
         event.kind,
         notify::EventKind::Create(_) | notify::EventKind::Modify(_)
     );
+    let glossary_changed =
+        created_or_modified || matches!(event.kind, notify::EventKind::Remove(_));
 
-    relevant_kind
-        && event
-            .paths
-            .iter()
-            .any(|path| path == settings_path)
+    event.paths.iter().any(|path| {
+        (created_or_modified && path == settings_path)
+            || (glossary_changed
+                && (path == global_glossary_path
+                    || (path.parent() == Some(profile_glossary_dir)
+                        && path.extension().and_then(|extension| extension.to_str())
+                            == Some("txt"))))
+    })
 }
 
-/// Watch the settings file for external changes and hot-reload into the running app.
-/// Handles hotkey re-registration and emits a settings-changed event to the frontend.
+/// Watch settings and personal dictionaries for external changes and hot-reload
+/// them into the running app. Handles hotkey re-registration and emits a
+/// settings-changed event to the frontend.
 fn start_settings_watcher(app: tauri::AppHandle) {
     use notify::{Config, RecursiveMode, Watcher};
     #[cfg(not(target_os = "macos"))]
@@ -806,6 +1897,8 @@ fn start_settings_watcher(app: tauri::AppHandle) {
     use std::sync::mpsc;
 
     let settings_path = sagascript_core::settings::store::settings_path();
+    let global_glossary_path = sagascript_core::settings::store::global_glossary_path();
+    let profile_glossary_dir = sagascript_core::settings::store::profile_glossary_dir();
     let watch_dir = match settings_path.parent() {
         Some(d) => d.to_path_buf(),
         None => {
@@ -840,7 +1933,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             }
         };
 
-        if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
+        if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::Recursive) {
             error!("Failed to watch settings directory: {e}");
             return;
         }
@@ -856,7 +1949,12 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 }
             };
 
-            if !settings_event_may_affect(&event, &settings_path) {
+            if !configuration_event_may_affect(
+                &event,
+                &settings_path,
+                &global_glossary_path,
+                &profile_glossary_dir,
+            ) {
                 continue;
             }
 
@@ -864,105 +1962,83 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             std::thread::sleep(Duration::from_millis(50));
 
             let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
-            let _transition = health.transition_guard();
-            let new_settings = load_settings_with_permission_gate();
             let ctrl: tauri::State<'_, SharedController> = app.state();
+            // Keep a live recording's bindings/configuration intact. This is
+            // the dedicated settings-watcher thread, never the native UI or
+            // audio thread. Re-read disk after idle so queued writes coalesce.
+            let _recording_lease = loop {
+                match commands::acquire_hotkey_configuration(&ctrl) {
+                    Ok(lease) => break lease,
+                    Err(_) => std::thread::sleep(Duration::from_millis(50)),
+                }
+            };
+            let _transition = health.transition_guard();
+            let mut new_settings = load_settings_with_permission_gate();
             let old_settings = {
                 let c = ctrl.lock().unwrap();
                 c.settings().clone()
             };
 
-            // Hot-reload hotkey if changed
-            if new_settings.hotkey != old_settings.hotkey {
-                info!(
-                    "Settings watcher: hotkey changed '{}' -> '{}'",
-                    old_settings.hotkey, new_settings.hotkey
-                );
-
+            let old_shortcuts = old_settings.resolved_shortcuts();
+            let new_shortcuts = new_settings.resolved_shortcuts();
+            let validation_error = new_settings.validate_shortcut_configuration().err();
+            if new_shortcuts != old_shortcuts || validation_error.is_some() {
+                info!("Settings watcher: hotkey profiles changed");
                 let old_operational = health.operational_hotkey();
-                let unregister_error = match &old_operational {
-                    hotkey::OperationalHotkey::Registered(shortcut) => app
-                        .global_shortcut()
-                        .unregister(shortcut.as_str())
-                        .err()
-                        .map(|e| {
-                            error!(
-                                "Failed to unregister operational hotkey '{shortcut}': {e}"
-                            );
-                            e.to_string()
-                        }),
-                    hotkey::OperationalHotkey::Inactive => None,
-                    hotkey::OperationalHotkey::Unknown => Some(
-                        "registration state is unknown after an earlier OS error; restart Sagascript"
-                            .to_string(),
-                    ),
+                let unregister_error = if validation_error.is_none() {
+                    match &old_operational {
+                        hotkey::OperationalHotkey::Registered(shortcuts) => hotkey::unregister_shortcuts(
+                            &app,
+                            shortcuts,
+                        )
+                            .err()
+                            .map(|error| error.to_string()),
+                        hotkey::OperationalHotkey::Inactive => None,
+                        hotkey::OperationalHotkey::Unknown => Some(
+                            "registration state is unknown after an earlier OS error; restart Sagascript".to_string(),
+                        ),
+                    }
+                } else {
+                    None
                 };
 
-                let change = if let Some(e) = unregister_error {
-                    // The OS registration is now unknown. Do not risk adding a
-                    // second active shortcut after a failed unregister.
-                    health.record(
-                        &new_settings.hotkey,
-                        Some(format!(
-                            "failed to replace previous hotkey because it could not be unregistered: {e}"
-                        )),
-                        hotkey::OperationalHotkey::Unknown,
-                    )
+                let change = if let Some(error) = validation_error {
+                    new_settings.hotkey = old_settings.hotkey.clone();
+                    new_settings.language = old_settings.language;
+                    new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
+                    new_settings.hotkey_mode = old_settings.hotkey_mode;
+                    health.record(&old_settings.hotkey, Some(format!("{error}; previous hotkey profiles remain active")), old_operational)
+                } else if let Some(error) = unregister_error {
+                    new_settings.hotkey = old_settings.hotkey.clone();
+                    new_settings.language = old_settings.language;
+                    new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
+                    new_settings.hotkey_mode = old_settings.hotkey_mode;
+                    health.record(&old_settings.hotkey, Some(format!("failed to unregister previous hotkeys: {error}")), hotkey::OperationalHotkey::Unknown)
                 } else {
-                    match app.global_shortcut().register(new_settings.hotkey.as_str()) {
-                        Ok(()) => {
-                            info!("Hotkey re-registered: {}", new_settings.hotkey);
-                            health.record(
-                                &new_settings.hotkey,
-                                None,
-                                hotkey::OperationalHotkey::registered(&new_settings.hotkey),
-                            )
-                        }
-                        Err(e) => {
-                            error!("Failed to register new hotkey '{}': {e}", new_settings.hotkey);
-                            // Re-register the old one as fallback so the app doesn't
-                            // end up with no hotkey bound at all. Either way the
-                            // SAVED shortcut is not registered — health must report
-                            // the saved shortcut's failure, not a false-normal for
-                            // the operational fallback.
-                            match &old_operational {
-                                hotkey::OperationalHotkey::Registered(old_shortcut) => {
-                                    match app.global_shortcut().register(old_shortcut.as_str()) {
-                                        Ok(()) => {
-                                            info!(
-                                                "Re-registered old hotkey '{old_shortcut}' as fallback"
-                                            );
-                                            health.record(
-                                                &new_settings.hotkey,
-                                                Some(format!(
-                                                    "failed to register: {e}; still using previous hotkey '{old_shortcut}'"
-                                                )),
-                                                hotkey::OperationalHotkey::Registered(
-                                                    old_shortcut.clone(),
-                                                ),
-                                            )
-                                        }
-                                        Err(e2) => {
-                                            error!("Failed to re-register old hotkey: {e2}");
-                                            health.record(
-                                                &new_settings.hotkey,
-                                                Some(format!(
-                                                    "failed to register: {e}; fallback to '{old_shortcut}' also failed: {e2}"
-                                                )),
-                                                hotkey::OperationalHotkey::Inactive,
-                                            )
-                                        }
-                                    }
-                                }
-                                hotkey::OperationalHotkey::Inactive => health.record(
-                                    &new_settings.hotkey,
-                                    Some(format!(
-                                        "failed to register: {e}; no previous hotkey was active"
-                                    )),
-                                    hotkey::OperationalHotkey::Inactive,
+                    match hotkey::register_shortcuts(&app, &new_shortcuts) {
+                        Ok(()) => health.record(&new_settings.hotkey, None, hotkey::OperationalHotkey::registered_many(&new_shortcuts)),
+                        Err(error) => {
+                            new_settings.hotkey = old_settings.hotkey.clone();
+                            new_settings.language = old_settings.language;
+                            new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
+                            new_settings.hotkey_mode = old_settings.hotkey_mode;
+                            match hotkey::unregister_shortcuts(&app, &new_shortcuts) {
+                                Err(cleanup_error) => health.record(
+                                    &old_settings.hotkey,
+                                    Some(format!("failed to register new hotkey profiles: {error}; partial-registration cleanup failed: {cleanup_error}")),
+                                    hotkey::OperationalHotkey::Unknown,
                                 ),
-                                hotkey::OperationalHotkey::Unknown => {
-                                    unreachable!("unknown state handled before registration")
+                                Ok(()) => {
+                                    let restored = match &old_operational {
+                                        hotkey::OperationalHotkey::Registered(shortcuts) => hotkey::register_shortcuts(&app, shortcuts).is_ok(),
+                                        hotkey::OperationalHotkey::Inactive => true,
+                                        hotkey::OperationalHotkey::Unknown => false,
+                                    };
+                                    health.record(
+                                        &old_settings.hotkey,
+                                        Some(format!("failed to register new hotkey profiles: {error}; previous profiles {}", if restored { "restored" } else { "could not be restored" })),
+                                        if restored { old_operational } else { hotkey::OperationalHotkey::Inactive },
+                                    )
                                 }
                             }
                         }
@@ -974,10 +2050,12 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             }
 
             // Update controller with all new settings
+            let profiles = new_settings.resolved_hotkey_profiles();
             {
                 let mut c = ctrl.lock().unwrap();
                 c.update_settings(new_settings);
             }
+            update_profiles_menu(&app, &profiles);
 
             // Notify frontend so UI reflects external changes
             let _ = app.emit(events::event::STATE_CHANGED, "settings_reloaded");
@@ -991,15 +2069,276 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn elapsed_ms_if_success_only_marks_successful_operations_complete() {
+        let start = Instant::now();
+        assert!(elapsed_ms_if_success::<(), ()>(&Ok(()), start).is_some());
+        assert!(elapsed_ms_if_success::<(), ()>(&Err(()), start).is_none());
+    }
+
+    #[test]
+    fn second_instance_reveals_settings_except_for_background_startup() {
+        assert!(second_instance_requests_settings(&[
+            "sagascript".to_string()
+        ]));
+        assert!(second_instance_requests_settings(&[
+            "sagascript".to_string(),
+            sagascript_cli::open::GUI_OPEN_ARG.to_string()
+        ]));
+        assert!(second_instance_requests_settings(&[
+            sagascript_cli::open::GUI_OPEN_ARG.to_string()
+        ]));
+        assert!(!second_instance_requests_settings(&[
+            "sagascript".to_string(),
+            sagascript_cli::open::GUI_BACKGROUND_ARG.to_string()
+        ]));
+        assert!(!second_instance_requests_settings(&[
+            sagascript_cli::open::GUI_BACKGROUND_ARG.to_string(),
+            "future-metadata".to_string()
+        ]));
+    }
+
+    #[test]
+    fn update_status_describes_available_and_current_releases() {
+        assert_eq!(
+            update_status_text(&updates::UpdateCheck::Available {
+                version: semver::Version::new(1, 2, 3)
+            }),
+            "Update available — v1.2.3"
+        );
+        assert_eq!(
+            update_status_text(&updates::UpdateCheck::UpToDate),
+            "Sagascript is up to date"
+        );
+    }
+
+    #[derive(Default)]
+    struct MockMainWindow {
+        operations: std::cell::RefCell<Vec<&'static str>>,
+        fail_at: Option<&'static str>,
+    }
+
+    impl MainWindowVisibility for MockMainWindow {
+        fn activate_app(&self) {
+            self.operations.borrow_mut().push("activate_app");
+        }
+
+        fn reset_to_normal_level(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("reset_to_normal_level");
+            if self.fail_at == Some("reset_to_normal_level") {
+                Err("window level failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn unminimize(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("unminimize");
+            if self.fail_at == Some("unminimize") {
+                Err("restore failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn show(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("show");
+            if self.fail_at == Some("show") {
+                Err("show failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn set_focus(&self) -> Result<(), String> {
+            self.operations.borrow_mut().push("set_focus");
+            if self.fail_at == Some("set_focus") {
+                Err("focus failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn main_window_reveal_restores_before_showing_and_focusing() {
+        let window = MockMainWindow::default();
+
+        reveal_existing_main_window(&window).unwrap();
+
+        assert_eq!(
+            *window.operations.borrow(),
+            [
+                "reset_to_normal_level",
+                "unminimize",
+                "show",
+                "set_focus",
+                "activate_app"
+            ]
+        );
+    }
+
+    #[test]
+    fn main_window_reveal_reports_the_failed_step_and_stops() {
+        let window = MockMainWindow {
+            fail_at: Some("show"),
+            ..Default::default()
+        };
+
+        let error = reveal_existing_main_window(&window).unwrap_err();
+
+        assert!(error.contains("show main window"));
+        assert!(error.contains("show failed"));
+        assert_eq!(
+            *window.operations.borrow(),
+            ["reset_to_normal_level", "unminimize", "show"]
+        );
+    }
+
+    #[test]
+    fn main_window_reveal_continues_if_normal_window_level_cannot_be_restored() {
+        let window = MockMainWindow {
+            fail_at: Some("reset_to_normal_level"),
+            ..Default::default()
+        };
+
+        reveal_existing_main_window(&window).unwrap();
+
+        assert_eq!(
+            *window.operations.borrow(),
+            [
+                "reset_to_normal_level",
+                "unminimize",
+                "show",
+                "set_focus",
+                "activate_app"
+            ]
+        );
+    }
+
+    #[test]
+    fn completed_onboarding_normal_launch_opens_settings() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::Standard),
+            InitialWindowRequest::Settings
+        );
+    }
+
+    #[test]
+    fn dictation_state_never_turns_a_reopen_event_into_a_settings_window() {
+        assert!(should_reveal_for_reopen(AppState::Idle));
+        assert!(!should_reveal_for_reopen(AppState::Recording));
+        assert!(!should_reveal_for_reopen(AppState::Transcribing));
+    }
+
+    #[test]
+    fn explicit_open_starts_on_the_settings_view() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::ShowSettings),
+            InitialWindowRequest::Settings
+        );
+    }
+
+    #[test]
+    fn completed_onboarding_background_launch_stays_hidden() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::Background),
+            InitialWindowRequest::Hidden
+        );
+    }
+
+
+    #[test]
+    fn incomplete_onboarding_starts_on_the_onboarding_view_even_when_headless() {
+        assert_eq!(
+            initial_window_request(false, GuiLaunchMode::Background),
+            InitialWindowRequest::Onboarding
+        );
+    }
+
+    #[test]
+    fn private_gui_markers_are_accepted_only_as_the_sole_argument() {
+        use std::ffi::OsString;
+
+        let mode = |args: &[&str]| {
+            gui_launch_mode(args.iter().map(OsString::from).collect::<Vec<_>>())
+        };
+
+        assert_eq!(mode(&["sagascript"]), GuiLaunchMode::Standard);
+        assert_eq!(
+            mode(&["sagascript", sagascript_cli::open::GUI_OPEN_ARG]),
+            GuiLaunchMode::ShowSettings
+        );
+        assert_eq!(
+            mode(&["sagascript", sagascript_cli::open::GUI_BACKGROUND_ARG]),
+            GuiLaunchMode::Background
+        );
+        assert_eq!(
+            mode(&["sagascript", "config", sagascript_cli::open::GUI_OPEN_ARG]),
+            GuiLaunchMode::Standard
+        );
+        assert_eq!(
+            mode(&["sagascript", "presenter", "start"]),
+            GuiLaunchMode::Standard
+        );
+    }
+
+    #[test]
+    fn retired_presenter_markers_cannot_bypass_cli_or_reveal_settings() {
+        for marker in [
+            "--presenter-start",
+            "--presenter-start=swedish",
+            "--presenter-finish",
+            "--presenter-cancel",
+            "--presenter-unknown",
+        ] {
+            assert_eq!(
+                gui_launch_mode(["sagascript".into(), marker.into()]),
+                GuiLaunchMode::Standard,
+            );
+            assert!(!second_instance_requests_settings(&[marker.to_string()]));
+            assert!(!second_instance_requests_settings(&[
+                "sagascript".to_string(),
+                marker.to_string(),
+            ]));
+            assert!(!second_instance_requests_settings(&[
+                "/Applications/Sagascript.app/Contents/MacOS/sagascript".to_string(),
+                marker.to_string(),
+                "unexpected".to_string(),
+            ]));
+        }
+    }
+
+
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_non_text_cli_argument_stays_on_standard_cli_path() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let args = vec![
+            std::ffi::OsString::from("sagascript"),
+            std::ffi::OsString::from_vec(vec![b'/', b't', b'm', b'p', 0x80]),
+        ];
+        assert_eq!(gui_launch_mode(args), GuiLaunchMode::Standard);
+    }
     #[cfg(target_os = "macos")]
     fn wait_for_settings_event(
         rx: &std::sync::mpsc::Receiver<notify::Result<notify::Event>>,
         settings_path: &std::path::Path,
     ) -> bool {
+        let global_glossary_path = settings_path.parent().unwrap().join("glossary.txt");
+        let profile_glossary_dir = settings_path.parent().unwrap().join("glossaries");
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
             match rx.recv_timeout(remaining) {
-                Ok(Ok(event)) if settings_event_may_affect(&event, settings_path) => {
+                Ok(Ok(event))
+                    if configuration_event_may_affect(
+                        &event,
+                        settings_path,
+                        &global_glossary_path,
+                        &profile_glossary_dir,
+                    ) =>
+                {
                     return true;
                 }
                 Ok(_) => continue,
@@ -1049,43 +2388,96 @@ mod tests {
     }
 
     #[test]
-    fn settings_event_filter_accepts_target_create_and_modify_events() {
+    fn configuration_event_filter_accepts_settings_and_glossary_changes() {
         use notify::event::{CreateKind, ModifyKind};
         use notify::{Event, EventKind};
 
         let watch_dir = std::path::Path::new("/tmp/sagascript");
         let settings_path = watch_dir.join("sagascript-settings.json");
+        let global_glossary_path = watch_dir.join("glossary.txt");
+        let profile_glossary_dir = watch_dir.join("glossaries");
 
         for kind in [
             EventKind::Create(CreateKind::Any),
             EventKind::Modify(ModifyKind::Any),
         ] {
-            let target_event = Event::new(kind).add_path(settings_path.clone());
-            assert!(settings_event_may_affect(&target_event, &settings_path));
+            for target in [
+                settings_path.clone(),
+                global_glossary_path.clone(),
+                profile_glossary_dir.join("swedish.txt"),
+            ] {
+                let target_event = Event::new(kind).add_path(target);
+                assert!(configuration_event_may_affect(
+                    &target_event,
+                    &settings_path,
+                    &global_glossary_path,
+                    &profile_glossary_dir,
+                ));
+            }
         }
     }
 
     #[test]
-    fn settings_event_filter_rejects_unrelated_and_non_mutating_events() {
+    fn configuration_event_filter_rejects_unrelated_and_non_mutating_events() {
         use notify::event::{AccessKind, ModifyKind, RemoveKind};
         use notify::{Event, EventKind};
 
         let watch_dir = std::path::Path::new("/tmp/sagascript");
         let settings_path = watch_dir.join("sagascript-settings.json");
+        let global_glossary_path = watch_dir.join("glossary.txt");
+        let profile_glossary_dir = watch_dir.join("glossaries");
         let unrelated = Event::new(EventKind::Modify(ModifyKind::Any))
             .add_path(watch_dir.join("settings.tmp"));
-        assert!(!settings_event_may_affect(&unrelated, &settings_path));
+        assert!(!configuration_event_may_affect(
+            &unrelated,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
+
+        let unrelated_profile = Event::new(EventKind::Modify(ModifyKind::Any))
+            .add_path(profile_glossary_dir.join("notes.md"));
+        assert!(!configuration_event_may_affect(
+            &unrelated_profile,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
 
         let remove = Event::new(EventKind::Remove(RemoveKind::Any))
             .add_path(settings_path.clone());
-        assert!(!settings_event_may_affect(&remove, &settings_path));
+        assert!(!configuration_event_may_affect(
+            &remove,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
+
+        let remove_glossary = Event::new(EventKind::Remove(RemoveKind::Any))
+            .add_path(profile_glossary_dir.join("swedish.txt"));
+        assert!(configuration_event_may_affect(
+            &remove_glossary,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
 
         let access = Event::new(EventKind::Access(AccessKind::Any))
             .add_path(settings_path.clone());
-        assert!(!settings_event_may_affect(&access, &settings_path));
+        assert!(!configuration_event_may_affect(
+            &access,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
 
         let other = Event::new(EventKind::Other).add_path(settings_path.clone());
-        assert!(!settings_event_may_affect(&other, &settings_path));
+        assert!(!configuration_event_may_affect(
+            &other,
+            &settings_path,
+            &global_glossary_path,
+            &profile_glossary_dir,
+        ));
     }
 
     #[test]
@@ -1096,19 +2488,215 @@ mod tests {
         assert!(auto_paste_permitted(true, true));
     }
 
+    #[test]
+    fn startup_keeps_a_valid_hotkey() {
+        let requested = "Option+Space";
+        let (candidate, error) = startup_hotkey_candidate(requested);
+
+        assert_eq!(candidate, requested);
+        assert!(error.is_none());
+    }
+
+    #[test]
+    fn safe_fallback_requires_invalid_settings_and_exact_registered_binding() {
+        let registered = hotkey::OperationalHotkey::registered(SAFE_FALLBACK_HOTKEY);
+
+        assert!(!should_use_safe_fallback(
+            SAFE_FALLBACK_HOTKEY,
+            true,
+            &registered
+        ));
+        for shortcut in [
+            SAFE_FALLBACK_HOTKEY,
+            "shift+control+Space",
+            "Ctrl+Shift+Space",
+        ] {
+            assert!(should_use_safe_fallback(shortcut, false, &registered));
+        }
+        for shortcut in [
+            "Control+Shift+Enter",
+            "Control+Shift+Meta+Space",
+            "not-a-hotkey",
+        ] {
+            assert!(!should_use_safe_fallback(shortcut, false, &registered));
+        }
+
+        for operational_hotkey in [
+            hotkey::OperationalHotkey::Inactive,
+            hotkey::OperationalHotkey::Unknown,
+            hotkey::OperationalHotkey::registered("Control+Shift+Enter"),
+            hotkey::OperationalHotkey::registered("control+shift+space"),
+        ] {
+            assert!(!should_use_safe_fallback(
+                "shift+control+Space",
+                false,
+                &operational_hotkey
+            ));
+        }
+    }
+
+    #[test]
+    fn safe_fallback_never_activates_for_valid_settings() {
+        let registered = hotkey::OperationalHotkey::registered(SAFE_FALLBACK_HOTKEY);
+
+        assert!(!should_use_safe_fallback(
+            "shift+control+Space",
+            true,
+            &registered
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn startup_replaces_reserved_hotkey_with_safe_operational_fallback() {
+        let (candidate, error) = startup_hotkey_candidate("Super+Q");
+
+        assert_eq!(candidate, sagascript_core::settings::Settings::default().hotkey);
+        assert!(error
+            .as_deref()
+            .is_some_and(|message| message.contains("reserved for Quit on macOS")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn startup_replaces_saved_cut_hotkey_with_safe_operational_fallback() {
+        let (candidate, error) = startup_hotkey_candidate("Super+X");
+
+        assert_eq!(candidate, sagascript_core::settings::Settings::default().hotkey);
+        assert!(error
+            .as_deref()
+            .is_some_and(|message| message.contains("reserved for Cut on macOS")));
+    }
+
     // -- tray_label --
 
     #[test]
+    fn update_menu_makes_available_release_actionable() {
+        let result = updates::UpdateCheck::Available {
+            version: semver::Version::new(1, 2, 0),
+        };
+
+        assert_eq!(update_status_text(&result), "Update available — v1.2.0");
+        assert_eq!(update_action_text(&result), "Download Sagascript v1.2.0…");
+    }
+
+    #[test]
+    fn update_menu_keeps_a_clear_recheck_action_when_current() {
+        assert_eq!(
+            update_action_text(&updates::UpdateCheck::UpToDate),
+            "Check Again…"
+        );
+    }
+
+    #[test]
+    fn update_action_targets_the_exact_stable_release() {
+        assert_eq!(
+            stable_release_url(&semver::Version::new(1, 2, 0)),
+            "https://github.com/Magnus-Gille/sagascript/releases/tag/v1.2.0"
+        );
+    }
+
+    #[test]
+    fn build_identity_identifies_the_exact_app_build() {
+        assert!(BUILD_IDENTITY.contains(env!("CARGO_PKG_VERSION")));
+        assert!(BUILD_IDENTITY.contains(env!("GIT_HASH")));
+        assert!(BUILD_IDENTITY.contains(env!("BUILD_DATE")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tray_autosave_name_is_stable_and_bundle_qualified() {
+        assert_eq!(TRAY_AUTOSAVE_NAME, "ai.gille.sagascript.main");
+        assert_eq!(
+            tray_preferred_position_key(TRAY_AUTOSAVE_NAME),
+            "NSStatusItem Preferred Position ai.gille.sagascript.main"
+        );
+        assert_eq!(DEFAULT_TRAY_PREFERRED_POSITION, 340.0);
+        assert_eq!(initial_tray_preferred_position(false), Some(340.0));
+        assert_eq!(initial_tray_preferred_position(true), None);
+    }
+
+    #[test]
     fn tray_label_idle_not_failed() {
-        assert_eq!(tray_label("idle", false), ("Sagascript", "", "Idle"));
+        assert_eq!(tray_label("idle", false), ("Sagascript", "S", "Idle"));
     }
 
     #[test]
     fn tray_label_recording_not_failed() {
         assert_eq!(
             tray_label("recording", false),
-            ("Sagascript - Recording...", "Rec", "Recording...")
+            ("Sagascript - Recording...", "●", "Recording...")
         );
+    }
+
+    #[test]
+    fn tray_status_uses_compact_native_state_markers() {
+        assert_eq!(tray_label("idle", false).1, "S");
+        assert_eq!(tray_label("recording", false).1, "●");
+        assert_eq!(tray_label("loading_model", false).1, "…");
+        assert_eq!(tray_label("transcribing", false).1, "…");
+        assert_eq!(tray_label("idle", true).1, "!");
+    }
+
+    #[test]
+    fn profile_menu_label_explains_language_shortcut_and_selection() {
+        let profile = sagascript_core::settings::HotkeyProfile {
+            id: "swedish".to_string(),
+            name: "Svenska".to_string(),
+            shortcut: "Super+Shift+S".to_string(),
+            language: Language::Swedish,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
+        };
+
+        assert_eq!(
+            profile_menu_label(&profile, true),
+            "✓ Svenska — Swedish · ⇧⌘S"
+        );
+        assert_eq!(
+            profile_menu_label(&profile, false),
+            "Svenska — Swedish · ⇧⌘S"
+        );
+    }
+
+    #[test]
+    fn profile_menu_label_keeps_non_macos_shortcuts_readable() {
+        let profile = sagascript_core::settings::HotkeyProfile {
+            id: "english".to_string(),
+            name: "English".to_string(),
+            shortcut: "Control+Alt+Space".to_string(),
+            language: Language::English,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
+        };
+
+        assert_eq!(
+            profile_menu_label(&profile, false),
+            "English — English · ⌃⌥Space"
+        );
+    }
+
+    #[test]
+    fn profile_menu_shortcut_formats_command_or_control_aliases() {
+        let expected = if cfg!(target_os = "macos") {
+            "⇧⌘Space"
+        } else {
+            "⌃⇧Space"
+        };
+        for shortcut in [
+            "CommandOrControl+Shift+Space",
+            "CommandOrCtrl+Shift+Space",
+            "CmdOrCtrl+Shift+Space",
+            "CmdOrControl+Shift+Space",
+        ] {
+            assert_eq!(format_menu_shortcut(shortcut), expected);
+        }
+    }
+
+    #[test]
+    fn profile_menu_shortcut_formats_arrow_keys() {
+        assert_eq!(format_menu_shortcut("Control+ArrowUp"), "⌃↑");
+        assert_eq!(format_menu_shortcut("Alt+Left"), "⌥←");
     }
 
     #[test]
@@ -1190,6 +2778,21 @@ mod tests {
         assert!(new_path.exists(), "new path should now hold the migrated settings");
         assert_eq!(std::fs::read_to_string(&new_path).unwrap(), r#"{"language":"sv"}"#);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overridden_settings_path_disables_flowdictate_migration() {
+        let dir = migrate_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = dir.join("flowdictate-settings.json");
+        let new_path = dir.join("sagascript-settings.json");
+        std::fs::write(&legacy, r#"{"language":"sv"}"#).unwrap();
+
+        migrate_legacy_settings_unless_overridden(&legacy, &new_path, true);
+
+        assert!(legacy.exists(), "override mode must not inspect or move legacy settings");
+        assert!(!new_path.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

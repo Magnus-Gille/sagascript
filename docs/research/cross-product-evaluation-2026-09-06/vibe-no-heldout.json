@@ -1,0 +1,92 @@
+{
+  "configurations": [
+    {
+      "beam_size": 0,
+      "completed_rows": 40,
+      "expected_rows": 40,
+      "failed_rows": 0,
+      "language": "no",
+      "metrics": {
+        "cold": {
+          "count": 40,
+          "p50_ms": 546.8117910000001,
+          "p95_ms": 5355.098875
+        },
+        "deletions": 60,
+        "errors": 130,
+        "insertions": 8,
+        "reference_words": 907,
+        "substitutions": 62,
+        "utterances": 40,
+        "warm": {
+          "count": 200,
+          "p50_ms": 617.7682910000003,
+          "p95_ms": 5631.148333000001,
+          "repetitions_per_utterance": 5
+        },
+        "wer": 0.14332965821389196
+      },
+      "model": "nb-whisper-base",
+      "not_attempted_rows": 0,
+      "role": "baseline",
+      "temperature_fallback": true,
+      "unsupported_rows": 0
+    },
+    {
+      "beam_size": 0,
+      "completed_rows": 40,
+      "expected_rows": 40,
+      "failed_rows": 0,
+      "language": "no",
+      "metrics": {
+        "cold": {
+          "count": 40,
+          "p50_ms": 158.058875000017,
+          "p95_ms": 329.450125000003
+        },
+        "deletions": 107,
+        "errors": 234,
+        "insertions": 24,
+        "reference_words": 907,
+        "substitutions": 103,
+        "utterances": 40,
+        "warm": {
+          "count": 200,
+          "p50_ms": 113.6145410000172,
+          "p95_ms": 273.52470900000026,
+          "repetitions_per_utterance": 5
+        },
+        "wer": 0.2579933847850055
+      },
+      "model": "nb-whisper-tiny",
+      "not_attempted_rows": 0,
+      "role": "smaller",
+      "temperature_fallback": true,
+      "unsupported_rows": 0
+    },
+    {
+      "beam_size": 0,
+      "completed_rows": 0,
+      "expected_rows": 40,
+      "failed_rows": 0,
+      "language": "no",
+      "metrics": null,
+      "model": "nb-whisper-base",
+      "not_attempted_rows": 0,
+      "role": "decoder",
+      "temperature_fallback": false,
+      "unsupported_rows": 40
+    }
+  ],
+  "decision": "inconclusive",
+  "engine_caveat": "Vibe HTTP wall time is not Sagascript internal inference timing.",
+  "measurement_endpoint": "client_http_request_to_complete_body_not_visible_text",
+  "planned_rows": 120,
+  "schema_version": 1,
+  "status_counts": {
+    "completed": 80,
+    "failed": 0,
+    "not_attempted": 0,
+    "unsupported": 40
+  }
+}
