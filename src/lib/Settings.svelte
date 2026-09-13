@@ -1963,8 +1963,10 @@
               <div
                 class="popover-card"
                 role="dialog"
+                tabindex="-1"
                 aria-label="What is speaker diarization?"
                 onclick={(e) => e.stopPropagation()}
+                onkeydown={(e) => e.stopPropagation()}
               >
                 <div class="popover-title">Speaker diarization</div>
                 <p>
