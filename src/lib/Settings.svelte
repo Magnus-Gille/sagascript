@@ -1955,7 +1955,34 @@
             >?</button>
           </div>
           {#if showDiarizeInfo}
-            <div class="hotkey-hint">Detects who speaks when and labels each part ([Speaker 1], [Speaker 2]). Slower, and needs the diarization models — leave off for a plain transcript.</div>
+            <div
+              class="popover-backdrop"
+              role="presentation"
+              onclick={() => (showDiarizeInfo = false)}
+            >
+              <div
+                class="popover-card"
+                role="dialog"
+                aria-label="What is speaker diarization?"
+                onclick={(e) => e.stopPropagation()}
+              >
+                <div class="popover-title">Speaker diarization</div>
+                <p>
+                  Detects <strong>who speaks when</strong> and labels each part
+                  of the transcript — <em>[Speaker 1], [Speaker 2], …</em>
+                </p>
+                <p>
+                  Slower than plain transcription, and needs the diarization
+                  models (downloaded once).
+                </p>
+                <p>Leave it off for a plain transcript.</p>
+                <button
+                  type="button"
+                  class="secondary"
+                  onclick={() => (showDiarizeInfo = false)}
+                >Close</button>
+              </div>
+            </div>
           {/if}
           <textarea
             class="prompt-input"
@@ -3084,6 +3111,44 @@
   .info-dot:hover {
     border-color: var(--accent);
     color: var(--accent);
+  }
+
+  .popover-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  .popover-card {
+    width: 280px;
+    max-width: calc(100vw - 48px);
+    padding: 14px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text);
+  }
+
+  .popover-card p {
+    margin: 0 0 8px;
+    color: var(--text-muted);
+  }
+
+  .popover-card p strong {
+    color: var(--text);
+  }
+
+  .popover-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 8px;
   }
 
   .prompt-input {

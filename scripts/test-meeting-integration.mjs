@@ -89,6 +89,9 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(settingsSource, /Detects who speaks when/);
   assert.match(settingsSource, /info-dot/);
   assert.match(settingsSource, /showDiarizeInfo/);
+  assert.match(settingsSource, /popover-backdrop/);
+  assert.match(settingsSource, /popover-card/);
+  assert.match(settingsSource, /role="dialog"/);
   assert.doesNotMatch(settingsSource, /No profile keeps the selected language/);
 });
 
