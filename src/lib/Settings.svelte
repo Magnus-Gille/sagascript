@@ -3070,7 +3070,7 @@
   .formats-hint {
     font-size: 11px;
     color: var(--text-muted);
-    margin-top: 6px;
+    margin-top: 8px;
     text-align: center;
   }
 
@@ -3079,6 +3079,7 @@
     flex-direction: column;
     gap: 8px;
     margin-top: 0;
+    margin-bottom: 8px;
   }
 
   .transcribe-settings-row {
@@ -3096,7 +3097,7 @@
   }
 
   .transcribe-settings-row .profile-field {
-    flex: 1 1 0;
+    flex: 1.2 1 0;
     margin-bottom: 0;
     min-width: 0;
   }

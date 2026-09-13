@@ -19,6 +19,18 @@ pub fn mix_to_mono(data: &[f32], channels: usize) -> Vec<f32> {
 /// Uses rubato's SincFixedIn with sinc interpolation.
 /// Returns the input unchanged if rates already match.
 pub fn resample_to_16khz(mono: Vec<f32>, source_rate: u32) -> Result<Vec<f32>, String> {
+    resample_to_16khz_with_progress(mono, source_rate, None)
+}
+
+/// Like [`resample_to_16khz`], but reports chunked progress as a 0.0–1.0
+/// fraction of input samples consumed (only for the multi-chunk path;
+/// single-chunk inputs report nothing until done). The callback must be
+/// cheap — it runs ~`len/1024` times on the decode thread.
+pub fn resample_to_16khz_with_progress(
+    mono: Vec<f32>,
+    source_rate: u32,
+    on_progress: Option<&dyn Fn(f64)>,
+) -> Result<Vec<f32>, String> {
     if source_rate == TARGET_SAMPLE_RATE || mono.is_empty() {
         return Ok(mono);
     }
@@ -52,6 +64,11 @@ pub fn resample_to_16khz(mono: Vec<f32>, source_rate: u32) -> Result<Vec<f32>, S
             .process(&chunk, None)
             .map_err(|e| format!("Resample failed: {e}"))?;
         output.extend_from_slice(&result[0]);
+        if let Some(on_progress) = on_progress {
+            if full_chunks > 0 {
+                on_progress(i as f64 / full_chunks as f64);
+            }
+        }
     }
 
     // Process remaining samples with process_partial (handles short final chunk + flush)
@@ -164,6 +181,31 @@ mod tests {
     fn resample_empty_input() {
         let result = resample_to_16khz(vec![], 44_100).unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn resample_progress_reports_increasing_fractions() {
+        use std::cell::RefCell;
+        // 5000 samples at 44.1kHz -> 4 full 1024-chunks: fractions must be
+        // non-decreasing and stay inside [0, 1).
+        let seen = RefCell::new(Vec::new());
+        let result = resample_to_16khz_with_progress(
+            vec![0.25; 5000],
+            44_100,
+            Some(&|frac| seen.borrow_mut().push(frac)),
+        )
+        .unwrap();
+        assert!(!result.is_empty());
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 4, "one report per full chunk, got {seen:?}");
+        assert!(
+            seen.windows(2).all(|w| w[0] <= w[1]),
+            "fractions must not move backwards: {seen:?}"
+        );
+        assert!(
+            seen.iter().all(|&f| (0.0..1.0).contains(&f)),
+            "fractions stay in [0, 1): {seen:?}"
+        );
     }
 
     #[test]

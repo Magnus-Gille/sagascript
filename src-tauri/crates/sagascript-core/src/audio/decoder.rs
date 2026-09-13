@@ -8,7 +8,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use tracing::info;
 
-use super::resample::{mix_to_mono, resample_to_16khz};
+use super::resample::{mix_to_mono, resample_to_16khz_with_progress};
 use crate::error::DictationError;
 
 /// Supported audio/video file extensions.
@@ -310,13 +310,30 @@ fn decode_audio_file_inner(
         sample_rate,
     );
 
-    // Mix to mono and resample
+    // Mix to mono and resample. Resample dominates long files (measured ~96s
+    // on a 21min fixture), so its chunked 0.0–1.0 maps into 90–100 while the
+    // packet loop owns 0–~99. Monotonic against the loop via the shared
+    // last-reported cell; 100 snaps after resample completes.
     if let Some(checkpoint) = checkpoint {
         checkpoint()?;
     }
     let mono = mix_to_mono(&all_samples, actual_channels);
-    let resampled = resample_to_16khz(mono, sample_rate)
-        .map_err(|e| DictationError::TranscriptionFailed(format!("Resample failed: {e}")))?;
+    let last_reported = std::cell::Cell::new(last_decode_pct);
+    let resample_cb = on_decode.map(|cb| {
+        move |frac: f64| {
+            let pct = (90.0 + frac * 10.0).clamp(0.0, 100.0) as u8;
+            if pct > last_reported.get() {
+                last_reported.set(pct);
+                cb(pct);
+            }
+        }
+    });
+    let resampled = resample_to_16khz_with_progress(
+        mono,
+        sample_rate,
+        resample_cb.as_ref().map(|f| f as &dyn Fn(f64)),
+    )
+    .map_err(|e| DictationError::TranscriptionFailed(format!("Resample failed: {e}")))?;
     if total_bytes > 0 {
         if let Some(on_decode) = on_decode {
             on_decode(100);
