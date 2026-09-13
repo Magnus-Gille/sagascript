@@ -18,6 +18,7 @@ const {
   displayTranscribeProgress,
   transcribePhaseFloor,
   parseTranscribePhase,
+  clampDecodePct,
   canRetryTranscribeFile,
   isMissingTranscribeFileError,
   transcribeSaveDefaults,
@@ -87,6 +88,18 @@ test("prep phases tick the floor upward until real progress takes over", () => {
   assert.equal(displayTranscribeProgress(2, true, "preparing"), 5);
   assert.equal(displayTranscribeProgress(40, true, "preparing"), 40);
   assert.equal(displayTranscribeProgress(0, false, "loading"), 0);
+});
+
+test("decode payloads clamp to 0-100 or vanish when unusable", () => {
+  assert.equal(clampDecodePct(0), 0);
+  assert.equal(clampDecodePct(42.7), 42);
+  assert.equal(clampDecodePct(100), 100);
+  assert.equal(clampDecodePct(140), 100);
+  assert.equal(clampDecodePct(-3), 0);
+  assert.equal(clampDecodePct(NaN), null);
+  assert.equal(clampDecodePct("42"), null);
+  assert.equal(clampDecodePct(null), null);
+  assert.equal(clampDecodePct(undefined), null);
 });
 
 test("save defaults point at the audio folder with a .txt basename", () => {

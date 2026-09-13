@@ -78,6 +78,7 @@
   } from "./dictation-ui-state";
   import {
     canCancelPlainTranscription,
+    clampDecodePct,
     displayTranscribeProgress,
     parseTranscribePhase,
     transcribePhaseFloor,
@@ -217,6 +218,7 @@
   let transcribeStartedAt: number | null = $state(null);
   let transcribeElapsedSec: number = $state(0);
   let transcribePhase: TranscribePhase = $state(null);
+  let decodePct: number | null = $state(null);
   let transcriptionProgress: number = $state(0);
   let transcriptionResult: string = $state("");
   let transcribeError: string = $state("");
@@ -468,9 +470,16 @@
     });
 
     listen("transcription-phase", (event: any) => {
-      if (!transcribing) return;
+      // Meeting runs never clear this (their branch renders meetingPhase),
+      // so only plain runs may own the label.
+      if (!transcribing || meetingJobStatus !== null) return;
       transcribePhase = parseTranscribePhase(event.payload);
       transcriptionProgress = displayTranscribeProgress(transcriptionProgress, transcribing, transcribePhase);
+    });
+
+    listen("transcription-decode", (event: any) => {
+      if (!transcribing || meetingJobStatus !== null) return;
+      decodePct = clampDecodePct(event.payload);
     });
 
     listen("model-ready", async () => {
@@ -1107,6 +1116,8 @@
             transcribing = false;
             meetingPollingFailed = false;
             transcriptionProgress = 0;
+            transcribePhase = null;
+            decodePct = null;
             if (snapshot.status === "completed" && snapshot.reprocessing) {
               const result = snapshot.reprocessing;
               // Keep the completed work even if the separate preview request fails.
@@ -1188,6 +1199,8 @@
       meetingJobId = null;
       meetingJobStatus = "failed";
       meetingPhase = "Failed";
+      transcribePhase = null;
+      decodePct = null;
       meetingError = meetingFailureText(error, "Could not start meeting import.");
     }
   }
@@ -1217,6 +1230,7 @@
     // until the real progress stream takes over.
     transcriptionProgress = 1;
     transcribePhase = "decoding";
+    decodePct = null;
     transcribeStartedAt = Date.now();
     transcribeError = "";
     transcriptionResult = "";
@@ -1258,6 +1272,7 @@
       cancellingPlain = false;
       transcriptionProgress = 0;
       transcribePhase = null;
+      decodePct = null;
       transcribeStartedAt = null;
     }
   }
@@ -2033,7 +2048,7 @@
               {/if}
             {:else}
               {#if transcribePhase === "decoding"}
-                <div class="drop-zone-text">Decoding audio… {transcribePhaseFloor(transcribePhase)}% · {transcribeElapsedSec}s</div>
+                <div class="drop-zone-text">Decoding audio… {decodePct ?? transcribePhaseFloor(transcribePhase)}% · {transcribeElapsedSec}s</div>
               {:else if transcribePhase === "loading"}
                 <div class="drop-zone-text">Loading model… {transcribePhaseFloor(transcribePhase)}% · {transcribeElapsedSec}s</div>
               {:else if transcribePhase === "preparing"}

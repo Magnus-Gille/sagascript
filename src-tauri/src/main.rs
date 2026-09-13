@@ -614,6 +614,7 @@ fn main() {
             let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
             app.manage(controller);
             app.manage(whisper);
+            app.manage(commands::SharedPlainDecodeCancel::default());
             app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
             app.manage(meeting_media::SharedMeetingAudio::default());
             // Process-wide hotkey registration health (see hotkey::health for

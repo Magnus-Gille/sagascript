@@ -63,7 +63,7 @@ fn check_decode_size_cap(
 /// Uses symphonia to probe the file format, find the first audio track,
 /// decode all packets, then resample and mix to mono.
 pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
-    decode_audio_file_inner(path, None)
+    decode_audio_file_inner(path, None, None)
 }
 
 /// Decode an audio or video file while checking a caller-owned cancellation or
@@ -73,7 +73,32 @@ pub fn decode_audio_file_with_control(
     path: &Path,
     checkpoint: &dyn Fn() -> Result<(), DictationError>,
 ) -> Result<Vec<f32>, DictationError> {
-    decode_audio_file_inner(path, Some(checkpoint))
+    decode_audio_file_inner(path, Some(checkpoint), None)
+}
+
+/// Measured decode fraction as a byte ratio (0–100): consumed audio-packet
+/// bytes over source file size. The denominator is file size because
+/// containers give no trustworthy total upfront (VBR headers lie, m4a often
+/// omits frame counts) — so this is an I/O fraction, not a time fraction,
+/// and container overhead means packet bytes asymptote below 100 (the caller
+/// snaps to 100 on clean EOF). `total == 0` (unknown size) yields 0 and the
+/// caller must not display any percent at all.
+pub fn decode_percent(consumed_bytes: u64, total_bytes: u64) -> u8 {
+    if total_bytes == 0 {
+        return 0;
+    }
+    ((consumed_bytes as f64 / total_bytes as f64) * 100.0).clamp(0.0, 100.0) as u8
+}
+
+/// Decode with byte-fraction progress (`on_decode`, 0–100, called only on
+/// strict increase, clamped to 99 until the post-resample 100) plus the
+/// cancellable `checkpoint`. Either callback may be `None`.
+pub fn decode_audio_file_with_progress(
+    path: &Path,
+    checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
+    on_decode: Option<&dyn Fn(u8)>,
+) -> Result<Vec<f32>, DictationError> {
+    decode_audio_file_inner(path, checkpoint, on_decode)
 }
 
 const MAX_CONSECUTIVE_DECODE_ERRORS: usize = 64;
@@ -98,6 +123,7 @@ fn note_decode_error(
 fn decode_audio_file_inner(
     path: &Path,
     checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
+    on_decode: Option<&dyn Fn(u8)>,
 ) -> Result<Vec<f32>, DictationError> {
     if let Some(checkpoint) = checkpoint {
         checkpoint()?;
@@ -120,6 +146,13 @@ fn decode_audio_file_inner(
     let file = std::fs::File::open(path).map_err(|e| {
         DictationError::FileDecodeError(format!("Failed to open file: {e}"))
     })?;
+
+    // Byte-fraction denominator for progress. File size is always available,
+    // unlike packet counts or durations the container may omit or misreport.
+    // Zero (unstatable file) disables percent emission entirely.
+    let total_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let mut consumed_bytes = 0u64;
+    let mut last_decode_pct = 0u8;
 
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -203,6 +236,21 @@ fn decode_audio_file_inner(
             continue;
         }
 
+        // Measured progress: consumed packet bytes over file size. Counted
+        // here (not after decode) so undecodable packets still count as
+        // consumed input. Clamped to 99 — container overhead means packet
+        // bytes asymptote below 100; clean EOF snaps to 100 after resample.
+        if total_bytes > 0 {
+            consumed_bytes = consumed_bytes.saturating_add(packet.data.len() as u64);
+            let pct = decode_percent(consumed_bytes, total_bytes).min(99);
+            if pct > last_decode_pct {
+                last_decode_pct = pct;
+                if let Some(on_decode) = on_decode {
+                    on_decode(pct);
+                }
+            }
+        }
+
         let decoded = match decoder.decode(&packet) {
             Ok(d) => {
                 note_decode_progress(&mut consecutive_errors);
@@ -269,6 +317,11 @@ fn decode_audio_file_inner(
     let mono = mix_to_mono(&all_samples, actual_channels);
     let resampled = resample_to_16khz(mono, sample_rate)
         .map_err(|e| DictationError::TranscriptionFailed(format!("Resample failed: {e}")))?;
+    if total_bytes > 0 {
+        if let Some(on_decode) = on_decode {
+            on_decode(100);
+        }
+    }
     if let Some(checkpoint) = checkpoint {
         checkpoint()?;
     }
@@ -543,5 +596,17 @@ mod tests {
         // near the cap.
         let result = check_decode_size_cap(16_000, 1, 16_000);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn decode_percent_is_a_clamped_byte_ratio() {
+        assert_eq!(decode_percent(0, 1000), 0);
+        assert_eq!(decode_percent(500, 1000), 50);
+        assert_eq!(decode_percent(999, 1000), 99);
+        assert_eq!(decode_percent(1000, 1000), 100);
+        assert_eq!(decode_percent(1500, 1000), 100);
+        // Unknown size disables display: never divide, never emit.
+        assert_eq!(decode_percent(500, 0), 0);
+        assert_eq!(decode_percent(0, 0), 0);
     }
 }

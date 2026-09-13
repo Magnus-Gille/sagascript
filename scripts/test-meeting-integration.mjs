@@ -67,6 +67,8 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(settingsSource, /displayTranscribeProgress\(event\.payload, transcribing, transcribePhase\)/);
   assert.match(settingsSource, /transcriptionProgress = 1;/);
   assert.match(settingsSource, /transcription-phase/);
+  assert.match(settingsSource, /transcription-decode/);
+  assert.match(settingsSource, /decodePct/);
   assert.match(settingsSource, /Decoding audio…/);
   assert.match(settingsSource, /Preparing…/);
   assert.match(settingsSource, /Loading model…/);

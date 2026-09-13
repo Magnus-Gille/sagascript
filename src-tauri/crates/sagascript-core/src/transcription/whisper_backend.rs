@@ -1448,7 +1448,9 @@ impl WhisperBackend {
                 .map(|chunk| chunk.end_sample - chunk.start_sample)
                 .collect(),
             total_weight: audio.len(),
-            last_reported: -1,
+            // Start at 0, not -1: the caller already reported inference-start
+            // (1%), so the first per-chunk 0 must not emit a backwards step.
+            last_reported: 0,
             callback: Box::new(on_progress),
         }));
 

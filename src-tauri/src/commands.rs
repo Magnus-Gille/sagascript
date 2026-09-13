@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tauri::State;
@@ -356,6 +357,15 @@ pub type SharedController = Mutex<AppController>;
 /// Shared whisper backend — separate from AppController to avoid holding
 /// the controller lock during blocking transcription
 pub type SharedWhisper = Arc<WhisperBackend>;
+
+/// Per-run cancellation token for the plain `transcribe_file` decode stage.
+/// Blocking decode runs before the whisper state lock exists, so the shared
+/// whisper abort flag cannot represent it (a set flag may belong to an
+/// already-finished job and would instantly kill the next run's decode).
+/// The slot is (over)written at every plain run start; cancel sets the
+/// stored token when one is present. A stale set token is harmless — the
+/// next run overwrites the slot before its decode starts.
+pub type SharedPlainDecodeCancel = Mutex<Option<Arc<AtomicBool>>>;
 
 #[tauri::command]
 pub async fn get_active_hotkey_profile(
@@ -2019,7 +2029,14 @@ pub async fn set_vad_enabled(
 #[tauri::command]
 pub async fn cancel_file_transcription(
     whisper: State<'_, SharedWhisper>,
+    decode_cancel: State<'_, SharedPlainDecodeCancel>,
 ) -> Result<(), String> {
+    // Stop a decode in flight, if any. Inference (when running) is stopped
+    // via the whisper abort flag below; decode runs before the state lock
+    // exists, so it needs its own per-run token.
+    if let Some(token) = decode_cancel.lock().unwrap().as_ref() {
+        token.store(true, Ordering::SeqCst);
+    }
     whisper.request_abort();
     Ok(())
 }
@@ -2116,10 +2133,13 @@ mod save_name_tests {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri injects AppHandle + States; the
+// frontend call shape (file/prompt/diarize/profile) is unchanged.
 pub async fn transcribe_file(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
+    decode_cancel: State<'_, SharedPlainDecodeCancel>,
     file_path: String,
     prompt: Option<String>,
     diarize: Option<bool>,
@@ -2139,12 +2159,69 @@ pub async fn transcribe_file(
 
     let path = std::path::PathBuf::from(&file_path);
 
-    // Decode audio file
+    // Decode audio file with honest byte-fraction progress (#237) on a
+    // dedicated event. Unlike inference percentages this is an I/O fraction,
+    // not a time fraction — and unlike the old static 1% it always moves.
+    // Decode is cancellable via this run's token and bounded by a
+    // size-scaled timeout; both previously silent forever.
     let _ = app.emit(crate::events::event::TRANSCRIPTION_PHASE, "decoding");
-    let audio = tokio::task::spawn_blocking(move || decoder::decode_audio_file(&path))
-        .await
-        .map_err(|e| format!("Decode task failed: {e}"))?
-        .map_err(|e| e.to_string())?;
+    let decode_token = Arc::new(AtomicBool::new(false));
+    *decode_cancel.lock().unwrap() = Some(decode_token.clone());
+    let file_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    // ~2s per MB, clamped to [2min, 30min]: generous for slow machines,
+    // finite for pathological inputs.
+    let decode_timeout = Duration::from_secs((file_len / 500_000).clamp(120, 1_800));
+    let decode_app = app.clone();
+    let mut decode_fut = tokio::task::spawn_blocking(move || {
+        let checkpoint = {
+            let token = decode_token.clone();
+            move || {
+                if token.load(Ordering::SeqCst) {
+                    return Err(sagascript_core::error::DictationError::TranscriptionFailed(
+                        "Transcription cancelled.".to_string(),
+                    ));
+                }
+                Ok(())
+            }
+        };
+        decoder::decode_audio_file_with_progress(
+            &path,
+            Some(&checkpoint),
+            Some(&|pct| {
+                let _ = decode_app.emit(crate::events::event::TRANSCRIPTION_DECODE, pct);
+            }),
+        )
+    });
+    let audio = match tokio::time::timeout(decode_timeout, &mut decode_fut).await {
+        Ok(Ok(audio)) => audio.map_err(|e| e.to_string())?,
+        Ok(Err(e)) => return Err(format!("Decode task failed: {e}")),
+        Err(_) => {
+            warn!(
+                "File decode timed out after {}s — requesting abort",
+                decode_timeout.as_secs()
+            );
+            // Abort via the run's decode token only. Deliberately NOT
+            // whisper.request_abort() here: no inference holds the state
+            // lock, and the shared flag could belong to a concurrent
+            // dictation that must not be disturbed.
+            if let Some(token) = decode_cancel.lock().unwrap().as_ref() {
+                token.store(true, Ordering::SeqCst);
+            }
+            match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut decode_fut).await
+            {
+                Ok(_) => info!("Aborted decode task exited"),
+                Err(_) => error!(
+                    "Decode task still running {ABORT_GRACE_SECS}s after abort — \
+                     further transcriptions will report ModelBusy rather than block forever"
+                ),
+            }
+            let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
+            return Err(format!(
+                "Decoding timed out after {}s (decode aborted)",
+                decode_timeout.as_secs()
+            ));
+        }
+    };
 
     if audio.is_empty() {
         return Err("No audio decoded from file".to_string());

@@ -16,7 +16,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 #[cfg(feature = "diarization")]
 use sagascript_core::audio::decoder::decode_audio_file_with_control;
-use sagascript_core::audio::decoder::{decode_audio_file, SUPPORTED_EXTENSIONS};
+use sagascript_core::audio::decoder::SUPPORTED_EXTENSIONS;
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
@@ -1079,15 +1079,45 @@ fn transcribe_file(
     } else {
         eprintln!("Decoding {}...", file.display());
         let decode_started = Instant::now();
+        // Byte-fraction decode bar for large files (#237): small files
+        // decode sub-second, so only bar above 8 MB to avoid flicker.
+        let decode_len = std::fs::metadata(file).map(|m| m.len()).unwrap_or(0);
+        let decode_bar = (decode_len > 8_000_000).then(|| {
+            let pb = ProgressBar::new(100);
+            pb.set_style(
+                ProgressStyle::with_template("  Decoding [{bar:40}] {pos}%").unwrap(),
+            );
+            pb
+        });
+        let decode_progress = decode_bar.as_ref().map(|pb| {
+            let pb = pb.clone();
+            move |pct: u8| {
+                pb.set_position(pct.min(100) as u64);
+            }
+        });
+        let on_decode = decode_progress.as_ref().map(|f| f as &dyn Fn(u8));
         #[cfg(feature = "diarization")]
         let audio = if args.meeting_json {
             let checkpoint = || meeting_check(control);
-            decode_audio_file_with_control(file, &checkpoint)?
+            match on_decode {
+                Some(progress) => sagascript_core::audio::decoder::decode_audio_file_with_progress(
+                    file,
+                    Some(&checkpoint),
+                    Some(progress),
+                )?,
+                None => decode_audio_file_with_control(file, &checkpoint)?,
+            }
         } else {
-            decode_audio_file(file)?
+            sagascript_core::audio::decoder::decode_audio_file_with_progress(
+                file, None, on_decode,
+            )?
         };
         #[cfg(not(feature = "diarization"))]
-        let audio = decode_audio_file(file)?;
+        let audio =
+            sagascript_core::audio::decoder::decode_audio_file_with_progress(file, None, on_decode)?;
+        if let Some(pb) = decode_bar {
+            pb.finish_and_clear();
+        }
         let decode_resample_seconds = decode_started.elapsed().as_secs_f64();
         let duration = audio.len() as f64 / 16_000.0;
         eprintln!("Audio: {:.1}s, {} samples", duration, audio.len());
@@ -1449,6 +1479,9 @@ fn transcribe_file(
         eprintln!("VAD: enabled");
     }
 
+    // "Preparing" narration (GUI parity, #237): lock acquisition plus
+    // parallel-state creation are silent multi-second work on first use.
+    eprintln!("Preparing Whisper states...");
     let mut segments = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap());

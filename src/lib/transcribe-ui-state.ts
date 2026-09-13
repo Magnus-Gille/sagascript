@@ -54,6 +54,15 @@ export function parseTranscribePhase(value: unknown): TranscribePhase {
 }
 
 /**
+ * Clamp an untrusted decode-progress payload (#237) to 0–100 or null when it
+ * carries no usable number. Null renders the phase floor instead.
+ */
+export function clampDecodePct(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(100, Math.floor(value)));
+}
+
+/**
  * Display value for the Transcribe-tab progress (#237). The backend only
  * reports percentages during active decoding, so a raw 0 renders as "hung"
  * through model load + warmup. Floor at the current phase (≥1%) while a run
