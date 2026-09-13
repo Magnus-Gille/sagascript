@@ -16,6 +16,15 @@ const MISSING_FILE_HINTS = [
 ];
 
 /**
+ * Display name for the one-click re-run button (#235 follow-up): just the
+ * file name, never the full path.
+ */
+export function transcribeBaseName(path: string | null): string {
+  if (!path) return "";
+  return path.split(/[\\/]/).pop() ?? "";
+}
+
+/**
  * Display value for the Transcribe-tab progress (#237). The backend only
  * reports percentages during active decoding, so a raw 0 renders as "hung"
  * through model load + warmup. Floor at 1% while a run is in flight (the

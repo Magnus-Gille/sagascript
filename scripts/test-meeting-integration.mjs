@@ -53,8 +53,9 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(settingsSource, /Stop transcription/);
   assert.match(settingsSource, /Transcription was cancelled/);
   // #235: retry + session-only recent files (paths only, never persisted).
+  // One-click re-run lives in the idle drop zone (no scrolling, no picker).
   assert.match(settingsSource, /retryLastTranscription/);
-  assert.match(settingsSource, /Re-run \{lastTranscribeFile\}/);
+  assert.match(settingsSource, /Re-run \{transcribeBaseName\(lastTranscribeFile\)\}/);
   assert.match(settingsSource, /Recent files \(this session only/);
   assert.match(settingsSource, /Ready: \{stagedTranscribeFile\}/);
   assert.match(settingsSource, /Choose a recent file to re-run/);
@@ -71,6 +72,10 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(settingsSource, /copyTranscriptionResult\(\)/);
   assert.match(settingsSource, /saveTranscriptionResult\(\)/);
   assert.match(settingsSource, /Save…/);
+  // #238 follow-up: finished results scroll into view with Save… focused.
+  assert.match(settingsSource, /revealTranscriptionResult/);
+  assert.match(settingsSource, /scrollIntoView/);
+  assert.match(settingsSource, /saveResultButton\?\.focus/);
   assert(
     settingsSource.indexOf("transcribe-options") < settingsSource.indexOf("class=\"drop-zone\"")
     && settingsSource.indexOf("class=\"drop-zone\"") < settingsSource.indexOf("transcribe-result"),

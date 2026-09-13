@@ -82,6 +82,7 @@
     displayTranscribeProgress,
     pushRecentTranscribeFile,
     stageRecentTranscribeFile,
+    transcribeBaseName,
     canRetryTranscribeFile,
     isMissingTranscribeFileError,
     pruneMissingTranscribeFile,
@@ -251,6 +252,17 @@
   let recentTranscribeSelect: string = $state("");
   // #238: one-line feedback for the Copy/Save… result actions.
   let resultActionMessage: string = $state("");
+  let transcribeResultSection: HTMLDivElement | undefined = $state();
+  let saveResultButton: HTMLButtonElement | undefined = $state();
+
+  // #238 follow-up: when a transcription finishes, bring the result into
+  // view and put keyboard focus on Save… so it is one Enter press away.
+  function revealTranscriptionResult(): void {
+    queueMicrotask(() => {
+      transcribeResultSection?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      saveResultButton?.focus({ preventScroll: true });
+    });
+  }
 
   function rememberTranscribeFile(filePath: string): void {
     recentTranscribeFiles = pushRecentTranscribeFile(recentTranscribeFiles, filePath);
@@ -1210,6 +1222,8 @@
         diarize: false,
         profileId: profileId ?? undefined,
       });
+      if (plainGeneration !== plainTranscribeGeneration) return;
+      if (transcriptionResult.trim()) revealTranscriptionResult();
     } catch (error: any) {
       if (plainGeneration !== plainTranscribeGeneration) return;
       // #234: a user cancel discards the partial result and reports a
@@ -2004,6 +2018,16 @@
             <button class="primary open-file-btn" onclick={onPickFile}>
               Open File...
             </button>
+            {#if lastTranscribeFile}
+              <button
+                class="secondary"
+                onclick={() => void retryLastTranscription()}
+                disabled={meetingReprocessingBusy || meetingReviewInit !== null}
+                title="Re-run the last transcription with the same settings — no file picker"
+              >
+                Re-run {transcribeBaseName(lastTranscribeFile)}
+              </button>
+            {/if}
             <button class="secondary" onclick={() => void openSavedMeetingReview()} disabled={meetingReviewInit !== null}>
               Open saved review...
             </button>
@@ -2060,6 +2084,7 @@
         {/if}
 
         {#if transcriptionResult}
+          <div bind:this={transcribeResultSection}>
           <div class="result-label">Result</div>
           <textarea class="transcribe-result" readonly>{transcriptionResult}</textarea>
           <div class="result-actions">
@@ -2072,6 +2097,7 @@
             </button>
             <button
               class="secondary"
+              bind:this={saveResultButton}
               onclick={() => void saveTranscriptionResult()}
               disabled={transcribing}
               title="Choose where to save — defaults to the audio file's folder"
@@ -2082,17 +2108,6 @@
               <span class="result-action-message" role="status">{resultActionMessage}</span>
             {/if}
           </div>
-        {/if}
-
-        {#if canRetryTranscribeFile(transcribing, meetingReprocessingBusy, meetingReviewInit !== null, lastTranscribeFile)}
-          <div class="retry-row">
-            <button
-              class="secondary"
-              onclick={() => void retryLastTranscription()}
-              title="Re-run the same file with its original settings"
-            >
-              Re-run {lastTranscribeFile}
-            </button>
           </div>
         {/if}
 
@@ -3181,10 +3196,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--text-muted);
-  }
-
-  .retry-row {
-    margin-top: 10px;
   }
 
   .result-actions {

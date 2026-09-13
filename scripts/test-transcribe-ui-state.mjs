@@ -23,6 +23,7 @@ const {
   isMissingTranscribeFileError,
   pruneMissingTranscribeFile,
   transcribeSaveDefaults,
+  transcribeBaseName,
 } = await import(
   `data:text/javascript;base64,${Buffer.from(module).toString("base64")}`
 );
@@ -116,4 +117,12 @@ test("save defaults point at the audio folder with a .txt basename", () => {
     fileName: "transcription.txt",
     directory: null,
   });
+});
+
+test("re-run button shows the bare file name, never the full path", () => {
+  assert.equal(transcribeBaseName("/Users/x/audio/talk.m4a"), "talk.m4a");
+  assert.equal(transcribeBaseName("C:\\audio\\talk.m4a"), "talk.m4a");
+  assert.equal(transcribeBaseName("talk.wav"), "talk.wav");
+  assert.equal(transcribeBaseName(null), "");
+  assert.equal(transcribeBaseName(""), "");
 });
