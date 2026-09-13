@@ -7,7 +7,7 @@
   import type {
     ReprocessingMode, SelectedReprocessingPlan, ProposalState, ReprocessingResult,
   } from "./meeting-reprocessing-types";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import {
     getSettings,
     getLastError,
@@ -105,6 +105,24 @@
   let settingsError: string = $state("");
   let blockedLanguageChange: { language: Language; source: string } | null = $state(null);
   let languageSaving = $state(false);
+  let languageSelectEl: HTMLSelectElement | undefined = $state();
+  let languageRecoveryTitle: HTMLHeadingElement | undefined = $state();
+  // Contract-pinned against the Rust guard by test-language-switch-recovery.
+  const defaultDictionaryLanguageBlock = "Profile 'default' has a personal dictionary";
+
+  $effect(() => {
+    if (blockedLanguageChange && languageRecoveryTitle) languageRecoveryTitle.focus();
+  });
+
+  async function restoreLanguageFocus(): Promise<void> {
+    await tick();
+    languageSelectEl?.focus();
+  }
+
+  function cancelLanguageChange(): void {
+    blockedLanguageChange = null;
+    void restoreLanguageFocus();
+  }
 
   // Model selection state
   let selecting: boolean = $state(false);
@@ -554,26 +572,30 @@
     languageSaving = true;
     try {
       const ok = await applySetting(() => setLanguage(value));
-      if (!ok && settingsError.includes("Profile 'default' has a personal dictionary")) {
+      if (!ok && settingsError.includes(defaultDictionaryLanguageBlock)) {
         // Show the actual blocking dictionary, not whichever editor scope is
         // selected. Freeze the preview for the existing compare-and-swap API.
         const current = await getSettings();
         settings = current;
         const source = current.profile_glossaries.default ?? "";
         if (source.trim()) blockedLanguageChange = { language: value, source };
+        else settingsError = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
       }
       if (ok) models = await getModelInfo();
     } catch (error: any) {
-      settingsError += `${settingsError ? " " : ""}Could not refresh language settings: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
+      settingsError += `${settingsError ? " " : ""}Could not refresh language settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
     } finally {
       select.value = settings.language;
       languageSaving = false;
+      if (!blockedLanguageChange) void restoreLanguageFocus();
     }
   }
 
   async function clearDictionaryAndSwitchLanguage(): Promise<void> {
     if (!settings || !blockedLanguageChange || languageSaving || glossarySaving) return;
     const request = blockedLanguageChange;
+    const defaultDraft = glossaryScopeId === "default" && glossaryHasUnsavedChanges()
+      ? glossaryDraft : null;
     languageSaving = true;
     settingsError = "";
     let cleared = false;
@@ -583,14 +605,13 @@
       // Clear the confirmation immediately: a failed retry must not offer to
       // erase a dictionary that may have been populated again in the meantime.
       blockedLanguageChange = null;
-      if (glossaryScopeId === "default" && glossaryHasUnsavedChanges()) {
-        rememberGlossaryRecovery("default", glossaryDraft);
-      }
+      if (defaultDraft !== null) rememberGlossaryRecovery("default", defaultDraft);
       settings = { ...settings, profile_glossaries: { ...settings.profile_glossaries, default: "" } };
       if (glossaryScopeId === "default") discardGlossaryChanges();
       await setLanguage(request.language);
     } catch (error: any) {
       const message = typeof error === "string" ? error : error?.message || "Unknown error";
+      if (cleared) rememberGlossaryRecovery("default", request.source);
       settingsError = cleared
         ? `The default dictionary was cleared, but the language change failed: ${message}`
         : `The dictionary could not be cleared; the language was not changed: ${message}`;
@@ -604,6 +625,7 @@
         settingsError += `${settingsError ? " " : ""}Could not refresh settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
       }
       languageSaving = false;
+      void restoreLanguageFocus();
     }
   }
 
@@ -898,7 +920,7 @@
 
   async function saveAndFinishGlossaryNavigation(): Promise<void> {
     const pending = pendingGlossaryNavigation;
-    if (!pending || glossarySaving) return;
+    if (!pending || glossarySaving || languageSaving) return;
     if (await saveGlossary() && pendingGlossaryNavigation === pending) {
       finishPendingGlossaryNavigation(pending);
     }
@@ -906,7 +928,7 @@
 
   function discardAndFinishGlossaryNavigation(): void {
     const pending = pendingGlossaryNavigation;
-    if (!pending || glossarySaving) return;
+    if (!pending || glossarySaving || languageSaving) return;
     discardGlossaryChanges();
     finishPendingGlossaryNavigation(pending);
   }
@@ -917,6 +939,7 @@
   }
 
   function requestTabChange(nextTab: SettingsTab, afterNavigate?: () => void): void {
+    if (languageSaving) return;
     if (nextTab === activeTab) {
       afterNavigate?.();
       return;
@@ -1666,13 +1689,13 @@
   </header>
 
   <div class="tabs">
-    <button class="tab" class:active={activeTab === "dictate"} onclick={() => requestTabChange("dictate")}>
+    <button class="tab" class:active={activeTab === "dictate"} onclick={() => requestTabChange("dictate")} disabled={languageSaving}>
       Dictate
     </button>
-    <button class="tab" class:active={activeTab === "transcribe"} onclick={() => requestTabChange("transcribe")}>
+    <button class="tab" class:active={activeTab === "transcribe"} onclick={() => requestTabChange("transcribe")} disabled={languageSaving}>
       Transcribe
     </button>
-    <button class="tab" class:active={activeTab === "settings"} onclick={() => requestTabChange("settings")}>
+    <button class="tab" class:active={activeTab === "settings"} onclick={() => requestTabChange("settings")} disabled={languageSaving}>
       Settings
     </button>
   </div>
@@ -1683,7 +1706,7 @@
         <div class="transcribe-error">{initError}</div>
       {/if}
       {#if settingsError}
-        <div class="transcribe-error" role="alert">{settingsError}</div>
+        <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
       {/if}
       {#if activeTab === "dictate"}
         <div class="field profile-field">
@@ -1973,7 +1996,7 @@
       {:else if activeTab === "settings"}
         <div class="field">
           <label for="language">Language</label>
-          <select id="language" value={settings.language} onchange={onLanguageChange} disabled={languageSaving || glossarySaving}>
+          <select id="language" bind:this={languageSelectEl} value={settings.language} onchange={onLanguageChange} disabled={languageSaving || glossarySaving}>
             <option value="en">English</option>
             <option value="sv">Swedish</option>
             <option value="no">Norwegian</option>
@@ -1982,13 +2005,13 @@
           </select>
           {#if blockedLanguageChange}
             <section class="language-recovery" aria-labelledby="language-recovery-title">
-              <h3 id="language-recovery-title">Switch to {languageLabel(blockedLanguageChange.language)}?</h3>
+              <h3 id="language-recovery-title" bind:this={languageRecoveryTitle} tabindex="-1">Switch to {languageLabel(blockedLanguageChange.language)}?</h3>
               <p>The <strong>default</strong> profile has the saved dictionary below. Its words belong to its current language, even when another dictionary is selected in the editor.</p>
               <textarea class="initial-prompt-input" rows="3" aria-label="Saved default profile dictionary" value={blockedLanguageChange.source} readonly></textarea>
               <p>Copy these words before continuing if you want to keep them. Clearing cannot be undone. Unsaved editor drafts will be preserved.</p>
               <p>To keep this dictionary, cancel and use or add a language profile in the Dictate tab.</p>
               <div class="dictionary-actions">
-                <button type="button" class="secondary" onclick={() => { blockedLanguageChange = null; }} disabled={languageSaving}>Cancel</button>
+                <button type="button" class="secondary" onclick={cancelLanguageChange} disabled={languageSaving}>Cancel</button>
                 <button type="button" class="danger" onclick={() => void clearDictionaryAndSwitchLanguage()} disabled={languageSaving || glossarySaving}>
                   {languageSaving ? "Switching…" : `Clear default dictionary and switch to ${languageLabel(blockedLanguageChange.language)}`}
                 </button>
@@ -2226,13 +2249,13 @@
             type="button"
             class="primary"
             onclick={() => void saveAndFinishGlossaryNavigation()}
-            disabled={glossarySaving}
+            disabled={glossarySaving || languageSaving}
           >{glossarySaving ? "Saving…" : "Save"}</button>
           <button
             type="button"
             class="danger"
             onclick={discardAndFinishGlossaryNavigation}
-            disabled={glossarySaving}
+            disabled={glossarySaving || languageSaving}
           >Discard</button>
           <button type="button" class="secondary" data-dialog-stay onclick={stayOnGlossaryDraft} disabled={glossarySaving}>Stay</button>
         </div>

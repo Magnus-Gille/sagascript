@@ -7,6 +7,12 @@ import ts from "typescript";
 const source = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
 const script = source.match(/<script lang="ts">([\s\S]*?)<\/script>/)[1];
 const parsed = ts.createSourceFile("Settings.ts", script, ts.ScriptTarget.Latest, true);
+const defaultDictionaryLanguageBlock = script.match(/const defaultDictionaryLanguageBlock = "([^"]+)"/)[1];
+const core = await readFile(new URL("../src-tauri/crates/sagascript-core/src/settings/manager.rs", import.meta.url), "utf8");
+const backendError = core.match(/"(Profile 'default' has a personal dictionary;[^"\n]+)"/)[1];
+test("language recovery classifier matches the actual backend guard", () => {
+  assert.ok(backendError.includes(defaultDictionaryLanguageBlock));
+});
 const names = ["applySetting", "onLanguageChange", "clearDictionaryAndSwitchLanguage",
   "glossaryHasUnsavedChanges", "rememberGlossaryRecovery", "discardGlossaryChanges"];
 const functions = names.map((name) => {
@@ -15,9 +21,9 @@ const functions = names.map((name) => {
   return declaration.getText(parsed);
 }).join("\n");
 
-function harness({ clearFailure = "", retryFailure = "", refreshFailure = false, empty = false } = {}) {
+function harness({ clearFailure = "", retryFailure = "", refreshFailure = false, rejectionRefreshFailure = false, concurrentClear = false, empty = false } = {}) {
   let release;
-  const context = vm.createContext({ options: { clearFailure, retryFailure, refreshFailure, empty },
+  const context = vm.createContext({ options: { clearFailure, retryFailure, refreshFailure, rejectionRefreshFailure, concurrentClear, empty }, backendError, defaultDictionaryLanguageBlock,
     pauseClear: () => new Promise((resolve) => { release = resolve; }) });
   vm.runInContext(ts.transpileModule(`
     let stored = { language: "sv", initial_prompt: "global hints", hotkey_profiles: [],
@@ -25,7 +31,7 @@ function harness({ clearFailure = "", retryFailure = "", refreshFailure = false,
     let settings = structuredClone(stored);
     let settingsError = "", blockedLanguageChange = null, languageSaving = false, models = [];
     let glossarySaving = false, glossaryScopeId = "english", glossaryDraft = "english draft";
-    let glossaryEditBaseline = { scopeId: "english", source: "merge = merch" };
+    let glossaryEditBaseline = { scopeId: "english", source: "merge = merch", generation: 1 };
     let glossaryConflictScopeId = null, glossaryDraftGeneration = 1, glossaryDraftInitialized = true;
     let lastStoredGlossarySources = {}, recoveredGlossaryDrafts = [];
     const dictionaryConflictPrefix = "Dictionary changed elsewhere:";
@@ -34,7 +40,7 @@ function harness({ clearFailure = "", retryFailure = "", refreshFailure = false,
     async function setLanguage(value) {
       calls.push(["language", value]);
       if (stored.profile_glossaries.default.trim() && stored.language !== value)
-        throw "Profile 'default' has a personal dictionary; clear it before changing the profile language";
+        throw backendError;
       if (cleared && options.retryFailure) throw options.retryFailure;
       stored.language = value;
     }
@@ -48,8 +54,11 @@ function harness({ clearFailure = "", retryFailure = "", refreshFailure = false,
     }
     async function getSettings() {
       if (cleared && options.refreshFailure) throw "read failed";
+      if (!cleared && options.rejectionRefreshFailure) throw "rejection read failed";
+      if (!cleared && options.concurrentClear) stored.profile_glossaries.default = "";
       return structuredClone(stored);
     }
+    async function restoreLanguageFocus() {}
     async function getModelInfo() { return []; }
     async function refreshProfileModels() {}
     function glossarySourceForScope(id) { return settings.profile_glossaries[id] ?? settings.initial_prompt; }
@@ -60,7 +69,7 @@ function harness({ clearFailure = "", retryFailure = "", refreshFailure = false,
       cancel: () => { blockedLanguageChange = null; },
       changeStoredDictionary: () => { stored.profile_glossaries.default = "new words"; },
       selectDefaultDraft: () => { glossaryScopeId = "default"; glossaryDraft = "default draft";
-        glossaryEditBaseline = { scopeId: "default", source: stored.profile_glossaries.default }; },
+        glossaryEditBaseline = { scopeId: "default", source: stored.profile_glossaries.default, generation: 1 }; },
       hold: () => { holdClear = true; },
       snapshot: () => JSON.parse(JSON.stringify({ stored, settings, settingsError, blockedLanguageChange,
         languageSaving, calls, glossaryDraft, glossaryEditBaseline, recoveredGlossaryDrafts })),
@@ -142,6 +151,8 @@ test("failed language retry reports the completed clear and does not allow repea
   assert.equal(state.stored.profile_glossaries.default, "");
   assert.equal(state.stored.language, "sv");
   assert.match(state.settingsError, /dictionary was cleared, but the language change failed: write failed/);
+  assert.equal(state.recoveredGlossaryDrafts[0].scopeId, "default");
+  assert.equal(state.recoveredGlossaryDrafts[0].draft, "mergea = mördsa", "cleared words must remain copyable after a failed switch");
   await h.clear();
   assert.equal(h.snapshot().calls.length, 3);
 });
@@ -175,4 +186,19 @@ test("ordinary language change without dictionary succeeds without confirmation"
   assert.equal(await h.select(), "en");
   assert.equal(h.snapshot().blockedLanguageChange, null);
   assert.equal(h.snapshot().calls.length, 1);
+});
+
+test("failed refresh after rejection reports uncertainty and restores the known saved selection", async () => {
+  const h = harness({ rejectionRefreshFailure: true });
+  assert.equal(await h.select(), "sv");
+  assert.match(h.snapshot().settingsError, /reopen Settings to confirm the saved language.*rejection read failed/);
+  assert.equal(h.snapshot().blockedLanguageChange, null);
+  assert.equal(h.snapshot().languageSaving, false);
+});
+
+test("concurrent clear between rejection and preview provides retry guidance", async () => {
+  const h = harness({ concurrentClear: true });
+  assert.equal(await h.select(), "sv");
+  assert.match(h.snapshot().settingsError, /cleared elsewhere.*again to retry/);
+  assert.equal(h.snapshot().blockedLanguageChange, null);
 });

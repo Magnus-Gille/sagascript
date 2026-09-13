@@ -210,6 +210,7 @@ function createHarness({ failure = null } = {}) {
       onMeetingReviewDraftDirtyChange,
       setMeetingReviewConfirm: (value) => { meetingReviewConfirm = value; },
       setGlossarySaving: (value) => { glossarySaving = value; },
+      setLanguageSaving: (value) => { languageSaving = value; },
       snapshot: () => ({
         settings,
         settingsError,
@@ -234,6 +235,28 @@ function createHarness({ failure = null } = {}) {
 function input(exercise, value) {
   exercise.onGlossaryInput({ target: { value } });
 }
+
+test("language recovery blocks dictionary saves and navigation until it finishes", async () => {
+  const exercise = createHarness();
+  input(exercise, "draft survives recovery");
+  exercise.setLanguageSaving(true);
+  assert.equal(await exercise.saveGlossary(), false);
+  exercise.requestTabChange("dictate");
+  assert.equal(exercise.snapshot().pendingGlossaryNavigation, null);
+  assert.equal(exercise.snapshot().activeTab, "settings");
+  assert.equal(exercise.snapshot().calls.length, 0);
+  exercise.setLanguageSaving(false);
+  exercise.requestTabChange("dictate");
+  exercise.setLanguageSaving(true);
+  await exercise.saveAndFinishGlossaryNavigation();
+  exercise.discardAndFinishGlossaryNavigation();
+  assert.equal(exercise.snapshot().activeTab, "settings");
+  assert.equal(exercise.snapshot().glossaryDraft, "draft survives recovery");
+  assert.equal(exercise.snapshot().calls.length, 0);
+  exercise.setLanguageSaving(false);
+  await exercise.saveAndFinishGlossaryNavigation();
+  assert.equal(exercise.snapshot().activeTab, "dictate");
+});
 
 test("caret edits are local: input and blur do not persist", async () => {
   assert.doesNotMatch(settingsSource, /onblur=\{onInitialPromptBlur\}/);
