@@ -56,8 +56,25 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(settingsSource, /retryLastTranscription/);
   assert.match(settingsSource, /Re-run \{lastTranscribeFile\}/);
   assert.match(settingsSource, /Recent files \(this session only/);
-  assert.match(settingsSource, /Transcribe staged file/);
+  assert.match(settingsSource, /Ready: \{stagedTranscribeFile\}/);
+  assert.match(settingsSource, /Choose a recent file to re-run/);
+  assert.doesNotMatch(settingsSource, /to stage…/);
+  assert.doesNotMatch(settingsSource, /Staged: \{stagedTranscribeFile\}/);
   assert.doesNotMatch(settingsSource, /localStorage/);
+  // #237: progress leaves 0% immediately and floors while running.
+  assert.match(settingsSource, /displayTranscribeProgress\(event\.payload, transcribing\)/);
+  assert.match(settingsSource, /transcriptionProgress = 1;/);
+  // #238: settings above the drop zone; result + Copy/Save… below it.
+  assert.match(apiSource, /invoke\("save_transcription_text", \{ text, fileName, directory \}\)/);
+  assert.match(apiSource, /invoke\("copy_transcription_text", \{ text \}\)/);
+  assert.match(settingsSource, /copyTranscriptionResult\(\)/);
+  assert.match(settingsSource, /saveTranscriptionResult\(\)/);
+  assert.match(settingsSource, /Save…/);
+  assert(
+    settingsSource.indexOf("transcribe-options") < settingsSource.indexOf("class=\"drop-zone\"")
+    && settingsSource.indexOf("class=\"drop-zone\"") < settingsSource.indexOf("transcribe-result"),
+    "settings first, drop zone second, result last",
+  );
 });
 
 test("polling is serialized, stale generations are ignored, and cancellation waits for terminal state", async () => {

@@ -16,6 +16,42 @@ const MISSING_FILE_HINTS = [
 ];
 
 /**
+ * Display value for the Transcribe-tab progress (#237). The backend only
+ * reports percentages during active decoding, so a raw 0 renders as "hung"
+ * through model load + warmup. Floor at 1% while a run is in flight (the
+ * backend emits 1% at inference start, so the floor only covers genuine
+ * pre-first-report silence) and reset to 0 when idle.
+ */
+export function displayTranscribeProgress(reported: number, transcribing: boolean): number {
+  if (!transcribing) return 0;
+  if (!Number.isFinite(reported)) return 1;
+  return Math.max(1, Math.min(100, Math.floor(reported)));
+}
+
+/**
+ * Smart Save… dialog defaults (#238): the audio file's folder + its
+ * basename with a .txt extension, so "same folder" is one Enter press while
+ * any other location stays one dialog away. Paths only — never content.
+ */
+export function transcribeSaveDefaults(sourcePath: string | null): {
+  fileName: string;
+  directory: string | null;
+} {
+  if (!sourcePath || !sourcePath.trim()) {
+    return { fileName: "transcription.txt", directory: null };
+  }
+  const trimmed = sourcePath.trim();
+  const base = trimmed.split(/[\\/]/).pop() ?? "";
+  const stem = base.replace(/\.[^.]+$/, "");
+  const safe = stem.replace(/[\\/:*?"<>|]/g, "_").trim() || "transcription";
+  const dirIdx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return {
+    fileName: `${safe}.txt`,
+    directory: dirIdx > 0 ? trimmed.slice(0, dirIdx) : null,
+  };
+}
+
+/**
  * Whether the plain (non-diarized) transcription Stop/Cancel control is
  * enabled. Mirrors the meeting-cancel semantics from #234: only the plain
  * path (meetingJobStatus === null) while a run is in flight and not already

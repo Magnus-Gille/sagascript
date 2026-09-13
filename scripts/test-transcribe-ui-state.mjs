@@ -16,11 +16,13 @@ const module = ts.transpileModule(source, {
 const {
   MAX_RECENT_TRANSCRIBE_FILES,
   canCancelPlainTranscription,
+  displayTranscribeProgress,
   pushRecentTranscribeFile,
   stageRecentTranscribeFile,
   canRetryTranscribeFile,
   isMissingTranscribeFileError,
   pruneMissingTranscribeFile,
+  transcribeSaveDefaults,
 } = await import(
   `data:text/javascript;base64,${Buffer.from(module).toString("base64")}`
 );
@@ -79,4 +81,39 @@ test("missing-file errors prune the recent list gracefully", () => {
   assert.equal(isMissingTranscribeFileError(new Error("ENOENT: open failed")), true);
   assert.equal(isMissingTranscribeFileError("Whisper inference failed: -6"), false);
   assert.deepEqual(pruneMissingTranscribeFile(["a.wav", "b.wav"], "a.wav"), ["b.wav"]);
+});
+
+test("displayed progress floors at 1% while running and resets when idle", () => {
+  assert.equal(displayTranscribeProgress(0, true), 1);
+  assert.equal(displayTranscribeProgress(-5, true), 1);
+  assert.equal(displayTranscribeProgress(NaN, true), 1);
+  assert.equal(displayTranscribeProgress(1, true), 1);
+  assert.equal(displayTranscribeProgress(47.8, true), 47);
+  assert.equal(displayTranscribeProgress(100, true), 100);
+  assert.equal(displayTranscribeProgress(140, true), 100);
+  assert.equal(displayTranscribeProgress(47, false), 0);
+  assert.equal(displayTranscribeProgress(0, false), 0);
+});
+
+test("save defaults point at the audio folder with a .txt basename", () => {
+  assert.deepEqual(transcribeSaveDefaults("/Users/x/audio/talk.m4a"), {
+    fileName: "talk.txt",
+    directory: "/Users/x/audio",
+  });
+  assert.deepEqual(transcribeSaveDefaults("C:\\audio\\talk"), {
+    fileName: "talk.txt",
+    directory: "C:\\audio",
+  });
+  assert.deepEqual(transcribeSaveDefaults("talk.wav"), {
+    fileName: "talk.txt",
+    directory: null,
+  });
+  assert.deepEqual(transcribeSaveDefaults(null), {
+    fileName: "transcription.txt",
+    directory: null,
+  });
+  assert.deepEqual(transcribeSaveDefaults("   "), {
+    fileName: "transcription.txt",
+    directory: null,
+  });
 });

@@ -1386,6 +1386,13 @@ impl WhisperBackend {
             opts.parallel_chunks.clamp(1, MAX_PARALLEL_CHUNKS),
             MIN_PARALLEL_CHUNK_SAMPLES,
         );
+
+        // Leave 0% immediately (#237): whisper.cpp only reports progress per
+        // decoded step, so model load + encoder would otherwise render as a
+        // long stall. 1% honestly means "inference has started".
+        let mut on_progress = on_progress;
+        on_progress(1);
+
         info!(
             "Starting local transcription: {} samples, {} threads/state, {} chunk(s), lang={:?}, beam={}, temp_fallback={}, vad={}",
             audio.len(),

@@ -28,6 +28,8 @@
     downloadModel,
     transcribeFile,
     cancelFileTranscription,
+    saveTranscriptionText,
+    copyTranscriptionText,
     beginMeetingFile,
     getMeetingJob,
     cancelMeetingJob,
@@ -77,11 +79,13 @@
   import {
     MAX_RECENT_TRANSCRIBE_FILES,
     canCancelPlainTranscription,
+    displayTranscribeProgress,
     pushRecentTranscribeFile,
     stageRecentTranscribeFile,
     canRetryTranscribeFile,
     isMissingTranscribeFileError,
     pruneMissingTranscribeFile,
+    transcribeSaveDefaults,
   } from "./transcribe-ui-state";
   import {
     canUseBareHotkey,
@@ -245,6 +249,8 @@
   let recentTranscribeFiles: string[] = $state([]);
   let stagedTranscribeFile: string | null = $state(null);
   let recentTranscribeSelect: string = $state("");
+  // #238: one-line feedback for the Copy/Save… result actions.
+  let resultActionMessage: string = $state("");
 
   function rememberTranscribeFile(filePath: string): void {
     recentTranscribeFiles = pushRecentTranscribeFile(recentTranscribeFiles, filePath);
@@ -440,7 +446,9 @@
     });
 
     listen("transcription-progress", (event: any) => {
-      transcriptionProgress = event.payload;
+      // Floor at 1% while running (#237) so backend silence during model
+      // load/warmup never renders as a hung 0%.
+      transcriptionProgress = displayTranscribeProgress(event.payload, transcribing);
     });
 
     listen("model-ready", async () => {
@@ -1136,6 +1144,7 @@
     transcriptionProgress = 0;
     transcribeError = "";
     transcriptionResult = "";
+    resultActionMessage = "";
     meetingError = "";
     meetingPollingFailed = false;
     meetingJobId = null;
@@ -1180,9 +1189,13 @@
     meetingJobStatus = null;
     transcribing = true;
     cancellingPlain = false;
-    transcriptionProgress = 0;
+    // #237: leave 0% on the same beat the spinner appears; the backend
+    // re-reports 1% at inference start and the listener floors at 1%.
+    transcriptionProgress = 1;
     transcribeError = "";
     transcriptionResult = "";
+    resultActionMessage = "";
+    resultActionMessage = "";
     // #235: record the file + settings for retry/recent before running, so a
     // retry reproduces the exact settings even if the user edits them after.
     rememberTranscribeFile(filePath);
@@ -1266,6 +1279,30 @@
     const filePath = stagedTranscribeFile;
     if (!filePath || transcribing) return;
     await handleFileTranscription(filePath);
+  }
+
+  async function copyTranscriptionResult(): Promise<void> {
+    if (transcribing || !transcriptionResult) return;
+    try {
+      await copyTranscriptionText(transcriptionResult);
+      resultActionMessage = "Copied to clipboard.";
+    } catch (error: any) {
+      resultActionMessage = typeof error === "string" ? error : error?.message || "Could not copy.";
+    }
+  }
+
+  async function saveTranscriptionResult(): Promise<void> {
+    if (transcribing || !transcriptionResult) return;
+    // #238: one Save… button with smart defaults (audio folder +
+    // basename.txt) — cancelling the dialog writes nothing, and there is
+    // deliberately no automatic-save counterpart.
+    const { fileName, directory } = transcribeSaveDefaults(lastTranscribeFile);
+    try {
+      const saved = await saveTranscriptionText(transcriptionResult, fileName, directory);
+      resultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
+    } catch (error: any) {
+      resultActionMessage = typeof error === "string" ? error : error?.message || "Could not save.";
+    }
   }
 
   async function cancelMeetingImport(): Promise<void> {
@@ -1894,6 +1931,36 @@
           <span class="active-config-link">Settings</span>
         </button>
 
+        <div class="transcribe-options">
+          <div class="field">
+            <label for="transcribe-profile">Profile (optional)</label>
+            <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
+              <option value="">No profile (use selected language)</option>
+              {#each explicitProfiles() as profile (profile.id)}
+                <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
+              {/each}
+            </select>
+          </div>
+          {#if selectedTranscribeProfile()}
+            <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
+          {:else}
+            <div class="hotkey-hint">No profile keeps the selected language and global hint context.</div>
+          {/if}
+          <label class="diarize-option">
+            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
+            Speaker diarization
+          </label>
+          <textarea
+            class="prompt-input"
+            aria-label="Extra context for this file"
+            placeholder="Extra context for this file only (optional)"
+            bind:value={transcribePrompt}
+            rows="2"
+            disabled={transcribing}
+          ></textarea>
+          <div class="hotkey-hint">Temporary hint-only context for this import. A selected profile supplies its dictionary; no profile uses global hints.</div>
+        </div>
+
         <div
           class="drop-zone"
           class:drag-over={dragOver}
@@ -1945,7 +2012,7 @@
                   onchange={(e) => stageRecentTranscribeFileForRun((e.target as HTMLSelectElement).value)}
                   disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
                 >
-                  <option value="">Pick a recent file to stage…</option>
+                  <option value="">Choose a recent file to re-run…</option>
                   {#each recentTranscribeFiles as file (file)}
                     <option value={file}>{file}</option>
                   {/each}
@@ -1955,13 +2022,14 @@
             {/if}
             {#if stagedTranscribeFile}
               <div class="staged-file">
-                <span class="staged-file-path">Staged: {stagedTranscribeFile}</span>
+                <span class="staged-file-path">Ready: {stagedTranscribeFile}</span>
                 <button
                   class="primary"
                   onclick={() => void runStagedTranscribeFile()}
                   disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
+                  title="Run with the current settings above — change them first if you like"
                 >
-                  Transcribe staged file
+                  Transcribe
                 </button>
                 <button
                   class="secondary"
@@ -1979,36 +2047,6 @@
           Supported: {supportedFormats.map(f => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
         </div>
 
-        <div class="transcribe-options">
-          <div class="field">
-            <label for="transcribe-profile">Profile (optional)</label>
-            <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
-              <option value="">No profile (use selected language)</option>
-              {#each explicitProfiles() as profile (profile.id)}
-                <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
-              {/each}
-            </select>
-          </div>
-          {#if selectedTranscribeProfile()}
-            <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
-          {:else}
-            <div class="hotkey-hint">No profile keeps the selected language and global hint context.</div>
-          {/if}
-          <label class="diarize-option">
-            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
-            Speaker diarization
-          </label>
-          <textarea
-            class="prompt-input"
-            aria-label="Extra context for this file"
-            placeholder="Extra context for this file only (optional)"
-            bind:value={transcribePrompt}
-            rows="2"
-            disabled={transcribing}
-          ></textarea>
-          <div class="hotkey-hint">Temporary hint-only context for this import. A selected profile supplies its dictionary; no profile uses global hints.</div>
-        </div>
-
         {#if transcribeError}
           <div class="transcribe-error">{transcribeError}</div>
         {/if}
@@ -2020,6 +2058,26 @@
         {#if transcriptionResult}
           <div class="result-label">Result</div>
           <textarea class="transcribe-result" readonly>{transcriptionResult}</textarea>
+          <div class="result-actions">
+            <button
+              class="secondary"
+              onclick={() => void copyTranscriptionResult()}
+              disabled={transcribing}
+            >
+              Copy
+            </button>
+            <button
+              class="secondary"
+              onclick={() => void saveTranscriptionResult()}
+              disabled={transcribing}
+              title="Choose where to save — defaults to the audio file's folder"
+            >
+              Save…
+            </button>
+            {#if resultActionMessage}
+              <span class="result-action-message" role="status">{resultActionMessage}</span>
+            {/if}
+          </div>
         {/if}
 
         {#if canRetryTranscribeFile(transcribing, meetingReprocessingBusy, meetingReviewInit !== null, lastTranscribeFile)}
@@ -2922,8 +2980,8 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 12px;
-    padding: 32px 20px;
+    gap: 10px;
+    padding: 20px 16px;
     border: 2px dashed var(--border);
     border-radius: 12px;
     text-align: center;
@@ -3092,6 +3150,18 @@
 
   .retry-row {
     margin-top: 10px;
+  }
+
+  .result-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .result-action-message {
+    font-size: 12px;
+    color: var(--text-muted);
   }
 
   /* Test dictation section */

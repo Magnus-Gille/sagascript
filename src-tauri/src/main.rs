@@ -1034,6 +1034,8 @@ fn main() {
             commands::get_build_info,
             commands::transcribe_file,
             commands::cancel_file_transcription,
+            commands::save_transcription_text,
+            commands::copy_transcription_text,
             meeting_jobs::begin_meeting_file,
             meeting_jobs::begin_meeting_reprocessing,
             meeting_reprocessing_commands::plan_meeting_reprocessing,

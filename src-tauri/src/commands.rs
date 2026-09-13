@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::State;
+use tauri_plugin_dialog::DialogExt;
 use tracing::{error, info, warn};
 
 /// Maximum time to wait for whisper inference before aborting (seconds)
@@ -2023,6 +2024,97 @@ pub async fn cancel_file_transcription(
     Ok(())
 }
 
+/// Copy a finished plain transcription to the clipboard (#238). Plain
+/// `set_text` only — no paste, no restore dance (see `paste::PasteService`
+/// for the guarded live-dictation path).
+#[tauri::command]
+pub async fn copy_transcription_text(text: String) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("There is no transcription to copy.".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|error| format!("Clipboard error: {error}"))?;
+        clipboard
+            .set_text(text)
+            .map_err(|error| format!("Could not copy: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Copy worker failed: {error}"))?
+}
+
+/// Explicit manual save of a finished plain transcription (#238). Always
+/// shows the native save dialog prefilled with `file_name` in `directory`;
+/// cancelling writes nothing. Reuses the atomic, never-overwrite
+/// `write_new_export` publisher, so this path can never truncate an
+/// existing file. There is deliberately no automatic-save counterpart
+/// (privacy-first: transcripts reach disk only on explicit request).
+#[tauri::command]
+pub async fn save_transcription_text(
+    app: tauri::AppHandle,
+    text: String,
+    file_name: String,
+    directory: Option<String>,
+) -> Result<bool, String> {
+    if text.trim().is_empty() {
+        return Err("There is no transcription to save.".to_string());
+    }
+    let file_name = sanitize_save_file_name(&file_name);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = app
+            .dialog()
+            .file()
+            .set_title("Save transcription — choose a file")
+            .set_file_name(&file_name)
+            .add_filter("Text", &["txt"]);
+        if let Some(dir) = directory.filter(|dir| !dir.trim().is_empty()) {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(selected) = dialog.blocking_save_file() else {
+            return Ok(false);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| format!("Choose a local file: {error}"))?;
+        crate::meeting_jobs::write_new_export(&path, text.as_bytes())?;
+        Ok(true)
+    })
+    .await
+    .map_err(|error| format!("Save worker failed: {error}"))?
+}
+
+/// Keep the save dialog default to a bare file name: strip any directories
+/// (the dialog's directory picker owns the destination) and fall back to a
+/// neutral name. The extension is preserved when present, else `.txt`.
+fn sanitize_save_file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    if base.is_empty() {
+        return "transcription.txt".to_string();
+    }
+    if base.contains('.') {
+        base.to_string()
+    } else {
+        format!("{base}.txt")
+    }
+}
+
+#[cfg(test)]
+mod save_name_tests {
+    use super::sanitize_save_file_name;
+
+    #[test]
+    fn save_default_strips_directories_and_keeps_txt() {
+        assert_eq!(sanitize_save_file_name("/a/b/talk.m4a"), "talk.m4a");
+        assert_eq!(
+            sanitize_save_file_name("C:\\audio\\talk"),
+            "talk.txt"
+        );
+        assert_eq!(sanitize_save_file_name(""), "transcription.txt");
+        assert_eq!(sanitize_save_file_name("   "), "transcription.txt");
+        assert_eq!(sanitize_save_file_name("notes"), "notes.txt");
+    }
+}
+
 #[tauri::command]
 pub async fn transcribe_file(
     app: tauri::AppHandle,
@@ -2225,6 +2317,9 @@ pub async fn transcribe_file(
     opts.parallel_chunks =
         recommended_parallel_chunks(audio.len(), effective_model, opts.beam_size);
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
+    // Leave 0% immediately (#237): model load inside the blocking task is
+    // silent, so report "started" now; inference re-reports 1% itself.
+    let _ = app.emit(crate::events::event::TRANSCRIPTION_PROGRESS, 1);
     let whisper_ref = whisper.inner().clone();
     let app_progress = app.clone();
     // Borrowed handle (`&mut fut`) so the timeout path can await the task's

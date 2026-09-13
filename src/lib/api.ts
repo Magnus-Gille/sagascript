@@ -219,6 +219,18 @@ export async function cancelFileTranscription(): Promise<void> {
   return invoke("cancel_file_transcription");
 }
 
+export async function saveTranscriptionText(
+  text: string,
+  fileName: string,
+  directory: string | null,
+): Promise<boolean> {
+  return invoke("save_transcription_text", { text, fileName, directory });
+}
+
+export async function copyTranscriptionText(text: string): Promise<void> {
+  return invoke("copy_transcription_text", { text });
+}
+
 export async function beginMeetingFile(
   filePath: string,
   prompt: string | null,
