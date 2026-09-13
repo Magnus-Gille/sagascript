@@ -103,6 +103,8 @@
   // Initial data-fetch + settings-mutation error states
   let initError: string = $state("");
   let settingsError: string = $state("");
+  let blockedLanguageChange: { language: Language; source: string } | null = $state(null);
+  let languageSaving = $state(false);
 
   // Model selection state
   let selecting: boolean = $state(false);
@@ -541,10 +543,67 @@
   }
 
   async function onLanguageChange(e: Event) {
-    const value = (e.target as HTMLSelectElement).value as Language;
-    const ok = await applySetting(() => setLanguage(value));
-    if (ok) {
-      models = await getModelInfo();
+    const select = e.currentTarget as HTMLSelectElement;
+    const value = select.value as Language;
+    if (!settings) return;
+    // Native selects change before the async handler. A rejected value must
+    // never remain visible merely because Svelte's saved value did not change.
+    select.value = settings.language;
+    if (languageSaving || glossarySaving) return;
+    blockedLanguageChange = null;
+    languageSaving = true;
+    try {
+      const ok = await applySetting(() => setLanguage(value));
+      if (!ok && settingsError.includes("Profile 'default' has a personal dictionary")) {
+        // Show the actual blocking dictionary, not whichever editor scope is
+        // selected. Freeze the preview for the existing compare-and-swap API.
+        const current = await getSettings();
+        settings = current;
+        const source = current.profile_glossaries.default ?? "";
+        if (source.trim()) blockedLanguageChange = { language: value, source };
+      }
+      if (ok) models = await getModelInfo();
+    } catch (error: any) {
+      settingsError += `${settingsError ? " " : ""}Could not refresh language settings: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
+    } finally {
+      select.value = settings.language;
+      languageSaving = false;
+    }
+  }
+
+  async function clearDictionaryAndSwitchLanguage(): Promise<void> {
+    if (!settings || !blockedLanguageChange || languageSaving || glossarySaving) return;
+    const request = blockedLanguageChange;
+    languageSaving = true;
+    settingsError = "";
+    let cleared = false;
+    try {
+      await setProfileGlossary("default", "", request.source);
+      cleared = true;
+      // Clear the confirmation immediately: a failed retry must not offer to
+      // erase a dictionary that may have been populated again in the meantime.
+      blockedLanguageChange = null;
+      if (glossaryScopeId === "default" && glossaryHasUnsavedChanges()) {
+        rememberGlossaryRecovery("default", glossaryDraft);
+      }
+      settings = { ...settings, profile_glossaries: { ...settings.profile_glossaries, default: "" } };
+      if (glossaryScopeId === "default") discardGlossaryChanges();
+      await setLanguage(request.language);
+    } catch (error: any) {
+      const message = typeof error === "string" ? error : error?.message || "Unknown error";
+      settingsError = cleared
+        ? `The default dictionary was cleared, but the language change failed: ${message}`
+        : `The dictionary could not be cleared; the language was not changed: ${message}`;
+      blockedLanguageChange = null;
+    } finally {
+      try {
+        settings = await getSettings();
+        models = await getModelInfo();
+        await refreshProfileModels(settings.hotkey_profiles);
+      } catch (error: any) {
+        settingsError += `${settingsError ? " " : ""}Could not refresh settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
+      }
+      languageSaving = false;
     }
   }
 
@@ -646,6 +705,7 @@
   }
 
   async function saveGlossary(): Promise<boolean> {
+    if (languageSaving) return false;
     if (glossarySaveInFlight) return glossarySaveInFlight;
 
     const request: GlossarySaveRequest = {
@@ -1623,7 +1683,7 @@
         <div class="transcribe-error">{initError}</div>
       {/if}
       {#if settingsError}
-        <div class="transcribe-error">{settingsError}</div>
+        <div class="transcribe-error" role="alert">{settingsError}</div>
       {/if}
       {#if activeTab === "dictate"}
         <div class="field profile-field">
@@ -1913,13 +1973,28 @@
       {:else if activeTab === "settings"}
         <div class="field">
           <label for="language">Language</label>
-          <select id="language" value={settings.language} onchange={onLanguageChange}>
+          <select id="language" value={settings.language} onchange={onLanguageChange} disabled={languageSaving || glossarySaving}>
             <option value="en">English</option>
             <option value="sv">Swedish</option>
             <option value="no">Norwegian</option>
             <option value="fi">Finnish</option>
             <option value="auto">Auto-detect</option>
           </select>
+          {#if blockedLanguageChange}
+            <section class="language-recovery" aria-labelledby="language-recovery-title">
+              <h3 id="language-recovery-title">Switch to {languageLabel(blockedLanguageChange.language)}?</h3>
+              <p>The <strong>default</strong> profile has the saved dictionary below. Its words belong to its current language, even when another dictionary is selected in the editor.</p>
+              <textarea class="initial-prompt-input" rows="3" aria-label="Saved default profile dictionary" value={blockedLanguageChange.source} readonly></textarea>
+              <p>Copy these words before continuing if you want to keep them. Clearing cannot be undone. Unsaved editor drafts will be preserved.</p>
+              <p>To keep this dictionary, cancel and use or add a language profile in the Dictate tab.</p>
+              <div class="dictionary-actions">
+                <button type="button" class="secondary" onclick={() => { blockedLanguageChange = null; }} disabled={languageSaving}>Cancel</button>
+                <button type="button" class="danger" onclick={() => void clearDictionaryAndSwitchLanguage()} disabled={languageSaving || glossarySaving}>
+                  {languageSaving ? "Switching…" : `Clear default dictionary and switch to ${languageLabel(blockedLanguageChange.language)}`}
+                </button>
+              </div>
+            </section>
+          {/if}
         </div>
 
         <div class="field-row">
@@ -1942,7 +2017,7 @@
               <span class="unsaved-indicator" role="status">Unsaved changes</span>
             {/if}
           </div>
-          <select id="dictionary-scope" value={glossaryScopeId} onchange={onGlossaryScopeChange} disabled={glossarySaving}>
+          <select id="dictionary-scope" value={glossaryScopeId} onchange={onGlossaryScopeChange} disabled={glossarySaving || languageSaving}>
             <option value="">Global hints</option>
             {#each explicitProfiles() as profile (profile.id)}
               <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
@@ -1954,7 +2029,7 @@
             rows="5"
             value={glossaryDraft}
             oninput={onGlossaryInput}
-            disabled={glossarySaving}
+            disabled={glossarySaving || languageSaving}
             placeholder="OpenRouter = open router | open vrouter&#10;merge = merch&#10;Cloudflare = cloud flare"
           ></textarea>
           <div class="dictionary-actions">
@@ -1962,13 +2037,13 @@
               type="button"
               class="primary"
               onclick={() => void saveGlossary()}
-              disabled={!glossaryHasUnsavedChanges() || glossarySaving}
+              disabled={!glossaryHasUnsavedChanges() || glossarySaving || languageSaving}
             >{glossarySaving ? "Saving…" : "Save changes"}</button>
             <button
               type="button"
               class="secondary"
               onclick={discardGlossaryChanges}
-              disabled={!glossaryHasUnsavedChanges() || glossarySaving}
+              disabled={!glossaryHasUnsavedChanges() || glossarySaving || languageSaving}
             >Discard changes</button>
           </div>
           {#if glossaryScopeId === ""}
@@ -2868,6 +2943,24 @@
     border-radius: var(--radius);
     color: var(--danger);
     font-size: 12px;
+  }
+
+  .language-recovery {
+    margin-top: 12px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .language-recovery h3 {
+    margin: 0 0 8px;
+    font-size: 14px;
+  }
+
+  .language-recovery p {
+    margin: 8px 0;
+    font-size: 12px;
+    line-height: 1.5;
   }
 
   .result-label {

@@ -106,6 +106,7 @@ function createHarness({ failure = null } = {}) {
       ],
     };
     let settingsError = "";
+    let languageSaving = false;
     let activeTab = "settings";
     let meetingReviewDraftDirty = false;
     let meetingReviewConfirm = false;
