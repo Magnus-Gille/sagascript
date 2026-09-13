@@ -1948,9 +1948,9 @@
           {/if}
           <label class="diarize-option">
             <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
-            Speaker diarization
+            <span class="diarize-label">Speaker diarization</span>
+            <span class="diarize-info">Detects who speaks when and labels each part ([Speaker 1], [Speaker 2]). Slower, and needs the diarization models — leave off for a plain transcript.</span>
           </label>
-          <div class="hotkey-hint">Detects who speaks when and labels each part ([Speaker 1], [Speaker 2]). Slower, and needs the diarization models — leave off for a plain transcript.</div>
           <textarea
             class="prompt-input"
             aria-label="Extra context for this file"
@@ -3085,6 +3085,16 @@
     accent-color: var(--accent);
     cursor: pointer;
     flex-shrink: 0;
+  }
+
+  .diarize-label {
+    flex-shrink: 0;
+  }
+
+  .diarize-info {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
   }
 
   .prompt-input {
