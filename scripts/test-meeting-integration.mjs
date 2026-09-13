@@ -64,6 +64,7 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   // #237: progress leaves 0% immediately and floors while running.
   assert.match(settingsSource, /displayTranscribeProgress\(event\.payload, transcribing\)/);
   assert.match(settingsSource, /transcriptionProgress = 1;/);
+  assert.match(settingsSource, /Loading model…/);
   // #238: settings above the drop zone; result + Copy/Save… below it.
   assert.match(apiSource, /invoke\("save_transcription_text", \{ text, fileName, directory \}\)/);
   assert.match(apiSource, /invoke\("copy_transcription_text", \{ text \}\)/);

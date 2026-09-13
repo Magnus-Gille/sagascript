@@ -1982,7 +1982,11 @@
                 </button>
               {/if}
             {:else}
-              <div class="drop-zone-text">Transcribing... {transcriptionProgress}%</div>
+              {#if backendDictationState === "loading_model"}
+                <div class="drop-zone-text">Loading model…</div>
+              {:else}
+                <div class="drop-zone-text">Transcribing... {transcriptionProgress}%</div>
+              {/if}
               <div class="progress-bar transcription-progress">
                 <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
               </div>
@@ -2980,8 +2984,8 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 10px;
-    padding: 20px 16px;
+    gap: 8px;
+    padding: 12px 16px;
     border: 2px dashed var(--border);
     border-radius: 12px;
     text-align: center;
@@ -3003,7 +3007,7 @@
   }
 
   .drop-zone-icon {
-    font-size: 28px;
+    font-size: 22px;
     line-height: 1;
   }
 
@@ -3032,15 +3036,15 @@
   .formats-hint {
     font-size: 11px;
     color: var(--text-muted);
-    margin-top: 10px;
+    margin-top: 6px;
     text-align: center;
   }
 
   .transcribe-options {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    margin-top: 14px;
+    gap: 6px;
+    margin-top: 8px;
   }
 
   .diarize-option {
@@ -3106,7 +3110,7 @@
 
   .transcribe-result {
     width: 100%;
-    min-height: 100px;
+    min-height: 80px;
     max-height: 180px;
     padding: 10px 12px;
     background: var(--bg-secondary);
