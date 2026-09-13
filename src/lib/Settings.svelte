@@ -77,16 +77,12 @@
     type BackendDictationState,
   } from "./dictation-ui-state";
   import {
-    MAX_RECENT_TRANSCRIBE_FILES,
     canCancelPlainTranscription,
     displayTranscribeProgress,
-    pushRecentTranscribeFile,
-    stageRecentTranscribeFile,
-    transcribeBaseName,
     canRetryTranscribeFile,
     isMissingTranscribeFileError,
-    pruneMissingTranscribeFile,
     transcribeSaveDefaults,
+    transcribeBaseName,
   } from "./transcribe-ui-state";
   import {
     canUseBareHotkey,
@@ -239,17 +235,15 @@
   let cancellingPlain: boolean = $state(false);
   let plainTranscribeGeneration = 0;
 
-  // #235: one-click retry + session-only recent-files list. Privacy-first by
-  // design: in-memory paths only (cleared on quit), never audio or transcript
-  // content, never written to disk — aligns with #167 ("avoid a hidden
-  // transcript library"). Session-only is the recorded privacy choice.
+  // #235: one-click re-run of the last file with its original settings.
+  // Privacy-first by design: only the last path is remembered (in memory,
+  // cleared on quit) — never audio or transcript content, never written to
+  // disk. Aligns with #167 ("avoid a hidden transcript library").
+  // Session-only is the recorded privacy choice.
   let lastTranscribeFile: string | null = $state(null);
   let lastTranscribeProfileId: string | null = $state(null);
   let lastTranscribePrompt: string = $state("");
   let lastTranscribeDiarize: boolean = $state(false);
-  let recentTranscribeFiles: string[] = $state([]);
-  let stagedTranscribeFile: string | null = $state(null);
-  let recentTranscribeSelect: string = $state("");
   // #238: one-line feedback for the Copy/Save… result actions.
   let resultActionMessage: string = $state("");
   let transcribeResultSection: HTMLDivElement | undefined = $state();
@@ -262,13 +256,6 @@
       transcribeResultSection?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       saveResultButton?.focus({ preventScroll: true });
     });
-  }
-
-  function rememberTranscribeFile(filePath: string): void {
-    recentTranscribeFiles = pushRecentTranscribeFile(recentTranscribeFiles, filePath);
-    lastTranscribeFile = filePath;
-    stagedTranscribeFile = null;
-    recentTranscribeSelect = "";
   }
 
   onDestroy(() => {
@@ -1186,7 +1173,7 @@
     const profileId = selectedTranscribeProfile()?.id ?? null;
     const prompt = transcribePrompt.trim() || null;
     if (transcribeDiarize) {
-      rememberTranscribeFile(filePath);
+      lastTranscribeFile = filePath;
       lastTranscribeProfileId = profileId;
       lastTranscribePrompt = prompt ?? "";
       lastTranscribeDiarize = true;
@@ -1208,9 +1195,9 @@
     transcriptionResult = "";
     resultActionMessage = "";
     resultActionMessage = "";
-    // #235: record the file + settings for retry/recent before running, so a
-    // retry reproduces the exact settings even if the user edits them after.
-    rememberTranscribeFile(filePath);
+    // #235: record the file + settings for re-run before running, so a
+    // re-run reproduces the exact settings even if the user edits them after.
+    lastTranscribeFile = filePath;
     lastTranscribeProfileId = profileId;
     lastTranscribePrompt = prompt ?? "";
     lastTranscribeDiarize = false;
@@ -1234,11 +1221,9 @@
       } else {
         transcribeError = typeof error === "string" ? error : error.message || "Transcription failed";
       }
-      // #235: missing/moved files are pruned gracefully, never crashing.
-      if (isMissingTranscribeFileError(error)) {
-        recentTranscribeFiles = pruneMissingTranscribeFile(recentTranscribeFiles, filePath);
-        if (lastTranscribeFile === filePath) lastTranscribeFile = null;
-        if (stagedTranscribeFile === filePath) stagedTranscribeFile = null;
+      // Missing/moved files are forgotten gracefully, never crashing.
+      if (isMissingTranscribeFileError(error) && lastTranscribeFile === filePath) {
+        lastTranscribeFile = null;
       }
     } finally {
       if (plainGeneration !== plainTranscribeGeneration) return;
@@ -1274,25 +1259,6 @@
     transcribePrompt = lastTranscribePrompt;
     transcribeDiarize = lastTranscribeDiarize;
     await handleFileTranscription(filePath as string);
-  }
-
-  function stageRecentTranscribeFileForRun(filePath: string): void {
-    if (transcribing) return;
-    const staged = stageRecentTranscribeFile(recentTranscribeFiles, filePath);
-    if (!staged) {
-      transcribeError = "That file is no longer in the recent list. Pick another file.";
-      return;
-    }
-    // Staged but not started: settings stay editable before running (#235).
-    stagedTranscribeFile = staged;
-    recentTranscribeSelect = staged;
-    transcribeError = "";
-  }
-
-  async function runStagedTranscribeFile(): Promise<void> {
-    const filePath = stagedTranscribeFile;
-    if (!filePath || transcribing) return;
-    await handleFileTranscription(filePath);
   }
 
   async function copyTranscriptionResult(): Promise<void> {
@@ -2020,7 +1986,7 @@
             </button>
             {#if lastTranscribeFile}
               <button
-                class="secondary"
+                class="secondary rerun-highlight"
                 onclick={() => void retryLastTranscription()}
                 disabled={meetingReprocessingBusy || meetingReviewInit !== null}
                 title="Re-run the last transcription with the same settings — no file picker"
@@ -2031,43 +1997,6 @@
             <button class="secondary" onclick={() => void openSavedMeetingReview()} disabled={meetingReviewInit !== null}>
               Open saved review...
             </button>
-            {#if recentTranscribeFiles.length > 0}
-              <div class="field recent-files">
-                <label for="transcribe-recent">Recent files (this session only, last {MAX_RECENT_TRANSCRIBE_FILES})</label>
-                <select
-                  id="transcribe-recent"
-                  value={recentTranscribeSelect}
-                  onchange={(e) => stageRecentTranscribeFileForRun((e.target as HTMLSelectElement).value)}
-                  disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
-                >
-                  <option value="">Choose a recent file to re-run…</option>
-                  {#each recentTranscribeFiles as file (file)}
-                    <option value={file}>{file}</option>
-                  {/each}
-                </select>
-                <div class="hotkey-hint">Session-only paths, cleared on quit. Never audio or transcript content.</div>
-              </div>
-            {/if}
-            {#if stagedTranscribeFile}
-              <div class="staged-file">
-                <span class="staged-file-path">Ready: {stagedTranscribeFile}</span>
-                <button
-                  class="primary"
-                  onclick={() => void runStagedTranscribeFile()}
-                  disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
-                  title="Run with the current settings above — change them first if you like"
-                >
-                  Transcribe
-                </button>
-                <button
-                  class="secondary"
-                  onclick={() => { stagedTranscribeFile = null; recentTranscribeSelect = ""; }}
-                  disabled={transcribing}
-                >
-                  Clear
-                </button>
-              </div>
-            {/if}
           {/if}
         </div>
 
@@ -3174,28 +3103,15 @@
     border-color: var(--accent);
   }
 
-  .recent-files {
-    margin-top: 10px;
+  button.secondary.rerun-highlight {
+    border-color: #eab308;
+    color: #eab308;
   }
 
-  .staged-file {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 10px;
-    padding: 8px 10px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    font-size: 12px;
-  }
-
-  .staged-file-path {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-muted);
+  button.secondary.rerun-highlight:hover:not(:disabled) {
+    border-color: #eab308;
+    color: var(--text);
+    background: color-mix(in srgb, #eab308 12%, transparent);
   }
 
   .result-actions {

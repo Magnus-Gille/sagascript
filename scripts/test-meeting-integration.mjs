@@ -52,15 +52,16 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(settingsSource, /cancelPlainTranscription/);
   assert.match(settingsSource, /Stop transcription/);
   assert.match(settingsSource, /Transcription was cancelled/);
-  // #235: retry + session-only recent files (paths only, never persisted).
-  // One-click re-run lives in the idle drop zone (no scrolling, no picker).
+  // #235: one-click re-run of the last file (paths in memory only, never
+  // persisted). The recent-files dropdown is gone (owner 2026-09-13); the
+  // drop-zone Re-run button covers the need with one click.
   assert.match(settingsSource, /retryLastTranscription/);
   assert.match(settingsSource, /Re-run \{transcribeBaseName\(lastTranscribeFile\)\}/);
-  assert.match(settingsSource, /Recent files \(this session only/);
-  assert.match(settingsSource, /Ready: \{stagedTranscribeFile\}/);
-  assert.match(settingsSource, /Choose a recent file to re-run/);
-  assert.doesNotMatch(settingsSource, /to stage…/);
-  assert.doesNotMatch(settingsSource, /Staged: \{stagedTranscribeFile\}/);
+  assert.match(settingsSource, /rerun-highlight/);
+  assert.doesNotMatch(settingsSource, /Recent files \(this session only/);
+  assert.doesNotMatch(settingsSource, /Choose a recent file to re-run/);
+  assert.doesNotMatch(settingsSource, /recentTranscribeFiles/);
+  assert.doesNotMatch(settingsSource, /stagedTranscribeFile/);
   assert.doesNotMatch(settingsSource, /localStorage/);
   // #237: progress leaves 0% immediately and floors while running.
   assert.match(settingsSource, /displayTranscribeProgress\(event\.payload, transcribing\)/);
