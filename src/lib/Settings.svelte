@@ -169,6 +169,14 @@
     let revision = 0;
     const stops: Array<() => void> = [];
     const remember = (stop: () => void) => disposed ? stop() : stops.push(stop);
+    // Elapsed-time ticker for the Transcribe tab (#237 follow-up): proves the
+    // run is alive during the silent load/warmup behind progress 1%.
+    const elapsedTimer = setInterval(() => {
+      transcribeElapsedSec = transcribing && transcribeStartedAt !== null
+        ? Math.max(0, Math.floor((Date.now() - transcribeStartedAt) / 1000))
+        : 0;
+    }, 500);
+    remember(() => clearInterval(elapsedTimer));
     const errorListener = listen<string>("error", (event) => {
       revision++;
       testError = event.payload;
@@ -203,12 +211,15 @@
   // Transcribe tab state
   let supportedFormats: string[] = $state([]);
   let transcribing: boolean = $state(false);
+  let transcribeStartedAt: number | null = $state(null);
+  let transcribeElapsedSec: number = $state(0);
   let transcriptionProgress: number = $state(0);
   let transcriptionResult: string = $state("");
   let transcribeError: string = $state("");
   let dragOver: boolean = $state(false);
   let transcribePrompt: string = $state('');
   let transcribeDiarize: boolean = $state(false);
+  let showDiarizeInfo: boolean = $state(false);
   let transcribeProfileId: string | null = $state(null);
   let meetingReview: MeetingReviewDocument | null = $state(null);
   let meetingTranscript: MeetingTranscript | null = $state(null);
@@ -1141,6 +1152,7 @@
     // successful replacement still invalidates any stale action revision.
     transcribing = true;
     transcriptionProgress = 0;
+    transcribeStartedAt = Date.now();
     transcribeError = "";
     transcriptionResult = "";
     resultActionMessage = "";
@@ -1191,6 +1203,7 @@
     // #237: leave 0% on the same beat the spinner appears; the backend
     // re-reports 1% at inference start and the listener floors at 1%.
     transcriptionProgress = 1;
+    transcribeStartedAt = Date.now();
     transcribeError = "";
     transcriptionResult = "";
     resultActionMessage = "";
@@ -1230,6 +1243,7 @@
       transcribing = false;
       cancellingPlain = false;
       transcriptionProgress = 0;
+      transcribeStartedAt = null;
     }
   }
 
@@ -1926,11 +1940,23 @@
           {#if selectedTranscribeProfile()}
             <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
           {/if}
-          <label class="diarize-option">
-            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
-            <span class="diarize-label">Speaker diarization</span>
-            <span class="diarize-info">Detects who speaks when and labels each part ([Speaker 1], [Speaker 2]). Slower, and needs the diarization models — leave off for a plain transcript.</span>
-          </label>
+          <div class="diarize-row">
+            <label class="diarize-option">
+              <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
+              <span class="diarize-label">Speaker diarization</span>
+            </label>
+            <button
+              type="button"
+              class="info-dot"
+              aria-label="What is speaker diarization?"
+              aria-expanded={showDiarizeInfo}
+              title="What is speaker diarization?"
+              onclick={() => (showDiarizeInfo = !showDiarizeInfo)}
+            >?</button>
+          </div>
+          {#if showDiarizeInfo}
+            <div class="hotkey-hint">Detects who speaks when and labels each part ([Speaker 1], [Speaker 2]). Slower, and needs the diarization models — leave off for a plain transcript.</div>
+          {/if}
           <textarea
             class="prompt-input"
             aria-label="Extra context for this file"
@@ -1963,9 +1989,9 @@
               {/if}
             {:else}
               {#if backendDictationState === "loading_model"}
-                <div class="drop-zone-text">Loading model…</div>
+                <div class="drop-zone-text">Loading model… {transcribeElapsedSec}s</div>
               {:else}
-                <div class="drop-zone-text">Transcribing... {transcriptionProgress}%</div>
+                <div class="drop-zone-text">Transcribing... {transcriptionProgress}% · {transcribeElapsedSec}s</div>
               {/if}
               <div class="progress-bar transcription-progress">
                 <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
@@ -1997,6 +2023,7 @@
             <button class="secondary" onclick={() => void openSavedMeetingReview()} disabled={meetingReviewInit !== null}>
               Open saved review...
             </button>
+            <div class="hotkey-hint">Reopen a meeting review you saved earlier — speaker names and corrections are kept.</div>
           {/if}
         </div>
 
@@ -3034,10 +3061,29 @@
     flex-shrink: 0;
   }
 
-  .diarize-info {
-    font-size: 11px;
+  .diarize-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .info-dot {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--text-muted);
+    border-radius: 50%;
+    background: transparent;
     color: var(--text-muted);
-    line-height: 1.4;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .info-dot:hover {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .prompt-input {
