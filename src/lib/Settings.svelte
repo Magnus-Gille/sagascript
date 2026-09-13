@@ -1923,16 +1923,15 @@
         </div>
 
       {:else if activeTab === "transcribe"}
-        <button class="active-config-bar" onclick={() => requestTabChange("settings")}>
-          <div class="active-config-row">
-            <span class="active-config-label">Language</span>
-            <span class="active-config-value">{languageLabel(transcribeLanguage())}</span>
-          </div>
-          <span class="active-config-link">Settings</span>
-        </button>
-
-        <div class="transcribe-options">
-          <div class="field">
+        <div class="transcribe-settings-row">
+          <button class="active-config-bar" onclick={() => requestTabChange("settings")}>
+            <div class="active-config-row">
+              <span class="active-config-label">Language</span>
+              <span class="active-config-value">{languageLabel(transcribeLanguage())}</span>
+            </div>
+            <span class="active-config-link">Settings</span>
+          </button>
+          <div class="field profile-field">
             <label for="transcribe-profile">Profile (optional)</label>
             <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
               <option value="">No profile (use selected language)</option>
@@ -1941,15 +1940,17 @@
               {/each}
             </select>
           </div>
+        </div>
+
+        <div class="transcribe-options">
           {#if selectedTranscribeProfile()}
             <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
-          {:else}
-            <div class="hotkey-hint">No profile keeps the selected language and global hint context.</div>
           {/if}
           <label class="diarize-option">
             <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
             Speaker diarization
           </label>
+          <div class="hotkey-hint">Detects who speaks when and labels each part ([Speaker 1], [Speaker 2]). Slower, and needs the diarization models — leave off for a plain transcript.</div>
           <textarea
             class="prompt-input"
             aria-label="Extra context for this file"
@@ -3045,6 +3046,27 @@
     flex-direction: column;
     gap: 6px;
     margin-top: 8px;
+  }
+
+  .transcribe-settings-row {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  .transcribe-settings-row .active-config-bar {
+    flex: 1 1 0;
+    margin-bottom: 0;
+    min-width: 0;
+  }
+
+  .transcribe-settings-row .profile-field {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .transcribe-settings-row .profile-field select {
+    width: 100%;
   }
 
   .diarize-option {

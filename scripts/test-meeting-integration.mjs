@@ -76,6 +76,12 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
     && settingsSource.indexOf("class=\"drop-zone\"") < settingsSource.indexOf("transcribe-result"),
     "settings first, drop zone second, result last",
   );
+  // #238 follow-up: language + profile share one row; no-profile hint
+  // removed; diarization explained in plain language.
+  assert.match(settingsSource, /transcribe-settings-row/);
+  assert.match(settingsSource, /profile-field/);
+  assert.match(settingsSource, /Detects who speaks when/);
+  assert.doesNotMatch(settingsSource, /No profile keeps the selected language/);
 });
 
 test("polling is serialized, stale generations are ignored, and cancellation waits for terminal state", async () => {
