@@ -80,6 +80,7 @@
     canCancelPlainTranscription,
     displayTranscribeProgress,
     parseTranscribePhase,
+    transcribePhaseFloor,
     canRetryTranscribeFile,
     isMissingTranscribeFileError,
     transcribeSaveDefaults,
@@ -2032,11 +2033,11 @@
               {/if}
             {:else}
               {#if transcribePhase === "decoding"}
-                <div class="drop-zone-text">Decoding audio… {transcribeElapsedSec}s</div>
+                <div class="drop-zone-text">Decoding audio… {transcribePhaseFloor(transcribePhase)}% · {transcribeElapsedSec}s</div>
               {:else if transcribePhase === "loading"}
-                <div class="drop-zone-text">Loading model… {transcribeElapsedSec}s</div>
+                <div class="drop-zone-text">Loading model… {transcribePhaseFloor(transcribePhase)}% · {transcribeElapsedSec}s</div>
               {:else if transcribePhase === "preparing"}
-                <div class="drop-zone-text">Preparing… {transcribeElapsedSec}s</div>
+                <div class="drop-zone-text">Preparing… {transcribePhaseFloor(transcribePhase)}% · {transcribeElapsedSec}s</div>
               {:else}
                 <div class="drop-zone-text">Transcribing... {transcriptionProgress}% · {transcribeElapsedSec}s</div>
               {/if}
@@ -3061,24 +3062,27 @@
   .transcribe-options {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    margin-top: 8px;
+    gap: 8px;
+    margin-top: 0;
   }
 
   .transcribe-settings-row {
     display: flex;
     gap: 8px;
-    align-items: stretch;
+    align-items: flex-start;
+    margin-bottom: 8px;
   }
 
   .transcribe-settings-row .active-config-bar {
     flex: 1 1 0;
+    width: auto;
     margin-bottom: 0;
     min-width: 0;
   }
 
   .transcribe-settings-row .profile-field {
     flex: 1 1 0;
+    margin-bottom: 0;
     min-width: 0;
   }
 

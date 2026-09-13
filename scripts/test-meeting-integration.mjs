@@ -70,6 +70,8 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(settingsSource, /Decoding audio…/);
   assert.match(settingsSource, /Preparing…/);
   assert.match(settingsSource, /Loading model…/);
+  assert.match(settingsSource, /transcribePhaseFloor\(transcribePhase\)/);
+  assert.match(settingsSource, /align-items: flex-start/);
   // #238: settings above the drop zone; result + Copy/Save… below it.
   assert.match(apiSource, /invoke\("save_transcription_text", \{ text, fileName, directory \}\)/);
   assert.match(apiSource, /invoke\("copy_transcription_text", \{ text \}\)/);
