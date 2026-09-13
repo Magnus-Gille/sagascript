@@ -1033,6 +1033,7 @@ fn main() {
             commands::set_vad_enabled,
             commands::get_build_info,
             commands::transcribe_file,
+            commands::cancel_file_transcription,
             meeting_jobs::begin_meeting_file,
             meeting_jobs::begin_meeting_reprocessing,
             meeting_reprocessing_commands::plan_meeting_reprocessing,

@@ -43,10 +43,21 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(apiSource, /invoke\("begin_meeting_file", \{ filePath, prompt, profileId \}\)/);
   assert.match(apiSource, /invoke\("get_meeting_job", \{ jobId \}\)/);
   assert.match(apiSource, /invoke\("cancel_meeting_job", \{ jobId \}\)/);
-  assert.match(settingsSource, /if \(transcribeDiarize\) \{\s*await startMeetingFileTranscription/s);
+  assert.match(settingsSource, /if \(transcribeDiarize\) \{[\s\S]*?await startMeetingFileTranscription/s);
   assert.match(settingsSource, /beginMeetingFile\(filePath, prompt, profileId\)/);
   assert.match(settingsSource, /transcribeFile\(filePath, \{[\s\S]*?diarize: false/);
   assert.match(settingsSource, /disabled=\{transcribing\}/);
+  // #234: plain transcription is user-cancellable with meeting-cancel semantics.
+  assert.match(apiSource, /invoke\("cancel_file_transcription"/);
+  assert.match(settingsSource, /cancelPlainTranscription/);
+  assert.match(settingsSource, /Stop transcription/);
+  assert.match(settingsSource, /Transcription was cancelled/);
+  // #235: retry + session-only recent files (paths only, never persisted).
+  assert.match(settingsSource, /retryLastTranscription/);
+  assert.match(settingsSource, /Re-run \{lastTranscribeFile\}/);
+  assert.match(settingsSource, /Recent files \(this session only/);
+  assert.match(settingsSource, /Transcribe staged file/);
+  assert.doesNotMatch(settingsSource, /localStorage/);
 });
 
 test("polling is serialized, stale generations are ignored, and cancellation waits for terminal state", async () => {

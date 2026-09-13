@@ -2009,6 +2009,20 @@ pub async fn set_vad_enabled(
 
 // -- File transcription --
 
+/// User-requested abort for the plain (non-diarized) `transcribe_file` path
+/// (#234). Signals the shared Whisper backend to stop at the next compute
+/// step — the same real-abort mechanism as the timeout path — so the blocking
+/// task exits, discards its warm state, and releases the lock for the next
+/// run. Safe to call when idle: a stale flag is cleared by the next lock
+/// holder (`with_warm_state_grace`), never wedging future transcriptions.
+#[tauri::command]
+pub async fn cancel_file_transcription(
+    whisper: State<'_, SharedWhisper>,
+) -> Result<(), String> {
+    whisper.request_abort();
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn transcribe_file(
     app: tauri::AppHandle,

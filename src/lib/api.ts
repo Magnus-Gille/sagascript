@@ -215,6 +215,10 @@ export async function transcribeFile(
   });
 }
 
+export async function cancelFileTranscription(): Promise<void> {
+  return invoke("cancel_file_transcription");
+}
+
 export async function beginMeetingFile(
   filePath: string,
   prompt: string | null,

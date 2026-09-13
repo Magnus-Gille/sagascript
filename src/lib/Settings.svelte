@@ -27,6 +27,7 @@
     getEffectiveModelInfo,
     downloadModel,
     transcribeFile,
+    cancelFileTranscription,
     beginMeetingFile,
     getMeetingJob,
     cancelMeetingJob,
@@ -73,6 +74,15 @@
     retainTestRecordingOwnership,
     type BackendDictationState,
   } from "./dictation-ui-state";
+  import {
+    MAX_RECENT_TRANSCRIBE_FILES,
+    canCancelPlainTranscription,
+    pushRecentTranscribeFile,
+    stageRecentTranscribeFile,
+    canRetryTranscribeFile,
+    isMissingTranscribeFileError,
+    pruneMissingTranscribeFile,
+  } from "./transcribe-ui-state";
   import {
     canUseBareHotkey,
     formatHotkeyDisplay as formatShortcutDisplay,
@@ -217,6 +227,31 @@
   let meetingReprocessingBusy = $state(false);
   let meetingActionQueue: Promise<void> = Promise.resolve();
   let meetingReviewInit: Promise<void> | null = $state(null);
+
+  // #234: user-cancellable plain (non-diarized) transcription. Mirrors the
+  // meeting-cancel semantics: abort inference, discard the partial result,
+  // reset to idle with the previous review intact.
+  let cancellingPlain: boolean = $state(false);
+  let plainTranscribeGeneration = 0;
+
+  // #235: one-click retry + session-only recent-files list. Privacy-first by
+  // design: in-memory paths only (cleared on quit), never audio or transcript
+  // content, never written to disk — aligns with #167 ("avoid a hidden
+  // transcript library"). Session-only is the recorded privacy choice.
+  let lastTranscribeFile: string | null = $state(null);
+  let lastTranscribeProfileId: string | null = $state(null);
+  let lastTranscribePrompt: string = $state("");
+  let lastTranscribeDiarize: boolean = $state(false);
+  let recentTranscribeFiles: string[] = $state([]);
+  let stagedTranscribeFile: string | null = $state(null);
+  let recentTranscribeSelect: string = $state("");
+
+  function rememberTranscribeFile(filePath: string): void {
+    recentTranscribeFiles = pushRecentTranscribeFile(recentTranscribeFiles, filePath);
+    lastTranscribeFile = filePath;
+    stagedTranscribeFile = null;
+    recentTranscribeSelect = "";
+  }
 
   onDestroy(() => {
     meetingPollGeneration += 1;
@@ -1130,31 +1165,107 @@
     const profileId = selectedTranscribeProfile()?.id ?? null;
     const prompt = transcribePrompt.trim() || null;
     if (transcribeDiarize) {
+      rememberTranscribeFile(filePath);
+      lastTranscribeProfileId = profileId;
+      lastTranscribePrompt = prompt ?? "";
+      lastTranscribeDiarize = true;
       await startMeetingFileTranscription(filePath, prompt, profileId);
       return;
     }
 
+    const plainGeneration = ++plainTranscribeGeneration;
     ++meetingPollGeneration;
     ++meetingDocumentRevision;
     meetingError = "";
     meetingJobStatus = null;
     transcribing = true;
+    cancellingPlain = false;
     transcriptionProgress = 0;
     transcribeError = "";
     transcriptionResult = "";
+    // #235: record the file + settings for retry/recent before running, so a
+    // retry reproduces the exact settings even if the user edits them after.
+    rememberTranscribeFile(filePath);
+    lastTranscribeProfileId = profileId;
+    lastTranscribePrompt = prompt ?? "";
+    lastTranscribeDiarize = false;
     try {
       await waitForMeetingActions();
+      if (plainGeneration !== plainTranscribeGeneration) return;
       transcriptionResult = await transcribeFile(filePath, {
         prompt: prompt ?? undefined,
         diarize: false,
         profileId: profileId ?? undefined,
       });
     } catch (error: any) {
-      transcribeError = typeof error === "string" ? error : error.message || "Transcription failed";
+      if (plainGeneration !== plainTranscribeGeneration) return;
+      // #234: a user cancel discards the partial result and reports a
+      // friendly message; the previous meeting review stays mounted.
+      if (cancellingPlain) {
+        transcriptionResult = "";
+        transcribeError = "Transcription was cancelled.";
+      } else {
+        transcribeError = typeof error === "string" ? error : error.message || "Transcription failed";
+      }
+      // #235: missing/moved files are pruned gracefully, never crashing.
+      if (isMissingTranscribeFileError(error)) {
+        recentTranscribeFiles = pruneMissingTranscribeFile(recentTranscribeFiles, filePath);
+        if (lastTranscribeFile === filePath) lastTranscribeFile = null;
+        if (stagedTranscribeFile === filePath) stagedTranscribeFile = null;
+      }
     } finally {
+      if (plainGeneration !== plainTranscribeGeneration) return;
       transcribing = false;
+      cancellingPlain = false;
       transcriptionProgress = 0;
     }
+  }
+
+  async function cancelPlainTranscription(): Promise<void> {
+    if (!canCancelPlainTranscription({ transcribing, meetingJobStatus, cancellingPlain })) return;
+    cancellingPlain = true;
+    try {
+      await cancelFileTranscription();
+    } catch (error) {
+      // The in-flight transcribe_file call will still settle and reset the
+      // UI; only surface the cancel-request failure if nothing else does.
+      if (transcribing && !transcribeError) {
+        transcribeError = meetingFailureText(error, "Could not request cancellation. The transcription is still running.");
+      }
+      cancellingPlain = false;
+    }
+  }
+
+  async function retryLastTranscription(): Promise<void> {
+    const filePath = lastTranscribeFile;
+    if (!canRetryTranscribeFile(transcribing, meetingReprocessingBusy, meetingReviewInit !== null, filePath)) return;
+    // Restore the exact settings of the remembered run so model A/B
+    // comparison only changes what the user edits afterwards.
+    if (lastTranscribeProfileId !== undefined) {
+      transcribeProfileId = profileForId(lastTranscribeProfileId)?.id ?? transcribeProfileId;
+    }
+    transcribePrompt = lastTranscribePrompt;
+    transcribeDiarize = lastTranscribeDiarize;
+    await handleFileTranscription(filePath as string);
+  }
+
+  function stageRecentTranscribeFileForRun(filePath: string): void {
+    if (transcribing) return;
+    const staged = stageRecentTranscribeFile(recentTranscribeFiles, filePath);
+    if (!staged) {
+      transcribeError = "That file is no longer in the recent list. Pick another file.";
+      return;
+    }
+    // Staged but not started: settings stay editable before running (#235).
+    stagedTranscribeFile = staged;
+    recentTranscribeSelect = staged;
+    transcribeError = "";
+  }
+
+  async function runStagedTranscribeFile(): Promise<void> {
+    const filePath = stagedTranscribeFile;
+    if (!filePath || transcribing) return;
+    await handleFileTranscription(filePath);
   }
 
   async function cancelMeetingImport(): Promise<void> {
@@ -1808,6 +1919,13 @@
               <div class="progress-bar transcription-progress">
                 <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
               </div>
+              <button
+                class="secondary"
+                onclick={() => void cancelPlainTranscription()}
+                disabled={cancellingPlain}
+              >
+                {cancellingPlain ? "Cancelling…" : "Stop transcription"}
+              </button>
             {/if}
           {:else}
             <div class="drop-zone-icon">&#x1F4C1;</div>
@@ -1818,6 +1936,42 @@
             <button class="secondary" onclick={() => void openSavedMeetingReview()} disabled={meetingReviewInit !== null}>
               Open saved review...
             </button>
+            {#if recentTranscribeFiles.length > 0}
+              <div class="field recent-files">
+                <label for="transcribe-recent">Recent files (this session only, last {MAX_RECENT_TRANSCRIBE_FILES})</label>
+                <select
+                  id="transcribe-recent"
+                  value={recentTranscribeSelect}
+                  onchange={(e) => stageRecentTranscribeFileForRun((e.target as HTMLSelectElement).value)}
+                  disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
+                >
+                  <option value="">Pick a recent file to stage…</option>
+                  {#each recentTranscribeFiles as file (file)}
+                    <option value={file}>{file}</option>
+                  {/each}
+                </select>
+                <div class="hotkey-hint">Session-only paths, cleared on quit. Never audio or transcript content.</div>
+              </div>
+            {/if}
+            {#if stagedTranscribeFile}
+              <div class="staged-file">
+                <span class="staged-file-path">Staged: {stagedTranscribeFile}</span>
+                <button
+                  class="primary"
+                  onclick={() => void runStagedTranscribeFile()}
+                  disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
+                >
+                  Transcribe staged file
+                </button>
+                <button
+                  class="secondary"
+                  onclick={() => { stagedTranscribeFile = null; recentTranscribeSelect = ""; }}
+                  disabled={transcribing}
+                >
+                  Clear
+                </button>
+              </div>
+            {/if}
           {/if}
         </div>
 
@@ -1866,6 +2020,18 @@
         {#if transcriptionResult}
           <div class="result-label">Result</div>
           <textarea class="transcribe-result" readonly>{transcriptionResult}</textarea>
+        {/if}
+
+        {#if canRetryTranscribeFile(transcribing, meetingReprocessingBusy, meetingReviewInit !== null, lastTranscribeFile)}
+          <div class="retry-row">
+            <button
+              class="secondary"
+              onclick={() => void retryLastTranscription()}
+              title="Re-run the same file with its original settings"
+            >
+              Re-run {lastTranscribeFile}
+            </button>
+          </div>
         {/if}
 
         {#if meetingReview && meetingTranscript}
@@ -2898,6 +3064,34 @@
 
   .transcribe-result:focus {
     border-color: var(--accent);
+  }
+
+  .recent-files {
+    margin-top: 10px;
+  }
+
+  .staged-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 12px;
+  }
+
+  .staged-file-path {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+  }
+
+  .retry-row {
+    margin-top: 10px;
   }
 
   /* Test dictation section */
