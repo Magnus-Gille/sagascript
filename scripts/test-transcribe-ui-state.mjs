@@ -16,6 +16,8 @@ const module = ts.transpileModule(source, {
 const {
   canCancelPlainTranscription,
   displayTranscribeProgress,
+  transcribePhaseFloor,
+  parseTranscribePhase,
   canRetryTranscribeFile,
   isMissingTranscribeFileError,
   transcribeSaveDefaults,
@@ -68,6 +70,23 @@ test("displayed progress floors at 1% while running and resets when idle", () =>
   assert.equal(displayTranscribeProgress(140, true), 100);
   assert.equal(displayTranscribeProgress(47, false), 0);
   assert.equal(displayTranscribeProgress(0, false), 0);
+});
+
+test("prep phases tick the floor upward until real progress takes over", () => {
+  assert.equal(transcribePhaseFloor("decoding"), 1);
+  assert.equal(transcribePhaseFloor("loading"), 3);
+  assert.equal(transcribePhaseFloor("preparing"), 5);
+  assert.equal(transcribePhaseFloor(null), 1);
+  assert.equal(parseTranscribePhase("decoding"), "decoding");
+  assert.equal(parseTranscribePhase("loading"), "loading");
+  assert.equal(parseTranscribePhase("preparing"), "preparing");
+  assert.equal(parseTranscribePhase("transcribing"), null);
+  assert.equal(parseTranscribePhase(null), null);
+  assert.equal(parseTranscribePhase(42), null);
+  assert.equal(displayTranscribeProgress(0, true, "loading"), 3);
+  assert.equal(displayTranscribeProgress(2, true, "preparing"), 5);
+  assert.equal(displayTranscribeProgress(40, true, "preparing"), 40);
+  assert.equal(displayTranscribeProgress(0, false, "loading"), 0);
 });
 
 test("save defaults point at the audio folder with a .txt basename", () => {

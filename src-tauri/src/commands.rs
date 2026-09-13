@@ -2140,6 +2140,7 @@ pub async fn transcribe_file(
     let path = std::path::PathBuf::from(&file_path);
 
     // Decode audio file
+    let _ = app.emit(crate::events::event::TRANSCRIPTION_PHASE, "decoding");
     let audio = tokio::task::spawn_blocking(move || decoder::decode_audio_file(&path))
         .await
         .map_err(|e| format!("Decode task failed: {e}"))?
@@ -2167,6 +2168,7 @@ pub async fn transcribe_file(
     // Show model loading status if the exact model/profile runtime is not warm.
     if whisper.needs_reload_with_profile(effective_model, context_profile) {
         let _ = app.emit(crate::events::event::STATE_CHANGED, "loading_model");
+        let _ = app.emit(crate::events::event::TRANSCRIPTION_PHASE, "loading");
     }
 
     // Diarization path — runs both diarization and timestamped transcription in parallel,
@@ -2325,6 +2327,9 @@ pub async fn transcribe_file(
     // Borrowed handle (`&mut fut`) so the timeout path can await the task's
     // actual exit after requesting an abort — mirrors the live dictation path.
     let mut fut = tokio::task::spawn_blocking(move || {
+        // State prep (lock, chunk states) is silent work before the first
+        // progress callback — name it so the UI never shows a frozen 1%.
+        let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PHASE, "preparing");
         whisper_ref.with_model(effective_model, context_profile, |backend| {
             backend.transcribe_sync_with_options(&audio, language, &opts, move |pct| {
                 let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);

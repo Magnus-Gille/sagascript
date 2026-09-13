@@ -23,16 +23,51 @@ export function transcribeBaseName(path: string | null): string {
 }
 
 /**
+ * Backend-reported pre-inference phase for plain file transcription (#237).
+ * `null` means inference progress (or idle) — the progress stream owns the
+ * display then.
+ */
+export type TranscribePhase = "decoding" | "loading" | "preparing" | null;
+
+/**
+ * Display floor per phase (#237): each completed prep step visibly advances
+ * the bar, so the run ticks upward steadily until real inference progress
+ * takes over. Phase-driven, never time-faked.
+ */
+export function transcribePhaseFloor(phase: TranscribePhase): number {
+  switch (phase) {
+    case "decoding":
+      return 1;
+    case "loading":
+      return 3;
+    case "preparing":
+      return 5;
+    default:
+      return 1;
+  }
+}
+
+export function parseTranscribePhase(value: unknown): TranscribePhase {
+  return value === "decoding" || value === "loading" || value === "preparing"
+    ? value
+    : null;
+}
+
+/**
  * Display value for the Transcribe-tab progress (#237). The backend only
  * reports percentages during active decoding, so a raw 0 renders as "hung"
- * through model load + warmup. Floor at 1% while a run is in flight (the
- * backend emits 1% at inference start, so the floor only covers genuine
- * pre-first-report silence) and reset to 0 when idle.
+ * through model load + warmup. Floor at the current phase (≥1%) while a run
+ * is in flight and reset to 0 when idle.
  */
-export function displayTranscribeProgress(reported: number, transcribing: boolean): number {
+export function displayTranscribeProgress(
+  reported: number,
+  transcribing: boolean,
+  phase: TranscribePhase = null,
+): number {
   if (!transcribing) return 0;
-  if (!Number.isFinite(reported)) return 1;
-  return Math.max(1, Math.min(100, Math.floor(reported)));
+  const floor = transcribePhaseFloor(phase);
+  if (!Number.isFinite(reported)) return floor;
+  return Math.max(floor, Math.min(100, Math.floor(reported)));
 }
 
 /**

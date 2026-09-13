@@ -79,10 +79,12 @@
   import {
     canCancelPlainTranscription,
     displayTranscribeProgress,
+    parseTranscribePhase,
     canRetryTranscribeFile,
     isMissingTranscribeFileError,
     transcribeSaveDefaults,
     transcribeBaseName,
+    type TranscribePhase,
   } from "./transcribe-ui-state";
   import {
     canUseBareHotkey,
@@ -213,6 +215,7 @@
   let transcribing: boolean = $state(false);
   let transcribeStartedAt: number | null = $state(null);
   let transcribeElapsedSec: number = $state(0);
+  let transcribePhase: TranscribePhase = $state(null);
   let transcriptionProgress: number = $state(0);
   let transcriptionResult: string = $state("");
   let transcribeError: string = $state("");
@@ -456,9 +459,17 @@
     });
 
     listen("transcription-progress", (event: any) => {
-      // Floor at 1% while running (#237) so backend silence during model
-      // load/warmup never renders as a hung 0%.
-      transcriptionProgress = displayTranscribeProgress(event.payload, transcribing);
+      // Floor at the current phase while running (#237) so backend silence
+      // during decode/load/warmup never renders as a hung 0%. Real progress
+      // clears the phase label once it moves past the prep floors.
+      if (typeof event.payload === "number" && event.payload > 1) transcribePhase = null;
+      transcriptionProgress = displayTranscribeProgress(event.payload, transcribing, transcribePhase);
+    });
+
+    listen("transcription-phase", (event: any) => {
+      if (!transcribing) return;
+      transcribePhase = parseTranscribePhase(event.payload);
+      transcriptionProgress = displayTranscribeProgress(transcriptionProgress, transcribing, transcribePhase);
     });
 
     listen("model-ready", async () => {
@@ -1201,8 +1212,10 @@
     transcribing = true;
     cancellingPlain = false;
     // #237: leave 0% on the same beat the spinner appears; the backend
-    // re-reports 1% at inference start and the listener floors at 1%.
+    // phases (decoding → loading → preparing) then tick the floor upward
+    // until the real progress stream takes over.
     transcriptionProgress = 1;
+    transcribePhase = "decoding";
     transcribeStartedAt = Date.now();
     transcribeError = "";
     transcriptionResult = "";
@@ -1243,6 +1256,7 @@
       transcribing = false;
       cancellingPlain = false;
       transcriptionProgress = 0;
+      transcribePhase = null;
       transcribeStartedAt = null;
     }
   }
@@ -2017,8 +2031,12 @@
                 </button>
               {/if}
             {:else}
-              {#if backendDictationState === "loading_model"}
+              {#if transcribePhase === "decoding"}
+                <div class="drop-zone-text">Decoding audio… {transcribeElapsedSec}s</div>
+              {:else if transcribePhase === "loading"}
                 <div class="drop-zone-text">Loading model… {transcribeElapsedSec}s</div>
+              {:else if transcribePhase === "preparing"}
+                <div class="drop-zone-text">Preparing… {transcribeElapsedSec}s</div>
               {:else}
                 <div class="drop-zone-text">Transcribing... {transcriptionProgress}% · {transcribeElapsedSec}s</div>
               {/if}
@@ -2049,8 +2067,8 @@
                 Re-run {transcribeBaseName(lastTranscribeFile)}
               </button>
             {/if}
-            <button class="secondary" onclick={() => void openSavedMeetingReview()} disabled={meetingReviewInit !== null}>
-              Open saved review...
+            <button class="secondary" onclick={() => void openSavedMeetingReview()} disabled={meetingReviewInit !== null} title="Reopen a meeting review you saved earlier — speaker names and corrections are kept">
+              Open saved meeting...
             </button>
             <div class="hotkey-hint">Reopen a meeting review you saved earlier — speaker names and corrections are kept.</div>
           {/if}
