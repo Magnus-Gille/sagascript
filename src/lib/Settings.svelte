@@ -1954,12 +1954,11 @@
           <textarea
             class="prompt-input"
             aria-label="Extra context for this file"
-            placeholder="Extra context for this file only (optional)"
+            placeholder='Extra context, e.g. names to listen for: Astrid, Grimnir (optional)'
             bind:value={transcribePrompt}
             rows="2"
             disabled={transcribing}
           ></textarea>
-          <div class="hotkey-hint">Temporary hint-only context for this import. A selected profile supplies its dictionary; no profile uses global hints.</div>
         </div>
 
         <div

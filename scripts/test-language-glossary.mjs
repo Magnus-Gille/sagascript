@@ -117,5 +117,6 @@ test("selected profile fixes the file language and dictionary together", () => {
   assert.match(settingsSource, /languageLabel\(transcribeLanguage\(\)\)/);
   assert.match(settingsSource, /return selectedTranscribeProfile\(\)\?\.language \?\? settings\?\.language \?\? "auto"/);
   assert.match(settingsSource, /This profile fixes the file language and uses its personal dictionary/);
-  assert.match(settingsSource, /Temporary hint-only context for this import/);
+  assert.match(settingsSource, /names to listen for: Astrid, Grimnir/);
+  assert.doesNotMatch(settingsSource, /Temporary hint-only context for this import/);
 });
