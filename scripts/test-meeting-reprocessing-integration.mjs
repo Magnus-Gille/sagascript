@@ -4,12 +4,12 @@ import test from "node:test";
 import ts from "typescript";
 import vm from "node:vm";
 
-const settingsSource = await readFile(
-  new URL("../src/lib/Settings.svelte", import.meta.url),
+const fileTranscriptionSource = await readFile(
+  new URL("../src/lib/FileTranscription.svelte", import.meta.url),
   "utf8",
 );
-const scriptSource = settingsSource.match(/<script lang="ts">([\s\S]*?)<\/script>/)?.[1];
-assert.ok(scriptSource, "Settings.svelte should have a TypeScript script block");
+const scriptSource = fileTranscriptionSource.match(/<script lang="ts">([\s\S]*?)<\/script>/)?.[1];
+assert.ok(scriptSource, "FileTranscription.svelte should have a TypeScript script block");
 
 function functionSource(name) {
   const plainStart = scriptSource.indexOf(`function ${name}`);
@@ -17,7 +17,7 @@ function functionSource(name) {
   const start = asyncStart >= 0 && (plainStart < 0 || asyncStart < plainStart)
     ? asyncStart
     : plainStart;
-  assert.ok(start >= 0, `Settings.svelte should define ${name}`);
+  assert.ok(start >= 0, `FileTranscription.svelte should define ${name}`);
   const brace = scriptSource.indexOf("{", start);
   assert.ok(brace >= 0, `${name} should have a body`);
   let depth = 0;
@@ -145,6 +145,8 @@ function createHarness(controls) {
     let transcribing = false;
     let transcriptionProgress = 0;
     let transcribePrompt = "";
+    let otherBusy = false;
+    const job = { prompt: null, profileId: null };
 
     function selectedTranscribeProfile() { return null; }
 

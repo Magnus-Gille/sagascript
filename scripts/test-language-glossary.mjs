@@ -25,8 +25,9 @@ test("profile glossary API preserves the validated camelCase command payload", (
 test("file transcription carries an optional profile without changing no-profile behavior", () => {
   assert.match(apiSource, /options\?: \{ prompt\?: string; diarize\?: boolean; profileId\?: string \}/);
   assert.match(apiSource, /profileId: options\?\.profileId \?\? null/);
-  assert.match(settingsSource, /const profileId = selectedTranscribeProfile\(\)\?\.id/);
-  assert.match(settingsSource, /profileId: profileId \?\? undefined/);
+  assert.match(settingsSource, /createFileJobs\(paths, \{[\s\S]*diarize: transcribeDiarize/);
+  assert.match(settingsSource, /prompt: transcribePrompt\.trim\(\) \|\| null/);
+  assert.match(settingsSource, /profileId: selectedTranscribeProfile\(\)\?\.id \?\? null/);
   assert.match(settingsSource, /No profile \(use selected language\)/);
 });
 

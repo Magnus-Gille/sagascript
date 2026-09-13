@@ -17,6 +17,7 @@
   } from "./meeting-reprocessing-state.js";
 
   interface Props {
+    idPrefix?: string;
     busy: boolean;
     draftDirty: boolean;
     currentReviewRevision?: string | null;
@@ -35,6 +36,7 @@
   type ResolutionOperation = CorrectionOperation;
 
   let {
+    idPrefix = "",
     busy,
     draftDirty,
     currentReviewRevision = null,
@@ -327,11 +329,11 @@
   }
 </script>
 
-<section class="meeting-reprocessing" aria-labelledby="meeting-reprocessing-title">
+<section class="meeting-reprocessing" aria-labelledby={idPrefix + "meeting-reprocessing-title"}>
   <header class="header">
     <div>
       <p class="eyebrow">Meeting reprocessing</p>
-      <h1 id="meeting-reprocessing-title">Reprocess a meeting</h1>
+      <h1 id={idPrefix + "meeting-reprocessing-title"}>Reprocess a meeting</h1>
       <p class="intro">Choose the smallest explicit recomputation, review every correction migration, then accept it into the current review.</p>
     </div>
     <div class="header-actions">
@@ -346,10 +348,10 @@
   {/if}
   {#if notice}<p class="notice" role="status">{notice}</p>{/if}
 
-  <section class="panel plan-panel" aria-labelledby="plan-title">
+  <section class="panel plan-panel" aria-labelledby={idPrefix + "plan-title"}>
     <div class="section-heading">
       <div>
-        <h2 id="plan-title">1. Plan recomputation</h2>
+        <h2 id={idPrefix + "plan-title"}>1. Plan recomputation</h2>
         <p>Planning validates the selected source and immutable context before any work runs. These controls set the next plan.</p>
       </div>
     </div>
@@ -398,10 +400,10 @@
   </section>
 
   {#if selected}
-    <section class="panel selected-panel" aria-labelledby="selected-plan-title">
+    <section class="panel selected-panel" aria-labelledby={idPrefix + "selected-plan-title"}>
       <div class="section-heading">
         <div>
-          <h2 id="selected-plan-title">Selected plan</h2>
+          <h2 id={idPrefix + "selected-plan-title"}>Selected plan</h2>
           <p>{selected.file_path}</p>
         </div>
         <span class="status-pill">{modeDescriptions[selected.plan.mode].label}</span>
@@ -427,10 +429,10 @@
   {/if}
 
   {#if proposal}
-    <section class="panel proposal-panel" aria-labelledby="proposal-title">
+    <section class="panel proposal-panel" aria-labelledby={idPrefix + "proposal-title"}>
       <div class="section-heading">
         <div>
-          <h2 id="proposal-title">2. Review migration proposal</h2>
+          <h2 id={idPrefix + "proposal-title"}>2. Review migration proposal</h2>
           <p>{proposal.preview.steps.length} correction step{proposal.preview.steps.length === 1 ? "" : "s"}. Automatic mappings stay read-only; conflicts require an explicit target.</p>
         </div>
         <div class="proposal-actions">
@@ -578,8 +580,8 @@
   {/if}
 
   {#if result}
-    <section class="panel result-panel" aria-labelledby="result-title">
-      <div class="section-heading"><div><h2 id="result-title">Reprocessing result</h2><p>Measured work and timing from the completed operation.</p></div></div>
+    <section class="panel result-panel" aria-labelledby={idPrefix + "result-title"}>
+      <div class="section-heading"><div><h2 id={idPrefix + "result-title"}>Reprocessing result</h2><p>Measured work and timing from the completed operation.</p></div></div>
       <div class="work-grid" aria-label="Completed work">
         {#each workItems(result.required_work) as item}<span class:required={item.required} class="work-item">{item.required ? "Ran" : "Skipped"}: {item.label}</span>{/each}
       </div>

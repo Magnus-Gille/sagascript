@@ -15,6 +15,8 @@
   import { activeSegmentsAtTime } from "./meeting-playback";
 
   interface Props {
+    idPrefix?: string;
+    active?: boolean;
     review: MeetingReview;
     transcript: MeetingTranscript;
     busy?: boolean;
@@ -31,6 +33,8 @@
   }
 
   let {
+    idPrefix = "",
+    active = true,
     review,
     transcript,
     busy = false,
@@ -136,9 +140,13 @@
   });
 
   $effect(() => {
-    if (!followPlayback || activeSegments.length === 0 || typeof document === "undefined") return;
-    const first = document.getElementById("meeting-segment-" + activeSegments[0].id);
+    if (!active || !followPlayback || activeSegments.length === 0 || typeof document === "undefined") return;
+    const first = document.getElementById(idPrefix + "meeting-segment-" + activeSegments[0].id);
     first?.scrollIntoView({ block: "nearest" });
+  });
+
+  $effect(() => {
+    if (!active && audioEl) audioEl.pause();
   });
 
   onDestroy(() => {
@@ -296,6 +304,7 @@
   }
 
   function handleKeyboardScroll(event: KeyboardEvent): void {
+    if (!active) return;
     if (["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End", " "].includes(event.key)) disableFollow();
   }
 
@@ -324,17 +333,17 @@
 
 <svelte:window onkeydown={handleKeyboardScroll} />
 
-<section class="meeting-review" aria-labelledby="meeting-review-title">
+<section class="meeting-review" aria-labelledby={idPrefix + "meeting-review-title"}>
   <header class="review-header">
     <div>
       <p class="eyebrow">Meeting review</p>
-      <h1 id="meeting-review-title">Transcript</h1>
+      <h1 id={idPrefix + "meeting-review-title"}>Transcript</h1>
       <p class="metadata">
         {transcript.language.toUpperCase()} · {transcript.model} · {formatTimestamp(transcript.duration_seconds)}
       </p>
     </div>
     <div class="privacy-note">
-      Review stays local. Nothing is exported or retained by this view unless you explicitly choose an export.
+      Review stays local. Files are written only when you choose Save or Export.
     </div>
   </header>
 
@@ -363,10 +372,10 @@
     <p class="draft-note" role="status">Unapplied edits are not included in saves/exports. Apply or discard them before saving or exporting.</p>
   {/if}
 
-  <section class="speaker-panel" aria-labelledby="speaker-panel-title">
+  <section class="speaker-panel" aria-labelledby={idPrefix + "speaker-panel-title"}>
     <div class="section-heading">
       <div>
-        <h2 id="speaker-panel-title">Speakers</h2>
+        <h2 id={idPrefix + "speaker-panel-title"}>Speakers</h2>
         <p>Rename a speaker or merge two speaker IDs when they belong to the same person.</p>
       </div>
     </div>
@@ -379,9 +388,9 @@
             <div class="speaker-identity">
               <span class="speaker-dot" aria-hidden="true">{index + 1}</span>
               <div>
-                <label for={"speaker-name-" + index}>Speaker {index + 1} name</label>
+                <label for={idPrefix + "speaker-name-" + index}>Speaker {index + 1} name</label>
                 <input
-                  id={"speaker-name-" + index}
+                  id={idPrefix + "speaker-name-" + index}
                   type="text"
                   value={labelDrafts[speaker.id] ?? speaker.label}
                   aria-label={"Rename " + speaker.label}
@@ -441,10 +450,10 @@
     {/if}
   </section>
 
-  <section class="audio-panel" aria-labelledby="audio-panel-title">
+  <section class="audio-panel" aria-labelledby={idPrefix + "audio-panel-title"}>
     <div class="section-heading">
       <div>
-        <h2 id="audio-panel-title">Audio playback</h2>
+        <h2 id={idPrefix + "audio-panel-title"}>Audio playback</h2>
         <p>Choose the original source explicitly. Editing text never starts playback.</p>
       </div>
       <div class="audio-actions">
@@ -456,7 +465,7 @@
         {/if}
       </div>
     </div>
-    <p class="audio-lifecycle-note">Audio access is temporary and is detached when you leave this review.</p>
+    <p class="audio-lifecycle-note">Audio pauses when you switch tabs. Audio access ends when you quit Sagascript.</p>
     {#if audioUrl}
       <audio
         bind:this={audioEl}
@@ -477,10 +486,10 @@
     {/if}
   </section>
 
-  <section class="transcript-panel" aria-labelledby="transcript-panel-title">
+  <section class="transcript-panel" aria-labelledby={idPrefix + "transcript-panel-title"}>
     <div class="section-heading">
       <div>
-        <h2 id="transcript-panel-title">Conversation</h2>
+        <h2 id={idPrefix + "transcript-panel-title"}>Conversation</h2>
         <p>{transcript.segments.length} segment{transcript.segments.length === 1 ? "" : "s"}, ordered by time.</p>
       </div>
       {#if activeSegments.length > 0}<span class="active-note">Current timestamp: {activeSegments.map((segment) => displayLabel(segment.speaker)).join(", ")}</span>{/if}
@@ -490,7 +499,7 @@
     {:else}
       <div class="conversation" role="region" onwheel={disableFollow} ontouchmove={disableFollow} aria-label="Transcript segments">
         {#each sortedSegments as segment (segment.id)}
-          <article id={"meeting-segment-" + segment.id} class:active-segment={activeIds.has(segment.id)} class="segment-card">
+          <article id={idPrefix + "meeting-segment-" + segment.id} class:active-segment={activeIds.has(segment.id)} class="segment-card">
             <div class="segment-heading">
               <button type="button" class="timestamp" onclick={() => seekTo(segment.start)} disabled={!audioUrl} aria-label={"Seek to " + formatTimestamp(segment.start)}>
                 {formatTimestamp(segment.start)}
@@ -526,10 +535,10 @@
     {/if}
   </section>
 
-  <section class="export-panel" aria-labelledby="export-panel-title">
+  <section class="export-panel" aria-labelledby={idPrefix + "export-panel-title"}>
     <div class="section-heading">
       <div>
-        <h2 id="export-panel-title">Export reviewed transcript</h2>
+        <h2 id={idPrefix + "export-panel-title"}>Export reviewed transcript</h2>
         <p>Choose a format explicitly. Each export uses the current reviewed text and speaker labels.</p>
       </div>
     </div>
