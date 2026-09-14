@@ -6,11 +6,11 @@ export type PlainTranscriptionCancelState = {
 
 const MISSING_FILE_HINTS = [
   "no such file",
-  "not found",
   "enoent",
   "does not exist",
-  "failed to open",
-  "could not open",
+  "cannot find",
+  "os error 2",
+  "os error 3",
 ];
 
 /**
@@ -27,7 +27,7 @@ export function transcribeBaseName(path: string | null): string {
  * `null` means inference progress (or idle) — the progress stream owns the
  * display then.
  */
-export type TranscribePhase = "decoding" | "loading" | "preparing" | null;
+export type TranscribePhase = "decoding" | "resampling" | "loading" | "preparing" | "encoding" | null;
 
 /**
  * Display floor per phase (#237): each completed prep step visibly advances
@@ -42,13 +42,18 @@ export function transcribePhaseFloor(phase: TranscribePhase): number {
       return 3;
     case "preparing":
       return 5;
+    case "encoding":
+      return 6;
     default:
       return 1;
   }
 }
 
 export function parseTranscribePhase(value: unknown): TranscribePhase {
-  return value === "decoding" || value === "loading" || value === "preparing"
+  return value === "decoding" ||
+    value === "loading" ||
+    value === "preparing" ||
+    value === "encoding"
     ? value
     : null;
 }
@@ -133,5 +138,5 @@ export function canRetryTranscribeFile(
 export function isMissingTranscribeFileError(error: unknown): boolean {
   const message = typeof error === "string" ? error : (error as Error)?.message ?? "";
   const lowered = message.toLowerCase();
-  return MISSING_FILE_HINTS.some((hint) => lowered.includes(hint));
+  return lowered.includes("failed to open file:") && MISSING_FILE_HINTS.some((hint) => lowered.includes(hint));
 }

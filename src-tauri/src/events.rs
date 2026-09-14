@@ -12,12 +12,10 @@ pub mod event {
     pub const MODEL_READY: &str = "model-ready";
     /// Transcription progress percentage (0–100)
     pub const TRANSCRIPTION_PROGRESS: &str = "transcription-progress";
-    /// File-decode progress as a byte fraction 0–100 (#237). An I/O
-    /// fraction, not a time fraction; 100 snaps on clean EOF. Emitted only
-    /// while decoding; the inference stream uses TRANSCRIPTION_PROGRESS.
-    pub const TRANSCRIPTION_DECODE: &str = "transcription-decode";
+    /// Scoped plain-import progress: {runId, phase, percent}.
+    pub const PLAIN_TRANSCRIPTION_PROGRESS: &str = "plain-transcription-progress";
     /// Plain file-transcription phase (#237): "decoding" | "loading" |
-    /// "preparing". Emitted as the backend moves through the silent
+    /// "preparing" | "encoding". Emitted as the backend moves through the silent
     /// pre-inference work so the UI can name the stall instead of showing a
     /// frozen 1%. The progress stream takes over once inference starts.
     pub const TRANSCRIPTION_PHASE: &str = "transcription-phase";
@@ -41,7 +39,7 @@ mod tests {
             MODEL_DOWNLOAD_PROGRESS,
             MODEL_READY,
             TRANSCRIPTION_PROGRESS,
-            TRANSCRIPTION_DECODE,
+            PLAIN_TRANSCRIPTION_PROGRESS,
             TRANSCRIPTION_PHASE,
             HOTKEY_REGISTRATION_CHANGED,
             ACTIVE_HOTKEY_PROFILE_CHANGED,
@@ -68,7 +66,7 @@ mod tests {
             MODEL_DOWNLOAD_PROGRESS,
             MODEL_READY,
             TRANSCRIPTION_PROGRESS,
-            TRANSCRIPTION_DECODE,
+            PLAIN_TRANSCRIPTION_PROGRESS,
             TRANSCRIPTION_PHASE,
             HOTKEY_REGISTRATION_CHANGED,
             ACTIVE_HOTKEY_PROFILE_CHANGED,

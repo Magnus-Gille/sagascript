@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { rememberTranscription, type RecentTranscription } from "./recent-transcriptions";
+  import TranscriptionStages from "./TranscriptionStages.svelte";
+  import { initialStages, startStages, acceptRunProgress, finishStages } from "./transcribe-stages";
   import MeetingReprocessing from "./MeetingReprocessing.svelte";
   import {
     planMeetingReprocessing, beginMeetingReprocessing, previewMeetingProposal,
@@ -7,7 +10,7 @@
   import type {
     ReprocessingMode, SelectedReprocessingPlan, ProposalState, ReprocessingResult,
   } from "./meeting-reprocessing-types";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import {
     getSettings,
     getLastError,
@@ -78,15 +81,10 @@
   } from "./dictation-ui-state";
   import {
     canCancelPlainTranscription,
-    clampDecodePct,
-    displayTranscribeProgress,
-    parseTranscribePhase,
-    transcribePhaseFloor,
     canRetryTranscribeFile,
     isMissingTranscribeFileError,
     transcribeSaveDefaults,
     transcribeBaseName,
-    type TranscribePhase,
   } from "./transcribe-ui-state";
   import {
     canUseBareHotkey,
@@ -173,8 +171,7 @@
     let revision = 0;
     const stops: Array<() => void> = [];
     const remember = (stop: () => void) => disposed ? stop() : stops.push(stop);
-    // Elapsed-time ticker for the Transcribe tab (#237 follow-up): proves the
-    // run is alive during the silent load/warmup behind progress 1%.
+    // Elapsed time is UI feedback, not a heartbeat from native inference.
     const elapsedTimer = setInterval(() => {
       transcribeElapsedSec = transcribing && transcribeStartedAt !== null
         ? Math.max(0, Math.floor((Date.now() - transcribeStartedAt) / 1000))
@@ -217,15 +214,23 @@
   let transcribing: boolean = $state(false);
   let transcribeStartedAt: number | null = $state(null);
   let transcribeElapsedSec: number = $state(0);
-  let transcribePhase: TranscribePhase = $state(null);
-  let decodePct: number | null = $state(null);
-  let transcriptionProgress: number = $state(0);
+  let plainStages = $state(initialStages());
   let transcriptionResult: string = $state("");
   let transcribeError: string = $state("");
   let dragOver: boolean = $state(false);
   let transcribePrompt: string = $state('');
   let transcribeDiarize: boolean = $state(false);
   let showDiarizeInfo: boolean = $state(false);
+  let diarizeDialog: HTMLDialogElement | undefined = $state();
+  let diarizeInfoButton: HTMLButtonElement | undefined = $state();
+  $effect(() => {
+    if (showDiarizeInfo && diarizeDialog && !diarizeDialog.open) diarizeDialog.showModal();
+  });
+  async function closeDiarizeInfo(): Promise<void> {
+    showDiarizeInfo = false;
+    await tick();
+    diarizeInfoButton?.focus();
+  }
   let transcribeProfileId: string | null = $state(null);
   let meetingReview: MeetingReviewDocument | null = $state(null);
   let meetingTranscript: MeetingTranscript | null = $state(null);
@@ -251,16 +256,20 @@
   // reset to idle with the previous review intact.
   let cancellingPlain: boolean = $state(false);
   let plainTranscribeGeneration = 0;
+  let plainRunId: string | null = null;
+  let plainRequestStarted = false;
 
-  // #235: one-click re-run of the last file with its original settings.
-  // Privacy-first by design: only the last path is remembered (in memory,
-  // cleared on quit) — never audio or transcript content, never written to
-  // disk. Aligns with #167 ("avoid a hidden transcript library").
-  // Session-only is the recorded privacy choice.
+  // Session-only re-run requests; no audio or transcript results in history.
+  // Keep the result's source separate from the dropdown selection for Save….
   let lastTranscribeFile: string | null = $state(null);
-  let lastTranscribeProfileId: string | null = $state(null);
-  let lastTranscribePrompt: string = $state("");
-  let lastTranscribeDiarize: boolean = $state(false);
+  let recentTranscriptions: RecentTranscription[] = $state([]);
+  let selectedRerunPath: string = $state("");
+
+  function rememberRun(path: string, profileId: string | null, prompt: string, diarize: boolean): void {
+    recentTranscriptions = rememberTranscription(recentTranscriptions, { path, profileId, prompt, diarize });
+    selectedRerunPath = path;
+    lastTranscribeFile = path;
+  }
   // #238: one-line feedback for the Copy/Save… result actions.
   let resultActionMessage: string = $state("");
   let transcribeResultSection: HTMLDivElement | undefined = $state();
@@ -268,11 +277,13 @@
 
   // #238 follow-up: when a transcription finishes, bring the result into
   // view and put keyboard focus on Save… so it is one Enter press away.
-  function revealTranscriptionResult(): void {
-    queueMicrotask(() => {
+  async function revealTranscriptionResult(): Promise<void> {
+    const generation = plainTranscribeGeneration;
+    await tick();
+    if (activeTab === "transcribe" && generation === plainTranscribeGeneration) {
       transcribeResultSection?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       saveResultButton?.focus({ preventScroll: true });
-    });
+    }
   }
 
   onDestroy(() => {
@@ -461,25 +472,9 @@
       downloadProgress = event.payload.progress;
     });
 
-    listen("transcription-progress", (event: any) => {
-      // Floor at the current phase while running (#237) so backend silence
-      // during decode/load/warmup never renders as a hung 0%. Real progress
-      // clears the phase label once it moves past the prep floors.
-      if (typeof event.payload === "number" && event.payload > 1) transcribePhase = null;
-      transcriptionProgress = displayTranscribeProgress(event.payload, transcribing, transcribePhase);
-    });
-
-    listen("transcription-phase", (event: any) => {
-      // Meeting runs never clear this (their branch renders meetingPhase),
-      // so only plain runs may own the label.
+    listen("plain-transcription-progress", (event: any) => {
       if (!transcribing || meetingJobStatus !== null) return;
-      transcribePhase = parseTranscribePhase(event.payload);
-      transcriptionProgress = displayTranscribeProgress(transcriptionProgress, transcribing, transcribePhase);
-    });
-
-    listen("transcription-decode", (event: any) => {
-      if (!transcribing || meetingJobStatus !== null) return;
-      decodePct = clampDecodePct(event.payload);
+      plainStages = acceptRunProgress(plainStages, plainRunId, event.payload);
     });
 
     listen("model-ready", async () => {
@@ -1115,9 +1110,6 @@
             meetingJobId = null;
             transcribing = false;
             meetingPollingFailed = false;
-            transcriptionProgress = 0;
-            transcribePhase = null;
-            decodePct = null;
             if (snapshot.status === "completed" && snapshot.reprocessing) {
               const result = snapshot.reprocessing;
               // Keep the completed work even if the separate preview request fails.
@@ -1174,7 +1166,7 @@
     // document succeeds. Pending edits finish before the import starts below;
     // successful replacement still invalidates any stale action revision.
     transcribing = true;
-    transcriptionProgress = 0;
+    plainStages = initialStages();
     transcribeStartedAt = Date.now();
     transcribeError = "";
     transcriptionResult = "";
@@ -1199,8 +1191,6 @@
       meetingJobId = null;
       meetingJobStatus = "failed";
       meetingPhase = "Failed";
-      transcribePhase = null;
-      decodePct = null;
       meetingError = meetingFailureText(error, "Could not start meeting import.");
     }
   }
@@ -1210,50 +1200,51 @@
     const profileId = selectedTranscribeProfile()?.id ?? null;
     const prompt = transcribePrompt.trim() || null;
     if (transcribeDiarize) {
-      lastTranscribeFile = filePath;
-      lastTranscribeProfileId = profileId;
-      lastTranscribePrompt = prompt ?? "";
-      lastTranscribeDiarize = true;
+      rememberRun(filePath, profileId, prompt ?? "", true);
       await startMeetingFileTranscription(filePath, prompt, profileId);
       return;
     }
 
     const plainGeneration = ++plainTranscribeGeneration;
+    plainRunId = crypto.randomUUID();
+    plainRequestStarted = false;
     ++meetingPollGeneration;
     ++meetingDocumentRevision;
     meetingError = "";
     meetingJobStatus = null;
     transcribing = true;
     cancellingPlain = false;
-    // #237: leave 0% on the same beat the spinner appears; the backend
-    // phases (decoding → loading → preparing) then tick the floor upward
-    // until the real progress stream takes over.
-    transcriptionProgress = 1;
-    transcribePhase = "decoding";
-    decodePct = null;
+    plainStages = startStages();
     transcribeStartedAt = Date.now();
     transcribeError = "";
     transcriptionResult = "";
     resultActionMessage = "";
-    resultActionMessage = "";
-    // #235: record the file + settings for re-run before running, so a
-    // re-run reproduces the exact settings even if the user edits them after.
-    lastTranscribeFile = filePath;
-    lastTranscribeProfileId = profileId;
-    lastTranscribePrompt = prompt ?? "";
-    lastTranscribeDiarize = false;
+    // Retain file-specific options; model/decoder settings follow current Settings.
+    rememberRun(filePath, profileId, prompt ?? "", false);
     try {
       await waitForMeetingActions();
       if (plainGeneration !== plainTranscribeGeneration) return;
+      if (cancellingPlain) {
+        transcribeError = "Transcription was cancelled.";
+        plainStages = finishStages(plainStages, "cancelled");
+        return;
+      }
+      plainRequestStarted = true;
       transcriptionResult = await transcribeFile(filePath, {
         prompt: prompt ?? undefined,
         diarize: false,
         profileId: profileId ?? undefined,
+        runId: plainRunId ?? undefined,
       });
       if (plainGeneration !== plainTranscribeGeneration) return;
+      if (cancellingPlain) {
+        resultActionMessage = "Finished before Stop took effect.";
+      }
+      plainStages = finishStages(plainStages, "completed");
       if (transcriptionResult.trim()) revealTranscriptionResult();
     } catch (error: any) {
       if (plainGeneration !== plainTranscribeGeneration) return;
+      plainStages = finishStages(plainStages, cancellingPlain ? "cancelled" : "failed");
       // #234: a user cancel discards the partial result and reports a
       // friendly message; the previous meeting review stays mounted.
       if (cancellingPlain) {
@@ -1265,24 +1256,31 @@
       // Missing/moved files are forgotten gracefully, never crashing.
       if (isMissingTranscribeFileError(error) && lastTranscribeFile === filePath) {
         lastTranscribeFile = null;
+        recentTranscriptions = recentTranscriptions.filter(run => run.path !== filePath);
+        selectedRerunPath = recentTranscriptions[0]?.path ?? "";
       }
     } finally {
       if (plainGeneration !== plainTranscribeGeneration) return;
       transcribing = false;
       cancellingPlain = false;
-      transcriptionProgress = 0;
-      transcribePhase = null;
-      decodePct = null;
       transcribeStartedAt = null;
+      plainRunId = null;
+      plainRequestStarted = false;
     }
   }
 
   async function cancelPlainTranscription(): Promise<void> {
     if (!canCancelPlainTranscription({ transcribing, meetingJobStatus, cancellingPlain })) return;
     cancellingPlain = true;
+    if (!plainRequestStarted || !plainRunId) return;
+    const runId = plainRunId;
     try {
-      await cancelFileTranscription();
+      await cancelFileTranscription(runId);
+      if (plainRunId !== runId) return;
+      // Keep stop intent until the command settles. Backend success is
+      // authoritative if completion won the race; an early stop is queued.
     } catch (error) {
+      if (plainRunId !== runId) return;
       // The in-flight transcribe_file call will still settle and reset the
       // UI; only surface the cancel-request failure if nothing else does.
       if (transcribing && !transcribeError) {
@@ -1293,38 +1291,44 @@
   }
 
   async function retryLastTranscription(): Promise<void> {
-    const filePath = lastTranscribeFile;
-    if (!canRetryTranscribeFile(transcribing, meetingReprocessingBusy, meetingReviewInit !== null, filePath)) return;
-    // Restore the exact settings of the remembered run so model A/B
-    // comparison only changes what the user edits afterwards.
-    if (lastTranscribeProfileId !== undefined) {
-      transcribeProfileId = profileForId(lastTranscribeProfileId)?.id ?? transcribeProfileId;
+    const run = recentTranscriptions.find(run => run.path === selectedRerunPath);
+    if (!run || !canRetryTranscribeFile(transcribing, meetingReprocessingBusy, meetingReviewInit !== null, run.path)) return;
+    if (run.profileId && !profileForId(run.profileId)) {
+      transcribeError = "The profile for this file is no longer available. Choose a profile and open the file again.";
+      return;
     }
-    transcribePrompt = lastTranscribePrompt;
-    transcribeDiarize = lastTranscribeDiarize;
-    await handleFileTranscription(filePath as string);
+    transcribeProfileId = run.profileId;
+    transcribePrompt = run.prompt;
+    transcribeDiarize = run.diarize;
+    await handleFileTranscription(run.path);
   }
 
   async function copyTranscriptionResult(): Promise<void> {
     if (transcribing || !transcriptionResult) return;
+    const generation = plainTranscribeGeneration;
     try {
       await copyTranscriptionText(transcriptionResult);
+      if (generation !== plainTranscribeGeneration) return;
       resultActionMessage = "Copied to clipboard.";
     } catch (error: any) {
+      if (generation !== plainTranscribeGeneration) return;
       resultActionMessage = typeof error === "string" ? error : error?.message || "Could not copy.";
     }
   }
 
   async function saveTranscriptionResult(): Promise<void> {
     if (transcribing || !transcriptionResult) return;
+    const generation = plainTranscribeGeneration;
     // #238: one Save… button with smart defaults (audio folder +
     // basename.txt) — cancelling the dialog writes nothing, and there is
     // deliberately no automatic-save counterpart.
     const { fileName, directory } = transcribeSaveDefaults(lastTranscribeFile);
     try {
       const saved = await saveTranscriptionText(transcriptionResult, fileName, directory);
+      if (generation !== plainTranscribeGeneration) return;
       resultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
     } catch (error: any) {
+      if (generation !== plainTranscribeGeneration) return;
       resultActionMessage = typeof error === "string" ? error : error?.message || "Could not save.";
     }
   }
@@ -1978,6 +1982,7 @@
             <button
               type="button"
               class="info-dot"
+              bind:this={diarizeInfoButton}
               aria-label="What is speaker diarization?"
               aria-expanded={showDiarizeInfo}
               title="What is speaker diarization?"
@@ -1985,18 +1990,12 @@
             >?</button>
           </div>
           {#if showDiarizeInfo}
-            <div
-              class="popover-backdrop"
-              role="presentation"
-              onclick={() => (showDiarizeInfo = false)}
-            >
-              <div
+              <dialog
+                bind:this={diarizeDialog}
                 class="popover-card"
-                role="dialog"
-                tabindex="-1"
                 aria-label="What is speaker diarization?"
-                onclick={(e) => e.stopPropagation()}
-                onkeydown={(e) => e.stopPropagation()}
+                oncancel={closeDiarizeInfo}
+                onclose={closeDiarizeInfo}
               >
                 <div class="popover-title">Speaker diarization</div>
                 <p>
@@ -2011,10 +2010,9 @@
                 <button
                   type="button"
                   class="secondary"
-                  onclick={() => (showDiarizeInfo = false)}
+                  onclick={closeDiarizeInfo}
                 >Close</button>
-              </div>
-            </div>
+              </dialog>
           {/if}
           <textarea
             class="prompt-input"
@@ -2031,9 +2029,12 @@
           class:drag-over={dragOver}
           class:transcribing={transcribing}
         >
+          {#if transcribing ? meetingJobStatus === null : !transcribeDiarize}
+            <TranscriptionStages state={plainStages} cancelling={cancellingPlain} />
+          {/if}
           {#if transcribing}
-            <div class="spinner"></div>
             {#if meetingJobStatus !== null}
+              <div class="spinner"></div>
               <div class="drop-zone-text">{meetingStageText()}</div>
               {#if meetingJobId && meetingPollingFailed}
                 <button class="secondary" onclick={retryMeetingPolling}>Retry status check</button>
@@ -2047,18 +2048,7 @@
                 </button>
               {/if}
             {:else}
-              {#if transcribePhase === "decoding"}
-                <div class="drop-zone-text">Decoding audio… {decodePct ?? transcribePhaseFloor(transcribePhase)}% · {transcribeElapsedSec}s</div>
-              {:else if transcribePhase === "loading"}
-                <div class="drop-zone-text">Loading model… {transcribePhaseFloor(transcribePhase)}% · {transcribeElapsedSec}s</div>
-              {:else if transcribePhase === "preparing"}
-                <div class="drop-zone-text">Preparing… {transcribePhaseFloor(transcribePhase)}% · {transcribeElapsedSec}s</div>
-              {:else}
-                <div class="drop-zone-text">Transcribing... {transcriptionProgress}% · {transcribeElapsedSec}s</div>
-              {/if}
-              <div class="progress-bar transcription-progress">
-                <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
-              </div>
+              <div class="drop-zone-text">Elapsed: {transcribeElapsedSec}s</div>
               <button
                 class="secondary"
                 onclick={() => void cancelPlainTranscription()}
@@ -2073,15 +2063,29 @@
             <button class="primary open-file-btn" onclick={onPickFile}>
               Open File...
             </button>
-            {#if lastTranscribeFile}
+            {#if recentTranscriptions.length > 0}
+              <div class="rerun-controls">
               <button
                 class="secondary rerun-highlight"
                 onclick={() => void retryLastTranscription()}
                 disabled={meetingReprocessingBusy || meetingReviewInit !== null}
-                title="Re-run the last transcription with the same settings — no file picker"
+                title="Re-run with current model settings and this file's saved profile/context — no file picker"
               >
-                Re-run {transcribeBaseName(lastTranscribeFile)}
+                Re-run
               </button>
+              <select
+                aria-label="Recent files to re-run (last 5, this session)"
+                bind:value={selectedRerunPath}
+                title={selectedRerunPath}
+                disabled={meetingReprocessingBusy || meetingReviewInit !== null}
+              >
+                {#each recentTranscriptions as run (run.path)}
+                  <option value={run.path}>
+                    {recentTranscriptions.filter(item => transcribeBaseName(item.path) === transcribeBaseName(run.path)).length > 1 ? run.path : transcribeBaseName(run.path)}
+                  </option>
+                {/each}
+              </select>
+              </div>
             {/if}
             <button class="secondary" onclick={() => void openSavedMeetingReview()} disabled={meetingReviewInit !== null} title="Reopen a meeting review you saved earlier — speaker names and corrections are kept">
               Open saved meeting...
@@ -3036,10 +3040,6 @@
     border-color: var(--accent);
   }
 
-  .transcription-progress {
-    width: 80%;
-  }
-
   .drop-zone-icon {
     font-size: 22px;
     line-height: 1;
@@ -3153,17 +3153,10 @@
     color: var(--accent);
   }
 
-  .popover-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.45);
-  }
+  .popover-card::backdrop { background: rgba(0, 0, 0, 0.45); }
 
   .popover-card {
+    margin: auto;
     width: 280px;
     max-width: calc(100vw - 48px);
     padding: 14px 16px;
@@ -3258,6 +3251,17 @@
     border-color: #eab308;
     color: #eab308;
   }
+
+  .rerun-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .rerun-controls button { flex: 0 0 auto; }
+  .rerun-controls select { flex: 1; min-width: 0; width: 0; }
 
   button.secondary.rerun-highlight:hover:not(:disabled) {
     border-color: #eab308;

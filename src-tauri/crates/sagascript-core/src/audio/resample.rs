@@ -31,6 +31,17 @@ pub fn resample_to_16khz_with_progress(
     source_rate: u32,
     on_progress: Option<&dyn Fn(f64)>,
 ) -> Result<Vec<f32>, String> {
+    resample_to_16khz_with_control(mono, source_rate, on_progress, &|| Ok(()))
+}
+
+/// Cancellation is checked before work and between every bounded resampler call.
+pub fn resample_to_16khz_with_control(
+    mono: Vec<f32>,
+    source_rate: u32,
+    on_progress: Option<&dyn Fn(f64)>,
+    checkpoint: &dyn Fn() -> Result<(), String>,
+) -> Result<Vec<f32>, String> {
+    checkpoint()?;
     if source_rate == TARGET_SAMPLE_RATE || mono.is_empty() {
         return Ok(mono);
     }
@@ -58,6 +69,7 @@ pub fn resample_to_16khz_with_progress(
     // Process full chunks (rubato maintains state between calls)
     let full_chunks = mono.len() / chunk_size;
     for i in 0..full_chunks {
+        checkpoint()?;
         let start = i * chunk_size;
         let chunk = vec![mono[start..start + chunk_size].to_vec()];
         let result = resampler
@@ -73,6 +85,7 @@ pub fn resample_to_16khz_with_progress(
 
     // Process remaining samples with process_partial (handles short final chunk + flush)
     let remaining_start = full_chunks * chunk_size;
+    checkpoint()?;
     if remaining_start < mono.len() {
         let remainder = vec![mono[remaining_start..].to_vec()];
         let result = resampler
@@ -86,6 +99,7 @@ pub fn resample_to_16khz_with_progress(
         output.extend_from_slice(&result[0]);
     }
 
+    checkpoint()?;
     Ok(output)
 }
 
@@ -181,6 +195,20 @@ mod tests {
     fn resample_empty_input() {
         let result = resample_to_16khz(vec![], 44_100).unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn cancellation_during_resampling_stops_before_processing_remaining_chunks() {
+        use std::cell::Cell;
+        let cancelled = Cell::new(false);
+        let reports = Cell::new(0);
+        let result = resample_to_16khz_with_control(
+            vec![0.25; 44_100], 44_100,
+            Some(&|_| { reports.set(reports.get() + 1); cancelled.set(true); }),
+            &|| if cancelled.get() { Err("cancelled in conversion".into()) } else { Ok(()) },
+        );
+        assert_eq!(result.unwrap_err(), "cancelled in conversion");
+        assert_eq!(reports.get(), 1);
     }
 
     #[test]

@@ -52,27 +52,22 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(settingsSource, /cancelPlainTranscription/);
   assert.match(settingsSource, /Stop transcription/);
   assert.match(settingsSource, /Transcription was cancelled/);
-  // #235: one-click re-run of the last file (paths in memory only, never
-  // persisted). The recent-files dropdown is gone (owner 2026-09-13); the
-  // drop-zone Re-run button covers the need with one click.
+  // Compact session-only history beside Re-run; selection never opens a picker.
   assert.match(settingsSource, /retryLastTranscription/);
-  assert.match(settingsSource, /Re-run \{transcribeBaseName\(lastTranscribeFile\)\}/);
+  assert.match(settingsSource, /rerun-controls/);
+  assert.match(settingsSource, /bind:value=\{selectedRerunPath\}/);
   assert.match(settingsSource, /rerun-highlight/);
   assert.doesNotMatch(settingsSource, /Recent files \(this session only/);
   assert.doesNotMatch(settingsSource, /Choose a recent file to re-run/);
   assert.doesNotMatch(settingsSource, /recentTranscribeFiles/);
   assert.doesNotMatch(settingsSource, /stagedTranscribeFile/);
   assert.doesNotMatch(settingsSource, /localStorage/);
-  // #237: progress leaves 0% immediately and floors while running.
-  assert.match(settingsSource, /displayTranscribeProgress\(event\.payload, transcribing, transcribePhase\)/);
-  assert.match(settingsSource, /transcriptionProgress = 1;/);
-  assert.match(settingsSource, /transcription-phase/);
-  assert.match(settingsSource, /transcription-decode/);
-  assert.match(settingsSource, /decodePct/);
-  assert.match(settingsSource, /Decoding audio…/);
-  assert.match(settingsSource, /Preparing…/);
-  assert.match(settingsSource, /Loading model…/);
-  assert.match(settingsSource, /transcribePhaseFloor\(transcribePhase\)/);
+  // Three-step presentation consumes the real stage callbacks.
+  assert.match(settingsSource, /plainStages = startStages\(\)/);
+  assert.match(settingsSource, /TranscriptionStages state=\{plainStages\}/);
+  assert.match(settingsSource, /plain-transcription-progress/);
+  assert.match(settingsSource, /acceptRunProgress\(plainStages, plainRunId, event.payload\)/);
+  assert.match(settingsSource, /finishStages\(plainStages, "completed"\)/);
   assert.match(settingsSource, /align-items: flex-start/);
   // #238: settings above the drop zone; result + Copy/Save… below it.
   assert.match(apiSource, /invoke\("save_transcription_text", \{ text, fileName, directory \}\)/);
@@ -96,9 +91,8 @@ test("diarized imports use the job API while ordinary imports keep transcribeFil
   assert.match(settingsSource, /who speaks when/);
   assert.match(settingsSource, /info-dot/);
   assert.match(settingsSource, /showDiarizeInfo/);
-  assert.match(settingsSource, /popover-backdrop/);
   assert.match(settingsSource, /popover-card/);
-  assert.match(settingsSource, /role="dialog"/);
+  assert.match(settingsSource, /diarizeDialog.showModal\(\)/);
   assert.doesNotMatch(settingsSource, /No profile keeps the selected language/);
 });
 

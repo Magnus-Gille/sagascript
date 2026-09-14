@@ -205,18 +205,19 @@ export async function getBuildInfo(): Promise<BuildInfo> {
 
 export async function transcribeFile(
   filePath: string,
-  options?: { prompt?: string; diarize?: boolean; profileId?: string }
+  options?: { prompt?: string; diarize?: boolean; profileId?: string; runId?: string }
 ): Promise<string> {
   return invoke("transcribe_file", {
     filePath,
     prompt: options?.prompt ?? null,
     diarize: options?.diarize ?? false,
     profileId: options?.profileId ?? null,
+    runId: options?.runId ?? null,
   });
 }
 
-export async function cancelFileTranscription(): Promise<void> {
-  return invoke("cancel_file_transcription");
+export async function cancelFileTranscription(runId: string): Promise<boolean> {
+  return invoke("cancel_file_transcription", { runId });
 }
 
 export async function saveTranscriptionText(

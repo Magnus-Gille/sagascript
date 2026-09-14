@@ -23,7 +23,7 @@ test("profile glossary API preserves the validated camelCase command payload", (
 });
 
 test("file transcription carries an optional profile without changing no-profile behavior", () => {
-  assert.match(apiSource, /options\?: \{ prompt\?: string; diarize\?: boolean; profileId\?: string \}/);
+  assert.match(apiSource, /options\?: \{ prompt\?: string; diarize\?: boolean; profileId\?: string; runId\?: string \}/);
   assert.match(apiSource, /profileId: options\?\.profileId \?\? null/);
   assert.match(settingsSource, /const profileId = selectedTranscribeProfile\(\)\?\.id/);
   assert.match(settingsSource, /profileId: profileId \?\? undefined/);

@@ -8,7 +8,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use tracing::info;
 
-use super::resample::{mix_to_mono, resample_to_16khz_with_progress};
+use super::resample::{mix_to_mono, resample_to_16khz_with_control};
 use crate::error::DictationError;
 
 /// Supported audio/video file extensions.
@@ -63,7 +63,7 @@ fn check_decode_size_cap(
 /// Uses symphonia to probe the file format, find the first audio track,
 /// decode all packets, then resample and mix to mono.
 pub fn decode_audio_file(path: &Path) -> Result<Vec<f32>, DictationError> {
-    decode_audio_file_inner(path, None, None)
+    decode_audio_file_inner(path, None, None, None)
 }
 
 /// Decode an audio or video file while checking a caller-owned cancellation or
@@ -73,7 +73,7 @@ pub fn decode_audio_file_with_control(
     path: &Path,
     checkpoint: &dyn Fn() -> Result<(), DictationError>,
 ) -> Result<Vec<f32>, DictationError> {
-    decode_audio_file_inner(path, Some(checkpoint), None)
+    decode_audio_file_inner(path, Some(checkpoint), None, None)
 }
 
 /// Measured decode fraction as a byte ratio (0–100): consumed audio-packet
@@ -98,7 +98,19 @@ pub fn decode_audio_file_with_progress(
     checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
     on_decode: Option<&dyn Fn(u8)>,
 ) -> Result<Vec<f32>, DictationError> {
-    decode_audio_file_inner(path, checkpoint, on_decode)
+    decode_audio_file_inner(path, checkpoint, on_decode, None)
+}
+
+/// Independent progress for packet decoding and PCM conversion. The conversion
+/// callback starts at zero before mixing and measures resampled input chunks.
+/// These are stage percentages, never percentages of the entire transcription.
+pub fn decode_audio_file_with_stage_progress(
+    path: &Path,
+    checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
+    on_decode: &dyn Fn(u8),
+    on_resample: &dyn Fn(u8),
+) -> Result<Vec<f32>, DictationError> {
+    decode_audio_file_inner(path, checkpoint, Some(on_decode), Some(on_resample))
 }
 
 const MAX_CONSECUTIVE_DECODE_ERRORS: usize = 64;
@@ -124,6 +136,7 @@ fn decode_audio_file_inner(
     path: &Path,
     checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
     on_decode: Option<&dyn Fn(u8)>,
+    on_resample: Option<&dyn Fn(u8)>,
 ) -> Result<Vec<f32>, DictationError> {
     if let Some(checkpoint) = checkpoint {
         checkpoint()?;
@@ -310,31 +323,38 @@ fn decode_audio_file_inner(
         sample_rate,
     );
 
-    // Mix to mono and resample. Resample dominates long files (measured ~96s
-    // on a 21min fixture), so its chunked 0.0–1.0 maps into 90–100 while the
-    // packet loop owns 0–~99. Monotonic against the loop via the shared
-    // last-reported cell; 100 snaps after resample completes.
+    // Packet decoding is complete. Reset the percentage for a separate stage:
+    // sharing last_decode_pct here suppresses conversion updates until 99%.
     if let Some(checkpoint) = checkpoint {
         checkpoint()?;
     }
+    if let Some(cb) = on_resample {
+        if total_bytes > 0 {
+            if let Some(decode) = on_decode { decode(100); }
+        }
+        cb(0);
+    }
     let mono = mix_to_mono(&all_samples, actual_channels);
-    let last_reported = std::cell::Cell::new(last_decode_pct);
-    let resample_cb = on_decode.map(|cb| {
+    let last_reported = std::cell::Cell::new(0u8);
+    let resample_cb = on_resample.map(|cb| {
         move |frac: f64| {
-            let pct = (90.0 + frac * 10.0).clamp(0.0, 100.0) as u8;
+            let pct = (frac * 100.0).clamp(0.0, 99.0) as u8;
             if pct > last_reported.get() {
                 last_reported.set(pct);
                 cb(pct);
             }
         }
     });
-    let resampled = resample_to_16khz_with_progress(
+    let resampled = resample_to_16khz_with_control(
         mono,
         sample_rate,
         resample_cb.as_ref().map(|f| f as &dyn Fn(f64)),
+        &|| checkpoint.map_or(Ok(()), |check| check().map_err(|error| error.to_string())),
     )
     .map_err(|e| DictationError::TranscriptionFailed(format!("Resample failed: {e}")))?;
-    if total_bytes > 0 {
+    if let Some(cb) = on_resample {
+        cb(100);
+    } else if total_bytes > 0 {
         if let Some(on_decode) = on_decode {
             on_decode(100);
         }
@@ -613,6 +633,33 @@ mod tests {
         // near the cap.
         let result = check_decode_size_cap(16_000, 1, 16_000);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn conversion_progress_is_not_suppressed_by_decode_reaching_99() {
+        use std::cell::RefCell;
+        let path = std::env::temp_dir().join(format!("sagascript-stages-{}.wav", uuid::Uuid::new_v4()));
+        let mut wav = crate::audio::wav::encode_wav(&vec![0.1; 88_200]);
+        wav[24..28].copy_from_slice(&44_100u32.to_le_bytes());
+        wav[28..32].copy_from_slice(&88_200u32.to_le_bytes());
+        std::fs::write(&path, wav).unwrap();
+        let events = RefCell::new(Vec::new());
+        let result = decode_audio_file_with_stage_progress(
+            &path, None,
+            &|pct| events.borrow_mut().push(("decoding", pct)),
+            &|pct| events.borrow_mut().push(("resampling", pct)),
+        );
+        std::fs::remove_file(path).unwrap();
+        assert!(!result.unwrap().is_empty());
+        let events = events.borrow();
+        let boundary = events.iter().position(|e| *e == ("resampling", 0)).unwrap();
+        assert_eq!(events[boundary - 1], ("decoding", 100));
+        assert!(events[..boundary].contains(&("decoding", 99)));
+        let conversion = &events[boundary..];
+        assert!(conversion.len() > 20, "must report during conversion, not just completion");
+        assert!(conversion.iter().any(|(_, pct)| (20..80).contains(pct)));
+        assert!(conversion.windows(2).all(|w| w[0].1 < w[1].1));
+        assert_eq!(conversion.last(), Some(&("resampling", 100)));
     }
 
     #[test]

@@ -225,10 +225,9 @@ accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
 available as fi-whisper-tiny.
 
-INTERRUPTION: Press Ctrl+C to abort the current file. Each CLI invocation \
-uses a fresh in-process model backend with no on-disk warm-state lock, so \
-interrupting one run never wedges the next — simply re-run the same command \
-to retry. Compare models/decoding on one file by re-running with --model / \
+INTERRUPTION: Press Ctrl+C to terminate the CLI invocation. A retry uses a \
+fresh in-process model backend with no on-disk warm-state lock. Re-run the \
+same command to retry. Compare models/decoding on one file with --model / \
 --beam variants (e.g. greedy vs beam).",
         after_long_help = "\
 EXAMPLES:
@@ -238,7 +237,7 @@ EXAMPLES:
   # Re-run the same file to retry after an interruption or error
   sagascript transcribe meeting.wav
 
-  # Model A/B on one file: greedy Base vs beam-search Medium
+  # Model A/B on one file: greedy Base vs beam-search Small
   sagascript transcribe talk.m4a --model kb-whisper-base --beam 0
   sagascript transcribe talk.m4a --model kb-whisper-small --beam 5
 
@@ -916,8 +915,8 @@ mod tests {
         assert!(help.contains("--beam"), "transcribe help should document --beam variants");
         assert!(help.contains("Ctrl+C"), "transcribe help should document interruption");
         assert!(
-            help.contains("never wedges the next"),
-            "transcribe help should state the next run stays working: {help}"
+            help.contains("fresh in-process model backend"),
+            "transcribe help should describe the fresh process: {help}"
         );
     }
 

@@ -56,8 +56,10 @@ test("retry needs a previous file and an idle UI", () => {
 });
 
 test("missing-file errors forget the remembered file gracefully", () => {
-  assert.equal(isMissingTranscribeFileError("No such file or directory"), true);
-  assert.equal(isMissingTranscribeFileError(new Error("ENOENT: open failed")), true);
+  assert.equal(isMissingTranscribeFileError("File decode error: Failed to open file: No such file or directory"), true);
+  assert.equal(isMissingTranscribeFileError(new Error("Failed to open file: ENOENT")), true);
+  assert.equal(isMissingTranscribeFileError("Model not found"), false);
+  assert.equal(isMissingTranscribeFileError("Failed to open file: Permission denied"), false);
   assert.equal(isMissingTranscribeFileError("Whisper inference failed: -6"), false);
 });
 
@@ -77,10 +79,12 @@ test("prep phases tick the floor upward until real progress takes over", () => {
   assert.equal(transcribePhaseFloor("decoding"), 1);
   assert.equal(transcribePhaseFloor("loading"), 3);
   assert.equal(transcribePhaseFloor("preparing"), 5);
+  assert.equal(transcribePhaseFloor("encoding"), 6);
   assert.equal(transcribePhaseFloor(null), 1);
   assert.equal(parseTranscribePhase("decoding"), "decoding");
   assert.equal(parseTranscribePhase("loading"), "loading");
   assert.equal(parseTranscribePhase("preparing"), "preparing");
+  assert.equal(parseTranscribePhase("encoding"), "encoding");
   assert.equal(parseTranscribePhase("transcribing"), null);
   assert.equal(parseTranscribePhase(null), null);
   assert.equal(parseTranscribePhase(42), null);

@@ -1,5 +1,4 @@
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tauri::State;
@@ -86,7 +85,7 @@ pub(crate) struct FileTranscriptionContext {
     pub(crate) language: Language,
     pub(crate) model: WhisperModel,
     pub(crate) glossary: Glossary,
-    options: TranscribeOptions,
+    pub(crate) options: TranscribeOptions,
 }
 
 /// Freeze language, model and dictionary together before file decoding begins.
@@ -357,15 +356,6 @@ pub type SharedController = Mutex<AppController>;
 /// Shared whisper backend — separate from AppController to avoid holding
 /// the controller lock during blocking transcription
 pub type SharedWhisper = Arc<WhisperBackend>;
-
-/// Per-run cancellation token for the plain `transcribe_file` decode stage.
-/// Blocking decode runs before the whisper state lock exists, so the shared
-/// whisper abort flag cannot represent it (a set flag may belong to an
-/// already-finished job and would instantly kill the next run's decode).
-/// The slot is (over)written at every plain run start; cancel sets the
-/// stored token when one is present. A stale set token is harmless — the
-/// next run overwrites the slot before its decode starts.
-pub type SharedPlainDecodeCancel = Mutex<Option<Arc<AtomicBool>>>;
 
 #[tauri::command]
 pub async fn get_active_hotkey_profile(
@@ -1060,7 +1050,7 @@ pub async fn transcribe_training_file(
         whisper_ref.with_model(effective_model, ContextProfile::FlashAttention, |backend| {
             backend.transcribe_sync_with_options(&audio, language, &opts, move |progress| {
                 let _ = progress_app.emit("transcription-progress", progress);
-            })
+            }, None)
         })
     });
 
@@ -2021,24 +2011,14 @@ pub async fn set_vad_enabled(
 // -- File transcription --
 
 /// User-requested abort for the plain (non-diarized) `transcribe_file` path
-/// (#234). Signals the shared Whisper backend to stop at the next compute
-/// step — the same real-abort mechanism as the timeout path — so the blocking
-/// task exits, discards its warm state, and releases the lock for the next
-/// run. Safe to call when idle: a stale flag is cleared by the next lock
-/// holder (`with_warm_state_grace`), never wedging future transcriptions.
+/// (#234). Only the identified run's exclusively leased backend is signalled.
+/// Stale or idle requests return false without touching live dictation.
 #[tauri::command]
 pub async fn cancel_file_transcription(
-    whisper: State<'_, SharedWhisper>,
-    decode_cancel: State<'_, SharedPlainDecodeCancel>,
-) -> Result<(), String> {
-    // Stop a decode in flight, if any. Inference (when running) is stopped
-    // via the whisper abort flag below; decode runs before the state lock
-    // exists, so it needs its own per-run token.
-    if let Some(token) = decode_cancel.lock().unwrap().as_ref() {
-        token.store(true, Ordering::SeqCst);
-    }
-    whisper.request_abort();
-    Ok(())
+    jobs: State<'_, crate::plain_file_jobs::SharedPlainFileJobs>,
+    run_id: String,
+) -> Result<bool, String> {
+    Ok(jobs.cancel(&run_id))
 }
 
 /// Copy a finished plain transcription to the clipboard (#238). Plain
@@ -2093,7 +2073,10 @@ pub async fn save_transcription_text(
         let path = selected
             .into_path()
             .map_err(|error| format!("Choose a local file: {error}"))?;
-        crate::meeting_jobs::write_new_export(&path, text.as_bytes())?;
+        crate::meeting_jobs::write_new_export(&path, text.as_bytes()).map_err(|error| {
+            if path.exists() { "Choose a new file name — existing files are never overwritten.".to_string() }
+            else { error }
+        })?;
         Ok(true)
     })
     .await
@@ -2139,89 +2122,52 @@ pub async fn transcribe_file(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
-    decode_cancel: State<'_, SharedPlainDecodeCancel>,
+    jobs: State<'_, crate::plain_file_jobs::SharedPlainFileJobs>,
     file_path: String,
     prompt: Option<String>,
     diarize: Option<bool>,
     profile_id: Option<String>,
+    run_id: Option<String>,
 ) -> Result<String, String> {
     use tauri::Emitter;
 
-    let FileTranscriptionContext {
-        language,
-        model: effective_model,
-        glossary,
-        options: mut opts,
-    } = {
+    let context = {
         let ctrl = controller.lock().unwrap();
         file_transcription_context(ctrl.settings(), profile_id.as_deref(), prompt.as_deref())?
     };
 
+    if !diarize.unwrap_or(false) {
+        let text = crate::plain_file_jobs::transcribe(
+            app.clone(), jobs.inner().clone(), run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            file_path, context,
+        ).await?;
+        if controller.lock().unwrap().settings().auto_paste {
+            let paste_text = text.clone();
+            app.run_on_main_thread(move || {
+                if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
+                    error!(%error, "Auto-paste failed");
+                }
+            }).map_err(|error| format!("Could not dispatch auto-paste: {error}"))?;
+        }
+        return Ok(text);
+    }
+    let FileTranscriptionContext { language, model: effective_model, glossary, options: mut opts } = context;
+
     let path = std::path::PathBuf::from(&file_path);
 
-    // Decode audio file with honest byte-fraction progress (#237) on a
-    // dedicated event. Unlike inference percentages this is an I/O fraction,
-    // not a time fraction — and unlike the old static 1% it always moves.
-    // Decode is cancellable via this run's token and bounded by a
-    // size-scaled timeout; both previously silent forever.
-    let _ = app.emit(crate::events::event::TRANSCRIPTION_PHASE, "decoding");
-    let decode_token = Arc::new(AtomicBool::new(false));
-    *decode_cancel.lock().unwrap() = Some(decode_token.clone());
-    let file_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    // ~2s per MB, clamped to [2min, 30min]: generous for slow machines,
-    // finite for pathological inputs.
-    let decode_timeout = Duration::from_secs((file_len / 500_000).clamp(120, 1_800));
-    let decode_app = app.clone();
-    let mut decode_fut = tokio::task::spawn_blocking(move || {
-        let checkpoint = {
-            let token = decode_token.clone();
-            move || {
-                if token.load(Ordering::SeqCst) {
-                    return Err(sagascript_core::error::DictationError::TranscriptionFailed(
-                        "Transcription cancelled.".to_string(),
-                    ));
-                }
-                Ok(())
-            }
-        };
-        decoder::decode_audio_file_with_progress(
-            &path,
-            Some(&checkpoint),
-            Some(&|pct| {
-                let _ = decode_app.emit(crate::events::event::TRANSCRIPTION_DECODE, pct);
-            }),
-        )
-    });
-    let audio = match tokio::time::timeout(decode_timeout, &mut decode_fut).await {
-        Ok(Ok(audio)) => audio.map_err(|e| e.to_string())?,
-        Ok(Err(e)) => return Err(format!("Decode task failed: {e}")),
-        Err(_) => {
-            warn!(
-                "File decode timed out after {}s — requesting abort",
-                decode_timeout.as_secs()
-            );
-            // Abort via the run's decode token only. Deliberately NOT
-            // whisper.request_abort() here: no inference holds the state
-            // lock, and the shared flag could belong to a concurrent
-            // dictation that must not be disturbed.
-            if let Some(token) = decode_cancel.lock().unwrap().as_ref() {
-                token.store(true, Ordering::SeqCst);
-            }
-            match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut decode_fut).await
-            {
-                Ok(_) => info!("Aborted decode task exited"),
-                Err(_) => error!(
-                    "Decode task still running {ABORT_GRACE_SECS}s after abort — \
-                     further transcriptions will report ModelBusy rather than block forever"
-                ),
-            }
-            let _ = app.emit(crate::events::event::STATE_CHANGED, "idle");
-            return Err(format!(
-                "Decoding timed out after {}s (decode aborted)",
-                decode_timeout.as_secs()
-            ));
-        }
-    };
+    // Suppress unused-variable warning on `diarize` when the diarization feature is off
+    #[cfg(not(feature = "diarization"))]
+    let _ = &diarize;
+
+    #[cfg(feature = "diarization")]
+    let context_profile = ContextProfile::for_diarization(diarize.unwrap_or(false));
+    #[cfg(not(feature = "diarization"))]
+    let context_profile = ContextProfile::FlashAttention;
+
+    // Legacy diarized command path. The GUI uses the meeting-job API instead.
+    let audio = tokio::task::spawn_blocking(move || decoder::decode_audio_file(&path))
+        .await.map_err(|error| format!("Decode task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
 
     if audio.is_empty() {
         return Err("No audio decoded from file".to_string());
@@ -2232,15 +2178,6 @@ pub async fn transcribe_file(
     // the short live-dictation timeout (which beam search could otherwise hit).
     let file_timeout =
         Duration::from_secs(((audio.len() / 16_000) as u64 * 6).max(TRANSCRIPTION_TIMEOUT_SECS));
-
-    // Suppress unused-variable warning on `diarize` when the diarization feature is off
-    #[cfg(not(feature = "diarization"))]
-    let _ = &diarize;
-
-    #[cfg(feature = "diarization")]
-    let context_profile = ContextProfile::for_diarization(diarize.unwrap_or(false));
-    #[cfg(not(feature = "diarization"))]
-    let context_profile = ContextProfile::FlashAttention;
 
     // Show model loading status if the exact model/profile runtime is not warm.
     if whisper.needs_reload_with_profile(effective_model, context_profile) {
@@ -2406,11 +2343,21 @@ pub async fn transcribe_file(
     let mut fut = tokio::task::spawn_blocking(move || {
         // State prep (lock, chunk states) is silent work before the first
         // progress callback — name it so the UI never shows a frozen 1%.
-        let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PHASE, "preparing");
+        let phase = if whisper_ref.needs_reload_with_profile(effective_model, context_profile) {
+            "loading"
+        } else {
+            "preparing"
+        };
+        let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PHASE, phase);
         whisper_ref.with_model(effective_model, context_profile, |backend| {
+            let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PHASE, "preparing");
+            let encode_app = app_progress.clone();
+            let on_encode_start = move || {
+                let _ = encode_app.emit(crate::events::event::TRANSCRIPTION_PHASE, "encoding");
+            };
             backend.transcribe_sync_with_options(&audio, language, &opts, move |pct| {
                 let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
-            })
+            }, Some(&on_encode_start))
         })
     });
 

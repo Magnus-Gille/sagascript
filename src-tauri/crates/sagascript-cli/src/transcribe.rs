@@ -14,8 +14,6 @@ use sha2::{Digest, Sha256};
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-#[cfg(feature = "diarization")]
-use sagascript_core::audio::decoder::decode_audio_file_with_control;
 use sagascript_core::audio::decoder::SUPPORTED_EXTENSIONS;
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizedSegment;
@@ -41,6 +39,10 @@ use sagascript_core::transcription::{
 
 #[derive(Args)]
 pub struct TranscribeArgs {
+    /// Emit JSON progress events on stderr even without a terminal. Percent is
+    /// local to the named stage; stdout remains the transcript output.
+    #[arg(long)]
+    pub progress_json: bool,
     /// Audio/video files or directories to transcribe. Directories include
     /// supported files in deterministic filename order.
     #[arg(required = true, value_name = "INPUT")]
@@ -640,6 +642,7 @@ fn transcribe_meeting_file_inner(
     cache_policy: CachePolicy,
 ) -> Result<MeetingTranscript, DictationError> {
     let args = TranscribeArgs {
+        progress_json: false,
         files: vec![file.to_path_buf()],
         recursive: false,
         language: Some(language.whisper_code().unwrap_or("auto").to_string()),
@@ -889,6 +892,28 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     Ok(())
 }
 
+fn progress_step(phase: &str) -> Option<u8> {
+    match phase {
+        "decoding" => Some(1),
+        "resampling" | "loading" | "language_detection" | "preparing" | "encoding" => Some(2),
+        "transcribing" | "finalizing" | "completed" => Some(3),
+        _ => None,
+    }
+}
+
+fn emit_progress(enabled: bool, started: Instant, phase: &str, percent: Option<u8>) {
+    if enabled {
+        eprintln!("{}", serde_json::json!({
+            "event": "transcription_progress",
+            "phase": phase,
+            "step": progress_step(phase),
+            "steps_total": 3,
+            "percent": percent,
+            "elapsed_ms": started.elapsed().as_millis(),
+        }));
+    }
+}
+
 fn emit_jsonl_item(item: &BatchItem) -> Result<(), DictationError> {
     println!(
         "{}",
@@ -1089,32 +1114,24 @@ fn transcribe_file(
             );
             pb
         });
-        let decode_progress = decode_bar.as_ref().map(|pb| {
-            let pb = pb.clone();
-            move |pct: u8| {
-                pb.set_position(pct.min(100) as u64);
-            }
-        });
-        let on_decode = decode_progress.as_ref().map(|f| f as &dyn Fn(u8));
-        #[cfg(feature = "diarization")]
-        let audio = if args.meeting_json {
-            let checkpoint = || meeting_check(control);
-            match on_decode {
-                Some(progress) => sagascript_core::audio::decoder::decode_audio_file_with_progress(
-                    file,
-                    Some(&checkpoint),
-                    Some(progress),
-                )?,
-                None => decode_audio_file_with_control(file, &checkpoint)?,
-            }
-        } else {
-            sagascript_core::audio::decoder::decode_audio_file_with_progress(
-                file, None, on_decode,
-            )?
+        let on_decode = |pct: u8| {
+            emit_progress(args.progress_json, file_started, "decoding", Some(pct));
+            if let Some(pb) = &decode_bar { pb.set_position(pct as u64); }
         };
-        #[cfg(not(feature = "diarization"))]
-        let audio =
-            sagascript_core::audio::decoder::decode_audio_file_with_progress(file, None, on_decode)?;
+        let on_resample = |pct: u8| {
+            emit_progress(args.progress_json, file_started, "resampling", Some(pct));
+            if let Some(pb) = &decode_bar {
+                if pct == 0 {
+                    pb.set_style(ProgressStyle::with_template("  Resampling [{bar:40}] {pos}%").unwrap());
+                }
+                pb.set_position(pct as u64);
+            }
+        };
+        let checkpoint = || control.map_or(Ok(()), |control| control.check());
+        on_decode(0);
+        let audio = sagascript_core::audio::decoder::decode_audio_file_with_stage_progress(
+            file, Some(&checkpoint), &on_decode, &on_resample,
+        )?;
         if let Some(pb) = decode_bar {
             pb.finish_and_clear();
         }
@@ -1161,8 +1178,10 @@ fn transcribe_file(
             let context_profile = ContextProfile::for_diarization(args.diarize);
             #[cfg(not(feature = "diarization"))]
             let context_profile = ContextProfile::FlashAttention;
+            emit_progress(args.progress_json, file_started, "loading", None);
             let model_load_seconds =
                 ensure_model_loaded(backend, model, context_profile, model_loaded)?;
+            emit_progress(args.progress_json, file_started, "language_detection", None);
             let language_detection_started = Instant::now();
             let audio = audio.as_deref().expect("cache misses decode audio");
             let detected_language = match detect_file_language(backend, audio, model) {
@@ -1482,6 +1501,15 @@ fn transcribe_file(
     // "Preparing" narration (GUI parity, #237): lock acquisition plus
     // parallel-state creation are silent multi-second work on first use.
     eprintln!("Preparing Whisper states...");
+    // "Encoding" narration (GUI parity, #237): fires when compute resources
+    // are held and mel/encoder work begins — the silent window before the
+    // first Transcribing-bar update.
+    emit_progress(args.progress_json, file_started, "preparing", None);
+    let progress_json = args.progress_json;
+    let on_encode_start = || {
+        eprintln!("Encoding audio...");
+        emit_progress(progress_json, file_started, "encoding", None);
+    };
     let mut segments = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap());
@@ -1489,13 +1517,17 @@ fn transcribe_file(
         let segments =
             backend.transcribe_sync_with_options_segments(&audio, language, &opts, move |pct| {
                 crate::set_transcription_progress(&pb_cb, pct);
-            })?;
+                if pct > 1 { emit_progress(progress_json, file_started, "transcribing", Some(pct.clamp(0, 100) as u8)); }
+            }, Some(&on_encode_start))?;
         pb.finish_and_clear();
         segments
     } else {
         eprintln!("Transcribing...");
-        backend.transcribe_sync_with_options_segments(&audio, language, &opts, |_| {})?
+        backend.transcribe_sync_with_options_segments(&audio, language, &opts, move |pct| {
+            if pct > 1 { emit_progress(progress_json, file_started, "transcribing", Some(pct.clamp(0, 100) as u8)); }
+        }, Some(&on_encode_start))?
     };
+    emit_progress(args.progress_json, file_started, "finalizing", None);
     let mut corrections = apply_glossary_corrections(&mut segments, glossary);
     if args.correct_hints {
         corrections.extend(apply_hint_corrections(&mut segments, correction_vocabulary));
@@ -1554,6 +1586,7 @@ fn transcribe_file(
         "vocabulary_corrections": corrections,
     });
 
+    emit_progress(args.progress_json, file_started, "completed", Some(100));
     Ok(FileTranscription {
         json,
         plain: text,
