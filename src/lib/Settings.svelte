@@ -1500,6 +1500,31 @@
           </div>
         </div>
 
+        <div class="transcribe-options">
+          {#if selectedTranscribeProfile()}
+            <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
+          {/if}
+          <div class="diarize-row"><label class="diarize-option">
+            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
+            Speaker diarization
+          </label>
+          <button class="info-dot" bind:this={diarizeInfoButton} aria-label="What is speaker diarization?"
+            aria-expanded={showDiarizeInfo} onclick={() => { showDiarizeInfo = !showDiarizeInfo; }}>?</button></div>
+          {#if showDiarizeInfo}
+            <dialog bind:this={diarizeDialog} class="popover-card" aria-label="What is speaker diarization?"
+              oncancel={closeDiarizeInfo} onclose={closeDiarizeInfo}>
+              <h3>Speaker diarization</h3>
+              <p>Detects <strong>who speaks when</strong> and labels each part of the transcript — [Speaker 1], [Speaker 2], …</p>
+              <p>Slower than plain transcription, and needs the diarization models (downloaded once).</p>
+              <p>Leave it off for a plain transcript.</p>
+              <button class="secondary" onclick={closeDiarizeInfo}>Close</button>
+            </dialog>
+          {/if}
+          <textarea class="prompt-input" aria-label="Extra context for this file"
+            placeholder="Extra context, e.g. names to listen for: Astrid, Grimnir (optional)"
+            bind:value={transcribePrompt} rows="2" disabled={transcribing}></textarea>
+        </div>
+
         <div
           class="drop-zone"
           class:drag-over={dragOver}
@@ -1530,38 +1555,6 @@
 
         <div class="formats-hint">
           Supported: {supportedFormats.map(f => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
-        </div>
-
-        <div class="transcribe-options">
-          {#if selectedTranscribeProfile()}
-            <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
-          {:else}
-            <div class="hotkey-hint">No profile keeps the selected language and global hint context.</div>
-          {/if}
-          <div class="diarize-row"><label class="diarize-option">
-            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
-            Speaker diarization
-          </label>
-          <button class="info-dot" bind:this={diarizeInfoButton} aria-label="What is speaker diarization?"
-            aria-expanded={showDiarizeInfo} onclick={() => { showDiarizeInfo = !showDiarizeInfo; }}>?</button></div>
-          {#if showDiarizeInfo}
-            <dialog bind:this={diarizeDialog} class="popover-card" aria-label="What is speaker diarization?"
-              oncancel={closeDiarizeInfo} onclose={closeDiarizeInfo}>
-              <h3>Speaker diarization</h3>
-              <p>Detects <strong>who speaks when</strong> and labels each part of the transcript — [Speaker 1], [Speaker 2], …</p>
-              <p>Slower than plain transcription, and needs the diarization models (downloaded once).</p>
-              <p>Leave it off for a plain transcript.</p>
-              <button class="secondary" onclick={closeDiarizeInfo}>Close</button>
-            </dialog>
-          {/if}
-          <textarea
-            class="prompt-input"
-            aria-label="Extra context for this file"
-            placeholder="Extra context, e.g. names to listen for: Astrid, Grimnir (optional)"
-            bind:value={transcribePrompt}
-            rows="2"
-            disabled={transcribing}
-          ></textarea>
         </div>
 
         {#if fileJobs.length}
@@ -2522,7 +2515,8 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    margin-top: 14px;
+    margin-top: 0;
+    margin-bottom: 8px;
   }
 
   .diarize-option {

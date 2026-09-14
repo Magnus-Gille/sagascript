@@ -2186,6 +2186,7 @@ pub async fn transcribe_file(
     diarize: Option<bool>,
     profile_id: Option<String>,
     run_id: Option<String>,
+    auto_paste: Option<bool>,
 ) -> Result<String, String> {
     use tauri::Emitter;
 
@@ -2199,7 +2200,7 @@ pub async fn transcribe_file(
             app.clone(), jobs.inner().clone(), run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             file_path, context,
         ).await?;
-        if controller.lock().unwrap().settings().auto_paste {
+        if auto_paste.unwrap_or(true) && controller.lock().unwrap().settings().auto_paste {
             let paste_text = text.clone();
             app.run_on_main_thread(move || {
                 if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
@@ -2369,7 +2370,7 @@ pub async fn transcribe_file(
         // Auto-paste if enabled
         let should_paste = {
             let c = controller.lock().unwrap();
-            c.settings().auto_paste
+            auto_paste.unwrap_or(true) && c.settings().auto_paste
         };
         if should_paste {
             let text_for_paste = text.clone();
@@ -2460,7 +2461,7 @@ pub async fn transcribe_file(
             // Auto-paste if enabled
             let should_paste = {
                 let c = controller.lock().unwrap();
-                c.settings().auto_paste
+                auto_paste.unwrap_or(true) && c.settings().auto_paste
             };
 
             if should_paste {

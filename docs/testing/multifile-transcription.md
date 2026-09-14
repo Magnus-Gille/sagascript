@@ -7,6 +7,11 @@ holds the queue until Retry status check retrieves a terminal state; cancellatio
 also waits for the terminal snapshot. Results are session-only, with no automatic
 transcript writes.
 
+Queued GUI imports also disable auto-paste: use Copy or Save explicitly. Live
+dictation keeps its existing auto-paste preference. File-specific profile,
+context and diarization choices are captured; model/language/dictionary settings
+are resolved when a job starts, not frozen for the whole queue.
+
 Run `npm run test:frontend` and `npm run check` for queue helpers, existing review
 and reprocessing regressions, and Svelte diagnostics.
 
@@ -31,8 +36,8 @@ file-picker parity, serialized diarized jobs, polling retry, cancellation, and i
 unsaved meeting drafts across both kinds of tab navigation. Completed reviews stay
 editable during later transcriptions; appending while busy keeps the selected tab. No real audio,
 models, native file picker, permissions, or installed application are used.
-Screenshots are written to `/private/tmp/sagascript-242-results.png` and
-`/private/tmp/sagascript-242-meetings.png` on the macOS developer host.
+Screenshots are written to `dist/sagascript-242-results.png` and
+`dist/sagascript-242-meetings.png` in the worktree.
 
 Native acceptance: in a signed test build, drop three supported audio files,
 check the three results against their source files, and repeat with speaker

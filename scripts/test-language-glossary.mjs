@@ -25,6 +25,7 @@ test("profile glossary API preserves the validated camelCase command payload", (
 test("file transcription carries an optional profile without changing no-profile behavior", () => {
   assert.match(apiSource, /options\?: \{ prompt\?: string; diarize\?: boolean; profileId\?: string; runId\?: string \}/);
   assert.match(apiSource, /profileId: options\?\.profileId \?\? null/);
+  assert.match(apiSource, /invoke\("transcribe_file", \{[^}]*autoPaste: false/s, "queued file imports must use explicit Copy, never auto-paste");
   assert.match(settingsSource, /createFileJobs\(paths, \{[\s\S]*diarize: transcribeDiarize/);
   assert.match(settingsSource, /prompt: transcribePrompt\.trim\(\) \|\| null/);
   assert.match(settingsSource, /profileId: selectedTranscribeProfile\(\)\?\.id \?\? null/);

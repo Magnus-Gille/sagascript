@@ -51,7 +51,7 @@ mockIPC(async (cmd, args = {}) => {
       return new Promise((resolve, reject) => pending.set(args.filePath, { resolve, reject, runId: args.runId }));
     // Deliberately keep the native result pending: Stop is a request, not a
     // terminal status, and finish() may still produce authoritative success.
-    case "cancel_file_transcription": return [...pending.values()].some(task => task.runId === args.runId);
+    case "cancel_file_transcription": return false; // completion won the Stop race in this scenario
     case "save_transcription_text": return true;
     case "copy_transcription_text": return null;
     case "begin_meeting_file": {

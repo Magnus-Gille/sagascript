@@ -213,6 +213,9 @@ export async function transcribeFile(
     diarize: options?.diarize ?? false,
     profileId: options?.profileId ?? null,
     runId: options?.runId ?? null,
+    // File imports have explicit Copy/Save actions. A queued completion must
+    // not paste into another file's review draft or another application.
+    autoPaste: false,
   });
 }
 

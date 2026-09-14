@@ -20,6 +20,10 @@ async function meeting(path, state = "completed") { await page.evaluate(([path, 
 try {
   await page.goto(url);
   await page.getByRole("button", { name: "Open Files...", exact: true }).waitFor();
+  const optionsBox = await page.locator('.transcribe-options').boundingBox();
+  const dropBox = await page.locator('.drop-zone').boundingBox();
+  assert.ok(optionsBox.y + optionsBox.height + 7 <= dropBox.y, 'settings must stay above the drop zone with spacing');
+  assert.equal(await page.getByText('No profile keeps the selected language and global hint context.', { exact: true }).count(), 0);
   await drop(["/fixtures/one.wav", "/fixtures/two.wav", "/fixtures/three.wav"]);
   await waitStatus("one.wav", "running");
   await waitStatus("two.wav", "queued");
@@ -105,6 +109,7 @@ try {
   assert.equal(await page.evaluate(() => window.qa.maximum()), 1, "transcriptions must never overlap");
   const paths = await page.evaluate(() => window.qa.calls.filter(call => ["transcribe_file", "begin_meeting_file"].includes(call.cmd)).map(call => call.args.filePath));
   assert.deepEqual(paths, ["/fixtures/one.wav", "/fixtures/two.wav", "/fixtures/three.wav", "/fixtures/four.wav", "/fixtures/picked.wav", "/fixtures/meeting-one.wav", "/fixtures/meeting-two.wav", "/fixtures/meeting-three.wav", "/fixtures/meeting-cancel.wav", "/fixtures/meeting-after.wav"]);
+  assert.equal(await page.evaluate(() => window.qa.calls.filter(call => call.cmd === 'transcribe_file').every(call => call.args.autoPaste === false)), true);
   // Polish must remain per-file after extraction: a recent selection cannot
   // change Save's source, and re-run queues alongside the retained review.
   await status("one.wav", "completed").click();
