@@ -441,7 +441,7 @@ fn set_language_for_controller(
     language: Language,
 ) -> Result<(), String> {
     let persisted = sagascript_core::settings::store::try_update(|settings| {
-        settings.set_legacy_language(language)
+        apply_language_selection(settings, language)
     })?;
     let mut ctrl = controller.lock().unwrap();
     ctrl.update_settings(persisted.clone());
@@ -449,6 +449,64 @@ fn set_language_for_controller(
     crate::update_profiles_menu(app, &persisted.resolved_hotkey_profiles());
     info!("Language set to {:?}", language);
     Ok(())
+}
+
+// Keep profile/dictionary validation ahead of all preset mutations.
+fn apply_language_selection(settings: &mut Settings, language: Language) -> Result<(), String> {
+    settings.set_legacy_language(language)?;
+    settings.whisper_model = WhisperModel::recommended(language);
+    settings.auto_select_model = true;
+    Ok(())
+}
+
+#[cfg(test)]
+mod language_selection_tests {
+    use super::apply_language_selection;
+    use sagascript_core::settings::{Language, Settings, WhisperModel};
+
+    #[test]
+    fn explicit_language_selection_restores_recommended_model() {
+        for language in [
+            Language::English,
+            Language::Swedish,
+            Language::Norwegian,
+            Language::Finnish,
+            Language::Auto,
+        ] {
+            let mut settings = Settings {
+                whisper_model: WhisperModel::Small,
+                auto_select_model: false,
+                ..Default::default()
+            };
+            apply_language_selection(&mut settings, language).unwrap();
+            assert_eq!(settings.language, language);
+            assert_eq!(settings.whisper_model, WhisperModel::recommended(language));
+            assert_eq!(
+                settings.effective_model(),
+                WhisperModel::recommended(language)
+            );
+            assert!(settings.auto_select_model);
+        }
+    }
+
+    #[test]
+    fn rejected_language_change_preserves_model_and_dictionary() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            whisper_model: WhisperModel::KbWhisperSmall,
+            auto_select_model: false,
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".into(), "merge = merch".into());
+        let error = apply_language_selection(&mut settings, Language::English).unwrap_err();
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, Language::Swedish);
+        assert_eq!(settings.whisper_model, WhisperModel::KbWhisperSmall);
+        assert!(!settings.auto_select_model);
+        assert_eq!(settings.profile_glossaries["default"], "merge = merch");
+    }
 }
 
 #[tauri::command]
@@ -820,7 +878,7 @@ fn gui_start_recording_result(
     match result {
         Ok(true) => Ok(()),
         Ok(false) => Err(
-            "Cannot start recording while Sagascript is busy. Wait for the current transcription to finish."
+            "Cannot start recording while Sagascript is busy. Stop the current recording or wait for transcription to finish."
                 .to_string(),
         ),
         Err(error) => Err(error.to_string()),
@@ -836,7 +894,7 @@ mod gui_recording_tests {
         let error = gui_start_recording_result(Ok(false)).unwrap_err();
 
         assert!(error.contains("busy"));
-        assert!(error.contains("current transcription"));
+        assert!(error.contains("current recording"));
     }
 }
 
