@@ -34,6 +34,7 @@ secrets/
 # Test / benchmark outputs
 *.xcresult
 benchmark/audio/
+scripts/dictation_eval/__pycache__/
 
 # Diarization benchmark — audio binaries (gitignored; fetch with test-audio/diarization/fetch.sh)
 # Ground truth (.rttm, .stm, .json, .txt) and fetch.sh ARE committed.

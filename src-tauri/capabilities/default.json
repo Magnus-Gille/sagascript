@@ -9,6 +9,7 @@
     "dialog:allow-open",
     "core:event:allow-listen",
     "core:webview:allow-webview-position",
-    "core:window:default"
+    "core:window:default",
+    "core:window:allow-hide"
   ]
 }

@@ -9,7 +9,7 @@ use crate::hotkey::HotkeyService;
 use crate::logging::LoggingService;
 use crate::logging::log_events;
 use crate::paste::PasteService;
-use sagascript_core::settings::{HotkeyMode, Settings};
+use sagascript_core::settings::{canonical_hotkey, HotkeyMode, HotkeyProfile, Settings};
 
 /// Result of handling a hotkey-down event
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +74,20 @@ pub struct AppController {
     last_transcription: Option<String>,
     last_error: Option<String>,
     model_ready: bool,
+    active_hotkey_profile: Option<HotkeyProfile>,
+    active_hotkey_mode: Option<HotkeyMode>,
+    /// Canonical shortcut that initiated the active recording.  The profile's
+    /// legacy shortcut is not sufficient once one profile may expose both a
+    /// PTT and a toggle binding.
+    active_hotkey_shortcut: Option<String>,
+    toggle_stop_requested: bool,
+    toggle_key_down: bool,
+    recording_generation: u64,
+    hotkey_configuration_changing: bool,
+    training_recording: bool,
+    session_data: Option<serde_json::Value>,
+    release_started: Option<Instant>,
+    meeting_job: Option<String>,
 }
 
 impl AppController {
@@ -99,11 +113,42 @@ impl AppController {
             last_transcription: None,
             last_error: None,
             model_ready: false,
+            active_hotkey_profile: None,
+            active_hotkey_mode: None,
+            active_hotkey_shortcut: None,
+            toggle_stop_requested: false,
+            toggle_key_down: false,
+            recording_generation: 0,
+            hotkey_configuration_changing: false,
+            training_recording: false,
+            session_data: None,
+            release_started: None,
+            meeting_job: None,
         }
     }
 
     pub fn state(&self) -> AppState {
         self.state
+    }
+
+    /// Reserve the live-capture boundary while a separate file backend works.
+    /// Only the matching worker may release it, after native work has unwound.
+    pub fn begin_meeting_job(&mut self, id: &str) -> bool {
+        if self.state != AppState::Idle || self.meeting_job.is_some() {
+            return false;
+        }
+        self.meeting_job = Some(id.to_owned());
+        self.state = AppState::Transcribing;
+        true
+    }
+
+    pub fn finish_meeting_job(&mut self, id: &str) -> bool {
+        if self.meeting_job.as_deref() != Some(id) {
+            return false;
+        }
+        self.meeting_job = None;
+        self.state = AppState::Idle;
+        true
     }
 
     pub fn settings(&self) -> &Settings {
@@ -131,31 +176,97 @@ impl AppController {
     }
 
     pub fn language(&self) -> sagascript_core::settings::Language {
-        self.settings.language
+        self.active_hotkey_profile
+            .as_ref()
+            .map(|profile| profile.language)
+            .unwrap_or(self.settings.language)
+    }
+
+    pub fn active_hotkey_profile(&self) -> Option<&HotkeyProfile> {
+        self.active_hotkey_profile.as_ref()
     }
 
     /// Handle hotkey down event
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn handle_hotkey_down(&mut self) -> Result<HotkeyDownResult, DictationError> {
+        let profile = self
+            .settings
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .find(|profile| profile.id == "default")
+            .or_else(|| self.settings.resolved_hotkey_profiles().into_iter().next())
+            .expect("resolved profiles always contains at least one profile");
+        self.handle_hotkey_down_for_profile(profile)
+    }
+
+    pub fn handle_hotkey_down_for_profile(
+        &mut self,
+        profile: HotkeyProfile,
+    ) -> Result<HotkeyDownResult, DictationError> {
+        let mode = self.session_hotkey_mode();
+        let shortcut = profile.shortcut.clone();
+        self.handle_hotkey_down_for_binding(profile, mode, &shortcut)
+    }
+
+    /// Handle a press for a resolved per-shortcut binding.
+    ///
+    /// The mode is deliberately supplied by the binding instead of read from
+    /// current settings.  This lets one profile expose both PTT and toggle
+    /// shortcuts, and freezes the initiating mode/shortcut for the recording's
+    /// lifetime.  A toggle stop is accepted only for the same profile and the
+    /// same initiating toggle shortcut; a PTT binding can never stop it.
+    pub fn handle_hotkey_down_for_binding(
+        &mut self,
+        profile: HotkeyProfile,
+        mode: HotkeyMode,
+        shortcut: &str,
+    ) -> Result<HotkeyDownResult, DictationError> {
         info!("Hotkey DOWN");
 
-        match self.settings.hotkey_mode {
+        match mode {
             HotkeyMode::PushToTalk => {
                 // Only report StartedRecording if we actually started. Holding
                 // PTT while a prior utterance is still Transcribing must be a
                 // no-op — otherwise the overlay/tray shows a recording that
                 // never happened and never hides (finding 1).
-                if self.start_recording()? {
+                if self.start_recording_for_binding(profile, mode, shortcut)? {
                     Ok(HotkeyDownResult::StartedRecording)
                 } else {
                     Ok(HotkeyDownResult::NoOp)
                 }
             }
             HotkeyMode::Toggle => {
-                if self.state.is_recording() {
+                // Keep the no-argument test/compatibility helper's legacy
+                // behavior when it models a recording without the frozen
+                // binding metadata that real starts always populate.
+                let legacy_toggle_recording = self.active_hotkey_mode.is_none()
+                    && self.active_hotkey_profile.is_none()
+                    && self.active_hotkey_shortcut.is_none();
+                if self.state.is_recording()
+                    && !self.training_recording
+                    && (self.active_hotkey_mode == Some(HotkeyMode::Toggle)
+                        || legacy_toggle_recording)
+                    && !self.toggle_stop_requested
+                    && !self.toggle_key_down
+                    && self
+                        .active_hotkey_profile
+                        .as_ref()
+                        .map(|active| active.id == profile.id)
+                        .unwrap_or(true)
+                    && (legacy_toggle_recording || self.active_shortcut_matches(shortcut))
+                {
+                    // Global shortcut backends can deliver duplicate Pressed
+                    // notifications while a key is held.  Latch the first
+                    // accepted stop until the terminal transition clears it.
+                    self.toggle_stop_requested = true;
                     Ok(HotkeyDownResult::StopRecording)
                 } else if self.state == AppState::Idle {
-                    self.start_recording()?;
-                    Ok(HotkeyDownResult::StartedRecording)
+                    if self.start_recording_for_binding(profile, mode, shortcut)? {
+                        self.toggle_key_down = true;
+                        Ok(HotkeyDownResult::StartedRecording)
+                    } else {
+                        Ok(HotkeyDownResult::NoOp)
+                    }
                 } else {
                     Ok(HotkeyDownResult::NoOp)
                 }
@@ -163,9 +274,89 @@ impl AppController {
         }
     }
 
+    fn session_hotkey_mode(&self) -> HotkeyMode {
+        if self.state.is_busy() {
+            self.active_hotkey_mode.unwrap_or(self.settings.hotkey_mode)
+        } else {
+            self.settings.hotkey_mode
+        }
+    }
+
+    pub fn recording_generation(&self) -> u64 {
+        self.recording_generation
+    }
+
+    /// Only the validated registration-failure fallback caller may use this.
+    /// Keep the invalid saved configuration visible, but make this one capture
+    /// releasable by the exact fallback key that actually started it.
+    pub fn use_safe_fallback_lifecycle(&mut self) {
+        if self.state.is_recording() && !self.training_recording {
+            self.active_hotkey_mode = Some(HotkeyMode::PushToTalk);
+            self.active_hotkey_shortcut = canonical_hotkey(crate::SAFE_FALLBACK_HOTKEY).ok();
+            if let Some(profile) = &mut self.active_hotkey_profile {
+                profile.shortcut = crate::SAFE_FALLBACK_HOTKEY.to_string();
+            }
+        }
+    }
+
+    pub fn stop_recording_generation(&mut self, generation: u64) -> StopRecordingOutcome {
+        if self.recording_generation != generation {
+            StopRecordingOutcome::NotRecording
+        } else {
+            self.stop_recording_guarded()
+        }
+    }
+
+    /// Prevent a recording from starting halfway through an OS registration
+    /// transaction, without holding the controller mutex across native calls.
+    pub fn begin_hotkey_configuration_change(&mut self) -> bool {
+        // A meeting uses its own backend and frozen configuration. It holds
+        // the live-capture boundary, not the shortcut/settings boundary. Keep
+        // normal dictation/transcription protected while permitting settings
+        // reconciliation during a long file job.
+        let meeting_import = self.state == AppState::Transcribing && self.meeting_job.is_some();
+        if (self.state != AppState::Idle && !meeting_import) || self.hotkey_configuration_changing {
+            return false;
+        }
+        self.hotkey_configuration_changing = true;
+        true
+    }
+
+    pub fn end_hotkey_configuration_change(&mut self) {
+        self.hotkey_configuration_changing = false;
+    }
+
     /// Handle hotkey up event
     pub fn should_stop_on_key_up(&self) -> bool {
-        self.settings.hotkey_mode == HotkeyMode::PushToTalk && self.state.is_recording()
+        self.session_hotkey_mode() == HotkeyMode::PushToTalk
+            && self.state.is_recording()
+            && !self.training_recording
+    }
+
+    pub fn should_stop_profile_on_key_up(&self, shortcut: &str) -> bool {
+        self.should_stop_on_key_up()
+            && self.active_shortcut_matches(shortcut)
+    }
+
+    /// Record the physical release edge for toggle bindings.  Toggle presses
+    /// are edge-triggered: a repeated Pressed notification while the key is
+    /// still held must not be mistaken for the second user press.
+    pub fn note_hotkey_release(&mut self, shortcut: &str) {
+        if self.active_hotkey_mode == Some(HotkeyMode::Toggle)
+            && self.active_shortcut_matches(shortcut)
+        {
+            self.toggle_key_down = false;
+        }
+    }
+
+    fn active_shortcut_matches(&self, shortcut: &str) -> bool {
+        let active = self
+            .active_hotkey_shortcut
+            .as_deref()
+            .or_else(|| self.active_hotkey_profile.as_ref().map(|profile| profile.shortcut.as_str()));
+        active
+            .and_then(|active| Some(canonical_hotkey(active).ok()? == canonical_hotkey(shortcut).ok()?))
+            .unwrap_or(false)
     }
 
     /// Start audio recording.
@@ -175,10 +366,71 @@ impl AppController {
     /// still transcribing). Callers use this to avoid reporting a recording that
     /// never happened (finding 1).
     pub fn start_recording(&mut self) -> Result<bool, DictationError> {
-        if self.state != AppState::Idle {
+        let profile = self
+            .settings
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .find(|profile| profile.id == "default")
+            .or_else(|| self.settings.resolved_hotkey_profiles().into_iter().next())
+            .expect("resolved profiles always contains at least one profile");
+        self.start_recording_for_profile(profile)
+    }
+
+    pub fn start_recording_for_profile(
+        &mut self,
+        profile: HotkeyProfile,
+    ) -> Result<bool, DictationError> {
+        self.start_recording_for_profile_with_capture(profile, |audio| audio.start_capture())
+    }
+
+    fn start_recording_for_binding(
+        &mut self,
+        profile: HotkeyProfile,
+        mode: HotkeyMode,
+        shortcut: &str,
+    ) -> Result<bool, DictationError> {
+        self.start_recording_for_binding_with_capture(profile, mode, shortcut, |audio| {
+            audio.start_capture()
+        })
+    }
+
+    /// Start recording using the supplied capture operation.
+    ///
+    /// The injected capture operation keeps the startup transition testable
+    /// without requiring a microphone. It also makes sure a failure after the
+    /// dictation session is opened goes through the same controller-owned
+    /// cleanup path as other workflow errors.
+    fn start_recording_for_profile_with_capture<F>(
+        &mut self,
+        profile: HotkeyProfile,
+        start_capture: F,
+    ) -> Result<bool, DictationError>
+    where
+        F: FnOnce(&mut AudioCaptureService) -> Result<(), DictationError>,
+    {
+        let mode = self.settings.hotkey_mode;
+        let shortcut = profile.shortcut.clone();
+        self.start_recording_for_binding_with_capture(profile, mode, &shortcut, start_capture)
+    }
+
+    fn start_recording_for_binding_with_capture<F>(
+        &mut self,
+        profile: HotkeyProfile,
+        mode: HotkeyMode,
+        shortcut: &str,
+        start_capture: F,
+    ) -> Result<bool, DictationError>
+    where
+        F: FnOnce(&mut AudioCaptureService) -> Result<(), DictationError>,
+    {
+        if self.state != AppState::Idle || self.hotkey_configuration_changing {
             warn!("Cannot start recording: state is {:?}", self.state);
             return Ok(false);
         }
+
+        let next_generation = self.recording_generation.checked_add(1).ok_or_else(|| {
+            DictationError::TranscriptionFailed("Recording generation exhausted; restart Sagascript.".into())
+        })?;
 
         let session_id = self.logging.start_dictation_session();
         self.logging.log(
@@ -188,13 +440,55 @@ impl AppController {
             serde_json::json!({ "dictationSessionId": session_id }),
         );
 
-        self.audio.start_capture()?;
+        self.session_data = Some(serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "git_hash": env!("GIT_HASH"),
+            "language": profile.language,
+            "model": self.settings.effective_model_for(profile.language),
+            "audio_ms": null,
+            "phases_ms": {},
+            "auto_paste": self.settings.auto_paste,
+        }));
+        self.release_started = None;
+        if let Err(error) = start_capture(&mut self.audio) {
+            let message = error.to_string();
+            self.on_transcription_error(&message);
+            return Err(error);
+        }
+
+        info!(
+            profile_id = %profile.id,
+            profile_name = %profile.name,
+            language = %profile.language.display_name(),
+            "Recording profile selected"
+        );
+        self.active_hotkey_profile = Some(profile);
+        self.recording_generation = next_generation;
+        self.active_hotkey_mode = Some(mode);
+        self.active_hotkey_shortcut = canonical_hotkey(shortcut).ok();
+        self.toggle_stop_requested = false;
+        self.toggle_key_down = false;
+        self.training_recording = false;
         self.state = AppState::Recording;
         self.recording_start = Some(Instant::now());
         self.last_error = None;
 
         info!("Recording started");
         Ok(true)
+    }
+
+    /// Start a Teach Sagascript recording that only the Teach UI may stop.
+    /// Global hotkey releases and toggle presses must not route this audio
+    /// through the normal dictation/auto-paste path.
+    pub fn start_training_recording_for_profile(
+        &mut self,
+        profile: HotkeyProfile,
+    ) -> Result<bool, DictationError> {
+        let started = self.start_recording_for_profile(profile)?;
+        if started {
+            self.training_recording = true;
+        }
+        Ok(started)
     }
 
     /// Stop recording and return the captured 16 kHz samples.
@@ -205,15 +499,41 @@ impl AppController {
     /// left as `Recording`; callers surface the error and return to Idle (see
     /// [`Self::stop_recording_guarded`]).
     pub fn stop_recording(&mut self) -> Result<Vec<f32>, DictationError> {
+        self.mark_release();
         let samples = self.audio.stop_capture()?;
+        let (finalization, conversion) = self.audio.stop_timings();
+        self.record_phase("recording_finalization", finalization);
+        self.record_phase("conversion", conversion);
+        if let Some(data) = self.session_data.as_mut() {
+            data["audio_ms"] = serde_json::json!(samples.len() as u64 / 16);
+        }
         let duration = self
             .recording_start
             .map(|s| s.elapsed().as_millis())
             .unwrap_or(0);
+        let metrics = self.audio.metrics();
+        let recording_duration_ms = u64::try_from(duration).unwrap_or(u64::MAX);
+        let audio_duration_ms = u64::try_from(
+            (samples.len() as u128).saturating_mul(1_000) / 16_000,
+        )
+        .unwrap_or(u64::MAX);
 
         info!(
             "Recording stopped: {} samples ({duration}ms)",
             samples.len()
+        );
+        self.logging.log(
+            "info",
+            "Performance",
+            log_events::audio::CAPTURE_STOPPED,
+            serde_json::json!({
+                "recordingDurationMs": recording_duration_ms,
+                "audioDurationMs": audio_duration_ms,
+                "audioSamples": samples.len(),
+                "captureRequestToStreamPlayReturnMs": metrics.stream_play_return_ms,
+                "captureRequestToFirstAudioCallbackMs": metrics.first_callback_ms,
+                "deviceSampleRateHz": metrics.device_sample_rate_hz,
+            }),
         );
 
         self.state = AppState::Transcribing;
@@ -242,17 +562,64 @@ impl AppController {
     }
 
     /// Called after transcription succeeds
+    pub fn preserve_transcription(&mut self, text: &str) {
+        self.last_transcription = Some(text.to_string());
+    }
+
+    /// Called after transcription succeeds
     pub fn on_transcription_success(&mut self, text: &str) {
+        self.end_session("success");
+        self.last_error = None;
         self.last_transcription = Some(text.to_string());
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
+        self.active_hotkey_profile = None;
+        self.active_hotkey_shortcut = None;
+        self.toggle_stop_requested = false;
+        self.toggle_key_down = false;
+        self.training_recording = false;
         self.logging.end_dictation_session();
+    }
+
+    /// Complete a quiet push-to-talk cancellation without replacing the last
+    /// useful transcript, surfacing an error, or leaving retry audio behind.
+    pub fn on_no_speech_detected(&mut self) {
+        self.end_session("no_speech");
+        self.audio.clear_last_captured();
+        self.state = AppState::Idle;
+        self.active_hotkey_profile = None;
+        self.active_hotkey_shortcut = None;
+        self.toggle_stop_requested = false;
+        self.toggle_key_down = false;
+        self.training_recording = false;
+        self.logging.log(
+            "info",
+            "Transcription",
+            log_events::transcription::NO_SPEECH,
+            serde_json::json!({}),
+        );
+        self.logging.end_dictation_session();
+    }
+
+    pub fn log_dictation_performance(&self, data: serde_json::Value) {
+        self.logging.log(
+            "info",
+            "Performance",
+            log_events::transcription::PHASE_TIMINGS,
+            data,
+        );
     }
 
     /// Called after transcription fails
     pub fn on_transcription_error(&mut self, error: &str) {
+        self.end_session("error");
         self.last_error = Some(error.to_string());
         self.state = AppState::Idle;
+        self.active_hotkey_profile = None;
+        self.active_hotkey_shortcut = None;
+        self.toggle_stop_requested = false;
+        self.toggle_key_down = false;
+        self.training_recording = false;
         self.logging.end_dictation_session();
     }
 
@@ -267,7 +634,11 @@ impl AppController {
     ) -> Result<String, String> {
         match result {
             Ok(text) => {
-                self.on_transcription_success(&text);
+                if text.trim().is_empty() {
+                    self.on_no_speech_detected();
+                } else {
+                    self.on_transcription_success(&text);
+                }
                 Ok(text)
             }
             Err(error) => {
@@ -287,12 +658,54 @@ impl AppController {
     }
 
     /// Cancel recording without transcribing
+    pub fn complete_cancelled_recording(&mut self) {
+        self.end_session("cancelled");
+        self.audio.clear_last_captured();
+        self.state = AppState::Idle;
+        self.active_hotkey_profile = None;
+        self.active_hotkey_mode = None;
+        self.active_hotkey_shortcut = None;
+        self.toggle_stop_requested = false;
+        self.toggle_key_down = false;
+        self.training_recording = false;
+        self.logging.end_dictation_session();
+    }
+
+    /// Cancel recording without transcribing
     pub fn cancel_recording(&mut self) {
         if self.state.is_recording() {
             let _ = self.audio.stop_capture();
-            self.state = AppState::Idle;
-            self.logging.end_dictation_session();
+            self.complete_cancelled_recording();
             info!("Recording cancelled");
+        }
+    }
+
+    pub fn mark_release(&mut self) {
+        self.release_started.get_or_insert_with(Instant::now);
+    }
+
+    pub fn record_phase(&mut self, phase: &'static str, duration: Duration) {
+        if let Some(data) = self.session_data.as_mut() {
+            data["phases_ms"][phase] = serde_json::json!(duration.as_secs_f64() * 1000.0);
+        }
+    }
+
+    pub fn record_model_cache(&mut self, cached: bool) {
+        if let Some(data) = self.session_data.as_mut() {
+            data["model_cached"] = serde_json::json!(cached);
+            data["context_profile"] = serde_json::json!("flash_attention");
+        }
+    }
+
+    fn end_session(&mut self, outcome: &'static str) {
+        if let Some(mut data) = self.session_data.take() {
+            data["outcome"] = serde_json::json!(outcome);
+            if let Some(start) = self.release_started.take() {
+                data["key_up_to_completion_ms"] = serde_json::json!(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            // Only typed identifiers, durations and outcomes. Never log text,
+            // glossary entries, audio, window titles or free-form errors.
+            self.logging.log("info", "Dictation", "dictation_session_finished", data);
         }
     }
 
@@ -317,6 +730,7 @@ impl AppController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     fn default_controller() -> AppController {
         AppController::new(Settings::default())
@@ -355,6 +769,108 @@ mod tests {
     fn initial_state_is_idle() {
         let ctrl = default_controller();
         assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn a_deferred_stop_cannot_stop_a_new_recording() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        ctrl.start_recording_for_profile_with_capture(profile.clone(), |_| Ok(())).unwrap();
+        let old_generation = ctrl.recording_generation();
+        ctrl.cancel_recording();
+        ctrl.start_recording_for_profile_with_capture(profile, |_| Ok(())).unwrap();
+        assert_ne!(old_generation, ctrl.recording_generation());
+        assert!(matches!(ctrl.stop_recording_generation(old_generation), StopRecordingOutcome::NotRecording));
+        assert_eq!(ctrl.state(), AppState::Recording);
+        ctrl.cancel_recording();
+    }
+
+    #[test]
+    fn cancellation_during_transcription_requires_explicit_completion() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+
+        ctrl.cancel_recording();
+        assert_eq!(ctrl.state(), AppState::Transcribing);
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+
+        ctrl.complete_cancelled_recording();
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+    }
+
+    #[test]
+    fn failed_capture_keeps_generation_available_for_next_start() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        assert!(ctrl
+            .start_recording_for_profile_with_capture(profile.clone(), |_| Ok(()))
+            .unwrap());
+        let first_generation = ctrl.recording_generation();
+        ctrl.cancel_recording();
+
+        let failed = ctrl.start_recording_for_profile_with_capture(profile.clone(), |_| {
+            Err(DictationError::MicrophonePermissionDenied)
+        });
+        assert!(matches!(failed, Err(DictationError::MicrophonePermissionDenied)));
+        assert_eq!(ctrl.recording_generation(), first_generation);
+        assert_eq!(ctrl.state(), AppState::Idle);
+
+        assert!(ctrl
+            .start_recording_for_profile_with_capture(profile, |_| Ok(()))
+            .unwrap());
+        assert_eq!(ctrl.recording_generation(), first_generation + 1);
+        ctrl.cancel_recording();
+    }
+
+    #[test]
+    fn generation_exhaustion_fails_before_capture() {
+        let mut ctrl = default_controller();
+        ctrl.recording_generation = u64::MAX;
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        let capture_called = Cell::new(false);
+
+        let result = ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            capture_called.set(true);
+            Ok(())
+        });
+
+        assert!(matches!(
+            result,
+            Err(DictationError::TranscriptionFailed(message))
+                if message.contains("generation exhausted")
+        ));
+        assert!(!capture_called.get());
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert_eq!(ctrl.recording_generation(), u64::MAX);
+    }
+
+    #[test]
+    fn pending_toggle_configuration_does_not_report_started_recording() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        assert!(ctrl.begin_hotkey_configuration_change());
+
+        let result = ctrl.handle_hotkey_down_for_profile(profile);
+
+        assert_eq!(result.unwrap(), HotkeyDownResult::NoOp);
+        assert_eq!(ctrl.state(), AppState::Idle);
+        ctrl.end_hotkey_configuration_change();
+    }
+
+    #[test]
+    fn fallback_start_freezes_push_to_talk_without_rewriting_preferences() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        ctrl.start_recording_for_profile_with_capture(profile, |_| Ok(())).unwrap();
+        ctrl.use_safe_fallback_lifecycle();
+        assert!(ctrl.should_stop_profile_on_key_up(crate::SAFE_FALLBACK_HOTKEY));
+        assert_eq!(ctrl.active_hotkey_mode, Some(HotkeyMode::PushToTalk));
+        assert_eq!(ctrl.settings().hotkey_mode, HotkeyMode::Toggle);
+        ctrl.cancel_recording();
     }
 
     #[test]
@@ -474,6 +990,60 @@ mod tests {
         assert_eq!(ctrl.state(), AppState::Idle);
     }
 
+    #[test]
+    fn finish_transcription_empty_result_preserves_last_transcription() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+
+        let result = ctrl.finish_transcription(Ok(String::new()));
+
+        assert_eq!(result, Ok(String::new()));
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn finish_transcription_whitespace_result_preserves_last_transcription() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+
+        let result = ctrl.finish_transcription(Ok(" \n\t".to_string()));
+
+        assert_eq!(result, Ok(" \n\t".to_string()));
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
+
+    #[test]
+    fn no_speech_returns_idle_without_replacing_last_transcription() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.last_transcription = Some("Previous useful result".to_string());
+        ctrl.last_error = Some("stale error".to_string());
+        ctrl.session_data = Some(serde_json::json!({
+            "language": "en",
+            "model": "base.en",
+            "phases_ms": {},
+        }));
+        ctrl.release_started = Some(Instant::now());
+
+        ctrl.on_no_speech_detected();
+
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert_eq!(ctrl.last_transcription(), Some("Previous useful result"));
+        assert_eq!(ctrl.last_error(), Some("stale error"));
+        assert!(ctrl.session_data.is_none());
+        assert!(ctrl.release_started.is_none());
+
+        // A repeated terminal callback has no active payload, so it cannot
+        // emit a second typed terminal event for the same session.
+        ctrl.on_no_speech_detected();
+        assert!(ctrl.session_data.is_none());
+        assert!(ctrl.release_started.is_none());
+    }
+
     // -- Recording elapsed --
 
     #[test]
@@ -508,6 +1078,203 @@ mod tests {
         assert!(!ctrl.should_stop_on_key_up());
     }
 
+    #[test]
+    fn mode_changes_do_not_reinterpret_active_recording() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_mode = Some(HotkeyMode::Toggle);
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        assert!(!ctrl.should_stop_on_key_up());
+        assert_eq!(ctrl.handle_hotkey_down().unwrap(), HotkeyDownResult::NoOp);
+
+        ctrl.active_hotkey_mode = Some(HotkeyMode::PushToTalk);
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        assert!(ctrl.should_stop_on_key_up());
+        assert_eq!(ctrl.handle_hotkey_down().unwrap(), HotkeyDownResult::NoOp);
+    }
+
+    #[test]
+    fn shortcut_transaction_blocks_capture_without_holding_controller_lock() {
+        let mut ctrl = default_controller();
+        assert!(ctrl.begin_hotkey_configuration_change());
+        assert!(!ctrl.begin_hotkey_configuration_change());
+        let profile = ctrl.settings.resolved_hotkey_profiles()[0].clone();
+        assert!(!ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            panic!("capture must not start while bindings are changing");
+        }).unwrap());
+        ctrl.end_hotkey_configuration_change();
+        assert!(ctrl.begin_hotkey_configuration_change());
+        ctrl.end_hotkey_configuration_change();
+        for state in [AppState::Recording, AppState::Transcribing, AppState::Error] {
+            ctrl.state = state;
+            assert!(!ctrl.begin_hotkey_configuration_change());
+        }
+    }
+
+    #[test]
+    fn active_profile_freezes_language_and_release_identity() {
+        let mut ctrl = default_controller();
+        let profiles = vec![
+            HotkeyProfile { id: "default".into(), name: "English".into(), shortcut: "Control+Shift+E".into(), language: sagascript_core::settings::Language::English, push_to_talk_shortcut: None, toggle_shortcut: None },
+            HotkeyProfile { id: "swedish".into(), name: "Swedish".into(), shortcut: "Option+Space".into(), language: sagascript_core::settings::Language::Swedish, push_to_talk_shortcut: None, toggle_shortcut: None },
+        ];
+        ctrl.settings_mut().replace_hotkey_profiles(profiles.clone()).unwrap();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_profile = Some(profiles[1].clone());
+
+        assert_eq!(ctrl.language(), sagascript_core::settings::Language::Swedish);
+        assert!(ctrl.should_stop_profile_on_key_up("Alt+Space"));
+        assert!(!ctrl.should_stop_profile_on_key_up("Control+Shift+E"));
+    }
+
+    #[test]
+    fn toggle_press_from_different_profile_does_not_stop_active_recording() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_profile = Some(HotkeyProfile { id: "english".into(), name: "English".into(), shortcut: "Control+Shift+E".into(), language: sagascript_core::settings::Language::English, push_to_talk_shortcut: None, toggle_shortcut: None });
+        let swedish = HotkeyProfile { id: "swedish".into(), name: "Swedish".into(), shortcut: "Option+Space".into(), language: sagascript_core::settings::Language::Swedish, push_to_talk_shortcut: None, toggle_shortcut: None };
+
+        assert_eq!(ctrl.handle_hotkey_down_for_profile(swedish).unwrap(), HotkeyDownResult::NoOp);
+    }
+
+    #[test]
+    fn explicit_ptt_and_toggle_bindings_do_not_stop_each_other() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_profile = Some(profile.clone());
+        ctrl.active_hotkey_mode = Some(HotkeyMode::PushToTalk);
+        ctrl.active_hotkey_shortcut = canonical_hotkey("Super+S").ok();
+
+        assert_eq!(
+            ctrl.handle_hotkey_down_for_binding(profile, HotkeyMode::Toggle, "Super+Shift+S")
+                .unwrap(),
+            HotkeyDownResult::NoOp
+        );
+    }
+
+    #[test]
+    fn toggle_requires_release_edge_and_latches_stop_request() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_profile = Some(profile.clone());
+        ctrl.active_hotkey_mode = Some(HotkeyMode::Toggle);
+        ctrl.active_hotkey_shortcut = canonical_hotkey("Super+S").ok();
+        ctrl.toggle_key_down = true;
+
+        assert_eq!(
+            ctrl.handle_hotkey_down_for_binding(profile.clone(), HotkeyMode::Toggle, "Super+S")
+                .unwrap(),
+            HotkeyDownResult::NoOp
+        );
+        ctrl.note_hotkey_release("Super+S");
+        assert_eq!(
+            ctrl.handle_hotkey_down_for_binding(profile.clone(), HotkeyMode::Toggle, "Super+S")
+                .unwrap(),
+            HotkeyDownResult::StopRecording
+        );
+        assert_eq!(
+            ctrl.handle_hotkey_down_for_binding(profile, HotkeyMode::Toggle, "Super+S")
+                .unwrap(),
+            HotkeyDownResult::NoOp
+        );
+    }
+
+    #[test]
+    fn ptt_release_uses_frozen_binding_shortcut() {
+        let mut ctrl = default_controller();
+        let profile = ctrl.settings().resolved_hotkey_profiles()[0].clone();
+        ctrl.state = AppState::Recording;
+        ctrl.active_hotkey_profile = Some(profile);
+        ctrl.active_hotkey_mode = Some(HotkeyMode::PushToTalk);
+        ctrl.active_hotkey_shortcut = canonical_hotkey("Super+S").ok();
+
+        assert!(ctrl.should_stop_profile_on_key_up("Super+S"));
+        assert!(!ctrl.should_stop_profile_on_key_up("Control+Shift+Space"));
+    }
+
+    #[test]
+    fn english_alt_e_profile_freezes_english_model_with_global_swedish() {
+        let settings = Settings {
+            language: sagascript_core::settings::Language::Swedish,
+            auto_select_model: true,
+            hotkey_profiles: vec![
+                HotkeyProfile {
+                    id: "default".into(),
+                    name: "Swedish".into(),
+                    shortcut: "Control+Shift+Space".into(),
+                    language: sagascript_core::settings::Language::Swedish,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+                HotkeyProfile {
+                    id: "english".into(),
+                    name: "English".into(),
+                    shortcut: "Alt+E".into(),
+                    language: sagascript_core::settings::Language::English,
+                    push_to_talk_shortcut: None,
+                    toggle_shortcut: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut ctrl = AppController::new(settings);
+        let english = ctrl
+            .settings()
+            .hotkey_profile_for_shortcut("Alt+E")
+            .expect("English Alt+E profile should resolve");
+
+        assert!(ctrl
+            .start_recording_for_profile_with_capture(english, |_| Ok(()))
+            .unwrap());
+        assert_eq!(ctrl.language(), sagascript_core::settings::Language::English);
+
+        let session = ctrl
+            .session_data
+            .as_ref()
+            .expect("recording should snapshot session metadata");
+        assert_eq!(session["language"], serde_json::json!("en"));
+        assert_eq!(session["model"], serde_json::json!("base.en"));
+
+        // Changes to global settings during an active recording must not
+        // replace the profile model selected when Alt+E started the session.
+        ctrl.settings_mut().language = sagascript_core::settings::Language::Swedish;
+        ctrl.settings_mut().whisper_model = sagascript_core::settings::WhisperModel::KbWhisperBase;
+        assert_eq!(
+            ctrl.session_data.as_ref().unwrap()["model"],
+            serde_json::json!("base.en")
+        );
+
+        ctrl.cancel_recording();
+    }
+
+    #[test]
+    fn terminal_session_payload_is_consumed_once_without_transcript_contents() {
+        let mut ctrl = default_controller();
+        ctrl.state = AppState::Transcribing;
+        ctrl.session_data = Some(serde_json::json!({
+            "language": "en",
+            "model": "base.en",
+            "phases_ms": {},
+        }));
+
+        ctrl.preserve_transcription("private transcript text");
+        let payload_before_end = ctrl.session_data.as_ref().unwrap().to_string();
+        assert!(!payload_before_end.contains("private transcript text"));
+
+        ctrl.on_transcription_success("private transcript text");
+        assert!(ctrl.session_data.is_none(), "the terminal event must consume the session payload");
+        assert!(ctrl.release_started.is_none());
+
+        // A repeated terminal callback has no active payload to emit, so one
+        // dictation session can produce at most one finished-session event.
+        ctrl.on_transcription_success("private transcript text");
+        assert!(ctrl.session_data.is_none());
+    }
+
     // -- handle_hotkey_down --
 
     #[test]
@@ -517,6 +1284,42 @@ mod tests {
         ctrl.state = AppState::Recording;
         let result = ctrl.handle_hotkey_down().unwrap();
         assert_eq!(result, HotkeyDownResult::StopRecording);
+    }
+
+    #[test]
+    fn training_recording_ignores_toggle_hotkey_stop() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::Toggle;
+        ctrl.state = AppState::Recording;
+        ctrl.training_recording = true;
+
+        assert_eq!(
+            ctrl.handle_hotkey_down().unwrap(),
+            HotkeyDownResult::NoOp
+        );
+    }
+
+    #[test]
+    fn training_recording_ignores_push_to_talk_release() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        ctrl.state = AppState::Recording;
+        ctrl.training_recording = true;
+
+        assert!(!ctrl.should_stop_on_key_up());
+    }
+
+    #[test]
+    fn cancelling_training_recording_restores_normal_hotkey_lifecycle() {
+        let mut ctrl = default_controller();
+        ctrl.settings_mut().hotkey_mode = HotkeyMode::PushToTalk;
+        ctrl.state = AppState::Recording;
+        ctrl.training_recording = true;
+
+        ctrl.cancel_recording();
+
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert!(!ctrl.training_recording);
     }
 
     #[test]
@@ -572,7 +1375,97 @@ mod tests {
         assert_eq!(ctrl.state(), AppState::Transcribing); // unchanged
     }
 
+    #[test]
+    fn recording_start_failure_closes_session_and_restores_idle_without_capture() {
+        let mut ctrl = default_controller();
+        let profile = ctrl
+            .settings()
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .next()
+            .expect("default settings provide a hotkey profile");
+        let expected_error = DictationError::MicrophonePermissionDenied;
+        let expected_message = expected_error.to_string();
+
+        let result = ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            Err(expected_error.clone())
+        });
+
+        assert!(matches!(result, Err(DictationError::MicrophonePermissionDenied)));
+        assert_eq!(ctrl.last_error(), Some(expected_message.as_str()));
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert!(ctrl.active_hotkey_profile().is_none());
+        assert!(!ctrl.training_recording);
+
+        // The failed start must leave the controller reusable for a later
+        // attempt; this still injects the capture result and never opens a mic.
+        assert!(matches!(
+            ctrl.start_recording_for_profile_with_capture(
+                ctrl.settings()
+                    .resolved_hotkey_profiles()
+                    .into_iter()
+                    .next()
+                    .unwrap(),
+                |_| Ok(()),
+            ),
+            Ok(true)
+        ));
+        assert_eq!(ctrl.state(), AppState::Recording);
+        ctrl.cancel_recording();
+    }
+
     // -- stop_recording_guarded --
+
+    #[test]
+    fn meeting_lease_blocks_capture_and_stale_release_without_opening_microphone() {
+        let mut ctrl = default_controller();
+        assert!(ctrl.begin_meeting_job("job-a"));
+        assert!(!ctrl.begin_meeting_job("job-b"));
+        let profile = ctrl.settings().resolved_hotkey_profiles().remove(0);
+        assert!(!ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            panic!("meeting lease must prevent microphone access")
+        }).unwrap());
+        ctrl.cancel_recording();
+        assert_eq!(ctrl.state(), AppState::Transcribing);
+        assert!(!ctrl.finish_meeting_job("job-b"));
+        assert_eq!(ctrl.state(), AppState::Transcribing);
+        assert!(ctrl.finish_meeting_job("job-a"));
+        assert_eq!(ctrl.state(), AppState::Idle);
+        assert!(!ctrl.finish_meeting_job("job-a"));
+        assert!(ctrl.begin_meeting_job("job-b"));
+    }
+
+    #[test]
+    fn meeting_lease_never_takes_over_live_work() {
+        let mut ctrl = default_controller();
+        for state in [AppState::Recording, AppState::Transcribing, AppState::Error] {
+            ctrl.state = state;
+            assert!(!ctrl.begin_meeting_job("job-a"));
+            assert!(!ctrl.finish_meeting_job("job-a"));
+            assert_eq!(ctrl.state(), state);
+        }
+    }
+
+    #[test]
+    fn meeting_allows_shortcut_reconfiguration_without_releasing_capture_boundary() {
+        let mut ctrl = default_controller();
+        assert!(ctrl.begin_meeting_job("meeting"));
+        assert!(ctrl.begin_hotkey_configuration_change());
+        assert!(!ctrl.begin_hotkey_configuration_change());
+        ctrl.end_hotkey_configuration_change();
+        assert_eq!(ctrl.state(), AppState::Transcribing);
+        let profile = ctrl.settings().resolved_hotkey_profiles().remove(0);
+        assert!(!ctrl.start_recording_for_profile_with_capture(profile.clone(), |_| {
+            panic!("meeting still owns the capture boundary after registration")
+        }).unwrap());
+        assert!(ctrl.begin_hotkey_configuration_change());
+        assert!(ctrl.finish_meeting_job("meeting"));
+        assert!(!ctrl.start_recording_for_profile_with_capture(profile, |_| {
+            panic!("registration still owns the capture boundary after meeting completion")
+        }).unwrap());
+        ctrl.end_hotkey_configuration_change();
+        assert_eq!(ctrl.state(), AppState::Idle);
+    }
 
     // Finding 3: a stop that races an in-flight transcription (state !=
     // Recording) must be a no-op — it must not transition state nor set

@@ -1,0 +1,1364 @@
+{
+  "schemaVersion": 1,
+  "window": {
+    "from": "2026-09-06T08:20:44Z",
+    "through": "2026-09-08T09:44:00Z"
+  },
+  "selection": "Latest 100 repository runs; completed CI, Windows Package Candidate, Test Build, Release only. Latest job attempts as observed.",
+  "method": {
+    "elapsed": "max(job.completed_at) minus run.created_at",
+    "p50": "median",
+    "p90": "nearest rank",
+    "latencyPopulation": "successful runs only, mixed events/revisions/cache states/attempts",
+    "initiallyInProgressExcluded": [
+      34211620052
+    ]
+  },
+  "outcomes": {
+    "CI": {
+      "success": 39,
+      "failure": 2
+    },
+    "Release": {
+      "success": 1
+    },
+    "Windows Package Candidate": {
+      "cancelled": 4,
+      "success": 20,
+      "failure": 2
+    },
+    "Test Build": {
+      "success": 9
+    }
+  },
+  "workflows": {
+    "CI": {
+      "n": 39,
+      "p50_s": 618.0,
+      "p90_s": 729.0,
+      "min_s": 468.0,
+      "max_s": 1666.0
+    },
+    "Release": {
+      "n": 1,
+      "p50_s": 1067.0,
+      "p90_s": 1067.0,
+      "min_s": 1067.0,
+      "max_s": 1067.0
+    },
+    "Test Build": {
+      "n": 9,
+      "p50_s": 499.0,
+      "p90_s": 616.0,
+      "min_s": 291.0,
+      "max_s": 616.0
+    },
+    "Windows Package Candidate": {
+      "n": 20,
+      "p50_s": 1864.0,
+      "p90_s": 2171.0,
+      "min_s": 816.0,
+      "max_s": 2260.0
+    }
+  },
+  "successfulRunLedger": [
+    {
+      "run": 34211619966,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "e4bc2172078d8da02ee2e11b58a3bd0854817e91",
+      "seconds": 746.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 420.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 150.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 742.0
+        }
+      ]
+    },
+    {
+      "run": 34209086662,
+      "workflow": "Release",
+      "event": "push",
+      "sha": "1aba32242845340304e94e4c0e2b3540b81a2064",
+      "seconds": 1067.0,
+      "jobs": [
+        {
+          "name": "quality-gate",
+          "seconds": 578.0
+        },
+        {
+          "name": "build-macos",
+          "seconds": 458.0
+        },
+        {
+          "name": "publish-release",
+          "seconds": 11.0
+        }
+      ]
+    },
+    {
+      "run": 34206976204,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "122766517d8c7036cd8099efc8a264653429bcbd",
+      "seconds": 670.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 122.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 389.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 666.0
+        }
+      ]
+    },
+    {
+      "run": 34206945641,
+      "workflow": "Test Build",
+      "event": "workflow_dispatch",
+      "sha": "1aba32242845340304e94e4c0e2b3540b81a2064",
+      "seconds": 532.0,
+      "jobs": [
+        {
+          "name": "build-macos-test",
+          "seconds": 523.0
+        }
+      ]
+    },
+    {
+      "run": 34204997034,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "5123df4d901bfa4776f56e854f5c4a81c555288f",
+      "seconds": 655.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 176.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 550.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 651.0
+        }
+      ]
+    },
+    {
+      "run": 34204996987,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "5123df4d901bfa4776f56e854f5c4a81c555288f",
+      "seconds": 1012.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1008.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 908.0
+        }
+      ]
+    },
+    {
+      "run": 34204224613,
+      "workflow": "Windows Package Candidate",
+      "event": "workflow_dispatch",
+      "sha": "1aba32242845340304e94e4c0e2b3540b81a2064",
+      "seconds": 2096.0,
+      "jobs": [
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1544.0
+        },
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 2092.0
+        }
+      ]
+    },
+    {
+      "run": 34203274653,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "deedf96d860bc224bef80e5e34277bc8cd598ce5",
+      "seconds": 607.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 102.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 602.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 420.0
+        }
+      ]
+    },
+    {
+      "run": 34201979049,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "13f8a42b07c24a833cd59507dc5420f6f3d4ab3e",
+      "seconds": 642.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 363.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 158.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 638.0
+        }
+      ]
+    },
+    {
+      "run": 34201501326,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "7d937023562d45e66b2c3e82db09aa566b367770",
+      "seconds": 658.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 456.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 652.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 158.0
+        }
+      ]
+    },
+    {
+      "run": 34201501297,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "7d937023562d45e66b2c3e82db09aa566b367770",
+      "seconds": 2190.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 2186.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1572.0
+        }
+      ]
+    },
+    {
+      "run": 34198151269,
+      "workflow": "Windows Package Candidate",
+      "event": "workflow_dispatch",
+      "sha": "e4db9c6137b73c710826a21f5792ab5d31c4a798",
+      "seconds": 2171.0,
+      "jobs": [
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1471.0
+        },
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 2166.0
+        }
+      ]
+    },
+    {
+      "run": 34167344037,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "9e76c364de3ac17b2c3f56478644458779a39eec",
+      "seconds": 592.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 375.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 123.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 589.0
+        }
+      ]
+    },
+    {
+      "run": 34166555593,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "83bfc33c7711e628311105ae49e72ef9571f294d",
+      "seconds": 614.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 403.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 610.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 95.0
+        }
+      ]
+    },
+    {
+      "run": 34166488458,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "f281bf466c7351acfe1a6fa959f3dc7b656d7ca0",
+      "seconds": 630.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 105.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 543.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 627.0
+        }
+      ]
+    },
+    {
+      "run": 34164464479,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "653aff682aedaa0c65b1c26f241bb5d8adf3a31b",
+      "seconds": 530.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 114.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 526.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 445.0
+        }
+      ]
+    },
+    {
+      "run": 34164464363,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "653aff682aedaa0c65b1c26f241bb5d8adf3a31b",
+      "seconds": 1996.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1992.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1366.0
+        }
+      ]
+    },
+    {
+      "run": 34160445004,
+      "workflow": "Test Build",
+      "event": "workflow_dispatch",
+      "sha": "e4db9c6137b73c710826a21f5792ab5d31c4a798",
+      "seconds": 500.0,
+      "jobs": [
+        {
+          "name": "build-macos-test",
+          "seconds": 491.0
+        }
+      ]
+    },
+    {
+      "run": 34159205851,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "e4db9c6137b73c710826a21f5792ab5d31c4a798",
+      "seconds": 624.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 121.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 355.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 619.0
+        }
+      ]
+    },
+    {
+      "run": 34157025149,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "72c8fd8705f6c08cf4f6788a30372b95446a86ee",
+      "seconds": 1938.0,
+      "jobs": [
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1425.0
+        },
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1934.0
+        }
+      ]
+    },
+    {
+      "run": 34157025144,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "72c8fd8705f6c08cf4f6788a30372b95446a86ee",
+      "seconds": 508.0,
+      "jobs": [
+        {
+          "name": "check-windows",
+          "seconds": 505.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 117.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 390.0
+        }
+      ]
+    },
+    {
+      "run": 34122142331,
+      "workflow": "Test Build",
+      "event": "workflow_dispatch",
+      "sha": "c6f1046c4a1a2bb1c886f613cdb09850df29f32a",
+      "seconds": 616.0,
+      "jobs": [
+        {
+          "name": "build-macos-test",
+          "seconds": 605.0
+        }
+      ]
+    },
+    {
+      "run": 34120406896,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "c6f1046c4a1a2bb1c886f613cdb09850df29f32a",
+      "seconds": 646.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 336.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 642.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 99.0
+        }
+      ]
+    },
+    {
+      "run": 34117314379,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "a2ac7367ec8c8e306df6c0b868e27ad7ec9c83f7",
+      "seconds": 2095.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 2091.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1458.0
+        }
+      ]
+    },
+    {
+      "run": 34117314372,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "a2ac7367ec8c8e306df6c0b868e27ad7ec9c83f7",
+      "seconds": 680.0,
+      "jobs": [
+        {
+          "name": "check-windows",
+          "seconds": 677.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 121.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 399.0
+        }
+      ]
+    },
+    {
+      "run": 34110041596,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "3a75bee4c98f4e31e96ab107f04f9656c38bdd96",
+      "seconds": 634.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 252.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 386.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 630.0
+        }
+      ]
+    },
+    {
+      "run": 34105133106,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "c50f6613c1b694ef787350228e2e2891f0320286",
+      "seconds": 1084.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1080.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 892.0
+        }
+      ]
+    },
+    {
+      "run": 34105133008,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "c50f6613c1b694ef787350228e2e2891f0320286",
+      "seconds": 597.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 321.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 99.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 591.0
+        }
+      ]
+    },
+    {
+      "run": 34105127095,
+      "workflow": "Test Build",
+      "event": "workflow_dispatch",
+      "sha": "c50f6613c1b694ef787350228e2e2891f0320286",
+      "seconds": 541.0,
+      "jobs": [
+        {
+          "name": "build-macos-test",
+          "seconds": 532.0
+        }
+      ]
+    },
+    {
+      "run": 34102324573,
+      "workflow": "Test Build",
+      "event": "workflow_dispatch",
+      "sha": "3fc68078cd8f4726c4ba47a3a19c817b1651df59",
+      "seconds": 499.0,
+      "jobs": [
+        {
+          "name": "build-macos-test",
+          "seconds": 489.0
+        }
+      ]
+    },
+    {
+      "run": 34102223763,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "3fc68078cd8f4726c4ba47a3a19c817b1651df59",
+      "seconds": 1790.0,
+      "jobs": [
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1426.0
+        },
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1786.0
+        }
+      ]
+    },
+    {
+      "run": 34102223694,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "3fc68078cd8f4726c4ba47a3a19c817b1651df59",
+      "seconds": 533.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 101.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 384.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 527.0
+        }
+      ]
+    },
+    {
+      "run": 34092448629,
+      "workflow": "Windows Package Candidate",
+      "event": "workflow_dispatch",
+      "sha": "c001ef1cf6b0889ee884485eb4ad0cc6348ca70b",
+      "seconds": 1959.0,
+      "jobs": [
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1437.0
+        },
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1955.0
+        }
+      ]
+    },
+    {
+      "run": 34092447406,
+      "workflow": "Test Build",
+      "event": "workflow_dispatch",
+      "sha": "c001ef1cf6b0889ee884485eb4ad0cc6348ca70b",
+      "seconds": 499.0,
+      "jobs": [
+        {
+          "name": "build-macos-test",
+          "seconds": 488.0
+        }
+      ]
+    },
+    {
+      "run": 34092373805,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "c001ef1cf6b0889ee884485eb4ad0cc6348ca70b",
+      "seconds": 612.0,
+      "jobs": [
+        {
+          "name": "check-windows",
+          "seconds": 609.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 351.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 99.0
+        }
+      ]
+    },
+    {
+      "run": 34089490400,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "d7ff86c2f3dd70a4694f46f883ba003ed62bdf82",
+      "seconds": 613.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 420.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 125.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 607.0
+        }
+      ]
+    },
+    {
+      "run": 34089490046,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "d7ff86c2f3dd70a4694f46f883ba003ed62bdf82",
+      "seconds": 2260.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 2249.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1446.0
+        }
+      ]
+    },
+    {
+      "run": 34088638019,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "417f6ca9e88bf20c9e8f9365407723dd513060b2",
+      "seconds": 709.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 117.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 609.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 400.0
+        }
+      ]
+    },
+    {
+      "run": 34085960973,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "26df47407cfeb0489af7934b7393104be287240c",
+      "seconds": 611.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 361.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 608.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 124.0
+        }
+      ]
+    },
+    {
+      "run": 34059971109,
+      "workflow": "Windows Package Candidate",
+      "event": "workflow_dispatch",
+      "sha": "09493451cc11e2344d227c5798366fb4eab27d7d",
+      "seconds": 1505.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1501.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1432.0
+        }
+      ]
+    },
+    {
+      "run": 34059969412,
+      "workflow": "Test Build",
+      "event": "workflow_dispatch",
+      "sha": "09493451cc11e2344d227c5798366fb4eab27d7d",
+      "seconds": 390.0,
+      "jobs": [
+        {
+          "name": "build-macos-test",
+          "seconds": 381.0
+        }
+      ]
+    },
+    {
+      "run": 34059941334,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "09493451cc11e2344d227c5798366fb4eab27d7d",
+      "seconds": 585.0,
+      "jobs": [
+        {
+          "name": "check-windows",
+          "seconds": 581.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 433.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 139.0
+        }
+      ]
+    },
+    {
+      "run": 34059343158,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "9b1b9f7231a0c7fe9e8166bde5afbfa1e6565aee",
+      "seconds": 622.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 110.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 619.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 334.0
+        }
+      ]
+    },
+    {
+      "run": 34058770962,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "f81c6b9676801ad71735b94c4e8b3fc907c8ce68",
+      "seconds": 618.0,
+      "jobs": [
+        {
+          "name": "check-windows",
+          "seconds": 614.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 400.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 162.0
+        }
+      ]
+    },
+    {
+      "run": 34055841527,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "8f464d28d4d53d773a7863a5e14f5ffb255f0c81",
+      "seconds": 594.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 117.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 445.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 589.0
+        }
+      ]
+    },
+    {
+      "run": 34053600453,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "68178b45ad067c6401d43a30413022c36d47be5f",
+      "seconds": 1545.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1542.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1465.0
+        }
+      ]
+    },
+    {
+      "run": 34053600448,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "68178b45ad067c6401d43a30413022c36d47be5f",
+      "seconds": 666.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 98.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 342.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 663.0
+        }
+      ]
+    },
+    {
+      "run": 34053312881,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "ffa1ba3c296a5bfa4f23eff2628be047f21f6e4d",
+      "seconds": 586.0,
+      "jobs": [
+        {
+          "name": "check-windows",
+          "seconds": 582.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 343.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 107.0
+        }
+      ]
+    },
+    {
+      "run": 34051290652,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "6701036c37a8341a90b26fdab5a95cc96ec87923",
+      "seconds": 2134.0,
+      "jobs": [
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1476.0
+        },
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 2119.0
+        }
+      ]
+    },
+    {
+      "run": 34051290649,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "6701036c37a8341a90b26fdab5a95cc96ec87923",
+      "seconds": 607.0,
+      "jobs": [
+        {
+          "name": "check-windows",
+          "seconds": 604.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 111.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 354.0
+        }
+      ]
+    },
+    {
+      "run": 34050208171,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "aa5eb24adedfd86d7a91203339ef1967fa611de4",
+      "seconds": 587.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 320.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 148.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 583.0
+        }
+      ]
+    },
+    {
+      "run": 34047258974,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "3a23068790d5656754218a211b01180db4b3172e",
+      "seconds": 1666.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 437.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 1024.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 1662.0
+        }
+      ]
+    },
+    {
+      "run": 34045760979,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "b55fe61a8a3114da7bf12f562d5a48cf0ec19730",
+      "seconds": 763.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 375.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 623.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 139.0
+        }
+      ]
+    },
+    {
+      "run": 34045760976,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "b55fe61a8a3114da7bf12f562d5a48cf0ec19730",
+      "seconds": 1589.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1182.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1439.0
+        }
+      ]
+    },
+    {
+      "run": 34044931114,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "24f77dfc991f31a75e682d06124bac3fd7757325",
+      "seconds": 729.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 163.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 375.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 573.0
+        }
+      ]
+    },
+    {
+      "run": 34043640213,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "197e8fc2e21101686041d22df1e37f594020fdd7",
+      "seconds": 671.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 142.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 667.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 491.0
+        }
+      ]
+    },
+    {
+      "run": 34025123374,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "cae6c59d780e3e2265a9885f16b5ac3ace006ef8",
+      "seconds": 1020.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1017.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 815.0
+        }
+      ]
+    },
+    {
+      "run": 34025123365,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "cae6c59d780e3e2265a9885f16b5ac3ace006ef8",
+      "seconds": 603.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 143.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 600.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 365.0
+        }
+      ]
+    },
+    {
+      "run": 34024234830,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "ae644530cd029a207da28e15b3d782f5139d96f5",
+      "seconds": 602.0,
+      "jobs": [
+        {
+          "name": "check-linux",
+          "seconds": 164.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 468.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 598.0
+        }
+      ]
+    },
+    {
+      "run": 34024234800,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "ae644530cd029a207da28e15b3d782f5139d96f5",
+      "seconds": 816.0,
+      "jobs": [
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 812.0
+        },
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 800.0
+        }
+      ]
+    },
+    {
+      "run": 34024021044,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "0b514fed95f190a616c161f6800fe298fd2f59c4",
+      "seconds": 468.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 365.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 162.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 465.0
+        }
+      ]
+    },
+    {
+      "run": 34023378069,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "e855258ab307f2a1ec3543e96081689d6129b525",
+      "seconds": 657.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 363.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 653.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 150.0
+        }
+      ]
+    },
+    {
+      "run": 34022984597,
+      "workflow": "Windows Package Candidate",
+      "event": "workflow_dispatch",
+      "sha": "882e4f4be448368cc445ae45a0aa706f19a8bebe",
+      "seconds": 1458.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1454.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 762.0
+        }
+      ]
+    },
+    {
+      "run": 34022983714,
+      "workflow": "Test Build",
+      "event": "workflow_dispatch",
+      "sha": "882e4f4be448368cc445ae45a0aa706f19a8bebe",
+      "seconds": 291.0,
+      "jobs": [
+        {
+          "name": "build-macos-test",
+          "seconds": 282.0
+        }
+      ]
+    },
+    {
+      "run": 34022909720,
+      "workflow": "CI",
+      "event": "push",
+      "sha": "882e4f4be448368cc445ae45a0aa706f19a8bebe",
+      "seconds": 521.0,
+      "jobs": [
+        {
+          "name": "check-macos",
+          "seconds": 459.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 143.0
+        },
+        {
+          "name": "check-windows",
+          "seconds": 518.0
+        }
+      ]
+    },
+    {
+      "run": 34022455753,
+      "workflow": "CI",
+      "event": "pull_request",
+      "sha": "dc108d8b0635b29423bb6aab0b98c610531a52ac",
+      "seconds": 625.0,
+      "jobs": [
+        {
+          "name": "check-windows",
+          "seconds": 621.0
+        },
+        {
+          "name": "check-linux",
+          "seconds": 154.0
+        },
+        {
+          "name": "check-macos",
+          "seconds": 284.0
+        }
+      ]
+    },
+    {
+      "run": 34021727764,
+      "workflow": "Windows Package Candidate",
+      "event": "workflow_dispatch",
+      "sha": "69b0118399bf73c74ff812dbf608a8a57e171ea5",
+      "seconds": 1952.0,
+      "jobs": [
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1945.0
+        },
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1425.0
+        }
+      ]
+    },
+    {
+      "run": 34021726711,
+      "workflow": "Test Build",
+      "event": "workflow_dispatch",
+      "sha": "69b0118399bf73c74ff812dbf608a8a57e171ea5",
+      "seconds": 448.0,
+      "jobs": [
+        {
+          "name": "build-macos-test",
+          "seconds": 440.0
+        }
+      ]
+    },
+    {
+      "run": 34021588070,
+      "workflow": "Windows Package Candidate",
+      "event": "pull_request",
+      "sha": "e7355d53c6c23f99c04aa3cb9643eeccf7bfe313",
+      "seconds": 1440.0,
+      "jobs": [
+        {
+          "name": "Build Windows arm64 candidate",
+          "seconds": 1416.0
+        },
+        {
+          "name": "Build Windows x64 candidate",
+          "seconds": 1435.0
+        }
+      ]
+    }
+  ],
+  "observedDate": "2026-09-08"
+}

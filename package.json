@@ -1,12 +1,12 @@
 {
   "name": "sagascript",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.1.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "node scripts/build-frontend.mjs",
-    "test:frontend": "node --test scripts/test-onboarding-download-state.mjs scripts/test-dictation-test-state.mjs",
+    "test:frontend": "node scripts/run-frontend-tests.mjs",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "release:check": "node scripts/check-release.mjs",

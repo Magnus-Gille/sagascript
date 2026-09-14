@@ -18,6 +18,26 @@ function compareCodeUnits(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+function normalizeNewlines(text) {
+  return text.replace(/\r\n?/g, "\n");
+}
+
+function npmInstallationError(pkg, installedVersion, directoryExists) {
+  const path = relative(root, pkg.directory);
+  if (!directoryExists) {
+    return pkg.optional
+      ? null
+      : `npm dependency directory is missing: ${path} (run npm ci)`;
+  }
+  if (typeof installedVersion !== "string") {
+    return `npm dependency manifest has no version: ${path}/package.json (run npm ci)`;
+  }
+  if (installedVersion !== pkg.version) {
+    return `npm dependency version mismatch for ${pkg.name}: lockfile requires ${pkg.version}, installed ${installedVersion} in ${path} (run npm ci)`;
+  }
+  return null;
+}
+
 if (mode === "--test-sort") {
   const fixture = ["z", "ä", "a", "å", "A"].sort(compareCodeUnits);
   const expected = ["A", "a", "z", "ä", "å"];
@@ -28,8 +48,53 @@ if (mode === "--test-sort") {
   process.exit(0);
 }
 
+if (mode === "--test-npm-installation") {
+  const pkg = {
+    name: "example",
+    version: "2.0.0",
+    optional: false,
+    directory: join(root, "node_modules/example"),
+  };
+  const cases = [
+    [npmInstallationError(pkg, "2.0.0", true), null],
+    [
+      npmInstallationError(pkg, "1.0.0", true),
+      "npm dependency version mismatch for example: lockfile requires 2.0.0, installed 1.0.0 in node_modules/example (run npm ci)",
+    ],
+    [
+      npmInstallationError(pkg, undefined, false),
+      "npm dependency directory is missing: node_modules/example (run npm ci)",
+    ],
+    [npmInstallationError({ ...pkg, optional: true }, undefined, false), null],
+    [
+      npmInstallationError(pkg, undefined, true),
+      "npm dependency manifest has no version: node_modules/example/package.json (run npm ci)",
+    ],
+  ];
+  for (const [actual, expected] of cases) {
+    if (actual !== expected) {
+      throw new Error(`Unexpected npm installation validation result: ${actual}`);
+    }
+  }
+  console.log("npm installation validation passed");
+  process.exit(0);
+}
+
+if (mode === "--test-newline-normalization") {
+  const lf = "first\nsecond\n";
+  for (const candidate of [lf, "first\r\nsecond\r\n", "first\rsecond\r"]) {
+    if (normalizeNewlines(candidate) !== lf) {
+      throw new Error("Generated notice comparison is not newline-stable");
+    }
+  }
+  console.log("newline normalization passed");
+  process.exit(0);
+}
+
 if (!new Set(["--check", "--write"]).has(mode)) {
-  console.error("Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort");
+  console.error(
+    "Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort|--test-npm-installation|--test-newline-normalization",
+  );
   process.exit(2);
 }
 
@@ -189,8 +254,17 @@ for (const pkg of lockedNpmPackages) {
   else if (!reviewedNpmLicenses.has(pkg.license)) {
     errors.push(`npm ${pkg.name}@${pkg.version} has unreviewed license: ${pkg.license}`);
   }
-  if (!existsSync(pkg.directory) && !pkg.optional) {
-    errors.push(`npm dependency directory is missing: ${relative(root, pkg.directory)} (run npm ci)`);
+  const directoryExists = existsSync(pkg.directory);
+  let installedVersion;
+  if (directoryExists) {
+    const manifestPath = join(pkg.directory, "package.json");
+    if (existsSync(manifestPath)) {
+      installedVersion = JSON.parse(readFileSync(manifestPath, "utf8")).version;
+    }
+  }
+  const installationError = npmInstallationError(pkg, installedVersion, directoryExists);
+  if (installationError) {
+    errors.push(installationError);
   }
 }
 
@@ -267,7 +341,8 @@ dependency records to that release.
 Models are **not bundled in the installer**. Sagascript downloads a model only
 after the user chooses one; inference, audio, and transcripts remain local.
 The license shown is the license published by the linked upstream repository,
-reviewed on 2026-07-10. This shipped notice supplies the source and attribution
+reviewed on 2026-07-10 unless a later review date is shown below. This shipped
+notice supplies the source and attribution
 link; the upstream repository is authoritative for its license terms.
 
 | Model family | What Sagascript downloads | License | Upstream / attribution |
@@ -275,9 +350,17 @@ link; the upstream repository is authoritative for its license terms.
 | OpenAI Whisper GGML + Core ML encoders | Tiny, Base, Small, Medium, Large v3 Turbo variants | MIT | [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) |
 | KB-Whisper | Tiny, Base, Small, Medium, Large Swedish models | Apache-2.0 | [KBLab, National Library of Sweden](https://huggingface.co/KBLab) |
 | NB-Whisper | Tiny, Base, Small, Medium, Large Norwegian models | Apache-2.0 | [NbAiLab, National Library of Norway](https://huggingface.co/NbAiLab) |
+| Finnish-NLP Whisper Tiny | Unmodified \`ggml-model-fi-tiny.bin\`, optional Finnish specialist | Apache-2.0 | [Finnish-NLP pinned GGML repository](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d), reviewed 2026-09-06 |
 | Silero VAD (GGML conversion) | \`ggml-silero-v5.1.2.bin\` | MIT | [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad) |
 | Pyannote Segmentation 3.0 (ONNX conversion) | \`model.onnx\` | MIT, copyright CNRS | [csukuangfj conversion repository and LICENSE](https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/blob/main/LICENSE) |
 | WeSpeaker ResNet34-LM | \`voxceleb_resnet34_LM.onnx\` | CC-BY-4.0 | [WeSpeaker project/model card](https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM) |
+
+Finnish recommends the existing multilingual OpenAI Whisper Base model (MIT),
+not the English-only Base.en model. Optional Finnish-NLP Tiny is downloaded
+unchanged from its publisher under the declared [Apache-2.0 terms](https://www.apache.org/licenses/LICENSE-2.0).
+Its [source-model card](https://huggingface.co/Finnish-NLP/whisper-tiny-finnish/tree/bc5193ed50c052c426230644d17a12c3a8f86df6)
+identifies OpenAI Whisper Tiny as the base; retain the OpenAI Whisper MIT
+attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 
 ## Rust dependencies in the macOS application and build
 
@@ -313,7 +396,7 @@ if (mode === "--write") {
   writeFileSync(outputPath, generated);
   console.log(`Wrote ${relative(root, outputPath)} (${rustPackages.length} Rust, ${npmPackages.length} npm packages)`);
 } else {
-  if (!existsSync(outputPath) || readFileSync(outputPath, "utf8") !== generated) {
+  if (!existsSync(outputPath) || normalizeNewlines(readFileSync(outputPath, "utf8")) !== generated) {
     console.error("THIRD_PARTY_NOTICES.md is stale; run npm run licenses:generate and review the diff");
     process.exit(1);
   }

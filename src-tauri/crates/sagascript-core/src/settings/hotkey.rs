@@ -6,17 +6,71 @@ pub fn validate_hotkey(value: &str) -> Result<(), String> {
     validate_hotkey_for_platform(value, CURRENT_PLATFORM)
 }
 
+/// Canonical representation used for equality and duplicate detection.
+/// Tauri accepts several aliases for the same physical shortcut; storing the
+/// user's spelling is useful for display, but comparisons must collapse those
+/// aliases so two profiles cannot claim the same key combination.
+pub fn canonical_hotkey(value: &str) -> Result<String, String> {
+    validate_hotkey(value)?;
+    Ok(canonical_hotkey_for_platform(value, CURRENT_PLATFORM))
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum HotkeyPlatform {
     MacOS,
+    Windows,
     Other,
 }
 
 const CURRENT_PLATFORM: HotkeyPlatform = if cfg!(target_os = "macos") {
     HotkeyPlatform::MacOS
+} else if cfg!(target_os = "windows") {
+    HotkeyPlatform::Windows
 } else {
     HotkeyPlatform::Other
 };
+
+fn canonical_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> String {
+    let tokens: Vec<String> = value
+        .split('+')
+        .map(|token| token.trim().to_ascii_lowercase())
+        .collect();
+    let (modifiers, key) = tokens.split_at(tokens.len() - 1);
+    let mut modifiers: Vec<&str> = modifiers
+        .iter()
+        .map(|modifier| match modifier.as_str() {
+            "control" | "ctrl" => "control",
+            "alt" | "option" => "alt",
+            "super" | "command" | "cmd" | "meta" => "super",
+            "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" => {
+                if platform == HotkeyPlatform::MacOS { "super" } else { "control" }
+            }
+            "shift" => "shift",
+            _ => unreachable!("validated modifier"),
+        })
+        .collect();
+    modifiers.sort_unstable();
+    modifiers.dedup();
+
+    let raw_key = key[0].as_str();
+    let key = match raw_key {
+        "up" => "arrowup".to_string(),
+        "down" => "arrowdown".to_string(),
+        "left" => "arrowleft".to_string(),
+        "right" => "arrowright".to_string(),
+        "esc" => "escape".to_string(),
+        other if other.len() == 1 && other.as_bytes()[0].is_ascii_lowercase() => {
+            format!("key{other}")
+        }
+        other if other.len() == 1 && other.as_bytes()[0].is_ascii_digit() => {
+            format!("digit{other}")
+        }
+        other => other.to_string(),
+    };
+    let mut parts: Vec<String> = modifiers.into_iter().map(str::to_string).collect();
+    parts.push(key);
+    parts.join("+")
+}
 
 fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result<(), String> {
     const MODIFIERS: &[&str] = &[
@@ -28,6 +82,10 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
         "super",
         "command",
         "cmd",
+        // `global-hotkey` 0.8 (keyboard-types 0.8) renamed the Command/Win
+        // modifier from `super` to `meta`, and shortcut events are reported
+        // with that spelling. Accept it so events match saved profiles.
+        "meta",
         "commandorcontrol",
         "commandorctrl",
         "cmdorctrl",
@@ -178,6 +236,11 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
         ";",
         "slash",
         "/",
+        // ISO section key: `§` left of `1` on Swedish, UK and other Apple ISO
+        // keyboards (macOS virtual key 0x0A), `<`/`\` next to left Shift on
+        // PC ISO keyboards. Only registrable once the patched `global-hotkey`
+        // (tauri-apps/global-hotkey#216) is in use; see src-tauri/Cargo.toml.
+        "intlbackslash",
         // Lock & control
         "capslock",
         "numlock",
@@ -286,11 +349,57 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
         }
     }
 
-    if modifier_tokens.is_empty() {
+    // The X11 backend maps this physical key to the ordinary backslash
+    // keysym, which can resolve to a different key on non-US layouts.
+    if key == "intlbackslash" && platform == HotkeyPlatform::Other {
+        return Err(format!(
+            "Invalid hotkey '{}': IntlBackslash is supported only on macOS and Windows; \
+             it is not supported on this platform. Choose another key.",
+            value
+        ));
+    }
+
+    let function_key_number = key
+        .strip_prefix('f')
+        .and_then(|number| number.parse::<u8>().ok());
+
+    // Reject parsed keys that cannot reach either the platform shortcut
+    // backend or Sagascript's native macOS bare-function-key monitor.
+    if function_key_number.is_some_and(|number| (13..=24).contains(&number)) {
+        let unsupported_error = match platform {
+            HotkeyPlatform::MacOS
+                if !modifier_tokens.is_empty()
+                    && function_key_number.is_some_and(|number| number >= 21) =>
+            {
+                Some("F21-F24 are supported without modifiers on macOS, but the modified forms cannot be registered reliably")
+            }
+            HotkeyPlatform::MacOS | HotkeyPlatform::Windows | HotkeyPlatform::Other => None,
+        };
+        if let Some(error) = unsupported_error {
+            return Err(format!("Invalid hotkey '{}': {}.", value, error));
+        }
+    }
+
+    let bare_function_key_range = match platform {
+        HotkeyPlatform::MacOS => Some(13..=24),
+        HotkeyPlatform::Windows => Some(13..=24),
+        HotkeyPlatform::Other => None,
+    };
+    let is_allowed_bare_function_key = modifier_tokens.is_empty()
+        && function_key_number.is_some_and(|number| {
+            bare_function_key_range.is_some_and(|range| range.contains(&number))
+        });
+
+    if modifier_tokens.is_empty() && !is_allowed_bare_function_key {
         return Err(format!(
             "Invalid hotkey '{}': at least one modifier is required. \
-             Example: 'Control+Space', 'Option+Space'",
-            value
+             Example: 'Control+Space', 'Option+Space'. {} may be used without modifiers.",
+            value,
+            match platform {
+                HotkeyPlatform::MacOS => "F13-F24",
+                HotkeyPlatform::Windows => "F13-F24",
+                HotkeyPlatform::Other => "No keys",
+            }
         ));
     }
 
@@ -300,6 +409,7 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
             "super"
                 | "command"
                 | "cmd"
+                | "meta"
                 | "commandorcontrol"
                 | "commandorctrl"
                 | "cmdorctrl"
@@ -317,10 +427,7 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
             "x" | "keyx" if uses_command && modifier_tokens.len() == 1 => {
                 Some(("X", "Cut"))
             }
-            // Like Cut, Bold Text is a ubiquitous editor command. A global
-            // bare Command+B hotkey intercepts it in the active application,
-            // and can leave toggle-mode recording running with no obvious way
-            // to stop it from that editor.
+            // Do not intercept the active editor's standard Bold command.
             "b" | "keyb" if uses_command && modifier_tokens.len() == 1 => {
                 Some(("B", "Bold Text"))
             }
@@ -347,6 +454,7 @@ mod tests {
             "Command+Q",
             "Cmd+KeyQ",
             "Super+Q",
+            "Meta+Q",
             "CmdOrCtrl+Q",
             "CommandOrControl+q",
             "Control+Super+Shift+Q",
@@ -384,7 +492,10 @@ mod tests {
             "Command+B",
             "Cmd+KeyB",
             "Super+B",
+            "Meta+B",
             "CmdOrCtrl+B",
+            "CmdOrControl+B",
+            "CommandOrCtrl+B",
             "CommandOrControl+b",
             "  cOmMaNd + keyB  ",
         ] {
@@ -393,6 +504,16 @@ mod tests {
                 error.contains("reserved for Bold Text on macOS"),
                 "unexpected error for {shortcut}: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn bold_shortcut_restriction_is_limited_to_bare_macos_command() {
+        for shortcut in ["Control+B", "Command+Shift+B", "Command+Alt+B"] {
+            assert!(validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).is_ok());
+        }
+        for platform in [HotkeyPlatform::Windows, HotkeyPlatform::Other] {
+            assert!(validate_hotkey_for_platform("CmdOrCtrl+B", platform).is_ok());
         }
     }
 
@@ -414,7 +535,154 @@ mod tests {
     }
 
     #[test]
+    fn iso_section_key_is_accepted_with_modifiers_on_supported_platforms() {
+        for platform in [HotkeyPlatform::MacOS, HotkeyPlatform::Windows] {
+            for shortcut in [
+                "Command+IntlBackslash",
+                "Control+intlbackslash",
+                "Shift+Alt+IntlBackslash",
+            ] {
+                assert!(
+                    validate_hotkey_for_platform(shortcut, platform).is_ok(),
+                    "should be valid: {shortcut}"
+                );
+            }
+            let error = validate_hotkey_for_platform("IntlBackslash", platform).unwrap_err();
+            assert!(
+                error.contains("modifier is required"),
+                "unexpected error for bare IntlBackslash: {error}"
+            );
+        }
+        assert_eq!(
+            canonical_hotkey_for_platform("Cmd+IntlBackslash", HotkeyPlatform::MacOS),
+            "super+intlbackslash"
+        );
+        for platform in [HotkeyPlatform::MacOS, HotkeyPlatform::Windows] {
+            assert!(validate_hotkey_for_platform("meta+IntlBackslash", platform).is_ok());
+            assert_eq!(
+                canonical_hotkey_for_platform("meta+IntlBackslash", platform),
+                canonical_hotkey_for_platform("Super+IntlBackslash", platform)
+            );
+        }
+    }
+
+    #[test]
+    fn iso_section_key_is_rejected_on_linux_and_unknown_platforms() {
+        for shortcut in [
+            "Control+IntlBackslash",
+            " Alt + INTLBACKSLASH ",
+            "meta+intlbackslash",
+        ] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::Other).unwrap_err();
+            assert!(error.contains("not supported"), "unexpected error: {error}");
+        }
+        assert!(validate_hotkey_for_platform("Control+Backslash", HotkeyPlatform::Other).is_ok());
+        assert!(validate_hotkey_for_platform("Control+Space", HotkeyPlatform::Other).is_ok());
+    }
+
+    #[test]
+    fn meta_is_the_event_spelling_of_the_command_modifier() {
+        // global-hotkey reports the Super modifier as `meta`; both spellings
+        // must resolve to the same profile.
+        for platform in [
+            HotkeyPlatform::MacOS,
+            HotkeyPlatform::Windows,
+            HotkeyPlatform::Other,
+        ] {
+            assert!(validate_hotkey_for_platform("meta+Space", platform).is_ok());
+            assert_eq!(
+                canonical_hotkey_for_platform("meta+Space", platform),
+                canonical_hotkey_for_platform("Super+Space", platform)
+            );
+            assert_eq!(
+                canonical_hotkey_for_platform("shift+meta+Space", platform),
+                canonical_hotkey_for_platform("Command+Shift+Space", platform)
+            );
+        }
+    }
+
+    #[test]
     fn command_q_policy_is_platform_specific() {
         assert!(validate_hotkey_for_platform("Command+Q", HotkeyPlatform::Other).is_ok());
+    }
+
+    #[test]
+    fn canonical_hotkey_collapses_aliases_order_case_and_key_names() {
+        assert_eq!(
+            canonical_hotkey_for_platform("Shift+OPTION+A", HotkeyPlatform::MacOS),
+            canonical_hotkey_for_platform("Alt + Shift + KeyA", HotkeyPlatform::MacOS)
+        );
+        assert_eq!(
+            canonical_hotkey_for_platform("CmdOrCtrl+Space", HotkeyPlatform::MacOS),
+            canonical_hotkey_for_platform("Command+Space", HotkeyPlatform::MacOS)
+        );
+        assert_eq!(
+            canonical_hotkey_for_platform("F13", HotkeyPlatform::MacOS),
+            canonical_hotkey_for_platform("f13", HotkeyPlatform::MacOS)
+        );
+    }
+
+    #[test]
+    fn bare_extended_function_keys_follow_platform_registration_support() {
+        for shortcut in ["F13", "f17", "F20", "F21", "F24"] {
+            assert!(
+                validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).is_ok(),
+                "macOS should accept {shortcut} without a modifier"
+            );
+        }
+
+        for shortcut in ["F13", "f20", "F21", "F24"] {
+            assert!(
+                validate_hotkey_for_platform(shortcut, HotkeyPlatform::Windows).is_ok(),
+                "Windows should accept {shortcut} without a modifier"
+            );
+        }
+    }
+
+    #[test]
+    fn macos_only_accepts_f21_through_f24_without_modifiers() {
+        for shortcut in ["Shift+F21", "Control+f22", "Shift+F23", "Command+F24"] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).unwrap_err();
+            assert!(
+                error.contains("supported without modifiers on macOS"),
+                "unexpected error for {shortcut}: {error}"
+            );
+        }
+
+        assert!(validate_hotkey_for_platform("F24", HotkeyPlatform::MacOS).is_ok());
+        assert!(validate_hotkey_for_platform("Control+F24", HotkeyPlatform::Windows).is_ok());
+    }
+
+    #[test]
+    fn linux_preserves_modified_extended_function_keys_but_rejects_bare_ones() {
+        for shortcut in ["Control+F13", "Shift+F20", "Alt+F24"] {
+            assert!(
+                validate_hotkey_for_platform(shortcut, HotkeyPlatform::Other).is_ok(),
+                "modified shortcut should remain valid on Linux: {shortcut}"
+            );
+        }
+
+        for shortcut in ["F13", "F24"] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::Other).unwrap_err();
+            assert!(
+                error.contains("modifier is required"),
+                "unexpected error for {shortcut}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_bare_keys_and_f1_through_f12_still_require_modifiers() {
+        for shortcut in ["Space", "A", "7", "F1", "f12", "ArrowUp"] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).unwrap_err();
+            assert!(
+                error.contains("modifier is required"),
+                "unexpected error for {shortcut}: {error}"
+            );
+        }
+
+        for shortcut in ["Control+Space", "Option+A", "Shift+F12"] {
+            assert!(validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).is_ok());
+        }
     }
 }

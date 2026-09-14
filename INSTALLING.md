@@ -13,9 +13,16 @@ artifact is blocked, do not run it—report the release version and download URL
 
 ## Windows
 
-Sagascript v1 does not publish Windows installers. Windows remains a
-build-from-source preview. Do not bypass SmartScreen for an unsigned installer
-downloaded from another party; inspect the source and build it locally.
+Use the [Windows beta prerelease](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905).
+It is an unsigned preview for Windows 11 on x64 and ARM64, not a signed or
+stable release. Choose `Sagascript-Windows-x64-Setup.exe` for Intel/AMD PCs or
+`Sagascript-Windows-arm64-Setup.exe` for native ARM64 PCs. Verify the matching
+`SHA256SUMS-Windows-<architecture>` file before running an installer, and do
+not bypass SmartScreen.
+
+The prerelease also includes MSI, portable desktop, and CLI files for each
+architecture. The CLI is a separate console executable; it will not be
+automatically added to `PATH` by this beta.
 
 ## First launch
 
@@ -38,4 +45,4 @@ diarization, or VAD model.
 ## System requirements
 
 - **macOS:** 13.0 (Ventura) or later on Apple Silicon
-- **Windows preview:** 10 or later, built from source
+- **Windows beta:** Windows 11 on x64 or ARM64

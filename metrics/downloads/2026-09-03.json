@@ -1,0 +1,470 @@
+{
+  "schema_version": 1,
+  "repository": "Magnus-Gille/sagascript",
+  "captured_at": "2026-09-03T13:44:08.000Z",
+  "snapshot_date": "2026-09-03",
+  "totals": {
+    "all_assets": 74,
+    "app_downloads": 61,
+    "dmg_downloads": 49,
+    "updater_downloads": 12,
+    "windows_downloads": 0
+  },
+  "releases": [
+    {
+      "tag_name": "v0.0.1",
+      "published_at": "2026-02-24T15:36:51.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "Sagascript-Setup.exe",
+          "content_type": "application/x-msdos-program",
+          "size": 4485453,
+          "download_count": 0
+        },
+        {
+          "name": "Sagascript-Setup.msi",
+          "content_type": "application/x-msdownload",
+          "size": 6823936,
+          "download_count": 0
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 17288794,
+          "download_count": 5
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.0.0",
+      "published_at": "2026-07-12T11:53:21.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "content_type": "application/octet-stream",
+          "size": 169,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.app.tar.gz",
+          "content_type": "application/gzip",
+          "size": 14878254,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 16346877,
+          "download_count": 4
+        },
+        {
+          "name": "sbom-full.cdx.json",
+          "content_type": "application/json",
+          "size": 160302,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.cdx.json",
+          "content_type": "application/json",
+          "size": 540357,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.spdx.json",
+          "content_type": "application/json",
+          "size": 702534,
+          "download_count": 0
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.0.1",
+      "published_at": "2026-07-14T22:12:20.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "content_type": "application/octet-stream",
+          "size": 169,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.app.tar.gz",
+          "content_type": "application/gzip",
+          "size": 14869984,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 16336925,
+          "download_count": 5
+        },
+        {
+          "name": "sbom-full.cdx.json",
+          "content_type": "application/json",
+          "size": 160303,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.cdx.json",
+          "content_type": "application/json",
+          "size": 540357,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.spdx.json",
+          "content_type": "application/json",
+          "size": 702534,
+          "download_count": 0
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.0.2",
+      "published_at": "2026-07-30T12:21:49.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "content_type": "application/octet-stream",
+          "size": 169,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.app.tar.gz",
+          "content_type": "application/gzip",
+          "size": 14884670,
+          "download_count": 0
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 16352778,
+          "download_count": 4
+        },
+        {
+          "name": "sbom-full.cdx.json",
+          "content_type": "application/json",
+          "size": 161713,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.cdx.json",
+          "content_type": "application/json",
+          "size": 540357,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.spdx.json",
+          "content_type": "application/json",
+          "size": 702534,
+          "download_count": 0
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.0.4",
+      "published_at": "2026-07-31T15:23:07.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "content_type": "application/octet-stream",
+          "size": 169,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.app.tar.gz",
+          "content_type": "application/gzip",
+          "size": 14888560,
+          "download_count": 2
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 16353493,
+          "download_count": 3
+        },
+        {
+          "name": "sbom-full.cdx.json",
+          "content_type": "application/json",
+          "size": 160577,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.cdx.json",
+          "content_type": "application/json",
+          "size": 540357,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.spdx.json",
+          "content_type": "application/json",
+          "size": 702534,
+          "download_count": 0
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.0.5",
+      "published_at": "2026-08-16T13:47:02.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "content_type": "application/octet-stream",
+          "size": 169,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.app.tar.gz",
+          "content_type": "application/gzip",
+          "size": 14959555,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 16408391,
+          "download_count": 3
+        },
+        {
+          "name": "sbom-full.cdx.json",
+          "content_type": "application/json",
+          "size": 160579,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.cdx.json",
+          "content_type": "application/json",
+          "size": 540504,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.spdx.json",
+          "content_type": "application/json",
+          "size": 703054,
+          "download_count": 0
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.0.6",
+      "published_at": "2026-08-16T16:28:52.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "content_type": "application/octet-stream",
+          "size": 169,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.app.tar.gz",
+          "content_type": "application/gzip",
+          "size": 15018389,
+          "download_count": 0
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 16469368,
+          "download_count": 1
+        },
+        {
+          "name": "sbom-full.cdx.json",
+          "content_type": "application/json",
+          "size": 161051,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.cdx.json",
+          "content_type": "application/json",
+          "size": 540504,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.spdx.json",
+          "content_type": "application/json",
+          "size": 703054,
+          "download_count": 0
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.0.7",
+      "published_at": "2026-08-17T16:32:41.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "content_type": "application/octet-stream",
+          "size": 169,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.app.tar.gz",
+          "content_type": "application/gzip",
+          "size": 15018831,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 16473819,
+          "download_count": 1
+        },
+        {
+          "name": "sbom-full.cdx.json",
+          "content_type": "application/json",
+          "size": 161051,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.cdx.json",
+          "content_type": "application/json",
+          "size": 540504,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.spdx.json",
+          "content_type": "application/json",
+          "size": 703054,
+          "download_count": 0
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.0.8",
+      "published_at": "2026-08-18T08:10:47.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "content_type": "application/octet-stream",
+          "size": 169,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.app.tar.gz",
+          "content_type": "application/gzip",
+          "size": 15020321,
+          "download_count": 1
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 16472542,
+          "download_count": 2
+        },
+        {
+          "name": "sbom-full.cdx.json",
+          "content_type": "application/json",
+          "size": 161052,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.cdx.json",
+          "content_type": "application/json",
+          "size": 540548,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.spdx.json",
+          "content_type": "application/json",
+          "size": 703222,
+          "download_count": 0
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.0.9",
+      "published_at": "2026-08-19T07:39:45.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "content_type": "application/octet-stream",
+          "size": 169,
+          "download_count": 3
+        },
+        {
+          "name": "Sagascript.app.tar.gz",
+          "content_type": "application/gzip",
+          "size": 15314389,
+          "download_count": 2
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 16776955,
+          "download_count": 8
+        },
+        {
+          "name": "sbom-full.cdx.json",
+          "content_type": "application/json",
+          "size": 161054,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.cdx.json",
+          "content_type": "application/json",
+          "size": 540595,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.spdx.json",
+          "content_type": "application/json",
+          "size": 703398,
+          "download_count": 0
+        }
+      ]
+    },
+    {
+      "tag_name": "v1.1.3",
+      "published_at": "2026-09-03T08:47:02.000Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "SHA256SUMS",
+          "content_type": "application/octet-stream",
+          "size": 169,
+          "download_count": 2
+        },
+        {
+          "name": "Sagascript.app.tar.gz",
+          "content_type": "application/gzip",
+          "size": 14182200,
+          "download_count": 3
+        },
+        {
+          "name": "Sagascript.dmg",
+          "content_type": "application/x-apple-diskimage",
+          "size": 14270149,
+          "download_count": 13
+        },
+        {
+          "name": "sbom-full.cdx.json",
+          "content_type": "application/json",
+          "size": 161659,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.cdx.json",
+          "content_type": "application/json",
+          "size": 540698,
+          "download_count": 0
+        },
+        {
+          "name": "sbom-rust.spdx.json",
+          "content_type": "application/json",
+          "size": 703753,
+          "download_count": 0
+        }
+      ]
+    }
+  ]
+}

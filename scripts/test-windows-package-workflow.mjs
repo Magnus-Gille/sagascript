@@ -1,0 +1,292 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+test("Windows PR CI runs build identity regression tests before compilation", async () => {
+  const ci = (await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
+    .replace(/\r\n?/g, "\n");
+  const testWindowsStart = ci.indexOf("  test-windows:");
+  const buildWindowsStart = ci.indexOf("  build-windows:", testWindowsStart);
+  assert.ok(testWindowsStart >= 0 && buildWindowsStart > testWindowsStart);
+  const windows = ci.slice(testWindowsStart, buildWindowsStart);
+  const command = "node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs";
+  const checks = windows.indexOf(command);
+  assert.ok(checks > windows.indexOf("name: Install Node.js"));
+  assert.ok(checks < windows.indexOf("name: Cargo check"));
+});
+
+test("Windows candidates pin and verify source identity around release compilation", async () => {
+  const workflow = await readFile(
+    new URL("../.github/workflows/windows-package.yml", import.meta.url),
+    "utf8",
+  );
+  const initialize = workflow.indexOf("node scripts/ci-build-identity.mjs --initialize");
+  const installNode = workflow.indexOf("name: Install Node.js");
+  const installDependencies = workflow.indexOf("name: Install npm dependencies");
+  const rustTests = workflow.indexOf("name: Test and lint Rust workspace");
+  assert.ok(initialize > installNode && initialize < installDependencies);
+  assert.ok(initialize < rustTests);
+
+  const cliBuild = workflow.indexOf("name: Gate real Windows transcription");
+  const installerBuild = workflow.indexOf("name: Build unsigned internal installers");
+  const artifacts = workflow.indexOf("name: Prepare and verify candidate artifacts");
+  const verifies = [...workflow.matchAll(/node scripts\/ci-build-identity\.mjs --verify/g)]
+    .map((match) => match.index);
+  assert.equal(verifies.length, 3);
+  assert.ok(verifies[0] > rustTests && verifies[0] < cliBuild);
+  assert.ok(verifies[1] > cliBuild && verifies[1] < installerBuild);
+  assert.ok(verifies[2] > installerBuild && verifies[2] < artifacts);
+  assert.match(workflow.slice(artifacts), /-ExpectedGitHash \$env:SAGASCRIPT_GIT_HASH/);
+});
+
+const workflow = await readFile(
+  new URL("../.github/workflows/windows-package.yml", import.meta.url),
+  "utf8",
+);
+const releaseGuide = await readFile(
+  new URL("../docs/windows-release.md", import.meta.url),
+  "utf8",
+);
+const acceptanceScript = await readFile(
+  new URL("./accept-windows-candidate.ps1", import.meta.url),
+  "utf8",
+);
+
+test("Windows candidate workflow stays non-publishing and explicitly unsigned", () => {
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /- "\.gitattributes"/, "checkout normalization changes must trigger candidate builds");
+  assert.match(workflow, /permissions:\s*\n\s*contents: read/);
+  assert.match(workflow, /tauri build --ci --bundles nsis,msi --no-sign/);
+  assert.match(workflow, /SignaturePolicy Internal/);
+  assert.match(workflow, /runs-on: \$\{\{ matrix\.runner \}\}/);
+  assert.match(workflow, /architecture: x64[\s\S]*runner: windows-latest[\s\S]*rust_target: x86_64-pc-windows-msvc/);
+  assert.match(workflow, /architecture: arm64[\s\S]*runner: windows-11-arm[\s\S]*rust_target: aarch64-pc-windows-msvc/);
+  assert.match(workflow, /windows-\$\{\{ matrix\.architecture \}\}-unsigned-candidate/);
+  assert.match(workflow, /RuntimeInformation\]::OSArchitecture/);
+  assert.match(workflow, /rustc -vV/);
+  assert.match(workflow, /name: Configure native ARM64 C and C\+\+ toolchain/);
+  assert.match(workflow, /if: matrix\.architecture == 'arm64'/);
+  assert.match(workflow, /CMAKE_GENERATOR=Ninja/);
+  assert.match(workflow, /CMAKE_CXX_FLAGS=\/EHsc \/utf-8/);
+  assert.match(workflow, /CMAKE_C_COMPILER=clang-cl/);
+  assert.match(workflow, /CMAKE_CXX_COMPILER=clang-cl/);
+  assert.match(workflow, /CMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc/);
+  assert.match(workflow, /CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc/);
+  assert.match(
+    workflow,
+    /concurrency:\s*\n\s*group:\s+\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}\s*\n\s*cancel-in-progress:\s+true/,
+  );
+  assert.match(workflow, /name: Identify Windows runner image/);
+  assert.match(workflow, /\$env:ImageOS/);
+  assert.match(workflow, /\$env:ImageVersion/);
+  assert.match(workflow, /IsNullOrWhiteSpace\(\$imageOs\)/);
+  assert.match(workflow, /IsNullOrWhiteSpace\(\$imageVersion\)/);
+  assert.match(workflow, /GITHUB_OUTPUT/);
+  const imageStart = workflow.indexOf("name: Identify Windows runner image");
+  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
+  const nodeStart = workflow.indexOf("name: Install Node.js");
+  assert.ok(imageStart >= 0 && cacheStart > imageStart && nodeStart > cacheStart);
+  const rustCache = workflow.slice(cacheStart, nodeStart);
+  assert.match(
+    rustCache,
+    /uses: Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/,
+  );
+  assert.match(rustCache, /workspaces:\s+src-tauri/);
+  assert.match(
+    rustCache,
+    /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/cmake\/windows-arm64-native\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
+  );
+  assert.doesNotMatch(
+    rustCache,
+    /actions\/cache/,
+    "native cache must use the target-aware Rust cache namespace",
+  );
+  assert.match(workflow, /accept-windows-candidate\.ps1/);
+  assert.match(workflow, /norwegian-short-3s\.mp3/);
+  assert.match(workflow, /Sagascript-Windows-\$architecture-Portable\.exe/);
+  assert.match(workflow, /Sagascript-Windows-\$architecture-CLI\.exe/);
+  assert.match(workflow, /Sagascript-Windows-\$architecture-Setup\.exe/);
+  assert.match(workflow, /Sagascript-Windows-\$architecture\.msi/);
+  assert.match(workflow, /-CliExe "artifacts\\Sagascript-Windows-\$architecture-CLI\.exe"/);
+  assert.match(workflow, /ChecksumOutput "artifacts\\SHA256SUMS-Windows-\$architecture"/);
+  assert.match(workflow, /targetRoot = "src-tauri\\target\\\$\{\{ matrix\.rust_target \}\}\\release"/);
+  assert.match(workflow, /name: Remove cached installer bundles/);
+  assert.match(workflow, /Remove-Item -LiteralPath \$bundleDirectory -Recurse -Force/);
+  assert.match(workflow, /\$nsis\.Count -ne 1/);
+  assert.match(workflow, /\$msi\.Count -ne 1/);
+  assert.match(workflow, /\$nsis\[0\]\.Name -notmatch \[regex\]::Escape\(\$version\)/);
+  assert.match(workflow, /\$msi\[0\]\.Name -notmatch \[regex\]::Escape\(\$version\)/);
+  assert.doesNotMatch(workflow, /\$version:/);
+  assert.doesNotMatch(workflow, /action-gh-release|gh release|contents: write/);
+});
+
+test("Windows ARM64 disables unsupported scalable vectors before restoring native cache", () => {
+  const start = workflow.indexOf("name: Configure native ARM64 C and C++ toolchain");
+  const end = workflow.indexOf("name: Configure portable x64 inference baseline", start);
+  assert.ok(start >= 0 && end > start);
+  const arm = workflow.slice(start, end);
+  assert.match(arm, /if: matrix\.architecture == 'arm64'/);
+  assert.match(arm, /scripts\/cmake\/windows-arm64-native\.cmake/);
+  assert.match(arm, /CMAKE_PROJECT_INCLUDE=\$policy/);
+  assert.ok(end < workflow.indexOf("name: Cache Rust dependencies"));
+});
+
+test("Windows ARM64 pins and validates the LLVM toolchain before native configuration", () => {
+  const pinStart = workflow.indexOf("name: Install pinned LLVM for ARM64 bindgen");
+  const nativeStart = workflow.indexOf("name: Configure native ARM64 C and C++ toolchain");
+  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
+  assert.ok(pinStart >= 0 && nativeStart > pinStart && cacheStart > nativeStart);
+
+  const pin = workflow.slice(pinStart, nativeStart);
+  assert.match(pin, /if: matrix\.architecture == 'arm64'/);
+  assert.match(
+    pin,
+    /https:\/\/github\.com\/llvm\/llvm-project\/releases\/download\/llvmorg-20\.1\.8\/LLVM-20\.1\.8-woa64\.exe/,
+  );
+  assert.match(pin, /7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e/);
+
+  const download = pin.indexOf("Invoke-WebRequest");
+  const verifyHash = pin.indexOf("Get-FileHash");
+  const execute = pin.indexOf("Start-Process");
+  assert.ok(download >= 0 && verifyHash > download && execute > verifyHash);
+  assert.match(pin, /-Algorithm SHA256/);
+  assert.match(pin, /if \(\$actualHash -ne \$expectedHash\)/);
+  assert.match(pin, /-ArgumentList @\('\/S', "\/D=\$installRoot"\)/);
+  assert.match(pin, /if \(\$process\.ExitCode -ne 0\)/);
+  assert.match(pin, /\[guid\]::NewGuid\(\)/);
+
+  assert.match(pin, /clang-cl\.exe/);
+  assert.match(pin, /libclang\.dll/);
+  assert.match(pin, /Test-Path -LiteralPath \$clangPath -PathType Leaf/);
+  assert.match(pin, /Test-Path -LiteralPath \$libclangPath -PathType Leaf/);
+  assert.match(pin, /clang version 20\\\.1\\\.8/);
+  assert.match(pin, /Write-Output \$clangVersion/);
+  assert.match(pin, /\[regex\]::Match\(\$clangVersion/);
+  assert.match(pin, /Target:\\s\*\(\?<target>\\S\+\)/);
+  assert.match(pin, /aarch64-pc-windows-msvc/);
+  assert.match(pin, /\$targetMatch\.Groups\['target'\]\.Value -ne 'aarch64-pc-windows-msvc'/);
+  assert.doesNotMatch(pin, /-dumpmachine/);
+  assert.match(pin, /\$llvmBin \| Out-File -FilePath \$env:GITHUB_PATH/);
+  assert.match(pin, /LIBCLANG_PATH=\$llvmBin/);
+  assert.match(pin, /rust-bindgen#3264/);
+  assert.doesNotMatch(pin, /WHISPER_DONT_GENERATE_BINDINGS|disable ABI asserts/);
+});
+
+test("Windows x64 caches and artifacts use an explicit verified CPU baseline", () => {
+  const policyStart = workflow.indexOf("name: Configure portable x64 inference baseline");
+  const cacheStart = workflow.indexOf("name: Cache Rust dependencies");
+  assert.ok(policyStart >= 0 && policyStart < cacheStart);
+  const policy = workflow.slice(policyStart, cacheStart);
+  assert.match(policy, /if: matrix\.architecture == 'x64'/);
+  assert.match(policy, /CMAKE_PROJECT_INCLUDE=\$policy/);
+  assert.match(policy, /SAGASCRIPT_WINDOWS_X64_BASELINE=avx2/);
+  assert.match(policy, /Win32_Processor/);
+  for (const feature of ["Avx2", "Fma", "Bmi2"]) {
+    assert.ok(policy.includes(`X86.${feature}]::IsSupported`));
+  }
+  assert.match(policy, /CpuId\(1, 0\)\.Item3/);
+  assert.match(policy, /throw 'Runner does not support the packaged x64 CPU baseline'/);
+  assert.equal((workflow.match(/run: \.\/scripts\/verify-windows-x64-cpu-policy\.ps1/g) ?? []).length, 2);
+  assert.equal((workflow.match(/\.\/scripts\/verify-windows-x64-cpu-policy\.ps1 -TargetRoot/g) ?? []).length, 3);
+  const transcriptionStart = workflow.indexOf("name: Gate real Windows transcription");
+  assert.ok(transcriptionStart >= 0);
+  const transcription = workflow.slice(transcriptionStart, workflow.indexOf("name: Gate repeated English dictation"));
+  const releaseVerify = transcription.indexOf("./scripts/verify-windows-x64-cpu-policy.ps1");
+  assert.ok(releaseVerify >= 0 && releaseVerify < transcription.indexOf("& $binary transcribe"));
+  assert.match(transcription, /if \('\$\{\{ matrix\.architecture \}\}' -eq 'x64'\) \{\s+\.\/scripts\/verify-windows-x64-cpu-policy/);
+  const packagedCheck = workflow.indexOf("name: Verify packaged x64 inference CPU policy");
+  assert.ok(packagedCheck > workflow.indexOf("name: Build unsigned internal installers"));
+  assert.ok(packagedCheck < workflow.indexOf("name: Prepare and verify candidate artifacts"));
+});
+
+test("Windows candidate makes real transcription a blocking gate", () => {
+  const clipboardGate = workflow.indexOf("name: Gate native Windows clipboard transactions");
+  assert.ok(clipboardGate >= 0);
+  assert.match(workflow.slice(clipboardGate), /native_runner_clipboard_transaction_smoke -- --ignored --test-threads=1/);
+  assert.match(workflow.slice(clipboardGate), /if \(\$LASTEXITCODE -ne 0\) \{ throw "Native clipboard transaction gate failed" \}/);
+  const gateStart = workflow.indexOf("name: Gate real Windows transcription");
+  const buildStart = workflow.indexOf("name: Build unsigned internal installers");
+  assert.ok(gateStart >= 0 && buildStart > gateStart);
+  const gate = workflow.slice(gateStart, buildStart);
+  const downloadCalls = gate.match(/& \$binary download-model nb-whisper-tiny/g) ?? [];
+  assert.equal(
+    downloadCalls.length,
+    2,
+    "native gate must download once and re-verify the existing model",
+  );
+  const firstDownload = gate.indexOf("& $binary download-model nb-whisper-tiny");
+  const secondDownload = gate.indexOf(
+    "& $binary download-model nb-whisper-tiny",
+    firstDownload + 1,
+  );
+  const transcription = gate.indexOf("& $binary transcribe");
+  assert.ok(firstDownload >= 0 && secondDownload > firstDownload);
+  assert.ok(transcription > secondDownload);
+  assert.match(gate, /Existing model verification failed/);
+  assert.match(gate, /verify-json-cli-streams\.py/);
+  assert.doesNotMatch(gate, /continue-on-error/);
+  assert.match(workflow, /Verify native runner architecture/);
+  assert.match(workflow, /Expected native \$\{\{ matrix\.rust_target \}\} runner/);
+});
+
+test("Windows acceptance re-verifies an already-downloaded model", () => {
+  const downloadCalls = acceptanceScript.match(
+    /Invoke-Sagascript -Executable \$cliExePath -Arguments @\("download-model", "nb-whisper-tiny"\)/g,
+  ) ?? [];
+  assert.equal(
+    downloadCalls.length,
+    2,
+    "packaged acceptance must exercise existing-model verification",
+  );
+  const firstDownload = acceptanceScript.indexOf(
+    'Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny")',
+  );
+  const secondDownload = acceptanceScript.indexOf(
+    'Invoke-Sagascript -Executable $cliExePath -Arguments @("download-model", "nb-whisper-tiny")',
+    firstDownload + 1,
+  );
+  const transcription = acceptanceScript.indexOf('$transcriptionOutput = Invoke-Sagascript');
+  assert.ok(firstDownload >= 0 && secondDownload > firstDownload);
+  assert.ok(transcription > secondDownload);
+  assert.match(acceptanceScript, /verification_seconds/);
+});
+
+test("Windows release guide distinguishes the unsigned beta from stable release", () => {
+  assert.match(releaseGuide, /clearly labelled \*\*unsigned Windows beta\*\*/);
+  assert.match(releaseGuide, /not a signed or stable\s+release/);
+  assert.match(releaseGuide, /windows-beta-20260905/);
+  assert.match(releaseGuide, /Microsoft Store and MSIX remain optional future work/);
+  assert.match(releaseGuide, /Release[^\n]*requires every executable artifact/i);
+  assert.match(releaseGuide, /SHA256SUMS-Windows-<architecture>/);
+  assert.match(releaseGuide, /Sagascript-Windows-<architecture>-Portable\.exe/);
+  assert.match(releaseGuide, /Sagascript-Windows-<architecture>-CLI\.exe/);
+  assert.match(releaseGuide, /Sagascript-Windows-<architecture>-Setup\.exe/);
+  assert.match(releaseGuide, /Sagascript-Windows-<architecture>\.msi/);
+});
+
+test("third-party notice comparison accepts Windows checkout line endings", () => {
+  const output = execFileSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./generate-third-party-notices.mjs", import.meta.url)),
+      "--test-newline-normalization",
+    ],
+    { encoding: "utf8" },
+  );
+  assert.match(output, /newline normalization passed/);
+});
+
+test("ARM64 candidate records generated debug and release CPU flags", () => {
+  for (const [name, after, before] of [
+    ["Verify debug ARM64 native CPU flags", "name: Test and lint Rust workspace", "name: Gate real Windows transcription"],
+    ["Verify packaged ARM64 native CPU flags", "name: Build unsigned internal installers", "name: Prepare and verify candidate artifacts"],
+  ]) {
+    const start = workflow.indexOf(`name: ${name}`);
+    assert.ok(start > workflow.indexOf(after) && start < workflow.indexOf(before));
+    const step = workflow.slice(start, workflow.indexOf("\n      - name:", start));
+    assert.match(step, /if: matrix\.architecture == 'arm64'/);
+    assert.match(step, /node scripts\/report-windows-arm64-native\.mjs src-tauri\/target/);
+  }
+});

@@ -34,7 +34,7 @@
     }
   });
 
-  function onOnboardingComplete() {
+  async function onOnboardingComplete() {
     showOnboarding = false;
     // Strip onboarding param from URL
     const url = new URL(window.location.href);

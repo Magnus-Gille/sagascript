@@ -5,29 +5,31 @@
 
 Dictate anywhere. Privately. A lightweight menu bar app for macOS. Press a
 hotkey, speak, and text appears in any application. Audio and transcripts stay
-on your Mac; an internet connection is used only when you choose to download a
-speech or diarization model.
+on your Mac. Sagascript connects to the internet only when you choose a
+language that needs its speech engine, download another model, or check for an
+update.
 
 ## Features
 
 - **Push-to-talk dictation** -- hold a global hotkey, speak, release to transcribe and paste into any app
 - **Local transcription** -- audio and transcripts are processed on-device with Metal/Core ML; they are not uploaded
 - **Nordic-grade accuracy** -- Swedish and Norwegian use [KB-Whisper](https://huggingface.co/KBLab) (Swedish National Library) and [NB-Whisper](https://huggingface.co/NbAiLab) (Norwegian National Library), fine-tuned on 50,000+ hours of Nordic speech with 47% fewer errors than generic Whisper
-- **Privacy by default** -- no telemetry, cloud transcription, or transcript upload; network access is limited to model downloads you initiate
+- **Privacy by default** -- no telemetry, cloud transcription, or transcript upload; network access is limited to explicit speech-engine/model downloads and update checks
 - **No telemetry or tracking** -- no analytics, no usage sharing, no data collection of any kind
 - **Multi-language** -- English, Swedish, and Norwegian with dedicated models; additional languages supported via generic Whisper models
+- **Language shortcuts** -- assign different global hotkeys to different languages and switch without opening Settings
 - **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
 - **Configurable** -- choose your model, language, hotkey, and output behavior
 - **macOS v1** -- official releases are signed and notarized for macOS 13+ on Apple Silicon; Intel Macs are not supported by the v1 binary release
-- **Windows preview** -- the Windows port remains available for build-from-source testing; no official Windows binaries are published yet
+- **Windows beta** -- an unsigned Windows 11 preview for x64 and ARM64 is available from the [GitHub prerelease](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905)
 
 ## Building from source
 
 ### Prerequisites
 
 - **macOS**: macOS 13.0+ on Apple Silicon (Intel Macs are not supported by the v1 binary release)
-- **Windows preview**: Windows 10+ (build from source; not an official v1 release)
+- **Windows beta**: Windows 11 on x64 or ARM64; unsigned preview, not an official stable release
 - **Linux** (experimental): X11 session; GTK/WebKit dev libraries + `xdotool` — see [Linux notes](docs/linux-notes.md)
 - Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
 - Node.js 20+ (`brew install node` on macOS, or download from [nodejs.org](https://nodejs.org) on Windows)
@@ -49,8 +51,8 @@ cargo tauri build
 ```
 
 On macOS the `.app` bundle will be in `src-tauri/target/release/bundle/macos/`.
-Source builds can also produce Windows or experimental Linux packages; these
-are not official v1 release artifacts. See the platform notes below.
+Source builds can also produce Windows or experimental Linux packages. The
+downloadable Windows beta is documented in the platform notes below.
 
 ## CLI usage
 
@@ -59,6 +61,12 @@ Sagascript includes a full CLI. The desktop binary itself accepts every CLI subc
 ```bash
 # Transcribe an audio/video file
 sagascript transcribe recording.mp3
+
+# Load the model once and transcribe several files or a directory
+sagascript transcribe one.wav two.mp3 recordings/ --recursive
+
+# Stream one result or error per source (JSON Lines)
+sagascript transcribe recordings/ --recursive --jsonl
 
 # Record from microphone and transcribe
 sagascript record
@@ -73,6 +81,17 @@ sagascript download-model ggml-base.en
 sagascript config list
 sagascript config set language sv
 sagascript config get hotkey
+sagascript config path
+
+# Manage the external personal dictionary (global entries are hint-only)
+sagascript glossary path
+sagascript glossary add OpenRouter
+
+# Use one shortcut for English and another for Swedish
+sagascript config profiles create swedish --name Swedish --hotkey 'Option+Space' --language sv
+sagascript config profiles list
+# Enable deterministic aliases only in the explicit-language profile
+sagascript glossary add OpenRouter --alias 'open router' --profile swedish
 
 # Generate shell completions
 sagascript completions zsh > ~/.zfunc/_sagascript
@@ -83,6 +102,31 @@ sagascript manpages --dir /usr/local/share/man/man1
 
 Run `sagascript --help` for the full list of commands.
 
+Default CLI diagnostics retain Sagascript warnings and errors while suppressing
+routine native Whisper/GGML chatter, so machine-readable stdout (including
+`--json`) remains safe to capture. To opt in to verbose native diagnostics for
+troubleshooting, set an explicit filter, for example
+`RUST_LOG=whisper_rs=info sagascript transcribe recording.mp3`.
+
+For files of at least one minute, `--language auto` samples up to 60
+speech-rich windows for sustained language changes. JSON includes
+`language_regions` with language probabilities and a `mixed_language_audio`
+warning when two supported languages remain stable across multiple windows.
+The v1 behavior warns instead of silently switching the decoder; split the
+recording or transcribe each part with an explicit language for best accuracy.
+Explicit `en`, `sv`, and `no` keep the single-language fast path. Batch mode
+runs language detection, VAD, repetition checks, and diagnostics
+independently for every source file while loading the selected model only once.
+
+Batch directory discovery accepts WAV, MP3, M4A, AAC, MP4, MOV, QTA, OGG,
+WebM, and FLAC (case-insensitive), sorted by path. Explicit inputs retain their
+given order and duplicates are processed once. By default an invalid or corrupt
+item is reported while later items continue; the command still exits non-zero.
+Use `--fail-fast` to stop immediately. For machine consumers, multi-input
+`--json` returns an array of `{source,status,result|error}` objects and
+`--jsonl` emits the same objects one per line. Single-file `--json` retains its
+existing object shape.
+
 ## Permissions
 
 ### macOS
@@ -90,20 +134,25 @@ Run `sagascript --help` for the full list of commands.
 Sagascript needs the following permissions (macOS will prompt you on first use):
 
 - **Microphone** -- for recording audio
-- **Accessibility** -- for pasting transcriptions into the active app
+- **Accessibility** -- for pasting transcriptions into the active app and for
+  bare F13–F24 shortcuts
 Official macOS releases are Developer ID signed and notarized. If a downloaded
 release asks you to bypass Gatekeeper, do not run it; report the artifact.
 
 ### Windows
 
-Windows is currently a build-from-source preview. It needs microphone access
-for recording audio. Do not install an unsigned binary from an untrusted party.
+The [Windows beta](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905)
+is an unsigned preview for Windows 11 on x64 and ARM64. It needs microphone
+access for recording audio. Verify the release checksums before running it, and
+do not bypass SmartScreen.
 
 ## Documentation
 
 - [Installation guide](docs/installation.md) -- detailed install instructions for macOS and Windows
 - [Linux notes](docs/linux-notes.md) -- experimental Linux build, prerequisites, and known limitations
 - [Windows-specific notes](docs/windows-notes.md) -- feature comparison, known limitations, and troubleshooting
+- [Windows release track](docs/windows-release.md) -- unsigned beta distribution, verification record, and stable-release gates
+- [Configuration files](docs/configuration.md) -- XDG paths, dotfiles, migration, and personal dictionaries
 - [Third-party notices](THIRD_PARTY_NOTICES.md) -- dependency and downloadable-model licenses
 - [Model sources and integrity manifest](docs/model-sources.md) -- pinned revisions, licenses, sizes, and SHA-256 checksums
 

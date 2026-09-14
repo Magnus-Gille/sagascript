@@ -5,14 +5,15 @@ use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 use whisper_rs::{
-    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
-    WhisperVadParams, get_lang_str,
+    get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
+    WhisperState, WhisperVadParams,
 };
 #[cfg(feature = "diarization")]
 use whisper_rs::{DtwMode, DtwParameters};
 
 use crate::error::DictationError;
 use crate::settings::{Language, WhisperModel};
+use crate::transcription::chunking::{plan_chunks, AudioChunk};
 use crate::transcription::diagnostics::LanguageDetection;
 use crate::transcription::model;
 
@@ -20,6 +21,95 @@ use crate::transcription::model;
 /// isn't latency-sensitive, so a wider beam trades speed for fewer repetition
 /// loops. Shared by the GUI file-transcribe command and the `transcribe` CLI.
 pub const FILE_TRANSCRIBE_BEAM: u32 = 5;
+
+#[cfg(any(test, all(target_os = "windows", target_arch = "x86_64")))]
+fn require_packaged_x64_cpu(
+    baseline: Option<&str>,
+    features: [bool; 4],
+) -> Result<(), DictationError> {
+    match baseline {
+        None => Ok(()), // Local source builds retain their own compiler policy.
+        Some("avx2") if features.into_iter().all(|supported| supported) => Ok(()),
+        Some("avx2") => Err(DictationError::TranscriptionFailed(
+            "This Windows x64 build requires AVX2, FMA, F16C and BMI2 CPU support. Use a compatible computer or a source build configured for your CPU.".into(),
+        )),
+        Some(_) => Err(DictationError::TranscriptionFailed(
+            "Unrecognized Windows x64 build CPU policy; install a verified Sagascript build.".into(),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod packaged_x64_cpu_tests {
+    use super::require_packaged_x64_cpu;
+
+    #[test]
+    fn packaged_baseline_requires_every_feature_before_native_model_loading() {
+        for bits in 0..16 {
+            let features = std::array::from_fn(|index| bits & (1 << index) != 0);
+            assert_eq!(
+                require_packaged_x64_cpu(Some("avx2"), features).is_ok(),
+                bits == 15
+            );
+            assert!(require_packaged_x64_cpu(None, features).is_ok());
+        }
+        assert!(require_packaged_x64_cpu(Some("unknown"), [true; 4]).is_err());
+    }
+
+    #[test]
+    fn unsupported_cpu_error_is_actionable_and_contains_no_model_or_audio_data() {
+        let error = require_packaged_x64_cpu(Some("avx2"), [false; 4])
+            .unwrap_err()
+            .to_string();
+        for feature in ["AVX2", "FMA", "F16C", "BMI2", "source build"] {
+            assert!(error.contains(feature));
+        }
+    }
+}
+
+/// Privacy-safe timings shared by live dictation and its CLI benchmark.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct DictationTimings {
+    pub model_ms: f64,
+    pub inference_ms: f64,
+    pub model_cached: bool,
+    #[serde(skip)]
+    pub model_acquisition_started: bool,
+    #[serde(skip)]
+    pub inference_started: bool,
+    #[serde(skip)]
+    pub model_ready_at: Option<Instant>,
+}
+
+/// Parallel file transcription is deliberately bounded: each state owns GPU
+/// buffers and a Metal command queue, so unbounded fan-out quickly wastes RAM.
+pub const MAX_PARALLEL_CHUNKS: usize = 4;
+
+/// Do not split into sub-minute pieces. Whisper loses decoder context at every
+/// boundary, and short chunks do not amortize state creation.
+const MIN_PARALLEL_CHUNK_SAMPLES: usize = 60 * 16_000;
+const AUTO_PARALLEL_MIN_SAMPLES: usize = 10 * 60 * 16_000;
+const AUTO_PARALLEL_MAX_MODEL_MB: u32 = 500;
+
+/// Select the measured-safe automatic file-transcription parallelism.
+///
+/// Beam search benefits from two Metal command queues on long files. Greedy
+/// decoding did not speed up in the benchmark, and large models have not yet
+/// passed the memory gate, so both remain serial unless explicitly overridden.
+pub fn recommended_parallel_chunks(
+    audio_samples: usize,
+    model: WhisperModel,
+    beam_size: u32,
+) -> usize {
+    if beam_size >= 2
+        && audio_samples >= AUTO_PARALLEL_MIN_SAMPLES
+        && model.size_mb() <= AUTO_PARALLEL_MAX_MODEL_MB
+    {
+        2
+    } else {
+        1
+    }
+}
 
 /// How long `with_warm_state` waits for the state mutex before giving up with
 /// [`DictationError::ModelBusy`] instead of blocking a caller forever.
@@ -35,6 +125,102 @@ const WARM_STATE_GRACE: Duration = Duration::from_secs(3);
 
 /// Poll interval while waiting for the state mutex during the grace budget.
 const WARM_STATE_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// Maximum number of resident language models, including the active model.
+/// Two covers the common bilingual hotkey setup without turning the app into an
+/// unbounded model server.
+pub const WARM_MODEL_CACHE_MAX_MODELS: usize = 2;
+
+/// Maximum combined advertised model size retained across the active and warm
+/// secondary model. This admits the Swedish/English base pair (60 + 142 MB)
+/// and rejects combinations whose steady-state footprint would be surprising.
+pub const WARM_MODEL_CACHE_BUDGET_MB: u32 = 384;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelAvailability {
+    Active,
+    Cached,
+    Missing,
+}
+
+/// Context-level acceleration/timestamp mode. Whisper fixes these parameters
+/// when a context is created, so the profile is part of the runtime identity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ContextProfile {
+    /// Exact flash-attention kernels for dictation and ordinary file
+    /// transcription. This is the default profile.
+    #[default]
+    FlashAttention,
+    /// Cross-attention DTW required for diarization token alignment.
+    TokenAlignment,
+}
+
+impl ContextProfile {
+    /// Select token alignment only for explicit speaker diarization.
+    pub const fn for_diarization(enabled: bool) -> Self {
+        if enabled {
+            Self::TokenAlignment
+        } else {
+            Self::FlashAttention
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeKey {
+    model: WhisperModel,
+    profile: ContextProfile,
+}
+
+fn model_availability(
+    active: Option<RuntimeKey>,
+    cached: Option<RuntimeKey>,
+    desired: RuntimeKey,
+) -> ModelAvailability {
+    if active == Some(desired) {
+        ModelAvailability::Active
+    } else if cached == Some(desired) {
+        ModelAvailability::Cached
+    } else {
+        ModelAvailability::Missing
+    }
+}
+
+fn can_cache_pair(active: RuntimeKey, secondary: RuntimeKey) -> bool {
+    active != secondary
+        && active
+            .model
+            .size_mb()
+            .saturating_add(secondary.model.size_mb())
+            <= WARM_MODEL_CACHE_BUDGET_MB
+}
+
+fn activate_cached_runtime<C, S>(
+    desired: RuntimeKey,
+    active_key: &mut Option<RuntimeKey>,
+    active_context: &mut Option<C>,
+    active_state: &mut Option<S>,
+    cached: &mut Option<CachedWhisperRuntime<C, S>>,
+) -> bool {
+    let Some(cached_runtime) = cached.take() else {
+        return false;
+    };
+    if cached_runtime.key != desired || active_key.is_none() || active_context.is_none() {
+        *cached = Some(cached_runtime);
+        return false;
+    }
+
+    let active_runtime = CachedWhisperRuntime {
+        key: active_key.take().unwrap(),
+        context: active_context.take().unwrap(),
+        state: active_state.take(),
+    };
+    *active_key = Some(cached_runtime.key);
+    *active_context = Some(cached_runtime.context);
+    *active_state = cached_runtime.state;
+    *cached = Some(active_runtime);
+    true
+}
 
 /// Per-transcription tuning knobs (opt-in modes). `Default` reproduces the
 /// fast, robust dictation defaults: greedy decoding, temperature fallback on,
@@ -56,6 +242,9 @@ pub struct TranscribeOptions {
     /// Request real Whisper segment timestamps for structured outputs such as
     /// CLI JSON. Text decoding remains in no-timestamps mode.
     pub segment_timestamps: bool,
+    /// Number of independent Whisper states used for long-file transcription.
+    /// Values are clamped to [`MAX_PARALLEL_CHUNKS`]; `0` and `1` are serial.
+    pub parallel_chunks: usize,
 }
 
 impl Default for TranscribeOptions {
@@ -66,6 +255,7 @@ impl Default for TranscribeOptions {
             temperature_fallback: true,
             vad_model_path: None,
             segment_timestamps: false,
+            parallel_chunks: 1,
         }
     }
 }
@@ -79,7 +269,7 @@ impl Default for TranscribeOptions {
 /// Typical values: > -0.3 confident, -0.3..-0.8 shaky, < -0.8 suspect.
 /// `no_speech_prob` is whisper's own per-segment estimate that the window
 /// contains no speech (near 1.0 ⇒ likely hallucinated text).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TranscriptSegment {
     /// Segment start in seconds.
     pub start: f64,
@@ -94,6 +284,22 @@ pub struct TranscriptSegment {
     pub no_speech_prob: f32,
 }
 
+/// Timestamped transcript plus phase timings used by the diarization path.
+#[cfg(feature = "diarization")]
+#[derive(Debug, Clone)]
+pub struct DiarizationTranscription {
+    pub segments: Vec<(f64, f64, String)>,
+    pub timings: DiarizationTranscriptionTimings,
+}
+
+/// Separates native Whisper inference from Rust-side DTW word attribution.
+#[cfg(feature = "diarization")]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+pub struct DiarizationTranscriptionTimings {
+    pub whisper_inference_seconds: f64,
+    pub word_timestamp_attribution_seconds: f64,
+}
+
 /// Mean of per-token log-probabilities; `None` for an empty slice.
 fn mean_logprob(plogs: &[f32]) -> Option<f32> {
     if plogs.is_empty() {
@@ -102,15 +308,32 @@ fn mean_logprob(plogs: &[f32]) -> Option<f32> {
     Some(plogs.iter().sum::<f32>() / plogs.len() as f32)
 }
 
+/// Return whether a raw Whisper segment contains its exact no-speech marker.
+///
+/// The marker is only interpreted while assembling user-facing text. Raw
+/// timestamped segments remain unchanged for diagnostics.
+pub fn contains_no_speech_marker(text: &str) -> bool {
+    text.contains("<|nospeech|>")
+}
+
 /// Assemble the plain transcript from Whisper's raw segments.
 ///
 /// Whisper normally includes a leading space on each new segment. When it does
 /// not, preserve the expected sentence boundary in the user-facing transcript
 /// without changing the raw, timestamped segment text.
-fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
+pub fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
     let mut transcript = String::new();
 
     for segment in segments {
+        // Whisper can prefix a silence hallucination with its internal
+        // no-speech token. Dropping only the marker would still expose the
+        // fabricated words that follow it, so discard the whole segment from
+        // the plain user-facing transcript. Raw timestamped segments remain
+        // unchanged for diagnostics.
+        if contains_no_speech_marker(&segment.text) {
+            continue;
+        }
+
         let previous_ends_with_whitespace = transcript
             .chars()
             .next_back()
@@ -135,7 +358,213 @@ fn assemble_transcript(segments: &[TranscriptSegment]) -> String {
         transcript.push_str(&segment.text);
     }
 
-    transcript
+    separate_sentence_boundaries(&transcript)
+}
+
+const MIN_STITCH_ANCHOR_WORDS: usize = 4;
+const MIN_STITCH_ANCHOR_CHARS: usize = 12;
+const MAX_STITCH_OVERLAP_WORDS: usize = 96;
+const MAX_STITCH_UNANCHORED_WORDS: usize = 32;
+
+#[derive(Debug)]
+struct StitchWord {
+    normalized: String,
+    start: usize,
+}
+
+/// Join independently decoded, overlapping chunks without repeating their
+/// shared prefix. Matching is deliberately conservative: short repetitions
+/// are preserved rather than risking deletion of real speech.
+fn stitch_chunk_results(
+    chunk_results: Vec<Vec<TranscriptSegment>>,
+    audio_duration: f64,
+) -> Vec<TranscriptSegment> {
+    let mut stitched: Vec<TranscriptSegment> = Vec::new();
+    let mut previous_end = 0.0;
+
+    for chunk in chunk_results {
+        if !stitched.is_empty() && !chunk.is_empty() {
+            let previous_text = concatenated_segment_text(&stitched);
+            let chunk_text = concatenated_segment_text(&chunk);
+            if let Some(suffix_start) = overlapping_suffix_start(&previous_text, &chunk_text) {
+                trim_segment_suffix(&mut stitched, suffix_start);
+            }
+        }
+
+        for mut segment in chunk {
+            if segment.text.trim().is_empty() {
+                continue;
+            }
+            (segment.start, segment.end) =
+                sanitize_segment_bounds(segment.start, segment.end, audio_duration, previous_end);
+            previous_end = segment.end;
+            stitched.push(segment);
+        }
+    }
+
+    stitched
+}
+
+fn concatenated_segment_text(segments: &[TranscriptSegment]) -> String {
+    let capacity = segments.iter().map(|segment| segment.text.len()).sum();
+    let mut text = String::with_capacity(capacity);
+    for segment in segments {
+        text.push_str(&segment.text);
+    }
+    text
+}
+
+fn overlapping_suffix_start(previous: &str, next: &str) -> Option<usize> {
+    let previous_words = stitch_words(previous);
+    let next_words = stitch_words(next);
+    let previous_floor = previous_words
+        .len()
+        .saturating_sub(MAX_STITCH_OVERLAP_WORDS);
+    let next_limit = next_words.len().min(MAX_STITCH_OVERLAP_WORDS);
+    let mut best: Option<(usize, usize, usize)> = None;
+
+    for previous_index in previous_floor..previous_words.len() {
+        for next_index in 0..next_limit {
+            if previous_index < next_index {
+                continue;
+            }
+            let aligned_start = previous_index - next_index;
+            if aligned_start < previous_floor {
+                continue;
+            }
+
+            let mut anchor_words = 0;
+            while previous_index + anchor_words < previous_words.len()
+                && next_index + anchor_words < next_limit
+                && previous_words[previous_index + anchor_words].normalized
+                    == next_words[next_index + anchor_words].normalized
+            {
+                anchor_words += 1;
+            }
+            if anchor_words < MIN_STITCH_ANCHOR_WORDS
+                || next_index > MAX_STITCH_UNANCHORED_WORDS
+                || previous_words.len() - previous_index - anchor_words
+                    > MAX_STITCH_UNANCHORED_WORDS
+            {
+                continue;
+            }
+            let anchor_chars = next_words[next_index..next_index + anchor_words]
+                .iter()
+                .map(|word| word.normalized.chars().count())
+                .sum::<usize>();
+            if anchor_chars < MIN_STITCH_ANCHOR_CHARS {
+                continue;
+            }
+
+            let candidate = (next_index, usize::MAX - anchor_words, aligned_start);
+            if best.is_none_or(|current| candidate < current) {
+                best = Some(candidate);
+            }
+        }
+    }
+
+    best.map(|(_, _, aligned_start)| previous_words[aligned_start].start)
+}
+
+fn stitch_words(text: &str) -> Vec<StitchWord> {
+    let mut words = Vec::new();
+    let mut start = None;
+
+    for (index, character) in text.char_indices() {
+        let continues_word = character.is_alphanumeric()
+            || (start.is_some() && matches!(character, '\'' | '’' | '-'));
+        if continues_word {
+            if start.is_none() && character.is_alphanumeric() {
+                start = Some(index);
+            }
+        } else if let Some(word_start) = start.take() {
+            let normalized = text[word_start..index]
+                .trim_end_matches(['\'', '’', '-'])
+                .to_lowercase();
+            if !normalized.is_empty() {
+                words.push(StitchWord {
+                    normalized,
+                    start: word_start,
+                });
+            }
+        }
+    }
+
+    if let Some(word_start) = start {
+        let normalized = text[word_start..]
+            .trim_end_matches(['\'', '’', '-'])
+            .to_lowercase();
+        if !normalized.is_empty() {
+            words.push(StitchWord {
+                normalized,
+                start: word_start,
+            });
+        }
+    }
+
+    words
+}
+
+fn trim_segment_suffix(segments: &mut Vec<TranscriptSegment>, suffix_start: usize) {
+    let mut remaining = suffix_start;
+    let mut retained = Vec::with_capacity(segments.len());
+
+    for mut segment in segments.drain(..) {
+        if remaining > segment.text.len() {
+            remaining -= segment.text.len();
+            retained.push(segment);
+            continue;
+        }
+
+        debug_assert!(segment.text.is_char_boundary(remaining));
+        segment.text.truncate(remaining);
+        let trimmed_len = segment.text.trim_end().len();
+        segment.text.truncate(trimmed_len);
+        if !segment.text.is_empty() {
+            retained.push(segment);
+        }
+        break;
+    }
+
+    *segments = retained;
+}
+
+/// Insert a missing word boundary after sentence-ending punctuation when the
+/// following character clearly begins a new sentence. Whisper can omit this
+/// separator inside a single raw segment, so repairing only segment joins is
+/// insufficient. Requiring an uppercase letter keeps decimals such as `1.2`
+/// unchanged, while a one-character lookahead preserves the internal dots in
+/// initialisms such as `U.S.A.`.
+fn separate_sentence_boundaries(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut word_len = 0usize;
+    let mut word_is_single_uppercase = false;
+
+    while let Some(current) = chars.next() {
+        let previous_word_is_initial = word_len == 1 && word_is_single_uppercase;
+        let continues_initialism = current == '.'
+            && previous_word_is_initial
+            && chars.peek().is_some_and(|next| next.is_uppercase())
+            && chars.clone().nth(1) == Some('.');
+        result.push(current);
+        if matches!(current, '.' | '?' | '!')
+            && chars.peek().is_some_and(|next| next.is_uppercase())
+            && !continues_initialism
+        {
+            result.push(' ');
+        }
+
+        if current.is_alphanumeric() {
+            word_len += 1;
+            word_is_single_uppercase = word_len == 1 && current.is_uppercase();
+        } else if !matches!(current, '\'' | '’') {
+            word_len = 0;
+            word_is_single_uppercase = false;
+        }
+    }
+
+    result
 }
 
 /// Bound whisper's segment timestamps to the source audio and preserve output
@@ -168,6 +597,14 @@ fn sanitize_segment_bounds(
     (start, end)
 }
 
+fn has_live_audio_signal(audio: &[f32]) -> Result<bool, DictationError> {
+    if audio.is_empty() {
+        return Err(DictationError::NoAudioCaptured);
+    }
+    crate::audio::speech::has_audio_signal(audio)
+        .map_err(|reason| DictationError::TranscriptionFailed(reason.to_string()))
+}
+
 /// Local transcription backend using whisper-rs (whisper.cpp bindings)
 /// Uses GGML model files with optional CoreML acceleration on macOS.
 ///
@@ -181,14 +618,24 @@ pub struct WhisperBackend {
     /// whisper/Metal state-init (kernel compile + GPU buffer alloc) on every
     /// call. Created lazily on first transcription; reset to None on model reload.
     state: Mutex<Option<WhisperState>>,
-    /// Currently loaded model
-    loaded_model: Mutex<Option<WhisperModel>>,
+    /// Currently loaded model and immutable context profile.
+    loaded_runtime: Mutex<Option<RuntimeKey>>,
+    /// One bounded secondary runtime. Its context and reusable state stay warm
+    /// so a bilingual hotkey switch can swap runtimes without reopening model
+    /// weights or recompiling inference state.
+    cached_runtime: Mutex<Option<CachedWhisperRuntime>>,
     /// Abort flag — set to true to cancel in-progress transcription
     abort_flag: Arc<AtomicBool>,
     /// Serializes model (re)loads so concurrent `ensure_model()` callers — e.g.
     /// the startup warmup thread and the first dictation — don't load the same
     /// model twice or race the warm-state reset.
     load_lock: Mutex<()>,
+}
+
+struct CachedWhisperRuntime<C = WhisperContext, S = WhisperState> {
+    key: RuntimeKey,
+    context: C,
+    state: Option<S>,
 }
 
 // WhisperContext is Send+Sync (it wraps a C pointer that's thread-safe)
@@ -204,10 +651,20 @@ impl Default for WhisperBackend {
 
 impl WhisperBackend {
     pub fn new() -> Self {
+        // whisper.cpp and GGML otherwise write their native diagnostics directly
+        // to stderr, bypassing Rust's UTF-8 and log-level guarantees. Route them
+        // through tracing before any context is created: the CLI suppresses
+        // routine native model/kernel/token chatter, while the hook's lossy
+        // C-string conversion preserves emitted errors as valid UTF-8. Application
+        // warnings remain visible. whisper-rs guards installation with `Once`, so
+        // concurrent backend construction remains safe.
+        whisper_rs::install_logging_hooks();
+
         Self {
             context: Mutex::new(None),
             state: Mutex::new(None),
-            loaded_model: Mutex::new(None),
+            loaded_runtime: Mutex::new(None),
+            cached_runtime: Mutex::new(None),
             abort_flag: Arc::new(AtomicBool::new(false)),
             load_lock: Mutex::new(()),
         }
@@ -280,7 +737,9 @@ impl WhisperBackend {
     /// [`Self::state`] mutex instead of running to completion. This un-wedges the
     /// transcription pipeline on the timeout path (see WP2b).
     pub fn request_abort(&self) {
-        warn!("Transcription abort requested — signalling whisper to stop at the next compute step");
+        warn!(
+            "Transcription abort requested — signalling whisper to stop at the next compute step"
+        );
         self.abort_flag.store(true, Ordering::SeqCst);
     }
 
@@ -326,8 +785,44 @@ impl WhisperBackend {
         }
     }
 
-    /// Load a specific model, replacing any previously loaded model
+    /// Load a model for the default low-latency transcription profile.
     pub fn load_model(&self, whisper_model: WhisperModel) -> Result<(), DictationError> {
+        self.load_model_with_profile(whisper_model, ContextProfile::FlashAttention)
+    }
+
+    /// Load a specific model and immutable context profile, replacing the
+    /// active runtime. DTW alignment and flash attention require different
+    /// whisper contexts and therefore cannot be toggled per transcription.
+    pub fn load_model_with_profile(
+        &self,
+        whisper_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> Result<(), DictationError> {
+        let _load = self.lock_load_bounded()?;
+        self.load_model_inner(whisper_model, profile)
+    }
+
+    fn load_model_inner(
+        &self,
+        whisper_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> Result<(), DictationError> {
+        // Check before model-loading FFI, including default context parameters.
+        // The candidate build hook pins its native library to this same policy.
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        require_packaged_x64_cpu(
+            option_env!("SAGASCRIPT_WINDOWS_X64_BASELINE"),
+            [
+                std::is_x86_feature_detected!("avx2"),
+                std::is_x86_feature_detected!("fma"),
+                std::is_x86_feature_detected!("f16c"),
+                std::is_x86_feature_detected!("bmi2"),
+            ],
+        )?;
+        let desired_key = RuntimeKey {
+            model: whisper_model,
+            profile,
+        };
         let model_path = model::model_path(whisper_model);
 
         if !model_path.exists() {
@@ -337,7 +832,6 @@ impl WhisperBackend {
             )));
         }
 
-
         // Never hand an unverified GGML file to whisper.cpp's native parser.
         // This also performs a one-time compatibility check for files saved by
         // versions released before download integrity was enforced.
@@ -345,29 +839,29 @@ impl WhisperBackend {
         model::quarantine_unverified_coreml_encoder(whisper_model)?;
 
         info!(
-            "Loading whisper model: {} from {}",
+            "Loading whisper model: {} ({profile:?}) from {}",
             whisper_model.display_name(),
             model_path.display()
         );
 
-        // Flash attention is an exact (not approximate) attention kernel that is
-        // accelerated on Metal — a free speedup with identical output. It is
-        // incompatible with DTW: whisper.cpp silently disables DTW token
-        // timestamps when flash_attn is on. So the default (dictation) build
-        // turns it ON, and the diarization build leaves it off and uses DTW for
-        // attention-based token timestamps (used by --diarize) instead.
-        let ctx_params = {
-            let mut p = WhisperContextParameters::default();
-            #[cfg(not(feature = "diarization"))]
-            p.flash_attn(true);
-            #[cfg(feature = "diarization")]
-            p.dtw_parameters(DtwParameters {
-                mode: DtwMode::ModelPreset {
-                    model_preset: whisper_model.dtw_preset(),
-                },
-                ..DtwParameters::default()
-            });
-            p
+        let mut ctx_params = WhisperContextParameters::default();
+        match profile {
+            ContextProfile::FlashAttention => {
+                ctx_params.flash_attn(true);
+            }
+            ContextProfile::TokenAlignment => {
+                #[cfg(feature = "diarization")]
+                ctx_params.dtw_parameters(DtwParameters {
+                    mode: DtwMode::ModelPreset {
+                        model_preset: whisper_model.dtw_preset(),
+                    },
+                    ..DtwParameters::default()
+                });
+                #[cfg(not(feature = "diarization"))]
+                return Err(DictationError::TranscriptionFailed(
+                    "Token-alignment context requires the diarization feature".to_string(),
+                ));
+            }
         };
 
         // whisper.cpp's Metal backend registration assumes that macOS returns
@@ -377,21 +871,26 @@ impl WhisperBackend {
         #[cfg(target_os = "macos")]
         super::metal_preflight::ensure_available()?;
 
+        // A third model must never overlap two already-resident runtimes while
+        // its weights are being opened. Keep the active runtime available for
+        // rollback, but discard the secondary before allocating the new
+        // context so transient memory remains bounded to two model contexts.
+        self.cached_runtime.lock().unwrap().take();
+
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().ok_or_else(|| {
                 DictationError::TranscriptionFailed("Invalid model path".to_string())
             })?,
             ctx_params,
         )
-        .map_err(|e| {
-            DictationError::TranscriptionFailed(format!("Failed to load model: {e}"))
-        })?;
+        .map_err(|e| DictationError::TranscriptionFailed(format!("Failed to load model: {e}")))?;
 
-        // Publish the new context atomically with respect to warm-state users:
-        // hold the state lock across the swap so no in-flight transcription can
-        // observe the new context (via loaded_model) while still holding the old
-        // warm state. The next transcription lazily recreates the state. Lock
-        // order is state -> context, matching with_warm_state().
+        // Publish the new context atomically with respect to warm-state users.
+        // When the old/new pair fits the explicit cache budget, move the old
+        // context and its reusable warm state into the secondary slot. The next
+        // switch can then restore both without touching disk or rebuilding the
+        // state. Lock order is state -> context -> loaded_runtime -> cache,
+        // matching activate_cached_profile().
         //
         // The state lock is acquired with the same bounded policy as
         // with_warm_state: if a stuck inference pins it past the grace budget,
@@ -400,34 +899,252 @@ impl WhisperBackend {
         // switch forever behind a wedged transcription.
         {
             let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
-            *self.context.lock().unwrap() = Some(ctx);
-            *self.loaded_model.lock().unwrap() = Some(whisper_model);
+            let mut context = self.context.lock().unwrap();
+            let mut loaded_runtime = self.loaded_runtime.lock().unwrap();
+            let previous = match (loaded_runtime.take(), context.take()) {
+                (Some(key), Some(context)) => Some(CachedWhisperRuntime {
+                    key,
+                    context,
+                    state: state.take(),
+                }),
+                (None, None) => None,
+                _ => panic!("whisper model/context invariant violated"),
+            };
+
+            *context = Some(ctx);
+            *loaded_runtime = Some(desired_key);
             *state = None;
+
+            let mut cached = self.cached_runtime.lock().unwrap();
+            *cached = previous.filter(|runtime| can_cache_pair(desired_key, runtime.key));
         }
 
-        info!("Model loaded: {}", whisper_model.display_name());
+        info!(
+            "Model loaded: {} ({profile:?})",
+            whisper_model.display_name()
+        );
         Ok(())
     }
 
     /// Get the currently loaded model
     pub fn loaded_model(&self) -> Option<WhisperModel> {
-        *self.loaded_model.lock().unwrap()
+        self.loaded_runtime.lock().unwrap().map(|key| key.model)
     }
 
-    /// Check if the correct model is loaded for the given settings
+    /// Get the immutable context profile of the active runtime.
+    pub fn loaded_context_profile(&self) -> Option<ContextProfile> {
+        self.loaded_runtime.lock().unwrap().map(|key| key.profile)
+    }
+
+    /// Models currently resident in memory, active first.
+    pub fn resident_models(&self) -> Vec<WhisperModel> {
+        let active = self.loaded_model();
+        let cached = self
+            .cached_runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|runtime| runtime.key.model);
+        active.into_iter().chain(cached).collect()
+    }
+
+    /// Check whether selecting this model in the default flash-attention
+    /// profile requires opening model weights.
     pub fn needs_reload(&self, desired_model: WhisperModel) -> bool {
-        self.loaded_model() != Some(desired_model)
+        self.needs_reload_with_profile(desired_model, ContextProfile::FlashAttention)
     }
 
-    /// Ensure the correct model is loaded. Serialized via `load_lock` so two
-    /// concurrent callers don't both load the same model; the loser re-checks
-    /// after acquiring the lock and finds the model already loaded.
+    /// Check whether selecting this model/profile runtime requires opening
+    /// model weights. A warm cached runtime returns false.
+    pub fn needs_reload_with_profile(
+        &self,
+        desired_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> bool {
+        let desired = RuntimeKey {
+            model: desired_model,
+            profile,
+        };
+        let active = *self.loaded_runtime.lock().unwrap();
+        let cached = self
+            .cached_runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|runtime| runtime.key);
+        model_availability(active, cached, desired) == ModelAvailability::Missing
+    }
+
+    /// Ensure the correct model is active in the default flash-attention
+    /// profile.
     pub fn ensure_model(&self, desired_model: WhisperModel) -> Result<(), DictationError> {
-        let _load = self.load_lock.lock().unwrap();
-        if self.needs_reload(desired_model) {
-            info!("Loading model: {:?}", desired_model);
-            self.load_model(desired_model)?;
+        self.ensure_model_with_profile(desired_model, ContextProfile::FlashAttention)
+    }
+
+    /// Ensure the correct model/profile runtime is active. Serialized via
+    /// `load_lock` so concurrent callers cannot race a load or cache switch.
+    pub fn ensure_model_with_profile(
+        &self,
+        desired_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> Result<(), DictationError> {
+        let _load = self.lock_load_bounded()?;
+        self.ensure_model_inner(desired_model, profile)
+    }
+
+    /// Ensure a model/profile is active and run a callback while the model
+    /// selection remains pinned. This keeps model selection, context access,
+    /// and inference in one transaction for callers that need to use one of
+    /// the lower-level transcription entry points.
+    ///
+    /// The callback must not call `ensure_model*` or `load_model*` on this
+    /// backend, because the bounded load lock is held until it returns.
+    pub fn with_model<R>(
+        &self,
+        model: WhisperModel,
+        profile: ContextProfile,
+        callback: impl FnOnce(&Self) -> Result<R, DictationError>,
+    ) -> Result<R, DictationError> {
+        let _load = self.lock_load_bounded()?;
+        self.ensure_model_inner(model, profile)?;
+        callback(self)
+    }
+
+    fn ensure_model_inner(
+        &self,
+        desired_model: WhisperModel,
+        profile: ContextProfile,
+    ) -> Result<(), DictationError> {
+        let desired = RuntimeKey {
+            model: desired_model,
+            profile,
+        };
+        let active = *self.loaded_runtime.lock().unwrap();
+        let cached = self
+            .cached_runtime
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|runtime| runtime.key);
+        match model_availability(active, cached, desired) {
+            ModelAvailability::Active => {}
+            ModelAvailability::Cached => {
+                self.activate_cached_profile(desired)?;
+            }
+            ModelAvailability::Missing => {
+                info!("Loading model runtime: {desired:?}");
+                self.load_model_inner(desired_model, profile)?;
+            }
         }
+        Ok(())
+    }
+
+    fn lock_load_bounded(&self) -> Result<MutexGuard<'_, ()>, DictationError> {
+        let deadline = Instant::now() + WARM_STATE_GRACE;
+        loop {
+            match self.load_lock.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(TryLockError::Poisoned(_)) => {
+                    // This mutex protects the multi-field runtime transaction,
+                    // not merely its unit payload. A panic can leave context,
+                    // runtime identity or warm state partially updated/poisoned.
+                    // Do not recover the guard and reuse potentially invalid
+                    // native state, or misreport a permanent fault as contention.
+                    return Err(DictationError::TranscriptionFailed(
+                        "The transcription engine was interrupted and cannot safely resume; restart Sagascript before trying again.".into(),
+                    ));
+                }
+                Err(TryLockError::WouldBlock) if Instant::now() >= deadline => {
+                    return Err(DictationError::ModelBusy);
+                }
+                Err(TryLockError::WouldBlock) => std::thread::sleep(WARM_STATE_POLL_INTERVAL),
+            }
+        }
+    }
+
+    /// Keep selection and inference in one transaction: startup warmup or a
+    /// second language must not swap the active context between these steps.
+    /// Blocking; desktop callers must use spawn_blocking.
+    pub fn transcribe_dictation(
+        &self,
+        model: WhisperModel,
+        audio: &[f32],
+        language: Language,
+        options: &TranscribeOptions,
+        timings: &mut DictationTimings,
+    ) -> Result<String, DictationError> {
+        *timings = DictationTimings::default();
+        let model_started = Instant::now();
+        timings.model_acquisition_started = true;
+        let _load = match self.lock_load_bounded() {
+            Ok(load) => load,
+            Err(error) => {
+                timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
+                return Err(error);
+            }
+        };
+        timings.model_cached = !self.needs_reload(model);
+        let selection = self.ensure_model_inner(model, ContextProfile::FlashAttention);
+        timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
+        selection?;
+        timings.model_ready_at = Some(Instant::now());
+        timings.inference_started = true;
+        let inference_started = Instant::now();
+        let result = self.transcribe_sync_with_options(audio, language, options, |_| {});
+        timings.inference_ms = inference_started.elapsed().as_secs_f64() * 1000.0;
+        result
+    }
+
+    /// Transactional live-microphone transcription. The signal guard runs
+    /// before model selection so empty, invalid, and near-silent captures do
+    /// not acquire or load a model. File/diagnostic callers should continue to
+    /// use [`Self::transcribe_dictation`] so intentional warmups remain raw.
+    pub fn transcribe_live_dictation(
+        &self,
+        model: WhisperModel,
+        audio: &[f32],
+        language: Language,
+        options: &TranscribeOptions,
+        timings: &mut DictationTimings,
+    ) -> Result<String, DictationError> {
+        *timings = DictationTimings::default();
+        if !has_live_audio_signal(audio)? {
+            info!("Skipping near-silent dictation: {} samples", audio.len());
+            return Ok(String::new());
+        }
+        self.transcribe_dictation(model, audio, language, options, timings)
+    }
+
+    pub fn warmup_model(&self, model: WhisperModel, language: Language) -> Result<(), DictationError> {
+        let mut timings = DictationTimings::default();
+        self.transcribe_dictation(model, &[0.0; 1600], language, &TranscribeOptions::default(), &mut timings)?;
+        Ok(())
+    }
+
+    /// Swap the active and secondary runtimes while preserving both warm
+    /// states. The caller holds load_lock, so cache membership cannot change
+    /// concurrently with this operation.
+    fn activate_cached_profile(&self, desired: RuntimeKey) -> Result<(), DictationError> {
+        let mut state = self.lock_state_bounded(WARM_STATE_GRACE)?;
+        let mut context = self.context.lock().unwrap();
+        let mut loaded_runtime = self.loaded_runtime.lock().unwrap();
+        let mut cached = self.cached_runtime.lock().unwrap();
+
+        if !activate_cached_runtime(
+            desired,
+            &mut loaded_runtime,
+            &mut context,
+            &mut state,
+            &mut cached,
+        ) {
+            return Err(DictationError::ModelNotLoaded);
+        }
+
+        info!(
+            "Activated cached whisper model: {} ({:?})",
+            desired.model.display_name(),
+            desired.profile
+        );
         Ok(())
     }
 
@@ -516,7 +1233,9 @@ impl WhisperBackend {
         // aborted, drop the warm state and clear the flag before releasing the
         // lock, so the next caller starts from a clean slate.
         if self.abort_flag.swap(false, Ordering::SeqCst) {
-            warn!("Inference was aborted — discarding warm whisper state; next transcription will rebuild it");
+            warn!(
+                "Inference was aborted — discarding warm whisper state; next transcription will rebuild it"
+            );
             *state_guard = None;
         }
 
@@ -573,7 +1292,7 @@ impl WhisperBackend {
         &self,
         audio: &[f32],
         language: Language,
-        on_progress: impl FnMut(i32) + 'static,
+        on_progress: impl FnMut(i32) + Send + 'static,
     ) -> Result<String, DictationError> {
         self.transcribe_sync_with_progress_and_prompt(audio, language, None, on_progress)
     }
@@ -585,13 +1304,29 @@ impl WhisperBackend {
         audio: &[f32],
         language: Language,
         prompt: Option<&str>,
-        on_progress: impl FnMut(i32) + 'static,
+        on_progress: impl FnMut(i32) + Send + 'static,
     ) -> Result<String, DictationError> {
         let opts = TranscribeOptions {
             prompt: prompt.map(str::to_string),
             ..Default::default()
         };
         self.transcribe_sync_with_options(audio, language, &opts, on_progress)
+    }
+
+    /// Live microphone transcription with a conservative near-silence guard.
+    /// File/diagnostic APIs and intentional silent model warmup remain ungated.
+    pub fn transcribe_live_sync_with_options(
+        &self,
+        audio: &[f32],
+        language: Language,
+        opts: &TranscribeOptions,
+        on_progress: impl FnMut(i32) + Send + 'static,
+    ) -> Result<String, DictationError> {
+        if !has_live_audio_signal(audio)? {
+            info!("Skipping near-silent dictation: {} samples", audio.len());
+            return Ok(String::new());
+        }
+        self.transcribe_sync_with_options(audio, language, opts, on_progress)
     }
 
     /// Core transcription entry point. Honors the opt-in [`TranscribeOptions`]
@@ -606,12 +1341,15 @@ impl WhisperBackend {
         audio: &[f32],
         language: Language,
         opts: &TranscribeOptions,
-        on_progress: impl FnMut(i32) + 'static,
+        on_progress: impl FnMut(i32) + Send + 'static,
     ) -> Result<String, DictationError> {
         let segments =
             self.transcribe_sync_with_options_segments(audio, language, opts, on_progress)?;
         let transcript = assemble_transcript(&segments);
-        Ok(super::normalize_nonspeech_markers(transcript.trim(), language))
+        Ok(super::normalize_nonspeech_markers(
+            transcript.trim(),
+            language,
+        ))
     }
 
     /// Like [`Self::transcribe_sync_with_options`] but returns the individual
@@ -623,15 +1361,13 @@ impl WhisperBackend {
         audio: &[f32],
         language: Language,
         opts: &TranscribeOptions,
-        on_progress: impl FnMut(i32) + 'static,
+        on_progress: impl FnMut(i32) + Send + 'static,
     ) -> Result<Vec<TranscriptSegment>, DictationError> {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
 
-        let model = self
-            .loaded_model()
-            .ok_or(DictationError::ModelNotLoaded)?;
+        let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
 
         // End-of-text token id, used to exclude special tokens from the
         // avg-logprob computation (matching whisper.cpp's confidence examples:
@@ -645,163 +1381,279 @@ impl WhisperBackend {
                 .token_eot()
         };
 
-        let n_threads = whisper_threads();
-        let no_speech_thold = model.no_speech_threshold();
-
-        // Beam search (opt-in) is more accurate on hard audio but several times
-        // slower; greedy best_of=1 is the fast default. Clamp to a sane range —
-        // an unbounded beam_size from config would overflow the i32 cast or make
-        // whisper.cpp unusably slow.
-        let beam_size = opts.beam_size.clamp(0, 8);
-        let strategy = if beam_size >= 2 {
-            SamplingStrategy::BeamSearch {
-                beam_size: beam_size as i32,
-                patience: -1.0, // whisper default
-            }
-        } else {
-            SamplingStrategy::Greedy { best_of: 1 }
-        };
-
-        let mut params = FullParams::new(strategy);
-        params.set_language(language.whisper_code());
-        params.set_n_threads(n_threads);
-        params.set_temperature(0.0);
-        // Temperature fallback re-decodes hard segments at higher temperature.
-        // Disabling it caps worst-case latency at the cost of some robustness.
-        params.set_temperature_inc(if opts.temperature_fallback { 0.2 } else { 0.0 });
-        params.set_translate(false);
-        // Keep text decoding stable: generative timestamp tokens materially
-        // change some transcripts. Structured callers get timing from token
-        // alignment instead (DTW in the default macOS build).
-        params.set_no_timestamps(true);
-        params.set_token_timestamps(opts.segment_timestamps);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_no_speech_thold(no_speech_thold);
-        params.set_suppress_blank(true);
-        if let Some(p) = &opts.prompt {
-            if !p.is_empty() {
-                params.set_initial_prompt(p);
-            }
-        }
-
-        // VAD (opt-in): skip non-speech regions. The model path MUST be set
-        // before enable_vad — whisper-rs panics otherwise. The caller guarantees
-        // the file exists.
-        if let Some(vad_path) = &opts.vad_model_path {
-            model::verify_vad_model(std::path::Path::new(vad_path))?;
-            params.set_vad_model_path(Some(vad_path.as_str()));
-            let mut vad = WhisperVadParams::new();
-            vad.set_threshold(0.5);
-            vad.set_min_silence_duration(200); // ms — slightly longer for dictation
-            vad.set_speech_pad(50); // ms — avoid clipping word edges
-            params.set_vad_params(vad);
-            params.enable_vad(true);
-        }
-
-        // whisper.cpp derives progress from its internal processing windows.
-        // On clips whose final window extends beyond the decoded duration it
-        // can report a value outside the documented percentage range. Keep the
-        // backend's public callback contract (0..=100) so callers such as the
-        // CLI cannot overrun their progress bar (or cast a negative value to a
-        // very large u64).
-        params.set_progress_callback_safe(clamped_progress_callback(on_progress));
-
-        // Real abort callback: wire the raw FFI trampoline (bypassing whisper-rs
-        // 0.15.1's unsound set_abort_callback_safe — see abort_trampoline). On
-        // timeout the caller flips the flag via request_abort(); whisper.cpp then
-        // aborts at its next compute step, so this blocking call returns and
-        // releases the warm-state mutex instead of running to completion and
-        // wedging the pipeline. The flag's clear/discard lifecycle is handled by
-        // with_warm_state under the state lock — nothing to do here.
-        self.install_abort_callback(&mut params);
-
+        let chunks = plan_chunks(
+            audio,
+            opts.parallel_chunks.clamp(1, MAX_PARALLEL_CHUNKS),
+            MIN_PARALLEL_CHUNK_SAMPLES,
+        );
         info!(
-            "Starting local transcription: {} samples, {} threads, lang={:?}, beam={}, temp_fallback={}, vad={}",
+            "Starting local transcription: {} samples, {} threads/state, {} chunk(s), lang={:?}, beam={}, temp_fallback={}, vad={}",
             audio.len(),
-            n_threads,
+            whisper_threads(),
+            chunks.len(),
             language,
             opts.beam_size,
             opts.temperature_fallback,
             opts.vad_model_path.is_some()
         );
 
-        self.with_warm_state(|state| {
-            state.full(params, audio).map_err(|e| {
-                DictationError::TranscriptionFailed(format!("Whisper inference failed: {e}"))
+        if chunks.len() == 1 {
+            return self.with_warm_state(|state| {
+                self.transcribe_chunk_segments(
+                    state,
+                    audio,
+                    0.0,
+                    model,
+                    language,
+                    opts,
+                    token_eot,
+                    on_progress,
+                )
+            });
+        }
+
+        self.transcribe_parallel_segments(
+            audio,
+            &chunks,
+            model,
+            language,
+            opts,
+            token_eot,
+            on_progress,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn transcribe_parallel_segments(
+        &self,
+        audio: &[f32],
+        chunks: &[AudioChunk],
+        model: WhisperModel,
+        language: Language,
+        opts: &TranscribeOptions,
+        token_eot: i32,
+        on_progress: impl FnMut(i32) + Send + 'static,
+    ) -> Result<Vec<TranscriptSegment>, DictationError> {
+        let progress = Arc::new(Mutex::new(ParallelProgress {
+            percentages: vec![0; chunks.len()],
+            weights: chunks
+                .iter()
+                .map(|chunk| chunk.end_sample - chunk.start_sample)
+                .collect(),
+            total_weight: audio.len(),
+            last_reported: -1,
+            callback: Box::new(on_progress),
+        }));
+
+        self.with_warm_state(|warm_state| {
+            let mut secondary_states = {
+                let context = self.context.lock().unwrap();
+                let context = context.as_ref().ok_or(DictationError::ModelNotLoaded)?;
+                (1..chunks.len())
+                    .map(|_| {
+                        context.create_state().map_err(|error| {
+                            DictationError::TranscriptionFailed(format!(
+                                "Failed to create parallel whisper state: {error}"
+                            ))
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+
+            let mut chunk_results = std::thread::scope(|scope| {
+                let first_chunk = chunks[0];
+                let first_progress = parallel_progress_callback(Arc::clone(&progress), 0);
+                let first = scope.spawn(move || {
+                    self.transcribe_chunk_segments(
+                        warm_state,
+                        &audio[first_chunk.decode_start_sample..first_chunk.decode_end_sample],
+                        first_chunk.decode_start_sample as f64 / 16_000.0,
+                        model,
+                        language,
+                        opts,
+                        token_eot,
+                        first_progress,
+                    )
+                });
+
+                let others = secondary_states
+                    .iter_mut()
+                    .zip(chunks.iter().copied().skip(1))
+                    .enumerate()
+                    .map(|(index, (state, chunk))| {
+                        let chunk_progress =
+                            parallel_progress_callback(Arc::clone(&progress), index + 1);
+                        scope.spawn(move || {
+                            self.transcribe_chunk_segments(
+                                state,
+                                &audio[chunk.decode_start_sample..chunk.decode_end_sample],
+                                chunk.decode_start_sample as f64 / 16_000.0,
+                                model,
+                                language,
+                                opts,
+                                token_eot,
+                                chunk_progress,
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                let mut results = Vec::with_capacity(chunks.len());
+                results.push(first.join().map_err(|_| {
+                    DictationError::TranscriptionFailed(
+                        "Parallel whisper worker panicked".to_string(),
+                    )
+                })??);
+                for worker in others {
+                    results.push(worker.join().map_err(|_| {
+                        DictationError::TranscriptionFailed(
+                            "Parallel whisper worker panicked".to_string(),
+                        )
+                    })??);
+                }
+                Ok::<_, DictationError>(results)
             })?;
 
-            let n_segments = state.full_n_segments();
-            let mut segments: Vec<TranscriptSegment> =
-                Vec::with_capacity(n_segments.max(0) as usize);
-            let audio_duration = audio.len() as f64 / 16_000.0;
-            let mut previous_end = 0.0;
-            for i in 0..n_segments {
-                if let Some(segment) = state.get_segment(i) {
-                    let text = match segment.to_str() {
-                        Ok(t) => t.to_string(),
-                        Err(e) => {
-                            warn!(
-                                "Segment {i} failed UTF-8 conversion, dropping from transcript: {e}"
-                            );
-                            continue;
-                        }
-                    };
-                    // avg_logprob over text tokens only (id < eot excludes
-                    // timestamp/control tokens, which would skew the mean).
-                    let mut plogs = Vec::with_capacity(segment.n_tokens().max(0) as usize);
-                    for j in 0..segment.n_tokens() {
-                        if let Some(token) = segment.get_token(j) {
-                            if token.token_id() < token_eot {
-                                plogs.push(token.token_data().plog);
-                            }
-                        }
+            let segments = stitch_chunk_results(
+                std::mem::take(&mut chunk_results),
+                audio.len() as f64 / 16_000.0,
+            );
+            info!(
+                "Parallel local transcription complete: {} segment(s) across {} chunks",
+                segments.len(),
+                chunks.len()
+            );
+            Ok(segments)
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn transcribe_chunk_segments(
+        &self,
+        state: &mut WhisperState,
+        audio: &[f32],
+        offset_seconds: f64,
+        model: WhisperModel,
+        language: Language,
+        opts: &TranscribeOptions,
+        token_eot: i32,
+        on_progress: impl FnMut(i32) + 'static,
+    ) -> Result<Vec<TranscriptSegment>, DictationError> {
+        let mut params = self.full_params(model, language, opts, on_progress)?;
+        self.install_abort_callback(&mut params);
+        state.full(params, audio).map_err(|error| {
+            DictationError::TranscriptionFailed(format!("Whisper inference failed: {error}"))
+        })?;
+
+        let n_segments = state.full_n_segments();
+        let mut segments = Vec::with_capacity(n_segments.max(0) as usize);
+        let chunk_duration = audio.len() as f64 / 16_000.0;
+        let mut previous_end = 0.0;
+        for index in 0..n_segments {
+            let Some(segment) = state.get_segment(index) else {
+                continue;
+            };
+            let text = match segment.to_str() {
+                Ok(text) => text.to_string(),
+                Err(error) => {
+                    warn!(
+                        "Segment {index} failed UTF-8 conversion, dropping from transcript: {error}"
+                    );
+                    continue;
+                }
+            };
+            let mut plogs = Vec::with_capacity(segment.n_tokens().max(0) as usize);
+            for token_index in 0..segment.n_tokens() {
+                if let Some(token) = segment.get_token(token_index) {
+                    if token.token_id() < token_eot {
+                        plogs.push(token.token_data().plog);
                     }
-                    let raw_bounds = {
-                        #[cfg(feature = "diarization")]
-                        {
-                            if opts.segment_timestamps {
-                                dtw_segment_timestamps(&segment, 0.0).unwrap_or_else(|| {
-                                    (
-                                        segment.start_timestamp() as f64 / 100.0,
-                                        segment.end_timestamp() as f64 / 100.0,
-                                    )
-                                })
-                            } else {
-                                (
-                                    segment.start_timestamp() as f64 / 100.0,
-                                    segment.end_timestamp() as f64 / 100.0,
-                                )
-                            }
-                        }
-                        #[cfg(not(feature = "diarization"))]
-                        {
+                }
+            }
+            let raw_bounds = {
+                #[cfg(feature = "diarization")]
+                {
+                    if opts.segment_timestamps {
+                        dtw_segment_timestamps(&segment, 0.0).unwrap_or_else(|| {
                             (
                                 segment.start_timestamp() as f64 / 100.0,
                                 segment.end_timestamp() as f64 / 100.0,
                             )
-                        }
-                    };
-                    let (start, end) = sanitize_segment_bounds(
-                        raw_bounds.0,
-                        raw_bounds.1,
-                        audio_duration,
-                        previous_end,
-                    );
-                    previous_end = end;
-                    segments.push(TranscriptSegment {
-                        start,
-                        end,
-                        text,
-                        avg_logprob: mean_logprob(&plogs),
-                        no_speech_prob: segment.no_speech_probability(),
-                    });
+                        })
+                    } else {
+                        (
+                            segment.start_timestamp() as f64 / 100.0,
+                            segment.end_timestamp() as f64 / 100.0,
+                        )
+                    }
                 }
-            }
+                #[cfg(not(feature = "diarization"))]
+                {
+                    (
+                        segment.start_timestamp() as f64 / 100.0,
+                        segment.end_timestamp() as f64 / 100.0,
+                    )
+                }
+            };
+            let (start, end) =
+                sanitize_segment_bounds(raw_bounds.0, raw_bounds.1, chunk_duration, previous_end);
+            previous_end = end;
+            segments.push(TranscriptSegment {
+                start: start + offset_seconds,
+                end: end + offset_seconds,
+                text,
+                avg_logprob: mean_logprob(&plogs),
+                no_speech_prob: segment.no_speech_probability(),
+            });
+        }
+        Ok(segments)
+    }
 
-            info!("Local transcription complete: {} segment(s)", segments.len());
-            Ok(segments)
-        })
+    fn full_params(
+        &self,
+        model: WhisperModel,
+        language: Language,
+        opts: &TranscribeOptions,
+        on_progress: impl FnMut(i32) + 'static,
+    ) -> Result<FullParams<'static, 'static>, DictationError> {
+        let beam_size = opts.beam_size.clamp(0, 8);
+        let strategy = if beam_size >= 2 {
+            SamplingStrategy::BeamSearch {
+                beam_size: beam_size as i32,
+                patience: -1.0,
+            }
+        } else {
+            SamplingStrategy::Greedy { best_of: 1 }
+        };
+        let mut params = FullParams::new(strategy);
+        params.set_language(language.whisper_code());
+        params.set_n_threads(whisper_threads());
+        params.set_temperature(0.0);
+        params.set_temperature_inc(if opts.temperature_fallback { 0.2 } else { 0.0 });
+        params.set_translate(false);
+        params.set_no_timestamps(true);
+        params.set_token_timestamps(opts.segment_timestamps);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_no_speech_thold(model.no_speech_threshold());
+        params.set_suppress_blank(true);
+        if let Some(prompt) = &opts.prompt {
+            if !prompt.is_empty() {
+                params.set_initial_prompt(prompt);
+            }
+        }
+        if let Some(vad_path) = &opts.vad_model_path {
+            model::verify_vad_model(std::path::Path::new(vad_path))?;
+            params.set_vad_model_path(Some(vad_path.as_str()));
+            let mut vad = WhisperVadParams::new();
+            vad.set_threshold(0.5);
+            vad.set_min_silence_duration(200);
+            vad.set_speech_pad(50);
+            params.set_vad_params(vad);
+            params.enable_vad(true);
+        }
+        params.set_progress_callback_safe(clamped_progress_callback(on_progress));
+        Ok(params)
     }
 
     /// Transcribe audio and return per-segment timestamps.
@@ -821,7 +1673,15 @@ impl WhisperBackend {
         // Process full audio in one call — whisper.cpp handles long audio internally
         // via its own sliding window. With no_timestamps=true + DTW there is no
         // looping risk, and the internal context is better than manual chunking.
-        self.transcribe_chunk_timestamps(audio, language, 0.0, prompt, Granularity::Segment)
+        Ok(self
+            .transcribe_chunk_timestamps_profiled(
+                audio,
+                language,
+                0.0,
+                prompt,
+                Granularity::Segment,
+            )?
+            .segments)
     }
 
     /// Transcribe audio and return per-word timestamps.
@@ -843,7 +1703,9 @@ impl WhisperBackend {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
-        self.transcribe_chunk_timestamps(audio, language, 0.0, prompt, Granularity::Word)
+        Ok(self
+            .transcribe_chunk_timestamps_profiled(audio, language, 0.0, prompt, Granularity::Word)?
+            .segments)
     }
 
     /// Transcribe audio at the finest timestamp granularity available for
@@ -860,13 +1722,51 @@ impl WhisperBackend {
         language: Language,
         prompt: Option<&str>,
     ) -> Result<Vec<(f64, f64, String)>, DictationError> {
-        let words = self.transcribe_sync_with_word_timestamps(audio, language, prompt)?;
-        if words.is_empty() {
-            warn!("Word-level DTW timestamps unavailable; falling back to segment timestamps");
-            self.transcribe_sync_with_timestamps(audio, language, prompt)
-        } else {
-            Ok(words)
+        Ok(self
+            .transcribe_sync_for_diarization_profiled(audio, language, prompt)?
+            .segments)
+    }
+
+    /// Profiled variant used by the CLI benchmark and cache path.
+    #[cfg(feature = "diarization")]
+    pub fn transcribe_sync_for_diarization_profiled(
+        &self,
+        audio: &[f32],
+        language: Language,
+        prompt: Option<&str>,
+    ) -> Result<DiarizationTranscription, DictationError> {
+        if audio.is_empty() {
+            return Err(DictationError::NoAudioCaptured);
         }
+        if self.loaded_context_profile() != Some(ContextProfile::TokenAlignment) {
+            return Err(DictationError::TranscriptionFailed(
+                "Diarization transcription requires a token-alignment model context".to_string(),
+            ));
+        }
+        let mut words = self.transcribe_chunk_timestamps_profiled(
+            audio,
+            language,
+            0.0,
+            prompt,
+            Granularity::Word,
+        )?;
+        if !words.segments.is_empty() {
+            return Ok(words);
+        }
+
+        warn!("Word-level DTW timestamps unavailable; falling back to segment timestamps");
+        let fallback = self.transcribe_chunk_timestamps_profiled(
+            audio,
+            language,
+            0.0,
+            prompt,
+            Granularity::Segment,
+        )?;
+        words.segments = fallback.segments;
+        words.timings.whisper_inference_seconds += fallback.timings.whisper_inference_seconds;
+        words.timings.word_timestamp_attribution_seconds +=
+            fallback.timings.word_timestamp_attribution_seconds;
+        Ok(words)
     }
 
     /// Transcribe a single audio chunk with timestamps via DTW.
@@ -879,17 +1779,15 @@ impl WhisperBackend {
     /// the generative `<|t.xx|>` tokens that degrade quality.
     /// `t_offset` (seconds) is added to all returned timestamps.
     #[cfg(feature = "diarization")]
-    fn transcribe_chunk_timestamps(
+    fn transcribe_chunk_timestamps_profiled(
         &self,
         audio: &[f32],
         language: Language,
         t_offset: f64,
         prompt: Option<&str>,
         granularity: Granularity,
-    ) -> Result<Vec<(f64, f64, String)>, DictationError> {
-        let model = self
-            .loaded_model()
-            .ok_or(DictationError::ModelNotLoaded)?;
+    ) -> Result<DiarizationTranscription, DictationError> {
+        let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
 
         let n_threads = whisper_threads();
         let no_speech_thold = model.no_speech_threshold();
@@ -900,7 +1798,7 @@ impl WhisperBackend {
         params.set_temperature(0.0);
         params.set_temperature_inc(0.2);
         params.set_translate(false);
-        params.set_no_timestamps(true);   // clean text — no generative timestamp tokens
+        params.set_no_timestamps(true); // clean text — no generative timestamp tokens
         params.set_token_timestamps(true); // populate token.t0/t1/t_dtw via cross-attention
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -916,10 +1814,13 @@ impl WhisperBackend {
         self.install_abort_callback(&mut params);
 
         self.with_warm_state(|state| {
+            let inference_started = Instant::now();
             state.full(params, audio).map_err(|e| {
                 DictationError::TranscriptionFailed(format!("Whisper inference failed: {e}"))
             })?;
+            let whisper_inference_seconds = inference_started.elapsed().as_secs_f64();
 
+            let attribution_started = Instant::now();
             let n_segments = state.full_n_segments();
             let mut results = Vec::with_capacity(n_segments as usize);
 
@@ -979,7 +1880,15 @@ impl WhisperBackend {
                 }
             }
 
-            Ok(results)
+            Ok(DiarizationTranscription {
+                segments: results,
+                timings: DiarizationTranscriptionTimings {
+                    whisper_inference_seconds,
+                    word_timestamp_attribution_seconds: attribution_started
+                        .elapsed()
+                        .as_secs_f64(),
+                },
+            })
         })
     }
 }
@@ -1039,12 +1948,191 @@ mod language_detection_preview_tests {
     }
 }
 
+#[cfg(test)]
+mod warm_model_cache_tests {
+    use super::*;
+
+    fn key(model: WhisperModel, profile: ContextProfile) -> RuntimeKey {
+        RuntimeKey { model, profile }
+    }
+
+    #[test]
+    fn distinguishes_active_cached_and_missing_models() {
+        let swedish = key(
+            WhisperModel::KbWhisperBase,
+            ContextProfile::FlashAttention,
+        );
+        let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
+        assert_eq!(
+            model_availability(Some(swedish), Some(english), swedish),
+            ModelAvailability::Active
+        );
+        assert_eq!(
+            model_availability(Some(swedish), Some(english), english),
+            ModelAvailability::Cached
+        );
+        assert_eq!(
+            model_availability(
+                Some(swedish),
+                Some(english),
+                key(
+                    WhisperModel::KbWhisperBase,
+                    ContextProfile::TokenAlignment,
+                ),
+            ),
+            ModelAvailability::Missing
+        );
+    }
+
+    #[test]
+    fn caches_two_base_models_within_budget() {
+        assert!(can_cache_pair(
+            key(
+                WhisperModel::KbWhisperBase,
+                ContextProfile::FlashAttention,
+            ),
+            key(WhisperModel::BaseEn, ContextProfile::FlashAttention),
+        ));
+    }
+
+    #[test]
+    fn refuses_duplicate_or_oversized_cache_pairs() {
+        let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
+        assert!(!can_cache_pair(english, english));
+        assert!(!can_cache_pair(
+            key(
+                WhisperModel::KbWhisperMedium,
+                ContextProfile::FlashAttention,
+            ),
+            english,
+        ));
+    }
+
+    #[test]
+    fn treats_same_model_with_different_profiles_as_distinct_runtimes() {
+        let flash = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
+        let alignment = key(WhisperModel::BaseEn, ContextProfile::TokenAlignment);
+
+        assert_eq!(
+            model_availability(Some(flash), None, alignment),
+            ModelAvailability::Missing
+        );
+        assert!(can_cache_pair(flash, alignment));
+    }
+
+    #[test]
+    fn selects_token_alignment_only_for_diarization() {
+        assert_eq!(
+            ContextProfile::for_diarization(false),
+            ContextProfile::FlashAttention
+        );
+        assert_eq!(
+            ContextProfile::for_diarization(true),
+            ContextProfile::TokenAlignment
+        );
+    }
+
+    #[test]
+    fn cached_runtime_switch_preserves_both_warm_payloads() {
+        let swedish = key(
+            WhisperModel::KbWhisperBase,
+            ContextProfile::FlashAttention,
+        );
+        let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
+        let mut active_key = Some(swedish);
+        let mut active_context = Some("swedish-context");
+        let mut active_state = Some("swedish-state");
+        let mut cached = Some(CachedWhisperRuntime {
+            key: english,
+            context: "english-context",
+            state: Some("english-state"),
+        });
+
+        assert!(activate_cached_runtime(
+            english,
+            &mut active_key,
+            &mut active_context,
+            &mut active_state,
+            &mut cached,
+        ));
+        assert_eq!(active_key, Some(english));
+        assert_eq!(active_context, Some("english-context"));
+        assert_eq!(active_state, Some("english-state"));
+
+        let cached = cached.unwrap();
+        assert_eq!(cached.key, swedish);
+        assert_eq!(cached.context, "swedish-context");
+        assert_eq!(cached.state, Some("swedish-state"));
+    }
+
+    #[test]
+    fn cache_miss_leaves_active_and_secondary_unchanged() {
+        let swedish = key(
+            WhisperModel::KbWhisperBase,
+            ContextProfile::FlashAttention,
+        );
+        let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
+        let mut active_key = Some(swedish);
+        let mut active_context = Some("swedish-context");
+        let mut active_state = Some("swedish-state");
+        let mut cached = Some(CachedWhisperRuntime {
+            key: english,
+            context: "english-context",
+            state: Some("english-state"),
+        });
+
+        assert!(!activate_cached_runtime(
+            key(
+                WhisperModel::NbWhisperBase,
+                ContextProfile::FlashAttention,
+            ),
+            &mut active_key,
+            &mut active_context,
+            &mut active_state,
+            &mut cached,
+        ));
+        assert_eq!(active_key, Some(swedish));
+        assert_eq!(active_context, Some("swedish-context"));
+        assert_eq!(active_state, Some("swedish-state"));
+        assert_eq!(cached.as_ref().unwrap().key, english);
+    }
+}
+
 /// Adapt whisper.cpp's native progress values to the backend's public
 /// percentage contract.
 fn clamped_progress_callback(
     mut on_progress: impl FnMut(i32) + 'static,
 ) -> impl FnMut(i32) + 'static {
     move |percentage| on_progress(percentage.clamp(0, 100))
+}
+
+struct ParallelProgress {
+    percentages: Vec<i32>,
+    weights: Vec<usize>,
+    total_weight: usize,
+    last_reported: i32,
+    callback: Box<dyn FnMut(i32) + Send>,
+}
+
+fn parallel_progress_callback(
+    progress: Arc<Mutex<ParallelProgress>>,
+    chunk_index: usize,
+) -> impl FnMut(i32) + Send + 'static {
+    move |percentage| {
+        let mut progress = progress.lock().unwrap();
+        progress.percentages[chunk_index] = percentage.clamp(0, 100);
+        let weighted_sum = progress
+            .percentages
+            .iter()
+            .zip(&progress.weights)
+            .map(|(percentage, weight)| *percentage as usize * *weight)
+            .sum::<usize>();
+        let aggregate = (weighted_sum / progress.total_weight.max(1)) as i32;
+        if aggregate > progress.last_reported {
+            progress.last_reported = aggregate;
+            (progress.callback)(aggregate);
+        }
+    }
 }
 
 /// Controls whether `transcribe_chunk_timestamps` emits one entry per segment or per word.
@@ -1103,7 +2191,9 @@ fn dtw_segment_timestamps(
     let mut t1 = None::<f64>;
 
     for j in 0..n {
-        let Some(token) = segment.get_token(j) else { continue };
+        let Some(token) = segment.get_token(j) else {
+            continue;
+        };
         let td = token.token_data();
         if td.t_dtw >= 0 {
             let t = td.t_dtw as f64 / 100.0 + t_offset;
@@ -1253,7 +2343,10 @@ fn words_from_segments(segments: &[Vec<TokenTiming>]) -> Vec<(f64, f64, String)>
                 } else {
                     format!(" {}", token.text)
                 };
-                flat.push(TokenTiming { t_dtw: token.t_dtw, text });
+                flat.push(TokenTiming {
+                    t_dtw: token.t_dtw,
+                    text,
+                });
                 first_content = false;
             } else {
                 flat.push(token.clone());
@@ -1267,14 +2360,20 @@ fn words_from_segments(segments: &[Vec<TokenTiming>]) -> Vec<(f64, f64, String)>
 
 #[cfg(all(test, feature = "diarization"))]
 mod word_grouping_tests {
-    use super::{TokenTiming, group_tokens_into_words, words_from_segments};
+    use super::{group_tokens_into_words, words_from_segments, TokenTiming};
 
     fn tok(text: &str, t_dtw: f64) -> TokenTiming {
-        TokenTiming { t_dtw, text: text.to_string() }
+        TokenTiming {
+            t_dtw,
+            text: text.to_string(),
+        }
     }
 
     fn tok_invalid(text: &str) -> TokenTiming {
-        TokenTiming { t_dtw: -1.0, text: text.to_string() }
+        TokenTiming {
+            t_dtw: -1.0,
+            text: text.to_string(),
+        }
     }
 
     #[test]
@@ -1295,10 +2394,7 @@ mod word_grouping_tests {
     #[test]
     fn leading_space_creates_word_boundary() {
         // " Hello" starts word 1, " world" starts word 2
-        let tokens = vec![
-            tok(" Hello", 1.0),
-            tok(" world", 2.0),
-        ];
+        let tokens = vec![tok(" Hello", 1.0), tok(" world", 2.0)];
         let words = group_tokens_into_words(&tokens);
         assert_eq!(words.len(), 2);
         assert_eq!(words[0].2, "Hello");
@@ -1325,7 +2421,7 @@ mod word_grouping_tests {
         // Word "un" composed of two tokens at t=1.0 and t=1.5
         let tokens = vec![
             tok(" un", 1.0),
-            tok("e", 1.5),  // no leading space → appends
+            tok("e", 1.5), // no leading space → appends
         ];
         let words = group_tokens_into_words(&tokens);
         assert_eq!(words.len(), 1);
@@ -1338,9 +2434,9 @@ mod word_grouping_tests {
     fn special_tokens_skipped() {
         let tokens = vec![
             tok(" Hello", 1.0),
-            tok("[_BEG_]", 0.0),     // bracket special → skip
+            tok("[_BEG_]", 0.0),      // bracket special → skip
             tok("<|nospeech|>", 0.5), // angle bracket special → skip
-            tok("",  0.0),            // empty → skip
+            tok("", 0.0),             // empty → skip
             tok(" world", 2.0),
         ];
         let words = group_tokens_into_words(&tokens);
@@ -1352,14 +2448,17 @@ mod word_grouping_tests {
     #[test]
     fn invalid_dtw_word_inherits_previous_end() {
         // Word 1: t=1.0, Word 2: no valid DTW → should inherit 1.0
-        let tokens = vec![
-            tok(" Hello", 1.0),
-            tok_invalid(" world"),
-        ];
+        let tokens = vec![tok(" Hello", 1.0), tok_invalid(" world")];
         let words = group_tokens_into_words(&tokens);
         assert_eq!(words.len(), 2);
-        assert!((words[1].0 - 1.0).abs() < 1e-9, "start should inherit previous end");
-        assert!((words[1].1 - 1.0).abs() < 1e-9, "end should inherit previous end");
+        assert!(
+            (words[1].0 - 1.0).abs() < 1e-9,
+            "start should inherit previous end"
+        );
+        assert!(
+            (words[1].1 - 1.0).abs() < 1e-9,
+            "end should inherit previous end"
+        );
         assert_eq!(words[1].2, "world");
     }
 
@@ -1376,10 +2475,7 @@ mod word_grouping_tests {
     #[test]
     fn start_never_exceeds_end() {
         // Two valid tokens at the same time → start == end
-        let tokens = vec![
-            tok(" test", 3.0),
-            tok("ing", 3.0),
-        ];
+        let tokens = vec![tok(" test", 3.0), tok("ing", 3.0)];
         let words = group_tokens_into_words(&tokens);
         assert_eq!(words.len(), 1);
         assert!(words[0].0 <= words[0].1, "start must not exceed end");
@@ -1399,7 +2495,10 @@ mod word_grouping_tests {
             seg(vec![tok_invalid(" foo"), tok_invalid(" bar")]),
         ];
         let result = words_from_segments(&segs);
-        assert!(result.is_empty(), "should be empty when no valid DTW exists, got: {result:?}");
+        assert!(
+            result.is_empty(),
+            "should be empty when no valid DTW exists, got: {result:?}"
+        );
     }
 
     /// (b) Second segment's first content word has invalid DTW → inherits from
@@ -1422,12 +2521,16 @@ mod word_grouping_tests {
             assert!(
                 result[i].0 >= result[i - 1].0,
                 "start[{i}]={} < start[{}]={} — not monotonic",
-                result[i].0, i - 1, result[i - 1].0
+                result[i].0,
+                i - 1,
+                result[i - 1].0
             );
             assert!(
                 result[i].1 >= result[i - 1].1,
                 "end[{i}]={} < end[{}]={} — not monotonic",
-                result[i].1, i - 1, result[i - 1].1
+                result[i].1,
+                i - 1,
+                result[i - 1].1
             );
         }
 
@@ -1452,7 +2555,11 @@ mod word_grouping_tests {
             seg(vec![tok("world", 2.0)]),
         ];
         let result = words_from_segments(&segs);
-        assert_eq!(result.len(), 2, "segment boundary must create word break; got: {result:?}");
+        assert_eq!(
+            result.len(),
+            2,
+            "segment boundary must create word break; got: {result:?}"
+        );
         assert_eq!(result[0].2, "Hello");
         assert_eq!(result[1].2, "world");
     }
@@ -1468,16 +2575,26 @@ mod word_grouping_tests {
             seg(vec![tok(" speech", 5.0)]),
         ];
         let result = words_from_segments(&segs);
-        assert!(!result.is_empty(), "should have words when any segment has valid DTW");
+        assert!(
+            !result.is_empty(),
+            "should have words when any segment has valid DTW"
+        );
         // "silence" inherits 0.0 (nothing before it), "speech" has t=5.0
-        let speech = result.iter().find(|w| w.2 == "speech").expect("should have 'speech'");
-        assert!((speech.0 - 5.0).abs() < 1e-9, "speech start should be 5.0, got {}", speech.0);
+        let speech = result
+            .iter()
+            .find(|w| w.2 == "speech")
+            .expect("should have 'speech'");
+        assert!(
+            (speech.0 - 5.0).abs() < 1e-9,
+            "speech start should be 5.0, got {}",
+            speech.0
+        );
     }
 }
 
 #[cfg(test)]
 mod progress_callback_tests {
-    use super::clamped_progress_callback;
+    use super::{clamped_progress_callback, parallel_progress_callback, ParallelProgress};
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -1494,6 +2611,31 @@ mod progress_callback_tests {
 
         assert_eq!(*received.lock().unwrap(), [0, 0, 99, 100, 100]);
     }
+
+    #[test]
+    fn parallel_progress_is_weighted_and_never_moves_backwards() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&received);
+        let progress = Arc::new(Mutex::new(ParallelProgress {
+            percentages: vec![0, 0],
+            weights: vec![1, 3],
+            total_weight: 4,
+            last_reported: -1,
+            callback: Box::new(move |percentage| {
+                captured.lock().unwrap().push(percentage);
+            }),
+        }));
+        let mut first = parallel_progress_callback(Arc::clone(&progress), 0);
+        let mut second = parallel_progress_callback(progress, 1);
+
+        first(100);
+        second(50);
+        first(0);
+        second(100);
+        first(100);
+
+        assert_eq!(*received.lock().unwrap(), [25, 62, 75, 100]);
+    }
 }
 
 /// Pure-function tests for the segment-confidence support (#81): the
@@ -1503,6 +2645,217 @@ mod progress_callback_tests {
 #[cfg(test)]
 mod segment_confidence_tests {
     use super::*;
+
+    #[test]
+    fn silent_audio_skips_decoder_without_a_loaded_model() {
+        let backend = WhisperBackend::new();
+        for language in [Language::Swedish, Language::English] {
+            for samples in [4052, 6400, 8000] {
+                let audio = vec![0.0; samples];
+                assert!(backend
+                    .transcribe_live_sync_with_options(
+                        &audio,
+                        language,
+                        &TranscribeOptions::default(),
+                        |_| {},
+                    )
+                    .unwrap()
+                    .is_empty());
+                assert!(matches!(
+                    backend.transcribe_sync_with_options_segments(
+                        &audio, language, &TranscribeOptions::default(), |_| {},
+                    ),
+                    Err(DictationError::ModelNotLoaded)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn live_dictation_guard_rejects_empty_and_non_finite_audio_without_model_access() {
+        let backend = WhisperBackend::new();
+        let options = TranscribeOptions::default();
+
+        let mut empty_timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: true,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+        assert!(matches!(
+            backend.transcribe_live_dictation(
+                WhisperModel::Base,
+                &[],
+                Language::English,
+                &options,
+                &mut empty_timings,
+            ),
+            Err(DictationError::NoAudioCaptured)
+        ));
+        assert_eq!(empty_timings.model_ms, 0.0);
+        assert_eq!(empty_timings.inference_ms, 0.0);
+        assert!(!empty_timings.model_cached);
+        assert!(!empty_timings.model_acquisition_started);
+        assert!(!empty_timings.inference_started);
+        assert!(empty_timings.model_ready_at.is_none());
+
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let audio = [0.0, invalid, 0.0];
+            let mut timings = DictationTimings::default();
+            assert!(matches!(
+                backend.transcribe_live_dictation(
+                    WhisperModel::Base,
+                    &audio,
+                    Language::English,
+                    &options,
+                    &mut timings,
+                ),
+                Err(DictationError::TranscriptionFailed(message))
+                    if message.contains("non-finite")
+            ));
+            assert!(!timings.model_acquisition_started);
+            assert!(!timings.inference_started);
+            assert!(timings.model_ready_at.is_none());
+        }
+    }
+
+    #[test]
+    fn live_silence_resets_timings_and_skips_model_access() {
+        let backend = WhisperBackend::new();
+        let mut timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: true,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+
+        let result = backend.transcribe_live_dictation(
+            WhisperModel::Base,
+            &[0.0; 8_000],
+            Language::English,
+            &TranscribeOptions::default(),
+            &mut timings,
+        );
+
+        assert_eq!(result.unwrap(), "");
+        assert_eq!(backend.loaded_model(), None);
+        assert_eq!(timings.model_ms, 0.0);
+        assert_eq!(timings.inference_ms, 0.0);
+        assert!(!timings.model_cached);
+        assert!(!timings.model_acquisition_started);
+        assert!(!timings.inference_started);
+        assert!(timings.model_ready_at.is_none());
+    }
+
+    #[test]
+    fn raw_dictation_resets_timings_and_marks_only_model_acquisition_on_failure() {
+        let backend = WhisperBackend::new();
+        let mut timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: false,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+
+        let poisoning = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _load = backend.load_lock.lock().unwrap();
+            panic!("poison load lock for deterministic timing test");
+        }));
+        assert!(poisoning.is_err());
+
+        let result = backend.transcribe_dictation(
+            WhisperModel::Base,
+            &[0.0; 8_000],
+            Language::English,
+            &TranscribeOptions::default(),
+            &mut timings,
+        );
+
+        assert!(matches!(result, Err(DictationError::TranscriptionFailed(ref message))
+            if message.contains("restart Sagascript")));
+        assert!(timings.model_acquisition_started);
+        assert!(!timings.inference_started);
+        assert!(timings.model_ready_at.is_none());
+        assert!(timings.model_ms.is_finite());
+        assert!(timings.model_ms >= 0.0);
+        assert_eq!(timings.inference_ms, 0.0);
+    }
+
+    #[test]
+    fn dictation_timings_keep_private_state_out_of_json_contract() {
+        let timings = DictationTimings {
+            model_ms: 12.0,
+            inference_ms: 34.0,
+            model_cached: true,
+            model_acquisition_started: true,
+            inference_started: true,
+            model_ready_at: Some(Instant::now()),
+        };
+        let json = serde_json::to_value(timings).unwrap();
+
+        assert_eq!(json["model_ms"], 12.0);
+        assert_eq!(json["inference_ms"], 34.0);
+        assert_eq!(json["model_cached"], true);
+        assert!(json.get("model_acquisition_started").is_none());
+        assert!(json.get("inference_started").is_none());
+        assert!(json.get("model_ready_at").is_none());
+    }
+
+    #[test]
+    fn warmup_still_requires_a_model_and_does_not_skip_silent_inference() {
+        assert!(matches!(
+            WhisperBackend::new().warmup(Language::English),
+            Err(DictationError::ModelNotLoaded)
+        ));
+    }
+
+    #[test]
+    fn assembled_transcript_discards_no_speech_marked_hallucination() {
+        let segments = [TranscriptSegment {
+            start: 0.0,
+            end: 0.3,
+            text: "<|nospeech|>-Hej Tack! Tack! Tack!".to_string(),
+            avg_logprob: Some(-0.1),
+            no_speech_prob: 0.9,
+        }];
+
+        assert_eq!(assemble_transcript(&segments), "");
+    }
+
+    #[test]
+    fn assembled_transcript_discards_no_speech_segment_between_sentences() {
+        let segments = [
+            TranscriptSegment {
+                start: 0.0,
+                end: 1.0,
+                text: "First.".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.01,
+            },
+            TranscriptSegment {
+                start: 1.0,
+                end: 1.3,
+                text: "<|nospeech|>-Hej Tack! Tack! Tack!".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.9,
+            },
+            TranscriptSegment {
+                start: 1.3,
+                end: 2.0,
+                text: "Second.".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.01,
+            },
+        ];
+
+        assert_eq!(assemble_transcript(&segments), "First. Second.");
+    }
 
     #[test]
     fn assembled_transcript_separates_sentence_ending_segments() {
@@ -1537,7 +2890,10 @@ mod segment_confidence_tests {
             },
         ];
 
-        assert_eq!(assemble_transcript(&segments), "First. Second? Third! Fourth");
+        assert_eq!(
+            assemble_transcript(&segments),
+            "First. Second? Third! Fourth"
+        );
     }
 
     #[test]
@@ -1563,6 +2919,135 @@ mod segment_confidence_tests {
     }
 
     #[test]
+    fn assembled_transcript_separates_sentences_inside_one_segment() {
+        let segments = [TranscriptSegment {
+            start: 0.0,
+            end: 4.0,
+            text: "Ja.Jag kastar att prata svenska.Jag testar att prata svenska.Jag.".to_string(),
+            avg_logprob: None,
+            no_speech_prob: 0.0,
+        }];
+
+        assert_eq!(
+            assemble_transcript(&segments),
+            "Ja. Jag kastar att prata svenska. Jag testar att prata svenska. Jag."
+        );
+    }
+
+    #[test]
+    fn assembled_transcript_does_not_split_decimal_numbers() {
+        let segments = [TranscriptSegment {
+            start: 0.0,
+            end: 1.0,
+            text: "Version 1.2 är klar. Nästa steg.".to_string(),
+            avg_logprob: None,
+            no_speech_prob: 0.0,
+        }];
+
+        assert_eq!(
+            assemble_transcript(&segments),
+            "Version 1.2 är klar. Nästa steg."
+        );
+    }
+
+    #[test]
+    fn assembled_transcript_does_not_split_initialisms() {
+        let segments = [TranscriptSegment {
+            start: 0.0,
+            end: 1.0,
+            text: "Jag bor i U.S.A.Nästa mening.".to_string(),
+            avg_logprob: None,
+            no_speech_prob: 0.0,
+        }];
+
+        assert_eq!(
+            assemble_transcript(&segments),
+            "Jag bor i U.S.A. Nästa mening."
+        );
+    }
+
+    #[test]
+    fn overlapping_continuous_speech_is_stitched_without_dropping_words() {
+        let chunk_results = vec![
+            vec![TranscriptSegment {
+                start: 0.0,
+                end: 65.0,
+                text: " Vi testar sammanhängande tal över chunkgränsen".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.0,
+            }],
+            vec![TranscriptSegment {
+                start: 55.0,
+                end: 120.0,
+                text: " sammanhängande tal över chunkgränsen utan att kapa ord.".to_string(),
+                avg_logprob: Some(-0.1),
+                no_speech_prob: 0.0,
+            }],
+        ];
+
+        let stitched = stitch_chunk_results(chunk_results, 120.0);
+        assert_eq!(
+            assemble_transcript(&stitched).trim(),
+            "Vi testar sammanhängande tal över chunkgränsen utan att kapa ord."
+        );
+        assert!(stitched.windows(2).all(|pair| pair[0].end <= pair[1].start));
+    }
+
+    #[test]
+    fn ambiguous_single_word_overlap_is_preserved_instead_of_dropped() {
+        let chunk_results = vec![
+            vec![TranscriptSegment {
+                start: 0.0,
+                end: 65.0,
+                text: " Jag sa ja".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            }],
+            vec![TranscriptSegment {
+                start: 55.0,
+                end: 120.0,
+                text: " ja till förslaget".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            }],
+        ];
+
+        let stitched = stitch_chunk_results(chunk_results, 120.0);
+        assert_eq!(
+            assemble_transcript(&stitched).trim(),
+            "Jag sa ja ja till förslaget"
+        );
+    }
+
+    #[test]
+    fn matching_anchor_replaces_a_differently_decoded_overlap() {
+        let chunk_results = vec![
+            vec![TranscriptSegment {
+                start: 0.0,
+                end: 65.0,
+                text: " Tidigare text. Där kommer det in på rätt svår. Det har ju också ett mellanskikt där."
+                    .to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            }],
+            vec![TranscriptSegment {
+                start: 55.0,
+                end: 120.0,
+                text: " Där kommer du in på rätt svår mark. Du har ju också ett mellanskikt där anonymisering fungerar."
+                    .to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            }],
+        ];
+
+        let stitched = stitch_chunk_results(chunk_results, 120.0);
+        assert_eq!(
+            assemble_transcript(&stitched).trim(),
+            "Tidigare text. Där kommer du in på rätt svår mark. Du har ju också ett mellanskikt där anonymisering fungerar."
+        );
+    }
+
+    #[test]
     fn mean_logprob_empty_is_none() {
         assert_eq!(mean_logprob(&[]), None);
     }
@@ -1570,6 +3055,32 @@ mod segment_confidence_tests {
     #[test]
     fn segment_timestamps_are_opt_in() {
         assert!(!TranscribeOptions::default().segment_timestamps);
+    }
+
+    #[test]
+    fn parallel_chunking_is_opt_in() {
+        assert_eq!(TranscribeOptions::default().parallel_chunks, 1);
+    }
+
+    #[test]
+    fn auto_parallelism_requires_long_beam_audio_and_bounded_model() {
+        let long_audio = 10 * 60 * 16_000;
+        assert_eq!(
+            recommended_parallel_chunks(long_audio, WhisperModel::KbWhisperSmall, 5),
+            2
+        );
+        assert_eq!(
+            recommended_parallel_chunks(long_audio - 1, WhisperModel::KbWhisperSmall, 5),
+            1
+        );
+        assert_eq!(
+            recommended_parallel_chunks(long_audio, WhisperModel::KbWhisperSmall, 0),
+            1
+        );
+        assert_eq!(
+            recommended_parallel_chunks(long_audio, WhisperModel::KbWhisperLarge, 5),
+            1
+        );
     }
 
     #[test]
@@ -1651,7 +3162,8 @@ mod warm_state_tests {
             tx.send(()).expect("signal lock acquired");
             thread::sleep(hold);
         });
-        rx.recv().expect("background thread should acquire the lock");
+        rx.recv()
+            .expect("background thread should acquire the lock");
         handle
     }
 

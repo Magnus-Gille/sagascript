@@ -1,8 +1,22 @@
+pub(crate) mod benchmark_config;
+mod benchmark_quality;
 pub mod config;
+pub mod benchmark_dictation;
+pub mod glossary;
+pub mod latency;
+pub mod meeting;
+pub mod meeting_proposal;
+#[cfg(feature = "diarization")]
+pub mod meeting_reprocessing;
+#[cfg(feature = "diarization")]
+pub mod meeting_reprocessing_cli;
 pub mod models;
+pub mod open;
 // Live recording is optional (`record` feature, on by default) so a pure
 // batch-transcribe build (`--no-default-features`) carries no audio-capture
 // stack — on Linux, no cpal/ALSA.
+#[cfg(feature = "diarization")]
+mod diarization_cache;
 #[cfg(feature = "record")]
 pub mod record;
 pub mod transcribe;
@@ -11,6 +25,31 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand};
+
+/// Default CLI logging keeps application warnings/errors but suppresses native
+/// Whisper/GGML messages below error. Those libraries classify routine Metal
+/// capability probes as warnings, so a plain `warn` filter still produces
+/// thousands of non-actionable lines on long machine-readable runs.
+pub const NATIVE_LOG_SUPPRESSION: &str =
+    "whisper_rs::whisper_logging_hook=error,whisper_rs::ggml_logging_hook=error";
+pub const DEFAULT_CLI_LOG_FILTER: &str =
+    "warn,whisper_rs::whisper_logging_hook=error,whisper_rs::ggml_logging_hook=error";
+
+#[cfg(target_os = "windows")]
+const WINDOWS_INFERENCE_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+/// Preserve an application's requested log level without accidentally opting
+/// into noisy native Whisper/GGML diagnostics. Native logging is enabled only
+/// when the filter names `whisper_rs` explicitly.
+pub fn effective_log_filter(configured: Option<&str>, default_level: &str) -> String {
+    let configured = configured.map(str::trim).filter(|value| !value.is_empty());
+    match configured {
+        Some(filter) if filter.contains("whisper_rs") => filter.to_owned(),
+        Some(filter) => format!("{filter},{NATIVE_LOG_SUPPRESSION}"),
+        None if default_level == "warn" => DEFAULT_CLI_LOG_FILTER.to_owned(),
+        None => format!("{default_level},{NATIVE_LOG_SUPPRESSION}"),
+    }
+}
 use clap_complete::{Generator, Shell};
 
 pub(crate) fn set_transcription_progress(progress: &indicatif::ProgressBar, percentage: i32) {
@@ -46,11 +85,13 @@ Workflow:
   2. Transcribe a file:  sagascript transcribe recording.wav
   3. Or record live:      sagascript record
 
-Supported languages: English (en), Swedish (sv), Norwegian (no), Auto-detect (auto).
-Models are downloaded from HuggingFace and stored locally.
+Supported languages: English (en), Swedish (sv), Norwegian (no), Finnish (fi), Auto-detect (auto).
+Models are downloaded from pinned publisher revisions and stored locally.
 
 NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
+Finnish uses the generic multilingual Base model by default; optional \
+Finnish-optimized Tiny is available as fi-whisper-tiny. \
 For best results, set a specific language.";
 
 #[cfg(not(feature = "record"))]
@@ -67,11 +108,13 @@ Workflow:
   1. Download a model:   sagascript download-model base.en
   2. Transcribe a file:  sagascript transcribe recording.wav
 
-Supported languages: English (en), Swedish (sv), Norwegian (no), Auto-detect (auto).
-Models are downloaded from HuggingFace and stored locally.
+Supported languages: English (en), Swedish (sv), Norwegian (no), Finnish (fi), Auto-detect (auto).
+Models are downloaded from pinned publisher revisions and stored locally.
 
 NOTE: Auto-detect uses a generic multilingual model which is less accurate \
 than the dedicated language models (KBLab for Swedish, NbAiLab for Norwegian). \
+Finnish uses the generic multilingual Base model by default; optional \
+Finnish-optimized Tiny is available as fi-whisper-tiny. \
 For best results, set a specific language.";
 
 #[cfg(feature = "record")]
@@ -141,20 +184,46 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Transcribe an audio/video file
+    /// Benchmark cold and warm in-process live dictation inference
     #[command(
         long_about = "\
-Transcribe an audio or video file to text using a local Whisper model.
+Benchmark the live dictation inference path on one supplied audio/video fixture.\
+ The fixture is decoded once, then transcribed once as a cold run and repeatedly\
+ through one in-process backend for warm timing samples. The command uses the\
+ recommended model for the selected language unless --model is supplied, and\
+ never downloads a model or changes saved settings. Decoder overrides are\
+ local to this invocation. Timings end at the inference call, not visible text.\n\n\
+ Normal JSON output contains timings and counts, never transcript text.\
+ --quality-output explicitly writes plaintext transcripts to a NEW local file\
+ in an existing directory (0600 on Unix; parent ACL on Windows). Keep it out of\
+ shared or synced folders. Inputs are limited to 128 MiB and 120 decoded seconds\
+ for this export. --allow-empty captures silence cases without judging quality.\
+ A report's cli_checks_passed is not an accuracy or adoption verdict.",
+        after_long_help = "\
+EXAMPLES:\n  sagascript benchmark-dictation test-audio/english-jfk.wav --language en\n  sagascript benchmark-dictation sample.wav --language sv --iterations 10 --max-warm-ms 250\n  sagascript benchmark-dictation sample.wav --language en --expect-word hello"
+    )]
+    BenchmarkDictation(benchmark_dictation::BenchmarkDictationArgs),
 
-The file is decoded to 16 kHz mono PCM, then processed by the selected \
-Whisper model. Supports WAV, MP3, M4A, AAC, MP4, MOV, QTA, OGG, WebM, and FLAC.
+    /// Transcribe audio/video files or directories
+    #[command(
+        long_about = "\
+Transcribe audio/video files or directories using one shared local Whisper model.
+
+Each file is decoded independently to 16 kHz mono PCM. Directories include \
+WAV, MP3, M4A, AAC, MP4, MOV, QTA, OGG, WebM, and FLAC files in deterministic \
+path order; use --recursive to include subdirectories.
+
+With more than one input, --json emits an array and --jsonl emits one compact \
+{source,status,result|error} object per line. Item failures do not hide later \
+results, but the command exits non-zero after the batch; --fail-fast stops early.
 
 By default, uses the language and model from your persisted settings \
 (see 'sagascript config list'). Override with --language and --model.
 
 NOTE: --language auto uses a generic multilingual model which is less \
-accurate than the dedicated language models. For best results, specify \
-a language explicitly (en, sv, no).",
+accurate than the dedicated language models. Finnish uses the generic \
+multilingual Base model by default; optional Finnish-optimized Tiny is \
+available as fi-whisper-tiny.",
         after_long_help = "\
 EXAMPLES:
   # Basic transcription (uses configured language/model)
@@ -163,6 +232,9 @@ EXAMPLES:
   # Transcribe in Swedish with a specific model
   sagascript transcribe tal.m4a --language sv --model kb-whisper-base
 
+  # Transcribe in Finnish with the generic multilingual Base model
+  sagascript transcribe tal.m4a --language fi --model base
+
   # Output as JSON (includes metadata)
   sagascript transcribe podcast.mp3 --json
 
@@ -170,9 +242,26 @@ EXAMPLES:
   sagascript transcribe note.wav --clipboard
 
   # Pipe-friendly: JSON to jq
-  sagascript transcribe call.wav --json | jq -r .text"
+  sagascript transcribe call.wav --json | jq -r .text
+
+  # Batch a directory with streaming machine-readable output
+  sagascript transcribe recordings/ --recursive --jsonl"
     )]
     Transcribe(transcribe::TranscribeArgs),
+
+    /// Summarize copied live-dictation latency JSONL without launching the app
+    #[command(
+        long_about = "Summarize explicitly copied dictation_phase_timings JSONL. Valid input emits JSON and exits zero. An explicit budget failure emits the JSON report and exits nonzero; invalid input or arguments exit nonzero without JSON. This command never reads the default log directory, starts the app, captures audio, loads a model, changes settings, or contacts a remote service.",
+        after_long_help = "EXAMPLES:\n  sagascript latency-report --input /tmp/sagascript.log\n  sagascript latency-report --input /tmp/sagascript.log --budget-length short --max-warm-p95-ms 800 --min-samples 20"
+    )]
+    LatencyReport(latency::LatencyReportArgs),
+
+    /// Inspect, correct and export validated meeting transcript documents
+    #[command(
+        long_about = "Read validated meeting transcript or review JSON documents and inspect, correct, undo, reset, or export them without modifying the input. Proposal commands preserve previous corrections while comparing a new machine transcript; explicit --output destinations create new private files and never overwrite existing files. Review audio-info and audio-range read only an explicitly selected, source-hash-matched local recording; audio-range emits bounded raw bytes for a player pipeline. Document commands do not implicitly play or copy audio, run inference, change settings, or contact a network service.",
+        after_long_help = "EXAMPLES:\n  sagascript meeting inspect meeting.json\n  sagascript meeting export meeting.json --format markdown\n  sagascript meeting rename meeting.json --speaker speaker-1 --label Chair\n  sagascript meeting merge meeting.json --from speaker-2 --into speaker-1"
+    )]
+    Meeting(meeting::MeetingArgs),
 
     /// Record from microphone and transcribe
     #[cfg(feature = "record")]
@@ -187,8 +276,9 @@ Use --output to save the raw audio as a WAV file without transcribing \
 (useful for capturing audio to process later with 'sagascript transcribe').
 
 NOTE: --language auto uses a generic multilingual model which is less \
-accurate than the dedicated language models. For best results, specify \
-a language explicitly (en, sv, no).",
+accurate than the dedicated language models. Finnish uses the generic \
+multilingual Base model by default; optional Finnish-optimized Tiny is \
+available as fi-whisper-tiny.",
         after_long_help = "\
 EXAMPLES:
   # Record until Ctrl+C, then transcribe
@@ -214,7 +304,9 @@ EXAMPLES:
 List all available Whisper models with their size and download status.
 
 Models are organized by language. English uses OpenAI Whisper models, \
-Swedish uses KBLab models, and Norwegian uses NbAiLab models. \
+Swedish uses KBLab models, Norwegian uses NbAiLab models, and Finnish uses \
+generic multilingual Whisper models plus an optional Finnish-optimized Tiny \
+(Base is recommended). \
 Use --language to filter the list.
 
 The DOWNLOADED column shows whether each model is already available locally.",
@@ -227,14 +319,17 @@ EXAMPLES:
   sagascript list-models --language sv
 
   # List English models
-  sagascript list-models --language en"
+  sagascript list-models --language en
+
+  # List Finnish models
+  sagascript list-models --language fi"
     )]
     ListModels(models::ListModelsArgs),
 
     /// Download a whisper model
     #[command(
         long_about = "\
-Download a Whisper model from HuggingFace to the local model directory.
+Download a verified Whisper model from its pinned source to the local model directory.
 
 Models are stored in ~/.sagascript/models/. If the model is already \
 downloaded, prints its path and exits without re-downloading.
@@ -256,6 +351,7 @@ AVAILABLE MODELS:
   English:    tiny.en, base.en
   Swedish:    kb-whisper-tiny, kb-whisper-base, kb-whisper-small
   Norwegian:  nb-whisper-tiny, nb-whisper-base, nb-whisper-small
+  Finnish:    base (generic multilingual default), fi-whisper-tiny
   Multilingual: tiny, base
 
 DIARIZATION MODELS (requires --features diarization):
@@ -282,6 +378,16 @@ EXAMPLES:
     )]
     DeleteModel(models::DeleteModelArgs),
 
+    /// Open or focus the installed Sagascript desktop app
+    #[command(
+        long_about = "\
+Open the installed Sagascript desktop app or focus its Settings window when it is already running.
+
+This is a recovery path when the menu-bar status item is unavailable. On macOS, the command asks Launch Services to open the signed app bundle; it never changes saved settings or permissions.",
+        after_long_help = "EXAMPLES:\n  sagascript open"
+    )]
+    Open,
+
     /// Reset first-launch onboarding (re-run setup wizard on next launch)
     #[command(
         long_about = "\
@@ -298,13 +404,14 @@ View and modify Sagascript settings. Settings are persisted to a JSON file \
 and take effect immediately (the GUI hot-reloads changes made via CLI).
 
 Available setting keys:
-  language           Language for transcription (en, sv, no, auto)
+  language           Language for transcription (en, sv, no, fi, auto)
   whisper_model      Whisper model ID (e.g. base.en, kb-whisper-base)
   hotkey_mode        Hotkey behavior: push (push-to-talk) or toggle
   show_overlay       Show recording overlay (true/false)
   auto_paste         Auto-paste transcription result (true/false)
   auto_select_model  Auto-select best model for language (true/false)
-  hotkey             Global hotkey shortcut (e.g. Control+Shift+Space)",
+  hotkey             Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows.
+                     IntlBackslash is the ISO section key (§ left of 1 on Swedish/UK Macs); macOS/Windows only",
         after_long_help = "\
 EXAMPLES:
   # Show all settings with current and default values
@@ -318,6 +425,8 @@ EXAMPLES:
 
   # Change the global hotkey
   sagascript config set hotkey 'Option+Space'
+  sagascript config set hotkey F13
+  sagascript config set hotkey 'Command+IntlBackslash'   # Command+§ on an ISO Mac keyboard
 
   # Reset a single setting to its default
   sagascript config reset language
@@ -329,6 +438,13 @@ EXAMPLES:
   sagascript config path"
     )]
     Config(config::ConfigArgs),
+
+    /// Manage global hint terms and explicit profile-scoped aliases used by live and batch transcription
+    #[command(
+        long_about = "Add preferred spellings and optional exact mishearings. Global and one-run terms prime Whisper as hint-only context; deterministic aliases require a selected known profile with an explicit language. No stored text is migrated or deleted.",
+        after_long_help = "EXAMPLES:\n  sagascript glossary path\n  sagascript glossary path --profile swedish\n  sagascript glossary list\n  sagascript glossary add OpenRouter\n  sagascript glossary add OpenRouter --alias 'open router' --alias 'open vrouter' --profile swedish\n  sagascript glossary add merge --alias merch --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish\n  sagascript glossary suggest heard.txt --corrected corrected.txt --profile swedish --apply\n  sagascript glossary remove OpenRouter --profile swedish\n  sagascript glossary clear --yes"
+    )]
+    Glossary(glossary::GlossaryArgs),
 
     /// List supported audio/video file formats
     #[command(
@@ -406,12 +522,18 @@ pub fn run(cli: Cli) {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
     let result = match cli.command.unwrap() {
-        Command::Transcribe(args) => transcribe::run(args),
+        Command::BenchmarkDictation(args) =>
+            run_inference_command("benchmark-dictation", move || benchmark_dictation::run(args)),
+        Command::Transcribe(args) =>
+            run_inference_command("transcribe", move || transcribe::run(args)),
+        Command::LatencyReport(args) => latency::run(args),
+        Command::Meeting(args) => meeting::run(args),
         #[cfg(feature = "record")]
-        Command::Record(args) => record::run(args),
+        Command::Record(args) => run_inference_command("record", move || record::run(args)),
         Command::ListModels(args) => models::list(args),
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
+        Command::Open => open::run(),
         Command::ResetOnboarding => {
             sagascript_core::settings::store::update(|settings| {
                 settings.has_completed_onboarding = false;
@@ -422,6 +544,7 @@ pub fn run(cli: Cli) {
                 })
         }
         Command::Config(args) => config::run(args),
+        Command::Glossary(args) => glossary::run(args),
         Command::Formats => {
             formats();
             Ok(())
@@ -437,6 +560,39 @@ pub fn run(cli: Cli) {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
+}
+
+#[cfg(target_os = "windows")]
+fn run_inference_command(
+    command: &'static str,
+    task: impl FnOnce() -> Result<(), sagascript_core::error::DictationError> + Send + 'static,
+) -> Result<(), sagascript_core::error::DictationError> {
+    // MSVC executables start with a much smaller main-thread stack than the
+    // worker threads used by the desktop app. Whisper inference exhausted it
+    // with STATUS_STACK_OVERFLOW (0xC00000FD) in the real Windows CI gate.
+    std::thread::Builder::new()
+        .name(format!("sagascript-cli-{command}"))
+        .stack_size(WINDOWS_INFERENCE_STACK_BYTES)
+        .spawn(task)
+        .map_err(|error| {
+            sagascript_core::error::DictationError::ApplicationLaunchError(format!(
+                "Failed to start Windows {command} worker: {error}"
+            ))
+        })?
+        .join()
+        .map_err(|_| {
+            sagascript_core::error::DictationError::TranscriptionFailed(format!(
+                "Windows {command} worker terminated unexpectedly"
+            ))
+        })?
+}
+
+#[cfg(not(target_os = "windows"))]
+fn run_inference_command(
+    _command: &'static str,
+    task: impl FnOnce() -> Result<(), sagascript_core::error::DictationError>,
+) -> Result<(), sagascript_core::error::DictationError> {
+    task()
 }
 
 fn formats() {
@@ -509,6 +665,43 @@ fn render_manpage_tree(cmd: &clap::Command, dir: &PathBuf) -> Result<(), io::Err
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_inference_command_has_a_large_named_worker_stack() {
+        run_inference_command("stack-test", || {
+            let stack_probe = [0_u8; 4 * 1024 * 1024];
+            assert_eq!(
+                std::thread::current().name(),
+                Some("sagascript-cli-stack-test")
+            );
+            std::hint::black_box(&stack_probe);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn log_filter_suppresses_native_diagnostics_by_default() {
+        assert_eq!(effective_log_filter(None, "warn"), DEFAULT_CLI_LOG_FILTER);
+        assert_eq!(
+            effective_log_filter(Some("info"), "warn"),
+            format!("info,{NATIVE_LOG_SUPPRESSION}")
+        );
+        assert_eq!(
+            effective_log_filter(Some("  "), "info"),
+            format!("info,{NATIVE_LOG_SUPPRESSION}")
+        );
+    }
+
+    #[test]
+    fn log_filter_preserves_explicit_native_diagnostics_opt_in() {
+        let configured = "warn,whisper_rs=info";
+        assert_eq!(
+            effective_log_filter(Some(configured), "warn"),
+            configured
+        );
+    }
+
     #[test]
     fn transcription_progress_bar_never_renders_outside_zero_to_one_hundred() {
         let progress = indicatif::ProgressBar::new(100);
@@ -528,6 +721,36 @@ mod tests {
 
         let command = Cli::command();
         assert_eq!(command.get_long_version(), Some(LONG_VERSION));
+    }
+
+    #[test]
+    fn benchmark_dictation_is_discoverable_with_gate_arguments() {
+        let command = Cli::command();
+        let benchmark = command
+            .find_subcommand("benchmark-dictation")
+            .expect("benchmark-dictation should be a root subcommand");
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "language"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "iterations"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "max_warm_ms"));
+        assert!(benchmark.get_arguments().any(|arg| arg.get_id() == "expect_word"));
+    }
+
+    #[test]
+    fn removed_presenter_command_is_not_discoverable_or_parseable() {
+        let command = Cli::command();
+        assert!(command.find_subcommand("presenter").is_none());
+        assert!(Cli::try_parse_from(["sagascript", "presenter", "start"]).is_err());
+        for marker in [
+            "--presenter-start",
+            "--presenter-start=swedish",
+            "--presenter-finish",
+            "--presenter-cancel",
+        ] {
+            let error = Cli::try_parse_from(["sagascript", marker])
+                .err()
+                .expect("retired marker must be rejected");
+            assert_eq!(error.exit_code(), 2);
+        }
     }
 
     // -- Completions generation --
@@ -730,10 +953,13 @@ mod tests {
         let cli = Cli::try_parse_from(["sagascript", "transcribe", "file.wav"]).unwrap();
         match cli.command.unwrap() {
             Command::Transcribe(args) => {
-                assert_eq!(args.file, PathBuf::from("file.wav"));
+                assert_eq!(args.files, vec![PathBuf::from("file.wav")]);
                 assert!(args.language.is_none());
                 assert!(args.model.is_none());
                 assert!(!args.json);
+                assert!(!args.jsonl);
+                assert!(!args.recursive);
+                assert!(!args.fail_fast);
                 assert!(!args.clipboard);
             }
             other => panic!("expected Transcribe, got {:?}", std::mem::discriminant(&other)),
@@ -753,7 +979,7 @@ mod tests {
         ]).unwrap();
         match cli.command.unwrap() {
             Command::Transcribe(args) => {
-                assert_eq!(args.file, PathBuf::from("meeting.mp3"));
+                assert_eq!(args.files, vec![PathBuf::from("meeting.mp3")]);
                 assert_eq!(args.language.as_deref(), Some("sv"));
                 assert_eq!(args.model.as_deref(), Some("kb-whisper-base"));
                 assert!(args.json);
@@ -761,6 +987,59 @@ mod tests {
                 assert_eq!(args.prompt.as_deref(), Some("Notre Dame, Sara"));
                 assert!(args.prompt_file.is_none());
                 assert!(args.correct_hints);
+            }
+            _ => panic!("expected Transcribe"),
+        }
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn diarization_cache_requires_diarization() {
+        assert!(Cli::try_parse_from([
+            "sagascript",
+            "transcribe",
+            "meeting.m4a",
+            "--diarize-cache",
+            "analysis.json",
+        ])
+        .is_err());
+
+        let cli = Cli::try_parse_from([
+            "sagascript",
+            "transcribe",
+            "meeting.m4a",
+            "--diarize",
+            "--diarize-cache",
+            "analysis.json",
+        ])
+        .unwrap();
+        let Command::Transcribe(args) = cli.command.unwrap() else {
+            panic!("expected Transcribe");
+        };
+        assert_eq!(args.diarize_cache, Some(PathBuf::from("analysis.json")));
+    }
+
+    #[test]
+    fn parse_transcribe_batch_flags_and_inputs() {
+        let cli = Cli::try_parse_from([
+            "sagascript",
+            "transcribe",
+            "one.wav",
+            "recordings",
+            "--recursive",
+            "--jsonl",
+            "--fail-fast",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Command::Transcribe(args) => {
+                assert_eq!(
+                    args.files,
+                    vec![PathBuf::from("one.wav"), PathBuf::from("recordings")]
+                );
+                assert!(args.recursive);
+                assert!(args.jsonl);
+                assert!(args.fail_fast);
             }
             _ => panic!("expected Transcribe"),
         }
@@ -875,6 +1154,88 @@ mod tests {
     }
 
     #[test]
+    fn parse_glossary_add_with_repeated_aliases() {
+        let cli = Cli::try_parse_from([
+            "sagascript",
+            "glossary",
+            "add",
+            "OpenRouter",
+            "--alias",
+            "open router",
+            "--alias",
+            "open vrouter",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Command::Glossary(args) => match args.action {
+                glossary::GlossaryAction::Add { term, aliases, profile } => {
+                    assert_eq!(term, "OpenRouter");
+                    assert_eq!(aliases, vec!["open router", "open vrouter"]);
+                    assert!(profile.is_none());
+                }
+                _ => panic!("expected glossary add"),
+            },
+            _ => panic!("expected Glossary"),
+        }
+    }
+
+    #[test]
+    fn parse_profile_glossary_path() {
+        let cli = Cli::try_parse_from([
+            "sagascript",
+            "glossary",
+            "path",
+            "--profile",
+            "swedish",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Command::Glossary(args) => match args.action {
+                glossary::GlossaryAction::Path { profile } => {
+                    assert_eq!(profile.as_deref(), Some("swedish"));
+                }
+                _ => panic!("expected glossary path"),
+            },
+            _ => panic!("expected Glossary"),
+        }
+    }
+
+    #[test]
+    fn parse_glossary_suggest_is_dry_run_by_default_and_profile_scoped() {
+        let cli = Cli::try_parse_from([
+            "sagascript",
+            "glossary",
+            "suggest",
+            "heard.txt",
+            "--corrected",
+            "corrected.txt",
+            "--profile",
+            "swedish",
+            "--json",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Command::Glossary(args) => match args.action {
+                glossary::GlossaryAction::Suggest {
+                    heard,
+                    corrected,
+                    profile,
+                    json,
+                    apply,
+                } => {
+                    assert_eq!(heard, PathBuf::from("heard.txt"));
+                    assert_eq!(corrected, PathBuf::from("corrected.txt"));
+                    assert_eq!(profile, "swedish");
+                    assert!(json);
+                    assert!(!apply);
+                }
+                _ => panic!("expected glossary suggest"),
+            },
+            _ => panic!("expected Glossary"),
+        }
+    }
+
+    #[test]
     fn parse_list_models_with_language() {
         let cli = Cli::try_parse_from(["sagascript", "list-models", "-l", "sv"]).unwrap();
         match cli.command.unwrap() {
@@ -894,6 +1255,12 @@ mod tests {
             }
             _ => panic!("expected DownloadModel"),
         }
+    }
+
+    #[test]
+    fn parse_open_gui() {
+        let cli = Cli::try_parse_from(["sagascript", "open"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Open)));
     }
 
     #[test]
@@ -920,6 +1287,81 @@ mod tests {
                     assert!(key.is_none(), "reset without key should be None");
                 }
                 _ => panic!("expected ConfigAction::Reset"),
+            },
+            _ => panic!("expected Config"),
+        }
+    }
+
+    #[test]
+    fn parse_config_profile_create() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "config", "profiles", "create", "swedish",
+            "--name", "Swedish", "--hotkey", "Option+Space", "--language", "sv",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Config(args) => match args.action {
+                config::ConfigAction::Profiles { action: config::ProfileAction::Create { id, name, hotkey, language, .. } } => {
+                    assert_eq!(id, "swedish");
+                    assert_eq!(name, "Swedish");
+                    assert_eq!(hotkey.as_deref(), Some("Option+Space"));
+                    assert_eq!(language, "sv");
+                }
+                _ => panic!("expected profile create"),
+            },
+            _ => panic!("expected Config"),
+        }
+    }
+
+    #[test]
+    fn parse_config_profile_add_explicit_shortcuts() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "config", "profiles", "add", "swedish",
+            "--name", "Swedish", "--push-to-talk-shortcut", "Control+Shift+P",
+            "--toggle-shortcut", "Control+Shift+T", "--language", "sv",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Config(args) => match args.action {
+                config::ConfigAction::Profiles {
+                    action: config::ProfileAction::Create {
+                        id,
+                        hotkey,
+                        push_to_talk_shortcut,
+                        toggle_shortcut,
+                        ..
+                    },
+                } => {
+                    assert_eq!(id, "swedish");
+                    assert!(hotkey.is_none());
+                    assert_eq!(push_to_talk_shortcut.as_deref(), Some("Control+Shift+P"));
+                    assert_eq!(toggle_shortcut.as_deref(), Some("Control+Shift+T"));
+                }
+                _ => panic!("expected profile add"),
+            },
+            _ => panic!("expected Config"),
+        }
+    }
+
+    #[test]
+    fn parse_config_profile_set_clear_explicit_shortcuts() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "config", "profiles", "set", "swedish",
+            "--clear-push-to-talk-shortcut", "--clear-toggle-shortcut",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Config(args) => match args.action {
+                config::ConfigAction::Profiles {
+                    action: config::ProfileAction::Update {
+                        id,
+                        clear_push_to_talk_shortcut,
+                        clear_toggle_shortcut,
+                        ..
+                    },
+                } => {
+                    assert_eq!(id, "swedish");
+                    assert!(clear_push_to_talk_shortcut);
+                    assert!(clear_toggle_shortcut);
+                }
+                _ => panic!("expected profile set"),
             },
             _ => panic!("expected Config"),
         }

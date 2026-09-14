@@ -8,7 +8,7 @@ use super::transcribe::{model_id_string, parse_language, parse_model};
 
 #[derive(Args)]
 pub struct ListModelsArgs {
-    /// Filter by language [possible values: en, sv, no, auto (less accurate)]
+    /// Filter by language [possible values: en, sv, no, fi, auto (less accurate)]
     #[arg(short, long, value_name = "LANG")]
     pub language: Option<String>,
 }
@@ -27,6 +27,7 @@ pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
             Language::English,
             Language::Swedish,
             Language::Norwegian,
+            Language::Finnish,
             Language::Auto,
         ]
     };

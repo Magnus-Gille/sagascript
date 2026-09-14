@@ -1,0 +1,392 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, test } from "node:test";
+
+const helper = fileURLToPath(new URL("./ci-build-identity.mjs", import.meta.url));
+const fixtureManifest = fileURLToPath(new URL("../src-tauri/Cargo.toml", import.meta.url));
+const fixtureAttributes = fileURLToPath(new URL("../.gitattributes", import.meta.url));
+const repos = [];
+const envDirs = [];
+const fixtureEnvironments = new Map();
+const allowedOutput = "src-tauri/gen/schemas/desktop-schema.json";
+
+function git(cwd, args, extraEnv = {}) {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...(fixtureEnvironments.get(cwd) ?? {}),
+      ...extraEnv,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_AUTHOR_NAME: "CI Fixture",
+      GIT_AUTHOR_EMAIL: "ci@example.invalid",
+      GIT_COMMITTER_NAME: "CI Fixture",
+      GIT_COMMITTER_EMAIL: "ci@example.invalid",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
+async function isolatedGitEnvironment() {
+  const directory = await mkdtemp(join(tmpdir(), "sagascript-ci-git-"));
+  envDirs.push(directory);
+  const globalConfig = join(directory, "global.gitconfig");
+  await writeFile(globalConfig, "");
+  return { GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: "1" };
+}
+
+async function fixture({ withAttributes = true } = {}) {
+  const cwd = await mkdtemp(join(tmpdir(), "sagascript-ci-identity-"));
+  repos.push(cwd);
+  fixtureEnvironments.set(cwd, await isolatedGitEnvironment());
+  git(cwd, ["init", "-q"]);
+  git(cwd, ["config", "user.email", "ci@example.invalid"]);
+  git(cwd, ["config", "user.name", "CI Fixture"]);
+  git(cwd, ["config", "commit.gpgsign", "false"]);
+  await mkdir(join(cwd, ".git/info"), { recursive: true });
+  const attributesFile = join(cwd, ".git/info/attributes");
+  const excludesFile = join(cwd, ".git/info/exclude");
+  await writeFile(attributesFile, "");
+  await writeFile(excludesFile, "");
+  git(cwd, ["config", "core.attributesfile", attributesFile.replaceAll("\\", "/")]);
+  git(cwd, ["config", "core.excludesfile", excludesFile.replaceAll("\\", "/")]);
+  await mkdir(join(cwd, "src-tauri/capabilities"), { recursive: true });
+  await mkdir(join(cwd, "src-tauri/gen/schemas"), { recursive: true });
+  await writeFile(join(cwd, "src-tauri/Cargo.toml"), normalizeCrlf(await readFile(fixtureManifest)));
+  if (withAttributes) {
+    await writeFile(join(cwd, ".gitattributes"), await readFile(fixtureAttributes));
+  }
+  await writeFile(join(cwd, "src-tauri/capabilities/default.json"), "{\"permission\":true}\n");
+  for (const relativePath of [
+    "src-tauri/gen/schemas/acl-manifests.json",
+    "src-tauri/gen/schemas/capabilities.json",
+    "src-tauri/gen/schemas/desktop-schema.json",
+  ]) {
+    await writeFile(join(cwd, relativePath), "{}\n");
+  }
+  git(cwd, ["add", "."]);
+  git(cwd, ["commit", "-qm", "fixture baseline"]);
+  const sha = git(cwd, ["rev-parse", "HEAD"]);
+  return { cwd, sha };
+}
+
+function configureCrlfCheckout(repo) {
+  git(repo.cwd, ["config", "core.autocrlf", "true"]);
+  git(repo.cwd, ["config", "core.eol", "crlf"]);
+}
+
+async function forceManifestCheckout(repo) {
+  const manifestPath = join(repo.cwd, "src-tauri/Cargo.toml");
+  await rm(manifestPath, { force: true });
+  git(repo.cwd, ["checkout", "--", "src-tauri/Cargo.toml"]);
+  return manifestPath;
+}
+
+function normalizeCrlf(bytes) {
+  const normalized = [];
+  for (let index = 0; index < bytes.length; index += 1) {
+    if (bytes[index] === 0x0d && bytes[index + 1] === 0x0a) {
+      continue;
+    }
+    normalized.push(bytes[index]);
+  }
+  return Buffer.from(normalized);
+}
+
+function countByte(bytes, expected) {
+  return bytes.reduce((count, byte) => count + (byte === expected ? 1 : 0), 0);
+}
+
+async function envPath() {
+  const directory = await mkdtemp(join(tmpdir(), "sagascript-ci-env-"));
+  envDirs.push(directory);
+  return join(directory, "github.env");
+}
+
+function invoke(cwd, args, extraEnv = {}) {
+  return spawnSync(process.execPath, [helper, ...args], {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, ...(fixtureEnvironments.get(cwd) ?? {}), ...extraEnv },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+async function withEnvironment(overrides, action) {
+  const previous = new Map();
+  for (const [name, value] of Object.entries(overrides)) {
+    previous.set(name, process.env[name]);
+    process.env[name] = value;
+  }
+  try {
+    return await action();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+}
+
+function assertRejected(result) {
+  assert.notEqual(result.status, 0, "expected helper rejection");
+  assert.equal(result.stdout, "");
+}
+
+async function initialized(repo) {
+  const githubEnv = await envPath();
+  const result = invoke(repo.cwd, ["--initialize"], {
+    GITHUB_SHA: repo.sha,
+    GITHUB_ENV: githubEnv,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const envText = await readFile(githubEnv, "utf8");
+  assert.match(envText, new RegExp("^SAGASCRIPT_GIT_HASH=" + repo.sha + "\\nSAGASCRIPT_BUILD_DATE=\\d{4}-\\d{2}-\\d{2}\\n$"));
+  return envText.match(/SAGASCRIPT_BUILD_DATE=(\d{4}-\d{2}-\d{2})/)[1];
+}
+
+function verifyEnv(repo, date, overrides = {}) {
+  return {
+    GITHUB_SHA: repo.sha,
+    SAGASCRIPT_GIT_HASH: repo.sha,
+    SAGASCRIPT_BUILD_DATE: date,
+    ...overrides,
+  };
+}
+
+afterEach(async () => {
+  const finishedRepos = repos.splice(0);
+  for (const repo of finishedRepos) {
+    fixtureEnvironments.delete(repo);
+  }
+  await Promise.all(finishedRepos.map((repo) => rm(repo, { recursive: true, force: true })));
+  await Promise.all(envDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+test("initialize emits full SHA and UTC date for a clean fixture", async () => {
+  const repo = await fixture();
+  const githubEnv = await envPath();
+  const result = invoke(repo.cwd, ["--initialize"], { GITHUB_SHA: repo.sha, GITHUB_ENV: githubEnv });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.mode, "initialize");
+  assert.equal(output.git_sha, repo.sha);
+  assert.match(output.build_date, /^\d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(output.allowed_generated_paths, [
+    "src-tauri/gen/schemas/acl-manifests.json",
+    "src-tauri/gen/schemas/capabilities.json",
+    "src-tauri/gen/schemas/desktop-schema.json",
+    "src-tauri/gen/schemas/windows-schema.json",
+  ]);
+  assert.equal((await readFile(githubEnv, "utf8")).split("\n").length, 3);
+});
+
+test("initialize rejects wrong or malformed expected SHA", async () => {
+  for (const expected of ["0".repeat(40), "A".repeat(40), "not-a-sha"]) {
+    const repo = await fixture();
+    const githubEnv = await envPath();
+    const result = invoke(repo.cwd, ["--initialize"], { GITHUB_SHA: expected, GITHUB_ENV: githubEnv });
+    assertRejected(result);
+    await assert.rejects(readFile(githubEnv, "utf8"));
+  }
+});
+
+test("initialize rejects git failure and dirty tracked or untracked files", async () => {
+  const outside = await mkdtemp(join(tmpdir(), "sagascript-ci-not-repo-"));
+  repos.push(outside);
+  const failedGit = invoke(outside, ["--initialize"], {
+    GITHUB_SHA: "0".repeat(40),
+    GITHUB_ENV: await envPath(),
+  });
+  assertRejected(failedGit);
+
+  const repo = await fixture();
+  await writeFile(join(repo.cwd, "src-tauri/capabilities/default.json"), "{\"permission\":false}\n");
+  await writeFile(join(repo.cwd, "unexpected.txt"), "untracked\n");
+  const result = invoke(repo.cwd, ["--initialize"], {
+    GITHUB_SHA: repo.sha,
+    GITHUB_ENV: await envPath(),
+  });
+  assertRejected(result);
+});
+
+test("initialize rejects missing GITHUB_ENV and malformed CLI arguments", async () => {
+  const repo = await fixture();
+  assertRejected(invoke(repo.cwd, ["--initialize"], { GITHUB_SHA: repo.sha, GITHUB_ENV: "" }));
+  assertRejected(invoke(repo.cwd, [], { GITHUB_SHA: repo.sha }));
+  assertRejected(invoke(repo.cwd, ["--verify", "extra"], { GITHUB_SHA: repo.sha }));
+});
+
+test("verify rejects a changed HEAD after initialization", async () => {
+  const repo = await fixture();
+  const date = await initialized(repo);
+  await writeFile(join(repo.cwd, "new-source.txt"), "new commit\n");
+  git(repo.cwd, ["add", "new-source.txt"]);
+  git(repo.cwd, ["commit", "-qm", "second fixture commit"]);
+  assertRejected(invoke(repo.cwd, ["--verify"], verifyEnv(repo, date)));
+});
+
+test("verify permits only regular generated schema outputs", async () => {
+  const repo = await fixture();
+  const date = await initialized(repo);
+  await writeFile(join(repo.cwd, allowedOutput), "{\"generated\":true}\n");
+  await writeFile(join(repo.cwd, "src-tauri/gen/schemas/windows-schema.json"), "{}\n");
+  const result = invoke(repo.cwd, ["--verify"], verifyEnv(repo, date));
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.deepEqual(output.observed_generated_paths, [
+    "src-tauri/gen/schemas/desktop-schema.json",
+    "src-tauri/gen/schemas/windows-schema.json",
+  ]);
+});
+
+test("verify rejects unexpected, untracked, and capability-source changes", async () => {
+  for (const change of [
+    async (repo) => writeFile(join(repo.cwd, "unexpected.txt"), "nope\n"),
+    async (repo) => writeFile(join(repo.cwd, "src-tauri/capabilities/default.json"), "{\"permission\":false}\n"),
+  ]) {
+    const repo = await fixture();
+    const date = await initialized(repo);
+    await change(repo);
+    const result = invoke(repo.cwd, ["--verify"], verifyEnv(repo, date));
+    assertRejected(result);
+  }
+});
+
+test("verify rejects generated deletion and rename", async () => {
+  const deleted = await fixture();
+  const deletedDate = await initialized(deleted);
+  await rm(join(deleted.cwd, allowedOutput));
+  assertRejected(invoke(deleted.cwd, ["--verify"], verifyEnv(deleted, deletedDate)));
+
+  const renamed = await fixture();
+  const renamedDate = await initialized(renamed);
+  git(renamed.cwd, ["mv", allowedOutput, allowedOutput + ".renamed"]);
+  assertRejected(invoke(renamed.cwd, ["--verify"], verifyEnv(renamed, renamedDate)));
+});
+
+test("verify rejects generated symlink", async (t) => {
+  const symlinked = await fixture();
+  const symlinkedDate = await initialized(symlinked);
+  await rm(join(symlinked.cwd, allowedOutput));
+  try {
+    await symlink("capabilities.json", join(symlinked.cwd, allowedOutput));
+  } catch (error) {
+    if (error && (error.code === "EPERM" || error.code === "EACCES")) {
+      t.skip("host denied symlink creation");
+      return;
+    }
+    throw error;
+  }
+  assertRejected(invoke(symlinked.cwd, ["--verify"], verifyEnv(symlinked, symlinkedDate)));
+});
+
+test("verify rejects missing, wrong, and invalid metadata", async () => {
+  for (const metadata of [
+    { SAGASCRIPT_GIT_HASH: "", SAGASCRIPT_BUILD_DATE: "" },
+    { SAGASCRIPT_GIT_HASH: "0".repeat(40) },
+    { SAGASCRIPT_GIT_HASH: "not-a-sha", SAGASCRIPT_BUILD_DATE: "2026-09-06" },
+  ]) {
+    const repo = await fixture();
+    const result = invoke(repo.cwd, ["--verify"], verifyEnv(repo, "2026-09-06", metadata));
+    assertRejected(result);
+  }
+});
+
+test("verify rejects an invalid build date after SHA validation", async () => {
+  const repo = await fixture();
+  const result = invoke(repo.cwd, ["--verify"], verifyEnv(repo, "2026-02-30"));
+  assertRejected(result);
+  assert.match(result.stderr, /SAGASCRIPT_BUILD_DATE/);
+});
+
+test("status diagnostics preserve a Unicode untracked path", async () => {
+  const repo = await fixture();
+  await writeFile(join(repo.cwd, "naïve.txt"), "untracked\n");
+  const result = invoke(repo.cwd, ["--initialize"], {
+    GITHUB_SHA: repo.sha,
+    GITHUB_ENV: await envPath(),
+  });
+  assertRejected(result);
+  assert.match(result.stderr, /path="naïve\.txt" xy="\?\?"/);
+});
+
+test("legacy CRLF checkout exposes the pre-attribute line-ending hazard", async () => {
+  const repo = await fixture({ withAttributes: false });
+  configureCrlfCheckout(repo);
+  const manifestPath = await forceManifestCheckout(repo);
+  const checkedOut = await readFile(manifestPath);
+  const tauriRewrite = normalizeCrlf(checkedOut);
+  const sourceLf = normalizeCrlf(await readFile(fixtureManifest));
+
+  assert.ok(countByte(checkedOut, 0x0d) > 0, "legacy checkout should contain CRLF bytes");
+  assert.notDeepEqual(checkedOut, tauriRewrite, "LF serialization must differ from the legacy checkout bytes");
+  assert.deepEqual(tauriRewrite, sourceLf, "LF serialization should restore the committed manifest bytes");
+});
+
+test("repo attributes force LF checkout and preserve strict verification", async () => {
+  const attributes = await readFile(fixtureAttributes, "utf8");
+  assert.match(attributes, /^src-tauri\/Cargo\.toml text eol=lf$/m);
+
+  const repo = await fixture();
+  configureCrlfCheckout(repo);
+  const manifestPath = await forceManifestCheckout(repo);
+  const checkedOut = await readFile(manifestPath);
+
+  assert.equal(countByte(checkedOut, 0x0d), 0, "repo attribute must force LF checkout");
+  assert.ok(countByte(checkedOut, 0x0a) > 0, "manifest should retain line endings");
+
+  const date = await initialized(repo);
+  await writeFile(manifestPath, normalizeCrlf(checkedOut));
+  assert.deepEqual(await readFile(manifestPath), checkedOut, "Tauri-style LF rewrite must be byte-identical");
+
+  const result = invoke(repo.cwd, ["--verify"], verifyEnv(repo, date));
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(git(repo.cwd, ["status", "--short"]), "");
+
+  await writeFile(manifestPath, Buffer.concat([checkedOut, Buffer.from("\n# source change\n")]));
+  const changed = invoke(repo.cwd, ["--verify"], verifyEnv(repo, date));
+  assertRejected(changed);
+  assert.match(changed.stderr, /Cargo\.toml/);
+});
+
+test("fixture Git operations ignore hostile global configuration", async () => {
+  const hostileDirectory = await mkdtemp(join(tmpdir(), "sagascript-ci-hostile-git-"));
+  envDirs.push(hostileDirectory);
+  const hostileIgnore = join(hostileDirectory, "global-ignore");
+  const hostileAttributes = join(hostileDirectory, "global-attributes");
+  const hostileGlobal = join(hostileDirectory, "global.gitconfig");
+  await writeFile(hostileIgnore, "unexpected.txt\n");
+  await writeFile(hostileAttributes, "src-tauri/Cargo.toml text eol=crlf\n");
+  await writeFile(
+    hostileGlobal,
+    "[core]\n" +
+      "\texcludesfile = \"" + hostileIgnore.replaceAll("\\", "/") + "\"\n" +
+      "\tattributesfile = \"" + hostileAttributes.replaceAll("\\", "/") + "\"\n" +
+      "\tautocrlf = true\n" +
+      "\teol = crlf\n",
+  );
+
+  await withEnvironment({ GIT_CONFIG_GLOBAL: hostileGlobal, GIT_CONFIG_NOSYSTEM: "1" }, async () => {
+    const lineEndingRepo = await fixture({ withAttributes: false });
+    const manifestPath = await forceManifestCheckout(lineEndingRepo);
+    assert.equal(countByte(await readFile(manifestPath), 0x0d), 0, "hostile global autocrlf must not leak into fixtures");
+
+    const helperRepo = await fixture();
+    await writeFile(join(helperRepo.cwd, "unexpected.txt"), "untracked\n");
+    const result = invoke(helperRepo.cwd, ["--initialize"], {
+      GITHUB_SHA: helperRepo.sha,
+      GITHUB_ENV: await envPath(),
+    });
+    assertRejected(result);
+    assert.match(result.stderr, /unexpected\.txt/);
+  });
+});

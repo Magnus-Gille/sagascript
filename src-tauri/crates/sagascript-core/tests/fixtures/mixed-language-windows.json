@@ -1,0 +1,6 @@
+[
+  {"sequence": 0, "start": 0.0, "end": 20.0, "language": "en", "probability": 0.98},
+  {"sequence": 1, "start": 20.0, "end": 40.0, "language": "en", "probability": 0.97},
+  {"sequence": 3, "start": 60.0, "end": 80.0, "language": "sv", "probability": 0.96},
+  {"sequence": 4, "start": 80.0, "end": 100.0, "language": "sv", "probability": 0.95}
+]
