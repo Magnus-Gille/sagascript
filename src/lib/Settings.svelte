@@ -192,6 +192,8 @@
   let fileJobs = $state<FileJob[]>([]);
   let selectedFileId = $state<string | null>(null);
   let fileBusy = $state<Record<string, boolean>>({});
+  let fileAttention = $state<Record<string, boolean>>({});
+  let filesNeedingRetry = $derived(fileJobs.filter(job => fileAttention[job.id]));
   let savedReviewIds = $state<string[]>([]);
   let recentTranscriptions = $state<RecentTranscription[]>([]);
   let selectedRerunPath = $state("");
@@ -263,6 +265,17 @@
   function forgetMissingFile(path: string): void {
     recentTranscriptions = recentTranscriptions.filter(run => run.path !== path);
     if (selectedRerunPath === path) selectedRerunPath = recentTranscriptions[0]?.path ?? "";
+  }
+
+  function updateFileAttention(id: string, needsRetry: boolean): void {
+    if (fileAttention[id] !== needsRetry) fileAttention = { ...fileAttention, [id]: needsRetry };
+  }
+
+  function showFileNeedingRetry(id: string): void {
+    requestTabChange("transcribe", () => {
+      selectedFileId = id;
+      void tick().then(() => document.getElementById(`file-tab-${id}`)?.focus());
+    });
   }
 
   function onResultTabKeydown(event: KeyboardEvent, index: number): void {
@@ -1330,6 +1343,26 @@
       {#if settingsError}
         <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
       {/if}
+      <p class="queue-summary" class:queue-empty={fileJobs.length === 0} role="status" aria-label="File transcription status" aria-atomic="true">
+        {#if fileJobs.length}
+          {fileJobs.filter(job => job.status === "completed" && !fileBusy[job.id]).length} completed ·
+          {fileJobs.filter(job => job.status === "failed").length} failed ·
+          {fileJobs.filter(job => job.status === "cancelled").length} cancelled ·
+          {fileJobs.filter(job => job.status === "queued").length} queued ·
+          {fileJobs.filter(job => job.status === "running" || fileBusy[job.id]).length} running ·
+          {filesNeedingRetry.length} needs retry
+        {/if}
+      </p>
+      {#if filesNeedingRetry.length}
+        <div class="queue-attention">
+          {#each filesNeedingRetry as job (job.id)}
+            <div>
+              <span>{fileJobName(job.path)} needs a status check.{#if fileJobs.some(file => file.status === "queued")} The queue is paused.{/if}</span>
+              <button class="secondary" onclick={() => showFileNeedingRetry(job.id)}>Show {fileJobName(job.path)}</button>
+            </div>
+          {/each}
+        </div>
+      {/if}
       {#if activeTab === "dictate"}
         <div class="field profile-field">
           <div class="profile-heading">
@@ -1547,9 +1580,6 @@
           <button class="secondary" onclick={() => handleFilesTranscription(["Saved review"], true)} disabled={transcribing}>
             Open saved meeting...
           </button>
-          {#if transcribing}
-            <div class="drop-zone-text" role="status">{fileJobs.filter(job => job.status === "queued").length} queued · select a file below to see its progress</div>
-          {/if}
         </div>
         {#if rerunError}<div class="transcribe-error">{rerunError}</div>{/if}
 
@@ -1566,7 +1596,7 @@
                 title={job.path} onclick={() => { selectedFileId = job.id; }}
                 onkeydown={(event) => onResultTabKeydown(event, index)}>
                 <span class="result-filename">{fileJobName(job.path)}</span>
-                <span class="result-status">{job.status}</span>
+                <span class="result-status">{fileAttention[job.id] ? "needs retry" : job.status}</span>
               </button>
             {/each}
           </div>
@@ -1579,6 +1609,7 @@
                 || Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
               openReview={savedReviewIds.includes(job.id)} onComplete={completeFile} onBusyChange={updateFileBusy}
               onMissingFile={forgetMissingFile}
+              onAttentionChange={updateFileAttention}
               active={activeTab === "transcribe" && selectedFileId === job.id} />
           </div>
         {/each}
@@ -2569,6 +2600,26 @@
     color: var(--danger);
     font-size: 12px;
   }
+
+  .queue-summary {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    line-height: 1.6;
+  }
+
+  .queue-summary.queue-empty { margin: 0; }
+
+  .queue-attention {
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+
+  .queue-attention > div { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+  .queue-attention button { flex-shrink: 0; }
 
   .result-tabs {
     display: flex;

@@ -12,12 +12,14 @@
     "release:check": "node scripts/check-release.mjs",
     "licenses:generate": "node scripts/generate-third-party-notices.mjs --write",
     "licenses:check": "node scripts/generate-third-party-notices.mjs --check",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:browser": "node scripts/run-transcription-browser-tests.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "@tauri-apps/cli": "^2.10.0",
     "@tsconfig/svelte": "^5.0.0",
+    "playwright": "1.63.0",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "tslib": "^2.6.0",

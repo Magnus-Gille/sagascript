@@ -114,6 +114,22 @@ jobs:
       - name: Test frontend lifecycle helpers
         run: npm run test:frontend
 
+      - name: Install browser regression runtime
+        run: npx playwright install chromium
+
+      - name: Test transcription result tabs in browser
+        env:
+          QA_OUTPUT_DIR: ${{ runner.temp }}/transcription-browser
+        run: npm run test:browser
+
+      - name: Upload browser regression diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcription-browser-diagnostics
+          path: ${{ runner.temp }}/transcription-browser
+          if-no-files-found: ignore
+
       - name: Build frontend
         run: npm run build
 

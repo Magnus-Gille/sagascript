@@ -14,6 +14,62 @@ function transcript(path) {
     segments: [{ id: "seg-1", start: 0, end: 4, text: `Meeting ${path}`, speaker: "spk-1" }],
     speakers: [{ id: "spk-1", label: "Speaker 1" }] };
 }
+function meetingTask(path) {
+  return [...meetings.values()].reverse().find(task => task.path === path && !task.released)
+    || [...meetings.values()].reverse().find(task => task.path === path);
+}
+function reprocessingPlan(previous, mode, threshold) {
+  return {
+    plan: {
+      schema_version: 1,
+      mode,
+      context: {
+        source_sha256: previous.original.source_sha256,
+        previous_revision: previous.revision,
+        transcription_context_sha256: "fixture-transcription-context",
+        analysis_context_sha256: "fixture-analysis-context",
+        cache_sha256: null,
+      },
+      threshold,
+      required_work: {
+        decode_audio: true,
+        transcription: true,
+        language_detection: true,
+        segmentation: true,
+        embeddings: true,
+        clustering: true,
+      },
+      revision: `plan-${++sequence}`,
+    },
+    file_path: previous.original.source_sha256,
+    cache_path: null,
+    cache_output: null,
+  };
+}
+function reprocessingResult(task) {
+  const previous = task.previous;
+  const proposal = {
+    schema_version: 1,
+    previous,
+    proposed: transcript(task.path),
+    generation: 1,
+    resolutions: [],
+    revision: `proposal-${++sequence}`,
+  };
+  return {
+    proposal,
+    required_work: task.plan.required_work,
+    timings: {
+      validation_seconds: 0,
+      decode_seconds: 0,
+      analysis_seconds: 0,
+      clustering_seconds: 0,
+      full_pipeline_seconds: 0,
+      proposal_seconds: 0,
+      total_seconds: 0,
+    },
+  };
+}
 window.qa = {
   calls,
   progress: (runId, phase, percent) => emit("plain-transcription-progress", { runId, phase, percent }),
@@ -25,11 +81,15 @@ window.qa = {
     if (error) task.reject(error); else task.resolve(`Transcript for ${path}`);
   },
   finishMeeting: (path, status = "completed") => {
-    const task = [...meetings.values()].find(task => task.path === path);
+    const task = meetingTask(path);
     if (!task) throw new Error(`No pending meeting: ${path}`);
     task.status = status;
   },
-  failPoll: (path) => { [...meetings.values()].find(task => task.path === path).failPoll = true; },
+  failPoll: (path) => {
+    const task = meetingTask(path);
+    if (!task) throw new Error(`No meeting to fail: ${path}`);
+    task.failPoll = true;
+  },
   maximum: () => maximum,
 };
 mockIPC(async (cmd, args = {}) => {
@@ -60,18 +120,45 @@ mockIPC(async (cmd, args = {}) => {
       meetings.set(id, { path: args.filePath, status: "running", released: false });
       return id;
     }
+    case "plan_meeting_reprocessing":
+      return reprocessingPlan(args.previous, args.mode, args.threshold);
+    case "begin_meeting_reprocessing": {
+      active++; maximum = Math.max(maximum, active);
+      const id = `meeting-${++sequence}`;
+      meetings.set(id, {
+        path: args.filePath,
+        status: "running",
+        released: false,
+        reprocessing: true,
+        previous: args.request.previous,
+        plan: args.request.plan,
+      });
+      return id;
+    }
     case "get_meeting_job": {
       const task = meetings.get(args.jobId);
       if (task.failPoll) { task.failPoll = false; throw new Error("Synthetic poll failure"); }
       if (task.status !== "running" && !task.released) { active--; task.released = true; }
       return { id: args.jobId, status: task.status, phase: task.status, error: null,
-        transcript: task.status === "completed" ? transcript(task.path) : null };
+        transcript: task.status === "completed" && !task.reprocessing ? transcript(task.path) : null,
+        reprocessing: task.status === "completed" && task.reprocessing ? reprocessingResult(task) : null };
     }
     case "cancel_meeting_job": meetings.get(args.jobId).status = "cancelled"; return true;
     case "create_meeting_review": return {
       review: { schema_version: 1, original: args.transcript, original_revision: "original", generation: 0,
         batches: [], revision: "revision-0" }, transcript: args.transcript,
     };
+    case "preview_meeting_proposal": {
+      const proposal = args.proposal;
+      return {
+        proposal,
+        preview: {
+          candidate: { ...proposal.previous, original: proposal.proposed, revision: "candidate-revision" },
+          steps: [],
+        },
+        candidate: proposal.proposed,
+      };
+    }
     case "plugin:dialog|open": return ["/fixtures/picked.wav"];
     default: return null;
   }

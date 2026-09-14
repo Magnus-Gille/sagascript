@@ -31,3 +31,10 @@ Browser fixtures use synthetic IPC; native release acceptance is separate.
 Remaining nonblocking follow-ups include queued-job removal, recovery from
 permanent meeting polling failure, model settings changing before queued jobs
 start, and idle unload/resource budgeting for the warm import backend.
+
+A concurrent PR243 update (`b51b388`) was subsequently merged without rewriting
+its history. It adds retry attention/navigation, persistent outcome counts,
+per-file radio-group isolation and pinned Playwright CI execution. Both old and
+new browser assertions were retained. The exact Playwright 1.63.0 browser suite,
+frontend checks and license check passed locally. A further frozen-diff Opus 5
+review approved this reconciliation with no new High/Medium issue.
