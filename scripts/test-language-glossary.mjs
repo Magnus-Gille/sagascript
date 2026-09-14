@@ -35,7 +35,7 @@ test("dictionary scope exposes only explicit profiles and keeps migration guidan
   assert.match(settingsSource, /function explicitProfiles\(source: Settings \| null = settings\)/);
   assert.match(settingsSource, /profile\.language !== "auto"/);
   assert.match(settingsSource, /let glossaryScopeId: string = \$state\(""\)/);
-  assert.match(settingsSource, /<select id="dictionary-scope" value=\{glossaryScopeId\} onchange=\{onGlossaryScopeChange\} disabled=\{glossarySaving\}>/);
+  assert.match(settingsSource, /<select id="dictionary-scope" value=\{glossaryScopeId\} onchange=\{onGlossaryScopeChange\} disabled=\{glossarySaving \|\| languageSaving\}>/);
   assert.match(settingsSource, /<option value="">Global hints<\/option>/);
   assert.match(settingsSource, /Global entries are hint-only and remain stored/);
   assert.match(settingsSource, /copy an entry into the explicit-language profile/);
@@ -105,7 +105,7 @@ test("dictionary edits use explicit Save and never persist from blur", () => {
   assert.doesNotMatch(settingsSource, /onblur=\{onInitialPromptBlur\}/);
   assert.match(settingsSource, /oninput=\{onGlossaryInput\}/);
   assert.match(settingsSource, /onclick=\{\(\) => void saveGlossary\(\)\}/);
-  assert.match(settingsSource, /disabled=\{!glossaryHasUnsavedChanges\(\) \|\| glossarySaving\}/);
+  assert.match(settingsSource, /disabled=\{!glossaryHasUnsavedChanges\(\) \|\| glossarySaving \|\| languageSaving\}/);
 });
 
 test("non-CAS dictionary failures retain the typed draft and baseline", () => {
