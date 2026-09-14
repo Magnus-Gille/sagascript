@@ -276,7 +276,6 @@ mod tests {
     use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker};
     use sagascript_core::meeting_review::{CorrectionFile, MeetingReview, REVIEW_SCHEMA_VERSION};
     use serde_json::json;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TempDir {
         path: PathBuf,
@@ -284,10 +283,7 @@ mod tests {
 
     impl TempDir {
         fn new() -> Self {
-            let nonce = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos();
+            let nonce = uuid::Uuid::new_v4();
             let path = std::env::temp_dir().join(format!("sagascript-proposal-{nonce}"));
             fs::create_dir(&path).expect("temp dir");
             Self { path }

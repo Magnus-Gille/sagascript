@@ -205,14 +205,34 @@ export async function getBuildInfo(): Promise<BuildInfo> {
 
 export async function transcribeFile(
   filePath: string,
-  options?: { prompt?: string; diarize?: boolean; profileId?: string }
+  options?: { prompt?: string; diarize?: boolean; profileId?: string; runId?: string }
 ): Promise<string> {
   return invoke("transcribe_file", {
     filePath,
     prompt: options?.prompt ?? null,
     diarize: options?.diarize ?? false,
     profileId: options?.profileId ?? null,
+    runId: options?.runId ?? null,
+    // File imports have explicit Copy/Save actions. A queued completion must
+    // not paste into another file's review draft or another application.
+    autoPaste: false,
   });
+}
+
+export async function cancelFileTranscription(runId: string): Promise<boolean> {
+  return invoke("cancel_file_transcription", { runId });
+}
+
+export async function saveTranscriptionText(
+  text: string,
+  fileName: string,
+  directory: string | null,
+): Promise<boolean> {
+  return invoke("save_transcription_text", { text, fileName, directory });
+}
+
+export async function copyTranscriptionText(text: string): Promise<void> {
+  return invoke("copy_transcription_text", { text });
 }
 
 export async function beginMeetingFile(

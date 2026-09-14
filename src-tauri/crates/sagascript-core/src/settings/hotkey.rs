@@ -427,6 +427,10 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
             "x" | "keyx" if uses_command && modifier_tokens.len() == 1 => {
                 Some(("X", "Cut"))
             }
+            // Do not intercept the active editor's standard Bold command.
+            "b" | "keyb" if uses_command && modifier_tokens.len() == 1 => {
+                Some(("B", "Bold Text"))
+            }
             _ => None,
         };
         if let Some((key, action)) = reserved_shortcut {
@@ -479,6 +483,37 @@ mod tests {
                 error.contains("reserved for Cut on macOS"),
                 "unexpected error for {shortcut}: {error}"
             );
+        }
+    }
+
+    #[test]
+    fn macos_bold_shortcut_is_reserved_for_every_command_alias() {
+        for shortcut in [
+            "Command+B",
+            "Cmd+KeyB",
+            "Super+B",
+            "Meta+B",
+            "CmdOrCtrl+B",
+            "CmdOrControl+B",
+            "CommandOrCtrl+B",
+            "CommandOrControl+b",
+            "  cOmMaNd + keyB  ",
+        ] {
+            let error = validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).unwrap_err();
+            assert!(
+                error.contains("reserved for Bold Text on macOS"),
+                "unexpected error for {shortcut}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn bold_shortcut_restriction_is_limited_to_bare_macos_command() {
+        for shortcut in ["Control+B", "Command+Shift+B", "Command+Alt+B"] {
+            assert!(validate_hotkey_for_platform(shortcut, HotkeyPlatform::MacOS).is_ok());
+        }
+        for platform in [HotkeyPlatform::Windows, HotkeyPlatform::Other] {
+            assert!(validate_hotkey_for_platform("CmdOrCtrl+B", platform).is_ok());
         }
     }
 

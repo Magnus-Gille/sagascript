@@ -16,6 +16,7 @@ mod logging;
 
 mod app_controller;
 mod commands;
+mod plain_file_jobs;
 mod meeting_jobs;
 mod meeting_review_commands;
 mod meeting_reprocessing_commands;
@@ -331,25 +332,29 @@ fn check_for_updates(app: tauri::AppHandle) {
             warn!("Update check failed: {error}");
         }
 
-        let items = {
-            let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-            let mut state = state.lock().unwrap();
-            state.checking = false;
-            state.available_version = available_version;
-            state.items.clone()
-        };
-        let Some(items) = items else {
-            return;
-        };
-        if let Err(error) = items.status.set_text(status_text) {
-            error!("Failed to set tray update status: {error}");
-        }
-        if let Err(error) = items.check.set_text(action_text) {
-            error!("Failed to set tray update action: {error}");
-        }
-        if let Err(error) = items.check.set_enabled(true) {
-            error!("Failed to re-enable update action: {error}");
-        }
+        // AppKit menu completion belongs on the main thread; keep the HTTP
+        // request above off-thread and retain the actionable release state.
+        dispatch_to_main(&app, move |app| {
+            let items = {
+                let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+                let mut state = state.lock().unwrap();
+                state.checking = false;
+                state.available_version = available_version;
+                state.items.clone()
+            };
+            let Some(items) = items else {
+                return;
+            };
+            if let Err(error) = items.status.set_text(status_text) {
+                error!("Failed to set tray update status: {error}");
+            }
+            if let Err(error) = items.check.set_text(action_text) {
+                error!("Failed to set tray update action: {error}");
+            }
+            if let Err(error) = items.check.set_enabled(true) {
+                error!("Failed to re-enable update action: {error}");
+            }
+        });
     });
 }
 
@@ -614,6 +619,7 @@ fn main() {
             let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
             app.manage(controller);
             app.manage(whisper);
+            app.manage(plain_file_jobs::SharedPlainFileJobs::default());
             app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
             app.manage(meeting_media::SharedMeetingAudio::default());
             // Process-wide hotkey registration health (see hotkey::health for
@@ -1033,6 +1039,9 @@ fn main() {
             commands::set_vad_enabled,
             commands::get_build_info,
             commands::transcribe_file,
+            commands::cancel_file_transcription,
+            commands::save_transcription_text,
+            commands::copy_transcription_text,
             meeting_jobs::begin_meeting_file,
             meeting_jobs::begin_meeting_reprocessing,
             meeting_reprocessing_commands::plan_meeting_reprocessing,
@@ -2566,6 +2575,20 @@ mod tests {
         assert!(error
             .as_deref()
             .is_some_and(|message| message.contains("reserved for Cut on macOS")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn startup_replaces_saved_bold_hotkey_with_safe_operational_fallback() {
+        let (candidate, error) = startup_hotkey_candidate("Super+B");
+
+        assert_eq!(
+            candidate,
+            sagascript_core::settings::Settings::default().hotkey
+        );
+        assert!(error
+            .as_deref()
+            .is_some_and(|message| message.contains("reserved for Bold Text on macOS")));
     }
 
     // -- tray_label --

@@ -23,10 +23,12 @@ test("profile glossary API preserves the validated camelCase command payload", (
 });
 
 test("file transcription carries an optional profile without changing no-profile behavior", () => {
-  assert.match(apiSource, /options\?: \{ prompt\?: string; diarize\?: boolean; profileId\?: string \}/);
+  assert.match(apiSource, /options\?: \{ prompt\?: string; diarize\?: boolean; profileId\?: string; runId\?: string \}/);
   assert.match(apiSource, /profileId: options\?\.profileId \?\? null/);
-  assert.match(settingsSource, /const profileId = selectedTranscribeProfile\(\)\?\.id/);
-  assert.match(settingsSource, /profileId: profileId \?\? undefined/);
+  assert.match(apiSource, /invoke\("transcribe_file", \{[^}]*autoPaste: false/s, "queued file imports must use explicit Copy, never auto-paste");
+  assert.match(settingsSource, /createFileJobs\(paths, \{[\s\S]*diarize: transcribeDiarize/);
+  assert.match(settingsSource, /prompt: transcribePrompt\.trim\(\) \|\| null/);
+  assert.match(settingsSource, /profileId: selectedTranscribeProfile\(\)\?\.id \?\? null/);
   assert.match(settingsSource, /No profile \(use selected language\)/);
 });
 
@@ -34,7 +36,7 @@ test("dictionary scope exposes only explicit profiles and keeps migration guidan
   assert.match(settingsSource, /function explicitProfiles\(source: Settings \| null = settings\)/);
   assert.match(settingsSource, /profile\.language !== "auto"/);
   assert.match(settingsSource, /let glossaryScopeId: string = \$state\(""\)/);
-  assert.match(settingsSource, /<select id="dictionary-scope" value=\{glossaryScopeId\} onchange=\{onGlossaryScopeChange\} disabled=\{glossarySaving\}>/);
+  assert.match(settingsSource, /<select id="dictionary-scope" value=\{glossaryScopeId\} onchange=\{onGlossaryScopeChange\} disabled=\{glossarySaving \|\| languageSaving\}>/);
   assert.match(settingsSource, /<option value="">Global hints<\/option>/);
   assert.match(settingsSource, /Global entries are hint-only and remain stored/);
   assert.match(settingsSource, /copy an entry into the explicit-language profile/);
@@ -104,7 +106,7 @@ test("dictionary edits use explicit Save and never persist from blur", () => {
   assert.doesNotMatch(settingsSource, /onblur=\{onInitialPromptBlur\}/);
   assert.match(settingsSource, /oninput=\{onGlossaryInput\}/);
   assert.match(settingsSource, /onclick=\{\(\) => void saveGlossary\(\)\}/);
-  assert.match(settingsSource, /disabled=\{!glossaryHasUnsavedChanges\(\) \|\| glossarySaving\}/);
+  assert.match(settingsSource, /disabled=\{!glossaryHasUnsavedChanges\(\) \|\| glossarySaving \|\| languageSaving\}/);
 });
 
 test("non-CAS dictionary failures retain the typed draft and baseline", () => {
@@ -117,5 +119,6 @@ test("selected profile fixes the file language and dictionary together", () => {
   assert.match(settingsSource, /languageLabel\(transcribeLanguage\(\)\)/);
   assert.match(settingsSource, /return selectedTranscribeProfile\(\)\?\.language \?\? settings\?\.language \?\? "auto"/);
   assert.match(settingsSource, /This profile fixes the file language and uses its personal dictionary/);
-  assert.match(settingsSource, /Temporary hint-only context for this import/);
+  assert.match(settingsSource, /names to listen for: Astrid, Grimnir/);
+  assert.doesNotMatch(settingsSource, /Temporary hint-only context for this import/);
 });

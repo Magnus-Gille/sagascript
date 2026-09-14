@@ -1,13 +1,11 @@
 <script lang="ts">
-  import MeetingReprocessing from "./MeetingReprocessing.svelte";
+  import FileTranscription from "./FileTranscription.svelte";
   import {
-    planMeetingReprocessing, beginMeetingReprocessing, previewMeetingProposal,
-    resolveMeetingProposal, acceptMeetingProposal, saveMeetingProposal, openMeetingProposal,
-  } from "./meeting-reprocessing-api";
-  import type {
-    ReprocessingMode, SelectedReprocessingPlan, ProposalState, ReprocessingResult,
-  } from "./meeting-reprocessing-types";
-  import { onDestroy, onMount } from "svelte";
+    createFileJobs, nextQueuedFile, updateFileJob, fileJobName,
+    type FileJob, type FileJobStatus,
+  } from "./transcription-queue";
+  import { onMount, tick } from "svelte";
+  import { rememberTranscription, type RecentTranscription } from "./recent-transcriptions";
   import {
     getSettings,
     getLastError,
@@ -26,18 +24,6 @@
     getModelInfo,
     getEffectiveModelInfo,
     downloadModel,
-    transcribeFile,
-    beginMeetingFile,
-    getMeetingJob,
-    cancelMeetingJob,
-    createMeetingReview,
-    applyMeetingCorrections,
-    undoMeetingReview,
-    resetMeetingReview,
-    openMeetingReview,
-    saveMeetingReview,
-    attachMeetingAudio,
-    detachMeetingAudio,
     getSupportedFormats,
     getPlatform,
     checkAccessibilityPermission,
@@ -52,19 +38,7 @@
     type WhisperModel,
     type HotkeyStatus,
     type HotkeyProfile,
-    type MeetingJobStatus,
-    type MeetingJobSnapshot,
   } from "./api";
-  import MeetingReview from "./MeetingReview.svelte";
-  import type {
-    CorrectionOperation,
-    MeetingAudioAttachment,
-    MeetingExportFormat,
-    MeetingReview as MeetingReviewDocument,
-    MeetingReviewState,
-    MeetingTranscript,
-  } from "./meeting-types";
-  import { pollMeetingJob as pollMeetingJobClient } from "./meeting-job-client";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -103,6 +77,26 @@
   // Initial data-fetch + settings-mutation error states
   let initError: string = $state("");
   let settingsError: string = $state("");
+  let blockedLanguageChange: { language: Language; source: string } | null = $state(null);
+  let languageSaving = $state(false);
+  let languageSelectEl: HTMLSelectElement | undefined = $state();
+  let languageRecoveryTitle: HTMLHeadingElement | undefined = $state();
+  // Contract-pinned against the Rust guard by test-language-switch-recovery.
+  const defaultDictionaryLanguageBlock = "Profile 'default' has a personal dictionary";
+
+  $effect(() => {
+    if (blockedLanguageChange && languageRecoveryTitle) languageRecoveryTitle.focus();
+  });
+
+  async function restoreLanguageFocus(): Promise<void> {
+    await tick();
+    languageSelectEl?.focus();
+  }
+
+  function cancelLanguageChange(): void {
+    blockedLanguageChange = null;
+    void restoreLanguageFocus();
+  }
 
   // Model selection state
   let selecting: boolean = $state(false);
@@ -191,36 +185,110 @@
 
   // Transcribe tab state
   let supportedFormats: string[] = $state([]);
-  let transcribing: boolean = $state(false);
-  let transcriptionProgress: number = $state(0);
-  let transcriptionResult: string = $state("");
-  let transcribeError: string = $state("");
-  let dragOver: boolean = $state(false);
-  let transcribePrompt: string = $state('');
-  let transcribeDiarize: boolean = $state(false);
+  let dragOver = $state(false);
+  let transcribePrompt = $state("");
+  let transcribeDiarize = $state(false);
   let transcribeProfileId: string | null = $state(null);
-  let meetingReview: MeetingReviewDocument | null = $state(null);
-  let meetingTranscript: MeetingTranscript | null = $state(null);
-  let meetingJobId: string | null = $state(null);
-  let meetingJobStatus: MeetingJobStatus | null = $state(null);
-  let meetingPhase: string = $state("");
-  let meetingError: string = $state("");
-  let meetingPollingFailed: boolean = $state(false);
-  let meetingPollGeneration = 0;
-  let meetingPollActive = false;
-  let meetingDocumentRevision = $state(0);
-  let meetingReviewResetKey = $state(0);
-  let meetingReviewDraftDirty = $state(false);
-  let meetingReprocessingPlan = $state<SelectedReprocessingPlan | null>(null);
-  let meetingProposal = $state<ProposalState | null>(null);
-  let meetingReprocessingResult = $state<ReprocessingResult | null>(null);
-  let meetingReprocessingBusy = $state(false);
-  let meetingActionQueue: Promise<void> = Promise.resolve();
-  let meetingReviewInit: Promise<void> | null = $state(null);
-
-  onDestroy(() => {
-    meetingPollGeneration += 1;
+  let fileJobs = $state<FileJob[]>([]);
+  let selectedFileId = $state<string | null>(null);
+  let fileBusy = $state<Record<string, boolean>>({});
+  let fileAttention = $state<Record<string, boolean>>({});
+  let filesNeedingRetry = $derived(fileJobs.filter(job => fileAttention[job.id]));
+  let savedReviewIds = $state<string[]>([]);
+  let recentTranscriptions = $state<RecentTranscription[]>([]);
+  let selectedRerunPath = $state("");
+  let rerunError = $state("");
+  let showDiarizeInfo = $state(false);
+  let diarizeDialog: HTMLDialogElement | undefined = $state();
+  let diarizeInfoButton: HTMLButtonElement | undefined = $state();
+  $effect(() => {
+    if (showDiarizeInfo && diarizeDialog && !diarizeDialog.open) diarizeDialog.showModal();
   });
+  async function closeDiarizeInfo(): Promise<void> {
+    showDiarizeInfo = false;
+    await tick();
+    diarizeInfoButton?.focus();
+  }
+  let transcribing = $derived(fileJobs.some(job => job.status === "queued" || job.status === "running")
+    || Object.values(fileBusy).some(Boolean));
+
+  $effect(() => {
+    const next = nextQueuedFile(fileJobs, Object.values(fileBusy).some(Boolean));
+    if (next) {
+      fileJobs = updateFileJob(fileJobs, next.id, "running");
+    }
+  });
+
+  function handleFilesTranscription(paths: string[], openReview = false): void {
+    const jobs = createFileJobs(paths, {
+      diarize: transcribeDiarize,
+      prompt: transcribePrompt.trim() || null,
+      profileId: selectedTranscribeProfile()?.id ?? null,
+    }, () => crypto.randomUUID());
+    if (!jobs.length) return;
+    if (openReview) savedReviewIds = [...savedReviewIds, ...jobs.map(job => job.id)];
+    else for (const job of jobs) {
+      recentTranscriptions = rememberTranscription(recentTranscriptions, { path: job.path,
+        profileId: job.profileId, prompt: job.prompt ?? "", diarize: job.diarize });
+      selectedRerunPath = job.path;
+    }
+    const keepSelection = transcribing && selectedFileId !== null;
+    fileJobs = [...fileJobs, ...jobs];
+    if (!keepSelection) selectedFileId = jobs[0].id;
+  }
+
+  function completeFile(id: string, status: FileJobStatus): void {
+    fileJobs = updateFileJob(fileJobs, id, status);
+  }
+
+  function retryLastTranscription(): void {
+    const run = recentTranscriptions.find(run => run.path === selectedRerunPath);
+    if (!run) return;
+    if (run.profileId && !profileForId(run.profileId)) {
+      rerunError = "The profile for this file is no longer available. Choose a profile and open the file again.";
+      return;
+    }
+    rerunError = "";
+    recentTranscriptions = rememberTranscription(recentTranscriptions, run);
+    // A fresh queued job preserves every previous result and review. Only the
+    // serial scheduler can start it; model/decoder settings apply at execution.
+    const jobs = createFileJobs([run.path], { profileId: run.profileId,
+      prompt: run.prompt || null, diarize: run.diarize }, () => crypto.randomUUID());
+    fileJobs = [...fileJobs, ...jobs];
+    selectedFileId = jobs[0].id;
+  }
+
+  function updateFileBusy(id: string, busy: boolean): void {
+    if (fileBusy[id] !== busy) fileBusy = { ...fileBusy, [id]: busy };
+  }
+
+  function forgetMissingFile(path: string): void {
+    recentTranscriptions = recentTranscriptions.filter(run => run.path !== path);
+    if (selectedRerunPath === path) selectedRerunPath = recentTranscriptions[0]?.path ?? "";
+  }
+
+  function updateFileAttention(id: string, needsRetry: boolean): void {
+    if (fileAttention[id] !== needsRetry) fileAttention = { ...fileAttention, [id]: needsRetry };
+  }
+
+  function showFileNeedingRetry(id: string): void {
+    requestTabChange("transcribe", () => {
+      selectedFileId = id;
+      void tick().then(() => document.getElementById(`file-tab-${id}`)?.focus());
+    });
+  }
+
+  function onResultTabKeydown(event: KeyboardEvent, index: number): void {
+    let next = index;
+    if (event.key === "ArrowRight") next = (index + 1) % fileJobs.length;
+    else if (event.key === "ArrowLeft") next = (index + fileJobs.length - 1) % fileJobs.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = fileJobs.length - 1;
+    else return;
+    event.preventDefault();
+    selectedFileId = fileJobs[next].id;
+    document.getElementById(`file-tab-${selectedFileId}`)?.focus();
+  }
 
   // The global dictionary is retained as a decoder hint source. Explicit
   // language profiles are the only selectable sources for deterministic
@@ -404,10 +472,6 @@
       downloadProgress = event.payload.progress;
     });
 
-    listen("transcription-progress", (event: any) => {
-      transcriptionProgress = event.payload;
-    });
-
     listen("model-ready", async () => {
       downloading = null;
       downloadProgress = 0;
@@ -462,7 +526,7 @@
         dragOver = false;
         const paths = event.payload.paths;
         if (paths.length > 0) {
-          requestTabChange("transcribe", () => handleFileTranscription(paths[0]));
+          requestTabChange("transcribe", () => handleFilesTranscription(paths));
         }
       } else {
         dragOver = false;
@@ -541,10 +605,71 @@
   }
 
   async function onLanguageChange(e: Event) {
-    const value = (e.target as HTMLSelectElement).value as Language;
-    const ok = await applySetting(() => setLanguage(value));
-    if (ok) {
-      models = await getModelInfo();
+    const select = e.currentTarget as HTMLSelectElement;
+    const value = select.value as Language;
+    if (!settings) return;
+    // Native selects change before the async handler. A rejected value must
+    // never remain visible merely because Svelte's saved value did not change.
+    select.value = settings.language;
+    if (languageSaving || glossarySaving) return;
+    blockedLanguageChange = null;
+    languageSaving = true;
+    try {
+      const ok = await applySetting(() => setLanguage(value));
+      if (!ok && settingsError.includes(defaultDictionaryLanguageBlock)) {
+        // Show the actual blocking dictionary, not whichever editor scope is
+        // selected. Freeze the preview for the existing compare-and-swap API.
+        const current = await getSettings();
+        settings = current;
+        const source = current.profile_glossaries.default ?? "";
+        if (source.trim()) blockedLanguageChange = { language: value, source };
+        else settingsError = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
+      }
+      if (ok) models = await getModelInfo();
+    } catch (error: any) {
+      settingsError += `${settingsError ? " " : ""}Could not refresh language settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
+    } finally {
+      select.value = settings.language;
+      languageSaving = false;
+      if (!blockedLanguageChange) void restoreLanguageFocus();
+    }
+  }
+
+  async function clearDictionaryAndSwitchLanguage(): Promise<void> {
+    if (!settings || !blockedLanguageChange || languageSaving || glossarySaving) return;
+    const request = blockedLanguageChange;
+    const defaultDraft = glossaryScopeId === "default" && glossaryHasUnsavedChanges()
+      ? glossaryDraft : null;
+    languageSaving = true;
+    settingsError = "";
+    let cleared = false;
+    try {
+      await setProfileGlossary("default", "", request.source);
+      cleared = true;
+      // Clear the confirmation immediately: a failed retry must not offer to
+      // erase a dictionary that may have been populated again in the meantime.
+      blockedLanguageChange = null;
+      if (defaultDraft !== null) rememberGlossaryRecovery("default", defaultDraft);
+      settings = { ...settings, profile_glossaries: { ...settings.profile_glossaries, default: "" } };
+      if (glossaryScopeId === "default") discardGlossaryChanges();
+      await setLanguage(request.language);
+    } catch (error: any) {
+      const message = typeof error === "string" ? error : error?.message || "Unknown error";
+      if (cleared) rememberGlossaryRecovery("default", request.source);
+      settingsError = cleared
+        ? `The default dictionary was cleared, but the language change failed: ${message}`
+        : `The dictionary could not be cleared; the language was not changed: ${message}`;
+      blockedLanguageChange = null;
+    } finally {
+      try {
+        settings = await getSettings();
+        models = await getModelInfo();
+        await refreshProfileModels(settings.hotkey_profiles);
+      } catch (error: any) {
+        settingsError += `${settingsError ? " " : ""}Could not refresh settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
+      }
+      languageSaving = false;
+      void restoreLanguageFocus();
     }
   }
 
@@ -646,6 +771,7 @@
   }
 
   async function saveGlossary(): Promise<boolean> {
+    if (languageSaving) return false;
     if (glossarySaveInFlight) return glossarySaveInFlight;
 
     const request: GlossarySaveRequest = {
@@ -831,14 +957,13 @@
       commitGlossaryScopeChange(pending.scopeId);
     } else {
       activeTab = pending.tab;
-      meetingReviewDraftDirty = false;
-      pending.afterNavigate?.();
+        pending.afterNavigate?.();
     }
   }
 
   async function saveAndFinishGlossaryNavigation(): Promise<void> {
     const pending = pendingGlossaryNavigation;
-    if (!pending || glossarySaving) return;
+    if (!pending || glossarySaving || languageSaving) return;
     if (await saveGlossary() && pendingGlossaryNavigation === pending) {
       finishPendingGlossaryNavigation(pending);
     }
@@ -846,7 +971,7 @@
 
   function discardAndFinishGlossaryNavigation(): void {
     const pending = pendingGlossaryNavigation;
-    if (!pending || glossarySaving) return;
+    if (!pending || glossarySaving || languageSaving) return;
     discardGlossaryChanges();
     finishPendingGlossaryNavigation(pending);
   }
@@ -857,12 +982,10 @@
   }
 
   function requestTabChange(nextTab: SettingsTab, afterNavigate?: () => void): void {
+    if (languageSaving) return;
     if (nextTab === activeTab) {
       afterNavigate?.();
       return;
-    }
-    if (meetingReviewDraftDirty) {
-      if (!window.confirm("Leave meeting review and discard unapplied edits?")) return;
     }
     if (glossarySaving) return;
     if (glossaryHasUnsavedChanges()) {
@@ -870,7 +993,6 @@
       return;
     }
     activeTab = nextTab;
-    meetingReviewDraftDirty = false;
     afterNavigate?.();
   }
 
@@ -973,410 +1095,6 @@
     }
   }
 
-  function meetingFailureText(value: unknown, fallback: string): string {
-    return typeof value === "string" ? value : value instanceof Error ? value.message : fallback;
-  }
-
-  function meetingStageText(): string {
-    if (meetingJobStatus === "cancelling") return "Cancelling meeting…";
-    if (meetingJobStatus === "running") return meetingPhase ? `Meeting: ${meetingPhase}` : "Starting meeting…";
-    return meetingPhase || "Meeting import";
-  }
-
-  function waitForMeetingPoll(): Promise<void> {
-    return new Promise((resolve) => window.setTimeout(resolve, 500));
-  }
-
-  function waitForMeetingActions(): Promise<void> {
-    return meetingActionQueue;
-  }
-
-  function enqueueMeetingAction(action: (review: MeetingReviewDocument, revision: number) => Promise<boolean | void>): Promise<boolean> {
-    const queued = meetingActionQueue.then(async () => {
-      const review = meetingReview;
-      if (!review) return false;
-      return (await action(review, meetingDocumentRevision)) !== false;
-    });
-    meetingActionQueue = queued.then(() => undefined, () => undefined);
-    return queued;
-  }
-
-  function acceptMeetingReview(state: MeetingReviewState, generation: number, replaceDocument = false): void {
-    if (generation !== meetingPollGeneration) return;
-    meetingReview = state.review;
-    meetingTranscript = state.transcript;
-    meetingDocumentRevision += 1;
-    if (replaceDocument) {
-      meetingReviewResetKey += 1;
-      meetingReprocessingPlan = null;
-      meetingProposal = null;
-      meetingReprocessingResult = null;
-    }
-    meetingError = "";
-  }
-
-  async function initializeMeetingReview(transcript: MeetingTranscript, generation: number): Promise<void> {
-    const state = await createMeetingReview(transcript);
-    acceptMeetingReview(state, generation, true);
-  }
-
-  async function pollMeetingJob(jobId: string, generation: number): Promise<void> {
-    if (meetingPollActive) return;
-    meetingPollActive = true;
-    try {
-      await pollMeetingJobClient({
-        jobId,
-        get: getMeetingJob,
-        isCurrent: () => generation === meetingPollGeneration,
-        onFailure: (error: unknown) => {
-          meetingPollingFailed = true;
-          meetingError = meetingFailureText(error, "Could not check meeting progress.")
-            + " Retry the status check to continue.";
-        },
-        onSnapshot: (snapshot: MeetingJobSnapshot) => {
-          if (generation !== meetingPollGeneration) return;
-          meetingJobStatus = snapshot.status;
-          meetingPhase = snapshot.phase;
-          if (snapshot.status === "completed" || snapshot.status === "cancelled" || snapshot.status === "failed") {
-            meetingJobId = null;
-            transcribing = false;
-            meetingPollingFailed = false;
-            transcriptionProgress = 0;
-            if (snapshot.status === "completed" && snapshot.reprocessing) {
-              const result = snapshot.reprocessing;
-              // Keep the completed work even if the separate preview request fails.
-              meetingReprocessingResult = result;
-              meetingReprocessingPlan = null;
-              meetingProposal = null;
-              meetingReviewInit = previewMeetingProposal(result.proposal)
-                .then((state) => {
-                  if (generation !== meetingPollGeneration) return;
-                  meetingProposal = state;
-                  meetingReprocessingResult = result;
-                  meetingReprocessingPlan = null;
-                })
-                .catch((error) => {
-                  if (generation === meetingPollGeneration) {
-                    meetingError = meetingFailureText(error, "Could not preview the proposal. The previous review is unchanged.");
-                  }
-                })
-                .finally(() => { if (generation === meetingPollGeneration) meetingReviewInit = null; });
-            } else if (snapshot.status === "completed" && snapshot.transcript) {
-              meetingReviewInit = initializeMeetingReview(snapshot.transcript, generation)
-                .catch((error) => {
-                  if (generation === meetingPollGeneration) {
-                    meetingError = meetingFailureText(error, "Could not initialize the meeting review.");
-                  }
-                })
-                .finally(() => {
-                  if (generation === meetingPollGeneration) meetingReviewInit = null;
-                });
-            } else if (snapshot.status === "completed") {
-              meetingError = "Meeting completed without a transcript. Try the import again.";
-            } else {
-              meetingError = snapshot.error
-                ?? (snapshot.status === "cancelled" ? "Meeting import was cancelled." : "Meeting import failed.");
-            }
-          }
-        },
-        wait: waitForMeetingPoll,
-      });
-    } finally {
-      meetingPollActive = false;
-    }
-  }
-
-  async function startMeetingFileTranscription(
-    filePath: string,
-    prompt: string | null,
-    profileId: string | null,
-  ): Promise<void> {
-    if (transcribing) return;
-    if (meetingReview && !window.confirm("Start a new meeting review and replace the current review if it completes?")) return;
-    const generation = ++meetingPollGeneration;
-    // Keep the previous review and its unsaved drafts mounted until a NEW
-    // document succeeds. Pending edits finish before the import starts below;
-    // successful replacement still invalidates any stale action revision.
-    transcribing = true;
-    transcriptionProgress = 0;
-    transcribeError = "";
-    transcriptionResult = "";
-    meetingError = "";
-    meetingPollingFailed = false;
-    meetingJobId = null;
-    meetingJobStatus = "running";
-    meetingPhase = "Starting";
-    try {
-      await waitForMeetingActions();
-      if (generation !== meetingPollGeneration) return;
-      const jobId = await beginMeetingFile(filePath, prompt, profileId);
-      if (generation !== meetingPollGeneration) return;
-      if (!jobId) throw new Error("Meeting import did not return a job ID.");
-      meetingJobId = jobId;
-      meetingJobStatus = "running";
-      void pollMeetingJob(jobId, generation);
-    } catch (error) {
-      if (generation !== meetingPollGeneration) return;
-      transcribing = false;
-      meetingJobId = null;
-      meetingJobStatus = "failed";
-      meetingPhase = "Failed";
-      meetingError = meetingFailureText(error, "Could not start meeting import.");
-    }
-  }
-
-  async function handleFileTranscription(filePath: string) {
-    if (transcribing) return;
-    const profileId = selectedTranscribeProfile()?.id ?? null;
-    const prompt = transcribePrompt.trim() || null;
-    if (transcribeDiarize) {
-      await startMeetingFileTranscription(filePath, prompt, profileId);
-      return;
-    }
-
-    ++meetingPollGeneration;
-    ++meetingDocumentRevision;
-    meetingError = "";
-    meetingJobStatus = null;
-    transcribing = true;
-    transcriptionProgress = 0;
-    transcribeError = "";
-    transcriptionResult = "";
-    try {
-      await waitForMeetingActions();
-      transcriptionResult = await transcribeFile(filePath, {
-        prompt: prompt ?? undefined,
-        diarize: false,
-        profileId: profileId ?? undefined,
-      });
-    } catch (error: any) {
-      transcribeError = typeof error === "string" ? error : error.message || "Transcription failed";
-    } finally {
-      transcribing = false;
-      transcriptionProgress = 0;
-    }
-  }
-
-  async function cancelMeetingImport(): Promise<void> {
-    const jobId = meetingJobId;
-    const generation = meetingPollGeneration;
-    if (!jobId || meetingJobStatus === "cancelling") return;
-    try {
-      const accepted = await cancelMeetingJob(jobId);
-      if (generation !== meetingPollGeneration || meetingJobId !== jobId) return;
-      if (accepted) {
-        meetingJobStatus = "cancelling";
-        meetingPhase = "Cancelling";
-        meetingError = "";
-      } else {
-        meetingError = "The meeting has already finished. Its final status is being retrieved.";
-      }
-    } catch (error) {
-      if (generation !== meetingPollGeneration || meetingJobId !== jobId) return;
-      meetingError = meetingFailureText(error, "Could not request cancellation. The meeting is still running.");
-    }
-  }
-
-  function retryMeetingPolling(): void {
-    if (!meetingJobId || meetingPollActive) return;
-    meetingPollingFailed = false;
-    meetingError = "";
-    transcribing = true;
-    void pollMeetingJob(meetingJobId, meetingPollGeneration);
-  }
-
-  async function renameMeetingReviewSpeaker(id: string, label: string): Promise<void> {
-    await applyMeetingReviewOperations([{ kind: "rename_speaker", speaker_id: id, label }]);
-  }
-
-  async function mergeMeetingReviewSpeakers(fromId: string, intoId: string): Promise<void> {
-    await applyMeetingReviewOperations([{ kind: "merge_speakers", from_id: fromId, into_id: intoId }]);
-  }
-
-  async function exportMeetingReview(format: MeetingExportFormat): Promise<boolean> {
-    return enqueueMeetingAction((review) => saveMeetingReview(review, format));
-  }
-
-  async function applyMeetingReviewOperations(operations: CorrectionOperation[]): Promise<void> {
-    await enqueueMeetingAction(async (review, revision) => {
-      const corrections = {
-        schema_version: 1,
-        source_sha256: review.original.source_sha256,
-        original_revision: review.original_revision,
-        expected_revision: review.revision,
-        operations,
-      };
-      const state = await applyMeetingCorrections(review, corrections);
-      if (revision === meetingDocumentRevision) acceptMeetingReview(state, meetingPollGeneration);
-    });
-  }
-
-  async function undoMeetingReviewChanges(): Promise<void> {
-    await enqueueMeetingAction(async (review, revision) => {
-      const state = await undoMeetingReview(review, review.revision);
-      if (revision === meetingDocumentRevision) acceptMeetingReview(state, meetingPollGeneration);
-    });
-  }
-
-  async function resetMeetingReviewChanges(): Promise<void> {
-    await enqueueMeetingAction(async (review, revision) => {
-      const state = await resetMeetingReview(review, review.revision);
-      if (revision === meetingDocumentRevision) acceptMeetingReview(state, meetingPollGeneration);
-    });
-  }
-
-  async function saveCurrentMeetingReview(): Promise<boolean> {
-    return enqueueMeetingAction((review) => saveMeetingReview(review, "json"));
-  }
-
-  async function attachCurrentMeetingAudio(): Promise<MeetingAudioAttachment | null> {
-    const review = meetingReview;
-    const transcript = meetingTranscript;
-    const generation = meetingPollGeneration;
-    const resetKey = meetingReviewResetKey;
-    if (!review || !transcript) return null;
-    const attachment = await attachMeetingAudio(transcript.source_sha256);
-    const stillCurrent =
-      generation === meetingPollGeneration
-      && resetKey === meetingReviewResetKey
-      && meetingReview?.original_revision === review.original_revision
-      && meetingTranscript?.source_sha256 === transcript.source_sha256;
-    if (!stillCurrent) {
-      if (attachment) await detachMeetingAudio(attachment.token).catch(() => undefined);
-      return null;
-    }
-    return attachment;
-  }
-
-  function onMeetingReviewDraftDirtyChange(dirty: boolean): void {
-    meetingReviewDraftDirty = dirty;
-  }
-
-  async function detachCurrentMeetingAudio(token: string): Promise<void> {
-    await detachMeetingAudio(token);
-  }
-
-  async function openSavedMeetingReview(): Promise<void> {
-    if (transcribing) return;
-    if (meetingReview && !window.confirm("Open a saved review and replace the current review if it succeeds?")) return;
-    const generation = ++meetingPollGeneration;
-    meetingError = "";
-    try {
-      await waitForMeetingActions();
-      const state = await openMeetingReview();
-      if (generation !== meetingPollGeneration || !state) return;
-      acceptMeetingReview(state, generation, true);
-    } catch (error) {
-      if (generation === meetingPollGeneration) meetingError = meetingFailureText(error, "Could not open the meeting review.");
-    }
-  }
-
-  async function planCurrentMeeting(mode: ReprocessingMode, threshold: number, saveCache: boolean): Promise<void> {
-    if (transcribing || meetingReprocessingBusy || meetingReviewDraftDirty) return;
-    meetingReprocessingBusy = true;
-    try {
-      await enqueueMeetingAction(async (review, revision) => {
-        const generation = meetingPollGeneration;
-        const selected = await planMeetingReprocessing(review, mode, threshold, saveCache,
-          transcribePrompt.trim() || null, selectedTranscribeProfile()?.id ?? null);
-        if (selected && revision === meetingDocumentRevision && generation === meetingPollGeneration) {
-          meetingReprocessingPlan = selected;
-        }
-      });
-    } finally { meetingReprocessingBusy = false; }
-  }
-
-  async function executeCurrentMeetingPlan(): Promise<void> {
-    if (transcribing || meetingReprocessingBusy || meetingReviewDraftDirty || !meetingReprocessingPlan) return;
-    await waitForMeetingActions();
-    const selected = meetingReprocessingPlan;
-    const review = meetingReview;
-    if (!review || !selected || transcribing || meetingReprocessingBusy || meetingReviewDraftDirty) return;
-    if (selected.plan.context.previous_revision !== review.revision) {
-      throw new Error("The review changed. Prepare a new plan; your corrections have been kept.");
-    }
-    const generation = ++meetingPollGeneration;
-    transcribing = true;
-    meetingError = "";
-    meetingPollingFailed = false;
-    meetingJobStatus = "running";
-    meetingPhase = "Preparing reprocessing";
-    try {
-      const id = await beginMeetingReprocessing(selected, review,
-        transcribePrompt.trim() || null, selectedTranscribeProfile()?.id ?? null);
-      if (!id) throw new Error("Reprocessing did not return a job ID.");
-      meetingJobId = id;
-      void pollMeetingJob(id, generation);
-    } catch (error) {
-      transcribing = false;
-      meetingJobId = null;
-      meetingJobStatus = "failed";
-      meetingError = meetingFailureText(error, "Reprocessing failed; the previous review is unchanged.");
-      throw error;
-    }
-  }
-
-  async function resolveCurrentMeetingProposal(index: number, operations: CorrectionOperation[]): Promise<void> {
-    const state = meetingProposal;
-    if (!state || transcribing || meetingReprocessingBusy) return;
-    meetingReprocessingBusy = true;
-    try {
-      const next = await resolveMeetingProposal(state.proposal, index, operations);
-      if (meetingProposal?.proposal.revision === state.proposal.revision) meetingProposal = next;
-    } finally { meetingReprocessingBusy = false; }
-  }
-
-  async function acceptCurrentMeetingProposal(): Promise<void> {
-    if (transcribing || meetingReprocessingBusy || meetingReviewDraftDirty) return;
-    meetingReprocessingBusy = true;
-    try {
-      await enqueueMeetingAction(async (review, revision) => {
-        const proposal = meetingProposal;
-        const generation = meetingPollGeneration;
-        if (!proposal || meetingReviewDraftDirty) return false;
-        const state = await acceptMeetingProposal(proposal.proposal, review);
-        if (revision !== meetingDocumentRevision || generation !== meetingPollGeneration
-          || meetingReviewDraftDirty || proposal.proposal.revision !== meetingProposal?.proposal.revision) {
-          throw new Error("The review changed before acceptance. It has not been replaced.");
-        }
-        acceptMeetingReview(state, generation, true);
-      });
-    } finally { meetingReprocessingBusy = false; }
-  }
-
-  async function saveCurrentMeetingProposal(): Promise<boolean> {
-    const proposal = meetingProposal?.proposal ?? meetingReprocessingResult?.proposal;
-    return proposal ? saveMeetingProposal(proposal) : false;
-  }
-
-  async function retryCurrentMeetingProposalPreview(): Promise<void> {
-    const result = meetingReprocessingResult;
-    if (!result || meetingProposal || transcribing || meetingReprocessingBusy || meetingReviewInit) return;
-    const generation = meetingPollGeneration;
-    meetingReprocessingBusy = true;
-    meetingError = "";
-    try {
-      const state = await previewMeetingProposal(result.proposal);
-      if (generation === meetingPollGeneration && meetingReprocessingResult === result) meetingProposal = state;
-    } catch (error) {
-      meetingError = meetingFailureText(error, "Could not preview the proposal. Save it to retry later; the previous review is unchanged.");
-    } finally { meetingReprocessingBusy = false; }
-  }
-
-  async function openCurrentMeetingProposal(): Promise<void> {
-    if (transcribing || meetingReprocessingBusy) return;
-    meetingReprocessingBusy = true;
-    const generation = meetingPollGeneration;
-    try {
-      const state = await openMeetingProposal();
-      if (state && generation === meetingPollGeneration) {
-        meetingProposal = state;
-        meetingReprocessingResult = null;
-        meetingReprocessingPlan = null;
-      }
-    } finally { meetingReprocessingBusy = false; }
-  }
-
   function onTranscribeProfileChange(e: Event) {
     const nextProfileId = (e.target as HTMLSelectElement).value;
     transcribeProfileId = profileForId(nextProfileId)?.id ?? null;
@@ -1385,7 +1103,7 @@
   async function onPickFile() {
     const exts = supportedFormats.length > 0 ? supportedFormats : ["wav", "mp3", "m4a", "mp4", "ogg", "flac"];
     const file = await open({
-      multiple: false,
+      multiple: true,
       filters: [
         {
           name: "Audio/Video",
@@ -1394,7 +1112,7 @@
       ],
     });
     if (file) {
-      await handleFileTranscription(file);
+      handleFilesTranscription(file);
     }
   }
 
@@ -1606,13 +1324,13 @@
   </header>
 
   <div class="tabs">
-    <button class="tab" class:active={activeTab === "dictate"} onclick={() => requestTabChange("dictate")}>
+    <button class="tab" class:active={activeTab === "dictate"} onclick={() => requestTabChange("dictate")} disabled={languageSaving}>
       Dictate
     </button>
-    <button class="tab" class:active={activeTab === "transcribe"} onclick={() => requestTabChange("transcribe")}>
+    <button class="tab" class:active={activeTab === "transcribe"} onclick={() => requestTabChange("transcribe")} disabled={languageSaving}>
       Transcribe
     </button>
-    <button class="tab" class:active={activeTab === "settings"} onclick={() => requestTabChange("settings")}>
+    <button class="tab" class:active={activeTab === "settings"} onclick={() => requestTabChange("settings")} disabled={languageSaving}>
       Settings
     </button>
   </div>
@@ -1623,7 +1341,27 @@
         <div class="transcribe-error">{initError}</div>
       {/if}
       {#if settingsError}
-        <div class="transcribe-error">{settingsError}</div>
+        <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
+      {/if}
+      <p class="queue-summary" class:queue-empty={fileJobs.length === 0} role="status" aria-label="File transcription status" aria-atomic="true">
+        {#if fileJobs.length}
+          {fileJobs.filter(job => job.status === "completed" && !fileBusy[job.id]).length} completed ·
+          {fileJobs.filter(job => job.status === "failed").length} failed ·
+          {fileJobs.filter(job => job.status === "cancelled").length} cancelled ·
+          {fileJobs.filter(job => job.status === "queued").length} queued ·
+          {fileJobs.filter(job => job.status === "running" || fileBusy[job.id]).length} running ·
+          {filesNeedingRetry.length} needs retry
+        {/if}
+      </p>
+      {#if filesNeedingRetry.length}
+        <div class="queue-attention">
+          {#each filesNeedingRetry as job (job.id)}
+            <div>
+              <span>{fileJobName(job.path)} needs a status check.{#if fileJobs.some(file => file.status === "queued")} The queue is paused.{/if}</span>
+              <button class="secondary" onclick={() => showFileNeedingRetry(job.id)}>Show {fileJobName(job.path)}</button>
+            </div>
+          {/each}
+        </div>
       {/if}
       {#if activeTab === "dictate"}
         <div class="field profile-field">
@@ -1774,7 +1512,9 @@
           ></textarea>
         </div>
 
-      {:else if activeTab === "transcribe"}
+      {/if}
+      <section hidden={activeTab !== "transcribe"} aria-label="File transcription">
+        <div class="transcribe-settings-row">
         <button class="active-config-bar" onclick={() => requestTabChange("settings")}>
           <div class="active-config-row">
             <span class="active-config-label">Language</span>
@@ -1782,51 +1522,7 @@
           </div>
           <span class="active-config-link">Settings</span>
         </button>
-
-        <div
-          class="drop-zone"
-          class:drag-over={dragOver}
-          class:transcribing={transcribing}
-        >
-          {#if transcribing}
-            <div class="spinner"></div>
-            {#if meetingJobStatus !== null}
-              <div class="drop-zone-text">{meetingStageText()}</div>
-              {#if meetingJobId && meetingPollingFailed}
-                <button class="secondary" onclick={retryMeetingPolling}>Retry status check</button>
-              {:else if meetingJobId}
-                <button
-                  class="secondary"
-                  onclick={cancelMeetingImport}
-                  disabled={meetingJobStatus === "cancelling"}
-                >
-                  {meetingJobStatus === "cancelling" ? "Cancelling…" : "Cancel meeting"}
-                </button>
-              {/if}
-            {:else}
-              <div class="drop-zone-text">Transcribing... {transcriptionProgress}%</div>
-              <div class="progress-bar transcription-progress">
-                <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
-              </div>
-            {/if}
-          {:else}
-            <div class="drop-zone-icon">&#x1F4C1;</div>
-            <div class="drop-zone-text">Drop an audio or video file here</div>
-            <button class="primary open-file-btn" onclick={onPickFile}>
-              Open File...
-            </button>
-            <button class="secondary" onclick={() => void openSavedMeetingReview()} disabled={meetingReviewInit !== null}>
-              Open saved review...
-            </button>
-          {/if}
-        </div>
-
-        <div class="formats-hint">
-          Supported: {supportedFormats.map(f => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
-        </div>
-
-        <div class="transcribe-options">
-          <div class="field">
+          <div class="field profile-field">
             <label for="transcribe-profile">Profile (optional)</label>
             <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
               <option value="">No profile (use selected language)</option>
@@ -1835,91 +1531,115 @@
               {/each}
             </select>
           </div>
+        </div>
+
+        <div class="transcribe-options">
           {#if selectedTranscribeProfile()}
             <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
-          {:else}
-            <div class="hotkey-hint">No profile keeps the selected language and global hint context.</div>
           {/if}
-          <label class="diarize-option">
+          <div class="diarize-row"><label class="diarize-option">
             <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
             Speaker diarization
           </label>
-          <textarea
-            class="prompt-input"
-            aria-label="Extra context for this file"
-            placeholder="Extra context for this file only (optional)"
-            bind:value={transcribePrompt}
-            rows="2"
-            disabled={transcribing}
-          ></textarea>
-          <div class="hotkey-hint">Temporary hint-only context for this import. A selected profile supplies its dictionary; no profile uses global hints.</div>
+          <button class="info-dot" bind:this={diarizeInfoButton} aria-label="What is speaker diarization?"
+            aria-expanded={showDiarizeInfo} onclick={() => { showDiarizeInfo = !showDiarizeInfo; }}>?</button></div>
+          {#if showDiarizeInfo}
+            <dialog bind:this={diarizeDialog} class="popover-card" aria-label="What is speaker diarization?"
+              oncancel={closeDiarizeInfo} onclose={closeDiarizeInfo}>
+              <h3>Speaker diarization</h3>
+              <p>Detects <strong>who speaks when</strong> and labels each part of the transcript — [Speaker 1], [Speaker 2], …</p>
+              <p>Slower than plain transcription, and needs the diarization models (downloaded once).</p>
+              <p>Leave it off for a plain transcript.</p>
+              <button class="secondary" onclick={closeDiarizeInfo}>Close</button>
+            </dialog>
+          {/if}
+          <textarea class="prompt-input" aria-label="Extra context for this file"
+            placeholder="Extra context, e.g. names to listen for: Astrid, Grimnir (optional)"
+            bind:value={transcribePrompt} rows="2" disabled={transcribing}></textarea>
         </div>
 
-        {#if transcribeError}
-          <div class="transcribe-error">{transcribeError}</div>
-        {/if}
+        <div
+          class="drop-zone"
+          class:drag-over={dragOver}
+          class:transcribing={transcribing}
+        >
+          <div class="drop-zone-icon">&#x1F4C1;</div>
+          <div class="drop-zone-text">Drop audio or video files here</div>
+          <button class="primary open-file-btn" onclick={onPickFile}>Open Files...</button>
+          {#if recentTranscriptions.length}
+            <div class="rerun-controls">
+              <button class="secondary rerun-highlight" onclick={retryLastTranscription}
+                title="Queue a new run with current model settings and this file's saved profile/context">Re-run</button>
+              <select aria-label="Recent files to re-run (last 5, this session)" bind:value={selectedRerunPath} title={selectedRerunPath}>
+                {#each recentTranscriptions as run (run.path)}
+                  <option value={run.path}>{recentTranscriptions.filter(item => fileJobName(item.path) === fileJobName(run.path)).length > 1 ? run.path : fileJobName(run.path)}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
+          <button class="secondary" onclick={() => handleFilesTranscription(["Saved review"], true)} disabled={transcribing}>
+            Open saved meeting...
+          </button>
+        </div>
+        {#if rerunError}<div class="transcribe-error">{rerunError}</div>{/if}
 
-        {#if meetingError && !meetingTranscript}
-          <div class="transcribe-error">{meetingError}</div>
-        {/if}
+        <div class="formats-hint">
+          Supported: {supportedFormats.map(f => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
+        </div>
 
-        {#if transcriptionResult}
-          <div class="result-label">Result</div>
-          <textarea class="transcribe-result" readonly>{transcriptionResult}</textarea>
+        {#if fileJobs.length}
+          <div class="result-tabs" role="tablist" aria-label="Transcription results">
+            {#each fileJobs as job, index (job.id)}
+              <button class="result-tab" class:active={selectedFileId === job.id}
+                id={`file-tab-${job.id}`} role="tab" aria-selected={selectedFileId === job.id}
+                aria-controls={`file-panel-${job.id}`} tabindex={selectedFileId === job.id ? 0 : -1}
+                title={job.path} onclick={() => { selectedFileId = job.id; }}
+                onkeydown={(event) => onResultTabKeydown(event, index)}>
+                <span class="result-filename">{fileJobName(job.path)}</span>
+                <span class="result-status">{fileAttention[job.id] ? "needs retry" : job.status}</span>
+              </button>
+            {/each}
+          </div>
         {/if}
+        {#each fileJobs as job (job.id)}
+          <div id={`file-panel-${job.id}`} role="tabpanel" aria-labelledby={`file-tab-${job.id}`}
+            tabindex="0" hidden={selectedFileId !== job.id}>
+            <FileTranscription {job}
+              otherBusy={fileJobs.some(other => other.id !== job.id && other.status === "running")
+                || Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
+              openReview={savedReviewIds.includes(job.id)} onComplete={completeFile} onBusyChange={updateFileBusy}
+              onMissingFile={forgetMissingFile}
+              onAttentionChange={updateFileAttention}
+              active={activeTab === "transcribe" && selectedFileId === job.id} />
+          </div>
+        {/each}
+      </section>
 
-        {#if meetingReview && meetingTranscript}
-            {#if meetingReprocessingResult && !meetingProposal}
-              <div role="status">
-                <p>The completed proposal is retained. Retry its preview or save it to open later.</p>
-                <button class="btn btn-secondary" disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
-                  onclick={() => void retryCurrentMeetingProposalPreview()}>Retry proposal preview</button>
-                <button class="btn btn-secondary" disabled={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
-                  onclick={() => void saveCurrentMeetingProposal().catch((error) => { meetingError = meetingFailureText(error, "Could not save the proposal."); })}>Save retained proposal</button>
-              </div>
-            {/if}
-            <MeetingReprocessing
-              currentReviewRevision={meetingReview.revision}
-              busy={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
-              draftDirty={meetingReviewDraftDirty}
-              selected={meetingReprocessingPlan}
-              proposal={meetingProposal}
-              result={meetingReprocessingResult}
-              onPlan={planCurrentMeeting}
-              onExecute={executeCurrentMeetingPlan}
-              onResolve={resolveCurrentMeetingProposal}
-              onAccept={acceptCurrentMeetingProposal}
-              onSave={saveCurrentMeetingProposal}
-              onOpen={openCurrentMeetingProposal}
-              onDiscard={() => { meetingProposal = null; meetingReprocessingResult = null; meetingReprocessingPlan = null; }}
-            />
-            <MeetingReview
-              review={meetingReview}
-              transcript={meetingTranscript}
-              busy={transcribing || meetingReprocessingBusy || meetingReviewInit !== null}
-              error={meetingError || null}
-              onApply={applyMeetingReviewOperations}
-              onUndo={undoMeetingReviewChanges}
-              onReset={resetMeetingReviewChanges}
-              onSave={saveCurrentMeetingReview}
-              onExport={exportMeetingReview}
-              onAttachAudio={attachCurrentMeetingAudio}
-              onDetachAudio={detachCurrentMeetingAudio}
-              onDraftDirtyChange={onMeetingReviewDraftDirtyChange}
-              resetDraftKey={meetingReviewResetKey}
-            />
-        {/if}
-
-      {:else if activeTab === "settings"}
+      {#if activeTab === "settings"}
         <div class="field">
           <label for="language">Language</label>
-          <select id="language" value={settings.language} onchange={onLanguageChange}>
+          <select id="language" bind:this={languageSelectEl} value={settings.language} onchange={onLanguageChange} disabled={languageSaving || glossarySaving}>
             <option value="en">English</option>
             <option value="sv">Swedish</option>
             <option value="no">Norwegian</option>
             <option value="fi">Finnish</option>
             <option value="auto">Auto-detect</option>
           </select>
+          {#if blockedLanguageChange}
+            <section class="language-recovery" aria-labelledby="language-recovery-title">
+              <h3 id="language-recovery-title" bind:this={languageRecoveryTitle} tabindex="-1">Switch to {languageLabel(blockedLanguageChange.language)}?</h3>
+              <p>The <strong>default</strong> profile has the saved dictionary below. Its words belong to its current language, even when another dictionary is selected in the editor.</p>
+              <textarea class="initial-prompt-input" rows="3" aria-label="Saved default profile dictionary" value={blockedLanguageChange.source} readonly></textarea>
+              <p>Copy these words before continuing if you want to keep them. Clearing cannot be undone. Unsaved editor drafts will be preserved.</p>
+              <p>To keep this dictionary, cancel and use or add a language profile in the Dictate tab.</p>
+              <div class="dictionary-actions">
+                <button type="button" class="secondary" onclick={cancelLanguageChange} disabled={languageSaving}>Cancel</button>
+                <button type="button" class="danger" onclick={() => void clearDictionaryAndSwitchLanguage()} disabled={languageSaving || glossarySaving}>
+                  {languageSaving ? "Switching…" : `Clear default dictionary and switch to ${languageLabel(blockedLanguageChange.language)}`}
+                </button>
+              </div>
+            </section>
+          {/if}
         </div>
 
         <div class="field-row">
@@ -1942,7 +1662,7 @@
               <span class="unsaved-indicator" role="status">Unsaved changes</span>
             {/if}
           </div>
-          <select id="dictionary-scope" value={glossaryScopeId} onchange={onGlossaryScopeChange} disabled={glossarySaving}>
+          <select id="dictionary-scope" value={glossaryScopeId} onchange={onGlossaryScopeChange} disabled={glossarySaving || languageSaving}>
             <option value="">Global hints</option>
             {#each explicitProfiles() as profile (profile.id)}
               <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
@@ -1954,7 +1674,7 @@
             rows="5"
             value={glossaryDraft}
             oninput={onGlossaryInput}
-            disabled={glossarySaving}
+            disabled={glossarySaving || languageSaving}
             placeholder="OpenRouter = open router | open vrouter&#10;merge = merch&#10;Cloudflare = cloud flare"
           ></textarea>
           <div class="dictionary-actions">
@@ -1962,13 +1682,13 @@
               type="button"
               class="primary"
               onclick={() => void saveGlossary()}
-              disabled={!glossaryHasUnsavedChanges() || glossarySaving}
+              disabled={!glossaryHasUnsavedChanges() || glossarySaving || languageSaving}
             >{glossarySaving ? "Saving…" : "Save changes"}</button>
             <button
               type="button"
               class="secondary"
               onclick={discardGlossaryChanges}
-              disabled={!glossaryHasUnsavedChanges() || glossarySaving}
+              disabled={!glossaryHasUnsavedChanges() || glossarySaving || languageSaving}
             >Discard changes</button>
           </div>
           {#if glossaryScopeId === ""}
@@ -2151,13 +1871,13 @@
             type="button"
             class="primary"
             onclick={() => void saveAndFinishGlossaryNavigation()}
-            disabled={glossarySaving}
+            disabled={glossarySaving || languageSaving}
           >{glossarySaving ? "Saving…" : "Save"}</button>
           <button
             type="button"
             class="danger"
             onclick={discardAndFinishGlossaryNavigation}
-            disabled={glossarySaving}
+            disabled={glossarySaving || languageSaving}
           >Discard</button>
           <button type="button" class="secondary" data-dialog-stay onclick={stayOnGlossaryDraft} disabled={glossarySaving}>Stay</button>
         </div>
@@ -2750,6 +2470,19 @@
   }
 
   /* Transcribe tab */
+  .transcribe-settings-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+  .transcribe-settings-row .active-config-bar { flex: 1 1 0; width: auto; margin-bottom: 0; min-width: 0; }
+  .transcribe-settings-row .profile-field { flex: 1.2 1 0; margin-bottom: 0; min-width: 0; }
+  .rerun-controls { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; }
+  .rerun-controls button { flex: 0 0 auto; }
+  .rerun-controls select { flex: 1; min-width: 0; width: 0; }
+  button.secondary.rerun-highlight { border-color: #eab308; color: #eab308; }
+  button.secondary.rerun-highlight:hover:not(:disabled) { background: color-mix(in srgb, #eab308 12%, transparent); }
+  .diarize-row { display: flex; align-items: center; gap: 6px; }
+  .info-dot { width: 18px; height: 18px; padding: 0; border: 1px solid var(--text-muted); border-radius: 50%; background: transparent; color: var(--text-muted); }
+  .popover-card { margin: auto; width: 280px; max-width: calc(100vw - 48px); padding: 14px 16px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; color: var(--text); font-size: 12px; line-height: 1.55; }
+  .popover-card::backdrop { background: rgba(0, 0, 0, 0.45); }
+  .popover-card p { margin: 8px 0; }
 
   .drop-zone {
     display: flex;
@@ -2757,7 +2490,7 @@
     align-items: center;
     justify-content: center;
     gap: 12px;
-    padding: 32px 20px;
+    padding: 12px 16px;
     border: 2px dashed var(--border);
     border-radius: 12px;
     text-align: center;
@@ -2774,9 +2507,6 @@
     border-color: var(--accent);
   }
 
-  .transcription-progress {
-    width: 80%;
-  }
 
   .drop-zone-icon {
     font-size: 28px;
@@ -2816,7 +2546,8 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    margin-top: 14px;
+    margin-top: 0;
+    margin-bottom: 8px;
   }
 
   .diarize-option {
@@ -2870,34 +2601,82 @@
     font-size: 12px;
   }
 
-  .result-label {
+  .queue-summary {
     font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
     color: var(--text-muted);
-    margin-top: 14px;
-    margin-bottom: 6px;
-    font-weight: 600;
+    margin-bottom: 12px;
+    line-height: 1.6;
   }
 
-  .transcribe-result {
-    width: 100%;
-    min-height: 100px;
-    max-height: 180px;
+  .queue-summary.queue-empty { margin: 0; }
+
+  .queue-attention {
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
     padding: 10px 12px;
-    background: var(--bg-secondary);
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+
+  .queue-attention > div { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+  .queue-attention button { flex-shrink: 0; }
+
+  .result-tabs {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    margin: 18px 0 12px;
+    padding-bottom: 4px;
+  }
+  .language-recovery {
+    margin-top: 12px;
+    padding: 14px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    color: var(--text);
-    font-family: inherit;
-    font-size: 13px;
-    line-height: 1.5;
-    resize: vertical;
-    outline: none;
   }
 
-  .transcribe-result:focus {
+  .language-recovery h3 {
+    margin: 0 0 8px;
+    font-size: 14px;
+  }
+
+  .language-recovery p {
+    margin: 8px 0;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .result-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    min-width: 110px;
+    max-width: 210px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-secondary);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .result-tab.active {
     border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+  }
+  .result-filename {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .result-status {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: capitalize;
+  }
+  [hidden] {
+    display: none !important;
   }
 
   /* Test dictation section */

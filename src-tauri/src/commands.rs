@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::State;
+use tauri_plugin_dialog::DialogExt;
 use tracing::{error, info, warn};
 
 /// Maximum time to wait for whisper inference before aborting (seconds)
@@ -84,7 +85,7 @@ pub(crate) struct FileTranscriptionContext {
     pub(crate) language: Language,
     pub(crate) model: WhisperModel,
     pub(crate) glossary: Glossary,
-    options: TranscribeOptions,
+    pub(crate) options: TranscribeOptions,
 }
 
 /// Freeze language, model and dictionary together before file decoding begins.
@@ -440,7 +441,7 @@ fn set_language_for_controller(
     language: Language,
 ) -> Result<(), String> {
     let persisted = sagascript_core::settings::store::try_update(|settings| {
-        settings.set_legacy_language(language)
+        apply_language_selection(settings, language)
     })?;
     let mut ctrl = controller.lock().unwrap();
     ctrl.update_settings(persisted.clone());
@@ -448,6 +449,64 @@ fn set_language_for_controller(
     crate::update_profiles_menu(app, &persisted.resolved_hotkey_profiles());
     info!("Language set to {:?}", language);
     Ok(())
+}
+
+// Keep profile/dictionary validation ahead of all preset mutations.
+fn apply_language_selection(settings: &mut Settings, language: Language) -> Result<(), String> {
+    settings.set_legacy_language(language)?;
+    settings.whisper_model = WhisperModel::recommended(language);
+    settings.auto_select_model = true;
+    Ok(())
+}
+
+#[cfg(test)]
+mod language_selection_tests {
+    use super::apply_language_selection;
+    use sagascript_core::settings::{Language, Settings, WhisperModel};
+
+    #[test]
+    fn explicit_language_selection_restores_recommended_model() {
+        for language in [
+            Language::English,
+            Language::Swedish,
+            Language::Norwegian,
+            Language::Finnish,
+            Language::Auto,
+        ] {
+            let mut settings = Settings {
+                whisper_model: WhisperModel::Small,
+                auto_select_model: false,
+                ..Default::default()
+            };
+            apply_language_selection(&mut settings, language).unwrap();
+            assert_eq!(settings.language, language);
+            assert_eq!(settings.whisper_model, WhisperModel::recommended(language));
+            assert_eq!(
+                settings.effective_model(),
+                WhisperModel::recommended(language)
+            );
+            assert!(settings.auto_select_model);
+        }
+    }
+
+    #[test]
+    fn rejected_language_change_preserves_model_and_dictionary() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            whisper_model: WhisperModel::KbWhisperSmall,
+            auto_select_model: false,
+            ..Default::default()
+        };
+        settings
+            .profile_glossaries
+            .insert("default".into(), "merge = merch".into());
+        let error = apply_language_selection(&mut settings, Language::English).unwrap_err();
+        assert!(error.contains("personal dictionary"));
+        assert_eq!(settings.language, Language::Swedish);
+        assert_eq!(settings.whisper_model, WhisperModel::KbWhisperSmall);
+        assert!(!settings.auto_select_model);
+        assert_eq!(settings.profile_glossaries["default"], "merge = merch");
+    }
 }
 
 #[tauri::command]
@@ -819,7 +878,7 @@ fn gui_start_recording_result(
     match result {
         Ok(true) => Ok(()),
         Ok(false) => Err(
-            "Cannot start recording while Sagascript is busy. Wait for the current transcription to finish."
+            "Cannot start recording while Sagascript is busy. Stop the current recording or wait for transcription to finish."
                 .to_string(),
         ),
         Err(error) => Err(error.to_string()),
@@ -835,7 +894,7 @@ mod gui_recording_tests {
         let error = gui_start_recording_result(Ok(false)).unwrap_err();
 
         assert!(error.contains("busy"));
-        assert!(error.contains("current transcription"));
+        assert!(error.contains("current recording"));
     }
 }
 
@@ -1049,7 +1108,7 @@ pub async fn transcribe_training_file(
         whisper_ref.with_model(effective_model, ContextProfile::FlashAttention, |backend| {
             backend.transcribe_sync_with_options(&audio, language, &opts, move |progress| {
                 let _ = progress_app.emit("transcription-progress", progress);
-            })
+            }, None)
         })
     });
 
@@ -2009,35 +2068,165 @@ pub async fn set_vad_enabled(
 
 // -- File transcription --
 
+/// User-requested abort for the plain (non-diarized) `transcribe_file` path
+/// (#234). Only the identified run's exclusively leased backend is signalled.
+/// Stale or idle requests return false without touching live dictation.
 #[tauri::command]
+pub async fn cancel_file_transcription(
+    jobs: State<'_, crate::plain_file_jobs::SharedPlainFileJobs>,
+    run_id: String,
+) -> Result<bool, String> {
+    Ok(jobs.cancel(&run_id))
+}
+
+/// Copy a finished plain transcription to the clipboard (#238). Plain
+/// `set_text` only — no paste, no restore dance (see `paste::PasteService`
+/// for the guarded live-dictation path).
+#[tauri::command]
+pub async fn copy_transcription_text(text: String) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err("There is no transcription to copy.".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut clipboard =
+            arboard::Clipboard::new().map_err(|error| format!("Clipboard error: {error}"))?;
+        clipboard
+            .set_text(text)
+            .map_err(|error| format!("Could not copy: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Copy worker failed: {error}"))?
+}
+
+/// Explicit manual save of a finished plain transcription (#238). Always
+/// shows the native save dialog prefilled with `file_name` in `directory`;
+/// cancelling writes nothing. Reuses the atomic, never-overwrite
+/// `write_new_export` publisher, so this path can never truncate an
+/// existing file. There is deliberately no automatic-save counterpart
+/// (privacy-first: transcripts reach disk only on explicit request).
+#[tauri::command]
+pub async fn save_transcription_text(
+    app: tauri::AppHandle,
+    text: String,
+    file_name: String,
+    directory: Option<String>,
+) -> Result<bool, String> {
+    if text.trim().is_empty() {
+        return Err("There is no transcription to save.".to_string());
+    }
+    let file_name = sanitize_save_file_name(&file_name);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = app
+            .dialog()
+            .file()
+            .set_title("Save transcription — choose a file")
+            .set_file_name(&file_name)
+            .add_filter("Text", &["txt"]);
+        if let Some(dir) = directory.filter(|dir| !dir.trim().is_empty()) {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(selected) = dialog.blocking_save_file() else {
+            return Ok(false);
+        };
+        let path = selected
+            .into_path()
+            .map_err(|error| format!("Choose a local file: {error}"))?;
+        crate::meeting_jobs::write_new_export(&path, text.as_bytes()).map_err(|error| {
+            if path.exists() { "Choose a new file name — existing files are never overwritten.".to_string() }
+            else { error }
+        })?;
+        Ok(true)
+    })
+    .await
+    .map_err(|error| format!("Save worker failed: {error}"))?
+}
+
+/// Keep the save dialog default to a bare file name: strip any directories
+/// (the dialog's directory picker owns the destination) and fall back to a
+/// neutral name. The extension is preserved when present, else `.txt`.
+fn sanitize_save_file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    if base.is_empty() {
+        return "transcription.txt".to_string();
+    }
+    if base.contains('.') {
+        base.to_string()
+    } else {
+        format!("{base}.txt")
+    }
+}
+
+#[cfg(test)]
+mod save_name_tests {
+    use super::sanitize_save_file_name;
+
+    #[test]
+    fn save_default_strips_directories_and_keeps_txt() {
+        assert_eq!(sanitize_save_file_name("/a/b/talk.m4a"), "talk.m4a");
+        assert_eq!(
+            sanitize_save_file_name("C:\\audio\\talk"),
+            "talk.txt"
+        );
+        assert_eq!(sanitize_save_file_name(""), "transcription.txt");
+        assert_eq!(sanitize_save_file_name("   "), "transcription.txt");
+        assert_eq!(sanitize_save_file_name("notes"), "notes.txt");
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri injects AppHandle + States; the
+// frontend call shape (file/prompt/diarize/profile) is unchanged.
 pub async fn transcribe_file(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
+    jobs: State<'_, crate::plain_file_jobs::SharedPlainFileJobs>,
     file_path: String,
     prompt: Option<String>,
     diarize: Option<bool>,
     profile_id: Option<String>,
+    run_id: Option<String>,
+    auto_paste: Option<bool>,
 ) -> Result<String, String> {
     use tauri::Emitter;
 
-    let FileTranscriptionContext {
-        language,
-        model: effective_model,
-        glossary,
-        options: mut opts,
-    } = {
+    let context = {
         let ctrl = controller.lock().unwrap();
         file_transcription_context(ctrl.settings(), profile_id.as_deref(), prompt.as_deref())?
     };
 
+    if !diarize.unwrap_or(false) {
+        let text = crate::plain_file_jobs::transcribe(
+            app.clone(), jobs.inner().clone(), run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            file_path, context,
+        ).await?;
+        if auto_paste.unwrap_or(true) && controller.lock().unwrap().settings().auto_paste {
+            let paste_text = text.clone();
+            app.run_on_main_thread(move || {
+                if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
+                    error!(%error, "Auto-paste failed");
+                }
+            }).map_err(|error| format!("Could not dispatch auto-paste: {error}"))?;
+        }
+        return Ok(text);
+    }
+    let FileTranscriptionContext { language, model: effective_model, glossary, options: mut opts } = context;
+
     let path = std::path::PathBuf::from(&file_path);
 
-    // Decode audio file
+    // Suppress unused-variable warning on `diarize` when the diarization feature is off
+    #[cfg(not(feature = "diarization"))]
+    let _ = &diarize;
+
+    #[cfg(feature = "diarization")]
+    let context_profile = ContextProfile::for_diarization(diarize.unwrap_or(false));
+    #[cfg(not(feature = "diarization"))]
+    let context_profile = ContextProfile::FlashAttention;
+
+    // Legacy diarized command path. The GUI uses the meeting-job API instead.
     let audio = tokio::task::spawn_blocking(move || decoder::decode_audio_file(&path))
-        .await
-        .map_err(|e| format!("Decode task failed: {e}"))?
-        .map_err(|e| e.to_string())?;
+        .await.map_err(|error| format!("Decode task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
 
     if audio.is_empty() {
         return Err("No audio decoded from file".to_string());
@@ -2049,18 +2238,10 @@ pub async fn transcribe_file(
     let file_timeout =
         Duration::from_secs(((audio.len() / 16_000) as u64 * 6).max(TRANSCRIPTION_TIMEOUT_SECS));
 
-    // Suppress unused-variable warning on `diarize` when the diarization feature is off
-    #[cfg(not(feature = "diarization"))]
-    let _ = &diarize;
-
-    #[cfg(feature = "diarization")]
-    let context_profile = ContextProfile::for_diarization(diarize.unwrap_or(false));
-    #[cfg(not(feature = "diarization"))]
-    let context_profile = ContextProfile::FlashAttention;
-
     // Show model loading status if the exact model/profile runtime is not warm.
     if whisper.needs_reload_with_profile(effective_model, context_profile) {
         let _ = app.emit(crate::events::event::STATE_CHANGED, "loading_model");
+        let _ = app.emit(crate::events::event::TRANSCRIPTION_PHASE, "loading");
     }
 
     // Diarization path — runs both diarization and timestamped transcription in parallel,
@@ -2189,7 +2370,7 @@ pub async fn transcribe_file(
         // Auto-paste if enabled
         let should_paste = {
             let c = controller.lock().unwrap();
-            c.settings().auto_paste
+            auto_paste.unwrap_or(true) && c.settings().auto_paste
         };
         if should_paste {
             let text_for_paste = text.clone();
@@ -2211,15 +2392,31 @@ pub async fn transcribe_file(
     opts.parallel_chunks =
         recommended_parallel_chunks(audio.len(), effective_model, opts.beam_size);
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
+    // Leave 0% immediately (#237): model load inside the blocking task is
+    // silent, so report "started" now; inference re-reports 1% itself.
+    let _ = app.emit(crate::events::event::TRANSCRIPTION_PROGRESS, 1);
     let whisper_ref = whisper.inner().clone();
     let app_progress = app.clone();
     // Borrowed handle (`&mut fut`) so the timeout path can await the task's
     // actual exit after requesting an abort — mirrors the live dictation path.
     let mut fut = tokio::task::spawn_blocking(move || {
+        // State prep (lock, chunk states) is silent work before the first
+        // progress callback — name it so the UI never shows a frozen 1%.
+        let phase = if whisper_ref.needs_reload_with_profile(effective_model, context_profile) {
+            "loading"
+        } else {
+            "preparing"
+        };
+        let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PHASE, phase);
         whisper_ref.with_model(effective_model, context_profile, |backend| {
+            let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PHASE, "preparing");
+            let encode_app = app_progress.clone();
+            let on_encode_start = move || {
+                let _ = encode_app.emit(crate::events::event::TRANSCRIPTION_PHASE, "encoding");
+            };
             backend.transcribe_sync_with_options(&audio, language, &opts, move |pct| {
                 let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
-            })
+            }, Some(&on_encode_start))
         })
     });
 
@@ -2264,7 +2461,7 @@ pub async fn transcribe_file(
             // Auto-paste if enabled
             let should_paste = {
                 let c = controller.lock().unwrap();
-                c.settings().auto_paste
+                auto_paste.unwrap_or(true) && c.settings().auto_paste
             };
 
             if should_paste {
