@@ -10,29 +10,37 @@ transcript writes.
 Run `npm run test:frontend` and `npm run check` for queue helpers, existing review
 and reprocessing regressions, and Svelte diagnostics.
 
-For the full browser regression, start Vite in an isolated worktree:
+Run the full browser regression in an isolated worktree:
 
 ```sh
-npm run dev -- --host 127.0.0.1 --port 5242
+npm ci
+npx playwright install chromium
+npm run test:browser
 ```
 
-Then run with an installed Playwright package and its bundled browser:
+Playwright is pinned in the lockfile. The runner starts and closes its own Vite
+server on an available loopback port. The test starts a fresh browser context,
+injects the official Tauri mocks, and uses synthetic paths/results only. It covers
+three-file processing, failure continuation, appending without changing selection,
+retained results, keyboard tabs, picker parity, serialized meetings, polling retry,
+cancellation, and independent drafts across result and Settings/Dictate navigation.
+Completed reviews remain editable while later files transcribe.
 
-```sh
-PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node scripts/qa-transcription-tabs.mjs
-```
+Review regressions cover separate reprocessing radio groups, attention status for
+polling failures in hidden tabs, recovery navigation, and persistent live-region
+outcome counts. Status is visible on all three main tabs, including after the queue
+drains. No real audio, models, native file picker, permissions, or installed
+application are used.
 
-If Playwright is already resolvable from Node, omit `PLAYWRIGHT_MODULE`.
-`QA_URL` can override the default `http://127.0.0.1:5242/?tab=transcribe`.
-The test starts a fresh browser context, injects the official Tauri mocks, and
-uses synthetic paths/results only. It verifies three-file processing, failure
-continuation, another drop while busy, retained results, keyboard tab navigation,
-file-picker parity, serialized diarized jobs, polling retry, cancellation, and independent
-unsaved meeting drafts across both kinds of tab navigation. Completed reviews stay
-editable during later transcriptions; appending while busy keeps the selected tab. No real audio,
-models, native file picker, permissions, or installed application are used.
-Screenshots are written to `/private/tmp/sagascript-242-results.png` and
-`/private/tmp/sagascript-242-meetings.png` on the macOS developer host.
+CI runs `npm run test:browser` in the required macOS test lane. Failure diagnostics
+are uploaded as `transcription-browser-diagnostics`. Locally, screenshots and
+failure diagnostics go to the operating system's temporary directory by default;
+set `QA_OUTPUT_DIR` to choose an output folder.
+
+For debugging against an existing Vite server, run `node
+scripts/qa-transcription-tabs.mjs` with `QA_URL` pointing at that server's
+`/?tab=transcribe` URL. `PLAYWRIGHT_MODULE` can override module resolution when
+using an existing installed Playwright package.
 
 Native acceptance: in a signed test build, drop three supported audio files,
 check the three results against their source files, and repeat with speaker

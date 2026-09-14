@@ -1,8 +1,13 @@
 // Run against an isolated Vite server. No native audio, models, or user data.
 // PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/qa-transcription-tabs.mjs
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
+const outputDir = process.env.QA_OUTPUT_DIR || tmpdir();
+await mkdir(outputDir, { recursive: true });
+const outputPath = name => join(outputDir, name);
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ viewport: { width: 760, height: 960 } });
 const page = await context.newPage();
@@ -17,6 +22,22 @@ async function waitStatus(name, state) { await status(name, state).waitFor(); }
 async function drop(paths) { await page.evaluate(paths => window.qa.drop(paths), paths); }
 async function finish(path, error = null) { await page.evaluate(([path, error]) => window.qa.finish(path, error), [path, error]); }
 async function meeting(path, state = "completed") { await page.evaluate(([path, state]) => window.qa.finishMeeting(path, state), [path, state]); }
+async function assertSummary(expected) {
+  const summary = page.getByRole("status", { name: "File transcription status", exact: true });
+  await summary.waitFor();
+  for (const [label, count] of Object.entries(expected)) {
+    await summary.filter({ hasText: new RegExp(String.raw`\b${count}\s+${label}\b`, "i") }).waitFor();
+  }
+}
+async function writeFailureDiagnostics(error) {
+  const message = error instanceof Error ? error.stack || error.message : String(error);
+  const body = await page.locator("body").innerText({ timeout: 5000 }).catch(() => "<body unavailable>");
+  await Promise.allSettled([
+    page.screenshot({ path: outputPath("transcription-tabs-failure.png"), fullPage: true, timeout: 5000 }),
+    writeFile(outputPath("transcription-tabs-failure.body.txt"), body),
+    writeFile(outputPath("transcription-tabs-failure.errors.txt"), [...errors, message].join("\n")),
+  ]);
+}
 try {
   await page.goto(url);
   await page.getByRole("button", { name: "Open Files...", exact: true }).waitFor();
@@ -47,7 +68,7 @@ try {
   await status("three.wav", "completed").click();
   assert.equal(await status("three.wav", "completed").getAttribute("aria-selected"), "true");
   await page.waitForFunction(() => getComputedStyle(document.querySelector(".result-tab.active")).borderColor === "rgb(114, 230, 207)");
-  await page.screenshot({ path: "/private/tmp/sagascript-242-results.png", fullPage: true });
+  await page.screenshot({ path: outputPath("sagascript-242-results.png"), fullPage: true });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   assert.equal(await page.locator('[role="tabpanel"]:visible textarea.transcribe-result').inputValue(), "Transcript for /fixtures/three.wav");
@@ -60,6 +81,7 @@ try {
   await waitStatus("picked.wav", "running");
   await finish("/fixtures/picked.wav");
   await waitStatus("picked.wav", "completed");
+  await assertSummary({ completed: 4, failed: 1, cancelled: 0, queued: 0, running: 0, "needs retry": 0 });
   // Diarized jobs wait for terminal snapshots, and a temporary poll error holds the queue.
   await page.getByRole("checkbox", { name: "Speaker diarization" }).check();
   await drop(["/fixtures/meeting-one.wav", "/fixtures/meeting-two.wav", "/fixtures/meeting-three.wav"]);
@@ -71,6 +93,16 @@ try {
   await page.getByRole("button", { name: "Retry status check", exact: true }).click();
   await waitStatus("meeting-one.wav", "completed");
   await waitStatus("meeting-two.wav", "running");
+  // A non-selected running meeting can lose its poll response. It is surfaced
+  // in the persistent queue summary and can be brought into view explicitly.
+  await page.evaluate(() => window.qa.failPoll("/fixtures/meeting-two.wav"));
+  await waitStatus("meeting-two.wav", "needs retry");
+  await assertSummary({ completed: 5, failed: 1, cancelled: 0, queued: 1, running: 1, "needs retry": 1 });
+  await page.getByRole("button", { name: "Show meeting-two.wav", exact: true }).click();
+  assert.equal(await status("meeting-two.wav", "needs retry").getAttribute("aria-selected"), "true");
+  await page.getByRole("button", { name: "Retry status check", exact: true }).click();
+  await waitStatus("meeting-two.wav", "running");
+  await status("meeting-one.wav", "completed").click();
   const completedSpeaker = page.getByRole("textbox", { name: "Rename Speaker 1", exact: true });
   assert.equal(await completedSpeaker.isEnabled(), true, "completed review remains editable while next file transcribes");
   await completedSpeaker.fill("Working Alice");
@@ -78,6 +110,40 @@ try {
   await waitStatus("meeting-three.wav", "running");
   await meeting("/fixtures/meeting-three.wav");
   await waitStatus("meeting-three.wav", "completed");
+
+  // Browser radio groups must remain independent across mounted result panels.
+  await status("meeting-one.wav", "completed").click();
+  await page.getByRole("textbox", { name: "Rename Speaker 1", exact: true }).fill("Speaker 1");
+  const modeRadios = page.locator('input[type="radio"][value="recluster"], input[type="radio"][value="rediarize"], input[type="radio"][value="full"]');
+  const modeNames = await modeRadios.evaluateAll(nodes => nodes.map(node => node.name));
+  assert.equal(modeNames.length, 9);
+  assert.equal(new Set(modeNames).size, 3, "each meeting review needs its own radio group");
+  await page.locator('input[type="radio"][value="full"]:visible').check();
+  await status("meeting-two.wav", "completed").click();
+  await page.locator('input[type="radio"][value="rediarize"]:visible').check();
+  await status("meeting-one.wav", "completed").click();
+  assert.equal(await page.locator('input[type="radio"][value="full"]:visible').isChecked(), true,
+    "changing B must not clear the radio selected in A");
+
+  // Exercise polling recovery for a reprocessing job on an already completed tab.
+  await page.getByRole("button", { name: "Plan reprocessing", exact: true }).click();
+  await page.getByRole("button", { name: "Execute selected Full recomputation plan", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Execute selected Full recomputation plan", exact: true }).click();
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "begin_meeting_reprocessing"));
+  await status("meeting-two.wav", "completed").click();
+  await page.evaluate(() => window.qa.failPoll("/fixtures/meeting-one.wav"));
+  await waitStatus("meeting-one.wav", "needs retry");
+  await assertSummary({ "needs retry": 1 });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await assertSummary({ "needs retry": 1 });
+  await page.locator(".content").evaluate(node => { node.scrollTop = 0; });
+  await page.screenshot({ path: outputPath("sagascript-243-attention.png"), fullPage: true });
+  await page.getByRole("button", { name: "Show meeting-one.wav", exact: true }).click();
+  await page.getByRole("button", { name: "Retry status check", exact: true }).click();
+  await meeting("/fixtures/meeting-one.wav");
+  await waitStatus("meeting-one.wav", "completed");
+  await page.getByRole("status", { name: "File transcription status" }).filter({ hasText: /0 running/ }).waitFor();
+
   // Cancellation must release the queue only after its terminal status is read.
   await drop(["/fixtures/meeting-cancel.wav", "/fixtures/meeting-after.wav"]);
   await waitStatus("meeting-cancel.wav", "running");
@@ -105,10 +171,14 @@ try {
   assert.equal(await page.evaluate(() => window.qa.maximum()), 1, "transcriptions must never overlap");
   const paths = await page.evaluate(() => window.qa.calls.filter(call => ["transcribe_file", "begin_meeting_file"].includes(call.cmd)).map(call => call.args.filePath));
   assert.deepEqual(paths, ["/fixtures/one.wav", "/fixtures/two.wav", "/fixtures/three.wav", "/fixtures/four.wav", "/fixtures/picked.wav", "/fixtures/meeting-one.wav", "/fixtures/meeting-two.wav", "/fixtures/meeting-three.wav", "/fixtures/meeting-cancel.wav", "/fixtures/meeting-after.wav"]);
+  await assertSummary({ completed: 8, failed: 1, cancelled: 1, queued: 0, running: 0, "needs retry": 0 });
   assert.deepEqual(errors, []);
   await nameInput.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "/private/tmp/sagascript-242-meetings.png", fullPage: true });
+  await page.screenshot({ path: outputPath("sagascript-242-meetings.png"), fullPage: true });
   console.log("PASS: real Svelte UI queue, retained results, failure continuation, append, keyboard tabs, picker, serialized meetings, poll retry, cancellation, independent drafts, unique IDs; no browser errors.");
+} catch (error) {
+  await writeFailureDiagnostics(error);
+  throw error;
 } finally {
   await context.close();
   await browser.close();

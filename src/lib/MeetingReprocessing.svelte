@@ -359,7 +359,7 @@
       {#each Object.entries(modeDescriptions) as [value, description]}
         {@const option = value as ReprocessingMode}
         <label class:chosen={mode === option} class="mode-card">
-          <input type="radio" name="reprocessing-mode" value={option} checked={mode === option} disabled={isBusy()} onchange={() => selectMode(option)} />
+          <input type="radio" name={idPrefix + "reprocessing-mode"} value={option} checked={mode === option} disabled={isBusy()} onchange={() => selectMode(option)} />
           <span>
             <strong>{description.label}</strong>
             <small>{description.detail}</small>

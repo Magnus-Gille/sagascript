@@ -26,7 +26,7 @@
   } from "./meeting-types";
   import { pollMeetingJob as pollMeetingJobClient } from "./meeting-job-client";
   import type { FileJob, FileJobStatus } from "./transcription-queue";
-  let { job, progress, otherBusy, active, openReview = false, onComplete, onBusyChange }: {
+  let { job, progress, otherBusy, active, openReview = false, onComplete, onBusyChange, onAttentionChange }: {
     job: FileJob;
     progress: number;
     otherBusy: boolean;
@@ -34,6 +34,7 @@
     openReview?: boolean;
     onComplete: (id: string, status: FileJobStatus) => void;
     onBusyChange: (id: string, busy: boolean) => void;
+    onAttentionChange: (id: string, needsRetry: boolean) => void;
   } = $props();
   let started = $state(false);
   let starting = $state(false);
@@ -50,6 +51,8 @@
   $effect(() => {
     onBusyChange(job.id, starting || transcribing || meetingReprocessingBusy || meetingReviewInit !== null || meetingPollActive);
   });
+
+  $effect(() => { onAttentionChange(job.id, meetingPollingFailed); });
 
   // A polling error is recoverable: hold the queue until a terminal snapshot
   // is retrieved. Await review initialization before releasing the next file.
