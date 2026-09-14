@@ -23,7 +23,7 @@ test("profile glossary API preserves the validated camelCase command payload", (
 });
 
 test("file transcription carries an optional profile without changing no-profile behavior", () => {
-  assert.match(apiSource, /options\?: \{ prompt\?: string; diarize\?: boolean; profileId\?: string \}/);
+  assert.match(apiSource, /options\?: \{ prompt\?: string; diarize\?: boolean; profileId\?: string; runId\?: string \}/);
   assert.match(apiSource, /profileId: options\?\.profileId \?\? null/);
   assert.match(settingsSource, /createFileJobs\(paths, \{[\s\S]*diarize: transcribeDiarize/);
   assert.match(settingsSource, /prompt: transcribePrompt\.trim\(\) \|\| null/);
@@ -118,5 +118,6 @@ test("selected profile fixes the file language and dictionary together", () => {
   assert.match(settingsSource, /languageLabel\(transcribeLanguage\(\)\)/);
   assert.match(settingsSource, /return selectedTranscribeProfile\(\)\?\.language \?\? settings\?\.language \?\? "auto"/);
   assert.match(settingsSource, /This profile fixes the file language and uses its personal dictionary/);
-  assert.match(settingsSource, /Temporary hint-only context for this import/);
+  assert.match(settingsSource, /names to listen for: Astrid, Grimnir/);
+  assert.doesNotMatch(settingsSource, /Temporary hint-only context for this import/);
 });

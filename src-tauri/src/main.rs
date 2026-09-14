@@ -16,6 +16,7 @@ mod logging;
 
 mod app_controller;
 mod commands;
+mod plain_file_jobs;
 mod meeting_jobs;
 mod meeting_review_commands;
 mod meeting_reprocessing_commands;
@@ -614,6 +615,7 @@ fn main() {
             let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
             app.manage(controller);
             app.manage(whisper);
+            app.manage(plain_file_jobs::SharedPlainFileJobs::default());
             app.manage(Arc::new(meeting_jobs::MeetingJobs::default()));
             app.manage(meeting_media::SharedMeetingAudio::default());
             // Process-wide hotkey registration health (see hotkey::health for
@@ -1033,6 +1035,9 @@ fn main() {
             commands::set_vad_enabled,
             commands::get_build_info,
             commands::transcribe_file,
+            commands::cancel_file_transcription,
+            commands::save_transcription_text,
+            commands::copy_transcription_text,
             meeting_jobs::begin_meeting_file,
             meeting_jobs::begin_meeting_reprocessing,
             meeting_reprocessing_commands::plan_meeting_reprocessing,

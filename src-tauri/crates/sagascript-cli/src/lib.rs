@@ -223,11 +223,23 @@ By default, uses the language and model from your persisted settings \
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
-available as fi-whisper-tiny.",
+available as fi-whisper-tiny.
+
+INTERRUPTION: Press Ctrl+C to terminate the CLI invocation. A retry uses a \
+fresh in-process model backend with no on-disk warm-state lock. Re-run the \
+same command to retry. Compare models/decoding on one file with --model / \
+--beam variants (e.g. greedy vs beam).",
         after_long_help = "\
 EXAMPLES:
   # Basic transcription (uses configured language/model)
   sagascript transcribe meeting.wav
+
+  # Re-run the same file to retry after an interruption or error
+  sagascript transcribe meeting.wav
+
+  # Model A/B on one file: greedy Base vs beam-search Small
+  sagascript transcribe talk.m4a --model kb-whisper-base --beam 0
+  sagascript transcribe talk.m4a --model kb-whisper-small --beam 5
 
   # Transcribe in Swedish with a specific model
   sagascript transcribe tal.m4a --language sv --model kb-whisper-base
@@ -887,6 +899,24 @@ mod tests {
         assert!(
             help.contains("auto uses a generic multilingual model"),
             "transcribe help should warn about auto-detect"
+        );
+    }
+
+    #[test]
+    fn transcribe_help_documents_rerun_model_comparison_and_interrupt() {
+        // #234 (CLI parity) + #235 (model A/B): the transcribe help must
+        // document re-running one file, --model/--beam variants, and that
+        // Ctrl+C never wedges the next run (fresh in-process backend).
+        let cmd = Cli::command();
+        let sub = cmd.find_subcommand("transcribe").expect("transcribe subcommand missing");
+        let help = get_long_help(sub);
+        assert!(help.contains("Re-run the same file"), "transcribe help should document re-run");
+        assert!(help.contains("--model"), "transcribe help should document --model variants");
+        assert!(help.contains("--beam"), "transcribe help should document --beam variants");
+        assert!(help.contains("Ctrl+C"), "transcribe help should document interruption");
+        assert!(
+            help.contains("fresh in-process model backend"),
+            "transcribe help should describe the fresh process: {help}"
         );
     }
 

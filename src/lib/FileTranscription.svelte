@@ -7,9 +7,14 @@
   import type {
     ReprocessingMode, SelectedReprocessingPlan, ProposalState, ReprocessingResult,
   } from "./meeting-reprocessing-types";
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
+  import TranscriptionStages from "./TranscriptionStages.svelte";
+  import { initialStages, startStages, acceptRunProgress, finishStages } from "./transcribe-stages";
+  import { canCancelPlainTranscription, transcribeSaveDefaults } from "./transcribe-ui-state";
   import {
-    transcribeFile, beginMeetingFile, getMeetingJob, cancelMeetingJob,
+    transcribeFile, cancelFileTranscription, copyTranscriptionText, saveTranscriptionText,
+    beginMeetingFile, getMeetingJob, cancelMeetingJob,
     createMeetingReview, applyMeetingCorrections, undoMeetingReview,
     resetMeetingReview, openMeetingReview, saveMeetingReview,
     attachMeetingAudio, detachMeetingAudio,
@@ -26,9 +31,8 @@
   } from "./meeting-types";
   import { pollMeetingJob as pollMeetingJobClient } from "./meeting-job-client";
   import type { FileJob, FileJobStatus } from "./transcription-queue";
-  let { job, progress, otherBusy, active, openReview = false, onComplete, onBusyChange }: {
+  let { job, otherBusy, active, openReview = false, onComplete, onBusyChange }: {
     job: FileJob;
-    progress: number;
     otherBusy: boolean;
     active: boolean;
     openReview?: boolean;
@@ -56,14 +60,28 @@
   $effect(() => {
     if (!started || starting || job.status !== "running" || transcribing
       || meetingReviewInit !== null || meetingPollActive || meetingPollingFailed) return;
-    onComplete(job.id, meetingJobStatus === "cancelled" ? "cancelled"
+    onComplete(job.id, meetingJobStatus === "cancelled" || plainStages.status === "cancelled" ? "cancelled"
       : transcribeError || meetingError ? "failed"
       : openReview && !meetingReview ? "cancelled" : "completed");
   });
 
-  $effect(() => { if (transcribing) transcriptionProgress = progress; });
-
   let transcribing: boolean = $state(false);
+  let plainStages = $state(initialStages());
+  let cancellingPlain = $state(false);
+  let plainRunId: string | null = null;
+  let plainRequestStarted = false;
+  let transcribeElapsedSec = $state(0);
+  let resultActionMessage = $state("");
+  let transcribeResultSection: HTMLDivElement | undefined = $state();
+  let saveResultButton: HTMLButtonElement | undefined = $state();
+
+  async function revealTranscriptionResult(): Promise<void> {
+    await tick();
+    if (active) {
+      transcribeResultSection?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      saveResultButton?.focus({ preventScroll: true });
+    }
+  }
   let transcriptionProgress: number = $state(0);
   let transcriptionResult: string = $state("");
   let transcribeError: string = $state("");
@@ -259,19 +277,81 @@
     transcriptionProgress = 0;
     transcribeError = "";
     transcriptionResult = "";
+    plainRunId = crypto.randomUUID();
+    plainRequestStarted = false;
+    cancellingPlain = false;
+    plainStages = startStages();
+    resultActionMessage = "";
+    const startedAt = Date.now();
+    // Elapsed time is feedback, never measured compute progress.
+    const timer = setInterval(() => { transcribeElapsedSec = Math.floor((Date.now() - startedAt) / 1000); }, 500);
+    let stopProgress: (() => void) | undefined;
     try {
       await waitForMeetingActions();
+      // Register before invoking native work so even the first event is scoped.
+      stopProgress = await listen("plain-transcription-progress", (event) => {
+        plainStages = acceptRunProgress(plainStages, plainRunId, event.payload);
+      });
+      if (cancellingPlain) {
+        plainStages = finishStages(plainStages, "cancelled");
+        transcribeError = "Transcription was cancelled.";
+        return;
+      }
+      plainRequestStarted = true;
       transcriptionResult = await transcribeFile(filePath, {
         prompt: prompt ?? undefined,
         diarize: false,
         profileId: profileId ?? undefined,
+        runId: plainRunId,
       });
+      if (cancellingPlain) resultActionMessage = "Finished before Stop took effect.";
+      plainStages = finishStages(plainStages, "completed");
+      if (transcriptionResult.trim()) void revealTranscriptionResult();
     } catch (error: any) {
-      transcribeError = meetingFailureText(error, "Transcription failed");
+      plainStages = finishStages(plainStages, cancellingPlain ? "cancelled" : "failed");
+      transcribeError = cancellingPlain ? "Transcription was cancelled." : meetingFailureText(error, "Transcription failed");
     } finally {
+      stopProgress?.();
+      clearInterval(timer);
+      plainRunId = null;
+      plainRequestStarted = false;
+      cancellingPlain = false;
       transcribing = false;
       transcriptionProgress = 0;
     }
+  }
+
+  async function cancelPlainTranscription(): Promise<void> {
+    if (!canCancelPlainTranscription({ transcribing, meetingJobStatus, cancellingPlain })) return;
+    cancellingPlain = true;
+    if (!plainRequestStarted || !plainRunId) return;
+    const runId = plainRunId;
+    try {
+      await cancelFileTranscription(runId);
+      if (plainRunId !== runId) return;
+      // Backend success remains authoritative if Stop lost the race.
+    } catch (error) {
+      if (plainRunId !== runId) return;
+      if (transcribing && !transcribeError) transcribeError = meetingFailureText(error, "Could not request cancellation. The transcription is still running.");
+      cancellingPlain = false;
+    }
+  }
+
+  async function copyTranscriptionResult(): Promise<void> {
+    if (transcribing || !transcriptionResult) return;
+    try {
+      await copyTranscriptionText(transcriptionResult);
+      resultActionMessage = "Copied to clipboard.";
+    } catch (error) { resultActionMessage = meetingFailureText(error, "Could not copy."); }
+  }
+
+  async function saveTranscriptionResult(): Promise<void> {
+    if (transcribing || !transcriptionResult) return;
+    const { fileName, directory } = transcribeSaveDefaults(job.path);
+    try {
+      const saved = await saveTranscriptionText(transcriptionResult, fileName, directory);
+      resultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
+    } catch (error) { resultActionMessage = meetingFailureText(error, "Could not save."); }
   }
 
   async function cancelMeetingImport(): Promise<void> {
@@ -495,6 +575,9 @@
   }
 
 </script>
+{#if !job.diarize && !openReview}
+  <TranscriptionStages state={plainStages} cancelling={cancellingPlain} />
+{/if}
 {#if job.status === "queued"}
   <p role="status">Queued — waiting for the previous file.</p>
 {:else if job.status === "completed" && !transcriptionResult && !meetingTranscript}
@@ -503,8 +586,8 @@
   <p role="status">Cancelled.</p>
 {/if}
           {#if transcribing}
-            <div class="spinner"></div>
             {#if meetingJobStatus !== null}
+              <div class="spinner"></div>
               <div class="drop-zone-text">{meetingStageText()}</div>
               {#if meetingJobId && meetingPollingFailed}
                 <button class="secondary" onclick={retryMeetingPolling}>Retry status check</button>
@@ -518,10 +601,10 @@
                 </button>
               {/if}
             {:else}
-              <div class="drop-zone-text">Transcribing... {transcriptionProgress}%</div>
-              <div class="progress-bar transcription-progress">
-                <div class="progress-fill" style="width: {transcriptionProgress}%"></div>
-              </div>
+              <div class="drop-zone-text">Elapsed: {transcribeElapsedSec}s</div>
+              <button class="secondary" onclick={() => void cancelPlainTranscription()} disabled={cancellingPlain}>
+                {cancellingPlain ? "Cancelling…" : "Stop transcription"}
+              </button>
             {/if}
           {/if}
         {#if transcribeError}
@@ -533,8 +616,16 @@
         {/if}
 
         {#if transcriptionResult}
+          <div bind:this={transcribeResultSection}>
           <div class="result-label">Result</div>
           <textarea class="transcribe-result" readonly>{transcriptionResult}</textarea>
+          <div class="result-actions">
+            <button class="secondary" onclick={() => void copyTranscriptionResult()} disabled={transcribing}>Copy</button>
+            <button class="secondary" bind:this={saveResultButton} onclick={() => void saveTranscriptionResult()} disabled={transcribing}
+              title="Choose where to save — defaults to the audio file's folder">Save…</button>
+            {#if resultActionMessage}<span role="status">{resultActionMessage}</span>{/if}
+          </div>
+          </div>
         {/if}
 
         {#if meetingReview && meetingTranscript}
@@ -624,8 +715,7 @@
 
 
   .drop-zone-text { font-size: 13px; color: var(--text-muted); margin: 10px 0; }
-  .transcription-progress { height: 5px; background: var(--border); border-radius: 4px; overflow: hidden; }
-  .progress-fill { height: 100%; background: var(--accent); transition: width 0.2s; }
+  .result-actions { display: flex; align-items: center; gap: 8px; font-size: 12px; }
   .spinner { width: 24px; height: 24px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   button { margin: 6px 4px 6px 0; padding: 7px 12px; background: var(--bg-secondary); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }

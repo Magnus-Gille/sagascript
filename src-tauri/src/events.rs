@@ -12,6 +12,13 @@ pub mod event {
     pub const MODEL_READY: &str = "model-ready";
     /// Transcription progress percentage (0–100)
     pub const TRANSCRIPTION_PROGRESS: &str = "transcription-progress";
+    /// Scoped plain-import progress: {runId, phase, percent}.
+    pub const PLAIN_TRANSCRIPTION_PROGRESS: &str = "plain-transcription-progress";
+    /// Plain file-transcription phase (#237): "decoding" | "loading" |
+    /// "preparing" | "encoding". Emitted as the backend moves through the silent
+    /// pre-inference work so the UI can name the stall instead of showing a
+    /// frozen 1%. The progress stream takes over once inference starts.
+    pub const TRANSCRIPTION_PHASE: &str = "transcription-phase";
     /// Hotkey registration health changed (registered OK <-> failed to
     /// register). Payload: `{ ok: bool, error: string | null, shortcut: string }`.
     pub const HOTKEY_REGISTRATION_CHANGED: &str = "hotkey-registration-changed";
@@ -32,6 +39,8 @@ mod tests {
             MODEL_DOWNLOAD_PROGRESS,
             MODEL_READY,
             TRANSCRIPTION_PROGRESS,
+            PLAIN_TRANSCRIPTION_PROGRESS,
+            TRANSCRIPTION_PHASE,
             HOTKEY_REGISTRATION_CHANGED,
             ACTIVE_HOTKEY_PROFILE_CHANGED,
         ];
@@ -57,6 +66,8 @@ mod tests {
             MODEL_DOWNLOAD_PROGRESS,
             MODEL_READY,
             TRANSCRIPTION_PROGRESS,
+            PLAIN_TRANSCRIPTION_PROGRESS,
+            TRANSCRIPTION_PHASE,
             HOTKEY_REGISTRATION_CHANGED,
             ACTIVE_HOTKEY_PROFILE_CHANGED,
         ];

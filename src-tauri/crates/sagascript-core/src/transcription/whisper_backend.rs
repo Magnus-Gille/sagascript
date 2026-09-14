@@ -1090,7 +1090,7 @@ impl WhisperBackend {
         timings.model_ready_at = Some(Instant::now());
         timings.inference_started = true;
         let inference_started = Instant::now();
-        let result = self.transcribe_sync_with_options(audio, language, options, |_| {});
+        let result = self.transcribe_sync_with_options(audio, language, options, |_| {}, None);
         timings.inference_ms = inference_started.elapsed().as_secs_f64() * 1000.0;
         result
     }
@@ -1310,7 +1310,7 @@ impl WhisperBackend {
             prompt: prompt.map(str::to_string),
             ..Default::default()
         };
-        self.transcribe_sync_with_options(audio, language, &opts, on_progress)
+        self.transcribe_sync_with_options(audio, language, &opts, on_progress, None)
     }
 
     /// Live microphone transcription with a conservative near-silence guard.
@@ -1326,7 +1326,7 @@ impl WhisperBackend {
             info!("Skipping near-silent dictation: {} samples", audio.len());
             return Ok(String::new());
         }
-        self.transcribe_sync_with_options(audio, language, opts, on_progress)
+        self.transcribe_sync_with_options(audio, language, opts, on_progress, None)
     }
 
     /// Core transcription entry point. Honors the opt-in [`TranscribeOptions`]
@@ -1336,15 +1336,24 @@ impl WhisperBackend {
     /// Thin wrapper over [`Self::transcribe_sync_with_options_segments`] that
     /// concatenates the raw segment texts, then applies display-only
     /// non-speech marker normalization. Timestamped segment text stays raw.
+    /// `on_encode_start`, when given, fires once compute resources are held
+    /// and mel/encoder work is about to begin (the silent window before the
+    /// first progress callback).
     pub fn transcribe_sync_with_options(
         &self,
         audio: &[f32],
         language: Language,
         opts: &TranscribeOptions,
         on_progress: impl FnMut(i32) + Send + 'static,
+        on_encode_start: Option<&dyn Fn()>,
     ) -> Result<String, DictationError> {
-        let segments =
-            self.transcribe_sync_with_options_segments(audio, language, opts, on_progress)?;
+        let segments = self.transcribe_sync_with_options_segments(
+            audio,
+            language,
+            opts,
+            on_progress,
+            on_encode_start,
+        )?;
         let transcript = assemble_transcript(&segments);
         Ok(super::normalize_nonspeech_markers(
             transcript.trim(),
@@ -1362,6 +1371,7 @@ impl WhisperBackend {
         language: Language,
         opts: &TranscribeOptions,
         on_progress: impl FnMut(i32) + Send + 'static,
+        on_encode_start: Option<&dyn Fn()>,
     ) -> Result<Vec<TranscriptSegment>, DictationError> {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
@@ -1386,6 +1396,7 @@ impl WhisperBackend {
             opts.parallel_chunks.clamp(1, MAX_PARALLEL_CHUNKS),
             MIN_PARALLEL_CHUNK_SAMPLES,
         );
+
         info!(
             "Starting local transcription: {} samples, {} threads/state, {} chunk(s), lang={:?}, beam={}, temp_fallback={}, vad={}",
             audio.len(),
@@ -1399,6 +1410,9 @@ impl WhisperBackend {
 
         if chunks.len() == 1 {
             return self.with_warm_state(|state| {
+                if let Some(on_encode_start) = on_encode_start {
+                    on_encode_start();
+                }
                 self.transcribe_chunk_segments(
                     state,
                     audio,
@@ -1420,6 +1434,7 @@ impl WhisperBackend {
             opts,
             token_eot,
             on_progress,
+            on_encode_start,
         )
     }
 
@@ -1433,6 +1448,7 @@ impl WhisperBackend {
         opts: &TranscribeOptions,
         token_eot: i32,
         on_progress: impl FnMut(i32) + Send + 'static,
+        on_encode_start: Option<&dyn Fn()>,
     ) -> Result<Vec<TranscriptSegment>, DictationError> {
         let progress = Arc::new(Mutex::new(ParallelProgress {
             percentages: vec![0; chunks.len()],
@@ -1441,7 +1457,8 @@ impl WhisperBackend {
                 .map(|chunk| chunk.end_sample - chunk.start_sample)
                 .collect(),
             total_weight: audio.len(),
-            last_reported: -1,
+            // Suppress zero-only updates before any chunk has progressed.
+            last_reported: 0,
             callback: Box::new(on_progress),
         }));
 
@@ -1459,6 +1476,12 @@ impl WhisperBackend {
                     })
                     .collect::<Result<Vec<_>, _>>()?
             };
+
+            // Compute resources held from here: mel/encoder work begins with
+            // the first chunk dispatch below.
+            if let Some(on_encode_start) = on_encode_start {
+                on_encode_start();
+            }
 
             let mut chunk_results = std::thread::scope(|scope| {
                 let first_chunk = chunks[0];
@@ -2663,7 +2686,7 @@ mod segment_confidence_tests {
                     .is_empty());
                 assert!(matches!(
                     backend.transcribe_sync_with_options_segments(
-                        &audio, language, &TranscribeOptions::default(), |_| {},
+                        &audio, language, &TranscribeOptions::default(), |_| {}, None,
                     ),
                     Err(DictationError::ModelNotLoaded)
                 ));

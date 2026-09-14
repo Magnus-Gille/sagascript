@@ -4,7 +4,8 @@
     createFileJobs, nextQueuedFile, updateFileJob, fileJobName,
     type FileJob, type FileJobStatus,
   } from "./transcription-queue";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
+  import { rememberTranscription, type RecentTranscription } from "./recent-transcriptions";
   import {
     getSettings,
     getLastError,
@@ -172,14 +173,26 @@
   let selectedFileId = $state<string | null>(null);
   let fileBusy = $state<Record<string, boolean>>({});
   let savedReviewIds = $state<string[]>([]);
-  let transcriptionProgress = $state(0);
+  let recentTranscriptions = $state<RecentTranscription[]>([]);
+  let selectedRerunPath = $state("");
+  let rerunError = $state("");
+  let showDiarizeInfo = $state(false);
+  let diarizeDialog: HTMLDialogElement | undefined = $state();
+  let diarizeInfoButton: HTMLButtonElement | undefined = $state();
+  $effect(() => {
+    if (showDiarizeInfo && diarizeDialog && !diarizeDialog.open) diarizeDialog.showModal();
+  });
+  async function closeDiarizeInfo(): Promise<void> {
+    showDiarizeInfo = false;
+    await tick();
+    diarizeInfoButton?.focus();
+  }
   let transcribing = $derived(fileJobs.some(job => job.status === "queued" || job.status === "running")
     || Object.values(fileBusy).some(Boolean));
 
   $effect(() => {
     const next = nextQueuedFile(fileJobs, Object.values(fileBusy).some(Boolean));
     if (next) {
-      transcriptionProgress = 0;
       fileJobs = updateFileJob(fileJobs, next.id, "running");
     }
   });
@@ -192,6 +205,11 @@
     }, () => crypto.randomUUID());
     if (!jobs.length) return;
     if (openReview) savedReviewIds = [...savedReviewIds, ...jobs.map(job => job.id)];
+    else for (const job of jobs) {
+      recentTranscriptions = rememberTranscription(recentTranscriptions, { path: job.path,
+        profileId: job.profileId, prompt: job.prompt ?? "", diarize: job.diarize });
+      selectedRerunPath = job.path;
+    }
     const keepSelection = transcribing && selectedFileId !== null;
     fileJobs = [...fileJobs, ...jobs];
     if (!keepSelection) selectedFileId = jobs[0].id;
@@ -199,6 +217,22 @@
 
   function completeFile(id: string, status: FileJobStatus): void {
     fileJobs = updateFileJob(fileJobs, id, status);
+  }
+
+  function retryLastTranscription(): void {
+    const run = recentTranscriptions.find(run => run.path === selectedRerunPath);
+    if (!run) return;
+    if (run.profileId && !profileForId(run.profileId)) {
+      rerunError = "The profile for this file is no longer available. Choose a profile and open the file again.";
+      return;
+    }
+    rerunError = "";
+    // A fresh queued job preserves every previous result and review. Only the
+    // serial scheduler can start it; model/decoder settings apply at execution.
+    const jobs = createFileJobs([run.path], { profileId: run.profileId,
+      prompt: run.prompt || null, diarize: run.diarize }, () => crypto.randomUUID());
+    fileJobs = [...fileJobs, ...jobs];
+    selectedFileId = jobs[0].id;
   }
 
   function updateFileBusy(id: string, busy: boolean): void {
@@ -397,10 +431,6 @@
     // prevent them from wiring up (e.g. a stuck-at-0% download).
     listen("model-download-progress", (event: any) => {
       downloadProgress = event.payload.progress;
-    });
-
-    listen("transcription-progress", (event: any) => {
-      transcriptionProgress = event.payload;
     });
 
     listen("model-ready", async () => {
@@ -1362,6 +1392,7 @@
 
       {/if}
       <section hidden={activeTab !== "transcribe"} aria-label="File transcription">
+        <div class="transcribe-settings-row">
         <button class="active-config-bar" onclick={() => requestTabChange("settings")}>
           <div class="active-config-row">
             <span class="active-config-label">Language</span>
@@ -1369,6 +1400,16 @@
           </div>
           <span class="active-config-link">Settings</span>
         </button>
+          <div class="field profile-field">
+            <label for="transcribe-profile">Profile (optional)</label>
+            <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
+              <option value="">No profile (use selected language)</option>
+              {#each explicitProfiles() as profile (profile.id)}
+                <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
+              {/each}
+            </select>
+          </div>
+        </div>
 
         <div
           class="drop-zone"
@@ -1378,41 +1419,56 @@
           <div class="drop-zone-icon">&#x1F4C1;</div>
           <div class="drop-zone-text">Drop audio or video files here</div>
           <button class="primary open-file-btn" onclick={onPickFile}>Open Files...</button>
+          {#if recentTranscriptions.length}
+            <div class="rerun-controls">
+              <button class="secondary rerun-highlight" onclick={retryLastTranscription}
+                title="Queue a new run with current model settings and this file's saved profile/context">Re-run</button>
+              <select aria-label="Recent files to re-run (last 5, this session)" bind:value={selectedRerunPath} title={selectedRerunPath}>
+                {#each recentTranscriptions as run (run.path)}
+                  <option value={run.path}>{recentTranscriptions.filter(item => fileJobName(item.path) === fileJobName(run.path)).length > 1 ? run.path : fileJobName(run.path)}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
           <button class="secondary" onclick={() => handleFilesTranscription(["Saved review"], true)} disabled={transcribing}>
-            Open saved review...
+            Open saved meeting...
           </button>
           {#if transcribing}
             <div class="drop-zone-text" role="status">{fileJobs.filter(job => job.status === "queued").length} queued · select a file below to see its progress</div>
           {/if}
         </div>
+        {#if rerunError}<div class="transcribe-error">{rerunError}</div>{/if}
 
         <div class="formats-hint">
           Supported: {supportedFormats.map(f => f.toUpperCase()).join(", ") || "WAV, MP3, M4A, AAC, MP4, MOV, OGG, WEBM, FLAC"}
         </div>
 
         <div class="transcribe-options">
-          <div class="field">
-            <label for="transcribe-profile">Profile (optional)</label>
-            <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
-              <option value="">No profile (use selected language)</option>
-              {#each explicitProfiles() as profile (profile.id)}
-                <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
-              {/each}
-            </select>
-          </div>
           {#if selectedTranscribeProfile()}
             <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
           {:else}
             <div class="hotkey-hint">No profile keeps the selected language and global hint context.</div>
           {/if}
-          <label class="diarize-option">
+          <div class="diarize-row"><label class="diarize-option">
             <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
             Speaker diarization
           </label>
+          <button class="info-dot" bind:this={diarizeInfoButton} aria-label="What is speaker diarization?"
+            aria-expanded={showDiarizeInfo} onclick={() => { showDiarizeInfo = !showDiarizeInfo; }}>?</button></div>
+          {#if showDiarizeInfo}
+            <dialog bind:this={diarizeDialog} class="popover-card" aria-label="What is speaker diarization?"
+              oncancel={closeDiarizeInfo} onclose={closeDiarizeInfo}>
+              <h3>Speaker diarization</h3>
+              <p>Detects <strong>who speaks when</strong> and labels each part of the transcript — [Speaker 1], [Speaker 2], …</p>
+              <p>Slower than plain transcription, and needs the diarization models (downloaded once).</p>
+              <p>Leave it off for a plain transcript.</p>
+              <button class="secondary" onclick={closeDiarizeInfo}>Close</button>
+            </dialog>
+          {/if}
           <textarea
             class="prompt-input"
             aria-label="Extra context for this file"
-            placeholder="Extra context for this file only (optional)"
+            placeholder="Extra context, e.g. names to listen for: Astrid, Grimnir (optional)"
             bind:value={transcribePrompt}
             rows="2"
             disabled={transcribing}
@@ -1437,7 +1493,7 @@
         {#each fileJobs as job (job.id)}
           <div id={`file-panel-${job.id}`} role="tabpanel" aria-labelledby={`file-tab-${job.id}`}
             tabindex="0" hidden={selectedFileId !== job.id}>
-            <FileTranscription {job} progress={transcriptionProgress}
+             <FileTranscription {job}
               otherBusy={fileJobs.some(other => other.id !== job.id && other.status === "running")
                 || Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
               openReview={savedReviewIds.includes(job.id)} onComplete={completeFile} onBusyChange={updateFileBusy}
@@ -2286,6 +2342,19 @@
   }
 
   /* Transcribe tab */
+  .transcribe-settings-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+  .transcribe-settings-row .active-config-bar { flex: 1 1 0; width: auto; margin-bottom: 0; min-width: 0; }
+  .transcribe-settings-row .profile-field { flex: 1.2 1 0; margin-bottom: 0; min-width: 0; }
+  .rerun-controls { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; }
+  .rerun-controls button { flex: 0 0 auto; }
+  .rerun-controls select { flex: 1; min-width: 0; width: 0; }
+  button.secondary.rerun-highlight { border-color: #eab308; color: #eab308; }
+  button.secondary.rerun-highlight:hover:not(:disabled) { background: color-mix(in srgb, #eab308 12%, transparent); }
+  .diarize-row { display: flex; align-items: center; gap: 6px; }
+  .info-dot { width: 18px; height: 18px; padding: 0; border: 1px solid var(--text-muted); border-radius: 50%; background: transparent; color: var(--text-muted); }
+  .popover-card { margin: auto; width: 280px; max-width: calc(100vw - 48px); padding: 14px 16px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; color: var(--text); font-size: 12px; line-height: 1.55; }
+  .popover-card::backdrop { background: rgba(0, 0, 0, 0.45); }
+  .popover-card p { margin: 8px 0; }
 
   .drop-zone {
     display: flex;

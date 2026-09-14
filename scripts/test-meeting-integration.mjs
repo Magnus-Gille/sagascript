@@ -235,7 +235,7 @@ test("meeting review exposes explicit corrections, playback, and all export form
   }
   assert.match(fileTranscriptionSource, /createMeetingReview\(transcript\)/);
   assert.match(fileTranscriptionSource, /meetingReviewInit = initializeMeetingReview/);
-  assert.match(settingsSource, /Open saved review/);
+  assert.match(settingsSource, /Open saved meeting/);
   assert.match(reviewSource, /reconcileMeetingDrafts/);
   assert.match(reviewSource, /resetDraftKey/);
   assert.match(reviewSource, /onDraftDirtyChange\?: \(dirty: boolean\) => void/);
