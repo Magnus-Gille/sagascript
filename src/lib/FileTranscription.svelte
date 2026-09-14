@@ -11,7 +11,7 @@
   import { listen } from "@tauri-apps/api/event";
   import TranscriptionStages from "./TranscriptionStages.svelte";
   import { initialStages, startStages, acceptRunProgress, finishStages } from "./transcribe-stages";
-  import { canCancelPlainTranscription, transcribeSaveDefaults } from "./transcribe-ui-state";
+  import { canCancelPlainTranscription, transcribeSaveDefaults, isMissingTranscribeFileError } from "./transcribe-ui-state";
   import {
     transcribeFile, cancelFileTranscription, copyTranscriptionText, saveTranscriptionText,
     beginMeetingFile, getMeetingJob, cancelMeetingJob,
@@ -31,13 +31,14 @@
   } from "./meeting-types";
   import { pollMeetingJob as pollMeetingJobClient } from "./meeting-job-client";
   import type { FileJob, FileJobStatus } from "./transcription-queue";
-  let { job, otherBusy, active, openReview = false, onComplete, onBusyChange }: {
+  let { job, otherBusy, active, openReview = false, onComplete, onBusyChange, onMissingFile }: {
     job: FileJob;
     otherBusy: boolean;
     active: boolean;
     openReview?: boolean;
     onComplete: (id: string, status: FileJobStatus) => void;
     onBusyChange: (id: string, busy: boolean) => void;
+    onMissingFile: (path: string) => void;
   } = $props();
   let started = $state(false);
   let starting = $state(false);
@@ -305,9 +306,11 @@
         runId: plainRunId,
       });
       if (cancellingPlain) resultActionMessage = "Finished before Stop took effect.";
+      transcribeError = "";
       plainStages = finishStages(plainStages, "completed");
       if (transcriptionResult.trim()) void revealTranscriptionResult();
     } catch (error: any) {
+      if (isMissingTranscribeFileError(error)) onMissingFile(filePath);
       plainStages = finishStages(plainStages, cancellingPlain ? "cancelled" : "failed");
       transcribeError = cancellingPlain ? "Transcription was cancelled." : meetingFailureText(error, "Transcription failed");
     } finally {

@@ -16,6 +16,7 @@ function transcript(path) {
 }
 window.qa = {
   calls,
+  progress: (runId, phase, percent) => emit("plain-transcription-progress", { runId, phase, percent }),
   drop: (paths) => emit(TauriEvent.DRAG_DROP, { paths, position: { x: 20, y: 20 } }),
   finish: (path, error = null) => {
     const task = pending.get(path);
@@ -47,7 +48,12 @@ mockIPC(async (cmd, args = {}) => {
     case "hotkey_status": return { ok: true, error: null, shortcut: "Control+Shift+Space", shortcuts: [] };
     case "transcribe_file":
       active++; maximum = Math.max(maximum, active);
-      return new Promise((resolve, reject) => pending.set(args.filePath, { resolve, reject }));
+      return new Promise((resolve, reject) => pending.set(args.filePath, { resolve, reject, runId: args.runId }));
+    // Deliberately keep the native result pending: Stop is a request, not a
+    // terminal status, and finish() may still produce authoritative success.
+    case "cancel_file_transcription": return [...pending.values()].some(task => task.runId === args.runId);
+    case "save_transcription_text": return true;
+    case "copy_transcription_text": return null;
     case "begin_meeting_file": {
       active++; maximum = Math.max(maximum, active);
       const id = `meeting-${++sequence}`;

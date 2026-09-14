@@ -47,7 +47,7 @@ try {
   await status("three.wav", "completed").click();
   assert.equal(await status("three.wav", "completed").getAttribute("aria-selected"), "true");
   await page.waitForFunction(() => getComputedStyle(document.querySelector(".result-tab.active")).borderColor === "rgb(114, 230, 207)");
-  await page.screenshot({ path: "/private/tmp/sagascript-242-results.png", fullPage: true });
+  await page.screenshot({ path: "dist/sagascript-242-results.png", fullPage: true });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   assert.equal(await page.locator('[role="tabpanel"]:visible textarea.transcribe-result').inputValue(), "Transcript for /fixtures/three.wav");
@@ -105,9 +105,44 @@ try {
   assert.equal(await page.evaluate(() => window.qa.maximum()), 1, "transcriptions must never overlap");
   const paths = await page.evaluate(() => window.qa.calls.filter(call => ["transcribe_file", "begin_meeting_file"].includes(call.cmd)).map(call => call.args.filePath));
   assert.deepEqual(paths, ["/fixtures/one.wav", "/fixtures/two.wav", "/fixtures/three.wav", "/fixtures/four.wav", "/fixtures/picked.wav", "/fixtures/meeting-one.wav", "/fixtures/meeting-two.wav", "/fixtures/meeting-three.wav", "/fixtures/meeting-cancel.wav", "/fixtures/meeting-after.wav"]);
+  // Polish must remain per-file after extraction: a recent selection cannot
+  // change Save's source, and re-run queues alongside the retained review.
+  await status("one.wav", "completed").click();
+  await page.getByRole("combobox", { name: "Recent files to re-run (last 5, this session)" }).selectOption("/fixtures/meeting-two.wav");
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await page.getByRole("button", { name: "Save…", exact: true }).click();
+  const saved = await page.evaluate(() => window.qa.calls.filter(call => call.cmd === "save_transcription_text").at(-1));
+  assert.deepEqual(saved.args, { text: "Transcript for /fixtures/one.wav", fileName: "one.txt", directory: "/fixtures" });
+  await page.getByRole("checkbox", { name: "Speaker diarization" }).uncheck();
+  await drop(["/fixtures/cancel-plain.wav", "/fixtures/after-plain.wav"]);
+  await waitStatus("cancel-plain.wav", "running");
+  const runId = await page.evaluate(() => window.qa.calls.filter(call => call.cmd === "transcribe_file").at(-1).args.runId);
+  assert.ok(runId);
+  await page.evaluate(() => window.qa.progress("wrong-run", "transcribing", 90));
+  await page.evaluate(runId => window.qa.progress(runId, "resampling", 60), runId);
+  await page.getByText("Converting to 16 kHz mono", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Stop transcription", exact: true }).click();
+  await waitStatus("after-plain.wav", "queued");
+  await finish("/fixtures/cancel-plain.wav");
+  await waitStatus("cancel-plain.wav", "completed");
+  await page.getByText("Finished before Stop took effect.", { exact: true }).waitFor();
+  await waitStatus("after-plain.wav", "running");
+  await page.getByRole("combobox", { name: "Recent files to re-run (last 5, this session)" }).selectOption("/fixtures/cancel-plain.wav");
+  await page.getByRole("button", { name: "Re-run", exact: true }).click();
+  await waitStatus("cancel-plain.wav", "queued");
+  await finish("/fixtures/after-plain.wav");
+  await waitStatus("cancel-plain.wav", "running");
+  await finish("/fixtures/cancel-plain.wav");
+  await page.waitForFunction(() => [...document.querySelectorAll('[role="tab"]')].filter(tab => tab.textContent.includes("cancel-plain.wav") && tab.textContent.includes("completed")).length === 2);
+  assert.equal(await page.evaluate(() => window.qa.maximum()), 1);
+  await page.getByRole("button", { name: "What is speaker diarization?", exact: true }).click();
+  await page.getByRole("dialog", { name: "What is speaker diarization?", exact: true }).waitFor();
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "What is speaker diarization?");
   assert.deepEqual(errors, []);
+  await status("meeting-one.wav", "completed").click();
   await nameInput.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "/private/tmp/sagascript-242-meetings.png", fullPage: true });
+  await page.screenshot({ path: "dist/sagascript-242-meetings.png", fullPage: true });
   console.log("PASS: real Svelte UI queue, retained results, failure continuation, append, keyboard tabs, picker, serialized meetings, poll retry, cancellation, independent drafts, unique IDs; no browser errors.");
 } finally {
   await context.close();

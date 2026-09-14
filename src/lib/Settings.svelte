@@ -247,6 +247,7 @@
       return;
     }
     rerunError = "";
+    recentTranscriptions = rememberTranscription(recentTranscriptions, run);
     // A fresh queued job preserves every previous result and review. Only the
     // serial scheduler can start it; model/decoder settings apply at execution.
     const jobs = createFileJobs([run.path], { profileId: run.profileId,
@@ -257,6 +258,11 @@
 
   function updateFileBusy(id: string, busy: boolean): void {
     if (fileBusy[id] !== busy) fileBusy = { ...fileBusy, [id]: busy };
+  }
+
+  function forgetMissingFile(path: string): void {
+    recentTranscriptions = recentTranscriptions.filter(run => run.path !== path);
+    if (selectedRerunPath === path) selectedRerunPath = recentTranscriptions[0]?.path ?? "";
   }
 
   function onResultTabKeydown(event: KeyboardEvent, index: number): void {
@@ -1575,10 +1581,11 @@
         {#each fileJobs as job (job.id)}
           <div id={`file-panel-${job.id}`} role="tabpanel" aria-labelledby={`file-tab-${job.id}`}
             tabindex="0" hidden={selectedFileId !== job.id}>
-             <FileTranscription {job}
+            <FileTranscription {job}
               otherBusy={fileJobs.some(other => other.id !== job.id && other.status === "running")
                 || Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
               openReview={savedReviewIds.includes(job.id)} onComplete={completeFile} onBusyChange={updateFileBusy}
+              onMissingFile={forgetMissingFile}
               active={activeTab === "transcribe" && selectedFileId === job.id} />
           </div>
         {/each}
@@ -2459,7 +2466,7 @@
     align-items: center;
     justify-content: center;
     gap: 12px;
-    padding: 32px 20px;
+    padding: 12px 16px;
     border: 2px dashed var(--border);
     border-radius: 12px;
     text-align: center;
