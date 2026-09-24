@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{canonical_hotkey, validate_hotkey};
 
@@ -494,6 +494,78 @@ impl WhisperModel {
     }
 }
 
+/// A file-transcription model choice. Unlike [`WhisperModel`], this can also
+/// select the Swedish-only Pianissimo Original model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileModel {
+    Whisper(WhisperModel),
+    PianissimoOriginal,
+}
+
+/// Persisted preference for file transcription.
+///
+/// `Auto` inherits the live dictation model, keeping existing settings files
+/// and live behavior unchanged when this field is absent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FileModelPreference {
+    #[default]
+    Auto,
+    Whisper(WhisperModel),
+    PianissimoOriginal,
+}
+
+impl FileModelPreference {
+    /// Parse one of the stable persisted model identifiers.
+    pub fn parse_id(id: &str) -> Result<Self, String> {
+        match id {
+            "auto" => Ok(Self::Auto),
+            "pianissimo-sv" => Ok(Self::PianissimoOriginal),
+            _ => serde_json::from_value::<WhisperModel>(serde_json::Value::String(id.to_owned()))
+                .map(Self::Whisper)
+                .map_err(|_| format!("Unknown file model preference '{id}'")),
+        }
+    }
+}
+
+impl Serialize for FileModelPreference {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Auto => serializer.serialize_str("auto"),
+            Self::Whisper(model) => model.serialize(serializer),
+            Self::PianissimoOriginal => serializer.serialize_str("pianissimo-sv"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FileModelPreference {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct FileModelPreferenceVisitor;
+
+        impl<'de> de::Visitor<'de> for FileModelPreferenceVisitor {
+            type Value = FileModelPreference;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a file model preference identifier")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                FileModelPreference::parse_id(value).map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(FileModelPreferenceVisitor)
+    }
+}
+
 /// Hotkey activation mode
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -558,6 +630,7 @@ impl HotkeyProfile {
 pub struct Settings {
     pub language: Language,
     pub whisper_model: WhisperModel,
+    pub file_transcription_model: FileModelPreference,
     pub hotkey_mode: HotkeyMode,
     pub show_overlay: bool,
     pub auto_paste: bool,
@@ -592,6 +665,7 @@ impl Default for Settings {
         Self {
             language: Language::default(),
             whisper_model: WhisperModel::default(),
+            file_transcription_model: FileModelPreference::default(),
             hotkey_mode: HotkeyMode::default(),
             show_overlay: true,
             auto_paste: true,
@@ -661,6 +735,28 @@ impl Settings {
             WhisperModel::recommended(language)
         } else {
             self.whisper_model
+        }
+    }
+
+    /// Resolve the model for file transcription without changing the live
+    /// dictation model preference.
+    pub fn effective_file_model_for(&self, language: Language) -> Result<FileModel, String> {
+        match self.file_transcription_model {
+            FileModelPreference::Auto => Ok(FileModel::Whisper(self.effective_model_for(language))),
+            FileModelPreference::Whisper(model) if model.is_compatible_with(language) => {
+                Ok(FileModel::Whisper(model))
+            }
+            FileModelPreference::Whisper(model) => Err(format!(
+                "Whisper model '{}' is incompatible with {}",
+                model.display_name(),
+                language.display_name()
+            )),
+            FileModelPreference::PianissimoOriginal if language == Language::Swedish => {
+                Ok(FileModel::PianissimoOriginal)
+            }
+            FileModelPreference::PianissimoOriginal => Err(
+                "Pianissimo Original is only available for Swedish file transcription".to_string(),
+            ),
         }
     }
 
@@ -1946,6 +2042,85 @@ mod tests {
         for language in [Language::English, Language::Swedish, Language::Norwegian, Language::Auto] {
             assert_eq!(settings.effective_model_for(language), WhisperModel::Medium);
         }
+    }
+
+    #[test]
+    fn legacy_settings_migrate_file_model_preference_to_auto() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"language":"sv","whisper_model":"kb-whisper-small"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.file_transcription_model, FileModelPreference::Auto);
+    }
+
+    #[test]
+    fn auto_file_model_preference_inherits_live_effective_model() {
+        let settings = Settings {
+            auto_select_model: true,
+            file_transcription_model: FileModelPreference::Auto,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            settings.effective_file_model_for(Language::Swedish),
+            Ok(FileModel::Whisper(WhisperModel::KbWhisperBase))
+        );
+    }
+
+    #[test]
+    fn selected_file_model_must_match_language() {
+        let settings = Settings {
+            file_transcription_model: FileModelPreference::Whisper(WhisperModel::KbWhisperBase),
+            ..Default::default()
+        };
+        assert!(settings.effective_file_model_for(Language::English).is_err());
+
+        let settings = Settings {
+            file_transcription_model: FileModelPreference::PianissimoOriginal,
+            ..Default::default()
+        };
+        assert_eq!(
+            settings.effective_file_model_for(Language::Swedish),
+            Ok(FileModel::PianissimoOriginal)
+        );
+        assert!(settings.effective_file_model_for(Language::Norwegian).is_err());
+    }
+
+    #[test]
+    fn file_model_preference_does_not_change_live_model_resolution() {
+        let settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::Medium,
+            file_transcription_model: FileModelPreference::PianissimoOriginal,
+            ..Default::default()
+        };
+
+        assert_eq!(settings.effective_model_for(Language::English), WhisperModel::Medium);
+        assert_eq!(
+            settings.effective_file_model_for(Language::Swedish),
+            Ok(FileModel::PianissimoOriginal)
+        );
+    }
+
+    #[test]
+    fn file_model_preference_serde_roundtrip_and_unknown_ids() {
+        let pairs = [
+            (FileModelPreference::Auto, "\"auto\""),
+            (
+                FileModelPreference::Whisper(WhisperModel::KbWhisperSmall),
+                "\"kb-whisper-small\"",
+            ),
+            (FileModelPreference::PianissimoOriginal, "\"pianissimo-sv\""),
+        ];
+
+        for (preference, expected) in pairs {
+            let json = serde_json::to_string(&preference).unwrap();
+            assert_eq!(json, expected);
+            assert_eq!(serde_json::from_str::<FileModelPreference>(&json).unwrap(), preference);
+        }
+        assert!(FileModelPreference::parse_id("unknown-model").is_err());
+        assert!(serde_json::from_str::<FileModelPreference>("\"unknown-model\"").is_err());
     }
 
     #[test]

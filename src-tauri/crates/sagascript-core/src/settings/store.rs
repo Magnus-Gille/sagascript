@@ -675,7 +675,7 @@ fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{HotkeyMode, Language, WhisperModel};
+    use crate::settings::{FileModelPreference, HotkeyMode, Language, WhisperModel};
     use std::fs;
     use std::sync::mpsc;
     use std::thread;
@@ -1385,6 +1385,7 @@ mod tests {
         assert_eq!(s.hotkey, "Alt+X");
         // Defaults for missing fields
         assert_eq!(s.whisper_model, WhisperModel::Base);
+        assert_eq!(s.file_transcription_model, FileModelPreference::Auto);
         assert_eq!(s.hotkey_mode, HotkeyMode::PushToTalk);
         assert!(s.show_overlay);
         assert!(s.auto_paste);
