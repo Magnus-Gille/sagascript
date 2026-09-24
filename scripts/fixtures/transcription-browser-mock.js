@@ -96,12 +96,16 @@ mockIPC(async (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
     case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
-    case "get_settings": return { language: "en", whisper_model: "base.en", hotkey_mode: "toggle",
+    case "get_settings": return { language: "en", whisper_model: "base.en", file_transcription_model: "auto", hotkey_mode: "toggle",
       show_overlay: true, auto_paste: false, auto_select_model: true, hotkey: "Control+Shift+Space",
       hotkey_profiles: [], initial_prompt: "", profile_glossaries: {}, beam_size: 0,
       temperature_fallback: true, vad_enabled: false, has_completed_onboarding: true };
     case "get_model_info": return [{ id: "base.en", display_name: "Base English", description: "Fixture",
       size_mb: 0, downloaded: true, active: true }];
+    case "get_file_model_options": return [{ id: "base.en", display_name: "Base English", description: "Fixture",
+      size_mb: 0, downloaded: true, active: false }];
+    case "get_effective_model_info": return { id: "base.en", display_name: "Base English", description: "Fixture",
+      size_mb: 0, downloaded: true, active: true };
     case "get_platform": return "macos";
     case "check_accessibility_permission": return true;
     case "get_supported_formats": return ["wav", "mp3", "m4a"];

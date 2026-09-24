@@ -1,0 +1,1040 @@
+[
+  {
+    "name": "absl-py",
+    "version": "2.5.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/absl-py/2.5.0/"
+  },
+  {
+    "name": "accelerate",
+    "version": "1.15.0",
+    "license": "Apache",
+    "source": "https://pypi.org/project/accelerate/1.15.0/"
+  },
+  {
+    "name": "aiohappyeyeballs",
+    "version": "2.7.1",
+    "license": "PSF-2.0",
+    "source": "https://pypi.org/project/aiohappyeyeballs/2.7.1/"
+  },
+  {
+    "name": "aiohttp",
+    "version": "3.14.3",
+    "license": "Apache-2.0 AND MIT",
+    "source": "https://pypi.org/project/aiohttp/3.14.3/"
+  },
+  {
+    "name": "aiosignal",
+    "version": "1.4.0",
+    "license": "Apache 2.0",
+    "source": "https://pypi.org/project/aiosignal/1.4.0/"
+  },
+  {
+    "name": "alembic",
+    "version": "1.20.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/alembic/1.20.0/"
+  },
+  {
+    "name": "annotated-types",
+    "version": "0.8.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/annotated-types/0.8.0/"
+  },
+  {
+    "name": "antlr4-python3-runtime",
+    "version": "4.9.3",
+    "license": "BSD",
+    "source": "https://pypi.org/project/antlr4-python3-runtime/4.9.3/"
+  },
+  {
+    "name": "anyio",
+    "version": "4.15.1",
+    "license": "MIT",
+    "source": "https://pypi.org/project/anyio/4.15.1/"
+  },
+  {
+    "name": "asttokens",
+    "version": "3.0.2",
+    "license": "Apache 2.0",
+    "source": "https://pypi.org/project/asttokens/3.0.2/"
+  },
+  {
+    "name": "attrs",
+    "version": "26.1.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/attrs/26.1.0/"
+  },
+  {
+    "name": "audioread",
+    "version": "3.1.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/audioread/3.1.0/"
+  },
+  {
+    "name": "braceexpand",
+    "version": "0.1.7",
+    "license": "MIT",
+    "source": "https://pypi.org/project/braceexpand/0.1.7/"
+  },
+  {
+    "name": "certifi",
+    "version": "2026.7.22",
+    "license": "MPL-2.0",
+    "source": "https://pypi.org/project/certifi/2026.7.22/"
+  },
+  {
+    "name": "cffi",
+    "version": "2.1.1",
+    "license": "MIT-0",
+    "source": "https://pypi.org/project/cffi/2.1.1/"
+  },
+  {
+    "name": "charset-normalizer",
+    "version": "3.5.1",
+    "license": "MIT",
+    "source": "https://pypi.org/project/charset-normalizer/3.5.1/"
+  },
+  {
+    "name": "click",
+    "version": "8.5.0",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/click/8.5.0/"
+  },
+  {
+    "name": "cloudpickle",
+    "version": "3.1.2",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/cloudpickle/3.1.2/"
+  },
+  {
+    "name": "colorama",
+    "version": "0.4.6",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/colorama/0.4.6/"
+  },
+  {
+    "name": "colorlog",
+    "version": "6.12.0",
+    "license": "MIT License",
+    "source": "https://pypi.org/project/colorlog/6.12.0/"
+  },
+  {
+    "name": "contourpy",
+    "version": "1.4.0",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/contourpy/1.4.0/"
+  },
+  {
+    "name": "cycler",
+    "version": "0.12.1",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/cycler/0.12.1/"
+  },
+  {
+    "name": "cytoolz",
+    "version": "1.1.0",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/cytoolz/1.1.0/"
+  },
+  {
+    "name": "datasets",
+    "version": "5.0.1",
+    "license": "Apache 2.0",
+    "source": "https://pypi.org/project/datasets/5.0.1/"
+  },
+  {
+    "name": "decorator",
+    "version": "5.3.1",
+    "license": "BSD-2-Clause",
+    "source": "https://pypi.org/project/decorator/5.3.1/"
+  },
+  {
+    "name": "dill",
+    "version": "0.4.1",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/dill/0.4.1/"
+  },
+  {
+    "name": "editdistance",
+    "version": "0.8.1",
+    "license": "MIT",
+    "source": "https://pypi.org/project/editdistance/0.8.1/"
+  },
+  {
+    "name": "einops",
+    "version": "0.8.2",
+    "license": "MIT",
+    "source": "https://pypi.org/project/einops/0.8.2/"
+  },
+  {
+    "name": "executing",
+    "version": "2.2.1",
+    "license": "MIT",
+    "source": "https://pypi.org/project/executing/2.2.1/"
+  },
+  {
+    "name": "fiddle",
+    "version": "0.3.0",
+    "license": "Apache 2.0",
+    "source": "https://pypi.org/project/fiddle/0.3.0/"
+  },
+  {
+    "name": "filelock",
+    "version": "4.0.1",
+    "license": "MIT",
+    "source": "https://pypi.org/project/filelock/4.0.1/"
+  },
+  {
+    "name": "fonttools",
+    "version": "4.66.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/fonttools/4.66.0/"
+  },
+  {
+    "name": "frozenlist",
+    "version": "1.8.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/frozenlist/1.8.0/"
+  },
+  {
+    "name": "fsspec",
+    "version": "2024.12.0",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/fsspec/2024.12.0/"
+  },
+  {
+    "name": "googleapis-common-protos",
+    "version": "1.75.0",
+    "license": "Apache 2.0",
+    "source": "https://pypi.org/project/googleapis-common-protos/1.75.0/"
+  },
+  {
+    "name": "graphviz",
+    "version": "0.21",
+    "license": "MIT",
+    "source": "https://pypi.org/project/graphviz/0.21/"
+  },
+  {
+    "name": "grpcio",
+    "version": "1.84.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/grpcio/1.84.0/"
+  },
+  {
+    "name": "h11",
+    "version": "0.16.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/h11/0.16.0/"
+  },
+  {
+    "name": "hf-xet",
+    "version": "1.6.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/hf-xet/1.6.0/"
+  },
+  {
+    "name": "httpcore",
+    "version": "1.0.9",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/httpcore/1.0.9/"
+  },
+  {
+    "name": "httpx",
+    "version": "0.28.1",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/httpx/0.28.1/"
+  },
+  {
+    "name": "huggingface_hub",
+    "version": "0.36.2",
+    "license": "Apache",
+    "source": "https://pypi.org/project/huggingface_hub/0.36.2/"
+  },
+  {
+    "name": "hydra-core",
+    "version": "1.3.2",
+    "license": "MIT",
+    "source": "https://pypi.org/project/hydra-core/1.3.2/"
+  },
+  {
+    "name": "idna",
+    "version": "3.20",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/idna/3.20/"
+  },
+  {
+    "name": "indic_numtowords",
+    "version": "1.1.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/indic_numtowords/1.1.0/"
+  },
+  {
+    "name": "inflect",
+    "version": "7.5.0",
+    "license": "MIT License",
+    "source": "https://pypi.org/project/inflect/7.5.0/"
+  },
+  {
+    "name": "intervaltree",
+    "version": "3.2.1",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/intervaltree/3.2.1/"
+  },
+  {
+    "name": "ipython",
+    "version": "9.17.1",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/ipython/9.17.1/"
+  },
+  {
+    "name": "ipython_pygments_lexers",
+    "version": "1.1.1",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/ipython_pygments_lexers/1.1.1/"
+  },
+  {
+    "name": "jedi",
+    "version": "0.20.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/jedi/0.20.0/"
+  },
+  {
+    "name": "Jinja2",
+    "version": "3.1.6",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/Jinja2/3.1.6/"
+  },
+  {
+    "name": "jiwer",
+    "version": "3.1.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/jiwer/3.1.0/"
+  },
+  {
+    "name": "joblib",
+    "version": "1.6.0",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/joblib/1.6.0/"
+  },
+  {
+    "name": "kaldi-python-io",
+    "version": "1.2.2",
+    "license": "Apache V2.0",
+    "source": "https://pypi.org/project/kaldi-python-io/1.2.2/"
+  },
+  {
+    "name": "kaldialign",
+    "version": "0.9.1",
+    "license": "Apache licensed, as found in the LICENSE file",
+    "source": "https://pypi.org/project/kaldialign/0.9.1/"
+  },
+  {
+    "name": "kiwisolver",
+    "version": "1.5.1",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/kiwisolver/1.5.1/"
+  },
+  {
+    "name": "lazy-loader",
+    "version": "0.6",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/lazy-loader/0.6/"
+  },
+  {
+    "name": "lhotse",
+    "version": "1.33.0",
+    "license": "Apache-2.0 License",
+    "source": "https://pypi.org/project/lhotse/1.33.0/"
+  },
+  {
+    "name": "libcst",
+    "version": "1.9.0",
+    "license": "MIT License",
+    "source": "https://pypi.org/project/libcst/1.9.0/"
+  },
+  {
+    "name": "librosa",
+    "version": "1.0.0",
+    "license": "ISC",
+    "source": "https://pypi.org/project/librosa/1.0.0/"
+  },
+  {
+    "name": "lightning",
+    "version": "2.4.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/lightning/2.4.0/"
+  },
+  {
+    "name": "lightning-utilities",
+    "version": "0.15.3",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/lightning-utilities/0.15.3/"
+  },
+  {
+    "name": "llvmlite",
+    "version": "0.49.0",
+    "license": "BSD-2-Clause AND Apache-2.0 WITH LLVM-exception",
+    "source": "https://pypi.org/project/llvmlite/0.49.0/"
+  },
+  {
+    "name": "lxml",
+    "version": "6.1.3",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/lxml/6.1.3/"
+  },
+  {
+    "name": "Mako",
+    "version": "1.4.3",
+    "license": "MIT",
+    "source": "https://pypi.org/project/Mako/1.4.3/"
+  },
+  {
+    "name": "Markdown",
+    "version": "3.10.3",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/Markdown/3.10.3/"
+  },
+  {
+    "name": "MarkupSafe",
+    "version": "3.0.3",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/MarkupSafe/3.0.3/"
+  },
+  {
+    "name": "marshmallow",
+    "version": "4.3.1",
+    "license": "MIT",
+    "source": "https://pypi.org/project/marshmallow/4.3.1/"
+  },
+  {
+    "name": "matplotlib",
+    "version": "3.11.2",
+    "license": "Python Software Foundation License",
+    "source": "https://pypi.org/project/matplotlib/3.11.2/"
+  },
+  {
+    "name": "matplotlib-inline",
+    "version": "0.2.2",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/matplotlib-inline/0.2.2/"
+  },
+  {
+    "name": "mediapy",
+    "version": "1.1.6",
+    "license": "Apache Software License",
+    "source": "https://pypi.org/project/mediapy/1.1.6/"
+  },
+  {
+    "name": "ml_dtypes",
+    "version": "0.6.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/ml_dtypes/0.6.0/"
+  },
+  {
+    "name": "more-itertools",
+    "version": "11.1.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/more-itertools/11.1.0/"
+  },
+  {
+    "name": "mpmath",
+    "version": "1.3.0",
+    "license": "BSD",
+    "source": "https://pypi.org/project/mpmath/1.3.0/"
+  },
+  {
+    "name": "msgpack",
+    "version": "1.2.2",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/msgpack/1.2.2/"
+  },
+  {
+    "name": "multidict",
+    "version": "6.9.1",
+    "license": "Apache License 2.0",
+    "source": "https://pypi.org/project/multidict/6.9.1/"
+  },
+  {
+    "name": "multiprocess",
+    "version": "0.70.19",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/multiprocess/0.70.19/"
+  },
+  {
+    "name": "narwhals",
+    "version": "2.26.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/narwhals/2.26.0/"
+  },
+  {
+    "name": "nemo-toolkit",
+    "version": "2.7.3",
+    "license": "Apache Software License",
+    "source": "https://pypi.org/project/nemo-toolkit/2.7.3/"
+  },
+  {
+    "name": "networkx",
+    "version": "3.7",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/networkx/3.7/"
+  },
+  {
+    "name": "numba",
+    "version": "0.67.0",
+    "license": "BSD",
+    "source": "https://pypi.org/project/numba/0.67.0/"
+  },
+  {
+    "name": "numexpr",
+    "version": "2.13.1",
+    "license": "MIT",
+    "source": "https://pypi.org/project/numexpr/2.13.1/"
+  },
+  {
+    "name": "numpy",
+    "version": "2.5.3",
+    "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+    "source": "https://pypi.org/project/numpy/2.5.3/"
+  },
+  {
+    "name": "nv-one-logger-core",
+    "version": "2.3.1",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/nv-one-logger-core/2.3.1/"
+  },
+  {
+    "name": "nv-one-logger-pytorch-lightning-integration",
+    "version": "2.3.1",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/nv-one-logger-pytorch-lightning-integration/2.3.1/"
+  },
+  {
+    "name": "nv-one-logger-training-telemetry",
+    "version": "2.3.1",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/nv-one-logger-training-telemetry/2.3.1/"
+  },
+  {
+    "name": "omegaconf",
+    "version": "2.3.0",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/omegaconf/2.3.0/"
+  },
+  {
+    "name": "onnx",
+    "version": "1.22.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/onnx/1.22.0/"
+  },
+  {
+    "name": "opentelemetry-api",
+    "version": "1.44.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/opentelemetry-api/1.44.0/"
+  },
+  {
+    "name": "opentelemetry-exporter-otlp-proto-common",
+    "version": "1.44.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/opentelemetry-exporter-otlp-proto-common/1.44.0/"
+  },
+  {
+    "name": "opentelemetry-exporter-otlp-proto-http",
+    "version": "1.44.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/opentelemetry-exporter-otlp-proto-http/1.44.0/"
+  },
+  {
+    "name": "opentelemetry-proto",
+    "version": "1.44.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/opentelemetry-proto/1.44.0/"
+  },
+  {
+    "name": "opentelemetry-sdk",
+    "version": "1.44.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/opentelemetry-sdk/1.44.0/"
+  },
+  {
+    "name": "opentelemetry-semantic-conventions",
+    "version": "0.65b0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/opentelemetry-semantic-conventions/0.65b0/"
+  },
+  {
+    "name": "optuna",
+    "version": "5.0.0",
+    "license": "MIT License",
+    "source": "https://pypi.org/project/optuna/5.0.0/"
+  },
+  {
+    "name": "overrides",
+    "version": "7.7.0",
+    "license": "Apache License, Version 2.0",
+    "source": "https://pypi.org/project/overrides/7.7.0/"
+  },
+  {
+    "name": "packaging",
+    "version": "24.2",
+    "license": "Apache Software License, BSD License",
+    "source": "https://pypi.org/project/packaging/24.2/"
+  },
+  {
+    "name": "pandas",
+    "version": "3.0.6",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/pandas/3.0.6/"
+  },
+  {
+    "name": "parso",
+    "version": "0.8.7",
+    "license": "MIT",
+    "source": "https://pypi.org/project/parso/0.8.7/"
+  },
+  {
+    "name": "peft",
+    "version": "0.21.0",
+    "license": "Apache",
+    "source": "https://pypi.org/project/peft/0.21.0/"
+  },
+  {
+    "name": "pexpect",
+    "version": "4.9.0",
+    "license": "ISC license",
+    "source": "https://pypi.org/project/pexpect/4.9.0/"
+  },
+  {
+    "name": "pillow",
+    "version": "12.3.0",
+    "license": "MIT-CMU",
+    "source": "https://pypi.org/project/pillow/12.3.0/"
+  },
+  {
+    "name": "platformdirs",
+    "version": "4.11.12",
+    "license": "MIT",
+    "source": "https://pypi.org/project/platformdirs/4.11.12/"
+  },
+  {
+    "name": "pooch",
+    "version": "1.9.0",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/pooch/1.9.0/"
+  },
+  {
+    "name": "portalocker",
+    "version": "4.4.0",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/portalocker/4.4.0/"
+  },
+  {
+    "name": "prompt_toolkit",
+    "version": "3.0.53",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/prompt_toolkit/3.0.53/"
+  },
+  {
+    "name": "propcache",
+    "version": "0.5.4",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/propcache/0.5.4/"
+  },
+  {
+    "name": "protobuf",
+    "version": "5.29.6",
+    "license": "3-Clause BSD License",
+    "source": "https://pypi.org/project/protobuf/5.29.6/"
+  },
+  {
+    "name": "psutil",
+    "version": "7.2.2",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/psutil/7.2.2/"
+  },
+  {
+    "name": "ptyprocess",
+    "version": "0.7.0",
+    "license": "UNKNOWN",
+    "source": "https://pypi.org/project/ptyprocess/0.7.0/"
+  },
+  {
+    "name": "pure_eval",
+    "version": "0.2.4",
+    "license": "MIT",
+    "source": "https://pypi.org/project/pure_eval/0.2.4/"
+  },
+  {
+    "name": "pyannote-core",
+    "version": "6.0.1",
+    "license": "MIT (publisher repository)",
+    "source": "https://pypi.org/project/pyannote-core/6.0.1/"
+  },
+  {
+    "name": "pyannote-database",
+    "version": "6.1.1",
+    "license": "MIT (publisher repository)",
+    "source": "https://pypi.org/project/pyannote-database/6.1.1/"
+  },
+  {
+    "name": "pyannote-metrics",
+    "version": "4.1",
+    "license": "MIT (publisher repository)",
+    "source": "https://pypi.org/project/pyannote-metrics/4.1/"
+  },
+  {
+    "name": "pyarrow",
+    "version": "25.0.1",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/pyarrow/25.0.1/"
+  },
+  {
+    "name": "pycparser",
+    "version": "3.0",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/pycparser/3.0/"
+  },
+  {
+    "name": "pydantic",
+    "version": "2.13.5",
+    "license": "MIT",
+    "source": "https://pypi.org/project/pydantic/2.13.5/"
+  },
+  {
+    "name": "pydantic_core",
+    "version": "2.46.5",
+    "license": "MIT",
+    "source": "https://pypi.org/project/pydantic_core/2.46.5/"
+  },
+  {
+    "name": "pydub",
+    "version": "0.25.1",
+    "license": "MIT",
+    "source": "https://pypi.org/project/pydub/0.25.1/"
+  },
+  {
+    "name": "Pygments",
+    "version": "2.21.0",
+    "license": "BSD-2-Clause",
+    "source": "https://pypi.org/project/Pygments/2.21.0/"
+  },
+  {
+    "name": "pyloudnorm",
+    "version": "0.2.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/pyloudnorm/0.2.0/"
+  },
+  {
+    "name": "pyparsing",
+    "version": "3.3.3",
+    "license": "MIT",
+    "source": "https://pypi.org/project/pyparsing/3.3.3/"
+  },
+  {
+    "name": "python-dateutil",
+    "version": "2.9.0.post0",
+    "license": "Dual License",
+    "source": "https://pypi.org/project/python-dateutil/2.9.0.post0/"
+  },
+  {
+    "name": "pytorch-lightning",
+    "version": "2.6.6",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/pytorch-lightning/2.6.6/"
+  },
+  {
+    "name": "PyYAML",
+    "version": "6.0.3",
+    "license": "MIT",
+    "source": "https://pypi.org/project/PyYAML/6.0.3/"
+  },
+  {
+    "name": "RapidFuzz",
+    "version": "3.14.6",
+    "license": "MIT",
+    "source": "https://pypi.org/project/RapidFuzz/3.14.6/"
+  },
+  {
+    "name": "regex",
+    "version": "2026.9.10",
+    "license": "Apache-2.0 AND CNRI-Python",
+    "source": "https://pypi.org/project/regex/2026.9.10/"
+  },
+  {
+    "name": "requests",
+    "version": "2.34.2",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/requests/2.34.2/"
+  },
+  {
+    "name": "resampy",
+    "version": "0.4.3",
+    "license": "ISC",
+    "source": "https://pypi.org/project/resampy/0.4.3/"
+  },
+  {
+    "name": "ruamel.yaml",
+    "version": "0.19.1",
+    "license": "MIT",
+    "source": "https://pypi.org/project/ruamel.yaml/0.19.1/"
+  },
+  {
+    "name": "sacrebleu",
+    "version": "2.6.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/sacrebleu/2.6.0/"
+  },
+  {
+    "name": "sacremoses",
+    "version": "0.2.0",
+    "license": "MIT License",
+    "source": "https://pypi.org/project/sacremoses/0.2.0/"
+  },
+  {
+    "name": "safetensors",
+    "version": "0.8.0",
+    "license": "Apache Software License",
+    "source": "https://pypi.org/project/safetensors/0.8.0/"
+  },
+  {
+    "name": "scikit-learn",
+    "version": "1.9.1",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/scikit-learn/1.9.1/"
+  },
+  {
+    "name": "scipy",
+    "version": "1.18.1",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/scipy/1.18.1/"
+  },
+  {
+    "name": "sentencepiece",
+    "version": "0.2.2",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/sentencepiece/0.2.2/"
+  },
+  {
+    "name": "setuptools",
+    "version": "84.0.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/setuptools/84.0.0/"
+  },
+  {
+    "name": "six",
+    "version": "1.17.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/six/1.17.0/"
+  },
+  {
+    "name": "sortedcontainers",
+    "version": "2.4.0",
+    "license": "Apache 2.0",
+    "source": "https://pypi.org/project/sortedcontainers/2.4.0/"
+  },
+  {
+    "name": "soundfile",
+    "version": "0.14.0",
+    "license": "BSD 3-Clause License",
+    "source": "https://pypi.org/project/soundfile/0.14.0/"
+  },
+  {
+    "name": "sox",
+    "version": "1.5.0",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/sox/1.5.0/"
+  },
+  {
+    "name": "soxr",
+    "version": "1.1.0",
+    "license": "LGPL-2.1-or-later",
+    "source": "https://pypi.org/project/soxr/1.1.0/"
+  },
+  {
+    "name": "SQLAlchemy",
+    "version": "2.0.54",
+    "license": "MIT",
+    "source": "https://pypi.org/project/SQLAlchemy/2.0.54/"
+  },
+  {
+    "name": "stack-data",
+    "version": "0.6.3",
+    "license": "MIT",
+    "source": "https://pypi.org/project/stack-data/0.6.3/"
+  },
+  {
+    "name": "StrEnum",
+    "version": "0.4.15",
+    "license": "MIT License",
+    "source": "https://pypi.org/project/StrEnum/0.4.15/"
+  },
+  {
+    "name": "sympy",
+    "version": "1.14.0",
+    "license": "BSD",
+    "source": "https://pypi.org/project/sympy/1.14.0/"
+  },
+  {
+    "name": "tabulate",
+    "version": "0.10.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/tabulate/0.10.0/"
+  },
+  {
+    "name": "tensorboard",
+    "version": "2.20.0",
+    "license": "Apache 2.0",
+    "source": "https://pypi.org/project/tensorboard/2.20.0/"
+  },
+  {
+    "name": "tensorboard-data-server",
+    "version": "0.7.2",
+    "license": "Apache 2.0",
+    "source": "https://pypi.org/project/tensorboard-data-server/0.7.2/"
+  },
+  {
+    "name": "text-unidecode",
+    "version": "1.3",
+    "license": "Artistic License",
+    "source": "https://pypi.org/project/text-unidecode/1.3/"
+  },
+  {
+    "name": "text2num",
+    "version": "3.1.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/text2num/3.1.0/"
+  },
+  {
+    "name": "threadpoolctl",
+    "version": "3.7.0",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/threadpoolctl/3.7.0/"
+  },
+  {
+    "name": "tokenizers",
+    "version": "0.22.2",
+    "license": "Apache Software License",
+    "source": "https://pypi.org/project/tokenizers/0.22.2/"
+  },
+  {
+    "name": "toml",
+    "version": "0.10.2",
+    "license": "MIT",
+    "source": "https://pypi.org/project/toml/0.10.2/"
+  },
+  {
+    "name": "toolz",
+    "version": "1.1.0",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/toolz/1.1.0/"
+  },
+  {
+    "name": "torch",
+    "version": "2.14.0",
+    "license": "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT",
+    "source": "https://pypi.org/project/torch/2.14.0/"
+  },
+  {
+    "name": "torchmetrics",
+    "version": "1.9.0",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/torchmetrics/1.9.0/"
+  },
+  {
+    "name": "tqdm",
+    "version": "4.70.1",
+    "license": "MPL-2.0 AND MIT",
+    "source": "https://pypi.org/project/tqdm/4.70.1/"
+  },
+  {
+    "name": "traitlets",
+    "version": "5.16.1",
+    "license": "BSD License",
+    "source": "https://pypi.org/project/traitlets/5.16.1/"
+  },
+  {
+    "name": "transformers",
+    "version": "4.57.6",
+    "license": "Apache 2.0 License",
+    "source": "https://pypi.org/project/transformers/4.57.6/"
+  },
+  {
+    "name": "typeguard",
+    "version": "4.6.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/typeguard/4.6.0/"
+  },
+  {
+    "name": "typing-inspection",
+    "version": "0.4.4",
+    "license": "MIT",
+    "source": "https://pypi.org/project/typing-inspection/0.4.4/"
+  },
+  {
+    "name": "typing_extensions",
+    "version": "4.16.0",
+    "license": "PSF-2.0",
+    "source": "https://pypi.org/project/typing_extensions/4.16.0/"
+  },
+  {
+    "name": "urllib3",
+    "version": "2.8.0",
+    "license": "MIT",
+    "source": "https://pypi.org/project/urllib3/2.8.0/"
+  },
+  {
+    "name": "wandb",
+    "version": "0.30.0",
+    "license": "MIT License",
+    "source": "https://pypi.org/project/wandb/0.30.0/"
+  },
+  {
+    "name": "wcwidth",
+    "version": "0.9.0",
+    "license": "MIT License",
+    "source": "https://pypi.org/project/wcwidth/0.9.0/"
+  },
+  {
+    "name": "webdataset",
+    "version": "1.0.2",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/webdataset/1.0.2/"
+  },
+  {
+    "name": "Werkzeug",
+    "version": "3.1.8",
+    "license": "BSD-3-Clause",
+    "source": "https://pypi.org/project/Werkzeug/3.1.8/"
+  },
+  {
+    "name": "wget",
+    "version": "3.2",
+    "license": "Public Domain",
+    "source": "https://pypi.org/project/wget/3.2/"
+  },
+  {
+    "name": "whisper_normalizer",
+    "version": "0.1.15",
+    "license": "MIT",
+    "source": "https://pypi.org/project/whisper_normalizer/0.1.15/"
+  },
+  {
+    "name": "wrapt",
+    "version": "2.4.1",
+    "license": "BSD-2-Clause",
+    "source": "https://pypi.org/project/wrapt/2.4.1/"
+  },
+  {
+    "name": "xxhash",
+    "version": "4.0.1",
+    "license": "BSD-2-Clause",
+    "source": "https://pypi.org/project/xxhash/4.0.1/"
+  },
+  {
+    "name": "yarl",
+    "version": "1.25.1",
+    "license": "Apache-2.0",
+    "source": "https://pypi.org/project/yarl/1.25.1/"
+  }
+]

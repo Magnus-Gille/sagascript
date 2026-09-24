@@ -44,10 +44,15 @@ pub fn model_path() -> PathBuf {
     path()
 }
 
-/// Return whether the checkpoint exists and passes its exact size and SHA-256
-/// integrity checks. Corrupt or truncated files are never reported as ready.
+/// Fast presence check for model listings. Full SHA-256 verification happens
+/// before inference and whenever the download command is run.
 pub fn is_downloaded() -> bool {
-    verify_file(&path(), PIANISSIMO_INTEGRITY).is_ok()
+    std::fs::metadata(path()).is_ok_and(|metadata| metadata.len() == PIANISSIMO_INTEGRITY.size)
+}
+
+/// Verify the exact checkpoint bytes before loading them into NeMo.
+pub fn verify_downloaded() -> Result<(), DictationError> {
+    verify_file(&path(), PIANISSIMO_INTEGRITY)
 }
 
 /// Download the original checkpoint into the shared model cache.

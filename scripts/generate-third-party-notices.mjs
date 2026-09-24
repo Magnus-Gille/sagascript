@@ -322,12 +322,34 @@ function table(packages) {
   ].join("\n");
 }
 
+const pianissimoPackages = JSON.parse(readFileSync(join(root, "scripts/pianissimo-runtime-inventory.json"), "utf8"));
+const pianissimoRequirements = readFileSync(join(root, "scripts/pianissimo-runtime-requirements.txt"), "utf8")
+  .trim().split("\n").map((line) => {
+    const match = /^([A-Za-z0-9_.-]+)==([^\s]+)$/.exec(line);
+    if (!match) throw new Error(`Invalid Pianissimo runtime requirement: ${line}`);
+    return `${match[1].toLowerCase().replaceAll(/[_.]/g, "-")}==${match[2]}`;
+  }).sort(compareCodeUnits);
+const pianissimoInventory = pianissimoPackages.map((pkg) => {
+  if (!pkg.license || !pkg.source) throw new Error(`Incomplete Pianissimo runtime notice: ${pkg.name}`);
+  return `${pkg.name.toLowerCase().replaceAll(/[_.]/g, "-")}==${pkg.version}`;
+}).sort(compareCodeUnits);
+if (JSON.stringify(pianissimoRequirements) !== JSON.stringify(pianissimoInventory)) {
+  throw new Error("Pianissimo runtime notices do not match pinned requirements");
+}
+
+const pianissimoTable = [
+  "| Python package | Version | Declared license | Source |",
+  "|---|---:|---|---|",
+  ...pianissimoPackages.map((pkg) =>
+    `| ${pkg.name} | ${pkg.version} | ${pkg.license.replaceAll("|", "\\|")} | [upstream](${pkg.source}) |`),
+].join("\n");
+
 const generated = `# Third-party notices
 
 This notice covers the runtime and build-time dependencies used to produce the
 official Apple Silicon macOS build, plus the separately downloaded models
 Sagascript can use. It is generated from the locked Rust and npm dependency
-graphs; do not edit the generated inventories by hand. Sagascript itself is
+graphs and the pinned Pianissimo Python environment; do not edit the generated inventories by hand. Sagascript itself is
 licensed under the MIT License in \`LICENSE\`.
 
 Generate this file with \`npm run licenses:generate\`. The release gate runs
@@ -349,6 +371,7 @@ link; the upstream repository is authoritative for its license terms.
 |---|---|---|---|
 | OpenAI Whisper GGML + Core ML encoders | Tiny, Base, Small, Medium, Large v3 Turbo variants | MIT | [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) |
 | KB-Whisper | Tiny, Base, Small, Medium, Large Swedish models | Apache-2.0 | [KBLab, National Library of Sweden](https://huggingface.co/KBLab) |
+| Klang Pianissimo Original | Unmodified \`pianissimo-sv.nemo\`, optional Swedish file model | CC-BY-4.0 | [Klang AI model card and attribution](https://huggingface.co/KlangAI/pianissimo-sv), reviewed 2026-09-24 |
 | NB-Whisper | Tiny, Base, Small, Medium, Large Norwegian models | Apache-2.0 | [NbAiLab, National Library of Norway](https://huggingface.co/NbAiLab) |
 | Finnish-NLP Whisper Tiny | Unmodified \`ggml-model-fi-tiny.bin\`, optional Finnish specialist | Apache-2.0 | [Finnish-NLP pinned GGML repository](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d), reviewed 2026-09-06 |
 | Silero VAD (GGML conversion) | \`ggml-silero-v5.1.2.bin\` | MIT | [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad) |
@@ -369,6 +392,18 @@ ${table(rustPackages)}
 ## npm dependencies used by the frontend and build
 
 ${table(npmPackages)}
+
+## Python dependencies bundled for Pianissimo on macOS
+
+The Apple Silicon app contains a local [CPython 3.12.9](https://github.com/python/cpython/tree/v3.12.9)
+runtime under the Python Software Foundation License (the full agreement is
+shipped in \`PianissimoRuntime/CPYTHON_LICENSE\`) and these pinned
+packages for the optional Pianissimo model. Their package metadata and shipped
+license/notice files are included in the app bundle. The table reflects the
+published package metadata; for pyannote packages, the MIT license is taken
+from the publisher repositories because the wheel metadata omits it.
+
+${pianissimoTable}
 
 ## License and notice texts shipped by dependencies
 

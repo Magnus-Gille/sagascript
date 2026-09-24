@@ -17,13 +17,16 @@
     setProfileGlossary,
     setShowOverlay,
     setWhisperModel,
+    setFileTranscriptionModel,
     setBeamSize,
     setTemperatureFallback,
     setVadEnabled,
     getBuildInfo,
     getModelInfo,
+    getFileModelOptions,
     getEffectiveModelInfo,
     downloadModel,
+    downloadPianissimoModel,
     getSupportedFormats,
     getPlatform,
     checkAccessibilityPermission,
@@ -63,6 +66,10 @@
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);
   let models: WhisperModel[] = $state([]);
+  let fileModelOptions: WhisperModel[] = $state([]);
+  let fileAutoModel: WhisperModel | null = $state(null);
+  let fileModelError = $state("");
+  let fileModelSaving = $state(false);
   type SettingsTab = "dictate" | "transcribe" | "settings";
   let activeTab: SettingsTab = $state("dictate");
   let downloading: string | null = $state(null);
@@ -402,6 +409,51 @@
 
   function transcribeLanguage(): Language {
     return selectedTranscribeProfile()?.language ?? settings?.language ?? "auto";
+  }
+
+  $effect(() => {
+    if (!settings) return;
+    const language = transcribeLanguage();
+    let stale = false;
+    void Promise.all([getFileModelOptions(language), getEffectiveModelInfo(language)])
+      .then(([options, automatic]) => {
+        if (!stale) { fileModelOptions = Array.isArray(options) ? options : []; fileAutoModel = automatic; }
+      })
+      .catch((error) => {
+        if (!stale) fileModelError = typeof error === "string" ? error : String(error);
+      });
+    return () => { stale = true; };
+  });
+
+  async function onFileModelChange(event: Event): Promise<void> {
+    if (!settings || fileModelSaving) return;
+    const id = (event.target as HTMLSelectElement).value;
+    fileModelSaving = true;
+    fileModelError = "";
+    try {
+      await setFileTranscriptionModel(id);
+      settings = await getSettings();
+      if (id === "pianissimo-sv") { transcribeDiarize = false; transcribePrompt = ""; }
+    } catch (error) {
+      fileModelError = typeof error === "string" ? error : String(error);
+    } finally { fileModelSaving = false; }
+  }
+
+  async function downloadSelectedFileModel(): Promise<void> {
+    const id = settings?.file_transcription_model;
+    if (!id || id === "auto" || downloading !== null) return;
+    downloading = id;
+    downloadingName = fileModelOptions.find((model) => model.id === id)?.display_name ?? id;
+    downloadProgress = 0;
+    fileModelError = "";
+    try {
+      if (id === "pianissimo-sv") await downloadPianissimoModel();
+      else await downloadModel(id);
+      const options = await getFileModelOptions(transcribeLanguage());
+      fileModelOptions = Array.isArray(options) ? options : [];
+    } catch (error) {
+      fileModelError = typeof error === "string" ? error : String(error);
+    } finally { downloading = null; downloadProgress = 0; }
   }
 
   // Settings can be reloaded after hotkey/profile changes. Never leave a
@@ -1534,11 +1586,39 @@
         </div>
 
         <div class="transcribe-options">
+          <div class="field profile-field">
+            <label for="file-model">File transcription model</label>
+            <select id="file-model" value={settings.file_transcription_model}
+              onchange={(event) => void onFileModelChange(event)}
+              disabled={transcribing || fileModelSaving || downloading !== null}>
+              <option value="auto">Auto — current dictation model ({fileAutoModel?.display_name ?? "loading…"})</option>
+              {#if settings.file_transcription_model !== "auto" && !fileModelOptions.some((model) => model.id === settings?.file_transcription_model)}
+                <option value={settings.file_transcription_model}>Current choice is incompatible with {languageLabel(transcribeLanguage())}</option>
+              {/if}
+              {#each fileModelOptions as model (model.id)}
+                <option value={model.id}>{model.display_name} · {model.size_mb} MB{model.downloaded ? " · ready" : " · download needed"}</option>
+              {/each}
+            </select>
+            <div class="hotkey-hint">Effective model: {settings.file_transcription_model === "auto"
+              ? fileAutoModel?.display_name ?? "loading…"
+              : fileModelOptions.find((model) => model.id === settings?.file_transcription_model)?.display_name ?? "incompatible with this language"}.
+              This choice affects files only; dictation shortcuts keep their own model.</div>
+            {#if settings.file_transcription_model !== "auto" && fileModelOptions.some((model) => model.id === settings?.file_transcription_model && !model.downloaded)}
+              <button class="secondary" onclick={() => void downloadSelectedFileModel()}
+                disabled={downloading !== null || transcribing}>
+                {downloading === settings.file_transcription_model ? `Downloading ${downloadingName}… ${downloadProgress}%` : "Download selected model"}
+              </button>
+            {/if}
+            {#if settings.file_transcription_model === "pianissimo-sv"}
+              <div class="hotkey-hint">The macOS app includes Pianissimo's local runtime. Download the original 2.5 GB model once. Peak memory was about 5.7 GB in our test.</div>
+            {/if}
+            {#if fileModelError}<div class="transcribe-error" role="alert">{fileModelError}</div>{/if}
+          </div>
           {#if selectedTranscribeProfile()}
             <div class="hotkey-hint">This profile fixes the file language and uses its personal dictionary.</div>
           {/if}
           <div class="diarize-row"><label class="diarize-option">
-            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing} />
+            <input type="checkbox" bind:checked={transcribeDiarize} disabled={transcribing || settings.file_transcription_model === "pianissimo-sv"} />
             Speaker diarization
           </label>
           <button class="info-dot" bind:this={diarizeInfoButton} aria-label="What is speaker diarization?"
@@ -1555,7 +1635,7 @@
           {/if}
           <textarea class="prompt-input" aria-label="Extra context for this file"
             placeholder="Extra context, e.g. names to listen for: Astrid, Grimnir (optional)"
-            bind:value={transcribePrompt} rows="2" disabled={transcribing}></textarea>
+            bind:value={transcribePrompt} rows="2" disabled={transcribing || settings.file_transcription_model === "pianissimo-sv"}></textarea>
         </div>
 
         <div

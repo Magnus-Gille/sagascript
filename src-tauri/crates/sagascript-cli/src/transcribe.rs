@@ -20,7 +20,11 @@ use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
-use sagascript_core::settings::{HotkeyProfile, Language, Settings, WhisperModel};
+use sagascript_core::settings::{
+    FileModel, FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel,
+};
+use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
+use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::diagnostics::{
     analyze_coverage, analyze_language_windows, analyze_repetition, language_mismatch_warning,
     CoverageDiagnostics, LanguageDetection, LanguageRegionDiagnostics, LanguageWindow,
@@ -60,7 +64,7 @@ pub struct TranscribeArgs {
     #[arg(long, value_name = "ID", conflicts_with = "language")]
     pub profile: Option<String>,
 
-    /// Whisper model ID to use [see: sagascript list-models]
+    /// File model ID to use [see: sagascript list-models]
     #[arg(short, long, value_name = "MODEL_ID")]
     pub model: Option<String>,
 
@@ -748,12 +752,18 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             "--diarize is only available when transcribing one file".to_string(),
         ));
     }
-    let model = resolve_effective_model(
-        args.model.as_deref(),
-        language,
-        stored.auto_select_model,
-        stored.whisper_model,
-    )?;
+    let selected_model = resolve_file_model(args.model.as_deref(), language, &stored)?;
+
+    if selected_model == FileModel::PianissimoOriginal {
+        #[cfg(feature = "diarization")]
+        if args.diarize || args.meeting_json {
+            return Err(DictationError::SettingsError(
+                "Pianissimo Original supports plain Swedish file transcription only; select a Whisper model for diarization or meeting output".into(),
+            ));
+        }
+        return run_pianissimo_batch(&args, &files, &stored, language, &glossary);
+    }
+    let FileModel::Whisper(model) = selected_model else { unreachable!() };
 
     let correction_vocabulary = if args.correct_hints {
         if glossary.decoder_prompt().is_none() {
@@ -887,6 +897,141 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         return Err(DictationError::TranscriptionFailed(format!(
             "{failures} of {} batch item(s) failed",
             processed
+        )));
+    }
+    Ok(())
+}
+
+fn run_pianissimo_batch(
+    args: &TranscribeArgs,
+    files: &[PathBuf],
+    _stored: &Settings,
+    language: Language,
+    glossary: &Glossary,
+) -> Result<(), DictationError> {
+    if language != Language::Swedish {
+        return Err(DictationError::SettingsError(
+            "Pianissimo Original supports Swedish files only".into(),
+        ));
+    }
+    if args.vad || args.beam_size.is_some() || args.parallel.is_some() || args.correct_hints
+        || args.prompt.is_some() || args.prompt_file.is_some()
+    {
+        return Err(DictationError::SettingsError(
+            "Pianissimo Original does not support --vad, --beam, --parallel, --correct-hints, or decoder --prompt/--prompt-file".into(),
+        ));
+    }
+    if !pianissimo_model::is_downloaded() {
+        return Err(DictationError::TranscriptionFailed(
+            "Pianissimo Original is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
+        ));
+    }
+    if glossary.decoder_prompt().is_some() {
+        eprintln!("Pianissimo does not use Whisper decoder hints; saved glossary replacements still apply after transcription.");
+    }
+    let load_started = Instant::now();
+    let backend = PianissimoBackend::start()?;
+    let model_load_seconds = load_started.elapsed().as_secs_f64();
+    let mut items = Vec::with_capacity(if args.json { files.len() } else { 0 });
+    let (processed, failures) = process_batch(
+        files,
+        args.fail_fast,
+        |index, file| {
+            eprintln!("[{}/{}] {}", index + 1, files.len(), file.display());
+            let started = Instant::now();
+            emit_progress(args.progress_json, started, "decoding", Some(0));
+            let audio = sagascript_core::audio::decoder::decode_audio_file_with_stage_progress(
+                file,
+                None,
+                &|pct| emit_progress(args.progress_json, started, "decoding", Some(pct)),
+                &|pct| emit_progress(args.progress_json, started, "resampling", Some(pct)),
+            )?;
+            let duration = audio.len() as f64 / 16_000.0;
+            let decode_resample_seconds = started.elapsed().as_secs_f64();
+            emit_progress(args.progress_json, started, "transcribing", Some(0));
+            let result = backend.transcribe(&audio, |pct| {
+                emit_progress(args.progress_json, started, "transcribing", Some(pct));
+            })?;
+            let (text, corrections) = glossary.correct_text(&result.text);
+            let segments: Vec<_> = result.words.iter().map(|word| serde_json::json!({
+                "start": word.start,
+                "end": word.end,
+                "text": word.word,
+                "avg_logprob": null,
+                "no_speech_prob": null,
+                "quarantined": false,
+            })).collect();
+            let output = serde_json::json!({
+                "text": text,
+                "segments": segments,
+                "language": language,
+                "model": "pianissimo-sv",
+                "file": file.display().to_string(),
+                "duration_seconds": duration,
+                "coverage_ratio": null,
+                "uncovered_spans": [],
+                "repetition_spans": [],
+                "detected_language": null,
+                "language_redetection_enabled": false,
+                "language_regions": null,
+                "warnings": [],
+                "vocabulary_corrections": corrections,
+                "performance": {
+                    "model_load_seconds": if index == 0 { model_load_seconds } else { 0.0 },
+                    "decode_resample_seconds": decode_resample_seconds,
+                    "total_seconds": started.elapsed().as_secs_f64(),
+                },
+            });
+            emit_progress(args.progress_json, started, "completed", Some(100));
+            Ok(FileTranscription {
+                json: output,
+                plain: text,
+                #[cfg(feature = "diarization")]
+                meeting: None,
+            })
+        },
+        |execution| {
+            let file = execution.source;
+            match execution.output {
+                Ok(output) => {
+                    if args.clipboard {
+                        copy_to_clipboard(&output.plain)?;
+                        eprintln!("Copied to clipboard.");
+                    }
+                    let item = BatchItem::Ok {
+                        source: file.display().to_string(),
+                        result: output.json,
+                    };
+                    if args.jsonl {
+                        emit_jsonl_item(&item)?;
+                    } else if args.json {
+                        items.push(item);
+                    } else {
+                        if files.len() > 1 { println!("==> {} <==", file.display()); }
+                        println!("{}", output.plain);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Error transcribing {}: {error}", file.display());
+                    let item = BatchItem::Error { source: file.display().to_string(), error };
+                    if args.jsonl { emit_jsonl_item(&item)?; }
+                    else if args.json { items.push(item); }
+                }
+            }
+            Ok(())
+        },
+    )?;
+    if args.json {
+        if files.len() == 1 && failures == 0 {
+            let BatchItem::Ok { result, .. } = &items[0] else { unreachable!() };
+            println!("{}", serde_json::to_string_pretty(result).expect("result serializes"));
+        } else {
+            println!("{}", serde_json::to_string_pretty(&items).expect("batch serializes"));
+        }
+    }
+    if failures > 0 {
+        return Err(DictationError::TranscriptionFailed(format!(
+            "{failures} of {processed} batch item(s) failed"
         )));
     }
     Ok(())
@@ -2196,6 +2341,33 @@ pub fn resolve_effective_model(
     }
 }
 
+/// Resolve a file run separately from the live `record` model. `Auto` keeps
+/// the CLI's existing fallback semantics for installations without a file
+/// preference; an explicit file choice is checked against the requested
+/// language rather than silently changing engines.
+pub fn resolve_file_model(
+    model_arg: Option<&str>,
+    language: Language,
+    settings: &Settings,
+) -> Result<FileModel, DictationError> {
+    if let Some(id) = model_arg {
+        let preference = FileModelPreference::parse_id(id).map_err(DictationError::SettingsError)?;
+        if preference == FileModelPreference::Auto {
+            return Err(DictationError::SettingsError(
+                "--model needs a concrete model ID; omit it to use the file default".into(),
+            ));
+        }
+        let mut run = settings.clone();
+        run.file_transcription_model = preference;
+        return run.effective_file_model_for(language).map_err(DictationError::SettingsError);
+    }
+    if settings.file_transcription_model == FileModelPreference::Auto {
+        return resolve_effective_model(None, language, settings.auto_select_model,
+            settings.whisper_model).map(FileModel::Whisper);
+    }
+    settings.effective_file_model_for(language).map_err(DictationError::SettingsError)
+}
+
 /// Resolve a non-empty one-run hint and compose it through Settings' scoped
 /// glossary helper. The helper owns legacy-global hint-only behavior and
 /// selected explicit-profile aliases; CLI never parses those sources directly.
@@ -3194,6 +3366,35 @@ mod tests {
             resolve_effective_model(Some("bogus"), Language::Auto, true, WhisperModel::Base)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn file_model_resolution_keeps_live_choice_independent() {
+        let settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::KbWhisperLarge,
+            file_transcription_model: FileModelPreference::PianissimoOriginal,
+            ..Default::default()
+        };
+        assert_eq!(resolve_file_model(None, Language::Swedish, &settings).unwrap(),
+            FileModel::PianissimoOriginal);
+        assert_eq!(resolve_file_model(Some("kb-whisper-small"), Language::Swedish, &settings).unwrap(),
+            FileModel::Whisper(WhisperModel::KbWhisperSmall));
+        assert_eq!(settings.effective_model_for(Language::Swedish), WhisperModel::KbWhisperLarge);
+        assert!(resolve_file_model(None, Language::English, &settings).is_err());
+    }
+
+    #[test]
+    fn file_model_auto_preserves_existing_cli_fallback() {
+        let settings = Settings {
+            auto_select_model: false,
+            whisper_model: WhisperModel::KbWhisperLarge,
+            ..Default::default()
+        };
+        assert_eq!(resolve_file_model(None, Language::English, &settings).unwrap(),
+            FileModel::Whisper(WhisperModel::KbWhisperLarge));
+        assert!(resolve_file_model(Some("pianissimo-sv"), Language::English, &settings).is_err());
+        assert!(resolve_file_model(Some("auto"), Language::Swedish, &settings).is_err());
     }
 
     #[test]

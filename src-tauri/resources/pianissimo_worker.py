@@ -29,6 +29,8 @@ from typing import Any, Iterable, Mapping, Sequence, TextIO
 SAMPLE_RATE = 16_000
 CHUNK_SECONDS = 120.0
 OVERLAP_SECONDS = 1.0
+NEMO_VERSION = "2.7.3"
+TORCH_VERSION = "2.14.0"
 
 LOGGER = logging.getLogger("sagascript.pianissimo")
 
@@ -49,6 +51,9 @@ def configure_offline_environment() -> None:
     os.environ["HF_DATASETS_OFFLINE"] = "1"
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
+    matplotlib_cache = Path(tempfile.gettempdir()) / "sagascript-matplotlib"
+    matplotlib_cache.mkdir(mode=0o700, exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = str(matplotlib_cache)
 
 
 def chunk_ranges(
@@ -202,20 +207,14 @@ def _transcribe_one(model: Any, audio_path: Path, device: Any) -> tuple[str, lis
 
     import torch
 
-    # NeMo's Lightning data path accepts this helper's keyword and MPS needs
-    # synchronous copies.  The call is kept in one place so future NeMo
-    # versions can use the same blocking policy without changing the protocol.
-    if getattr(device, "type", None) == "mps":
-        from lightning_fabric.utilities.apply_func import move_data_to_device
-
-        move_data_to_device(torch.empty(0), device, non_blocking=False)
-
     with torch.inference_mode():
         hypotheses = model.transcribe(
             audio=[str(audio_path)],
             batch_size=1,
             return_hypotheses=True,
             timestamps=True,
+            num_workers=0,
+            verbose=False,
         )
     if not hypotheses:
         return "", []
@@ -227,21 +226,29 @@ def _transcribe_one(model: Any, audio_path: Path, device: Any) -> tuple[str, lis
 
 def _load_model(model_path: Path) -> tuple[Any, Any]:
     configure_offline_environment()
+    from importlib.metadata import version
+
+    if version("nemo_toolkit") != NEMO_VERSION or version("torch") != TORCH_VERSION:
+        raise RuntimeError(
+            f"Pianissimo needs pinned NeMo {NEMO_VERSION} and PyTorch {TORCH_VERSION}"
+        )
     import torch
     from nemo.collections.asr.models import ASRModel
-    from nemo.utils import model_utils
 
     has_mps = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
     device = torch.device("mps" if has_mps else "cpu")
+    if device.type == "mps":
+        from functools import partial
+        from nemo.collections.asr.parts.mixins import transcription
 
-    # Restore from the supplied archive and resolve its recorded concrete ASR
-    # class.  ``from_pretrained`` is deliberately never used here: this worker
-    # must not consult a model hub.
-    config = ASRModel.restore_from(restore_path=str(model_path), return_config=True)
-    model_class = model_utils.import_class_by_path(config.target)
-    model = model_class.restore_from(restore_path=str(model_path), map_location=device)
-    model = model.to(device)
-    model.eval()
+        # NeMo holds this function reference in its transcription mixin. MPS
+        # needs the CPU source alive until the transfer has completed.
+        transcription.move_data_to_device = partial(
+            transcription.move_data_to_device, non_blocking=False
+        )
+
+    # Restore once from the caller-verified local archive. Never invoke a hub.
+    model = ASRModel.restore_from(str(model_path), map_location="cpu").eval().to(device)
     return model, device
 
 
@@ -282,7 +289,8 @@ def _transcribe_file(
                 )
 
     merged_words = deduplicate_chunk_words(chunk_results)
-    text = " ".join(word["word"] for word in merged_words).strip()
+    text = (text_parts[0].strip() if len(ranges) == 1 and text_parts else
+            " ".join(word["word"] for word in merged_words).strip())
     if not text:
         # A model without word timestamps still returns useful hypothesis text.
         # This fallback does not affect timestamped Pianissimo output.  For a
@@ -321,6 +329,8 @@ def serve(model_path: Path, input_stream: TextIO = sys.stdin, output_stream: Tex
             request = json.loads(line)
             if not isinstance(request, Mapping):
                 raise InvalidRequest
+            if request.get("type") == "close":
+                break
             request_id = request.get("id")
             path_value = request.get("path")
             if not isinstance(path_value, str) or not path_value:
@@ -347,11 +357,18 @@ def main(argv: Iterable[str] | None = None) -> int:
     if not args.model.is_file():
         parser.error("--model must point to a local checkpoint")
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(message)s")
+    # NeMo and native dependencies may write to fd 1. Keep the JSONL protocol
+    # on a duplicate while redirecting their incidental output to stderr.
+    protocol = os.fdopen(os.dup(sys.stdout.fileno()), "w", buffering=1, encoding="utf-8")
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    sys.stdout = sys.stderr
     try:
-        return serve(args.model)
+        return serve(args.model, output_stream=protocol)
     except BaseException as error:
         LOGGER.error("worker initialization failed (%s)", type(error).__name__)
         return 1
+    finally:
+        protocol.close()
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 This notice covers the runtime and build-time dependencies used to produce the
 official Apple Silicon macOS build, plus the separately downloaded models
 Sagascript can use. It is generated from the locked Rust and npm dependency
-graphs; do not edit the generated inventories by hand. Sagascript itself is
+graphs and the pinned Pianissimo Python environment; do not edit the generated inventories by hand. Sagascript itself is
 licensed under the MIT License in `LICENSE`.
 
 Generate this file with `npm run licenses:generate`. The release gate runs
@@ -25,6 +25,7 @@ link; the upstream repository is authoritative for its license terms.
 |---|---|---|---|
 | OpenAI Whisper GGML + Core ML encoders | Tiny, Base, Small, Medium, Large v3 Turbo variants | MIT | [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) |
 | KB-Whisper | Tiny, Base, Small, Medium, Large Swedish models | Apache-2.0 | [KBLab, National Library of Sweden](https://huggingface.co/KBLab) |
+| Klang Pianissimo Original | Unmodified `pianissimo-sv.nemo`, optional Swedish file model | CC-BY-4.0 | [Klang AI model card and attribution](https://huggingface.co/KlangAI/pianissimo-sv), reviewed 2026-09-24 |
 | NB-Whisper | Tiny, Base, Small, Medium, Large Norwegian models | Apache-2.0 | [NbAiLab, National Library of Norway](https://huggingface.co/NbAiLab) |
 | Finnish-NLP Whisper Tiny | Unmodified `ggml-model-fi-tiny.bin`, optional Finnish specialist | Apache-2.0 | [Finnish-NLP pinned GGML repository](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d), reviewed 2026-09-06 |
 | Silero VAD (GGML conversion) | `ggml-silero-v5.1.2.bin` | MIT | [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad) |
@@ -617,6 +618,192 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | vite | 6.4.3 | MIT | [upstream](https://www.npmjs.com/package/vite/v/6.4.3) |
 | vitefu | 1.1.1 | MIT | [upstream](https://www.npmjs.com/package/vitefu/v/1.1.1) |
 | zimmerframe | 1.1.4 | MIT | [upstream](https://www.npmjs.com/package/zimmerframe/v/1.1.4) |
+
+## Python dependencies bundled for Pianissimo on macOS
+
+The Apple Silicon app contains a local [CPython 3.12.9](https://github.com/python/cpython/tree/v3.12.9)
+runtime under the Python Software Foundation License (the full agreement is
+shipped in `PianissimoRuntime/CPYTHON_LICENSE`) and these pinned
+packages for the optional Pianissimo model. Their package metadata and shipped
+license/notice files are included in the app bundle. The table reflects the
+published package metadata; for pyannote packages, the MIT license is taken
+from the publisher repositories because the wheel metadata omits it.
+
+| Python package | Version | Declared license | Source |
+|---|---:|---|---|
+| absl-py | 2.5.0 | Apache-2.0 | [upstream](https://pypi.org/project/absl-py/2.5.0/) |
+| accelerate | 1.15.0 | Apache | [upstream](https://pypi.org/project/accelerate/1.15.0/) |
+| aiohappyeyeballs | 2.7.1 | PSF-2.0 | [upstream](https://pypi.org/project/aiohappyeyeballs/2.7.1/) |
+| aiohttp | 3.14.3 | Apache-2.0 AND MIT | [upstream](https://pypi.org/project/aiohttp/3.14.3/) |
+| aiosignal | 1.4.0 | Apache 2.0 | [upstream](https://pypi.org/project/aiosignal/1.4.0/) |
+| alembic | 1.20.0 | MIT | [upstream](https://pypi.org/project/alembic/1.20.0/) |
+| annotated-types | 0.8.0 | MIT | [upstream](https://pypi.org/project/annotated-types/0.8.0/) |
+| antlr4-python3-runtime | 4.9.3 | BSD | [upstream](https://pypi.org/project/antlr4-python3-runtime/4.9.3/) |
+| anyio | 4.15.1 | MIT | [upstream](https://pypi.org/project/anyio/4.15.1/) |
+| asttokens | 3.0.2 | Apache 2.0 | [upstream](https://pypi.org/project/asttokens/3.0.2/) |
+| attrs | 26.1.0 | MIT | [upstream](https://pypi.org/project/attrs/26.1.0/) |
+| audioread | 3.1.0 | MIT | [upstream](https://pypi.org/project/audioread/3.1.0/) |
+| braceexpand | 0.1.7 | MIT | [upstream](https://pypi.org/project/braceexpand/0.1.7/) |
+| certifi | 2026.7.22 | MPL-2.0 | [upstream](https://pypi.org/project/certifi/2026.7.22/) |
+| cffi | 2.1.1 | MIT-0 | [upstream](https://pypi.org/project/cffi/2.1.1/) |
+| charset-normalizer | 3.5.1 | MIT | [upstream](https://pypi.org/project/charset-normalizer/3.5.1/) |
+| click | 8.5.0 | BSD-3-Clause | [upstream](https://pypi.org/project/click/8.5.0/) |
+| cloudpickle | 3.1.2 | BSD-3-Clause | [upstream](https://pypi.org/project/cloudpickle/3.1.2/) |
+| colorama | 0.4.6 | BSD License | [upstream](https://pypi.org/project/colorama/0.4.6/) |
+| colorlog | 6.12.0 | MIT License | [upstream](https://pypi.org/project/colorlog/6.12.0/) |
+| contourpy | 1.4.0 | BSD-3-Clause | [upstream](https://pypi.org/project/contourpy/1.4.0/) |
+| cycler | 0.12.1 | BSD License | [upstream](https://pypi.org/project/cycler/0.12.1/) |
+| cytoolz | 1.1.0 | BSD-3-Clause | [upstream](https://pypi.org/project/cytoolz/1.1.0/) |
+| datasets | 5.0.1 | Apache 2.0 | [upstream](https://pypi.org/project/datasets/5.0.1/) |
+| decorator | 5.3.1 | BSD-2-Clause | [upstream](https://pypi.org/project/decorator/5.3.1/) |
+| dill | 0.4.1 | BSD-3-Clause | [upstream](https://pypi.org/project/dill/0.4.1/) |
+| editdistance | 0.8.1 | MIT | [upstream](https://pypi.org/project/editdistance/0.8.1/) |
+| einops | 0.8.2 | MIT | [upstream](https://pypi.org/project/einops/0.8.2/) |
+| executing | 2.2.1 | MIT | [upstream](https://pypi.org/project/executing/2.2.1/) |
+| fiddle | 0.3.0 | Apache 2.0 | [upstream](https://pypi.org/project/fiddle/0.3.0/) |
+| filelock | 4.0.1 | MIT | [upstream](https://pypi.org/project/filelock/4.0.1/) |
+| fonttools | 4.66.0 | MIT | [upstream](https://pypi.org/project/fonttools/4.66.0/) |
+| frozenlist | 1.8.0 | Apache-2.0 | [upstream](https://pypi.org/project/frozenlist/1.8.0/) |
+| fsspec | 2024.12.0 | BSD License | [upstream](https://pypi.org/project/fsspec/2024.12.0/) |
+| googleapis-common-protos | 1.75.0 | Apache 2.0 | [upstream](https://pypi.org/project/googleapis-common-protos/1.75.0/) |
+| graphviz | 0.21 | MIT | [upstream](https://pypi.org/project/graphviz/0.21/) |
+| grpcio | 1.84.0 | Apache-2.0 | [upstream](https://pypi.org/project/grpcio/1.84.0/) |
+| h11 | 0.16.0 | MIT | [upstream](https://pypi.org/project/h11/0.16.0/) |
+| hf-xet | 1.6.0 | Apache-2.0 | [upstream](https://pypi.org/project/hf-xet/1.6.0/) |
+| httpcore | 1.0.9 | BSD-3-Clause | [upstream](https://pypi.org/project/httpcore/1.0.9/) |
+| httpx | 0.28.1 | BSD-3-Clause | [upstream](https://pypi.org/project/httpx/0.28.1/) |
+| huggingface_hub | 0.36.2 | Apache | [upstream](https://pypi.org/project/huggingface_hub/0.36.2/) |
+| hydra-core | 1.3.2 | MIT | [upstream](https://pypi.org/project/hydra-core/1.3.2/) |
+| idna | 3.20 | BSD-3-Clause | [upstream](https://pypi.org/project/idna/3.20/) |
+| indic_numtowords | 1.1.0 | MIT | [upstream](https://pypi.org/project/indic_numtowords/1.1.0/) |
+| inflect | 7.5.0 | MIT License | [upstream](https://pypi.org/project/inflect/7.5.0/) |
+| intervaltree | 3.2.1 | Apache-2.0 | [upstream](https://pypi.org/project/intervaltree/3.2.1/) |
+| ipython | 9.17.1 | BSD-3-Clause | [upstream](https://pypi.org/project/ipython/9.17.1/) |
+| ipython_pygments_lexers | 1.1.1 | BSD License | [upstream](https://pypi.org/project/ipython_pygments_lexers/1.1.1/) |
+| jedi | 0.20.0 | MIT | [upstream](https://pypi.org/project/jedi/0.20.0/) |
+| Jinja2 | 3.1.6 | BSD License | [upstream](https://pypi.org/project/Jinja2/3.1.6/) |
+| jiwer | 3.1.0 | Apache-2.0 | [upstream](https://pypi.org/project/jiwer/3.1.0/) |
+| joblib | 1.6.0 | BSD-3-Clause | [upstream](https://pypi.org/project/joblib/1.6.0/) |
+| kaldi-python-io | 1.2.2 | Apache V2.0 | [upstream](https://pypi.org/project/kaldi-python-io/1.2.2/) |
+| kaldialign | 0.9.1 | Apache licensed, as found in the LICENSE file | [upstream](https://pypi.org/project/kaldialign/0.9.1/) |
+| kiwisolver | 1.5.1 | BSD License | [upstream](https://pypi.org/project/kiwisolver/1.5.1/) |
+| lazy-loader | 0.6 | BSD-3-Clause | [upstream](https://pypi.org/project/lazy-loader/0.6/) |
+| lhotse | 1.33.0 | Apache-2.0 License | [upstream](https://pypi.org/project/lhotse/1.33.0/) |
+| libcst | 1.9.0 | MIT License | [upstream](https://pypi.org/project/libcst/1.9.0/) |
+| librosa | 1.0.0 | ISC | [upstream](https://pypi.org/project/librosa/1.0.0/) |
+| lightning | 2.4.0 | Apache-2.0 | [upstream](https://pypi.org/project/lightning/2.4.0/) |
+| lightning-utilities | 0.15.3 | Apache-2.0 | [upstream](https://pypi.org/project/lightning-utilities/0.15.3/) |
+| llvmlite | 0.49.0 | BSD-2-Clause AND Apache-2.0 WITH LLVM-exception | [upstream](https://pypi.org/project/llvmlite/0.49.0/) |
+| lxml | 6.1.3 | BSD-3-Clause | [upstream](https://pypi.org/project/lxml/6.1.3/) |
+| Mako | 1.4.3 | MIT | [upstream](https://pypi.org/project/Mako/1.4.3/) |
+| Markdown | 3.10.3 | BSD-3-Clause | [upstream](https://pypi.org/project/Markdown/3.10.3/) |
+| MarkupSafe | 3.0.3 | BSD-3-Clause | [upstream](https://pypi.org/project/MarkupSafe/3.0.3/) |
+| marshmallow | 4.3.1 | MIT | [upstream](https://pypi.org/project/marshmallow/4.3.1/) |
+| matplotlib | 3.11.2 | Python Software Foundation License | [upstream](https://pypi.org/project/matplotlib/3.11.2/) |
+| matplotlib-inline | 0.2.2 | BSD-3-Clause | [upstream](https://pypi.org/project/matplotlib-inline/0.2.2/) |
+| mediapy | 1.1.6 | Apache Software License | [upstream](https://pypi.org/project/mediapy/1.1.6/) |
+| ml_dtypes | 0.6.0 | Apache-2.0 | [upstream](https://pypi.org/project/ml_dtypes/0.6.0/) |
+| more-itertools | 11.1.0 | MIT | [upstream](https://pypi.org/project/more-itertools/11.1.0/) |
+| mpmath | 1.3.0 | BSD | [upstream](https://pypi.org/project/mpmath/1.3.0/) |
+| msgpack | 1.2.2 | Apache-2.0 | [upstream](https://pypi.org/project/msgpack/1.2.2/) |
+| multidict | 6.9.1 | Apache License 2.0 | [upstream](https://pypi.org/project/multidict/6.9.1/) |
+| multiprocess | 0.70.19 | BSD-3-Clause | [upstream](https://pypi.org/project/multiprocess/0.70.19/) |
+| narwhals | 2.26.0 | MIT | [upstream](https://pypi.org/project/narwhals/2.26.0/) |
+| nemo-toolkit | 2.7.3 | Apache Software License | [upstream](https://pypi.org/project/nemo-toolkit/2.7.3/) |
+| networkx | 3.7 | BSD-3-Clause | [upstream](https://pypi.org/project/networkx/3.7/) |
+| numba | 0.67.0 | BSD | [upstream](https://pypi.org/project/numba/0.67.0/) |
+| numexpr | 2.13.1 | MIT | [upstream](https://pypi.org/project/numexpr/2.13.1/) |
+| numpy | 2.5.3 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | [upstream](https://pypi.org/project/numpy/2.5.3/) |
+| nv-one-logger-core | 2.3.1 | Apache-2.0 | [upstream](https://pypi.org/project/nv-one-logger-core/2.3.1/) |
+| nv-one-logger-pytorch-lightning-integration | 2.3.1 | Apache-2.0 | [upstream](https://pypi.org/project/nv-one-logger-pytorch-lightning-integration/2.3.1/) |
+| nv-one-logger-training-telemetry | 2.3.1 | Apache-2.0 | [upstream](https://pypi.org/project/nv-one-logger-training-telemetry/2.3.1/) |
+| omegaconf | 2.3.0 | BSD License | [upstream](https://pypi.org/project/omegaconf/2.3.0/) |
+| onnx | 1.22.0 | Apache-2.0 | [upstream](https://pypi.org/project/onnx/1.22.0/) |
+| opentelemetry-api | 1.44.0 | Apache-2.0 | [upstream](https://pypi.org/project/opentelemetry-api/1.44.0/) |
+| opentelemetry-exporter-otlp-proto-common | 1.44.0 | Apache-2.0 | [upstream](https://pypi.org/project/opentelemetry-exporter-otlp-proto-common/1.44.0/) |
+| opentelemetry-exporter-otlp-proto-http | 1.44.0 | Apache-2.0 | [upstream](https://pypi.org/project/opentelemetry-exporter-otlp-proto-http/1.44.0/) |
+| opentelemetry-proto | 1.44.0 | Apache-2.0 | [upstream](https://pypi.org/project/opentelemetry-proto/1.44.0/) |
+| opentelemetry-sdk | 1.44.0 | Apache-2.0 | [upstream](https://pypi.org/project/opentelemetry-sdk/1.44.0/) |
+| opentelemetry-semantic-conventions | 0.65b0 | Apache-2.0 | [upstream](https://pypi.org/project/opentelemetry-semantic-conventions/0.65b0/) |
+| optuna | 5.0.0 | MIT License | [upstream](https://pypi.org/project/optuna/5.0.0/) |
+| overrides | 7.7.0 | Apache License, Version 2.0 | [upstream](https://pypi.org/project/overrides/7.7.0/) |
+| packaging | 24.2 | Apache Software License, BSD License | [upstream](https://pypi.org/project/packaging/24.2/) |
+| pandas | 3.0.6 | BSD License | [upstream](https://pypi.org/project/pandas/3.0.6/) |
+| parso | 0.8.7 | MIT | [upstream](https://pypi.org/project/parso/0.8.7/) |
+| peft | 0.21.0 | Apache | [upstream](https://pypi.org/project/peft/0.21.0/) |
+| pexpect | 4.9.0 | ISC license | [upstream](https://pypi.org/project/pexpect/4.9.0/) |
+| pillow | 12.3.0 | MIT-CMU | [upstream](https://pypi.org/project/pillow/12.3.0/) |
+| platformdirs | 4.11.12 | MIT | [upstream](https://pypi.org/project/platformdirs/4.11.12/) |
+| pooch | 1.9.0 | BSD-3-Clause | [upstream](https://pypi.org/project/pooch/1.9.0/) |
+| portalocker | 4.4.0 | BSD-3-Clause | [upstream](https://pypi.org/project/portalocker/4.4.0/) |
+| prompt_toolkit | 3.0.53 | BSD License | [upstream](https://pypi.org/project/prompt_toolkit/3.0.53/) |
+| propcache | 0.5.4 | Apache-2.0 | [upstream](https://pypi.org/project/propcache/0.5.4/) |
+| protobuf | 5.29.6 | 3-Clause BSD License | [upstream](https://pypi.org/project/protobuf/5.29.6/) |
+| psutil | 7.2.2 | BSD-3-Clause | [upstream](https://pypi.org/project/psutil/7.2.2/) |
+| ptyprocess | 0.7.0 | UNKNOWN | [upstream](https://pypi.org/project/ptyprocess/0.7.0/) |
+| pure_eval | 0.2.4 | MIT | [upstream](https://pypi.org/project/pure_eval/0.2.4/) |
+| pyannote-core | 6.0.1 | MIT (publisher repository) | [upstream](https://pypi.org/project/pyannote-core/6.0.1/) |
+| pyannote-database | 6.1.1 | MIT (publisher repository) | [upstream](https://pypi.org/project/pyannote-database/6.1.1/) |
+| pyannote-metrics | 4.1 | MIT (publisher repository) | [upstream](https://pypi.org/project/pyannote-metrics/4.1/) |
+| pyarrow | 25.0.1 | Apache-2.0 | [upstream](https://pypi.org/project/pyarrow/25.0.1/) |
+| pycparser | 3.0 | BSD-3-Clause | [upstream](https://pypi.org/project/pycparser/3.0/) |
+| pydantic | 2.13.5 | MIT | [upstream](https://pypi.org/project/pydantic/2.13.5/) |
+| pydantic_core | 2.46.5 | MIT | [upstream](https://pypi.org/project/pydantic_core/2.46.5/) |
+| pydub | 0.25.1 | MIT | [upstream](https://pypi.org/project/pydub/0.25.1/) |
+| Pygments | 2.21.0 | BSD-2-Clause | [upstream](https://pypi.org/project/Pygments/2.21.0/) |
+| pyloudnorm | 0.2.0 | MIT | [upstream](https://pypi.org/project/pyloudnorm/0.2.0/) |
+| pyparsing | 3.3.3 | MIT | [upstream](https://pypi.org/project/pyparsing/3.3.3/) |
+| python-dateutil | 2.9.0.post0 | Dual License | [upstream](https://pypi.org/project/python-dateutil/2.9.0.post0/) |
+| pytorch-lightning | 2.6.6 | Apache-2.0 | [upstream](https://pypi.org/project/pytorch-lightning/2.6.6/) |
+| PyYAML | 6.0.3 | MIT | [upstream](https://pypi.org/project/PyYAML/6.0.3/) |
+| RapidFuzz | 3.14.6 | MIT | [upstream](https://pypi.org/project/RapidFuzz/3.14.6/) |
+| regex | 2026.9.10 | Apache-2.0 AND CNRI-Python | [upstream](https://pypi.org/project/regex/2026.9.10/) |
+| requests | 2.34.2 | Apache-2.0 | [upstream](https://pypi.org/project/requests/2.34.2/) |
+| resampy | 0.4.3 | ISC | [upstream](https://pypi.org/project/resampy/0.4.3/) |
+| ruamel.yaml | 0.19.1 | MIT | [upstream](https://pypi.org/project/ruamel.yaml/0.19.1/) |
+| sacrebleu | 2.6.0 | Apache-2.0 | [upstream](https://pypi.org/project/sacrebleu/2.6.0/) |
+| sacremoses | 0.2.0 | MIT License | [upstream](https://pypi.org/project/sacremoses/0.2.0/) |
+| safetensors | 0.8.0 | Apache Software License | [upstream](https://pypi.org/project/safetensors/0.8.0/) |
+| scikit-learn | 1.9.1 | BSD-3-Clause | [upstream](https://pypi.org/project/scikit-learn/1.9.1/) |
+| scipy | 1.18.1 | BSD License | [upstream](https://pypi.org/project/scipy/1.18.1/) |
+| sentencepiece | 0.2.2 | Apache-2.0 | [upstream](https://pypi.org/project/sentencepiece/0.2.2/) |
+| setuptools | 84.0.0 | MIT | [upstream](https://pypi.org/project/setuptools/84.0.0/) |
+| six | 1.17.0 | MIT | [upstream](https://pypi.org/project/six/1.17.0/) |
+| sortedcontainers | 2.4.0 | Apache 2.0 | [upstream](https://pypi.org/project/sortedcontainers/2.4.0/) |
+| soundfile | 0.14.0 | BSD 3-Clause License | [upstream](https://pypi.org/project/soundfile/0.14.0/) |
+| sox | 1.5.0 | BSD-3-Clause | [upstream](https://pypi.org/project/sox/1.5.0/) |
+| soxr | 1.1.0 | LGPL-2.1-or-later | [upstream](https://pypi.org/project/soxr/1.1.0/) |
+| SQLAlchemy | 2.0.54 | MIT | [upstream](https://pypi.org/project/SQLAlchemy/2.0.54/) |
+| stack-data | 0.6.3 | MIT | [upstream](https://pypi.org/project/stack-data/0.6.3/) |
+| StrEnum | 0.4.15 | MIT License | [upstream](https://pypi.org/project/StrEnum/0.4.15/) |
+| sympy | 1.14.0 | BSD | [upstream](https://pypi.org/project/sympy/1.14.0/) |
+| tabulate | 0.10.0 | MIT | [upstream](https://pypi.org/project/tabulate/0.10.0/) |
+| tensorboard | 2.20.0 | Apache 2.0 | [upstream](https://pypi.org/project/tensorboard/2.20.0/) |
+| tensorboard-data-server | 0.7.2 | Apache 2.0 | [upstream](https://pypi.org/project/tensorboard-data-server/0.7.2/) |
+| text-unidecode | 1.3 | Artistic License | [upstream](https://pypi.org/project/text-unidecode/1.3/) |
+| text2num | 3.1.0 | MIT | [upstream](https://pypi.org/project/text2num/3.1.0/) |
+| threadpoolctl | 3.7.0 | BSD-3-Clause | [upstream](https://pypi.org/project/threadpoolctl/3.7.0/) |
+| tokenizers | 0.22.2 | Apache Software License | [upstream](https://pypi.org/project/tokenizers/0.22.2/) |
+| toml | 0.10.2 | MIT | [upstream](https://pypi.org/project/toml/0.10.2/) |
+| toolz | 1.1.0 | BSD-3-Clause | [upstream](https://pypi.org/project/toolz/1.1.0/) |
+| torch | 2.14.0 | Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT | [upstream](https://pypi.org/project/torch/2.14.0/) |
+| torchmetrics | 1.9.0 | Apache-2.0 | [upstream](https://pypi.org/project/torchmetrics/1.9.0/) |
+| tqdm | 4.70.1 | MPL-2.0 AND MIT | [upstream](https://pypi.org/project/tqdm/4.70.1/) |
+| traitlets | 5.16.1 | BSD License | [upstream](https://pypi.org/project/traitlets/5.16.1/) |
+| transformers | 4.57.6 | Apache 2.0 License | [upstream](https://pypi.org/project/transformers/4.57.6/) |
+| typeguard | 4.6.0 | MIT | [upstream](https://pypi.org/project/typeguard/4.6.0/) |
+| typing-inspection | 0.4.4 | MIT | [upstream](https://pypi.org/project/typing-inspection/0.4.4/) |
+| typing_extensions | 4.16.0 | PSF-2.0 | [upstream](https://pypi.org/project/typing_extensions/4.16.0/) |
+| urllib3 | 2.8.0 | MIT | [upstream](https://pypi.org/project/urllib3/2.8.0/) |
+| wandb | 0.30.0 | MIT License | [upstream](https://pypi.org/project/wandb/0.30.0/) |
+| wcwidth | 0.9.0 | MIT License | [upstream](https://pypi.org/project/wcwidth/0.9.0/) |
+| webdataset | 1.0.2 | BSD-3-Clause | [upstream](https://pypi.org/project/webdataset/1.0.2/) |
+| Werkzeug | 3.1.8 | BSD-3-Clause | [upstream](https://pypi.org/project/Werkzeug/3.1.8/) |
+| wget | 3.2 | Public Domain | [upstream](https://pypi.org/project/wget/3.2/) |
+| whisper_normalizer | 0.1.15 | MIT | [upstream](https://pypi.org/project/whisper_normalizer/0.1.15/) |
+| wrapt | 2.4.1 | BSD-2-Clause | [upstream](https://pypi.org/project/wrapt/2.4.1/) |
+| xxhash | 4.0.1 | BSD-2-Clause | [upstream](https://pypi.org/project/xxhash/4.0.1/) |
+| yarl | 1.25.1 | Apache-2.0 | [upstream](https://pypi.org/project/yarl/1.25.1/) |
 
 ## License and notice texts shipped by dependencies
 

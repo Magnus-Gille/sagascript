@@ -19,12 +19,13 @@ use crate::hotkey::{HotkeyHealth, HotkeyStatus, OperationalHotkey};
 use crate::hotkey::configuration::HotkeyChange;
 use sagascript_core::audio::decoder;
 use sagascript_core::settings::{
-    validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
+    validate_hotkey, FileModel, FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
 };
 use sagascript_core::transcription::{
     model, recommended_parallel_chunks, ContextProfile, TranscribeOptions, WhisperBackend,
     FILE_TRANSCRIBE_BEAM,
 };
+use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{
     suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
 };
@@ -95,27 +96,33 @@ pub(crate) fn file_transcription_context(
     profile_id: Option<&str>,
     prompt: Option<&str>,
 ) -> Result<FileTranscriptionContext, String> {
-    let language = if let Some(id) = profile_id {
-        ensure_known_profile(settings, id)?;
-        settings
-            .resolved_hotkey_profiles()
-            .into_iter()
-            .find(|profile| profile.id == id)
-            .ok_or_else(|| format!("Unknown dictation profile '{id}'"))?
-            .language
-    } else {
-        settings.language
+    let language = file_transcription_language(settings, profile_id)?;
+    let model = match settings.effective_file_model_for(language)? {
+        FileModel::Whisper(model) => model,
+        FileModel::PianissimoOriginal => return Err(
+            "Pianissimo Original supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".into(),
+        ),
     };
     let glossary =
         Glossary::parse(&settings.effective_glossary_source_with_prompt(profile_id, prompt));
     let mut options = build_file_transcribe_options(settings, prompt.map(str::to_owned));
     options.prompt = glossary.decoder_prompt();
-    Ok(FileTranscriptionContext {
-        language,
-        model: settings.effective_model_for(language),
-        glossary,
-        options,
-    })
+    Ok(FileTranscriptionContext { language, model, glossary, options })
+}
+
+pub(crate) fn file_transcription_language(settings: &Settings, profile_id: Option<&str>) -> Result<Language, String> {
+    if let Some(id) = profile_id {
+        ensure_known_profile(settings, id)?;
+        let language = settings
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| format!("Unknown dictation profile '{id}'"))?
+            .language;
+        Ok(language)
+    } else {
+        Ok(settings.language)
+    }
 }
 
 pub(crate) fn apply_glossary(text: String, glossary: &Glossary) -> String {
@@ -318,6 +325,16 @@ mod glossary_options_tests {
         let context = file_transcription_context(&auto, None, None).unwrap();
         assert_eq!(context.language, Language::Auto);
         assert_eq!(apply_glossary("merch".into(), &context.glossary), "merch");
+    }
+
+    #[test]
+    fn meeting_context_rejects_pianissimo_instead_of_switching_to_whisper() {
+        let mut settings = scoped_file_settings();
+        settings.file_transcription_model = FileModelPreference::PianissimoOriginal;
+        let error = file_transcription_context(&settings, Some("swedish"), None)
+            .err().expect("meeting path must reject Pianissimo");
+        assert!(error.contains("plain Swedish"));
+        assert_eq!(settings.effective_model_for(Language::Swedish), WhisperModel::KbWhisperBase);
     }
 
     #[test]
@@ -537,6 +554,19 @@ pub async fn set_whisper_model(
     ctrl.settings_mut().whisper_model = persisted.whisper_model;
     ctrl.settings_mut().auto_select_model = persisted.auto_select_model;
     info!("Model set to {:?}", model);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_file_transcription_model(
+    controller: State<'_, SharedController>,
+    model_id: String,
+) -> Result<(), String> {
+    let choice = FileModelPreference::parse_id(&model_id)?;
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.file_transcription_model = choice;
+    })?;
+    controller.lock().unwrap().settings_mut().file_transcription_model = persisted.file_transcription_model;
     Ok(())
 }
 
@@ -1191,6 +1221,49 @@ pub async fn get_model_info(
             active: *m == effective,
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn get_file_model_options(language: Language) -> Result<Vec<ModelInfo>, String> {
+    let mut models: Vec<ModelInfo> = WhisperModel::models_for_language(language)
+        .iter()
+        .map(|model| ModelInfo {
+            id: serde_json::to_value(model).and_then(serde_json::from_value::<String>)
+                .expect("Whisper model has a stable ID"),
+            display_name: model.display_name().to_string(),
+            description: model.description().to_string(),
+            size_mb: model.size_mb(),
+            downloaded: model::is_model_downloaded(*model),
+            active: false,
+        })
+        .collect();
+    if language == Language::Swedish {
+        models.push(ModelInfo {
+            id: "pianissimo-sv".into(),
+            display_name: "Pianissimo Original".into(),
+            description: "Swedish file transcription · original NeMo checkpoint · local runtime required".into(),
+            size_mb: 2_509,
+            downloaded: pianissimo_model::is_downloaded(),
+            active: false,
+        });
+    }
+    Ok(models)
+}
+
+#[tauri::command]
+pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Emitter;
+    let progress_app = app.clone();
+    pianissimo_model::download(move |downloaded, total| {
+        let _ = progress_app.emit(crate::events::event::MODEL_DOWNLOAD_PROGRESS, serde_json::json!({
+            "model": "pianissimo-sv",
+            "downloaded": downloaded,
+            "total": total,
+            "progress": if total > 0 { (downloaded as f64 / total as f64 * 100.0) as u32 } else { 0 },
+        }));
+    }).await.map_err(|error| error.to_string())?;
+    let _ = app.emit(crate::events::event::MODEL_READY, ());
+    Ok(())
 }
 
 /// Return the effective speech engine for one profile language. This keeps the
@@ -2190,6 +2263,35 @@ pub async fn transcribe_file(
 ) -> Result<String, String> {
     use tauri::Emitter;
 
+    let pianissimo_glossary = {
+        let ctrl = controller.lock().unwrap();
+        let settings = ctrl.settings();
+        let language = file_transcription_language(settings, profile_id.as_deref())?;
+        match settings.effective_file_model_for(language)? {
+            FileModel::PianissimoOriginal => Some(Glossary::parse(
+                &settings.effective_glossary_source_with_prompt(profile_id.as_deref(), prompt.as_deref()),
+            )),
+            FileModel::Whisper(_) => None,
+        }
+    };
+    if let Some(glossary) = pianissimo_glossary {
+        if diarize.unwrap_or(false) {
+            return Err("Pianissimo Original supports plain Swedish file transcription only; choose a Whisper file model for diarization".into());
+        }
+        let text = crate::plain_file_jobs::transcribe_pianissimo(
+            app.clone(), jobs.inner().clone(), run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            file_path, glossary,
+        ).await?;
+        if auto_paste.unwrap_or(true) && controller.lock().unwrap().settings().auto_paste {
+            let paste_text = text.clone();
+            app.run_on_main_thread(move || {
+                if let Err(error) = crate::paste::PasteService::new().paste(&paste_text) {
+                    error!(%error, "Auto-paste failed");
+                }
+            }).map_err(|error| format!("Could not dispatch auto-paste: {error}"))?;
+        }
+        return Ok(text);
+    }
     let context = {
         let ctrl = controller.lock().unwrap();
         file_transcription_context(ctrl.settings(), profile_id.as_deref(), prompt.as_deref())?

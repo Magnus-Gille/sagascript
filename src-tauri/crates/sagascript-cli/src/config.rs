@@ -2,7 +2,8 @@ use clap::{Args, Subcommand};
 
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{
-    self, validate_hotkey, HotkeyMode, HotkeyProfile, Language, Settings, WhisperModel,
+    self, validate_hotkey, FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings,
+    WhisperModel,
 };
 
 #[derive(Args)]
@@ -17,7 +18,7 @@ pub enum ConfigAction {
     #[command(long_about = "\
 Show all settings in a table with their current values and defaults.
 
-Valid keys: language, whisper_model, hotkey_mode (push, toggle), show_overlay, \
+Valid keys: language, whisper_model, file_transcription_model, hotkey_mode (push, toggle), show_overlay, \
 auto_paste, auto_select_model, hotkey, initial_prompt, \
 beam_size, temperature_fallback, vad_enabled.")]
     List,
@@ -27,7 +28,7 @@ beam_size, temperature_fallback, vad_enabled.")]
         long_about = "\
 Print the current value of a single setting to stdout.
 
-Valid keys: language, whisper_model, hotkey_mode (push, toggle), show_overlay, \
+Valid keys: language, whisper_model, file_transcription_model, hotkey_mode (push, toggle), show_overlay, \
 auto_paste, auto_select_model, hotkey, initial_prompt, \
 beam_size, temperature_fallback, vad_enabled",
         after_long_help = "\
@@ -37,7 +38,7 @@ EXAMPLES:
   sagascript config get initial_prompt"
     )]
     Get {
-        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
+        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
         key: String,
     },
 
@@ -52,6 +53,7 @@ Valid values per key:
   whisper_model        tiny.en, tiny, base.en, base, kb-whisper-tiny,
                        kb-whisper-base, kb-whisper-small, nb-whisper-tiny,
                        nb-whisper-base, nb-whisper-small, fi-whisper-tiny
+  file_transcription_model  auto, any compatible Whisper model ID, pianissimo-sv
   hotkey_mode          push, toggle
   show_overlay         true, false
   auto_paste           true, false (enabling requires Accessibility approval for the installed GUI)
@@ -71,7 +73,7 @@ EXAMPLES:
   sagascript config set initial_prompt $'OpenRouter = open router | open vrouter\\nmerge = merch'"
     )]
     Set {
-        /// Setting key [possible values: language, whisper_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
+        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
         key: String,
         /// New value for the setting
         value: String,
@@ -161,6 +163,7 @@ pub enum ProfileAction {
 const VALID_KEYS: &[&str] = &[
     "language",
     "whisper_model",
+    "file_transcription_model",
     "hotkey_mode",
     "show_overlay",
     "auto_paste",
@@ -370,6 +373,12 @@ fn cmd_list() -> Result<(), DictationError> {
     );
     println!(
         "{:<20} {:<24} {}",
+        "file_transcription_model",
+        format_file_model(current.file_transcription_model),
+        format_file_model(defaults.file_transcription_model)
+    );
+    println!(
+        "{:<20} {:<24} {}",
         "hotkey_mode",
         format_hotkey_mode(current.hotkey_mode),
         format_hotkey_mode(defaults.hotkey_mode)
@@ -485,6 +494,10 @@ fn apply_setting_value(
         "whisper_model" => {
             settings.whisper_model = parse_enum_value::<WhisperModel>(value, "whisper_model")?;
         }
+        "file_transcription_model" => {
+            settings.file_transcription_model = FileModelPreference::parse_id(value)
+                .map_err(DictationError::SettingsError)?;
+        }
         "hotkey_mode" => {
             if value == "presenter" {
                 return Err(DictationError::SettingsError(
@@ -549,6 +562,10 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
             "language" => settings.set_legacy_language(defaults.language),
             "whisper_model" => {
                 settings.whisper_model = defaults.whisper_model;
+                Ok(())
+            }
+            "file_transcription_model" => {
+                settings.file_transcription_model = defaults.file_transcription_model;
                 Ok(())
             }
             "hotkey_mode" => settings.replace_hotkey_mode(defaults.hotkey_mode),
@@ -636,6 +653,7 @@ fn get_setting_value(settings: &Settings, key: &str) -> String {
     match key {
         "language" => format_language(settings.language),
         "whisper_model" => format_model(settings.whisper_model),
+        "file_transcription_model" => format_file_model(settings.file_transcription_model),
         "hotkey_mode" => format_hotkey_mode(settings.hotkey_mode),
         "show_overlay" => settings.show_overlay.to_string(),
         "auto_paste" => settings.auto_paste.to_string(),
@@ -653,6 +671,12 @@ fn format_language(lang: Language) -> String {
     serde_json::to_value(lang)
         .and_then(serde_json::from_value::<String>)
         .unwrap_or_else(|_| format!("{:?}", lang))
+}
+
+fn format_file_model(model: FileModelPreference) -> String {
+    serde_json::to_value(model)
+        .and_then(serde_json::from_value::<String>)
+        .expect("file model preference has a stable string ID")
 }
 
 fn format_model(model: WhisperModel) -> String {
@@ -1147,6 +1171,17 @@ mod tests {
     }
 
     // -- get_setting_value / format helpers --
+
+    #[test]
+    fn file_model_setting_is_independent_of_live_model() {
+        let mut settings = Settings::default();
+        let live = settings.whisper_model;
+        apply_setting_value(&mut settings, "file_transcription_model", "pianissimo-sv").unwrap();
+        assert_eq!(settings.whisper_model, live);
+        assert_eq!(get_setting_value(&settings, "file_transcription_model"), "pianissimo-sv");
+        assert!(apply_setting_value(&mut settings, "file_transcription_model", "unknown").is_err());
+        assert_eq!(get_setting_value(&settings, "file_transcription_model"), "pianissimo-sv");
+    }
 
     #[test]
     fn get_setting_value_returns_serialized_values() {

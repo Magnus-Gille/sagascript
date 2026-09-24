@@ -9,6 +9,8 @@ target/
 node_modules/
 dist/
 src-tauri/build-meta.env
+build/pianissimo-runtime/
+src-tauri/resources/__pycache__/
 
 # Claude Code local state
 .claude/settings.local.json
