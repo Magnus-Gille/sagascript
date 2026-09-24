@@ -63,6 +63,25 @@ class ChunkProtocolTests(unittest.TestCase):
         )
         self.assertEqual(merged, [{"word": "ok", "start": 2.0, "end": 2.0}])
 
+    def test_chunk_text_preserves_untimestamped_part(self) -> None:
+        ranges = [(0.0, 120.0), (119.0, 200.0)]
+        words = [{"word": "first", "start": 5.0, "end": 5.5}]
+        self.assertEqual(
+            worker.assemble_chunk_text(ranges, ["first", "second sentence"], words),
+            "first second sentence",
+        )
+
+    def test_chunk_text_prefers_owned_words_to_duplicate_overlap(self) -> None:
+        ranges = [(0.0, 120.0), (119.0, 200.0)]
+        words = [
+            {"word": "before", "start": 118.0, "end": 118.5},
+            {"word": "after", "start": 119.2, "end": 119.8},
+        ]
+        self.assertEqual(
+            worker.assemble_chunk_text(ranges, ["before repeated", "repeated after"], words),
+            "before after",
+        )
+
 
 class ProtocolTests(unittest.TestCase):
     def test_emit_is_one_line_json_and_flushes(self) -> None:

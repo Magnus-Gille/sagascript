@@ -58,7 +58,7 @@ pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
                 lang.display_name(),
             );
         }
-        if *lang == Language::Swedish {
+        if *lang == Language::Swedish && sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
             println!(
                 "{:<20} {:<10} {:>5} MB  {:<12} {:<12}",
                 "pianissimo-sv",
@@ -141,6 +141,11 @@ pub fn delete(args: DeleteModelArgs) -> Result<(), DictationError> {
 
 pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
     if args.model == "pianissimo-sv" {
+        if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
+            return Err(DictationError::TranscriptionFailed(
+                "Pianissimo Original requires macOS 14 or later".into(),
+            ));
+        }
         eprintln!("Downloading Pianissimo Original (~2509 MB, CC BY 4.0)...");
         let path = pianissimo_model::download(|downloaded, total| {
             if total > 0 {
@@ -148,7 +153,7 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
                     total as f64 / 1_048_576.0, downloaded as f64 / total as f64 * 100.0);
             }
         }).await?;
-        eprintln!("\nModel ready. Runtime setup is required before transcription.");
+        eprintln!("\nOriginal model ready.");
         println!("{}", path.display());
         return Ok(());
     }

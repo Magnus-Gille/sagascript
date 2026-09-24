@@ -1237,11 +1237,11 @@ pub async fn get_file_model_options(language: Language) -> Result<Vec<ModelInfo>
             active: false,
         })
         .collect();
-    if language == Language::Swedish {
+    if language == Language::Swedish && sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
         models.push(ModelInfo {
             id: "pianissimo-sv".into(),
             display_name: "Pianissimo Original".into(),
-            description: "Swedish file transcription · original NeMo checkpoint · local runtime required".into(),
+            description: "Swedish file transcription · original NeMo checkpoint · macOS 14+ app runtime included".into(),
             size_mb: 2_509,
             downloaded: pianissimo_model::is_downloaded(),
             active: false,
@@ -1253,6 +1253,9 @@ pub async fn get_file_model_options(language: Language) -> Result<Vec<ModelInfo>
 #[tauri::command]
 pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Emitter;
+    if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
+        return Err("Pianissimo Original requires macOS 14 or later".into());
+    }
     let progress_app = app.clone();
     pianissimo_model::download(move |downloaded, total| {
         let _ = progress_app.emit(crate::events::event::MODEL_DOWNLOAD_PROGRESS, serde_json::json!({

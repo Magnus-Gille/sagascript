@@ -1610,7 +1610,7 @@
               </button>
             {/if}
             {#if settings.file_transcription_model === "pianissimo-sv"}
-              <div class="hotkey-hint">The macOS app includes Pianissimo's local runtime. Download the original 2.5 GB model once. Peak memory was about 5.7 GB in our test.</div>
+              <div class="hotkey-hint">The macOS 14+ app includes Pianissimo's local runtime. Download the original 2.5 GB model once. Peak memory was about 5.7 GB in our test.</div>
             {/if}
             {#if fileModelError}<div class="transcribe-error" role="alert">{fileModelError}</div>{/if}
           </div>

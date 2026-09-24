@@ -6,7 +6,7 @@ use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -36,7 +36,7 @@ pub struct PianissimoResult {
 pub struct PianissimoBackend {
     child: Mutex<Child>,
     stdin: Mutex<ChildStdin>,
-    stdout: Mutex<BufReader<ChildStdout>>,
+    stdout: Arc<Mutex<BufReader<ChildStdout>>>,
     operation: Mutex<()>,
 }
 
@@ -69,6 +69,30 @@ fn runtime_python() -> RuntimePython {
     RuntimePython { executable: OsString::from("python3.12"), python_home: None, site_packages: None }
 }
 
+/// The pinned PyTorch arm64 wheel is tagged macOS 14.0+.
+pub fn runtime_supported_on_this_os() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let Ok(output) = Command::new("/usr/bin/sw_vers").arg("-productVersion").output() else {
+            return false;
+        };
+        output.status.success()
+            && std::str::from_utf8(&output.stdout).ok()
+                .is_some_and(macos_version_supported)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_version_supported(version: &str) -> bool {
+    version.trim().split('.').next()
+        .and_then(|major| major.parse::<u32>().ok())
+        .is_some_and(|major| major >= 14)
+}
+
 #[cfg(target_os = "macos")]
 fn bundled_runtime(executable: &std::path::Path) -> Option<RuntimePython> {
     let contents = executable.parent()?.parent()?;
@@ -88,6 +112,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn macos_13_stays_supported_by_app_but_not_pianissimo() {
+        assert!(!macos_version_supported("13.7.6"));
+        assert!(macos_version_supported("14.0"));
+        assert!(macos_version_supported("26.6.2\n"));
+        assert!(!macos_version_supported("unknown"));
+    }
+
+    #[test]
     fn bundled_runtime_resolves_relative_to_app_executable() {
         let root = std::env::temp_dir().join(format!("sagascript-runtime-test-{}", uuid::Uuid::new_v4()));
         let contents = root.join("Sagascript.app/Contents");
@@ -101,6 +133,28 @@ mod tests {
         assert_eq!(found.site_packages.unwrap(), runtime.join("site-packages"));
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn stalled_worker_read_has_a_deadline() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("10")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let backend = PianissimoBackend {
+            child: Mutex::new(child),
+            stdin: Mutex::new(stdin),
+            stdout: Arc::new(Mutex::new(BufReader::new(stdout))),
+            operation: Mutex::new(()),
+        };
+        let started = Instant::now();
+        let error = backend.read_protocol_line(Duration::from_millis(50)).unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 }
 
 impl PianissimoBackend {
@@ -110,6 +164,11 @@ impl PianissimoBackend {
     }
 
     pub fn start_with_cancel(cancelled: &AtomicBool) -> Result<Self, DictationError> {
+        if !runtime_supported_on_this_os() {
+            return Err(DictationError::TranscriptionFailed(
+                "Pianissimo Original requires macOS 14 or later".into(),
+            ));
+        }
         pianissimo_model::verify_downloaded()?;
         let runtime = runtime_python();
         let mut command = Command::new(&runtime.executable);
@@ -182,9 +241,37 @@ impl PianissimoBackend {
         Ok(Self {
             child: Mutex::new(child),
             stdin: Mutex::new(stdin),
-            stdout: Mutex::new(reader),
+            stdout: Arc::new(Mutex::new(reader)),
             operation: Mutex::new(()),
         })
+    }
+
+    fn read_protocol_line(&self, timeout: Duration) -> Result<String, DictationError> {
+        let reader = Arc::clone(&self.stdout);
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let result = reader.lock().unwrap().read_line(&mut line).map(|count| (count, line));
+            let _ = sender.send(result);
+        });
+        match receiver.recv_timeout(timeout) {
+            Ok(Ok((0, _))) => Err(DictationError::TranscriptionFailed(
+                "Pianissimo worker exited before returning a transcript".into(),
+            )),
+            Ok(Ok((_, line))) => Ok(line),
+            Ok(Err(error)) => Err(DictationError::TranscriptionFailed(format!(
+                "Pianissimo protocol read failed: {error}"
+            ))),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.request_abort();
+                Err(DictationError::TranscriptionFailed(
+                    "Pianissimo worker timed out while transcribing".into(),
+                ))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(DictationError::TranscriptionFailed(
+                "Pianissimo protocol reader stopped".into(),
+            )),
+        }
     }
 
     pub fn transcribe(&self, samples: &[f32], progress: impl Fn(u8)) -> Result<PianissimoResult, DictationError> {
@@ -203,16 +290,8 @@ impl PianissimoBackend {
                     "Pianissimo worker stopped before the request: {error}"
                 )))?;
         }
-        let mut reader = self.stdout.lock().unwrap();
         loop {
-            let mut line = String::new();
-            if reader.read_line(&mut line).map_err(|error| DictationError::TranscriptionFailed(
-                format!("Pianissimo protocol read failed: {error}")
-            ))? == 0 {
-                return Err(DictationError::TranscriptionFailed(
-                    "Pianissimo worker exited before returning a transcript".into(),
-                ));
-            }
+            let line = self.read_protocol_line(Duration::from_secs(180))?;
             let event: Value = serde_json::from_str(&line).map_err(|_| DictationError::TranscriptionFailed(
                 "Pianissimo worker returned an invalid protocol message".into(),
             ))?;
@@ -225,7 +304,9 @@ impl PianissimoBackend {
                 Some("progress") => {
                     let completed = event.get("completed").and_then(Value::as_u64).unwrap_or(0);
                     let total = event.get("total").and_then(Value::as_u64).unwrap_or(0);
-                    if total > 0 { progress(((completed * 100) / total).min(100) as u8); }
+                    if let Some(percent) = completed.saturating_mul(100).checked_div(total) {
+                        progress(percent.min(100) as u8);
+                    }
                 }
                 Some("result") => {
                     let text = event.get("text").and_then(Value::as_str).ok_or_else(||

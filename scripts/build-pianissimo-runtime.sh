@@ -18,8 +18,8 @@ UV_NO_CACHE=1 uv python install 3.12.9 --install-dir "$scratch/managed" --no-bin
 python_home="$scratch/managed/cpython-3.12.9-macos-aarch64-none"
 [[ -x "$python_home/bin/python3.12" ]] || { echo "Managed Python was not installed" >&2; exit 1; }
 uv venv --python "$python_home/bin/python3.12" "$scratch/venv"
-UV_NO_CACHE=1 uv pip sync "$repo_root/scripts/pianissimo-runtime-requirements.txt" \
-  --python "$scratch/venv/bin/python" --link-mode copy --strict
+UV_NO_CACHE=1 uv pip sync "$repo_root/scripts/pianissimo-runtime-hashed.txt" \
+  --python "$scratch/venv/bin/python" --link-mode copy --strict --require-hashes
 
 mkdir -p "$output"
 mv "$python_home" "$output/python"

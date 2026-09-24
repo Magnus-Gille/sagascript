@@ -22,6 +22,14 @@ function normalizeNewlines(text) {
   return text.replace(/\r\n?/g, "\n");
 }
 
+function parsePianissimoRequirements(source) {
+  return normalizeNewlines(source).trim().split("\n").map((line) => {
+    const match = /^([A-Za-z0-9_.-]+)==([^\s]+)$/.exec(line);
+    if (!match) throw new Error(`Invalid Pianissimo runtime requirement: ${line}`);
+    return `${match[1].toLowerCase().replaceAll(/[_.]/g, "-")}==${match[2]}`;
+  }).sort(compareCodeUnits);
+}
+
 function npmInstallationError(pkg, installedVersion, directoryExists) {
   const path = relative(root, pkg.directory);
   if (!directoryExists) {
@@ -45,6 +53,18 @@ if (mode === "--test-sort") {
     throw new Error(`Unexpected deterministic sort order: ${fixture.join(", ")}`);
   }
   console.log(createHash("sha256").update(fixture.join("\n")).digest("hex"));
+  process.exit(0);
+}
+
+if (mode === "--test-pianissimo-line-endings") {
+  const expected = ["absl-py==2.5.0", "torch==2.14.0"];
+  for (const separator of ["\n", "\r\n"]) {
+    const parsed = parsePianissimoRequirements(expected.join(separator) + separator);
+    if (JSON.stringify(parsed) !== JSON.stringify(expected)) {
+      throw new Error(`Pianissimo requirement parser failed for ${JSON.stringify(separator)}`);
+    }
+  }
+  console.log("Pianissimo requirements accept LF and CRLF");
   process.exit(0);
 }
 
@@ -323,12 +343,9 @@ function table(packages) {
 }
 
 const pianissimoPackages = JSON.parse(readFileSync(join(root, "scripts/pianissimo-runtime-inventory.json"), "utf8"));
-const pianissimoRequirements = readFileSync(join(root, "scripts/pianissimo-runtime-requirements.txt"), "utf8")
-  .trim().split("\n").map((line) => {
-    const match = /^([A-Za-z0-9_.-]+)==([^\s]+)$/.exec(line);
-    if (!match) throw new Error(`Invalid Pianissimo runtime requirement: ${line}`);
-    return `${match[1].toLowerCase().replaceAll(/[_.]/g, "-")}==${match[2]}`;
-  }).sort(compareCodeUnits);
+const pianissimoRequirements = parsePianissimoRequirements(
+  readFileSync(join(root, "scripts/pianissimo-runtime-requirements.txt"), "utf8"),
+);
 const pianissimoInventory = pianissimoPackages.map((pkg) => {
   if (!pkg.license || !pkg.source) throw new Error(`Incomplete Pianissimo runtime notice: ${pkg.name}`);
   return `${pkg.name.toLowerCase().replaceAll(/[_.]/g, "-")}==${pkg.version}`;

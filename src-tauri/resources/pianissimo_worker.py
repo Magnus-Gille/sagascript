@@ -150,6 +150,30 @@ def deduplicate_words(
     return deduplicate_chunk_words(chunks)
 
 
+def assemble_chunk_text(
+    ranges: Sequence[tuple[float, float]],
+    chunk_texts: Sequence[str],
+    words: Sequence[Mapping[str, Any]],
+) -> str:
+    """Use owned timestamped words and retain text from untimestamped chunks."""
+
+    if len(ranges) != len(chunk_texts):
+        raise ValueError("chunk text count does not match audio ranges")
+    if len(ranges) == 1:
+        return chunk_texts[0].strip() or " ".join(word["word"] for word in words).strip()
+    pieces = []
+    for index, (start, end) in enumerate(ranges):
+        ownership_end = ranges[index + 1][0] if index + 1 < len(ranges) else end
+        owned_words = [
+            word["word"] for word in words
+            if start <= (word["start"] + word["end"]) / 2.0 < ownership_end
+        ]
+        piece = " ".join(owned_words) if owned_words else chunk_texts[index].strip()
+        if piece:
+            pieces.append(piece)
+    return " ".join(pieces)
+
+
 def _audio_info(path: Path) -> tuple[int, int, int, int, float]:
     if not path.is_absolute() or not path.is_file():
         raise FileNotFoundError
@@ -281,22 +305,14 @@ def _transcribe_file(
                         rate,
                     )
                 chunk_text, words = _transcribe_one(model, chunk_path, device)
-                if chunk_text:
-                    text_parts.append(chunk_text)
+                text_parts.append(chunk_text)
                 chunk_results.append((start, end, words))
                 emit_progress(
                     {"type": "progress", "id": request_id, "completed": index + 1, "total": len(ranges)}
                 )
 
     merged_words = deduplicate_chunk_words(chunk_results)
-    text = (text_parts[0].strip() if len(ranges) == 1 and text_parts else
-            " ".join(word["word"] for word in merged_words).strip())
-    if not text:
-        # A model without word timestamps still returns useful hypothesis text.
-        # This fallback does not affect timestamped Pianissimo output.  For a
-        # chunked file, it may contain a repeated overlap, so prefer words when
-        # NeMo supplied them and otherwise preserve the model's chunk text.
-        text = " ".join(text_parts).strip()
+    text = assemble_chunk_text(ranges, text_parts, merged_words)
     return {"text": text, "words": merged_words, "duration": duration}
 
 
