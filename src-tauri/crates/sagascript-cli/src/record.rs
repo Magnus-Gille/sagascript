@@ -10,8 +10,8 @@ use sagascript_core::audio::resample::TARGET_SAMPLE_RATE;
 use sagascript_core::audio::AudioCaptureService;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Language, WhisperModel};
+use sagascript_core::transcription::live_dictation::LiveDictationBackend;
 use sagascript_core::transcription::model;
-use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
 use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{Glossary, TranscribeOptions, WhisperBackend};
 
@@ -221,11 +221,8 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
                 eprintln!("Pianissimo does not use Whisper decoder hints; aliases in the selected profile still correct the transcript after inference.");
             }
             eprintln!("Loading model: Pianissimo Q8...");
-            let backend = PianissimoBackend::start()?;
-            let result = transcribe_pianissimo_with_progress(duration, |callback| {
-                backend.transcribe(&audio, callback)
-            })?;
-            (result.text, "pianissimo-sv")
+            let text = transcribe_pianissimo_record(&audio, duration)?;
+            (text, "pianissimo-sv")
         }
     };
 
@@ -306,6 +303,24 @@ fn validate_pianissimo_record_options(
     Ok(())
 }
 
+fn transcribe_pianissimo_record(audio: &[f32], duration: f64) -> Result<String, DictationError> {
+    let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true);
+    transcribe_pianissimo_with_progress(duration, |progress| {
+        progress(0);
+        let result = backend.transcribe(
+            WhisperModel::Base,
+            audio,
+            Language::Swedish,
+            &TranscribeOptions::default(),
+            &mut Default::default(),
+        );
+        if result.is_ok() {
+            progress(100);
+        }
+        result
+    })
+}
+
 fn transcribe_pianissimo_with_progress<T>(
     duration: f64,
     transcribe: impl FnOnce(Box<dyn Fn(u8) + Send>) -> Result<T, DictationError>,
@@ -349,6 +364,16 @@ mod tests {
     use sagascript_core::settings::{Language, WhisperModel};
 
     const FALLBACK: WhisperModel = WhisperModel::KbWhisperLarge;
+
+    #[test]
+    fn pianissimo_silence_skips_native_model_in_record() {
+        for audio in [vec![0.0; 1600], vec![0.00001; 1600]] {
+            assert_eq!(
+                super::transcribe_pianissimo_record(&audio, 0.1).unwrap(),
+                ""
+            );
+        }
+    }
 
     #[test]
     fn explicit_pianissimo_selects_swedish_engine() {

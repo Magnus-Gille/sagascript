@@ -992,8 +992,8 @@ impl Settings {
     }
 
     /// Build the ordered set of profile models worth loading during GUI
-    /// startup. The primary profile is always first and always included because
-    /// normal dictation requires it. Additional distinct models must fit both
+    /// startup. Pianissimo profiles are excluded. The primary remaining Whisper
+    /// profile is always first and included. Additional distinct models must fit both
     /// the resident-entry limit and advertised model-size budget.
     pub fn warm_model_plan(
         &self,

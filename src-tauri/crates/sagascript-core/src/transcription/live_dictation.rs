@@ -58,6 +58,15 @@ impl LiveDictationBackend {
             return Err(cancelled_error());
         }
 
+        if samples.is_empty() {
+            return Err(DictationError::NoAudioCaptured);
+        }
+        if !crate::audio::has_audio_signal(samples)
+            .map_err(|reason| DictationError::TranscriptionFailed(reason.to_string()))?
+        {
+            return Ok(String::new());
+        }
+
         // Startup verifies the downloaded artifact; it does not load the
         // recognizer. The native command loads and infers in one process with
         // no stage markers, so keep model_ready_at unset and report the full
@@ -122,6 +131,45 @@ fn cancelled_error() -> DictationError {
 mod tests {
     use super::*;
     use crate::transcription::WhisperBackend;
+
+    #[test]
+    fn pianissimo_silence_does_not_load_or_infer() {
+        let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true);
+        for audio in [vec![0.0; 1600], vec![0.00001; 1600]] {
+            let mut timings = DictationTimings::default();
+            let result = backend
+                .transcribe(
+                    WhisperModel::Base,
+                    &audio,
+                    Language::Swedish,
+                    &TranscribeOptions::default(),
+                    &mut timings,
+                )
+                .unwrap();
+            assert!(result.is_empty());
+            assert!(!timings.model_acquisition_started);
+            assert!(!timings.inference_started);
+        }
+    }
+
+    #[test]
+    fn pianissimo_invalid_capture_never_starts_model_work() {
+        let backend = LiveDictationBackend::new(Arc::new(WhisperBackend::new()), true);
+        for audio in [vec![], vec![f32::NAN; 320], vec![f32::INFINITY; 320]] {
+            let mut timings = DictationTimings::default();
+            assert!(backend
+                .transcribe(
+                    WhisperModel::Base,
+                    &audio,
+                    Language::Swedish,
+                    &TranscribeOptions::default(),
+                    &mut timings
+                )
+                .is_err());
+            assert!(!timings.model_acquisition_started);
+            assert!(!timings.inference_started);
+        }
+    }
 
     #[test]
     fn cancellation_before_native_start_does_not_require_a_model() {
