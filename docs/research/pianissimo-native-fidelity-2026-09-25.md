@@ -86,7 +86,10 @@ signed Sagascript app or its full installer size.
    An `import librosa` check alone was insufficient because the failing import
    was lazy.
 3. Convert the same `.nemo` with `python convert_model.py model.nemo --outfile
-   pianissimo-sv-q8_0.gguf --outtype q8_0`. Reject **any** converter warning.
+   pianissimo-sv-q8_0.gguf --outtype q8_0`. Reject the
+   `WARN: librosa not installed` fallback. The pinned GGUF writer also prints
+   `Duplicated key name 'general.architecture'` for both old and corrected
+   files; that warning alone does not establish a missing filterbank.
    Check the GGUF with `GGUFReader`: tensor `preprocessor.fb` must exist with
    `data.shape == (128, 257)`. `nemo-speech model info` must report 701 tensors and no
    errors or warnings.
