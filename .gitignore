@@ -10,6 +10,8 @@ node_modules/
 dist/
 src-tauri/build-meta.env
 build/pianissimo-runtime/
+build/pianissimo-native-runtime/
+build/pianissimo-sv-q8-melfix.gguf
 src-tauri/resources/__pycache__/
 
 # Claude Code local state

@@ -97,7 +97,7 @@ pub async fn transcribe_pianissimo(
                 &|pct| progress("resampling", Some(pct)),
             )?;
             run.check()?;
-            let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 6).max(60));
+            let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 10).max(180));
             progress("loading", None);
             let backend = Arc::new(PianissimoBackend::start_with_cancel(&run.cancelled)?);
             *worker_lease.jobs.pianissimo_backend.lock().unwrap() = Some(backend.clone());

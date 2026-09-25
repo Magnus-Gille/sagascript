@@ -758,7 +758,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         #[cfg(feature = "diarization")]
         if args.diarize || args.meeting_json {
             return Err(DictationError::SettingsError(
-                "Pianissimo Original supports plain Swedish file transcription only; select a Whisper model for diarization or meeting output".into(),
+                "Pianissimo Q8 supports plain Swedish file transcription only; select a Whisper model for diarization or meeting output".into(),
             ));
         }
         return run_pianissimo_batch(&args, &files, &stored, language, &glossary);
@@ -911,19 +911,19 @@ fn run_pianissimo_batch(
 ) -> Result<(), DictationError> {
     if language != Language::Swedish {
         return Err(DictationError::SettingsError(
-            "Pianissimo Original supports Swedish files only".into(),
+            "Pianissimo Q8 supports Swedish files only".into(),
         ));
     }
     if args.vad || args.beam_size.is_some() || args.parallel.is_some() || args.correct_hints
         || args.prompt.is_some() || args.prompt_file.is_some()
     {
         return Err(DictationError::SettingsError(
-            "Pianissimo Original does not support --vad, --beam, --parallel, --correct-hints, or decoder --prompt/--prompt-file".into(),
+            "Pianissimo Q8 does not support --vad, --beam, --parallel, --correct-hints, or decoder --prompt/--prompt-file".into(),
         ));
     }
     if !pianissimo_model::is_downloaded() {
         return Err(DictationError::TranscriptionFailed(
-            "Pianissimo Original is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
+            "Pianissimo Q8 is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
         ));
     }
     if glossary.decoder_prompt().is_some() {
@@ -931,7 +931,7 @@ fn run_pianissimo_batch(
     }
     let load_started = Instant::now();
     let backend = PianissimoBackend::start()?;
-    let model_load_seconds = load_started.elapsed().as_secs_f64();
+    let model_verification_seconds = load_started.elapsed().as_secs_f64();
     let mut items = Vec::with_capacity(if args.json { files.len() } else { 0 });
     let (processed, failures) = process_batch(
         files,
@@ -977,7 +977,8 @@ fn run_pianissimo_batch(
                 "warnings": [],
                 "vocabulary_corrections": corrections,
                 "performance": {
-                    "model_load_seconds": if index == 0 { model_load_seconds } else { 0.0 },
+                    "model_load_seconds": 0.0,
+                    "model_verification_seconds": if index == 0 { model_verification_seconds } else { 0.0 },
                     "decode_resample_seconds": decode_resample_seconds,
                     "total_seconds": started.elapsed().as_secs_f64(),
                 },

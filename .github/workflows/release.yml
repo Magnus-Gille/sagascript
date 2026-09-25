@@ -177,15 +177,16 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Install Python runtime packager
+      - name: Build bundled Pianissimo runtime
+        run: ./scripts/build-pianissimo-native-runtime.sh
+
+      - name: Install Python for build-time model conversion
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - name: Build bundled Pianissimo runtime
-        run: |
-          python -m pip install uv==0.8.5
-          ./scripts/build-pianissimo-runtime.sh
+      - name: Build verified optional Pianissimo Q8 model
+        run: ./scripts/prepare-pianissimo-release-model.sh
 
       - name: Verify release metadata and tag
         env:
@@ -214,7 +215,7 @@ jobs:
       - name: Sign bundled Pianissimo native libraries
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: python scripts/sign-pianissimo-runtime.py build/pianissimo-runtime
+        run: python3 scripts/sign-pianissimo-runtime.py build/pianissimo-native-runtime
 
       - name: Prepare notarization credentials and build metadata
         env:
@@ -266,6 +267,7 @@ jobs:
           mkdir -p artifacts
           cp "$dmg" artifacts/Sagascript.dmg
           tar -czf artifacts/Sagascript.app.tar.gz -C "$(dirname "$app")" "$(basename "$app")"
+          cp build/pianissimo-sv-q8-melfix.gguf artifacts/pianissimo-sv-q8-melfix.gguf
 
       - name: Gate upgrade and installed CLI transcription
         run: |
@@ -289,6 +291,16 @@ jobs:
             "${SAGASCRIPT_GIT_HASH}" \
             test-audio/norwegian-short-3s.mp3
 
+      - name: Gate signed Pianissimo transcription
+        run: |
+          mkdir -p "$HOME/Library/Application Support/Sagascript/Models"
+          cp build/pianissimo-sv-q8-melfix.gguf "$HOME/Library/Application Support/Sagascript/Models/"
+          /usr/local/bin/sagascript transcribe --language sv --model pianissimo-sv --json \
+            test-audio/english-jfk.wav > "$RUNNER_TEMP/pianissimo-signed-smoke.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["segments"]' \
+            "$RUNNER_TEMP/pianissimo-signed-smoke.json"
+          rm "$HOME/Library/Application Support/Sagascript/Models/pianissimo-sv-q8-melfix.gguf"
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -296,6 +308,7 @@ jobs:
           path: |
             artifacts/Sagascript.dmg
             artifacts/Sagascript.app.tar.gz
+            artifacts/pianissimo-sv-q8-melfix.gguf
           if-no-files-found: error
 
   publish-release:
@@ -315,8 +328,9 @@ jobs:
         run: |
           cp artifacts/macos-bundle/Sagascript.dmg artifacts/Sagascript.dmg
           cp artifacts/macos-bundle/Sagascript.app.tar.gz artifacts/Sagascript.app.tar.gz
+          cp artifacts/macos-bundle/pianissimo-sv-q8-melfix.gguf artifacts/pianissimo-sv-q8-melfix.gguf
 
-          (cd artifacts && sha256sum Sagascript.dmg Sagascript.app.tar.gz > SHA256SUMS)
+          (cd artifacts && sha256sum Sagascript.dmg Sagascript.app.tar.gz pianissimo-sv-q8-melfix.gguf > SHA256SUMS)
 
           echo "Stable artifacts:"
           ls -lh artifacts/Sagascript* artifacts/SHA256SUMS
@@ -329,4 +343,5 @@ jobs:
           files: |
             artifacts/Sagascript.dmg
             artifacts/Sagascript.app.tar.gz
+            artifacts/pianissimo-sv-q8-melfix.gguf
             artifacts/SHA256SUMS

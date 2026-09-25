@@ -1,42 +1,46 @@
-//! Local subprocess adapter for the original Pianissimo NeMo checkpoint.
-//! Official macOS builds carry an arm64 Python/NeMo runtime in the app bundle.
-//! It is never used by live dictation.
+//! Local subprocess adapter for the native NeMo-Speech.cpp Pianissimo runtime.
+//!
+//! The native executable is started for each transcription request. Keeping the
+//! process short lived makes cancellation reliable and avoids shipping Python,
+//! while the model itself remains in Sagascript's normal local model cache.
 
-use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
-use serde_json::{json, Value};
 
 use crate::audio::wav::encode_wav;
 use crate::error::DictationError;
 use crate::transcription::pianissimo_model;
 
-const WORKER: &str = include_str!("../../../../resources/pianissimo_worker.py");
+const MIN_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(180);
+const SAMPLE_RATE: u64 = 16_000;
 
-#[derive(Debug, Clone, Deserialize)]
+fn transcription_timeout(sample_count: usize) -> Duration {
+    let audio_seconds = (sample_count as u64).saturating_add(SAMPLE_RATE - 1) / SAMPLE_RATE;
+    MIN_TRANSCRIPTION_TIMEOUT.max(Duration::from_secs(audio_seconds.saturating_mul(10)))
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct PianissimoWord {
     pub word: String,
     pub start: f64,
     pub end: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PianissimoResult {
     pub text: String,
     pub words: Vec<PianissimoWord>,
 }
 
 pub struct PianissimoBackend {
-    child: Mutex<Child>,
-    stdin: Mutex<ChildStdin>,
-    stdout: Arc<Mutex<BufReader<ChildStdout>>>,
+    executable: PathBuf,
+    active_child: Mutex<Option<Child>>,
     operation: Mutex<()>,
 }
 
@@ -48,36 +52,23 @@ impl Drop for TemporaryWav {
     }
 }
 
-struct RuntimePython {
-    executable: OsString,
-    python_home: Option<PathBuf>,
-    site_packages: Option<PathBuf>,
-}
-
-fn runtime_python() -> RuntimePython {
-    if let Some(executable) = std::env::var_os("SAGASCRIPT_PIANISSIMO_PYTHON")
-        .or_else(|| std::env::var_os("PIANISSIMO_PYTHON"))
-    {
-        return RuntimePython { executable, python_home: None, site_packages: None };
-    }
-    #[cfg(target_os = "macos")]
-    if let Ok(executable) = std::env::current_exe().and_then(std::fs::canonicalize) {
-        if let Some(runtime) = bundled_runtime(&executable) {
-            return runtime;
-        }
-    }
-    RuntimePython { executable: OsString::from("python3.12"), python_home: None, site_packages: None }
-}
-
-/// The pinned PyTorch arm64 wheel is tagged macOS 14.0+.
+/// Return whether this OS can run the bundled native runtime.
+///
+/// The native NeMo-Speech.cpp runtime is built for macOS 13 and later. Other
+/// platforms use the CPU backend and are allowed through for development and
+/// future packaging.
 pub fn runtime_supported_on_this_os() -> bool {
     #[cfg(target_os = "macos")]
     {
-        let Ok(output) = Command::new("/usr/bin/sw_vers").arg("-productVersion").output() else {
+        let Ok(output) = Command::new("/usr/bin/sw_vers")
+            .arg("-productVersion")
+            .output()
+        else {
             return false;
         };
         output.status.success()
-            && std::str::from_utf8(&output.stdout).ok()
+            && std::str::from_utf8(&output.stdout)
+                .ok()
                 .is_some_and(macos_version_supported)
     }
     #[cfg(not(target_os = "macos"))]
@@ -88,73 +79,53 @@ pub fn runtime_supported_on_this_os() -> bool {
 
 #[cfg(target_os = "macos")]
 fn macos_version_supported(version: &str) -> bool {
-    version.trim().split('.').next()
+    version
+        .trim()
+        .split('.')
+        .next()
         .and_then(|major| major.parse::<u32>().ok())
-        .is_some_and(|major| major >= 14)
+        .is_some_and(|major| major >= 13)
 }
 
-#[cfg(target_os = "macos")]
-fn bundled_runtime(executable: &std::path::Path) -> Option<RuntimePython> {
-    let contents = executable.parent()?.parent()?;
-    let root = contents.join("Resources/PianissimoRuntime");
-    let python_home = root.join("python");
-    let site_packages = root.join("site-packages");
-    let python = python_home.join("bin/python3.12");
-    (python.is_file() && site_packages.is_dir()).then_some(RuntimePython {
-        executable: python.into_os_string(),
-        python_home: Some(python_home),
-        site_packages: Some(site_packages),
+fn bundled_executable(current_exe: &Path) -> Option<PathBuf> {
+    let contents = current_exe.parent()?.parent()?;
+    let executable = contents.join("Resources/PianissimoRuntime/bin/nemo-speech");
+    executable.is_file().then_some(executable)
+}
+
+fn resolve_executable() -> PathBuf {
+    if let Some(executable) = std::env::var_os("SAGASCRIPT_PIANISSIMO_EXECUTABLE") {
+        return PathBuf::from(executable);
+    }
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(executable) = bundled_executable(&current_exe) {
+            return executable;
+        }
+    }
+
+    // Leave PATH lookup to Command::new so development can use an installed
+    // `nemo-speech` without requiring a machine-specific absolute path.
+    PathBuf::from("nemo-speech")
+}
+
+fn backend_device() -> &'static str {
+    "cpu"
+}
+
+fn parse_transcript_json(bytes: &[u8]) -> Result<PianissimoResult, String> {
+    #[derive(Deserialize)]
+    struct NativeTranscript {
+        text: String,
+        words: Vec<PianissimoWord>,
+    }
+
+    let transcript: NativeTranscript = serde_json::from_slice(bytes)
+        .map_err(|error| format!("native runtime returned invalid JSON: {error}"))?;
+    Ok(PianissimoResult {
+        text: transcript.text,
+        words: transcript.words,
     })
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn macos_13_stays_supported_by_app_but_not_pianissimo() {
-        assert!(!macos_version_supported("13.7.6"));
-        assert!(macos_version_supported("14.0"));
-        assert!(macos_version_supported("26.6.2\n"));
-        assert!(!macos_version_supported("unknown"));
-    }
-
-    #[test]
-    fn bundled_runtime_resolves_relative_to_app_executable() {
-        let root = std::env::temp_dir().join(format!("sagascript-runtime-test-{}", uuid::Uuid::new_v4()));
-        let contents = root.join("Sagascript.app/Contents");
-        let runtime = contents.join("Resources/PianissimoRuntime");
-        std::fs::create_dir_all(runtime.join("python/bin")).unwrap();
-        std::fs::create_dir_all(runtime.join("site-packages")).unwrap();
-        std::fs::write(runtime.join("python/bin/python3.12"), b"").unwrap();
-        let found = bundled_runtime(&contents.join("MacOS/sagascript")).unwrap();
-        assert_eq!(PathBuf::from(found.executable), runtime.join("python/bin/python3.12"));
-        assert_eq!(found.python_home.unwrap(), runtime.join("python"));
-        assert_eq!(found.site_packages.unwrap(), runtime.join("site-packages"));
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn stalled_worker_read_has_a_deadline() {
-        let mut child = Command::new("/bin/sleep")
-            .arg("10")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let backend = PianissimoBackend {
-            child: Mutex::new(child),
-            stdin: Mutex::new(stdin),
-            stdout: Arc::new(Mutex::new(BufReader::new(stdout))),
-            operation: Mutex::new(()),
-        };
-        let started = Instant::now();
-        let error = backend.read_protocol_line(Duration::from_millis(50)).unwrap_err();
-        assert!(error.to_string().contains("timed out"));
-        assert!(started.elapsed() < Duration::from_secs(2));
-    }
 }
 
 impl PianissimoBackend {
@@ -166,189 +137,237 @@ impl PianissimoBackend {
     pub fn start_with_cancel(cancelled: &AtomicBool) -> Result<Self, DictationError> {
         if !runtime_supported_on_this_os() {
             return Err(DictationError::TranscriptionFailed(
-                "Pianissimo Original requires macOS 14 or later".into(),
+                "Pianissimo requires macOS 13 or later".into(),
+            ));
+        }
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(DictationError::TranscriptionFailed(
+                "Pianissimo load cancelled".into(),
             ));
         }
         pianissimo_model::verify_downloaded()?;
-        let runtime = runtime_python();
-        let mut command = Command::new(&runtime.executable);
-        if let (Some(home), Some(packages)) = (&runtime.python_home, &runtime.site_packages) {
-            command.env("PYTHONHOME", home).env("PYTHONPATH", packages).env("PYTHONNOUSERSITE", "1");
-        }
-        let mut child = command
-            .arg("-u")
-            .arg("-c")
-            .arg(WORKER)
-            .arg("--model")
-            .arg(pianissimo_model::path())
-            .env("HF_HUB_OFFLINE", "1")
-            .env("TRANSFORMERS_OFFLINE", "1")
-            .env("HF_DATASETS_OFFLINE", "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|error| DictationError::TranscriptionFailed(format!(
-                "Could not start Pianissimo Python runtime ({error}). Reinstall the app or set SAGASCRIPT_PIANISSIMO_PYTHON to a Python 3.12 environment with NeMo and PyTorch."
-            )))?;
-        let stdin = child.stdin.take().expect("piped stdin");
-        let stdout = child.stdout.take().expect("piped stdout");
-        let (sender, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
-            let result = reader.read_line(&mut line).map(|count| (count, line, reader));
-            let _ = sender.send(result);
-        });
-        let deadline = Instant::now() + Duration::from_secs(180);
-        let (count, line, reader) = loop {
-            if cancelled.load(Ordering::SeqCst) || Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(DictationError::TranscriptionFailed(
-                    if cancelled.load(Ordering::SeqCst) { "Pianissimo load cancelled" } else { "Pianissimo load timed out" }.into(),
-                ));
-            }
-            match receiver.recv_timeout(Duration::from_millis(100)) {
-                Ok(Ok(ready)) => break ready,
-                Ok(Err(error)) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(DictationError::TranscriptionFailed(format!(
-                        "Pianissimo startup failed: {error}"
-                    )));
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(DictationError::TranscriptionFailed(
-                        "Pianissimo startup reader stopped".into(),
-                    ));
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-            }
-        };
-        if count == 0 || serde_json::from_str::<Value>(&line).ok()
-            .and_then(|event| event.get("type").and_then(Value::as_str).map(str::to_owned))
-            .as_deref() != Some("ready")
-        {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(DictationError::TranscriptionFailed(
-                "Pianissimo runtime could not load the original checkpoint. Check the local NeMo/PyTorch installation and worker logs.".into(),
-            ));
-        }
+
         Ok(Self {
-            child: Mutex::new(child),
-            stdin: Mutex::new(stdin),
-            stdout: Arc::new(Mutex::new(reader)),
+            executable: resolve_executable(),
+            active_child: Mutex::new(None),
             operation: Mutex::new(()),
         })
     }
 
-    fn read_protocol_line(&self, timeout: Duration) -> Result<String, DictationError> {
-        let reader = Arc::clone(&self.stdout);
-        let (sender, receiver) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut line = String::new();
-            let result = reader.lock().unwrap().read_line(&mut line).map(|count| (count, line));
-            let _ = sender.send(result);
-        });
-        match receiver.recv_timeout(timeout) {
-            Ok(Ok((0, _))) => Err(DictationError::TranscriptionFailed(
-                "Pianissimo worker exited before returning a transcript".into(),
-            )),
-            Ok(Ok((_, line))) => Ok(line),
-            Ok(Err(error)) => Err(DictationError::TranscriptionFailed(format!(
-                "Pianissimo protocol read failed: {error}"
-            ))),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.request_abort();
-                Err(DictationError::TranscriptionFailed(
-                    "Pianissimo worker timed out while transcribing".into(),
-                ))
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(DictationError::TranscriptionFailed(
-                "Pianissimo protocol reader stopped".into(),
-            )),
-        }
-    }
-
-    pub fn transcribe(&self, samples: &[f32], progress: impl Fn(u8)) -> Result<PianissimoResult, DictationError> {
-        let _operation = self.operation.lock().unwrap();
-        let path = std::env::temp_dir().join(format!("sagascript-pianissimo-{}.wav", uuid::Uuid::new_v4()));
+    pub fn transcribe(
+        &self,
+        samples: &[f32],
+        progress: impl Fn(u8),
+    ) -> Result<PianissimoResult, DictationError> {
+        let _operation = self.operation.lock().map_err(|_| {
+            DictationError::TranscriptionFailed("Pianissimo operation lock was poisoned".into())
+        })?;
+        let path = std::env::temp_dir().join(format!(
+            "sagascript-pianissimo-{}.wav",
+            uuid::Uuid::new_v4()
+        ));
         let wav = TemporaryWav(path);
         std::fs::write(&wav.0, encode_wav(samples)).map_err(|error| {
             DictationError::FileDecodeError(format!("Could not prepare Pianissimo audio: {error}"))
         })?;
-        let id = uuid::Uuid::new_v4().to_string();
+
+        progress(0);
+        let mut child = Command::new(&self.executable)
+            .arg("transcribe")
+            .arg(&wav.0)
+            .arg("--model")
+            .arg(pianissimo_model::path())
+            .arg("--language")
+            .arg("sv")
+            .arg("--device")
+            .arg(backend_device())
+            .arg("--format")
+            .arg("json")
+            .arg("--word-times")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|error| {
+                DictationError::TranscriptionFailed(format!(
+                    "Could not start Pianissimo native runtime ({}): {error}",
+                    self.executable.display()
+                ))
+            })?;
+        let mut stdout = child.stdout.take().ok_or_else(|| {
+            DictationError::TranscriptionFailed(
+                "Pianissimo native runtime did not provide stdout".into(),
+            )
+        })?;
+        let stdout_reader = std::thread::spawn(move || {
+            let mut output = Vec::new();
+            let result = stdout.read_to_end(&mut output);
+            (result, output)
+        });
+
         {
-            let mut stdin = self.stdin.lock().unwrap();
-            writeln!(stdin, "{}", json!({"id": id, "path": wav.0}))
-                .and_then(|_| stdin.flush())
-                .map_err(|error| DictationError::TranscriptionFailed(format!(
-                    "Pianissimo worker stopped before the request: {error}"
-                )))?;
+            let mut active = self.active_child.lock().map_err(|_| {
+                DictationError::TranscriptionFailed("Pianissimo process lock was poisoned".into())
+            })?;
+            *active = Some(child);
         }
-        loop {
-            let line = self.read_protocol_line(Duration::from_secs(180))?;
-            let event: Value = serde_json::from_str(&line).map_err(|_| DictationError::TranscriptionFailed(
-                "Pianissimo worker returned an invalid protocol message".into(),
-            ))?;
-            if event.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+
+        let deadline = Instant::now() + transcription_timeout(samples.len());
+        let status = loop {
+            if Instant::now() >= deadline {
+                self.request_abort();
+                let _ = stdout_reader.join();
                 return Err(DictationError::TranscriptionFailed(
-                    "Pianissimo worker returned a mismatched request ID".into(),
+                    "Pianissimo native runtime timed out while transcribing".into(),
                 ));
             }
-            match event.get("type").and_then(Value::as_str) {
-                Some("progress") => {
-                    let completed = event.get("completed").and_then(Value::as_u64).unwrap_or(0);
-                    let total = event.get("total").and_then(Value::as_u64).unwrap_or(0);
-                    if let Some(percent) = completed.saturating_mul(100).checked_div(total) {
-                        progress(percent.min(100) as u8);
-                    }
+            let status = {
+                let mut active = self.active_child.lock().map_err(|_| {
+                    DictationError::TranscriptionFailed(
+                        "Pianissimo process lock was poisoned".into(),
+                    )
+                })?;
+                active.as_mut().map(|child| child.try_wait())
+            };
+            match status {
+                Some(Ok(Some(status))) => break status,
+                Some(Ok(None)) => std::thread::sleep(Duration::from_millis(25)),
+                Some(Err(error)) => {
+                    self.request_abort();
+                    let _ = stdout_reader.join();
+                    return Err(DictationError::TranscriptionFailed(format!(
+                        "Pianissimo native runtime status check failed: {error}"
+                    )));
                 }
-                Some("result") => {
-                    let text = event.get("text").and_then(Value::as_str).ok_or_else(||
-                        DictationError::TranscriptionFailed("Pianissimo worker returned no text".into()))?.to_owned();
-                    let words = serde_json::from_value(event.get("words").cloned().ok_or_else(||
-                        DictationError::TranscriptionFailed("Pianissimo worker returned no word array".into()))?)
-                        .map_err(|_| DictationError::TranscriptionFailed(
-                            "Pianissimo worker returned invalid word timestamps".into()))?;
-                    return Ok(PianissimoResult { text, words });
+                None => {
+                    let _ = stdout_reader.join();
+                    return Err(DictationError::TranscriptionFailed(
+                        "Pianissimo native runtime disappeared before completing".into(),
+                    ));
                 }
-                Some("error") => return Err(DictationError::TranscriptionFailed(format!(
-                    "Pianissimo worker failed ({})",
-                    event.get("error").and_then(Value::as_str).unwrap_or("unknown")
-                ))),
-                _ => return Err(DictationError::TranscriptionFailed(
-                    "Pianissimo worker returned an unexpected protocol message".into(),
-                )),
             }
+        };
+
+        let output = stdout_reader.join().map_err(|_| {
+            DictationError::TranscriptionFailed(
+                "Pianissimo native runtime output reader stopped".into(),
+            )
+        })?;
+        {
+            let mut active = self.active_child.lock().map_err(|_| {
+                DictationError::TranscriptionFailed("Pianissimo process lock was poisoned".into())
+            })?;
+            let _ = active.take();
         }
+
+        if !status.success() {
+            return Err(DictationError::TranscriptionFailed(format!(
+                "Pianissimo native runtime exited with {status}"
+            )));
+        }
+        let (read_result, output) = output;
+        read_result.map_err(|error| {
+            DictationError::TranscriptionFailed(format!(
+                "Pianissimo native runtime output read failed: {error}"
+            ))
+        })?;
+        let result = parse_transcript_json(&output).map_err(DictationError::TranscriptionFailed)?;
+        progress(100);
+        Ok(result)
     }
 
     pub fn request_abort(&self) {
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
+        if let Ok(mut active) = self.active_child.lock() {
+            if let Some(child) = active.as_mut() {
+                let _ = child.kill();
+            }
         }
     }
 }
 
 impl Drop for PianissimoBackend {
     fn drop(&mut self) {
-        if let Ok(mut stdin) = self.stdin.lock() {
-            let _ = writeln!(stdin, "{{\"type\":\"close\"}}");
-            let _ = stdin.flush();
-        }
-        if let Ok(mut child) = self.child.lock() {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while Instant::now() < deadline {
-                if child.try_wait().ok().flatten().is_some() { return; }
-                std::thread::sleep(Duration::from_millis(25));
+        self.request_abort();
+        if let Ok(mut active) = self.active_child.lock() {
+            if let Some(mut child) = active.take() {
+                let _ = child.wait();
             }
-            let _ = child.kill();
-            let _ = child.wait();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_files_get_a_duration_scaled_deadline() {
+        assert_eq!(transcription_timeout(16_000), Duration::from_secs(180));
+        assert_eq!(transcription_timeout(16_000 * 60), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn uses_cpu_backend_on_all_platforms() {
+        assert_eq!(backend_device(), "cpu");
+    }
+
+    #[test]
+    fn parses_native_json_with_extra_metadata_and_confidence() {
+        let result = parse_transcript_json(
+            r#"{"file":"recording.wav","text":"Hej världen.","confidence":0.98,"duration":1.2,"languages":["sv"],"words":[{"word":"Hej","start":0.1,"end":0.4,"confidence":0.99},{"word":"världen.","start":0.5,"end":1.1,"confidence":0.97}]}"#
+                .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(result.text, "Hej världen.");
+        assert_eq!(result.words.len(), 2);
+        assert_eq!(result.words[1].word, "världen.");
+        assert!((result.words[1].start - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn rejects_native_json_without_word_timestamps() {
+        let error = parse_transcript_json(br#"{"text":"Hej"}"#).unwrap_err();
+        assert!(error.contains("missing field `words`"), "{error}");
+    }
+
+    #[test]
+    fn bundled_runtime_resolves_relative_to_app_executable() {
+        let root =
+            std::env::temp_dir().join(format!("sagascript-runtime-test-{}", uuid::Uuid::new_v4()));
+        let contents = root.join("Sagascript.app/Contents");
+        let runtime = contents.join("Resources/PianissimoRuntime/bin");
+        std::fs::create_dir_all(&runtime).unwrap();
+        let executable = runtime.join("nemo-speech");
+        std::fs::write(&executable, b"").unwrap();
+        let found = bundled_executable(&contents.join("MacOS/sagascript")).unwrap();
+        assert_eq!(found, executable);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn request_abort_kills_fake_sleeping_runtime() {
+        let child = Command::new("/bin/sleep").arg("10").spawn().unwrap();
+        let backend = PianissimoBackend {
+            executable: PathBuf::from("/bin/sleep"),
+            active_child: Mutex::new(Some(child)),
+            operation: Mutex::new(()),
+        };
+        let started = Instant::now();
+        backend.request_abort();
+        let mut active = backend.active_child.lock().unwrap();
+        let status = active.as_mut().unwrap().wait().unwrap();
+        assert!(!status.success());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_13_is_supported_by_native_runtime() {
+        assert!(macos_version_supported("13.7.6"));
+        assert!(macos_version_supported("14.0"));
+        assert!(macos_version_supported("26.6.2\n"));
+        assert!(!macos_version_supported("12.6.9"));
+        assert!(!macos_version_supported("unknown"));
     }
 }
