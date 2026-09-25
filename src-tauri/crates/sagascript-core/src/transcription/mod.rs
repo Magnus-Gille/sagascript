@@ -3,6 +3,8 @@ pub mod diagnostics;
 pub mod glossary;
 pub mod glossary_suggestions;
 pub mod model;
+pub mod pianissimo_backend;
+pub mod pianissimo_model;
 mod postprocess;
 pub mod whisper_backend;
 

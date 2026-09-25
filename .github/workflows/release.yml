@@ -177,6 +177,16 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Install Python runtime packager
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build bundled Pianissimo runtime
+        run: |
+          python -m pip install uv==0.8.5
+          ./scripts/build-pianissimo-runtime.sh
+
       - name: Verify release metadata and tag
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -201,6 +211,11 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
           security list-keychains -d user -s "$keychain"
 
+      - name: Sign bundled Pianissimo native libraries
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: python scripts/sign-pianissimo-runtime.py build/pianissimo-runtime
+
       - name: Prepare notarization credentials and build metadata
         env:
           APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
@@ -223,7 +238,7 @@ jobs:
         run: |
           : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
           : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
-          npx tauri build --target aarch64-apple-darwin
+          npx tauri build --target aarch64-apple-darwin --config scripts/tauri-pianissimo-bundle.json
 
       - name: Notarize and staple disk image
         env:

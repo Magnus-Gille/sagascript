@@ -32,6 +32,7 @@ export interface WhisperModel {
 export interface Settings {
   language: Language;
   whisper_model: string;
+  file_transcription_model: string;
   hotkey_mode: HotkeyMode;
   show_overlay: boolean;
   auto_paste: boolean;
@@ -114,6 +115,18 @@ export async function setLanguage(language: Language): Promise<void> {
 
 export async function setWhisperModel(model: string): Promise<void> {
   return invoke("set_whisper_model", { model });
+}
+
+export async function setFileTranscriptionModel(modelId: string): Promise<void> {
+  return invoke("set_file_transcription_model", { modelId });
+}
+
+export async function getFileModelOptions(language: Language): Promise<WhisperModel[]> {
+  return invoke("get_file_model_options", { language });
+}
+
+export async function downloadPianissimoModel(): Promise<void> {
+  return invoke("download_pianissimo_model");
 }
 
 export async function setAutoSelectModel(enabled: boolean): Promise<void> {

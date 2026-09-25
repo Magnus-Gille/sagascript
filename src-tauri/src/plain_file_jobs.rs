@@ -5,6 +5,7 @@ use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::collections::VecDeque;
 use sagascript_core::{audio::decoder, error::DictationError, transcription::{ContextProfile, WhisperBackend, recommended_parallel_chunks}};
+use sagascript_core::transcription::{Glossary, pianissimo_backend::PianissimoBackend};
 use tauri::Emitter;
 use crate::commands::FileTranscriptionContext;
 
@@ -14,10 +15,11 @@ pub struct PlainFileJobs {
     active: Mutex<Option<Arc<RunControl>>>,
     pending_cancels: Mutex<VecDeque<(String, Instant)>>,
     backend: Arc<WhisperBackend>,
+    pianissimo_backend: Mutex<Option<Arc<PianissimoBackend>>>,
 }
 impl Default for PlainFileJobs {
     fn default() -> Self {
-        Self { active: Mutex::new(None), pending_cancels: Mutex::new(VecDeque::new()), backend: Arc::new(WhisperBackend::new()) }
+        Self { active: Mutex::new(None), pending_cancels: Mutex::new(VecDeque::new()), backend: Arc::new(WhisperBackend::new()), pianissimo_backend: Mutex::new(None) }
     }
 }
 struct RunControl {
@@ -61,6 +63,9 @@ impl PlainFileJobs {
         run.cancelled.store(true, Ordering::SeqCst);
         // This backend is exclusively leased to this run, never live dictation.
         self.backend.request_abort();
+        if let Some(backend) = self.pianissimo_backend.lock().unwrap().as_ref() {
+            backend.request_abort();
+        }
         true
     }
     fn finish(&self, lease: &Lease, result: Result<String, String>) -> Result<String, String> {
@@ -69,6 +74,65 @@ impl PlainFileJobs {
         if active.as_ref().is_some_and(|run| Arc::ptr_eq(run, &lease.control)) { *active = None; }
         result
     }
+}
+
+pub async fn transcribe_pianissimo(
+    app: tauri::AppHandle, jobs: SharedPlainFileJobs, run_id: String,
+    file_path: String, glossary: Glossary,
+) -> Result<String, String> {
+    let lease = jobs.begin(run_id)?;
+    let worker_lease = lease.clone();
+    let mut worker = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let run = &worker_lease.control;
+        let progress = |phase: &str, percent| {
+            let _ = app.emit(crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS,
+                Progress { run_id: &run.id, phase, percent });
+        };
+        let work = || -> Result<String, DictationError> {
+            run.check()?;
+            progress("decoding", Some(0));
+            let audio = decoder::decode_audio_file_with_stage_progress(
+                std::path::Path::new(&file_path), Some(&|| run.check()),
+                &|pct| progress("decoding", Some(pct)),
+                &|pct| progress("resampling", Some(pct)),
+            )?;
+            run.check()?;
+            let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 6).max(60));
+            progress("loading", None);
+            let backend = Arc::new(PianissimoBackend::start_with_cancel(&run.cancelled)?);
+            *worker_lease.jobs.pianissimo_backend.lock().unwrap() = Some(backend.clone());
+            run.check()?;
+            *run.deadline.lock().unwrap() = Some(Instant::now() + timeout);
+            progress("transcribing", Some(0));
+            let result = backend.transcribe(&audio, |pct| progress("transcribing", Some(pct)))?;
+            run.check()?;
+            progress("finalizing", None);
+            Ok(crate::commands::apply_glossary(result.text, &glossary))
+        };
+        let result = work().map_err(|error| error.to_string());
+        *worker_lease.jobs.pianissimo_backend.lock().unwrap() = None;
+        result
+    });
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    let mut timed_out = false;
+    let result = loop {
+        tokio::select! {
+            result = &mut worker => break result.unwrap_or_else(|error| Err(format!("Transcription worker failed: {error}"))),
+            _ = tick.tick() => {
+                if lease.control.deadline.lock().unwrap().is_some_and(|end| Instant::now() >= end) {
+                    timed_out = true;
+                    lease.control.cancelled.store(true, Ordering::SeqCst);
+                }
+                if lease.control.cancelled.load(Ordering::SeqCst) {
+                    if let Some(backend) = jobs.pianissimo_backend.lock().unwrap().as_ref() {
+                        backend.request_abort();
+                    }
+                }
+            }
+        }
+    };
+    let result = jobs.finish(&lease, result);
+    if timed_out { Err("Transcription timed out and has stopped.".into()) } else { result }
 }
 impl RunControl {
     fn check(&self) -> Result<(), DictationError> {
