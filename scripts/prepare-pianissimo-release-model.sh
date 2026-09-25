@@ -26,7 +26,7 @@ python_bin=${PIANISSIMO_CONVERTER_PYTHON:-"$scratch/venv/bin/python"}
 if [[ -z "${PIANISSIMO_CONVERTER_PYTHON:-}" ]]; then
   python3 -m venv "$scratch/venv"
   "$python_bin" -m pip install --disable-pip-version-check --no-cache-dir \
-    torch==2.14.0 numpy==2.5.3 librosa==1.0.0 gguf==0.19.0 pyyaml==6.0.3
+    torch==2.14.0 numpy==2.5.3 librosa==1.0.0 gguf==0.19.0 pyyaml==6.0.3 sentencepiece==0.2.2
 fi
 
 "$repo_root/scripts/build-pianissimo-model.sh" \
