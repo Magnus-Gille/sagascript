@@ -61,10 +61,10 @@ jobs:
       - name: Build verified optional Pianissimo Q8 model
         run: ./scripts/prepare-pianissimo-release-model.sh
 
-      - name: Gate unsigned native Pianissimo inference
+      - name: Gate unsigned native Pianissimo CPU inference
         run: |
           build/pianissimo-native-runtime/bin/nemo-speech transcribe test-audio/english-jfk.wav \
-            --model build/pianissimo-sv-q8-melfix.gguf --language sv --device metal --format json \
+            --model build/pianissimo-sv-q8-melfix.gguf --language sv --device cpu --format json \
             > "$RUNNER_TEMP/pianissimo-unsigned-smoke.json"
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["words"]' \
             "$RUNNER_TEMP/pianissimo-unsigned-smoke.json"
@@ -99,10 +99,10 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: python3 scripts/sign-pianissimo-runtime.py build/pianissimo-native-runtime
 
-      - name: Gate signed native Pianissimo inference before bundling
+      - name: Gate signed native Pianissimo CPU inference before bundling
         run: |
           build/pianissimo-native-runtime/bin/nemo-speech transcribe test-audio/english-jfk.wav \
-            --model build/pianissimo-sv-q8-melfix.gguf --language sv --device metal --format json \
+            --model build/pianissimo-sv-q8-melfix.gguf --language sv --device cpu --format json \
             > "$RUNNER_TEMP/pianissimo-signed-native-smoke.json"
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["words"]' \
             "$RUNNER_TEMP/pianissimo-signed-native-smoke.json"

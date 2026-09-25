@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Stage NVIDIA NeMo-Speech.cpp's pinned Apple Silicon Metal runtime.
+# Stage NVIDIA NeMo-Speech.cpp's pinned Apple Silicon CPU runtime.
 # The archive is verified before it is unpacked.  Set
 # PIANISSIMO_NATIVE_ARCHIVE to use a local archive in offline builds/tests.
 
@@ -14,9 +14,9 @@ archive_override=${PIANISSIMO_NATIVE_ARCHIVE:-}
   exit 1
 }
 
-archive_name="nemo-speech-0.1.0-macos-aarch64-metal.tar.gz"
+archive_name="nemo-speech-0.1.0-macos-aarch64-cpu.tar.gz"
 archive_url="https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.1.0/$archive_name"
-archive_sha256="f1dff4f9dd9c96214f8cb78b982812459132df8a4ad1a42409fd94de4a366244"
+archive_sha256="971661d38d4bf97a63c528d13041a964316d25068d8df045e5b4839848092f25"
 
 [[ ! -e "$output" ]] || {
   echo "Native runtime output already exists: $output" >&2
@@ -125,7 +125,7 @@ for library in \
   lib/libggml.dylib \
   lib/libggml-base.dylib \
   lib/libggml-cpu.dylib \
-  lib/libggml-metal.dylib \
+  lib/libggml-blas.dylib \
   lib/libllama.dylib; do
   [[ -e "$output/$library" ]] || {
     echo "Native runtime library missing: $output/$library" >&2
