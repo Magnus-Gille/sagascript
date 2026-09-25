@@ -23,7 +23,7 @@ pub const PIANISSIMO_FILENAME: &str = "pianissimo-sv-q8-melfix.gguf";
 const LEGACY_PIANISSIMO_FILENAME: &str = "pianissimo-sv.nemo";
 
 /// The converted model is an optional asset of the matching app release.
-pub const PIANISSIMO_URL: &str = "https://github.com/Magnus-Gille/sagascript/releases/download/v1.3.1/pianissimo-sv-q8-melfix.gguf";
+pub const PIANISSIMO_URL: &str = "https://github.com/Magnus-Gille/sagascript/releases/download/v1.3.2/pianissimo-sv-q8-melfix.gguf";
 
 /// Immutable integrity manifest for the corrected conversion.
 pub const PIANISSIMO_INTEGRITY: DownloadIntegrity = DownloadIntegrity {
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn manifest_is_pinned_to_corrected_conversion() {
         assert_eq!(PIANISSIMO_FILENAME, "pianissimo-sv-q8-melfix.gguf");
-        assert_eq!(PIANISSIMO_URL, "https://github.com/Magnus-Gille/sagascript/releases/download/v1.3.1/pianissimo-sv-q8-melfix.gguf");
+        assert_eq!(PIANISSIMO_URL, "https://github.com/Magnus-Gille/sagascript/releases/download/v1.3.2/pianissimo-sv-q8-melfix.gguf");
         assert_eq!(PIANISSIMO_INTEGRITY.size, 714_456_704);
         assert_eq!(
             PIANISSIMO_INTEGRITY.sha256,
