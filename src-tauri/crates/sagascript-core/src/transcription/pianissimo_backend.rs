@@ -110,14 +110,7 @@ fn resolve_executable() -> PathBuf {
 }
 
 fn backend_device() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        "metal"
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        "cpu"
-    }
+    "cpu"
 }
 
 fn parse_transcript_json(bytes: &[u8]) -> Result<PianissimoResult, String> {
@@ -311,6 +304,11 @@ mod tests {
     fn long_files_get_a_duration_scaled_deadline() {
         assert_eq!(transcription_timeout(16_000), Duration::from_secs(180));
         assert_eq!(transcription_timeout(16_000 * 60), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn uses_cpu_backend_on_all_platforms() {
+        assert_eq!(backend_device(), "cpu");
     }
 
     #[test]
