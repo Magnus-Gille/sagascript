@@ -17,7 +17,13 @@ use crate::audio::wav::encode_wav;
 use crate::error::DictationError;
 use crate::transcription::pianissimo_model;
 
-const TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(180);
+const MIN_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(180);
+const SAMPLE_RATE: u64 = 16_000;
+
+fn transcription_timeout(sample_count: usize) -> Duration {
+    let audio_seconds = (sample_count as u64).saturating_add(SAMPLE_RATE - 1) / SAMPLE_RATE;
+    MIN_TRANSCRIPTION_TIMEOUT.max(Duration::from_secs(audio_seconds.saturating_mul(10)))
+}
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct PianissimoWord {
@@ -213,7 +219,7 @@ impl PianissimoBackend {
             *active = Some(child);
         }
 
-        let deadline = Instant::now() + TRANSCRIPTION_TIMEOUT;
+        let deadline = Instant::now() + transcription_timeout(samples.len());
         let status = loop {
             if Instant::now() >= deadline {
                 self.request_abort();
@@ -228,10 +234,7 @@ impl PianissimoBackend {
                         "Pianissimo process lock was poisoned".into(),
                     )
                 })?;
-                match active.as_mut() {
-                    Some(child) => Some(child.try_wait()),
-                    None => None,
-                }
+                active.as_mut().map(|child| child.try_wait())
             };
             match status {
                 Some(Ok(Some(status))) => break status,
@@ -303,6 +306,12 @@ impl Drop for PianissimoBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_files_get_a_duration_scaled_deadline() {
+        assert_eq!(transcription_timeout(16_000), Duration::from_secs(180));
+        assert_eq!(transcription_timeout(16_000 * 60), Duration::from_secs(600));
+    }
 
     #[test]
     fn parses_native_json_with_extra_metadata_and_confidence() {

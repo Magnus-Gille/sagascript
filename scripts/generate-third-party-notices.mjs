@@ -388,7 +388,7 @@ link; the upstream repository is authoritative for its license terms.
 |---|---|---|---|
 | OpenAI Whisper GGML + Core ML encoders | Tiny, Base, Small, Medium, Large v3 Turbo variants | MIT | [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) |
 | KB-Whisper | Tiny, Base, Small, Medium, Large Swedish models | Apache-2.0 | [KBLab, National Library of Sweden](https://huggingface.co/KBLab) |
-| Klang Pianissimo Original | Unmodified \`pianissimo-sv.nemo\`, optional Swedish file model | CC-BY-4.0 | [Klang AI model card and attribution](https://huggingface.co/KlangAI/pianissimo-sv), reviewed 2026-09-24 |
+| Klang Pianissimo Q8 | Corrected \`pianissimo-sv-q8-melfix.gguf\` conversion, optional Swedish file model | CC-BY-4.0 | [Klang AI model card and attribution](https://huggingface.co/KlangAI/pianissimo-sv), reviewed 2026-09-25 |
 | NB-Whisper | Tiny, Base, Small, Medium, Large Norwegian models | Apache-2.0 | [NbAiLab, National Library of Norway](https://huggingface.co/NbAiLab) |
 | Finnish-NLP Whisper Tiny | Unmodified \`ggml-model-fi-tiny.bin\`, optional Finnish specialist | Apache-2.0 | [Finnish-NLP pinned GGML repository](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d), reviewed 2026-09-06 |
 | Silero VAD (GGML conversion) | \`ggml-silero-v5.1.2.bin\` | MIT | [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad) |
@@ -410,15 +410,17 @@ ${table(rustPackages)}
 
 ${table(npmPackages)}
 
-## Python dependencies bundled for Pianissimo on macOS
+## Pianissimo native runtime
 
-The Apple Silicon app contains a local [CPython 3.12.9](https://github.com/python/cpython/tree/v3.12.9)
-runtime under the Python Software Foundation License (the full agreement is
-shipped in \`PianissimoRuntime/CPYTHON_LICENSE\`) and these pinned
-packages for the optional Pianissimo model. Their package metadata and shipped
-license/notice files are included in the app bundle. The table reflects the
-published package metadata; for pyannote packages, the MIT license is taken
-from the publisher repositories because the wheel metadata omits it.
+The Apple Silicon app includes [NVIDIA NeMo-Speech.cpp v0.1.0](https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.1.0).
+Its license and third-party notices are shipped under
+\`PianissimoRuntime/share/licenses/nemo-speech/\`.
+
+## Historical Python runtime dependency inventory
+
+Earlier test builds used [CPython 3.12.9](https://github.com/python/cpython/tree/v3.12.9)
+and these pinned packages. They are not included in the native app bundle.
+The inventory is retained for reproducibility of that evaluation.
 
 ${pianissimoTable}
 

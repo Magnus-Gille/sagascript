@@ -47,6 +47,19 @@ actual_architectures=$(lipo -archs "$binary")
 }
 
 codesign --verify --deep --strict --verbose=2 "$app"
+runtime="$app/Contents/Resources/PianissimoRuntime"
+[[ -x "$runtime/bin/nemo-speech" ]] || {
+  echo "Bundled Pianissimo native executable is missing" >&2
+  exit 1
+}
+[[ ! -e "$runtime/python/bin/python3.12" ]] || {
+  echo "Unexpected Python runtime remains in app bundle" >&2
+  exit 1
+}
+for native in "$runtime/bin/nemo-speech" "$runtime"/lib/*.dylib; do
+  [[ -e "$native" ]] || { echo "Missing Pianissimo native component: $native" >&2; exit 1; }
+  codesign --verify --strict "$native"
+done
 signature=$(codesign -dvvv "$app" 2>&1)
 grep -q '^Authority=Developer ID Application:' <<<"$signature" || {
   echo "App is not signed with Developer ID Application" >&2
@@ -73,6 +86,10 @@ verify_audio_input_entitlement "$entitlements" || {
   echo "Signed app is missing the audio-input entitlement" >&2
   exit 1
 }
+if [[ $(plutil -extract 'com\.apple\.security\.cs\.allow-unsigned-executable-memory' raw "$entitlements" 2>/dev/null || true) == "true" ]]; then
+  echo "Signed app unexpectedly allows unsigned executable memory" >&2
+  exit 1
+fi
 
 xcrun stapler validate "$app"
 xcrun stapler validate "$dmg"

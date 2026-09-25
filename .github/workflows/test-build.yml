@@ -50,15 +50,16 @@ jobs:
       - name: Verify release metadata (no tag check for test builds)
         run: npm run release:check
 
-      - name: Install Python runtime packager
+      - name: Build bundled Pianissimo runtime
+        run: ./scripts/build-pianissimo-native-runtime.sh
+
+      - name: Install Python for build-time model conversion
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - name: Build bundled Pianissimo runtime
-        run: |
-          python -m pip install uv==0.8.5
-          ./scripts/build-pianissimo-runtime.sh
+      - name: Build verified optional Pianissimo Q8 model
+        run: ./scripts/prepare-pianissimo-release-model.sh
 
       - name: Verify third-party notices
         run: npm run licenses:check
@@ -88,7 +89,7 @@ jobs:
       - name: Sign bundled Pianissimo native libraries
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: python scripts/sign-pianissimo-runtime.py build/pianissimo-runtime
+        run: python3 scripts/sign-pianissimo-runtime.py build/pianissimo-native-runtime
 
       - name: Prepare notarization credentials and build metadata
         env:
@@ -146,6 +147,17 @@ jobs:
           tar -czf "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
           (cd artifacts && shasum -a 256 Sagascript-TEST-* > SHA256SUMS)
           ls -lh artifacts/
+
+      - name: Gate signed Pianissimo transcription
+        run: |
+          mkdir -p "$HOME/Library/Application Support/Sagascript/Models"
+          cp build/pianissimo-sv-q8-melfix.gguf "$HOME/Library/Application Support/Sagascript/Models/"
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
+          "$app/Contents/MacOS/sagascript" transcribe --language sv --model pianissimo-sv --json \
+            test-audio/english-jfk.wav > "$RUNNER_TEMP/pianissimo-signed-smoke.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["segments"]' \
+            "$RUNNER_TEMP/pianissimo-signed-smoke.json"
+          rm "$HOME/Library/Application Support/Sagascript/Models/pianissimo-sv-q8-melfix.gguf"
 
       - name: Upload macOS test artifacts (no GitHub Release is created)
         uses: actions/upload-artifact@v4

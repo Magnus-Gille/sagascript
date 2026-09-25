@@ -100,7 +100,7 @@ pub(crate) fn file_transcription_context(
     let model = match settings.effective_file_model_for(language)? {
         FileModel::Whisper(model) => model,
         FileModel::PianissimoOriginal => return Err(
-            "Pianissimo Original supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".into(),
+            "Pianissimo Q8 supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".into(),
         ),
     };
     let glossary =
@@ -1240,8 +1240,8 @@ pub async fn get_file_model_options(language: Language) -> Result<Vec<ModelInfo>
     if language == Language::Swedish && sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
         models.push(ModelInfo {
             id: "pianissimo-sv".into(),
-            display_name: "Pianissimo Original".into(),
-            description: "Swedish file transcription · original NeMo checkpoint · macOS 14+ app runtime included".into(),
+            display_name: "Pianissimo Q8".into(),
+            description: "Swedish file transcription · corrected Q8 conversion · macOS 13+ app runtime included".into(),
             size_mb: 2_509,
             downloaded: pianissimo_model::is_downloaded(),
             active: false,
@@ -1254,7 +1254,7 @@ pub async fn get_file_model_options(language: Language) -> Result<Vec<ModelInfo>
 pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Emitter;
     if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
-        return Err("Pianissimo Original requires macOS 14 or later".into());
+        return Err("Pianissimo requires macOS 13 or later".into());
     }
     let progress_app = app.clone();
     pianissimo_model::download(move |downloaded, total| {
@@ -2279,7 +2279,7 @@ pub async fn transcribe_file(
     };
     if let Some(glossary) = pianissimo_glossary {
         if diarize.unwrap_or(false) {
-            return Err("Pianissimo Original supports plain Swedish file transcription only; choose a Whisper file model for diarization".into());
+            return Err("Pianissimo Q8 supports plain Swedish file transcription only; choose a Whisper file model for diarization".into());
         }
         let text = crate::plain_file_jobs::transcribe_pianissimo(
             app.clone(), jobs.inner().clone(), run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),

@@ -2,7 +2,7 @@
   "bundle": {
     "macOS": {
       "files": {
-        "Resources/PianissimoRuntime": "../build/pianissimo-runtime"
+        "Resources/PianissimoRuntime": "../build/pianissimo-native-runtime"
       }
     }
   }

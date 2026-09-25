@@ -27,8 +27,8 @@ def main() -> int:
     if not identity:
         print("APPLE_SIGNING_IDENTITY is required", file=sys.stderr)
         return 2
-    if not (root / "CPYTHON_LICENSE").is_file():
-        print("CPython license is missing from runtime", file=sys.stderr)
+    if not (root / "share/licenses/nemo-speech/LICENSE").is_file():
+        print("NeMo-Speech.cpp license is missing from runtime", file=sys.stderr)
         return 1
 
     native = []
@@ -48,8 +48,8 @@ def main() -> int:
             # Scripts are imported as data and do not need execute permission.
             path.chmod(path.stat().st_mode & ~0o111)
 
-    if not native or not (root / "python/bin/python3.12") in native:
-        print("Pianissimo runtime contains no signed Python executable", file=sys.stderr)
+    if not native or not (root / "bin/nemo-speech") in native:
+        print("Pianissimo runtime contains no native executable", file=sys.stderr)
         return 1
     # Sign inner binaries before their containing library and the outer app.
     native.sort(key=lambda path: (-len(path.parts), str(path)))
