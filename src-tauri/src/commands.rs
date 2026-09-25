@@ -1242,7 +1242,7 @@ pub async fn get_file_model_options(language: Language) -> Result<Vec<ModelInfo>
             id: "pianissimo-sv".into(),
             display_name: "Pianissimo Q8".into(),
             description: "Swedish file transcription · corrected Q8 conversion · macOS 13+ app runtime included".into(),
-            size_mb: 2_509,
+            size_mb: 714,
             downloaded: pianissimo_model::is_downloaded(),
             active: false,
         });

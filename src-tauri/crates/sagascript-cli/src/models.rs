@@ -110,7 +110,7 @@ pub struct DeleteModelArgs {
 pub fn delete(args: DeleteModelArgs) -> Result<(), DictationError> {
     if args.model == "pianissimo-sv" {
         pianissimo_model::delete()?;
-        eprintln!("Deleted Pianissimo Q8");
+        eprintln!("Deleted Pianissimo Q8 and any legacy original checkpoint");
         return Ok(());
     }
     let whisper_model = parse_model(&args.model)?;

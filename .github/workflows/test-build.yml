@@ -145,7 +145,8 @@ jobs:
           mkdir -p artifacts
           cp "$dmg" "artifacts/Sagascript-TEST-${label}-${sha}.dmg"
           tar -czf "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
-          (cd artifacts && shasum -a 256 Sagascript-TEST-* > SHA256SUMS)
+          cp build/pianissimo-sv-q8-melfix.gguf artifacts/pianissimo-sv-q8-melfix.gguf
+          (cd artifacts && shasum -a 256 Sagascript-TEST-* pianissimo-sv-q8-melfix.gguf > SHA256SUMS)
           ls -lh artifacts/
 
       - name: Gate signed Pianissimo transcription
@@ -165,5 +166,6 @@ jobs:
           name: test-dmg-${{ inputs.label }}
           path: |
             artifacts/Sagascript-TEST-*
+            artifacts/pianissimo-sv-q8-melfix.gguf
             artifacts/SHA256SUMS
           if-no-files-found: error

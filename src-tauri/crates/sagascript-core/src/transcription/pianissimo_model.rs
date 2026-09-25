@@ -8,7 +8,7 @@
 //!
 //! Conversion and its fidelity checks are documented in docs/research.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tracing::info;
 
@@ -20,6 +20,7 @@ use crate::transcription::model::models_dir;
 
 /// Filename keeps the converted artifact separate from any earlier checkpoint.
 pub const PIANISSIMO_FILENAME: &str = "pianissimo-sv-q8-melfix.gguf";
+const LEGACY_PIANISSIMO_FILENAME: &str = "pianissimo-sv.nemo";
 
 /// The converted model is an optional asset of the matching app release.
 pub const PIANISSIMO_URL: &str = "https://github.com/Magnus-Gille/sagascript/releases/download/v1.3.1/pianissimo-sv-q8-melfix.gguf";
@@ -82,15 +83,21 @@ pub async fn download(
     Ok(destination)
 }
 
-/// Remove the cached checkpoint. It is safe to call when no checkpoint exists.
-pub fn delete() -> Result<(), DictationError> {
-    match std::fs::remove_file(path()) {
+fn remove_if_present(path: &Path) -> Result<(), DictationError> {
+    match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(DictationError::ModelDownloadFailed(format!(
-            "Failed to delete Pianissimo model: {error}"
+            "Failed to delete Pianissimo model at {}: {error}", path.display()
         ))),
     }
+}
+
+/// Remove both the current model and any original checkpoint on explicit
+/// user-initiated deletion. Upgrade and download leave the old file intact.
+pub fn delete() -> Result<(), DictationError> {
+    remove_if_present(&path())?;
+    remove_if_present(&models_dir().join(LEGACY_PIANISSIMO_FILENAME))
 }
 
 #[cfg(test)]
@@ -131,6 +138,23 @@ mod tests {
 
         assert_eq!(result, ExistingArtifact::RemovedInvalid);
         assert!(!destination.exists());
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn explicit_cleanup_removes_current_and_legacy_files() {
+        let directory = std::env::temp_dir().join(format!(
+            "sagascript-pianissimo-cleanup-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&directory).unwrap();
+        for name in [PIANISSIMO_FILENAME, LEGACY_PIANISSIMO_FILENAME] {
+            let file = directory.join(name);
+            fs::write(&file, b"cached model").unwrap();
+            remove_if_present(&file).unwrap();
+            assert!(!file.exists());
+            remove_if_present(&file).unwrap();
+        }
         fs::remove_dir(directory).unwrap();
     }
 }
