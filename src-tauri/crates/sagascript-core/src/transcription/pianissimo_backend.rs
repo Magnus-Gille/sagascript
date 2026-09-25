@@ -346,6 +346,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
     #[test]
     fn request_abort_kills_fake_sleeping_runtime() {
         let child = Command::new("/bin/sleep").arg("10").spawn().unwrap();
