@@ -504,8 +504,8 @@ pub enum FileModel {
 
 /// Persisted preference for file transcription.
 ///
-/// `Auto` inherits the live dictation model, keeping existing settings files
-/// and live behavior unchanged when this field is absent.
+/// `Auto` inherits the effective Whisper model for the requested language.
+/// The separate experimental Pianissimo live-dictation choice does not affect it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FileModelPreference {
     #[default]
