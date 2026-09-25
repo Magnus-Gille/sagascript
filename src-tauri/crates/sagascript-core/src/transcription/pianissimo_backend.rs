@@ -147,6 +147,9 @@ impl PianissimoBackend {
             ));
         }
         pianissimo_model::verify_downloaded()?;
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(cancelled_error());
+        }
 
         Ok(Self {
             executable: resolve_executable(),
@@ -160,9 +163,28 @@ impl PianissimoBackend {
         samples: &[f32],
         progress: impl Fn(u8),
     ) -> Result<PianissimoResult, DictationError> {
+        static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
+        self.transcribe_with_cancel(samples, progress, &NEVER_CANCEL)
+    }
+
+    /// Run one native transcription while observing a caller-owned cancellation
+    /// flag before work, immediately before spawn, and after the child is
+    /// registered so an abort racing with process startup still kills it.
+    pub fn transcribe_with_cancel(
+        &self,
+        samples: &[f32],
+        progress: impl Fn(u8),
+        cancelled: &AtomicBool,
+    ) -> Result<PianissimoResult, DictationError> {
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(cancelled_error());
+        }
         let _operation = self.operation.lock().map_err(|_| {
             DictationError::TranscriptionFailed("Pianissimo operation lock was poisoned".into())
         })?;
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(cancelled_error());
+        }
         let path = std::env::temp_dir().join(format!(
             "sagascript-pianissimo-{}.wav",
             uuid::Uuid::new_v4()
@@ -171,6 +193,9 @@ impl PianissimoBackend {
         std::fs::write(&wav.0, encode_wav(samples)).map_err(|error| {
             DictationError::FileDecodeError(format!("Could not prepare Pianissimo audio: {error}"))
         })?;
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(cancelled_error());
+        }
 
         progress(0);
         let mut child = Command::new(&self.executable)
@@ -195,28 +220,51 @@ impl PianissimoBackend {
                     self.executable.display()
                 ))
             })?;
-        let mut stdout = child.stdout.take().ok_or_else(|| {
-            DictationError::TranscriptionFailed(
-                "Pianissimo native runtime did not provide stdout".into(),
-            )
-        })?;
+        let mut stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(DictationError::TranscriptionFailed(
+                    "Pianissimo native runtime did not provide stdout".into(),
+                ));
+            }
+        };
+
+        match self.active_child.lock() {
+            Ok(mut active) => *active = Some(child),
+            Err(_) => {
+                // The process is already running; close its output before
+                // waiting so a full pipe cannot keep it alive after the kill.
+                let _ = child.kill();
+                drop(stdout);
+                let _ = child.wait();
+                return Err(DictationError::TranscriptionFailed(
+                    "Pianissimo process lock was poisoned".into(),
+                ));
+            }
+        }
         let stdout_reader = std::thread::spawn(move || {
             let mut output = Vec::new();
             let result = stdout.read_to_end(&mut output);
             (result, output)
         });
 
-        {
-            let mut active = self.active_child.lock().map_err(|_| {
-                DictationError::TranscriptionFailed("Pianissimo process lock was poisoned".into())
-            })?;
-            *active = Some(child);
+        if cancelled.load(Ordering::SeqCst) {
+            self.stop_active_child();
+            let _ = stdout_reader.join();
+            return Err(cancelled_error());
         }
 
         let deadline = Instant::now() + transcription_timeout(samples.len());
         let status = loop {
+            if cancelled.load(Ordering::SeqCst) {
+                self.stop_active_child();
+                let _ = stdout_reader.join();
+                return Err(cancelled_error());
+            }
             if Instant::now() >= deadline {
-                self.request_abort();
+                self.stop_active_child();
                 let _ = stdout_reader.join();
                 return Err(DictationError::TranscriptionFailed(
                     "Pianissimo native runtime timed out while transcribing".into(),
@@ -234,7 +282,7 @@ impl PianissimoBackend {
                 Some(Ok(Some(status))) => break status,
                 Some(Ok(None)) => std::thread::sleep(Duration::from_millis(25)),
                 Some(Err(error)) => {
-                    self.request_abort();
+                    self.stop_active_child();
                     let _ = stdout_reader.join();
                     return Err(DictationError::TranscriptionFailed(format!(
                         "Pianissimo native runtime status check failed: {error}"
@@ -284,6 +332,20 @@ impl PianissimoBackend {
             }
         }
     }
+
+    fn stop_active_child(&self) {
+        self.request_abort();
+        if let Ok(mut active) = self.active_child.lock() {
+            if let Some(child) = active.as_mut() {
+                let _ = child.wait();
+            }
+            let _ = active.take();
+        }
+    }
+}
+
+fn cancelled_error() -> DictationError {
+    DictationError::TranscriptionFailed("Pianissimo transcription cancelled".into())
 }
 
 impl Drop for PianissimoBackend {
@@ -389,6 +451,53 @@ mod tests {
         let status = active.as_mut().unwrap().wait().unwrap();
         assert!(!status.success());
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_after_native_child_registration_kills_fake_runtime() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Arc;
+
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-pianissimo-cancel-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let executable = root.join("sleeping-runtime");
+        std::fs::write(&executable, b"#!/bin/sh\nexec /bin/sleep 10\n").unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+
+        let backend = Arc::new(PianissimoBackend {
+            executable,
+            active_child: Mutex::new(None),
+            operation: Mutex::new(()),
+        });
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let transcribe_backend = Arc::clone(&backend);
+        let transcribe_cancelled = Arc::clone(&cancelled);
+        let transcribe = std::thread::spawn(move || {
+            transcribe_backend.transcribe_with_cancel(&[0.1; 1_600], |_| {}, &transcribe_cancelled)
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if backend.active_child.lock().unwrap().is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "native child did not start");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let cancelled_at = Instant::now();
+        cancelled.store(true, Ordering::SeqCst);
+        let result = transcribe.join().unwrap();
+
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert!(cancelled_at.elapsed() < Duration::from_secs(2));
+        assert!(backend.active_child.lock().unwrap().is_none());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(target_os = "macos")]
