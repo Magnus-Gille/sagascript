@@ -33,6 +33,7 @@ export interface Settings {
   language: Language;
   whisper_model: string;
   file_transcription_model: string;
+  pianissimo_dictation: boolean;
   hotkey_mode: HotkeyMode;
   show_overlay: boolean;
   auto_paste: boolean;
@@ -411,4 +412,12 @@ export async function getPlatform(): Promise<string> {
 
 export async function setOnboardingCompleted(): Promise<void> {
   return invoke("set_onboarding_completed");
+}
+
+export async function setPianissimoDictation(enabled: boolean): Promise<void> {
+  return invoke("set_pianissimo_dictation", { enabled });
+}
+
+export async function getDictationModelInfo(language: Language): Promise<WhisperModel> {
+  return invoke("get_dictation_model_info", { language });
 }

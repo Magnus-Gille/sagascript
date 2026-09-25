@@ -225,7 +225,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
             let result = transcribe_pianissimo_with_progress(duration, |callback| {
                 backend.transcribe(&audio, callback)
             })?;
-            (result.text, "pianissimo-sv".to_string())
+            (result.text, "pianissimo-sv")
         }
     };
 

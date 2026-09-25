@@ -1013,6 +1013,7 @@ fn main() {
             commands::set_language,
             commands::set_whisper_model,
             commands::set_file_transcription_model,
+            commands::set_pianissimo_dictation,
             commands::set_auto_select_model,
             commands::set_hotkey_mode,
             commands::set_hotkey,
@@ -1029,6 +1030,7 @@ fn main() {
             commands::get_model_info,
             commands::get_file_model_options,
             commands::get_effective_model_info,
+            commands::get_dictation_model_info,
             commands::download_model,
             commands::download_pianissimo_model,
             commands::set_auto_paste,
@@ -1597,14 +1599,13 @@ fn stop_recording_and_transcribe(
             return;
         }
 
-        // Transcribe (timeout/cancellation logic is owned by a separate work
-        // package — left unchanged). Runs in this same task, which is already
-        // off the UI thread.
+        // Select the live engine off the UI thread. Both engines share the
+        // bounded transaction and postprocessing/paste path below.
         let ctrl: tauri::State<'_, SharedController> = app_handle.state();
         let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 
         // Extract what we need for transcription (lock briefly)
-        let (language, effective_model, opts, glossary) = {
+        let (language, effective_model, opts, glossary, use_pianissimo) = {
             let c = ctrl.lock().unwrap();
             let profile_id = c.active_hotkey_profile().map(|profile| profile.id.as_str());
             (
@@ -1614,15 +1615,16 @@ fn stop_recording_and_transcribe(
                 sagascript_core::transcription::Glossary::parse(
                     &c.settings().effective_glossary_source(profile_id),
                 ),
+                c.settings().uses_pianissimo_for_dictation(c.language()),
             )
         };
 
-        let model_name = effective_model.display_name().to_string();
+        let model_name = if use_pianissimo { "Pianissimo Q8" } else { effective_model.display_name() }.to_string();
         let language_name = language.display_name().to_string();
-        let beam_size = opts.beam_size;
-        let temperature_fallback = opts.temperature_fallback;
-        let vad_enabled = opts.vad_model_path.is_some();
-        let mut model_was_warm = !whisper.needs_reload(effective_model);
+        let beam_size = if use_pianissimo { 0 } else { opts.beam_size };
+        let temperature_fallback = !use_pianissimo && opts.temperature_fallback;
+        let vad_enabled = !use_pianissimo && opts.vad_model_path.is_some();
+        let mut model_was_warm = !use_pianissimo && !whisper.needs_reload(effective_model);
         info!("Transcribing with model: {model_name}");
 
         // Show model loading status in tray
@@ -1643,10 +1645,11 @@ fn stop_recording_and_transcribe(
             // WhisperBackend): request_abort() flips the flag whisper.cpp checks
             // between compute steps, so the blocking task returns and releases the
             // warm state instead of running to completion and wedging the pipeline.
-            let whisper_ref = whisper.inner().clone();
+            let live_backend = std::sync::Arc::new(sagascript_core::transcription::live_dictation::LiveDictationBackend::new(whisper.inner().clone(), use_pianissimo));
+            let live_ref = live_backend.clone();
             let mut fut = tokio::task::spawn_blocking(move || {
                 let mut timings = sagascript_core::transcription::whisper_backend::DictationTimings::default();
-                let result = whisper_ref.transcribe_live_dictation(effective_model, &audio, language, &opts, &mut timings);
+                let result = live_ref.transcribe(effective_model, &audio, language, &opts, &mut timings);
                 (result, timings)
             });
 
@@ -1675,7 +1678,7 @@ fn stop_recording_and_transcribe(
                 )),
                 Err(_) => {
                     warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
-                    whisper.request_abort();
+                    live_backend.request_abort();
                     // Brief grace for the aborted inference to unwind; log which
                     // outcome occurred so a genuine hang is visible.
                     match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut).await

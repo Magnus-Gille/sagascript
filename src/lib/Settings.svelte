@@ -18,6 +18,8 @@
     setShowOverlay,
     setWhisperModel,
     setFileTranscriptionModel,
+    setPianissimoDictation,
+    getDictationModelInfo,
     setBeamSize,
     setTemperatureFallback,
     setVadEnabled,
@@ -497,13 +499,32 @@
     }
   });
 
+  let dictationModelSaving = $state(false);
+  async function onPianissimoDictationChange(event: Event) {
+    if (!settings || dictationModelSaving) return;
+    const checkbox = event.currentTarget as HTMLInputElement;
+    const enabled = checkbox.checked;
+    dictationModelSaving = true;
+    settingsError = "";
+    try {
+      await setPianissimoDictation(enabled);
+      settings = await getSettings();
+      await refreshProfileModels(settings.hotkey_profiles);
+    } catch (error) {
+      settingsError = String(error);
+    } finally {
+      checkbox.checked = settings?.pianissimo_dictation ?? false;
+      dictationModelSaving = false;
+    }
+  }
+
   async function refreshProfileModels(profiles: HotkeyProfile[]) {
     const generation = ++profileModelRefresh;
     try {
       const entries = await Promise.all(
         profiles.map(async (profile) => [
           profile.id,
-          await getEffectiveModelInfo(profile.language),
+          await getDictationModelInfo(profile.language),
         ] as const),
       );
       if (generation === profileModelRefresh) {
@@ -1097,7 +1118,8 @@
     downloadProgress = 0;
     profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
     try {
-      await downloadModel(model.id);
+      if (model.id === "pianissimo-sv") await downloadPianissimoModel();
+      else await downloadModel(model.id);
       await refreshProfileModels(settings?.hotkey_profiles ?? []);
       models = await getModelInfo();
     } catch (e: any) {
@@ -1417,6 +1439,17 @@
       {/if}
       {#if activeTab === "dictate"}
         <div class="field profile-field">
+          <label class="diarize-option">
+            <input type="checkbox" checked={settings.pianissimo_dictation ?? false}
+              onchange={onPianissimoDictationChange}
+              disabled={dictationModelSaving || backendDictationState !== "idle" || transcribing || downloading !== null} />
+            Use Pianissimo for Swedish dictation (experimental)
+          </label>
+          <div class="hotkey-hint">Swedish dictation uses Pianissimo, including Swedish test recordings. Other languages use Whisper.
+            Add a Swedish shortcut to download the 714 MB model; it is shared with file transcription.
+            Dictionary replacements work, but decoder vocabulary hints are not supported.</div>
+        </div>
+        <div class="field profile-field">
           <div class="profile-heading">
             <span class="field-label">Dictation shortcuts</span>
             <button class="link-btn" onclick={addProfile}>+ Add language</button>
@@ -1591,7 +1624,7 @@
             <select id="file-model" value={settings.file_transcription_model}
               onchange={(event) => void onFileModelChange(event)}
               disabled={transcribing || fileModelSaving || downloading !== null}>
-              <option value="auto">Auto — current dictation model ({fileAutoModel?.display_name ?? "loading…"})</option>
+              <option value="auto">Auto — automatic Whisper model ({fileAutoModel?.display_name ?? "loading…"})</option>
               {#if settings.file_transcription_model !== "auto" && !fileModelOptions.some((model) => model.id === settings?.file_transcription_model)}
                 <option value={settings.file_transcription_model}>Current choice is incompatible with {languageLabel(transcribeLanguage())}</option>
               {/if}

@@ -24,6 +24,29 @@ update.
 - **macOS v1** -- official releases are signed and notarized for macOS 13+ on Apple Silicon; Intel Macs are not supported by the v1 binary release
 - **Windows beta** -- an unsigned Windows 11 preview for x64 and ARM64 is available from the [GitHub prerelease](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905)
 
+## Experimental Pianissimo dictation
+
+In **Dictate**, enable **Use Pianissimo for Swedish dictation (experimental)**,
+then download its 714 MB model from a Swedish shortcut's speech-engine prompt.
+Swedish push-to-talk, toggle dictation and Swedish test recordings use Pianissimo;
+other languages retain Whisper. The file-transcription choice stays independent.
+The macOS package includes the native CPU runtime; no Python installation is needed.
+
+CLI equivalents:
+
+```bash
+sagascript download-model pianissimo-sv
+sagascript record --language sv --model pianissimo-sv
+sagascript config set pianissimo_dictation true
+# Restore Whisper for Swedish dictation:
+sagascript config set pianissimo_dictation false
+```
+
+Pianissimo starts a new native process for each utterance. It supports dictionary
+replacements after transcription, but not Whisper decoder hints. Explicit
+`--hint`/`--hint-file` options are rejected with this model. File **Auto** continues
+to use the configured Whisper model; select Pianissimo explicitly for files.
+
 ## Building from source
 
 ### Prerequisites
