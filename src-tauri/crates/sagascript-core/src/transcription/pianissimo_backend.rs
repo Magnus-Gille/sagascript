@@ -88,6 +88,7 @@ fn macos_version_supported(version: &str) -> bool {
 }
 
 fn bundled_executable(current_exe: &Path) -> Option<PathBuf> {
+    let current_exe = current_exe.canonicalize().ok()?;
     let contents = current_exe.parent()?.parent()?;
     let executable = contents.join("Resources/PianissimoRuntime/bin/nemo-speech");
     executable.is_file().then_some(executable)
@@ -336,11 +337,40 @@ mod tests {
             std::env::temp_dir().join(format!("sagascript-runtime-test-{}", uuid::Uuid::new_v4()));
         let contents = root.join("Sagascript.app/Contents");
         let runtime = contents.join("Resources/PianissimoRuntime/bin");
+        let app_executable = contents.join("MacOS/sagascript");
         std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::create_dir_all(app_executable.parent().unwrap()).unwrap();
         let executable = runtime.join("nemo-speech");
         std::fs::write(&executable, b"").unwrap();
-        let found = bundled_executable(&contents.join("MacOS/sagascript")).unwrap();
-        assert_eq!(found, executable);
+        std::fs::write(&app_executable, b"").unwrap();
+        let found = bundled_executable(&app_executable).unwrap();
+        assert_eq!(found, executable.canonicalize().unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundled_runtime_resolves_from_cli_symlink_outside_app_bundle() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("sagascript-runtime-test-{}", uuid::Uuid::new_v4()));
+        let contents = root.join("Sagascript.app/Contents");
+        let runtime = contents.join("Resources/PianissimoRuntime/bin");
+        let app_executable = contents.join("MacOS/sagascript");
+        let cli_dir = root.join("usr-local-bin");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::create_dir_all(app_executable.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&cli_dir).unwrap();
+        let executable = runtime.join("nemo-speech");
+        std::fs::write(&executable, b"").unwrap();
+        std::fs::write(&app_executable, b"").unwrap();
+        let cli_symlink = cli_dir.join("sagascript");
+        symlink(&app_executable, &cli_symlink).unwrap();
+
+        let found = bundled_executable(&cli_symlink).unwrap();
+
+        assert_eq!(found, executable.canonicalize().unwrap());
         std::fs::remove_dir_all(root).unwrap();
     }
 

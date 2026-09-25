@@ -165,12 +165,14 @@ jobs:
           (cd artifacts && shasum -a 256 Sagascript-TEST-* pianissimo-sv-q8-melfix.gguf > SHA256SUMS)
           ls -lh artifacts/
 
-      - name: Gate signed Pianissimo transcription
+      - name: Gate signed Pianissimo transcription through installed CLI symlink
         run: |
           mkdir -p "$HOME/Library/Application Support/Sagascript/Models"
           cp build/pianissimo-sv-q8-melfix.gguf "$HOME/Library/Application Support/Sagascript/Models/"
           app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
-          if ! "$app/Contents/MacOS/sagascript" transcribe --language sv --model pianissimo-sv --json \
+          cli_link="$RUNNER_TEMP/sagascript-pianissimo-cli"
+          ln -s "$GITHUB_WORKSPACE/$app/Contents/MacOS/sagascript" "$cli_link"
+          if ! "$cli_link" transcribe --language sv --model pianissimo-sv --json \
             test-audio/english-jfk.wav > "$RUNNER_TEMP/pianissimo-signed-smoke.json"; then
             sleep 2
             find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -name 'nemo-speech*.ips' \
