@@ -9,27 +9,6 @@ const OVERLAY_LABEL: &str = "overlay";
 // window. In particular, Tauri's macOS `show` implementation calls
 // `makeKeyAndOrderFront`, which would move focus away from the destination
 // editor while a transcription is in flight.
-const OVERLAY_FOCUSABLE: bool = false;
-const OVERLAY_VISIBLE_ON_CREATE: bool = false;
-
-#[derive(Debug, PartialEq, Eq)]
-enum OverlayPresentMode {
-    #[cfg(target_os = "macos")]
-    NonActivating,
-    #[cfg(not(target_os = "macos"))]
-    Normal,
-}
-
-fn overlay_present_mode() -> OverlayPresentMode {
-    #[cfg(target_os = "macos")]
-    {
-        OverlayPresentMode::NonActivating
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        OverlayPresentMode::Normal
-    }
-}
 
 /// Show the recording overlay window (create lazily on first call).
 ///
@@ -88,8 +67,8 @@ fn create_overlay(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Erro
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
-    .visible(OVERLAY_VISIBLE_ON_CREATE)
-    .focusable(OVERLAY_FOCUSABLE)
+    .visible(false)
+    .focusable(false)
     .focused(false)
     .resizable(false)
     .skip_taskbar(true)
@@ -108,13 +87,11 @@ fn create_overlay(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Erro
 
 #[cfg(target_os = "macos")]
 fn present_existing_overlay(window: &tauri::WebviewWindow) {
-    debug_assert_eq!(overlay_present_mode(), OverlayPresentMode::NonActivating);
     macos_show_without_focus(window);
 }
 
 #[cfg(not(target_os = "macos"))]
 fn present_existing_overlay(window: &tauri::WebviewWindow) {
-    debug_assert_eq!(overlay_present_mode(), OverlayPresentMode::Normal);
     let _ = window.show();
 }
 
@@ -154,15 +131,5 @@ fn macos_show_without_focus(window: &tauri::WebviewWindow) {
     let ns_window: id = window.ns_window().unwrap() as id;
     unsafe {
         let _: () = objc::msg_send![ns_window, orderFront: nil];
-    }
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::{overlay_present_mode, OverlayPresentMode};
-
-    #[test]
-    fn macos_overlay_presentation_is_non_activating() {
-        assert_eq!(overlay_present_mode(), OverlayPresentMode::NonActivating);
     }
 }
