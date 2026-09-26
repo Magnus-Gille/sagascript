@@ -239,6 +239,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | memchr | 2.8.0 | Unlicense OR MIT | [upstream](https://github.com/BurntSushi/memchr) |
 | mime | 0.3.17 | MIT OR Apache-2.0 | [upstream](https://github.com/hyperium/mime) |
 | minimal-lexical | 0.2.1 | MIT/Apache-2.0 | [upstream](https://github.com/Alexhuszagh/minimal-lexical) |
+| minisign-verify | 0.2.5 | MIT | [upstream](https://github.com/jedisct1/rust-minisign-verify) |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 | [upstream](https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide) |
 | mio | 1.1.1 | MIT | [upstream](https://github.com/tokio-rs/mio) |
 | moxcms | 0.7.11 | BSD-3-Clause OR Apache-2.0 | [upstream](https://github.com/awxkee/moxcms.git) |
@@ -273,6 +274,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | objc2-foundation | 0.3.2 | MIT | [upstream](https://github.com/madsmtm/objc2) |
 | objc2-io-surface | 0.3.2 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/madsmtm/objc2) |
 | objc2-javascript-core | 0.3.2 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/madsmtm/objc2) |
+| objc2-osa-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/madsmtm/objc2) |
 | objc2-quartz-core | 0.3.2 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/madsmtm/objc2) |
 | objc2-security | 0.3.2 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/madsmtm/objc2) |
 | objc2-web-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | [upstream](https://github.com/madsmtm/objc2) |
@@ -280,6 +282,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | option-ext | 0.2.0 | MPL-2.0 | [upstream](https://github.com/soc/option-ext.git) |
 | ort | 2.0.0-rc.12 | MIT OR Apache-2.0 | [upstream](https://github.com/pykeio/ort) |
 | ort-sys | 2.0.0-rc.12 | MIT OR Apache-2.0 | [upstream](https://github.com/pykeio/ort) |
+| osakit | 0.3.1 | MIT OR Apache-2.0 | [upstream](https://github.com/mdevils/rust-osakit) |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 | [upstream](https://github.com/Amanieu/parking_lot) |
 | parking_lot_core | 0.9.12 | MIT OR Apache-2.0 | [upstream](https://github.com/Amanieu/parking_lot) |
 | pem-rfc7468 | 1.0.0 | Apache-2.0 OR MIT | [upstream](https://github.com/RustCrypto/formats) |
@@ -331,6 +334,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | regex-automata | 0.4.14 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
 | regex-syntax | 0.8.9 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
 | reqwest | 0.12.28 | MIT OR Apache-2.0 | [upstream](https://github.com/seanmonstar/reqwest) |
+| reqwest | 0.13.2 | MIT OR Apache-2.0 | [upstream](https://github.com/seanmonstar/reqwest) |
 | rfd | 0.16.0 | MIT | [upstream](https://github.com/PolyMeilex/rfd) |
 | ring | 0.17.14 | Apache-2.0 AND ISC | [upstream](https://github.com/briansmith/ring) |
 | roff | 0.2.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-cli/roff-rs) |
@@ -341,6 +345,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | rustix | 1.1.3 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [upstream](https://github.com/bytecodealliance/rustix) |
 | rustls | 0.23.36 | Apache-2.0 OR ISC OR MIT | [upstream](https://github.com/rustls/rustls) |
 | rustls-pki-types | 1.14.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/pki-types) |
+| rustls-platform-verifier | 0.6.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/rustls-platform-verifier) |
 | rustls-webpki | 0.103.9 | ISC | [upstream](https://github.com/rustls/webpki) |
 | ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 | [upstream](https://github.com/dtolnay/ryu) |
 | same-file | 1.0.6 | Unlicense/MIT | [upstream](https://github.com/BurntSushi/same-file) |
@@ -407,6 +412,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | system-configuration | 0.7.0 | MIT OR Apache-2.0 | [upstream](https://github.com/mullvad/system-configuration-rs) |
 | system-configuration-sys | 0.6.0 | MIT OR Apache-2.0 | [upstream](https://github.com/mullvad/system-configuration-rs) |
 | tao | 0.34.5 | Apache-2.0 | [upstream](https://github.com/tauri-apps/tao) |
+| tar | 0.4.46 | MIT OR Apache-2.0 | [upstream](https://github.com/composefs/tar-rs) |
 | tauri | 2.10.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-build | 2.5.5 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-codegen | 2.5.4 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
@@ -417,6 +423,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | tauri-plugin-fs | 2.4.5 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-plugin-global-shortcut | 2.3.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-plugin-single-instance | 2.4.4 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
+| tauri-plugin-updater | 2.12.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/plugins-workspace) |
 | tauri-runtime | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-runtime-wry | 2.10.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
 | tauri-utils | 2.8.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/tauri) |
@@ -486,6 +493,7 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | winnow | 0.7.14 | MIT | [upstream](https://github.com/winnow-rs/winnow) |
 | writeable | 0.6.2 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
 | wry | 0.54.2 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/wry) |
+| xattr | 1.6.1 | MIT OR Apache-2.0 | [upstream](https://github.com/Stebalien/xattr) |
 | yoke | 0.8.1 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
 | yoke-derive | 0.8.1 | Unicode-3.0 | [upstream](https://github.com/unicode-org/icu4x) |
 | zerocopy | 0.8.39 | BSD-2-Clause OR Apache-2.0 OR MIT | [upstream](https://github.com/google/zerocopy) |
@@ -2651,7 +2659,7 @@ limitations under the License.
 
 ### 283ea6cc2997
 
-Components: Rust clang-sys@1.8.1, Rust cpal@0.15.3, Rust embed_plist@1.2.2, Rust encoding_rs@0.8.35, Rust iri-string@0.7.10, Rust lzma-rust2@0.15.7, Rust ort-sys@2.0.0-rc.12, Rust ort@2.0.0-rc.12, Rust serialize-to-javascript-impl@0.1.2, Rust serialize-to-javascript@0.1.2, Rust ureq@3.3.0, Rust utf8_iter@1.0.4, Rust zeroize@1.8.2
+Components: Rust clang-sys@1.8.1, Rust cpal@0.15.3, Rust embed_plist@1.2.2, Rust encoding_rs@0.8.35, Rust iri-string@0.7.10, Rust lzma-rust2@0.15.7, Rust ort-sys@2.0.0-rc.12, Rust ort@2.0.0-rc.12, Rust rustls-platform-verifier@0.6.2, Rust serialize-to-javascript-impl@0.1.2, Rust serialize-to-javascript@0.1.2, Rust ureq@3.3.0, Rust utf8_iter@1.0.4, Rust zeroize@1.8.2
 
 Source filenames: LICENSE, LICENSE-APACHE, LICENSE-APACHE.txt, LICENSE.txt
 
@@ -5692,7 +5700,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 4bf96504d6e8
 
-Components: Rust arboard@3.6.1, Rust fdeflate@0.3.7, Rust half@2.7.1, Rust image@0.25.9, Rust miniz_oxide@0.8.9, Rust pin-project-lite@0.2.16, Rust portable-atomic@1.13.1, Rust raw-window-handle@0.6.2, Rust sync_wrapper@1.0.2, Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-plugin-single-instance@2.4.4, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, Rust time-core@0.1.8, Rust time-macros@0.2.27, Rust time@0.3.47, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
+Components: Rust arboard@3.6.1, Rust fdeflate@0.3.7, Rust half@2.7.1, Rust image@0.25.9, Rust miniz_oxide@0.8.9, Rust pin-project-lite@0.2.16, Rust portable-atomic@1.13.1, Rust raw-window-handle@0.6.2, Rust sync_wrapper@1.0.2, Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-plugin-single-instance@2.4.4, Rust tauri-plugin-updater@2.12.0, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, Rust time-core@0.1.8, Rust time-macros@0.2.27, Rust time@0.3.47, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
 
 Source filenames: LICENSE, LICENSE-APACHE, LICENSE-APACHE.md, LICENSE-APACHE.txt, LICENSE-Apache, LICENSE_APACHE-2.0
 
@@ -6005,6 +6013,74 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ~~~~
 
+### 58f66933c7bb
+
+Components: Rust minisign-verify@0.2.5
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright (c) 2019-2025 Frank Denis
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+--
+
+Code in the src/crypto folder is derived from the rust-crypto project:
+https://github.com/DaGenix/rust-crypto
+
+Original ISC license follows:
+
+Copyright (c) 2006-2009 Graydon Hoare
+Copyright (c) 2009-2013 Mozilla Foundation
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### 5a7d13c6710c
 
 Components: Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21
@@ -6282,7 +6358,7 @@ Apache License
 
 ### 5c3866f31ed2
 
-Components: Rust reqwest@0.12.28
+Components: Rust reqwest@0.12.28, Rust reqwest@0.13.2
 
 Source filenames: LICENSE-APACHE
 
@@ -6826,6 +6902,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ~~~~
 
+### 6205904d5539
+
+Components: Rust rustls-platform-verifier@0.6.2
+
+Source filenames: LICENSE-MIT
+
+~~~~text
+MIT License
+
+Copyright (c) 2022 1Password
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### 627eff66d6c4
 
 Components: Rust simd-adler32@0.3.8
@@ -7293,6 +7399,40 @@ Redistribution and use in source and binary forms, with or without modification,
 3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+~~~~
+
+### 6ca34f7d0a42
+
+Components: Rust osakit@0.3.1
+
+Source filenames: LICENSE-MIT
+
+~~~~text
+Copyright (c) 2024 Marat Dulin
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### 6d3a9431e65e
@@ -8692,7 +8832,7 @@ option.
 
 ### 7bdd5c5e8ad0
 
-Components: Rust tempfile@3.25.0
+Components: Rust tempfile@3.25.0, Rust xattr@1.6.1
 
 Source filenames: LICENSE-MIT
 
@@ -9762,7 +9902,7 @@ SOFTWARE.
 
 ### 85ad950cce87
 
-Components: Rust anyhow@1.0.101, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust libc@0.2.180, Rust mach2@0.4.3, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust quote@1.0.44, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust ryu@1.0.23, Rust semver@1.0.27, Rust serde-untagged@0.1.9, Rust serde@1.0.228, Rust serde_core@1.0.228, Rust serde_derive@1.0.228, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.149, Rust serde_repr@0.1.20, Rust serde_urlencoded@0.7.1, Rust syn@2.0.116, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.18, Rust thiserror@1.0.69, Rust thiserror@2.0.18, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
+Components: Rust anyhow@1.0.101, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust libc@0.2.180, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust quote@1.0.44, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust ryu@1.0.23, Rust semver@1.0.27, Rust serde-untagged@0.1.9, Rust serde@1.0.228, Rust serde_core@1.0.228, Rust serde_derive@1.0.228, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.149, Rust serde_repr@0.1.20, Rust serde_urlencoded@0.7.1, Rust syn@2.0.116, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.18, Rust thiserror@1.0.69, Rust thiserror@2.0.18, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
 
 Source filenames: LICENSE-APACHE
 
@@ -10626,7 +10766,7 @@ limitations under the License.
 
 ### 89ff9689dcf9
 
-Components: Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
+Components: Rust tauri-build@2.5.5, Rust tauri-codegen@2.5.4, Rust tauri-macros@2.5.4, Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-plugin-updater@2.12.0, Rust tauri-runtime-wry@2.10.0, Rust tauri-runtime@2.10.0, Rust tauri-utils@2.8.2, Rust tauri@2.10.2, npm @tauri-apps/api@2.10.1, npm @tauri-apps/cli@2.10.0
 
 Source filenames: LICENSE_MIT
 
@@ -13380,7 +13520,7 @@ DEALINGS IN THE SOFTWARE.
 
 ### 954f335b8baf
 
-Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust base64@0.21.7, Rust base64@0.22.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.8.0, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust mime@0.3.17, Rust muda@0.17.1, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.14, Rust regex-syntax@0.8.9, Rust regex@1.12.3, Rust rustc_version@0.4.1, Rust rustix@1.1.3, Rust rustls@0.23.36, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust smallvec@1.15.1, Rust socket2@0.6.2, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tempfile@3.25.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.2
+Components: Rust arrayvec@0.7.6, Rust atomic-waker@1.1.2, Rust autocfg@1.5.0, Rust base64@0.21.7, Rust base64@0.22.1, Rust bitflags@1.3.2, Rust bitflags@2.11.0, Rust camino@1.2.2, Rust cc@1.2.56, Rust cexpr@0.6.0, Rust cfg-if@1.0.4, Rust cmake@0.1.57, Rust cocoa-foundation@0.2.1, Rust cocoa@0.26.1, Rust core-foundation-sys@0.8.7, Rust core-foundation@0.10.1, Rust core-foundation@0.9.4, Rust core-graphics-types@0.2.0, Rust core-graphics@0.24.0, Rust core-graphics@0.25.0, Rust coreaudio-rs@0.11.3, Rust crossbeam-channel@0.5.15, Rust crossbeam-utils@0.8.21, Rust displaydoc@0.2.5, Rust either@1.15.0, Rust equivalent@1.0.2, Rust errno@0.3.14, Rust fastrand@2.3.0, Rust filetime@0.2.27, Rust find-msvc-tools@0.1.9, Rust flate2@1.1.9, Rust fnv@1.0.7, Rust form_urlencoded@1.2.2, Rust fs2@0.4.3, Rust futf@0.1.5, Rust glob@0.3.3, Rust global-hotkey@0.8.0, Rust hashbrown@0.12.3, Rust hashbrown@0.16.1, Rust heck@0.5.0, Rust html5ever@0.29.1, Rust httparse@1.10.1, Rust hyper-rustls@0.27.7, Rust hyper-tls@0.6.0, Rust idna@1.1.0, Rust idna_adapter@1.2.1, Rust indexmap@1.9.3, Rust indexmap@2.13.0, Rust itertools@0.13.0, Rust jobserver@0.1.34, Rust keyboard-types@0.7.0, Rust keyboard-types@0.8.3, Rust lazy_static@1.5.0, Rust lock_api@0.4.14, Rust log@0.4.29, Rust markup5ever@0.14.1, Rust matrixmultiply@0.3.10, Rust mime@0.3.17, Rust muda@0.17.1, Rust ndarray@0.17.2, Rust nodrop@0.1.14, Rust num-complex@0.4.6, Rust num-integer@0.1.46, Rust num-traits@0.2.19, Rust num_cpus@1.17.0, Rust once_cell@1.21.3, Rust parking_lot@0.12.5, Rust parking_lot_core@0.9.12, Rust percent-encoding@2.3.2, Rust png@0.17.16, Rust png@0.18.1, Rust primal-check@0.3.4, Rust proc-macro-hack@0.5.20+deprecated, Rust rawpointer@0.2.1, Rust regex-automata@0.4.14, Rust regex-syntax@0.8.9, Rust regex@1.12.3, Rust rustc_version@0.4.1, Rust rustix@1.1.3, Rust rustls@0.23.36, Rust scopeguard@1.2.0, Rust security-framework-sys@2.16.0, Rust security-framework@3.6.0, Rust serde_with@3.16.1, Rust serde_with_macros@3.16.1, Rust servo_arc@0.2.0, Rust signal-hook-registry@1.4.8, Rust smallvec@1.15.1, Rust socket2@0.6.2, Rust stable_deref_trait@1.2.1, Rust string_cache@0.8.9, Rust string_cache_codegen@0.5.4, Rust syn@1.0.109, Rust system-configuration-sys@0.6.0, Rust system-configuration@0.7.0, Rust tar@0.4.46, Rust tempfile@3.25.0, Rust tendril@0.4.3, Rust thread_local@1.1.9, Rust tray-icon@0.21.3, Rust unicode-segmentation@1.12.0, Rust unicode-width@0.2.2, Rust url@2.5.8, Rust uuid@1.21.0, Rust version_check@0.9.5, Rust weezl@0.1.12, Rust window-vibrancy@0.6.0, Rust wry@0.54.2, Rust xattr@1.6.1
 
 Source filenames: LICENSE-APACHE
 
@@ -16476,6 +16616,34 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
+### bde59a7e336f
+
+Components: Rust reqwest@0.13.2
+
+Source filenames: LICENSE-MIT
+
+~~~~text
+Copyright (c) 2016-2026 Sean McArthur
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+~~~~
+
 ### c0fdcda1a4ff
 
 Components: Rust tokio-macros@2.6.0
@@ -19083,6 +19251,40 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ~~~~
 
+### e6e853531994
+
+Components: Rust tar@0.4.46
+
+Source filenames: LICENSE-MIT
+
+~~~~text
+Copyright (c) The tar-rs Project Contributors
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+~~~~
+
 ### e7330bf53074
 
 Components: Rust getrandom@0.1.16, Rust getrandom@0.2.17, Rust getrandom@0.3.4, Rust getrandom@0.4.1, Rust rand@0.7.3, Rust rand_chacha@0.2.2, Rust rand_chacha@0.3.1, Rust rand_core@0.5.1, Rust rand_pcg@0.2.1
@@ -19685,7 +19887,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 ### eb8a6c846304
 
-Components: Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-plugin-single-instance@2.4.4, npm @tauri-apps/plugin-autostart@2.5.1, npm @tauri-apps/plugin-dialog@2.6.0
+Components: Rust tauri-plugin-autostart@2.5.1, Rust tauri-plugin-dialog@2.6.0, Rust tauri-plugin-fs@2.4.5, Rust tauri-plugin-global-shortcut@2.3.2, Rust tauri-plugin-single-instance@2.4.4, Rust tauri-plugin-updater@2.12.0, npm @tauri-apps/plugin-autostart@2.5.1, npm @tauri-apps/plugin-dialog@2.6.0
 
 Source filenames: LICENSE.spdx
 
