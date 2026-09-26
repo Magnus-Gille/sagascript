@@ -74,6 +74,10 @@ function reprocessingResult(task) {
 }
 window.qa = {
   calls,
+  removePianissimo: () => {
+    pianissimoDownloaded = false;
+    emit("model-ready", {});
+  },
   progress: (runId, phase, percent) => emit("plain-transcription-progress", { runId, phase, percent }),
   drop: (paths) => emit(TauriEvent.DRAG_DROP, { paths, position: { x: 20, y: 20 } }),
   finish: (path, error = null) => {

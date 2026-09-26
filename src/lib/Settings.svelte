@@ -514,7 +514,7 @@
 
   async function selectDictationModel(model: WhisperModel): Promise<void> {
     if (!settings || selecting || dictationModelSaving) return;
-    if (model.id === "pianissimo-sv" && settings.pianissimo_dictation) return;
+    if (model.id === "pianissimo-sv" && settings.pianissimo_dictation && pianissimoDictationModel?.downloaded) return;
 
     if (model.id !== "pianissimo-sv" && settings.pianissimo_dictation) {
       dictationModelSaving = true;
@@ -1178,6 +1178,7 @@
   }
 
   async function onTestRecord() {
+    if (dictationModelSaving || selecting || downloading !== null) return;
     const action = dictateButtonAction(backendDictationState, testOwnsRecording);
     if (action === "blocked") return;
 
@@ -1524,7 +1525,9 @@
               >
                 <div class="model-card-header">
                   <span class="model-card-name">Pianissimo Q8</span>
-                  {#if settings.pianissimo_dictation}
+                  {#if settings.pianissimo_dictation && !pianissimoDictationModel.downloaded}
+                    <span class="model-badge download-badge">Selected · Download required</span>
+                  {:else if settings.pianissimo_dictation}
                     <span class="model-badge active-badge">Active</span>
                   {:else if pianissimoDictationModel.downloaded}
                     <span class="model-badge experimental-badge">Swedish · Experimental</span>
@@ -1666,7 +1669,7 @@
             class:recording={testRecording}
             class:transcribing={testTranscribing}
             onclick={onTestRecord}
-            disabled={dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" || downloading !== null}
+            disabled={dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" || downloading !== null || selecting || dictationModelSaving}
           >
             {#if testTranscribing}
               <div class="spinner small"></div>

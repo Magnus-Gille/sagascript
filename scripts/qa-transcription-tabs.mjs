@@ -54,6 +54,12 @@ try {
   assert.equal(await page.locator("#file-model").inputValue(), "auto");
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
   assert.equal(await pianissimoChoice.evaluate(element => element.classList.contains("active")), true);
+  // Repair a selected model whose cached artifact was removed outside the UI.
+  await page.evaluate(() => window.qa.removePianissimo());
+  await page.getByText("Selected · Download required", { exact: true }).waitFor();
+  await pianissimoChoice.click();
+  await page.waitForFunction(() => window.qa.calls.filter(call => call.cmd === "download_pianissimo_model").length === 2);
+  await page.getByText("Speech engine ready", { exact: true }).waitFor();
   await page.screenshot({ path: outputPath("sagascript-pianissimo-dictation.png"), fullPage: true });
   await page.getByRole("button", { name: /Base English/ }).first().click();
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_pianissimo_dictation" && call.args.enabled === false));
