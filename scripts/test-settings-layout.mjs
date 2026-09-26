@@ -48,7 +48,7 @@ test("Dictate exposes the Swedish experimental model in its model picker", () =>
   const dictateSource = content.slice(dictateStart, dictateEnd);
   assert.match(dictateSource, /Dictation model · push-to-speak/);
   assert.match(dictateSource, /Pianissimo Q8/);
-  assert.match(dictateSource, /Swedish profiles only and is experimental/);
+  assert.match(dictateSource, /Pianissimo is experimental and applies to every Swedish dictation shortcut/);
   assert.match(dictateSource, /experimental-model-card/);
   assert.doesNotMatch(dictateSource, /Use Pianissimo for Swedish dictation/);
   assert.match(content, /selectDictationModel/);

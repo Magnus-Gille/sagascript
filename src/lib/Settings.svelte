@@ -1485,7 +1485,7 @@
         <div class="field model-selection-field">
           <div class="model-section-label">Dictation model · push-to-speak</div>
           <div class="hotkey-hint model-selection-hint">
-            Choose the model used by push-to-speak and the recording test below. Pianissimo applies to Swedish profiles only and is experimental.
+            Whisper choices follow the default language ({languageLabel(settings.language)}). Pianissimo is experimental and applies to every Swedish dictation shortcut and recording test; other languages keep Whisper.
           </div>
           <div class="model-picker">
             {#each models as model (model.id)}
@@ -1494,7 +1494,7 @@
                 class:active={!settings.pianissimo_dictation && model.active}
                 class:downloading={downloading === model.id}
                 onclick={() => selectDictationModel(model)}
-                disabled={downloading !== null || selecting || dictationModelSaving}
+                disabled={downloading !== null || selecting || dictationModelSaving || backendDictationState !== "idle" || transcribing}
               >
                 <div class="model-card-header">
                   <span class="model-card-name">{model.display_name}</span>
@@ -1520,7 +1520,7 @@
                 class:active={settings.pianissimo_dictation}
                 class:downloading={downloading === pianissimoDictationModel.id}
                 onclick={() => selectDictationModel(pianissimoDictationModel!)}
-                disabled={downloading !== null || selecting || dictationModelSaving}
+                disabled={downloading !== null || selecting || dictationModelSaving || backendDictationState !== "idle" || transcribing}
               >
                 <div class="model-card-header">
                   <span class="model-card-name">Pianissimo Q8</span>
