@@ -25,7 +25,7 @@ test("manual workflow input never enters a shell program through expression inte
 });
 
 test("signed upgrade builds the updated app with its generated updater config", () => {
-  const smoke = steps.find((step) => step.includes("name: Gate real signed self-upgrade"));
+  const smoke = steps.find((step) => step.includes("name: Gate real signed self-upgrade"))?.replace(/\r\n/g, "\n");
   assert.ok(smoke);
   assert.match(smoke, /generate-updater-smoke-config\.mjs \\\n+\s+scripts\/tauri-updater-smoke-new\.json "\$updated_smoke_config"/);
   assert.match(smoke, /--config "\$updated_smoke_config"/);
