@@ -239,11 +239,14 @@ jobs:
             echo 'Hosted runner has an installed Sagascript; refusing smoke test' >&2
             exit 1
           }
+          smoke_config="$RUNNER_TEMP/sagascript-updater-smoke-old.json"
+          node scripts/generate-updater-smoke-config.mjs \
+            scripts/tauri-updater-smoke-old.json "$smoke_config"
           npx tauri build --ci --target aarch64-apple-darwin --bundles app \
             --features updater-smoke-test \
             --config scripts/tauri-ci-prebuilt.json \
             --config scripts/tauri-pianissimo-bundle.json \
-            --config scripts/tauri-updater-smoke-old.json
+            --config "$smoke_config"
           source_app=src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app
           test_dir="$RUNNER_TEMP/sagascript-signed-updater-smoke"
           mkdir -p "$test_dir"
