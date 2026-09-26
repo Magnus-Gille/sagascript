@@ -19,7 +19,7 @@ pub enum ConfigAction {
 Show all settings in a table with their current values and defaults.
 
 Valid keys: language, whisper_model, file_transcription_model, hotkey_mode (push, toggle), show_overlay, \
-auto_paste, auto_select_model, hotkey, initial_prompt, \
+auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, \
 beam_size, temperature_fallback, vad_enabled.")]
     List,
 
@@ -29,7 +29,7 @@ beam_size, temperature_fallback, vad_enabled.")]
 Print the current value of a single setting to stdout.
 
 Valid keys: language, whisper_model, file_transcription_model, hotkey_mode (push, toggle), show_overlay, \
-auto_paste, auto_select_model, hotkey, initial_prompt, \
+auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, \
 beam_size, temperature_fallback, vad_enabled",
         after_long_help = "\
 EXAMPLES:
@@ -38,7 +38,7 @@ EXAMPLES:
   sagascript config get initial_prompt"
     )]
     Get {
-        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
+        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
         key: String,
     },
 
@@ -58,6 +58,7 @@ Valid values per key:
   show_overlay         true, false
   auto_paste           true, false (enabling requires Accessibility approval for the installed GUI)
   auto_select_model    true, false
+  pianissimo_dictation true, false (Swedish live dictation only)
   hotkey               Modifier+Key; bare F13-F24 on macOS (Accessibility) or Windows
   initial_prompt       Personal dictionary text; aliases use TERM = ALIAS | ALIAS
   beam_size            Integer >= 0 (0 = greedy/fast, 5 = beam search/accurate)
@@ -70,10 +71,11 @@ EXAMPLES:
   sagascript config set hotkey 'Option+Space'
   sagascript config set hotkey F13
   sagascript config set auto_paste false
+  sagascript config set pianissimo_dictation true
   sagascript config set initial_prompt $'OpenRouter = open router | open vrouter\\nmerge = merch'"
     )]
     Set {
-        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
+        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
         key: String,
         /// New value for the setting
         value: String,
@@ -92,6 +94,7 @@ clear --yes`; repeat with `--profile ID` for each profile dictionary.",
 EXAMPLES:
   # Reset just the language
   sagascript config reset language
+  sagascript config reset pianissimo_dictation
 
   # Reset everything
   sagascript config reset"
@@ -168,6 +171,7 @@ const VALID_KEYS: &[&str] = &[
     "show_overlay",
     "auto_paste",
     "auto_select_model",
+    "pianissimo_dictation",
     "hotkey",
     "initial_prompt",
     "beam_size",
@@ -397,6 +401,10 @@ fn cmd_list() -> Result<(), DictationError> {
     );
     println!(
         "{:<20} {:<24} {}",
+        "pianissimo_dictation", current.pianissimo_dictation, defaults.pianissimo_dictation
+    );
+    println!(
+        "{:<20} {:<24} {}",
         "hotkey", current.hotkey, defaults.hotkey
     );
     println!(
@@ -518,6 +526,9 @@ fn apply_setting_value(
         "auto_select_model" => {
             settings.auto_select_model = parse_bool(value, "auto_select_model")?;
         }
+        "pianissimo_dictation" => {
+            settings.pianissimo_dictation = parse_bool(value, "pianissimo_dictation")?;
+        }
         "hotkey" => {
             validate_hotkey(value).map_err(DictationError::SettingsError)?;
             settings
@@ -558,49 +569,9 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
             eprintln!("Reset hotkey to {}", settings::store::load().hotkey);
             return Ok(());
         }
-        let settings = settings::store::try_update(|settings| match key {
-            "language" => settings.set_legacy_language(defaults.language),
-            "whisper_model" => {
-                settings.whisper_model = defaults.whisper_model;
-                Ok(())
-            }
-            "file_transcription_model" => {
-                settings.file_transcription_model = defaults.file_transcription_model;
-                Ok(())
-            }
-            "hotkey_mode" => settings.replace_hotkey_mode(defaults.hotkey_mode),
-            "show_overlay" => {
-                settings.show_overlay = defaults.show_overlay;
-                Ok(())
-            }
-            "auto_paste" => {
-                settings.auto_paste = defaults.auto_paste;
-                Ok(())
-            }
-            "auto_select_model" => {
-                settings.auto_select_model = defaults.auto_select_model;
-                Ok(())
-            }
-            "hotkey" => unreachable!("hotkey reset handled transactionally above"),
-            "initial_prompt" => {
-                settings.initial_prompt = defaults.initial_prompt;
-                Ok(())
-            }
-            "beam_size" => {
-                settings.beam_size = defaults.beam_size;
-                Ok(())
-            }
-            "temperature_fallback" => {
-                settings.temperature_fallback = defaults.temperature_fallback;
-                Ok(())
-            }
-            "vad_enabled" => {
-                settings.vad_enabled = defaults.vad_enabled;
-                Ok(())
-            }
-            _ => unreachable!(),
-        })
-        .map_err(DictationError::SettingsError)?;
+        let settings =
+            settings::store::try_update(|settings| reset_setting_value(settings, key, &defaults))
+                .map_err(DictationError::SettingsError)?;
         eprintln!("Reset {key} to {}", get_setting_value(&settings, key));
     } else {
         settings::store::try_update(|current| {
@@ -611,6 +582,59 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
         eprintln!("All application settings reset to defaults; personal dictionaries preserved");
     }
     Ok(())
+}
+
+fn reset_setting_value(
+    settings: &mut Settings,
+    key: &str,
+    defaults: &Settings,
+) -> Result<(), String> {
+    match key {
+        "language" => settings.set_legacy_language(defaults.language),
+        "whisper_model" => {
+            settings.whisper_model = defaults.whisper_model;
+            Ok(())
+        }
+        "file_transcription_model" => {
+            settings.file_transcription_model = defaults.file_transcription_model;
+            Ok(())
+        }
+        "hotkey_mode" => settings.replace_hotkey_mode(defaults.hotkey_mode),
+        "show_overlay" => {
+            settings.show_overlay = defaults.show_overlay;
+            Ok(())
+        }
+        "auto_paste" => {
+            settings.auto_paste = defaults.auto_paste;
+            Ok(())
+        }
+        "auto_select_model" => {
+            settings.auto_select_model = defaults.auto_select_model;
+            Ok(())
+        }
+        "pianissimo_dictation" => {
+            settings.pianissimo_dictation = defaults.pianissimo_dictation;
+            Ok(())
+        }
+        "hotkey" => unreachable!("hotkey reset handled transactionally above"),
+        "initial_prompt" => {
+            settings.initial_prompt = defaults.initial_prompt.clone();
+            Ok(())
+        }
+        "beam_size" => {
+            settings.beam_size = defaults.beam_size;
+            Ok(())
+        }
+        "temperature_fallback" => {
+            settings.temperature_fallback = defaults.temperature_fallback;
+            Ok(())
+        }
+        "vad_enabled" => {
+            settings.vad_enabled = defaults.vad_enabled;
+            Ok(())
+        }
+        _ => unreachable!("validate_key already checked the setting key"),
+    }
 }
 
 fn reset_all_settings(current: &mut Settings) -> Result<(), String> {
@@ -658,6 +682,7 @@ fn get_setting_value(settings: &Settings, key: &str) -> String {
         "show_overlay" => settings.show_overlay.to_string(),
         "auto_paste" => settings.auto_paste.to_string(),
         "auto_select_model" => settings.auto_select_model.to_string(),
+        "pianissimo_dictation" => settings.pianissimo_dictation.to_string(),
         "hotkey" => settings.hotkey.clone(),
         "initial_prompt" => settings.initial_prompt.clone(),
         "beam_size" => settings.beam_size.to_string(),
@@ -1184,6 +1209,41 @@ mod tests {
     }
 
     #[test]
+    fn pianissimo_dictation_can_be_set_and_reset_to_default() {
+        let mut settings = Settings::default();
+        assert!(!settings.pianissimo_dictation);
+
+        apply_setting_value(&mut settings, "pianissimo_dictation", "true").unwrap();
+        assert!(settings.pianissimo_dictation);
+        assert_eq!(get_setting_value(&settings, "pianissimo_dictation"), "true");
+
+        let defaults = Settings::default();
+        reset_setting_value(&mut settings, "pianissimo_dictation", &defaults).unwrap();
+        assert_eq!(settings.pianissimo_dictation, defaults.pianissimo_dictation);
+        assert_eq!(
+            get_setting_value(&settings, "pianissimo_dictation"),
+            defaults.pianissimo_dictation.to_string()
+        );
+    }
+
+    #[test]
+    fn pianissimo_dictation_rejects_invalid_boolean_without_mutating() {
+        let mut settings = Settings {
+            pianissimo_dictation: true,
+            ..Settings::default()
+        };
+
+        for value in ["yes", "1", "TRUE"] {
+            let error =
+                apply_setting_value(&mut settings, "pianissimo_dictation", value).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains(value));
+            assert!(message.contains("pianissimo_dictation"));
+            assert!(settings.pianissimo_dictation);
+        }
+    }
+
+    #[test]
     fn get_setting_value_returns_serialized_values() {
         let settings = Settings::default();
         assert_eq!(get_setting_value(&settings, "language"), "en");
@@ -1191,6 +1251,10 @@ mod tests {
         assert_eq!(get_setting_value(&settings, "show_overlay"), "true");
         assert_eq!(get_setting_value(&settings, "auto_paste"), "true");
         assert_eq!(get_setting_value(&settings, "auto_select_model"), "true");
+        assert_eq!(
+            get_setting_value(&settings, "pianissimo_dictation"),
+            "false"
+        );
         assert_eq!(
             get_setting_value(&settings, "hotkey"),
             "Control+Shift+Space"

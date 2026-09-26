@@ -504,8 +504,8 @@ pub enum FileModel {
 
 /// Persisted preference for file transcription.
 ///
-/// `Auto` inherits the live dictation model, keeping existing settings files
-/// and live behavior unchanged when this field is absent.
+/// `Auto` inherits the effective Whisper model for the requested language.
+/// The separate experimental Pianissimo live-dictation choice does not affect it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FileModelPreference {
     #[default]
@@ -631,6 +631,9 @@ pub struct Settings {
     pub language: Language,
     pub whisper_model: WhisperModel,
     pub file_transcription_model: FileModelPreference,
+    /// Use the experimental native Pianissimo runtime for Swedish live dictation.
+    /// File transcription continues to use `file_transcription_model`.
+    pub pianissimo_dictation: bool,
     pub hotkey_mode: HotkeyMode,
     pub show_overlay: bool,
     pub auto_paste: bool,
@@ -666,6 +669,7 @@ impl Default for Settings {
             language: Language::default(),
             whisper_model: WhisperModel::default(),
             file_transcription_model: FileModelPreference::default(),
+            pianissimo_dictation: false,
             hotkey_mode: HotkeyMode::default(),
             show_overlay: true,
             auto_paste: true,
@@ -736,6 +740,12 @@ impl Settings {
         } else {
             self.whisper_model
         }
+    }
+
+    /// Whether live dictation should use Pianissimo for this language.
+    /// Other languages always retain the configured Whisper model.
+    pub fn uses_pianissimo_for_dictation(&self, language: Language) -> bool {
+        self.pianissimo_dictation && language == Language::Swedish
     }
 
     /// Resolve the model for file transcription without changing the live
@@ -982,15 +992,19 @@ impl Settings {
     }
 
     /// Build the ordered set of profile models worth loading during GUI
-    /// startup. The primary profile is always first and always included because
-    /// normal dictation requires it. Additional distinct models must fit both
+    /// startup. Pianissimo profiles are excluded. The primary remaining Whisper
+    /// profile is always first and included. Additional distinct models must fit both
     /// the resident-entry limit and advertised model-size budget.
     pub fn warm_model_plan(
         &self,
         max_models: usize,
         max_total_mb: u32,
     ) -> Vec<(WhisperModel, Language)> {
-        let profiles = self.resolved_hotkey_profiles();
+        let profiles: Vec<_> = self
+            .resolved_hotkey_profiles()
+            .into_iter()
+            .filter(|profile| !self.uses_pianissimo_for_dictation(profile.language))
+            .collect();
         let Some(primary_index) = profiles
             .iter()
             .position(|profile| profile.id == "default")
@@ -1062,6 +1076,43 @@ mod tests {
         assert_eq!(json, "\"sv\"");
         let deserialized: Language = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, lang);
+    }
+
+    #[test]
+    fn pianissimo_dictation_defaults_off_and_roundtrips() {
+        let default = Settings::default();
+        assert!(!default.pianissimo_dictation);
+
+        let legacy: Settings = serde_json::from_str(r#"{"language":"sv"}"#).unwrap();
+        assert!(!legacy.pianissimo_dictation);
+
+        let enabled = Settings {
+            pianissimo_dictation: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&enabled).unwrap();
+        let decoded: Settings = serde_json::from_str(&json).unwrap();
+        assert!(decoded.pianissimo_dictation);
+    }
+
+    #[test]
+    fn pianissimo_dictation_is_swedish_only() {
+        let disabled = Settings::default();
+        assert!(!disabled.uses_pianissimo_for_dictation(Language::Swedish));
+
+        let enabled = Settings {
+            pianissimo_dictation: true,
+            ..Default::default()
+        };
+        assert!(enabled.uses_pianissimo_for_dictation(Language::Swedish));
+        for language in [
+            Language::English,
+            Language::Norwegian,
+            Language::Finnish,
+            Language::Auto,
+        ] {
+            assert!(!enabled.uses_pianissimo_for_dictation(language));
+        }
     }
 
     #[test]
@@ -2144,6 +2195,36 @@ mod tests {
                 (WhisperModel::BaseEn, Language::English),
             ]
         );
+    }
+
+    #[test]
+    fn warm_model_plan_skips_pianissimo_profiles_but_keeps_whisper_profiles() {
+        let mut settings = Settings {
+            pianissimo_dictation: true,
+            auto_select_model: false,
+            whisper_model: WhisperModel::KbWhisperBase,
+            ..Default::default()
+        };
+        settings
+            .replace_hotkey_profiles(vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            settings.warm_model_plan(2, 384),
+            vec![(WhisperModel::BaseEn, Language::English)]
+        );
+
+        settings
+            .replace_hotkey_profiles(vec![profile(
+                "default",
+                "Super+S",
+                Language::Swedish,
+            )])
+            .unwrap();
+        assert!(settings.warm_model_plan(2, 384).is_empty());
     }
 
     #[test]
