@@ -1,9 +1,35 @@
 use tauri::Manager;
-use tracing::info;
 #[cfg(not(target_os = "linux"))]
 use tracing::error;
+use tracing::info;
 
 const OVERLAY_LABEL: &str = "overlay";
+
+// The recording indicator is click-through and must never become the key
+// window. In particular, Tauri's macOS `show` implementation calls
+// `makeKeyAndOrderFront`, which would move focus away from the destination
+// editor while a transcription is in flight.
+const OVERLAY_FOCUSABLE: bool = false;
+const OVERLAY_VISIBLE_ON_CREATE: bool = false;
+
+#[derive(Debug, PartialEq, Eq)]
+enum OverlayPresentMode {
+    #[cfg(target_os = "macos")]
+    NonActivating,
+    #[cfg(not(target_os = "macos"))]
+    Normal,
+}
+
+fn overlay_present_mode() -> OverlayPresentMode {
+    #[cfg(target_os = "macos")]
+    {
+        OverlayPresentMode::NonActivating
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        OverlayPresentMode::Normal
+    }
+}
 
 /// Show the recording overlay window (create lazily on first call).
 ///
@@ -20,9 +46,7 @@ pub fn show(app: &tauri::AppHandle) {
     #[cfg(not(target_os = "linux"))]
     {
         if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {
-            let _ = window.show();
-            #[cfg(target_os = "macos")]
-            macos_order_front(&window);
+            present_existing_overlay(&window);
             info!("Overlay shown (existing window)");
         } else {
             match create_overlay(app) {
@@ -64,6 +88,8 @@ fn create_overlay(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Erro
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
+    .visible(OVERLAY_VISIBLE_ON_CREATE)
+    .focusable(OVERLAY_FOCUSABLE)
     .focused(false)
     .resizable(false)
     .skip_taskbar(true)
@@ -75,10 +101,21 @@ fn create_overlay(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Erro
     // Click-through: cross-platform via Tauri API
     let _ = window.set_ignore_cursor_events(true);
 
-    // Suppress close — just hide instead
-    let _ = window;
+    present_existing_overlay(&window);
 
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn present_existing_overlay(window: &tauri::WebviewWindow) {
+    debug_assert_eq!(overlay_present_mode(), OverlayPresentMode::NonActivating);
+    macos_show_without_focus(window);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn present_existing_overlay(window: &tauri::WebviewWindow) {
+    debug_assert_eq!(overlay_present_mode(), OverlayPresentMode::Normal);
+    let _ = window.show();
 }
 
 /// macOS-specific: configure NSWindow for overlay behaviour
@@ -108,14 +145,24 @@ fn configure_macos_window(window: &tauri::WebviewWindow) {
     }
 }
 
-/// macOS-specific: bring window to front without stealing focus
+/// macOS-specific: bring window to front without making it the key window.
 #[cfg(target_os = "macos")]
 #[allow(deprecated, unexpected_cfgs)]
-fn macos_order_front(window: &tauri::WebviewWindow) {
+fn macos_show_without_focus(window: &tauri::WebviewWindow) {
     use cocoa::base::{id, nil};
 
     let ns_window: id = window.ns_window().unwrap() as id;
     unsafe {
         let _: () = objc::msg_send![ns_window, orderFront: nil];
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::{overlay_present_mode, OverlayPresentMode};
+
+    #[test]
+    fn macos_overlay_presentation_is_non_activating() {
+        assert_eq!(overlay_present_mode(), OverlayPresentMode::NonActivating);
     }
 }
