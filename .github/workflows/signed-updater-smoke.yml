@@ -1,0 +1,100 @@
+name: Signed Updater Smoke
+
+# Manual, isolated Apple Silicon lane. No release, tag, or published artifact.
+# It proves that a signed app under RUNNER_TEMP replaces itself from a signed
+# local updater archive and starts the replacement process.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-updater-smoke:
+    runs-on: macos-14
+    environment: updater-signing
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: src-tauri
+          shared-key: sagascript-test-macos-arm64
+
+      - name: Install dependencies and build frontend/native runtime
+        run: |
+          npm ci
+          npm run build
+          ./scripts/build-pianissimo-native-runtime.sh
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          : "${APPLE_CERTIFICATE:?APPLE_CERTIFICATE secret is required}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?APPLE_CERTIFICATE_PASSWORD secret is required}"
+          : "${KEYCHAIN_PASSWORD:?KEYCHAIN_PASSWORD secret is required}"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          keychain="$RUNNER_TEMP/sagascript-updater-smoke.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$certificate" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          security list-keychains -d user -s "$keychain"
+
+      - name: Sign native Pianissimo libraries
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: python3 scripts/sign-pianissimo-runtime.py build/pianissimo-native-runtime
+
+      - name: Build both signed test apps and sign the updater archive
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SAGASCRIPT_UPDATER_PUBKEY: ${{ vars.SAGASCRIPT_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
+          : "${SAGASCRIPT_UPDATER_PUBKEY:?SAGASCRIPT_UPDATER_PUBKEY variable is required}"
+          : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
+          [[ ! -e /Applications/Sagascript.app ]] || {
+            echo 'Hosted runner has an installed Sagascript; refusing smoke test' >&2
+            exit 1
+          }
+          export SAGASCRIPT_GIT_HASH="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+          export SAGASCRIPT_BUILD_DATE="$(date -u +%F)"
+          npx tauri build --ci --target aarch64-apple-darwin --bundles app \
+            --features updater-smoke-test \
+            --config scripts/tauri-ci-prebuilt.json \
+            --config scripts/tauri-pianissimo-bundle.json \
+            --config scripts/tauri-updater-smoke-old.json
+          source_app=src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app
+          test_dir="$RUNNER_TEMP/sagascript-signed-updater-smoke"
+          mkdir -p "$test_dir"
+          ditto "$source_app" "$test_dir/Sagascript.app"
+          codesign --verify --deep --strict "$test_dir/Sagascript.app"
+          npx tauri build --ci --target aarch64-apple-darwin --bundles app \
+            --config scripts/tauri-ci-prebuilt.json \
+            --config scripts/tauri-pianissimo-bundle.json \
+            --config scripts/tauri-updater-smoke-new.json
+          codesign --verify --deep --strict "$source_app"
+          archive="$test_dir/Sagascript.app.tar.gz"
+          tar -czf "$archive" -C "$(dirname "$source_app")" "$(basename "$source_app")"
+          npx tauri signer sign "$archive"
+          [[ -s "$archive" && -s "$archive.sig" ]]
+          node scripts/smoke-signed-updater.mjs \
+            "$test_dir/Sagascript.app" "$archive" "$archive.sig" 1.3.3 1.3.4

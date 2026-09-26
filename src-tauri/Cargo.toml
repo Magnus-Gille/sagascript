@@ -93,6 +93,9 @@ workspace = true
 default = ["custom-protocol", "diarization"]
 custom-protocol = ["tauri/custom-protocol"]
 diarization = ["sagascript-core/diarization", "sagascript-cli/diarization"]
+# Only the manually triggered signed updater smoke lane enables this feature.
+# The regular release build never compiles its loopback manifest endpoint.
+updater-smoke-test = []
 
 # Optimize the Rust DSP/glue (rubato resampler, symphonia decode, audio mixing)
 # in release builds. whisper.cpp itself is compiled -O3 by whisper-rs's build

@@ -6,9 +6,11 @@ use serde::Deserialize;
 const LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/Magnus-Gille/sagascript/releases/latest";
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "updater-smoke-test")))]
 pub const SIGNED_UPDATE_MANIFEST_URL: &str =
     "https://github.com/Magnus-Gille/sagascript/releases/latest/download/latest.json";
+#[cfg(all(target_os = "macos", feature = "updater-smoke-test"))]
+pub const SIGNED_UPDATE_MANIFEST_URL: &str = "http://127.0.0.1:34827/latest.json";
 
 pub fn updater_public_key() -> Option<&'static str> {
     option_env!("SAGASCRIPT_UPDATER_PUBKEY").filter(|key| !key.trim().is_empty())
@@ -100,6 +102,18 @@ fn parse_stable_release_tag(tag: &str) -> Result<Version, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn signed_update_endpoint_matches_build_flavor() {
+        #[cfg(feature = "updater-smoke-test")]
+        assert_eq!(SIGNED_UPDATE_MANIFEST_URL, "http://127.0.0.1:34827/latest.json");
+        #[cfg(not(feature = "updater-smoke-test"))]
+        assert_eq!(
+            SIGNED_UPDATE_MANIFEST_URL,
+            "https://github.com/Magnus-Gille/sagascript/releases/latest/download/latest.json"
+        );
+    }
 
     #[test]
     fn newer_stable_release_is_available() {
