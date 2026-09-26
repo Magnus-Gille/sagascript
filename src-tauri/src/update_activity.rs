@@ -1,5 +1,55 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
+
+struct PendingPreparation {
+    nonce: String,
+    sender: oneshot::Sender<Result<(), String>>,
+}
+
+/// A one-shot acknowledgement from the Settings webview after its results have
+/// been saved to the local recovery file. An update never restarts on a missing
+/// or failed acknowledgement.
+#[derive(Default)]
+pub struct UpdatePreparation {
+    pending: Mutex<Option<PendingPreparation>>,
+}
+
+impl UpdatePreparation {
+    pub fn begin(&self) -> (String, oneshot::Receiver<Result<(), String>>) {
+        let nonce = uuid::Uuid::new_v4().to_string();
+        let (sender, receiver) = oneshot::channel();
+        *self.pending.lock().unwrap() = Some(PendingPreparation {
+            nonce: nonce.clone(),
+            sender,
+        });
+        (nonce, receiver)
+    }
+
+    pub fn complete(&self, nonce: &str, result: Result<(), String>) -> Result<(), String> {
+        let mut pending = self.pending.lock().unwrap();
+        if pending
+            .as_ref()
+            .is_none_or(|current| current.nonce != nonce)
+        {
+            return Err("Unknown or expired update preparation request.".into());
+        }
+        if let Some(current) = pending.take() {
+            let _ = current.sender.send(result);
+        }
+        Ok(())
+    }
+
+    pub fn cancel(&self, nonce: &str) {
+        let mut pending = self.pending.lock().unwrap();
+        if pending
+            .as_ref()
+            .is_some_and(|current| current.nonce == nonce)
+        {
+            pending.take();
+        }
+    }
+}
 
 #[derive(Default)]
 struct ActivityState {
@@ -97,6 +147,33 @@ impl Drop for ExclusiveLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preparation_accepts_only_the_current_nonce() {
+        let preparation = UpdatePreparation::default();
+        let (nonce, receiver) = preparation.begin();
+        assert!(preparation.complete("stale", Ok(())).is_err());
+        preparation.complete(&nonce, Ok(())).unwrap();
+        assert!(receiver.blocking_recv().unwrap().is_ok());
+        assert!(preparation.complete(&nonce, Ok(())).is_err());
+    }
+
+    #[test]
+    fn cancelled_preparation_cannot_acknowledge_a_later_update() {
+        let preparation = UpdatePreparation::default();
+        let (old_nonce, old_receiver) = preparation.begin();
+        preparation.cancel(&old_nonce);
+        assert!(old_receiver.blocking_recv().is_err());
+        let (new_nonce, receiver) = preparation.begin();
+        assert!(preparation.complete(&old_nonce, Ok(())).is_err());
+        preparation
+            .complete(&new_nonce, Err("draft save failed".into()))
+            .unwrap();
+        assert_eq!(
+            receiver.blocking_recv().unwrap().unwrap_err(),
+            "draft save failed"
+        );
+    }
 
     #[test]
     fn exclusive_update_waits_for_active_work_and_blocks_new_work_atomically() {

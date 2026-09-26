@@ -30,6 +30,7 @@ mod paste_completion;
 mod plain_file_jobs;
 mod platform;
 mod update_activity;
+mod update_recovery;
 mod updates;
 
 use tracing_subscriber::EnvFilter;
@@ -237,7 +238,6 @@ struct UpdateMenuState {
     items: Option<UpdateMenuItems>,
     checking: bool,
     installing: bool,
-    waiting_for_results: bool,
     available_version: Option<semver::Version>,
 }
 
@@ -249,7 +249,6 @@ const UPDATE_CHECK_ACTION: &str = "Check for Updates…";
 enum UpdateMenuMode {
     Available(semver::Version),
     Installing,
-    WaitingForResults,
     Idle,
 }
 
@@ -313,25 +312,16 @@ fn set_update_menu(
                 UpdateMenuMode::Available(version) => {
                     state.checking = false;
                     state.installing = false;
-                    state.waiting_for_results = false;
                     state.available_version = Some(version);
                 }
                 UpdateMenuMode::Installing => {
                     state.checking = false;
                     state.installing = true;
-                    state.waiting_for_results = false;
-                    state.available_version = None;
-                }
-                UpdateMenuMode::WaitingForResults => {
-                    state.checking = false;
-                    state.installing = true;
-                    state.waiting_for_results = true;
                     state.available_version = None;
                 }
                 UpdateMenuMode::Idle => {
                     state.checking = false;
                     state.installing = false;
-                    state.waiting_for_results = false;
                     state.available_version = None;
                 }
             }
@@ -474,6 +464,68 @@ fn finish_update_check_error(app: &tauri::AppHandle, error: String) {
 }
 
 #[cfg(target_os = "macos")]
+async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
+    if app.get_webview_window("settings").is_some() {
+        let preparation: tauri::State<'_, update_activity::UpdatePreparation> = app.state();
+        let (nonce, response) = preparation.begin();
+        if let Err(error) = app.emit_to("settings", "update-preparing", nonce.clone()) {
+            preparation.cancel(&nonce);
+            return Err(format!("Could not ask Settings to save recovery drafts: {error}"));
+        }
+        let result = tokio::time::timeout(Duration::from_secs(30), response).await;
+        preparation.cancel(&nonce);
+        return match result {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("Settings closed before recovery drafts were saved.".into()),
+            Err(_) => Err("Timed out while saving recovery drafts. The update was not installed.".into()),
+        };
+    }
+
+    // Background dictation can run before Settings has ever been opened. Keep
+    // its last result without creating or focusing a window during an update.
+    let last_text = {
+        let controller: tauri::State<'_, SharedController> = app.state();
+        let text = controller
+            .lock()
+            .unwrap()
+            .last_transcription()
+            .map(str::to_owned);
+        text
+    };
+    let Some(last_text) = last_text.filter(|text| !text.trim().is_empty()) else {
+        return Ok(());
+    };
+    let path = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not locate local recovery storage: {error}"))?
+        .join("update-recovery.json");
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut payload = update_recovery::load(&path)
+            .map_err(|error| error.to_string())?
+            .map_or_else(
+                || serde_json::json!({
+                    "schema_version": 1,
+                    "saved_at": chrono::Utc::now().to_rfc3339(),
+                    "dictation": null,
+                    "files": [],
+                    "meetings": []
+                }),
+                |snapshot| snapshot.payload,
+            );
+        payload["dictation"] = serde_json::json!({ "text": last_text });
+        payload["saved_at"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_secs();
+        update_recovery::save(path, 1, timestamp, &payload).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("Could not finish saving dictation draft: {error}"))?
+}
+
+#[cfg(target_os = "macos")]
 async fn install_signed_update(
     app: tauri::AppHandle,
     update: tauri_plugin_updater::Update,
@@ -534,10 +586,28 @@ async fn install_signed_update(
     };
 
     let activity: Arc<UpdateActivity> = app.state::<Arc<UpdateActivity>>().inner().clone();
-    let mut settings_opened = false;
     loop {
-        match activity.try_exclusive(true) {
+        match activity.try_exclusive(false) {
             Ok(update_permit) => {
+                set_update_menu(
+                    &app,
+                    "Saving recoverable drafts…",
+                    "Preparing update…",
+                    false,
+                    UpdateMenuMode::Installing,
+                );
+                if let Err(error) = prepare_update_recovery(&app).await {
+                    warn!("Could not safely prepare update: {error}");
+                    drop(update_permit);
+                    set_update_menu(
+                        &app,
+                        "Could not save drafts for update",
+                        "Try Again…",
+                        true,
+                        UpdateMenuMode::Idle,
+                    );
+                    return;
+                }
                 set_update_menu(
                     &app,
                     format!("Installing update v{version}…"),
@@ -572,17 +642,8 @@ async fn install_signed_update(
                 return;
             }
             Err(ExclusiveError::ResultsPending) => {
-                set_update_menu(
-                    &app,
-                    "Save or copy finished results to complete the update",
-                    "Open Settings to review results…",
-                    true,
-                    UpdateMenuMode::WaitingForResults,
-                );
-                if !settings_opened {
-                    settings_opened = true;
-                    dispatch_to_main(&app, |app| open_settings_window(app, None));
-                }
+                warn!("Update activity unexpectedly rejected the recovery path");
+                return;
             }
             Err(ExclusiveError::WorkActive) => {
                 set_update_menu(
@@ -881,6 +942,7 @@ fn main() {
             let controller: SharedController = Mutex::new(app_controller);
             let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
             app.manage(update_activity);
+            app.manage(update_activity::UpdatePreparation::default());
             app.manage(controller);
             app.manage(whisper);
             app.manage(plain_file_jobs::SharedPlainFileJobs::default());
@@ -897,7 +959,6 @@ fn main() {
                 items: None,
                 checking: false,
                 installing: false,
-                waiting_for_results: false,
                 available_version: None,
             });
             app.manage(status_item);
@@ -1092,18 +1153,15 @@ fn main() {
                         open_settings_window(app, Some("dictate"));
                     }
                     "check_for_updates" => {
-                        let (available_version, installing, waiting_for_results) = {
+                        let (available_version, installing) = {
                             let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
                             let state = state.lock().unwrap();
                             (
                                 state.available_version.clone(),
                                 state.installing,
-                                state.waiting_for_results,
                             )
                         };
-                        if waiting_for_results {
-                            open_settings_window(app, None);
-                        } else if installing {
+                        if installing {
                             // The updater owns the menu action while it is
                             // downloading, waiting for work, or restarting.
                         } else if let Some(version) = available_version {
@@ -1317,6 +1375,10 @@ fn main() {
             commands::transcribe_file,
             commands::cancel_file_transcription,
             commands::set_update_result_pending,
+            commands::save_update_recovery,
+            commands::load_update_recovery,
+            commands::clear_update_recovery,
+            commands::complete_update_preparation,
             commands::save_transcription_text,
             commands::copy_transcription_text,
             meeting_jobs::begin_meeting_file,

@@ -2167,6 +2167,68 @@ pub async fn set_update_result_pending(
     activity.set_result_pending(&result_id, pending)
 }
 
+fn update_recovery_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join("update-recovery.json"))
+        .map_err(|error| format!("Could not locate local recovery storage: {error}"))
+}
+
+#[tauri::command]
+pub async fn save_update_recovery(
+    app: tauri::AppHandle,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    if payload.get("schema_version").and_then(serde_json::Value::as_u64) != Some(1) {
+        return Err("Unsupported recovery draft format.".into());
+    }
+    let path = update_recovery_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_secs();
+        crate::update_recovery::save(path, 1, timestamp, &payload)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("Could not finish saving recovery draft: {error}"))?
+}
+
+#[tauri::command]
+pub async fn load_update_recovery(
+    app: tauri::AppHandle,
+) -> Result<Option<serde_json::Value>, String> {
+    let path = update_recovery_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::update_recovery::load(path)
+            .map(|snapshot| snapshot.map(|snapshot| snapshot.payload))
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("Could not finish loading recovery draft: {error}"))?
+}
+
+#[tauri::command]
+pub async fn clear_update_recovery(app: tauri::AppHandle) -> Result<(), String> {
+    let path = update_recovery_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::update_recovery::clear(path).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("Could not finish clearing recovery draft: {error}"))?
+}
+
+#[tauri::command]
+pub fn complete_update_preparation(
+    preparation: State<'_, crate::update_activity::UpdatePreparation>,
+    nonce: String,
+    error: Option<String>,
+) -> Result<(), String> {
+    preparation.complete(&nonce, error.map_or(Ok(()), Err))
+}
+
 /// Copy a finished plain transcription to the clipboard (#238). Plain
 /// `set_text` only — no paste, no restore dance (see `paste::PasteService`
 /// for the guarded live-dictation path).
