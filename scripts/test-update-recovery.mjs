@@ -22,8 +22,8 @@ const transcript = {
 function completePayload() {
   return recovery.createUpdateRecoveryPayload({
     dictation: { text: "En osparad diktering" },
-    file: { path: "/tmp/interview.wav", text: "En osparad filtranskribering" },
-    meeting: {
+    files: [{ job_id: "file-1", path: "/tmp/interview.wav", text: "En osparad filtranskribering" }],
+    meetings: [{ job_id: "meeting-1",
       review: {
         review: {
           schema_version: 1,
@@ -74,7 +74,7 @@ function completePayload() {
         },
         candidate: transcript,
       },
-    },
+    }],
   }, "2026-09-26T10:00:00.000Z");
 }
 
@@ -83,8 +83,8 @@ test("payload round trips all unsaved result types", () => {
   const serialized = recovery.serializeUpdateRecoveryPayload(original);
   const parsed = recovery.parseUpdateRecoveryPayload(serialized);
   assert.deepEqual(parsed, original);
-  assert.equal(parsed.meeting.editor_draft.texts["seg-1"], "Hej där");
-  assert.equal(parsed.meeting.proposal.proposal.revision, "proposal-1");
+  assert.equal(parsed.meetings[0].editor_draft.texts["seg-1"], "Hej där");
+  assert.equal(parsed.meetings[0].proposal.proposal.revision, "proposal-1");
 });
 
 test("untrusted input is normalized, bounded, and stripped to known fields", () => {
@@ -92,12 +92,12 @@ test("untrusted input is normalized, bounded, and stripped to known fields", () 
     schema_version: 1,
     saved_at: "saved",
     dictation: { text: "x".repeat(600_000), audio_bytes: "must be discarded" },
-    file: { path: "/tmp/a", text: "file", raw_audio: [1, 2, 3] },
-    meeting: null,
+    files: [{ job_id: "file-1", path: "/tmp/a", text: "file", raw_audio: [1, 2, 3] }],
+    meetings: [],
     unexpected: { token: "discard" },
   }));
   assert.equal(parsed.dictation.text.length, recovery.UPDATE_RECOVERY_LIMITS.maxTextLength);
-  assert.deepEqual(parsed.file, { path: "/tmp/a", text: "file" });
+  assert.deepEqual(parsed.files, [{ job_id: "file-1", path: "/tmp/a", text: "file" }]);
   assert.equal(Object.hasOwn(parsed, "unexpected"), false);
   assert.equal(Object.hasOwn(parsed.dictation, "audio_bytes"), false);
 });
@@ -109,11 +109,11 @@ test("invalid JSON, schema versions, and malformed nested results fail closed", 
     schema_version: 1,
     saved_at: "saved",
     dictation: { text: "kept" },
-    file: { path: 42, text: "discarded" },
-    meeting: { review: null, editor_draft: {} },
+    files: [{ job_id: "file-1", path: 42, text: "discarded" }],
+    meetings: [{ job_id: "meeting-1", review: null, editor_draft: {} }],
   }));
-  assert.deepEqual(parsed.file, null);
-  assert.deepEqual(parsed.meeting, null);
+  assert.deepEqual(parsed.files, []);
+  assert.deepEqual(parsed.meetings, []);
   assert.deepEqual(parsed.dictation, { text: "kept" });
 });
 
@@ -125,4 +125,45 @@ test("oversized serialized payloads are rejected", () => {
     recovery.parseUpdateRecoveryPayload("x".repeat(recovery.UPDATE_RECOVERY_LIMITS.maxPayloadBytes + 1)),
     null,
   );
+});
+
+test("multiple file and meeting entries round trip in queue order", () => {
+  const payload = completePayload();
+  payload.files.push({ job_id: "file-2", path: "/tmp/second.wav", text: "Andra filen" });
+  payload.meetings.push({ ...payload.meetings[0], job_id: "meeting-2" });
+  const parsed = recovery.parseUpdateRecoveryPayload(recovery.serializeUpdateRecoveryPayload(payload));
+  assert.deepEqual(parsed.files.map((entry) => entry.job_id), ["file-1", "file-2"]);
+  assert.deepEqual(parsed.meetings.map((entry) => entry.job_id), ["meeting-1", "meeting-2"]);
+});
+
+test("duplicate job IDs keep the first valid entry", () => {
+  const parsed = recovery.parseUpdateRecoveryPayload(JSON.stringify({
+    schema_version: 1,
+    saved_at: "saved",
+    dictation: null,
+    files: [
+      { job_id: "same", path: "/tmp/first.wav", text: "first" },
+      { job_id: "same", path: "/tmp/second.wav", text: "second" },
+    ],
+    meetings: [],
+  }));
+  assert.deepEqual(parsed.files, [{ job_id: "same", path: "/tmp/first.wav", text: "first" }]);
+});
+
+test("file and meeting queues are capped at the configured entry limit", () => {
+  const payload = completePayload();
+  payload.files = Array.from({ length: recovery.UPDATE_RECOVERY_LIMITS.maxRecoveryEntries + 7 }, (_, index) => ({
+    job_id: `file-${index}`,
+    path: `/tmp/${index}.wav`,
+    text: `file ${index}`,
+  }));
+  payload.meetings = Array.from({ length: recovery.UPDATE_RECOVERY_LIMITS.maxRecoveryEntries + 7 }, (_, index) => ({
+    ...payload.meetings[0],
+    job_id: `meeting-${index}`,
+  }));
+  const parsed = recovery.parseUpdateRecoveryPayload(recovery.serializeUpdateRecoveryPayload(payload));
+  assert.equal(parsed.files.length, recovery.UPDATE_RECOVERY_LIMITS.maxRecoveryEntries);
+  assert.equal(parsed.meetings.length, recovery.UPDATE_RECOVERY_LIMITS.maxRecoveryEntries);
+  assert.equal(parsed.files.at(-1).job_id, "file-49");
+  assert.equal(parsed.meetings.at(-1).job_id, "meeting-49");
 });

@@ -24,6 +24,7 @@ export const UPDATE_RECOVERY_LIMITS = Object.freeze({
   maxLanguageLength: 64,
   maxModelLength: 256,
   maxRevisionLength: 256,
+  maxRecoveryEntries: 50,
   maxSegments: 50_000,
   maxSpeakers: 1_000,
   maxBatches: 1_000,
@@ -38,11 +39,13 @@ export interface UpdateRecoveryDictation {
 }
 
 export interface UpdateRecoveryFile {
+  job_id: string;
   path: string;
   text: string;
 }
 
 export interface UpdateRecoveryMeeting {
+  job_id: string;
   review: MeetingReviewState;
   editor_draft: MeetingDraftState;
   proposal: ProposalState | null;
@@ -52,8 +55,8 @@ export interface UpdateRecoveryPayload {
   schema_version: typeof UPDATE_RECOVERY_SCHEMA_VERSION;
   saved_at: string;
   dictation: UpdateRecoveryDictation | null;
-  file: UpdateRecoveryFile | null;
-  meeting: UpdateRecoveryMeeting | null;
+  files: UpdateRecoveryFile[];
+  meetings: UpdateRecoveryMeeting[];
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -275,7 +278,30 @@ function normalizeMeeting(value: unknown): UpdateRecoveryMeeting | null {
     texts: normalizeRecord(editorDraftSource.texts, UPDATE_RECOVERY_LIMITS.maxDraftEntries),
     speakers: normalizeRecord(editorDraftSource.speakers, UPDATE_RECOVERY_LIMITS.maxDraftEntries),
   };
-  return { review, editor_draft, proposal: normalizeProposalState(source.proposal) };
+  const jobId = stringValue(source.job_id, UPDATE_RECOVERY_LIMITS.maxIdLength, false);
+  if (jobId === null) return null;
+  return { job_id: jobId, review, editor_draft, proposal: normalizeProposalState(source.proposal) };
+}
+
+function normalizeFile(value: unknown): UpdateRecoveryFile | null {
+  const source = record(value);
+  if (!source) return null;
+  const jobId = stringValue(source.job_id, UPDATE_RECOVERY_LIMITS.maxIdLength, false);
+  const path = stringValue(source.path, UPDATE_RECOVERY_LIMITS.maxPathLength, false);
+  const text = stringValue(source.text, UPDATE_RECOVERY_LIMITS.maxTextLength);
+  return jobId === null || path === null || text === null ? null : { job_id: jobId, path, text };
+}
+
+function normalizeUniqueEntries<T extends { job_id: string }>(value: unknown, normalizer: (item: unknown) => T | null): T[] {
+  const result: T[] = [];
+  const seen = new Set<string>();
+  for (const item of boundedArray(value, UPDATE_RECOVERY_LIMITS.maxRecoveryEntries)) {
+    const normalized = normalizer(item);
+    if (normalized === null || seen.has(normalized.job_id)) continue;
+    seen.add(normalized.job_id);
+    result.push(normalized);
+  }
+  return result;
 }
 
 function normalizePayload(value: unknown): UpdateRecoveryPayload | null {
@@ -286,16 +312,12 @@ function normalizePayload(value: unknown): UpdateRecoveryPayload | null {
   const dictationSource = record(source.dictation);
   const dictationText = dictationSource === null ? null : stringValue(dictationSource.text, UPDATE_RECOVERY_LIMITS.maxTextLength);
   const dictation = dictationText === null ? null : { text: dictationText };
-  const fileSource = record(source.file);
-  const filePath = fileSource === null ? null : stringValue(fileSource.path, UPDATE_RECOVERY_LIMITS.maxPathLength, false);
-  const fileText = fileSource === null ? null : stringValue(fileSource.text, UPDATE_RECOVERY_LIMITS.maxTextLength);
-  const file = filePath === null || fileText === null ? null : { path: filePath, text: fileText };
   return {
     schema_version: UPDATE_RECOVERY_SCHEMA_VERSION,
     saved_at: savedAt,
     dictation,
-    file,
-    meeting: normalizeMeeting(source.meeting),
+    files: normalizeUniqueEntries(source.files, normalizeFile),
+    meetings: normalizeUniqueEntries(source.meetings, normalizeMeeting),
   };
 }
 
