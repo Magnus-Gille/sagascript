@@ -32,12 +32,14 @@ function fileHarness(path, overrides = {}) {
   let removed = 0;
   const calls = [];
   const native = deferred();
-  const deps = { ...stages, ...ui, job: { path, profileId: "swedish", prompt: "Astrid", diarize: false },
+  const deps = { ...stages, ...ui, job: { id: "job-1", path, profileId: "swedish", prompt: "Astrid", diarize: false },
     listen: async (event, handler) => { assert.equal(event, "plain-transcription-progress"); listener = handler; return () => { removed++; }; },
     transcribeFile: async (...args) => { calls.push(args); return native.promise; },
     cancelFileTranscription: async id => { calls.push(["cancel", id]); return true; },
     copyTranscriptionText: async text => { calls.push(["copy", text]); },
     saveTranscriptionText: async (...args) => { calls.push(["save", ...args]); return true; },
+    setUpdateResultPending: async () => {},
+    onFileRecoveryChange: () => {},
     waitForMeetingActions: async () => {}, revealTranscriptionResult: async () => {},
     onMissingFile: path => calls.push(["missing", path]), ...overrides };
   const source = `let transcribing = false, cancellingPlain = false, plainRequestStarted = false;

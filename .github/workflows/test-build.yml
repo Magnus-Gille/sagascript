@@ -22,10 +22,20 @@ permissions:
 jobs:
   build-macos-test:
     runs-on: macos-14
+    environment: updater-signing
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Validate TEST artifact label before signing credentials are available
+        env:
+          TEST_LABEL: ${{ inputs.label }}
+        run: |
+          if [[ ! "$TEST_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$ ]]; then
+            echo 'TEST artifact label must be 1–40 letters, digits, dots, underscores, or hyphens.' >&2
+            exit 1
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -128,18 +138,33 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          SAGASCRIPT_UPDATER_PUBKEY: ${{ vars.SAGASCRIPT_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
           : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
+          : "${SAGASCRIPT_UPDATER_PUBKEY:?SAGASCRIPT_UPDATER_PUBKEY variable is required}"
+          : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
           npx tauri build --config scripts/tauri-ci-prebuilt.json --config scripts/tauri-pianissimo-bundle.json --target aarch64-apple-darwin
 
-      - name: Notarize and staple disk image
+      - name: Notarize app and disk image
         env:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: |
           : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
           : "${APPLE_API_KEY:?APPLE_API_KEY secret is required}"
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
+          app_zip="$RUNNER_TEMP/Sagascript-notarization.zip"
+          ditto -c -k --keepParent "$app" "$app_zip"
+          xcrun notarytool submit "$app_zip" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
           dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
           [[ -n "$dmg" ]]
           xcrun notarytool submit "$dmg" \
@@ -150,17 +175,33 @@ jobs:
           xcrun stapler staple "$dmg"
 
       - name: Verify macOS test artifact and rename as TEST build
+        env:
+          TEST_LABEL: ${{ inputs.label }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           version=$(node -p "require('./package.json').version")
           app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
           dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
           [[ -n "$dmg" ]]
           ./scripts/verify-macos-release.sh "$app" "$dmg" "$version"
-          label="${{ inputs.label }}"
+          label="$TEST_LABEL"
           sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
           mkdir -p artifacts
           cp "$dmg" "artifacts/Sagascript-TEST-${label}-${sha}.dmg"
-          tar -czf "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
+          updater_bundle="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app.tar.gz"
+          updater_signature="$updater_bundle.sig"
+          tar -czf "$updater_bundle" -C "$(dirname "$app")" "$(basename "$app")"
+          rm -f "$updater_signature"
+          npx tauri signer sign "$updater_bundle"
+          [[ -s "$updater_bundle" && -s "$updater_signature" ]]
+          archive_check="$RUNNER_TEMP/sagascript-updater-archive-check"
+          mkdir -p "$archive_check"
+          tar -xzf "$updater_bundle" -C "$archive_check"
+          xcrun stapler validate "$archive_check/Sagascript.app"
+          spctl --assess --type execute --verbose=2 "$archive_check/Sagascript.app"
+          cp "$updater_bundle" "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz"
+          cp "$updater_signature" "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz.sig"
           cp build/pianissimo-sv-q8-melfix.gguf artifacts/pianissimo-sv-q8-melfix.gguf
           (cd artifacts && shasum -a 256 Sagascript-TEST-* pianissimo-sv-q8-melfix.gguf > SHA256SUMS)
           ls -lh artifacts/
@@ -182,6 +223,46 @@ jobs:
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["segments"]' \
             "$RUNNER_TEMP/pianissimo-signed-smoke.json"
           rm "$HOME/Library/Application Support/Sagascript/Models/pianissimo-sv-q8-melfix.gguf"
+
+      - name: Gate real signed self-upgrade in an isolated app
+        if: inputs.label == 'issue-255-updater-smoke'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SAGASCRIPT_UPDATER_PUBKEY: ${{ vars.SAGASCRIPT_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
+          : "${SAGASCRIPT_UPDATER_PUBKEY:?SAGASCRIPT_UPDATER_PUBKEY variable is required}"
+          : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
+          [[ ! -e /Applications/Sagascript.app ]] || {
+            echo 'Hosted runner has an installed Sagascript; refusing smoke test' >&2
+            exit 1
+          }
+          smoke_config="$RUNNER_TEMP/sagascript-updater-smoke-old.json"
+          node scripts/generate-updater-smoke-config.mjs \
+            scripts/tauri-updater-smoke-old.json "$smoke_config"
+          npx tauri build --ci --target aarch64-apple-darwin --bundles app \
+            --features updater-smoke-test \
+            --config scripts/tauri-ci-prebuilt.json \
+            --config scripts/tauri-pianissimo-bundle.json \
+            --config "$smoke_config"
+          source_app=src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app
+          test_dir="$RUNNER_TEMP/sagascript-signed-updater-smoke"
+          mkdir -p "$test_dir"
+          ditto "$source_app" "$test_dir/Sagascript.app"
+          codesign --verify --deep --strict "$test_dir/Sagascript.app"
+          npx tauri build --ci --target aarch64-apple-darwin --bundles app \
+            --config scripts/tauri-ci-prebuilt.json \
+            --config scripts/tauri-pianissimo-bundle.json \
+            --config scripts/tauri-updater-smoke-new.json
+          codesign --verify --deep --strict "$source_app"
+          archive="$test_dir/Sagascript.app.tar.gz"
+          tar -czf "$archive" -C "$(dirname "$source_app")" "$(basename "$source_app")"
+          npx tauri signer sign "$archive"
+          [[ -s "$archive" && -s "$archive.sig" ]]
+          node scripts/smoke-signed-updater.mjs \
+            "$test_dir/Sagascript.app" "$archive" "$archive.sig" 1.3.3 1.3.4
 
       - name: Upload macOS test artifacts (no GitHub Release is created)
         uses: actions/upload-artifact@v4

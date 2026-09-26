@@ -1,3 +1,86 @@
+<script module lang="ts">
+  import type { MeetingDraftState as DraftState, MeetingTranscript as Transcript } from "./meeting-types";
+
+  /** Serializable editor state owned by the parent recovery store. */
+  export interface MeetingReviewDraftSnapshot {
+    source_sha256: string;
+    review_revision: string;
+    drafts: DraftState;
+  }
+
+  function stringMap(value: unknown): Record<string, string> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key, entry]) => key.length > 0 && typeof entry === "string"),
+    ) as Record<string, string>;
+  }
+
+  function mapForIds(
+    value: unknown,
+    ids: readonly string[],
+    fallback: Record<string, string>,
+  ): Record<string, string> {
+    const source = stringMap(value);
+    return Object.fromEntries(ids.map((id) => [id, source[id] ?? fallback[id] ?? ""]));
+  }
+
+  /**
+   * Restore only editor fields belonging to this exact transcript/review.
+   * Unknown IDs and invalid speaker merge targets are intentionally dropped.
+   */
+  export function restoreMeetingDraftSnapshot(
+    base: DraftState,
+    snapshot: MeetingReviewDraftSnapshot | null | undefined,
+    transcript: Transcript,
+    sourceSha256: string,
+    reviewRevision: string,
+  ): DraftState {
+    if (
+      !snapshot
+      || snapshot.source_sha256 !== sourceSha256
+      || snapshot.review_revision !== reviewRevision
+    ) return base;
+
+    const speakerIds = transcript.speakers.map((speaker) => speaker.id);
+    const segmentIds = transcript.segments.map((segment) => segment.id);
+    const speakerIdSet = new Set(speakerIds);
+    const mergeSource = stringMap(snapshot.drafts?.mergeTargets);
+    const mergeTargets = Object.fromEntries(
+      Object.entries(mergeSource).filter(([from, into]) =>
+        from !== into && speakerIdSet.has(from) && speakerIdSet.has(into)),
+    );
+    const speakerDrafts = mapForIds(snapshot.drafts?.speakers, segmentIds, base.speakers);
+    for (const id of segmentIds) {
+      if (!speakerIdSet.has(speakerDrafts[id])) speakerDrafts[id] = base.speakers[id] ?? "";
+    }
+
+    return {
+      labels: mapForIds(snapshot.drafts?.labels, speakerIds, base.labels),
+      mergeTargets,
+      texts: mapForIds(snapshot.drafts?.texts, segmentIds, base.texts),
+      speakers: speakerDrafts,
+    };
+  }
+
+  export function createMeetingReviewDraftSnapshot(
+    sourceSha256: string,
+    reviewRevision: string,
+    drafts: DraftState,
+  ): MeetingReviewDraftSnapshot {
+    return {
+      source_sha256: sourceSha256,
+      review_revision: reviewRevision,
+      drafts: {
+        labels: { ...drafts.labels },
+        mergeTargets: { ...drafts.mergeTargets },
+        texts: { ...drafts.texts },
+        speakers: { ...drafts.speakers },
+      },
+    };
+  }
+</script>
+
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
@@ -29,6 +112,9 @@
     onAttachAudio: () => Promise<MeetingAudioAttachment | null>;
     onDetachAudio: (token: string) => Promise<void>;
     onDraftDirtyChange?: (dirty: boolean) => void;
+    /** `undefined` means the parent has not finished loading recovery state; `null` means none exists. */
+    initialDraftSnapshot?: MeetingReviewDraftSnapshot | null;
+    onDraftSnapshotChange?: (snapshot: MeetingReviewDraftSnapshot) => void;
     resetDraftKey?: number;
   }
 
@@ -47,6 +133,8 @@
     onAttachAudio,
     onDetachAudio,
     onDraftDirtyChange = () => undefined,
+    initialDraftSnapshot,
+    onDraftSnapshotChange = () => undefined,
     resetDraftKey = 0,
   }: Props = $props();
 
@@ -65,6 +153,8 @@
   let draftRevision: string | null = $state(null);
   let committedTranscript: MeetingTranscript | null = $state(null);
   let committedResetKey: number | null = $state(null);
+  let appliedInitialSnapshotKey: string | null = $state(null);
+  let draftsReady = $state(false);
   let discardDraftsOnNextRevision = $state(false);
   let pendingAction: string | null = $state(null);
   let actionError: string = $state("");
@@ -86,11 +176,23 @@
   const activeIds = $derived(new Set(activeSegments.map((segment) => segment.id)));
 
   $effect(() => {
+    const initialSnapshotKey = initialDraftSnapshot
+      ? `${initialDraftSnapshot.source_sha256}\u0000${initialDraftSnapshot.review_revision}`
+      : null;
+    if (initialSnapshotKey === null) appliedInitialSnapshotKey = null;
+    const initialSnapshotMatches = initialDraftSnapshot != null
+      && initialDraftSnapshot.source_sha256 === review.original.source_sha256
+      && initialDraftSnapshot.source_sha256 === transcript.source_sha256
+      && initialDraftSnapshot.review_revision === review.revision;
+    const shouldHydrateInitialSnapshot = initialSnapshotMatches
+      && initialSnapshotKey !== appliedInitialSnapshotKey;
     if (
       draftRevision === review.revision
       && committedTranscript !== null
       && committedResetKey === resetDraftKey
+      && !shouldHydrateInitialSnapshot
     ) return;
+    draftsReady = false;
     const previousTranscript = untrack(() => committedTranscript);
     const previousDrafts: MeetingDraftState = untrack(() => ({
       labels: labelDrafts,
@@ -106,13 +208,23 @@
       || previousTranscript.source_sha256 !== transcript.source_sha256
       || previousTranscript.language !== transcript.language
       || previousTranscript.model !== transcript.model;
-    const nextDrafts = reconcileMeetingDrafts(
+    let nextDrafts = reconcileMeetingDrafts(
       previousTranscript,
       transcript,
       previousDrafts,
       review.batches.at(-1)?.operations ?? [],
       shouldReset,
     );
+    if (shouldHydrateInitialSnapshot) {
+      nextDrafts = restoreMeetingDraftSnapshot(
+        nextDrafts,
+        initialDraftSnapshot,
+        transcript,
+        review.original.source_sha256,
+        review.revision,
+      );
+      appliedInitialSnapshotKey = initialSnapshotKey;
+    }
     draftRevision = review.revision;
     committedTranscript = transcript;
     committedResetKey = resetDraftKey;
@@ -121,6 +233,26 @@
     textDrafts = nextDrafts.texts;
     speakerDrafts = nextDrafts.speakers;
     discardDraftsOnNextRevision = false;
+    draftsReady = true;
+  });
+
+  $effect(() => {
+    const currentSourceSha = review.original.source_sha256;
+    const currentTranscript = committedTranscript;
+    if (
+      !draftsReady
+      || draftRevision !== review.revision
+      || currentTranscript === null
+      || currentTranscript.source_sha256 !== transcript.source_sha256
+      || currentTranscript.language !== transcript.language
+      || currentTranscript.model !== transcript.model
+    ) return;
+    const snapshot = createMeetingReviewDraftSnapshot(
+      currentSourceSha,
+      review.revision,
+      { labels: labelDrafts, mergeTargets, texts: textDrafts, speakers: speakerDrafts },
+    );
+    untrack(() => onDraftSnapshotChange(snapshot));
   });
 
   $effect(() => {

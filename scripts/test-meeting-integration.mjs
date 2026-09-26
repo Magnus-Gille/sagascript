@@ -16,6 +16,17 @@ const reviewSource = await readFile(
   new URL("../src/lib/MeetingReview.svelte", import.meta.url),
   "utf8",
 );
+const moduleScript = reviewSource.match(/<script module lang="ts">([\s\S]*?)<\/script>/)?.[1];
+assert.ok(moduleScript, "MeetingReview.svelte should expose its draft snapshot module");
+const draftModule = ts.transpileModule(moduleScript, {
+  compilerOptions: {
+    module: ts.ModuleKind.ESNext,
+    target: ts.ScriptTarget.ES2022,
+  },
+}).outputText;
+const { createMeetingReviewDraftSnapshot, restoreMeetingDraftSnapshot } = await import(
+  `data:text/javascript;base64,${Buffer.from(draftModule).toString("base64")}`
+);
 const pollingSource = await readFile(
   new URL("../src/lib/meeting-job-client.ts", import.meta.url),
   "utf8",
@@ -239,6 +250,12 @@ test("meeting review exposes explicit corrections, playback, and all export form
   assert.match(reviewSource, /reconcileMeetingDrafts/);
   assert.match(reviewSource, /resetDraftKey/);
   assert.match(reviewSource, /onDraftDirtyChange\?: \(dirty: boolean\) => void/);
+  assert.match(reviewSource, /initialDraftSnapshot\?: MeetingReviewDraftSnapshot \| null/);
+  assert.match(reviewSource, /onDraftSnapshotChange\?: \(snapshot: MeetingReviewDraftSnapshot\) => void/);
+  assert.match(reviewSource, /source_sha256/);
+  assert.match(reviewSource, /review_revision/);
+  assert.match(reviewSource, /restoreMeetingDraftSnapshot/);
+  assert.match(reviewSource, /createMeetingReviewDraftSnapshot/);
   assert.match(reviewSource, /committedResetKey === resetDraftKey/);
   assert.match(reviewSource, /Undo the last correction and discard unsaved edits/);
   assert.match(fileTranscriptionSource, /replace the current review if it succeeds/);
@@ -251,6 +268,57 @@ test("meeting review exposes explicit corrections, playback, and all export form
   assert.doesNotMatch(reviewSource, /{@html/);
   assert.doesNotMatch(reviewSource, /localStorage|fetch\(|AudioContext|MediaRecorder/);
   assert.doesNotMatch(reviewSource, /\.play\(\)/, "editing and timestamp controls must not autoplay audio");
+});
+
+test("meeting draft snapshots round-trip and reject another source or review revision", () => {
+  const transcript = {
+    schema_version: 1,
+    source_sha256: "source-a",
+    language: "en",
+    model: "model",
+    duration_seconds: 4,
+    segments: [
+      { id: "a", start: 0, end: 1, text: "A original", speaker: "s1" },
+      { id: "b", start: 1, end: 2, text: "B original", speaker: "s2" },
+    ],
+    speakers: [
+      { id: "s1", label: "Speaker 1" },
+      { id: "s2", label: "Speaker 2" },
+    ],
+  };
+  const clean = initialMeetingDrafts(transcript);
+  const dirty = {
+    labels: { ...clean.labels, s1: "Alice" },
+    mergeTargets: { s1: "s2", ignored: "s1", s2: "s2" },
+    texts: { ...clean.texts, a: "A edited", ignored: "should be dropped" },
+    speakers: { ...clean.speakers, b: "s1", ignored: "s1" },
+  };
+  const snapshot = createMeetingReviewDraftSnapshot("source-a", "revision-1", dirty);
+  dirty.texts.a = "mutated after snapshot";
+  assert.equal(snapshot.drafts.texts.a, "A edited", "snapshot must own serializable copies");
+
+  const restored = restoreMeetingDraftSnapshot(
+    clean,
+    snapshot,
+    transcript,
+    "source-a",
+    "revision-1",
+  );
+  assert.equal(restored.labels.s1, "Alice");
+  assert.equal(restored.texts.a, "A edited");
+  assert.equal(restored.speakers.b, "s1");
+  assert.deepEqual(restored.mergeTargets, { s1: "s2" }, "invalid merge targets and IDs are dropped");
+  assert.equal(restored.texts.ignored, undefined);
+  assert.deepEqual(
+    restoreMeetingDraftSnapshot(clean, snapshot, transcript, "source-b", "revision-1"),
+    clean,
+    "a different source must not hydrate editor state",
+  );
+  assert.deepEqual(
+    restoreMeetingDraftSnapshot(clean, snapshot, transcript, "source-a", "revision-2"),
+    clean,
+    "a different committed revision must not hydrate editor state",
+  );
 });
 
 test("review draft reconciliation preserves dirty segment B while applying segment A and another speaker rename", () => {

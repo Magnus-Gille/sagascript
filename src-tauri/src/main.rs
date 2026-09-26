@@ -16,19 +16,21 @@ mod logging;
 
 mod app_controller;
 mod commands;
-mod plain_file_jobs;
-mod meeting_jobs;
-mod meeting_review_commands;
-mod meeting_reprocessing_commands;
-mod meeting_media_range;
-mod meeting_media;
 mod events;
 mod hotkey;
+mod meeting_jobs;
+mod meeting_media;
+mod meeting_media_range;
+mod meeting_reprocessing_commands;
+mod meeting_review_commands;
 mod overlay;
 mod paste;
 #[path = "paste/completion.rs"]
 mod paste_completion;
+mod plain_file_jobs;
 mod platform;
+mod update_activity;
+mod update_recovery;
 mod updates;
 
 use tracing_subscriber::EnvFilter;
@@ -59,13 +61,13 @@ use tracing::{error, info, warn};
 use app_controller::AppState;
 use app_controller::{AppController, HotkeyDownResult, StopRecordingOutcome};
 use commands::{SharedController, SharedWhisper};
-use sagascript_core::settings::HotkeyProfile;
-use sagascript_core::settings::HotkeyMode;
 use sagascript_core::settings::canonical_hotkey;
+use sagascript_core::settings::HotkeyMode;
+use sagascript_core::settings::HotkeyProfile;
 #[cfg(test)]
 use sagascript_core::settings::{validate_hotkey, Language};
 use sagascript_core::transcription::{
-    WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS, WhisperBackend,
+    WhisperBackend, WARM_MODEL_CACHE_BUDGET_MB, WARM_MODEL_CACHE_MAX_MODELS,
 };
 
 /// Minimum recording duration before we allow stop (300ms)
@@ -235,12 +237,21 @@ struct UpdateMenuItems {
 struct UpdateMenuState {
     items: Option<UpdateMenuItems>,
     checking: bool,
+    installing: bool,
     available_version: Option<semver::Version>,
 }
 
 type SharedUpdateMenuState = Mutex<UpdateMenuState>;
 
 const UPDATE_CHECK_ACTION: &str = "Check for Updates…";
+
+#[derive(Clone)]
+enum UpdateMenuMode {
+    Available(semver::Version),
+    #[cfg(target_os = "macos")]
+    Installing,
+    Idle,
+}
 
 fn update_status_text(result: &updates::UpdateCheck) -> String {
     match result {
@@ -254,7 +265,7 @@ fn update_status_text(result: &updates::UpdateCheck) -> String {
 fn update_action_text(result: &updates::UpdateCheck) -> String {
     match result {
         updates::UpdateCheck::Available { version } => {
-            format!("Download Sagascript v{version}…")
+            format!("Open Release v{version}…")
         }
         updates::UpdateCheck::UpToDate => "Check Again…".to_string(),
     }
@@ -285,11 +296,70 @@ fn open_update_release(version: &semver::Version) -> Result<(), String> {
         .map_err(|error| format!("failed to open {url}: {error}"))
 }
 
+fn set_update_menu(
+    app: &tauri::AppHandle,
+    status_text: impl Into<String>,
+    action_text: impl Into<String>,
+    enabled: bool,
+    mode: UpdateMenuMode,
+) {
+    let status_text = status_text.into();
+    let action_text = action_text.into();
+    dispatch_to_main(app, move |app| {
+        let items = {
+            let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
+            let mut state = state.lock().unwrap();
+            match mode {
+                UpdateMenuMode::Available(version) => {
+                    state.checking = false;
+                    state.installing = false;
+                    state.available_version = Some(version);
+                }
+                #[cfg(target_os = "macos")]
+                UpdateMenuMode::Installing => {
+                    state.checking = false;
+                    state.installing = true;
+                    state.available_version = None;
+                }
+                UpdateMenuMode::Idle => {
+                    state.checking = false;
+                    state.installing = false;
+                    state.available_version = None;
+                }
+            }
+            state.items.clone()
+        };
+        let Some(items) = items else {
+            return;
+        };
+        if let Err(error) = items.status.set_text(status_text) {
+            error!("Failed to update tray update status: {error}");
+        }
+        if let Err(error) = items.check.set_text(action_text) {
+            error!("Failed to update tray update action: {error}");
+        }
+        if let Err(error) = items.check.set_enabled(enabled) {
+            error!("Failed to update tray update action availability: {error}");
+        }
+    });
+}
+
 fn check_for_updates(app: tauri::AppHandle) {
+    check_for_updates_with_intent(app, false);
+}
+
+fn check_for_updates_and_install(app: tauri::AppHandle) {
+    check_for_updates_with_intent(app, true);
+}
+
+fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: bool) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = install_when_available;
+
     let items = {
         let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
         let mut state = state.lock().unwrap();
-        if state.checking {
+        if state.checking || state.installing {
             return;
         }
         let Some(items) = state.items.clone() else {
@@ -307,6 +377,51 @@ fn check_for_updates(app: tauri::AppHandle) {
     }
 
     tauri::async_runtime::spawn(async move {
+        #[cfg(target_os = "macos")]
+        if updates::updater_public_key().is_some() {
+            match updates::check_signed_update(&app).await {
+                Ok(Some(update)) => {
+                    let version =
+                        match semver::Version::parse(update.version.trim_start_matches('v')) {
+                            Ok(version) => version,
+                            Err(error) => {
+                                finish_update_check_error(
+                                    &app,
+                                    format!("invalid updater version: {error}"),
+                                );
+                                return;
+                            }
+                        };
+                    if install_when_available {
+                        install_signed_update(app, update, version).await;
+                    } else {
+                        set_update_menu(
+                            &app,
+                            format!("Update available — v{version}"),
+                            format!("Install and Restart v{version}…"),
+                            true,
+                            UpdateMenuMode::Available(version),
+                        );
+                    }
+                    return;
+                }
+                Ok(None) => {
+                    set_update_menu(
+                        &app,
+                        "Sagascript is up to date",
+                        "Check Again…",
+                        true,
+                        UpdateMenuMode::Idle,
+                    );
+                    return;
+                }
+                Err(error) => {
+                    finish_update_check_error(&app, error);
+                    return;
+                }
+            }
+        }
+
         let result = updates::check_for_update(env!("CARGO_PKG_VERSION")).await;
         let (status_text, action_text, available_version, check_error) = match result {
             Ok(result) => {
@@ -331,31 +446,223 @@ fn check_for_updates(app: tauri::AppHandle) {
         if let Some(error) = check_error {
             warn!("Update check failed: {error}");
         }
-
-        // AppKit menu completion belongs on the main thread; keep the HTTP
-        // request above off-thread and retain the actionable release state.
-        dispatch_to_main(&app, move |app| {
-            let items = {
-                let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-                let mut state = state.lock().unwrap();
-                state.checking = false;
-                state.available_version = available_version;
-                state.items.clone()
-            };
-            let Some(items) = items else {
-                return;
-            };
-            if let Err(error) = items.status.set_text(status_text) {
-                error!("Failed to set tray update status: {error}");
-            }
-            if let Err(error) = items.check.set_text(action_text) {
-                error!("Failed to set tray update action: {error}");
-            }
-            if let Err(error) = items.check.set_enabled(true) {
-                error!("Failed to re-enable update action: {error}");
-            }
-        });
+        let mode = match available_version {
+            Some(version) => UpdateMenuMode::Available(version),
+            None => UpdateMenuMode::Idle,
+        };
+        set_update_menu(&app, status_text, action_text, true, mode);
     });
+}
+
+#[cfg(target_os = "macos")]
+fn finish_update_check_error(app: &tauri::AppHandle, error: String) {
+    warn!("Update check failed: {error}");
+    set_update_menu(
+        app,
+        "Couldn't check for updates",
+        "Try Again…",
+        true,
+        UpdateMenuMode::Idle,
+    );
+}
+
+#[cfg(target_os = "macos")]
+async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
+    if app.get_webview_window("settings").is_some() {
+        let preparation: tauri::State<'_, update_activity::UpdatePreparation> = app.state();
+        let (nonce, response) = preparation.begin();
+        if let Err(error) = app.emit_to("settings", "update-preparing", nonce.clone()) {
+            preparation.cancel(&nonce);
+            return Err(format!("Could not ask Settings to save recovery drafts: {error}"));
+        }
+        let result = tokio::time::timeout(Duration::from_secs(30), response).await;
+        preparation.cancel(&nonce);
+        return match result {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err("Settings closed before recovery drafts were saved.".into()),
+            Err(_) => Err("Timed out while saving recovery drafts. The update was not installed.".into()),
+        };
+    }
+
+    // Background dictation can run before Settings has ever been opened. Keep
+    // its last result without creating or focusing a window during an update.
+    let last_text = {
+        let controller: tauri::State<'_, SharedController> = app.state();
+        let text = controller
+            .lock()
+            .unwrap()
+            .last_transcription()
+            .map(str::to_owned);
+        text
+    };
+    let Some(last_text) = last_text.filter(|text| !text.trim().is_empty()) else {
+        return Ok(());
+    };
+    let path = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Could not locate local recovery storage: {error}"))?
+        .join("update-recovery.json");
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut payload = update_recovery::load(&path)
+            .map_err(|error| error.to_string())?
+            .map_or_else(
+                || serde_json::json!({
+                    "schema_version": 1,
+                    "saved_at": chrono::Utc::now().to_rfc3339(),
+                    "dictation": null,
+                    "files": [],
+                    "meetings": []
+                }),
+                |snapshot| snapshot.payload,
+            );
+        payload["dictation"] = serde_json::json!({ "text": last_text });
+        payload["saved_at"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_secs();
+        update_recovery::save(path, 1, timestamp, &payload).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("Could not finish saving dictation draft: {error}"))?
+}
+
+#[cfg(target_os = "macos")]
+async fn install_signed_update(
+    app: tauri::AppHandle,
+    update: tauri_plugin_updater::Update,
+    version: semver::Version,
+) {
+    use crate::update_activity::{ExclusiveError, UpdateActivity};
+
+    set_update_menu(
+        &app,
+        format!("Downloading update v{version}…"),
+        "Downloading update…",
+        false,
+        UpdateMenuMode::Installing,
+    );
+
+    let mut downloaded = 0_u64;
+    let mut last_percent = None;
+    let app_for_progress = app.clone();
+    let progress_version = version.clone();
+    let bytes = match update
+        .download(
+            move |chunk, total| {
+                downloaded = downloaded.saturating_add(chunk as u64);
+                let percent = total
+                    .filter(|total| *total > 0)
+                    .map(|total| (downloaded.saturating_mul(100) / total).min(100) as u8);
+                if percent != last_percent {
+                    last_percent = percent;
+                    let action = percent.map_or_else(
+                        || "Downloading update…".to_string(),
+                        |percent| format!("Downloading update… {percent}%"),
+                    );
+                    set_update_menu(
+                        &app_for_progress,
+                        format!("Downloading update v{progress_version}…"),
+                        action,
+                        false,
+                        UpdateMenuMode::Installing,
+                    );
+                }
+            },
+            || {},
+        )
+        .await
+    {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            warn!("Signed updater download/verification failed: {error}");
+            set_update_menu(
+                &app,
+                "Update download failed",
+                "Try Again…",
+                true,
+                UpdateMenuMode::Idle,
+            );
+            return;
+        }
+    };
+
+    let activity: Arc<UpdateActivity> = app.state::<Arc<UpdateActivity>>().inner().clone();
+    loop {
+        match activity.try_exclusive(false) {
+            Ok(update_permit) => {
+                set_update_menu(
+                    &app,
+                    "Saving recoverable drafts…",
+                    "Preparing update…",
+                    false,
+                    UpdateMenuMode::Installing,
+                );
+                if let Err(error) = prepare_update_recovery(&app).await {
+                    warn!("Could not safely prepare update: {error}");
+                    let _ = app.emit_to("settings", "update-aborted", &error);
+                    drop(update_permit);
+                    set_update_menu(
+                        &app,
+                        "Could not save drafts for update",
+                        "Try Again…",
+                        true,
+                        UpdateMenuMode::Idle,
+                    );
+                    return;
+                }
+                set_update_menu(
+                    &app,
+                    format!("Installing update v{version}…"),
+                    "Installing update…",
+                    false,
+                    UpdateMenuMode::Installing,
+                );
+                if let Err(error) = update.install(&bytes) {
+                    warn!("Signed updater installation failed: {error}");
+                    let _ = app.emit_to("settings", "update-aborted", error.to_string());
+                    drop(update_permit);
+                    set_update_menu(
+                        &app,
+                        "Update installation failed",
+                        "Try Again…",
+                        true,
+                        UpdateMenuMode::Idle,
+                    );
+                    return;
+                }
+
+                set_update_menu(
+                    &app,
+                    format!("Update v{version} installed; restarting Sagascript…"),
+                    "Restarting…",
+                    false,
+                    UpdateMenuMode::Installing,
+                );
+                dispatch_to_main(&app, move |app| {
+                    let _update_permit = update_permit;
+                    app.restart();
+                });
+                return;
+            }
+            Err(ExclusiveError::ResultsPending) => {
+                warn!("Update activity unexpectedly rejected the recovery path");
+                return;
+            }
+            Err(ExclusiveError::WorkActive) => {
+                set_update_menu(
+                    &app,
+                    "Waiting for current dictation or transcription to finish…",
+                    "Waiting for current work…",
+                    false,
+                    UpdateMenuMode::Installing,
+                );
+            }
+            Err(error) => warn!(?error, "Could not safely apply update"),
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -449,7 +756,8 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                     .into_iter()
                     .find(|(_, configured, _)| {
                         canonical_hotkey(configured).ok() == canonical_hotkey(shortcut).ok()
-                    });
+                    },
+                );
                 let result = match binding {
                     Some((profile, configured_shortcut, mode)) => {
                         // A failed operational configuration always uses the
@@ -461,17 +769,17 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                             (mode, configured_shortcut.as_str())
                         };
                         match c.handle_hotkey_down_for_binding(profile, mode, shortcut) {
-                        Ok(result) => {
-                            if safe_fallback && result == HotkeyDownResult::StartedRecording {
-                                c.use_safe_fallback_lifecycle();
+                            Ok(result) => {
+                                if safe_fallback && result == HotkeyDownResult::StartedRecording {
+                                    c.use_safe_fallback_lifecycle();
+                                }
+                                result
                             }
-                            result
-                        },
-                        Err(error) => {
-                            error!("Hotkey down error: {error}");
-                            let _ = app.emit(events::event::ERROR, error.to_string());
-                            HotkeyDownResult::NoOp
-                        }
+                            Err(error) => {
+                                error!("Hotkey down error: {error}");
+                                let _ = app.emit(events::event::ERROR, error.to_string());
+                                HotkeyDownResult::NoOp
+                            }
                         }
                     }
                     None if safe_fallback => {
@@ -564,10 +872,12 @@ fn main() {
 
     info!("Sagascript starting...");
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .register_asynchronous_uri_scheme_protocol("meeting-audio", meeting_media::protocol)
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            if !second_instance_requests_settings(&args) {
+            let update_requested = second_instance_requests_update(&args);
+            if !update_requested && !second_instance_requests_settings(&args) {
                 info!("Background second-instance launch ignored");
                 return;
             }
@@ -579,6 +889,11 @@ fn main() {
             // of keeping the secondary process blocked on a window operation.
             let app = app.clone();
             dispatch_to_main(&app, move |app| {
+                if update_requested {
+                    info!("CLI requested the in-app updater");
+                    check_for_updates_and_install(app.clone());
+                    return;
+                }
                 let should_reveal = app
                     .try_state::<SharedController>()
                     .map(|ctrl| should_reveal_for_reopen(ctrl.lock().unwrap().state()))
@@ -606,7 +921,18 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![sagascript_cli::open::GUI_BACKGROUND_ARG]),
         ))
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    #[cfg(target_os = "macos")]
+    if let Some(pubkey) = updates::updater_public_key() {
+        builder = builder.plugin(
+            tauri_plugin_updater::Builder::new()
+                .pubkey(pubkey.to_owned())
+                .build(),
+        );
+    }
+
+    builder
         .setup(move |app| {
             // `tauri-plugin-single-instance` is initialized before Tauri calls
             // setup. Keep backend construction here so a secondary process is
@@ -615,8 +941,13 @@ fn main() {
             let settings = load_settings_with_permission_gate();
             info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
             let initial_hotkey = settings.hotkey.clone();
-            let controller: SharedController = Mutex::new(AppController::new(settings));
+            let update_activity = Arc::new(update_activity::UpdateActivity::default());
+            let mut app_controller = AppController::new(settings);
+            app_controller.set_update_activity(update_activity.clone());
+            let controller: SharedController = Mutex::new(app_controller);
             let whisper: SharedWhisper = Arc::new(WhisperBackend::new());
+            app.manage(update_activity);
+            app.manage(update_activity::UpdatePreparation::default());
             app.manage(controller);
             app.manage(whisper);
             app.manage(plain_file_jobs::SharedPlainFileJobs::default());
@@ -632,6 +963,7 @@ fn main() {
             let update_menu: SharedUpdateMenuState = Mutex::new(UpdateMenuState {
                 items: None,
                 checking: false,
+                installing: false,
                 available_version: None,
             });
             app.manage(status_item);
@@ -826,26 +1158,22 @@ fn main() {
                         open_settings_window(app, Some("dictate"));
                     }
                     "check_for_updates" => {
-                        let available_version = {
+                        let (available_version, installing) = {
                             let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-                            let version = state.lock().unwrap().available_version.clone();
-                            version
+                            let state = state.lock().unwrap();
+                            (
+                                state.available_version.clone(),
+                                state.installing,
+                            )
                         };
-                        if let Some(version) = available_version {
-                            if let Err(error) = open_update_release(&version) {
+                        if installing {
+                            // The updater owns the menu action while it is
+                            // downloading, waiting for work, or restarting.
+                        } else if let Some(version) = available_version {
+                            if updates::updater_public_key().is_some() {
+                                check_for_updates_and_install(app.clone());
+                            } else if let Err(error) = open_update_release(&version) {
                                 error!("Failed to open update release: {error}");
-                            } else {
-                                let items = {
-                                    let state: tauri::State<'_, SharedUpdateMenuState> = app.state();
-                                    let mut state = state.lock().unwrap();
-                                    state.available_version = None;
-                                    state.items.clone()
-                                };
-                                if let Some(items) = items {
-                                    if let Err(error) = items.check.set_text("Check Again…") {
-                                        error!("Failed to reset update action after opening release: {error}");
-                                    }
-                                }
                             }
                         } else {
                             check_for_updates(app.clone());
@@ -903,6 +1231,14 @@ fn main() {
                         open_settings_window(app.handle(), Some("onboarding"));
                     }
                 }
+            }
+
+            if gui_launch_mode == GuiLaunchMode::InstallUpdate {
+                check_for_updates_and_install(app.handle().clone());
+            } else if cfg!(target_os = "macos") && updates::updater_public_key().is_some() {
+                // Manifest checks only; downloads and installation remain an
+                // explicit user action from the tray or `sagascript update`.
+                check_for_updates(app.handle().clone());
             }
 
             // Preload + warm the bounded set of models selected by the hotkey
@@ -1043,6 +1379,11 @@ fn main() {
             commands::get_build_info,
             commands::transcribe_file,
             commands::cancel_file_transcription,
+            commands::set_update_result_pending,
+            commands::save_update_recovery,
+            commands::load_update_recovery,
+            commands::clear_update_recovery,
+            commands::complete_update_preparation,
             commands::save_transcription_text,
             commands::copy_transcription_text,
             meeting_jobs::begin_meeting_file,
@@ -1298,6 +1639,7 @@ enum GuiLaunchMode {
     Standard,
     ShowSettings,
     Background,
+    InstallUpdate,
 }
 
 fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLaunchMode {
@@ -1315,6 +1657,11 @@ fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLau
         {
             GuiLaunchMode::Background
         }
+        (Some(argument), None)
+            if argument == std::ffi::OsStr::new(sagascript_cli::open::GUI_UPDATE_ARG) =>
+        {
+            GuiLaunchMode::InstallUpdate
+        }
         _ => GuiLaunchMode::Standard,
     }
 }
@@ -1330,9 +1677,15 @@ fn second_instance_requests_settings(args: &[String]) -> bool {
     // let every other relaunch (including a bare Start-menu launch) reveal
     // Settings. Looking for the marker anywhere is robust to either argv
     // shape and to a future plugin adding metadata arguments.
-    !args
-        .iter()
-        .any(|argument| argument == sagascript_cli::open::GUI_BACKGROUND_ARG)
+    !args.iter().any(|argument| {
+        argument == sagascript_cli::open::GUI_BACKGROUND_ARG
+            || argument == sagascript_cli::open::GUI_UPDATE_ARG
+    })
+}
+
+fn second_instance_requests_update(args: &[String]) -> bool {
+    args.iter()
+        .any(|argument| argument == sagascript_cli::open::GUI_UPDATE_ARG)
 }
 
 fn initial_window_request(
@@ -1341,7 +1694,10 @@ fn initial_window_request(
 ) -> InitialWindowRequest {
     if !has_completed_onboarding {
         InitialWindowRequest::Onboarding
-    } else if launch_mode == GuiLaunchMode::Background {
+    } else if matches!(
+        launch_mode,
+        GuiLaunchMode::Background | GuiLaunchMode::InstallUpdate
+    ) {
         InitialWindowRequest::Hidden
     } else {
         InitialWindowRequest::Settings
@@ -1443,20 +1799,17 @@ fn try_open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) -> Result
             660.0
         };
 
-        let window = tauri::WebviewWindowBuilder::new(
-            app,
-            "settings",
-            tauri::WebviewUrl::App(url.into()),
-        )
-        .title("Sagascript")
-        .inner_size(500.0, default_height)
-        .min_inner_size(500.0, 400.0)
-        .resizable(true)
-        .always_on_top(false)
-        .center()
-        .focused(true)
-        .build()
-        .map_err(|error| format!("failed to create main window: {error}"))?;
+        let window =
+            tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App(url.into()))
+                .title("Sagascript")
+                .inner_size(500.0, default_height)
+                .min_inner_size(500.0, 400.0)
+                .resizable(true)
+                .always_on_top(false)
+                .center()
+                .focused(true)
+                .build()
+                .map_err(|error| format!("failed to create main window: {error}"))?;
 
         reveal_existing_main_window(&window)
     }
@@ -1645,8 +1998,15 @@ fn stop_recording_and_transcribe(
             // warm state instead of running to completion and wedging the pipeline.
             let whisper_ref = whisper.inner().clone();
             let mut fut = tokio::task::spawn_blocking(move || {
-                let mut timings = sagascript_core::transcription::whisper_backend::DictationTimings::default();
-                let result = whisper_ref.transcribe_live_dictation(effective_model, &audio, language, &opts, &mut timings);
+                let mut timings =
+                    sagascript_core::transcription::whisper_backend::DictationTimings::default();
+                let result = whisper_ref.transcribe_live_dictation(
+                    effective_model,
+                    &audio,
+                    language,
+                    &opts,
+                    &mut timings,
+                );
                 (result, timings)
             });
 
@@ -1657,7 +2017,10 @@ fn stop_recording_and_transcribe(
                     if timings.model_acquisition_started {
                         model_load_ms = Some(timings.model_ms);
                         model_was_warm = timings.model_cached;
-                        c.record_phase("model_acquisition", Duration::from_secs_f64(timings.model_ms / 1000.0));
+                        c.record_phase(
+                            "model_acquisition",
+                            Duration::from_secs_f64(timings.model_ms / 1000.0),
+                        );
                         c.record_model_cache(timings.model_cached);
                     }
                     key_up_to_model_ready_ms = timings.model_ready_at.map(|ready| {
@@ -1666,7 +2029,10 @@ fn stop_recording_and_transcribe(
                     });
                     if timings.inference_started {
                         whisper_ms = Some(timings.inference_ms);
-                        c.record_phase("inference", Duration::from_secs_f64(timings.inference_ms / 1000.0));
+                        c.record_phase(
+                            "inference",
+                            Duration::from_secs_f64(timings.inference_ms / 1000.0),
+                        );
                     }
                     r
                 }
@@ -1680,7 +2046,9 @@ fn stop_recording_and_transcribe(
                     // outcome occurred so a genuine hang is visible.
                     match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut).await
                     {
-                        Ok(_) => info!("Aborted transcription task exited — warm-state lock released"),
+                        Ok(_) => {
+                            info!("Aborted transcription task exited — warm-state lock released")
+                        }
                         Err(_) => error!(
                             "Transcription task still running {ABORT_GRACE_SECS}s after abort — \
                              warm state may stay locked until it unwinds; further transcriptions \
@@ -1901,11 +2269,11 @@ fn configuration_event_may_affect(
 /// them into the running app. Handles hotkey re-registration and emits a
 /// settings-changed event to the frontend.
 fn start_settings_watcher(app: tauri::AppHandle) {
-    use notify::{Config, RecursiveMode, Watcher};
-    #[cfg(not(target_os = "macos"))]
-    use notify::RecommendedWatcher;
     #[cfg(target_os = "macos")]
     use notify::PollWatcher;
+    #[cfg(not(target_os = "macos"))]
+    use notify::RecommendedWatcher;
+    use notify::{Config, RecursiveMode, Watcher};
     use std::sync::mpsc;
 
     let settings_path = sagascript_core::settings::store::settings_path();
@@ -2019,16 +2387,28 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                     new_settings.language = old_settings.language;
                     new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
                     new_settings.hotkey_mode = old_settings.hotkey_mode;
-                    health.record(&old_settings.hotkey, Some(format!("{error}; previous hotkey profiles remain active")), old_operational)
+                    health.record(
+                        &old_settings.hotkey,
+                        Some(format!("{error}; previous hotkey profiles remain active")),
+                        old_operational,
+                    )
                 } else if let Some(error) = unregister_error {
                     new_settings.hotkey = old_settings.hotkey.clone();
                     new_settings.language = old_settings.language;
                     new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
                     new_settings.hotkey_mode = old_settings.hotkey_mode;
-                    health.record(&old_settings.hotkey, Some(format!("failed to unregister previous hotkeys: {error}")), hotkey::OperationalHotkey::Unknown)
+                    health.record(
+                        &old_settings.hotkey,
+                        Some(format!("failed to unregister previous hotkeys: {error}")),
+                        hotkey::OperationalHotkey::Unknown,
+                    )
                 } else {
                     match hotkey::register_shortcuts(&app, &new_shortcuts) {
-                        Ok(()) => health.record(&new_settings.hotkey, None, hotkey::OperationalHotkey::registered_many(&new_shortcuts)),
+                        Ok(()) => health.record(
+                            &new_settings.hotkey,
+                            None,
+                            hotkey::OperationalHotkey::registered_many(&new_shortcuts),
+                        ),
                         Err(error) => {
                             new_settings.hotkey = old_settings.hotkey.clone();
                             new_settings.language = old_settings.language;
@@ -2108,6 +2488,12 @@ mod tests {
             sagascript_cli::open::GUI_BACKGROUND_ARG.to_string(),
             "future-metadata".to_string()
         ]));
+        let update_args = [
+            "sagascript".to_string(),
+            sagascript_cli::open::GUI_UPDATE_ARG.to_string(),
+        ];
+        assert!(!second_instance_requests_settings(&update_args));
+        assert!(second_instance_requests_update(&update_args));
     }
 
     #[test]
@@ -2121,6 +2507,12 @@ mod tests {
         assert_eq!(
             update_status_text(&updates::UpdateCheck::UpToDate),
             "Sagascript is up to date"
+        );
+        assert_eq!(
+            update_action_text(&updates::UpdateCheck::Available {
+                version: semver::Version::new(1, 2, 3)
+            }),
+            "Open Release v1.2.3…"
         );
     }
 
@@ -2259,6 +2651,13 @@ mod tests {
         );
     }
 
+    #[test]
+    fn update_launch_stays_hidden_until_the_updater_restarts_the_app() {
+        assert_eq!(
+            initial_window_request(true, GuiLaunchMode::InstallUpdate),
+            InitialWindowRequest::Hidden
+        );
+    }
 
     #[test]
     fn incomplete_onboarding_starts_on_the_onboarding_view_even_when_headless() {
@@ -2272,9 +2671,8 @@ mod tests {
     fn private_gui_markers_are_accepted_only_as_the_sole_argument() {
         use std::ffi::OsString;
 
-        let mode = |args: &[&str]| {
-            gui_launch_mode(args.iter().map(OsString::from).collect::<Vec<_>>())
-        };
+        let mode =
+            |args: &[&str]| gui_launch_mode(args.iter().map(OsString::from).collect::<Vec<_>>());
 
         assert_eq!(mode(&["sagascript"]), GuiLaunchMode::Standard);
         assert_eq!(
@@ -2284,6 +2682,10 @@ mod tests {
         assert_eq!(
             mode(&["sagascript", sagascript_cli::open::GUI_BACKGROUND_ARG]),
             GuiLaunchMode::Background
+        );
+        assert_eq!(
+            mode(&["sagascript", sagascript_cli::open::GUI_UPDATE_ARG]),
+            GuiLaunchMode::InstallUpdate
         );
         assert_eq!(
             mode(&["sagascript", "config", sagascript_cli::open::GUI_OPEN_ARG]),
@@ -2320,7 +2722,6 @@ mod tests {
             ]));
         }
     }
-
 
     #[cfg(unix)]
     #[test]
@@ -2603,7 +3004,7 @@ mod tests {
         };
 
         assert_eq!(update_status_text(&result), "Update available — v1.2.0");
-        assert_eq!(update_action_text(&result), "Download Sagascript v1.2.0…");
+        assert_eq!(update_action_text(&result), "Open Release v1.2.0…");
     }
 
     #[test]

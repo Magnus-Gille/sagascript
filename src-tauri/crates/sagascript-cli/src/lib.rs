@@ -400,6 +400,13 @@ This is a recovery path when the menu-bar status item is unavailable. On macOS, 
     )]
     Open,
 
+    /// Check, install, and restart through the installed signed macOS app
+    #[cfg(target_os = "macos")]
+    #[command(
+        long_about = "Request a signed in-app update through the installed Sagascript desktop app. The desktop updater checks the stable release manifest, verifies the signed bundle, waits for active work and unsaved results to be resolved, then installs and restarts. This command starts the app-mediated flow; it does not download or install a bundle in the CLI process."
+    )]
+    Update,
+
     /// Reset first-launch onboarding (re-run setup wizard on next launch)
     #[command(
         long_about = "\
@@ -546,6 +553,8 @@ pub fn run(cli: Cli) {
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
         Command::Open => open::run(),
+        #[cfg(target_os = "macos")]
+        Command::Update => open::run_update(),
         Command::ResetOnboarding => {
             sagascript_core::settings::store::update(|settings| {
                 settings.has_completed_onboarding = false;
@@ -1291,6 +1300,13 @@ mod tests {
     fn parse_open_gui() {
         let cli = Cli::try_parse_from(["sagascript", "open"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Open)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_update_command() {
+        let cli = Cli::try_parse_from(["sagascript", "update"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Update)));
     }
 
     #[test]

@@ -44,6 +44,7 @@ fn emit_source_rerun_triggers() {
 fn emit_git_rerun_triggers() {
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_GIT_HASH");
     println!("cargo:rerun-if-env-changed=SAGASCRIPT_BUILD_DATE");
+    println!("cargo:rerun-if-env-changed=SAGASCRIPT_UPDATER_PUBKEY");
     println!("cargo:rerun-if-changed=build-meta.env");
 
     if let Some(git_dir) = command_output(&["rev-parse", "--absolute-git-dir"]) {
@@ -65,6 +66,15 @@ fn emit_git_rerun_triggers() {
 fn main() {
     emit_git_rerun_triggers();
     emit_source_rerun_triggers();
+
+    let is_macos_release = std::env::var("PROFILE").as_deref() == Ok("release")
+        && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos");
+    let updater_pubkey_configured = std::env::var("SAGASCRIPT_UPDATER_PUBKEY")
+        .ok()
+        .is_some_and(|key| !key.trim().is_empty());
+    if is_macos_release && !updater_pubkey_configured {
+        panic!("macOS release builds require SAGASCRIPT_UPDATER_PUBKEY");
+    }
 
     let git_hash = metadata_value("SAGASCRIPT_GIT_HASH", local_git_hash);
     let build_date = metadata_value("SAGASCRIPT_BUILD_DATE", || {
