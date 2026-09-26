@@ -23,3 +23,10 @@ test("manual workflow input never enters a shell program through expression inte
   assert.match(signing, /TEST_LABEL: \$\{\{ inputs\.label \}\}/);
   assert.match(signing, /label="\$TEST_LABEL"/);
 });
+
+test("signed upgrade builds the updated app with its generated updater config", () => {
+  const smoke = steps.find((step) => step.includes("name: Gate real signed self-upgrade"));
+  assert.ok(smoke);
+  assert.match(smoke, /generate-updater-smoke-config\.mjs \\\n+\s+scripts\/tauri-updater-smoke-new\.json "\$updated_smoke_config"/);
+  assert.match(smoke, /--config "\$updated_smoke_config"/);
+});

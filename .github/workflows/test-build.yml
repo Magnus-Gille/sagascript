@@ -252,10 +252,13 @@ jobs:
           mkdir -p "$test_dir"
           ditto "$source_app" "$test_dir/Sagascript.app"
           codesign --verify --deep --strict "$test_dir/Sagascript.app"
+          updated_smoke_config="$RUNNER_TEMP/sagascript-updater-smoke-new.json"
+          node scripts/generate-updater-smoke-config.mjs \
+            scripts/tauri-updater-smoke-new.json "$updated_smoke_config"
           npx tauri build --ci --target aarch64-apple-darwin --bundles app \
             --config scripts/tauri-ci-prebuilt.json \
             --config scripts/tauri-pianissimo-bundle.json \
-            --config scripts/tauri-updater-smoke-new.json
+            --config "$updated_smoke_config"
           codesign --verify --deep --strict "$source_app"
           archive="$test_dir/Sagascript.app.tar.gz"
           tar -czf "$archive" -C "$(dirname "$source_app")" "$(basename "$source_app")"
