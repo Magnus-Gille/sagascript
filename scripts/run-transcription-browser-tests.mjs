@@ -10,7 +10,7 @@ try {
   await server.listen();
   const address = server.httpServer?.address();
   if (!address || typeof address === "string") throw new Error("Vite did not expose a TCP port.");
-  for (const script of ["qa-transcription-tabs.mjs", "qa-update-recovery.mjs"]) {
+  for (const script of ["qa-transcription-tabs.mjs", "qa-update-recovery.mjs", "qa-update-completion-races.mjs"]) {
     const result = await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [fileURLToPath(new URL(`./${script}`, import.meta.url))], {
         stdio: "inherit",
