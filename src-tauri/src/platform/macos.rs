@@ -4,9 +4,65 @@ use core_foundation::dictionary::CFDictionary;
 use core_foundation::string::CFString;
 use std::io;
 use std::process::{Command, ExitStatus};
+use std::sync::atomic::{AtomicI32, Ordering};
+
+use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication, NSWorkspace};
 
 const ACCESSIBILITY_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility";
+static DICTATION_TARGET_PID: AtomicI32 = AtomicI32::new(0);
+
+fn own_pid() -> i32 {
+    i32::try_from(std::process::id()).unwrap_or(-1)
+}
+
+pub fn frontmost_pid() -> Option<i32> {
+    NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .map(|application| application.processIdentifier())
+}
+
+fn should_restore_dictation_target(target: i32, current: Option<i32>, own: i32) -> bool {
+    target > 0 && target != own && current == Some(own)
+}
+
+fn can_paste_to_frontmost(target: i32, current: Option<i32>, own: i32) -> bool {
+    match current {
+        Some(pid) if pid == own => target == own,
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// Preserve the editor seen at hotkey-down before recording setup or the first
+/// overlay WebView can activate Sagascript.
+pub fn remember_dictation_target(target: Option<i32>) {
+    let target = target.unwrap_or(0);
+    DICTATION_TARGET_PID.store(target, Ordering::Release);
+}
+
+/// Restore only when Sagascript itself took focus. A deliberate switch to a
+/// different app during dictation remains the user's chosen paste destination.
+pub fn restore_dictation_target_if_stolen() -> Result<bool, String> {
+    let target = DICTATION_TARGET_PID.load(Ordering::Acquire);
+    if !should_restore_dictation_target(target, frontmost_pid(), own_pid()) {
+        return Ok(false);
+    }
+    let target_app = NSRunningApplication::runningApplicationWithProcessIdentifier(target)
+        .ok_or_else(|| "The previous paste target has closed".to_string())?;
+    if !target_app.activateWithOptions(NSApplicationActivationOptions::empty()) {
+        return Err("Could not restore the previous paste target".to_string());
+    }
+    Ok(true)
+}
+
+pub fn dictation_paste_target_is_valid() -> bool {
+    can_paste_to_frontmost(
+        DICTATION_TARGET_PID.load(Ordering::Acquire),
+        frontmost_pid(),
+        own_pid(),
+    )
+}
 
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
@@ -97,12 +153,29 @@ pub fn activate_app() {
 mod tests {
     use super::{
         accessibility_request_prompts_user, accessibility_settings_command, interpret_open_result,
-        ACCESSIBILITY_SETTINGS_URL,
+        can_paste_to_frontmost, should_restore_dictation_target, ACCESSIBILITY_SETTINGS_URL,
     };
     use std::ffi::OsStr;
     use std::io;
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
+
+    #[test]
+    fn focus_repair_only_runs_when_sagascript_took_the_target_from_another_app() {
+        assert!(should_restore_dictation_target(101, Some(202), 202));
+        assert!(!should_restore_dictation_target(101, Some(303), 202));
+        assert!(!should_restore_dictation_target(202, Some(202), 202));
+        assert!(!should_restore_dictation_target(0, Some(202), 202));
+    }
+
+    #[test]
+    fn paste_guard_rejects_own_stolen_focus_but_allows_an_original_own_target() {
+        assert!(!can_paste_to_frontmost(101, Some(202), 202));
+        assert!(can_paste_to_frontmost(202, Some(202), 202));
+        assert!(can_paste_to_frontmost(101, Some(303), 202));
+        assert!(!can_paste_to_frontmost(0, Some(202), 202));
+        assert!(!can_paste_to_frontmost(101, None, 202));
+    }
 
     #[test]
     fn initial_accessibility_request_does_not_show_a_redundant_native_prompt() {
