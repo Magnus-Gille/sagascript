@@ -60,6 +60,7 @@ semver = "1"
 # notify 7 requires one native macOS backend feature even when this app uses
 # PollWatcher explicitly for settings (see start_settings_watcher).
 notify = { version = "7", default-features = false, features = ["macos_fsevent"] }
+tauri-plugin-updater = "2"
 # enigo (auto-paste) and the objc FFI stack are desktop-GUI integrations.
 enigo = { version = "0.6", features = ["serde"] }
 core-foundation = "0.10"

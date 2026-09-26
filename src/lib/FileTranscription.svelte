@@ -14,6 +14,7 @@
   import { canCancelPlainTranscription, transcribeSaveDefaults, isMissingTranscribeFileError } from "./transcribe-ui-state";
   import {
     transcribeFile, cancelFileTranscription, copyTranscriptionText, saveTranscriptionText,
+    setUpdateResultPending,
     beginMeetingFile, getMeetingJob, cancelMeetingJob,
     createMeetingReview, applyMeetingCorrections, undoMeetingReview,
     resetMeetingReview, openMeetingReview, saveMeetingReview,
@@ -92,6 +93,7 @@
   let meetingReview: MeetingReviewDocument | null = $state(null);
   let meetingTranscript: MeetingTranscript | null = $state(null);
   let meetingJobId: string | null = $state(null);
+  let meetingResultId: string | null = $state(null);
   let meetingJobStatus: MeetingJobStatus | null = $state(null);
   let meetingPhase: string = $state("");
   let meetingError: string = $state("");
@@ -128,6 +130,12 @@
 
   function waitForMeetingActions(): Promise<void> {
     return meetingActionQueue;
+  }
+
+  async function setMeetingResultPending(pending: boolean): Promise<void> {
+    if (meetingResultId) {
+      await setUpdateResultPending(`meeting:${meetingResultId}`, pending);
+    }
   }
 
   function enqueueMeetingAction(action: (review: MeetingReviewDocument, revision: number) => Promise<boolean | void>): Promise<boolean> {
@@ -232,6 +240,15 @@
   ): Promise<void> {
     if (transcribing) return;
     if (meetingReview && !window.confirm("Start a new meeting review and replace the current review if it completes?")) return;
+    if (meetingResultId) {
+      try {
+        await setMeetingResultPending(false);
+      } catch (error) {
+        meetingError = meetingFailureText(error, "Could not preserve the current meeting result.");
+        return;
+      }
+    }
+    meetingResultId = null;
     const generation = ++meetingPollGeneration;
     // Keep the previous review and its unsaved drafts mounted until a NEW
     // document succeeds. Pending edits finish before the import starts below;
@@ -252,6 +269,7 @@
       if (generation !== meetingPollGeneration) return;
       if (!jobId) throw new Error("Meeting import did not return a job ID.");
       meetingJobId = jobId;
+      meetingResultId = jobId;
       meetingJobStatus = "running";
       void pollMeetingJob(jobId, generation);
     } catch (error) {
@@ -281,7 +299,7 @@
     transcriptionProgress = 0;
     transcribeError = "";
     transcriptionResult = "";
-    plainRunId = crypto.randomUUID();
+    plainRunId = job.id;
     plainRequestStarted = false;
     cancellingPlain = false;
     plainStages = startStages();
@@ -347,6 +365,7 @@
     if (transcribing || !transcriptionResult) return;
     try {
       await copyTranscriptionText(transcriptionResult);
+      await setUpdateResultPending(job.id, false);
       resultActionMessage = "Copied to clipboard.";
     } catch (error) { resultActionMessage = meetingFailureText(error, "Could not copy."); }
   }
@@ -356,6 +375,7 @@
     const { fileName, directory } = transcribeSaveDefaults(job.path);
     try {
       const saved = await saveTranscriptionText(transcriptionResult, fileName, directory);
+      if (saved) await setUpdateResultPending(job.id, false);
       resultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
     } catch (error) { resultActionMessage = meetingFailureText(error, "Could not save."); }
   }
@@ -397,7 +417,9 @@
   }
 
   async function exportMeetingReview(format: MeetingExportFormat): Promise<boolean> {
-    return enqueueMeetingAction((review) => saveMeetingReview(review, format));
+    const saved = await enqueueMeetingAction((review) => saveMeetingReview(review, format));
+    if (saved) await setMeetingResultPending(false);
+    return saved;
   }
 
   async function applyMeetingReviewOperations(operations: CorrectionOperation[]): Promise<void> {
@@ -429,7 +451,9 @@
   }
 
   async function saveCurrentMeetingReview(): Promise<boolean> {
-    return enqueueMeetingAction((review) => saveMeetingReview(review, "json"));
+    const saved = await enqueueMeetingAction((review) => saveMeetingReview(review, "json"));
+    if (saved) await setMeetingResultPending(false);
+    return saved;
   }
 
   async function attachCurrentMeetingAudio(): Promise<MeetingAudioAttachment | null> {
@@ -453,6 +477,7 @@
 
   function onMeetingReviewDraftDirtyChange(dirty: boolean): void {
     meetingReviewDraftDirty = dirty;
+    if (dirty) void setMeetingResultPending(true);
   }
 
   async function detachCurrentMeetingAudio(token: string): Promise<void> {
@@ -469,6 +494,8 @@
       const state = await openMeetingReview();
       if (generation !== meetingPollGeneration || !state) return;
       acceptMeetingReview(state, generation, true);
+      if (meetingResultId) await setMeetingResultPending(false);
+      meetingResultId = null;
     } catch (error) {
       if (generation === meetingPollGeneration) meetingError = meetingFailureText(error, "Could not open the meeting review.");
     }
@@ -509,6 +536,7 @@
         job.prompt, job.profileId);
       if (!id) throw new Error("Reprocessing did not return a job ID.");
       meetingJobId = id;
+      meetingResultId = id;
       void pollMeetingJob(id, generation);
     } catch (error) {
       transcribing = false;
@@ -549,7 +577,9 @@
 
   async function saveCurrentMeetingProposal(): Promise<boolean> {
     const proposal = meetingProposal?.proposal ?? meetingReprocessingResult?.proposal;
-    return proposal ? saveMeetingProposal(proposal) : false;
+    const saved = proposal ? await saveMeetingProposal(proposal) : false;
+    if (saved) await setMeetingResultPending(false);
+    return saved;
   }
 
   async function retryCurrentMeetingProposalPreview(): Promise<void> {

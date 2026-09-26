@@ -1094,10 +1094,13 @@ pub async fn transcribe_training_file(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
+    activity: State<'_, Arc<crate::update_activity::UpdateActivity>>,
     file_path: String,
     profile_id: String,
 ) -> Result<TrainingTranscript, String> {
     use tauri::Emitter;
+
+    let _work_lease = activity.begin_work()?;
 
     let path = std::path::PathBuf::from(file_path);
     let audio = tokio::task::spawn_blocking(move || decoder::decode_audio_file(&path))
@@ -2155,6 +2158,15 @@ pub async fn cancel_file_transcription(
     Ok(jobs.cancel(&run_id))
 }
 
+#[tauri::command]
+pub async fn set_update_result_pending(
+    activity: State<'_, Arc<crate::update_activity::UpdateActivity>>,
+    result_id: String,
+    pending: bool,
+) -> Result<(), String> {
+    activity.set_result_pending(&result_id, pending)
+}
+
 /// Copy a finished plain transcription to the clipboard (#238). Plain
 /// `set_text` only — no paste, no restore dance (see `paste::PasteService`
 /// for the guarded live-dictation path).
@@ -2257,6 +2269,7 @@ pub async fn transcribe_file(
     controller: State<'_, SharedController>,
     whisper: State<'_, SharedWhisper>,
     jobs: State<'_, crate::plain_file_jobs::SharedPlainFileJobs>,
+    activity: State<'_, Arc<crate::update_activity::UpdateActivity>>,
     file_path: String,
     prompt: Option<String>,
     diarize: Option<bool>,
@@ -2265,6 +2278,10 @@ pub async fn transcribe_file(
     auto_paste: Option<bool>,
 ) -> Result<String, String> {
     use tauri::Emitter;
+
+    let activity = activity.inner().clone();
+    let _work_lease = activity.begin_work()?;
+    let result_id = run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let pianissimo_glossary = {
         let ctrl = controller.lock().unwrap();
@@ -2282,9 +2299,10 @@ pub async fn transcribe_file(
             return Err("Pianissimo Q8 supports plain Swedish file transcription only; choose a Whisper file model for diarization".into());
         }
         let text = crate::plain_file_jobs::transcribe_pianissimo(
-            app.clone(), jobs.inner().clone(), run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            app.clone(), jobs.inner().clone(), result_id.clone(),
             file_path, glossary,
         ).await?;
+        activity.set_result_pending(&result_id, true)?;
         if auto_paste.unwrap_or(true) && controller.lock().unwrap().settings().auto_paste {
             let paste_text = text.clone();
             app.run_on_main_thread(move || {
@@ -2302,9 +2320,10 @@ pub async fn transcribe_file(
 
     if !diarize.unwrap_or(false) {
         let text = crate::plain_file_jobs::transcribe(
-            app.clone(), jobs.inner().clone(), run_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            app.clone(), jobs.inner().clone(), result_id.clone(),
             file_path, context,
         ).await?;
+        activity.set_result_pending(&result_id, true)?;
         if auto_paste.unwrap_or(true) && controller.lock().unwrap().settings().auto_paste {
             let paste_text = text.clone();
             app.run_on_main_thread(move || {
@@ -2467,6 +2486,7 @@ pub async fn transcribe_file(
             .collect::<Vec<_>>()
             .join("\n");
         let text = apply_glossary(text, &glossary);
+        activity.set_result_pending(&result_id, true)?;
 
         info!("Diarized file transcription complete: {} chars", text.len());
 
@@ -2561,6 +2581,7 @@ pub async fn transcribe_file(
     match result {
         Ok(text) => {
             let text = apply_glossary(text, &glossary);
+            activity.set_result_pending(&result_id, true)?;
             info!("File transcription complete: {} chars", text.len());
 
             // Auto-paste if enabled

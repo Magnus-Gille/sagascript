@@ -248,6 +248,10 @@ export async function copyTranscriptionText(text: string): Promise<void> {
   return invoke("copy_transcription_text", { text });
 }
 
+export async function setUpdateResultPending(resultId: string, pending: boolean): Promise<void> {
+  return invoke("set_update_result_pending", { resultId, pending });
+}
+
 export async function beginMeetingFile(
   filePath: string,
   prompt: string | null,

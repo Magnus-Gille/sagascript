@@ -128,18 +128,34 @@ Acceptance on a clean Apple Silicon Mac running macOS 13 or later:
 
 ### 4. Make updates obvious
 
-- Keep update checks explicit and privacy-preserving.
-- Show checking, up-to-date, available, and error states in the menu.
-- When a release is available, provide a clear action that opens the exact
-  stable GitHub release page. Do not claim an in-app update was installed.
+- Run a lightweight signed-manifest check at startup and expose availability in
+  the tray; the tray also has an explicit recheck action. Neither check downloads
+  an artifact. Downloading starts only after the user chooses **Install and
+  Restart** (or runs `sagascript update`).
+- Verify the update payload with the Tauri updater signature before installing.
+  Embed the updater public key at build time as `SAGASCRIPT_UPDATER_PUBKEY`; keep
+  the private signing key and password in GitHub Actions secrets. Never ship an
+  updater-capable release without a matching signed `.app.tar.gz`, `.sig`, and
+  `latest.json` entry for `darwin-aarch64`.
+- Show checking, up-to-date, available, download progress, waiting, and error
+  states in the menu. Wait for active dictation and file/meeting transcription
+  to finish before replacing the app. Preserve completed in-memory results in a
+  local recoverable draft before automatic restart.
+- macOS is the first supported in-app update target. Sagascript 1.3.2 predates
+  the updater, so users upgrading from that version need one manual install;
+  later updater-capable versions can update in-app.
 
 Acceptance:
 
 - Version comparison covers newer, equal, older, malformed, draft, and
-  prerelease responses.
-- The menu always returns from the temporary checking state.
-- The available-version action points at a stable release and the user can
-  verify the installed version afterward with `sagascript --version`.
+  prerelease responses. A missing public key or invalid signature must fail
+  closed without installing an unsigned artifact.
+- The menu always leaves temporary checking/downloading states on success or
+  failure. An update action waits for active work, preserves recoverable drafts,
+  installs the signed bundle, and restarts without accepting new work in the
+  install/restart window.
+- `sagascript update` initiates the same app-mediated signed update action. The
+  user can verify the installed version afterward with `sagascript --version`.
 
 ### 5. Publish a minimal product page
 
@@ -187,7 +203,8 @@ cargo build -p sagascript-cli --no-default-features
 
 - Teach/training UI.
 - Cloud transcription or accounts.
-- Automatic background update installation.
+- Automatic update checks or downloads in the background.
+- Windows in-app updates.
 - Intel macOS binaries and public Windows installers.
 - Additional model tuning in the normal settings surface.
 

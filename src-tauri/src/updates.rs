@@ -6,6 +6,31 @@ use serde::Deserialize;
 const LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/Magnus-Gille/sagascript/releases/latest";
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+pub const SIGNED_UPDATE_MANIFEST_URL: &str =
+    "https://github.com/Magnus-Gille/sagascript/releases/latest/download/latest.json";
+
+pub fn updater_public_key() -> Option<&'static str> {
+    option_env!("SAGASCRIPT_UPDATER_PUBKEY").filter(|key| !key.trim().is_empty())
+}
+
+#[cfg(target_os = "macos")]
+pub async fn check_signed_update(
+    app: &tauri::AppHandle,
+) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let endpoint = SIGNED_UPDATE_MANIFEST_URL
+        .parse()
+        .map_err(|error| format!("invalid updater manifest URL: {error}"))?;
+    app.updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|error| format!("invalid updater endpoint: {error}"))?
+        .build()
+        .map_err(|error| format!("failed to configure updater: {error}"))?
+        .check()
+        .await
+        .map_err(|error| format!("signed update check failed: {error}"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateCheck {
@@ -47,7 +72,10 @@ pub async fn check_for_update(current_version: &str) -> Result<UpdateCheck, Stri
     compare_release_version(current_version, &release.tag_name)
 }
 
-fn compare_release_version(current_version: &str, release_tag: &str) -> Result<UpdateCheck, String> {
+fn compare_release_version(
+    current_version: &str,
+    release_tag: &str,
+) -> Result<UpdateCheck, String> {
     let current = Version::parse(current_version)
         .map_err(|error| format!("invalid current version '{current_version}': {error}"))?;
     let release = parse_stable_release_tag(release_tag)?;

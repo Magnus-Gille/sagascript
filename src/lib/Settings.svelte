@@ -34,6 +34,9 @@
     retryHotkeyRegistration,
     startRecording,
     stopAndTranscribe,
+    copyTranscriptionText,
+    saveTranscriptionText,
+    setUpdateResultPending,
     hotkeyStatus,
     type Settings,
     type BuildInfo,
@@ -153,6 +156,29 @@
   let testOwnsRecording: boolean = $state(false);
   let testResult: string = $state("");
   let testError: string = $state("");
+  let testResultActionMessage: string = $state("");
+
+  async function copyTestResult(): Promise<void> {
+    if (!testResult.trim()) return;
+    try {
+      await copyTranscriptionText(testResult);
+      await setUpdateResultPending("live-dictation", false);
+      testResultActionMessage = "Copied to clipboard.";
+    } catch (error) {
+      testResultActionMessage = typeof error === "string" ? error : String(error);
+    }
+  }
+
+  async function saveTestResult(): Promise<void> {
+    if (!testResult.trim()) return;
+    try {
+      const saved = await saveTranscriptionText(testResult, "dictation.txt", null);
+      if (saved) await setUpdateResultPending("live-dictation", false);
+      testResultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
+    } catch (error) {
+      testResultActionMessage = typeof error === "string" ? error : String(error);
+    }
+  }
 
   onMount(() => {
     let disposed = false;
@@ -1562,6 +1588,13 @@
             bind:value={testResult}
             placeholder="Click here and use your hotkey, or press the button above"
           ></textarea>
+          {#if testResult.trim()}
+            <div class="result-actions">
+              <button class="secondary" onclick={() => void copyTestResult()}>Copy result</button>
+              <button class="secondary" onclick={() => void saveTestResult()}>Save result…</button>
+              {#if testResultActionMessage}<span role="status">{testResultActionMessage}</span>{/if}
+            </div>
+          {/if}
         </div>
 
       {/if}
@@ -2846,5 +2879,13 @@
 
   .test-result:focus {
     border-color: var(--accent);
+  }
+
+  .result-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 12px;
   }
 </style>

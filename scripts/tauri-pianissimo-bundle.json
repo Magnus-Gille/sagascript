@@ -1,5 +1,6 @@
 {
   "bundle": {
+    "createUpdaterArtifacts": true,
     "macOS": {
       "files": {
         "Resources/PianissimoRuntime": "../build/pianissimo-native-runtime"
