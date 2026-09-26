@@ -155,12 +155,12 @@ function normalizeCorrection(value: unknown): CorrectionOperation | null {
     const segmentId = stringValue(source.segment_id, UPDATE_RECOVERY_LIMITS.maxIdLength, false);
     if (segmentId === null) return null;
     const result: CorrectionOperation = { kind: "edit_segment", segment_id: segmentId };
-    if (source.text !== undefined) {
+    if (source.text !== undefined && source.text !== null) {
       const text = stringValue(source.text, UPDATE_RECOVERY_LIMITS.maxTextLength);
       if (text === null) return null;
       result.text = text;
     }
-    if (source.speaker_id !== undefined) {
+    if (source.speaker_id !== undefined && source.speaker_id !== null) {
       const speakerId = stringValue(source.speaker_id, UPDATE_RECOVERY_LIMITS.maxIdLength);
       if (speakerId === null) return null;
       result.speaker_id = speakerId;
@@ -324,6 +324,59 @@ function normalizePayload(value: unknown): UpdateRecoveryPayload | null {
   };
 }
 
+function sameNormalizedValue(input: unknown, normalized: unknown): boolean {
+  if (Object.is(input, normalized)) return true;
+  if (Array.isArray(input) || Array.isArray(normalized)) {
+    return Array.isArray(input)
+      && Array.isArray(normalized)
+      && input.length === normalized.length
+      && input.every((item, index) => sameNormalizedValue(item, normalized[index]));
+  }
+  const inputRecord = record(input);
+  const normalizedRecord = record(normalized);
+  if (inputRecord === null || normalizedRecord === null) return false;
+  const inputKeys = Object.keys(inputRecord).filter((key) => {
+    // Rust serializes Option fields as null. For edit operations, null is the
+    // wire representation of an absent optional value, which normalization
+    // intentionally omits from the TypeScript shape.
+    return !(inputRecord.kind === "edit_segment"
+      && normalizedRecord.kind === "edit_segment"
+      && (key === "text" || key === "speaker_id")
+      && inputRecord[key] === null
+      && !Object.hasOwn(normalizedRecord, key));
+  });
+  const normalizedKeys = Object.keys(normalizedRecord);
+  return inputKeys.length === normalizedKeys.length
+    && inputKeys.every((key) => Object.hasOwn(normalizedRecord, key)
+      && sameNormalizedValue(inputRecord[key], normalizedRecord[key]));
+}
+
+function assertLosslessNormalization(input: unknown, normalized: UpdateRecoveryPayload): void {
+  if (!sameNormalizedValue(input, normalized)) {
+    throw new RangeError(
+      "Unsaved results exceed the updater recovery limits. Save or remove some results before updating.",
+    );
+  }
+}
+
+function utf8ByteLength(value: string, maximum: number): number {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x7f) bytes += 1;
+    else if (code <= 0x7ff) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff
+      && index + 1 < value.length
+      && value.charCodeAt(index + 1) >= 0xdc00
+      && value.charCodeAt(index + 1) <= 0xdfff) {
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+    if (bytes > maximum) return bytes;
+  }
+  return bytes;
+}
+
 /** Build a normalized payload with a fresh timestamp for durable local recovery. */
 export function createUpdateRecoveryPayload(
   value: Omit<UpdateRecoveryPayload, "schema_version" | "saved_at">,
@@ -331,6 +384,7 @@ export function createUpdateRecoveryPayload(
 ): UpdateRecoveryPayload {
   const normalized = normalizePayload({ ...value, schema_version: UPDATE_RECOVERY_SCHEMA_VERSION, saved_at: savedAt });
   if (normalized === null) throw new TypeError("Invalid updater recovery payload");
+  assertLosslessNormalization({ ...value, schema_version: UPDATE_RECOVERY_SCHEMA_VERSION, saved_at: savedAt }, normalized);
   return normalized;
 }
 
@@ -338,9 +392,10 @@ export function createUpdateRecoveryPayload(
 export function serializeUpdateRecoveryPayload(payload: UpdateRecoveryPayload): string {
   const normalized = normalizePayload(payload);
   if (normalized === null) throw new TypeError("Invalid updater recovery payload");
+  assertLosslessNormalization(payload, normalized);
   const serialized = JSON.stringify(normalized);
-  if (serialized.length > UPDATE_RECOVERY_LIMITS.maxPayloadBytes) {
-    throw new RangeError("Updater recovery payload exceeds the maximum size");
+  if (utf8ByteLength(serialized, UPDATE_RECOVERY_LIMITS.maxPayloadBytes) > UPDATE_RECOVERY_LIMITS.maxPayloadBytes) {
+    throw new RangeError("Updater recovery payload exceeds the maximum size. Save or remove some results before updating.");
   }
   return serialized;
 }
@@ -348,7 +403,8 @@ export function serializeUpdateRecoveryPayload(payload: UpdateRecoveryPayload): 
 /** Parse and normalize untrusted JSON. Invalid top-level data returns null. */
 export function parseUpdateRecoveryPayload(input: string | unknown): UpdateRecoveryPayload | null {
   if (typeof input === "string") {
-    if (input.length > UPDATE_RECOVERY_LIMITS.maxPayloadBytes) return null;
+    if (input.length > UPDATE_RECOVERY_LIMITS.maxPayloadBytes
+      || utf8ByteLength(input, UPDATE_RECOVERY_LIMITS.maxPayloadBytes) > UPDATE_RECOVERY_LIMITS.maxPayloadBytes) return null;
     try {
       return normalizePayload(JSON.parse(input));
     } catch {
