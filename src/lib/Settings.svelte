@@ -180,6 +180,7 @@
   let recoveredDictationActive = $state(false);
   let recoveredDraftsNotice = $state(false);
   let recoveryWriteQueue: Promise<void> = Promise.resolve();
+  let recoveryRestore: Promise<void> = Promise.resolve();
 
   function persistRemainingRecoveredDrafts(): void {
     const fileIds = new Set(recoveredFileIds);
@@ -321,6 +322,7 @@
       }
     } catch (error) {
       console.warn("Could not restore update recovery drafts", error);
+      throw error;
     }
   }
 
@@ -353,6 +355,7 @@
 
   async function prepareForUpdate(nonce: string): Promise<void> {
     try {
+      await recoveryRestore;
       await tick();
       await recoveryWriteQueue.catch(() => undefined);
       const payload = createUpdateRecoveryPayload({
@@ -806,7 +809,8 @@
       if (disposed) stop();
       else recoveryAbortStop = stop;
     }).catch((error) => console.warn("Could not listen for update abort", error));
-    void restoreUpdateRecovery();
+    recoveryRestore = restoreUpdateRecovery();
+    void recoveryRestore.catch(() => undefined);
 
     // Register listeners + drag-drop FIRST — they don't depend on the data
     // fetched below, so a rejected invoke in the fetch sequence must never

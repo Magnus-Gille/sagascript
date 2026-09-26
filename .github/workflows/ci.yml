@@ -231,6 +231,8 @@ jobs:
       # weakening native macOS coverage.
 
       - name: Build native release binary (no installer)
+        env:
+          SAGASCRIPT_UPDATER_PUBKEY: ${{ vars.SAGASCRIPT_UPDATER_PUBKEY }}
         run: npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle
 
       - name: Verify native release binary

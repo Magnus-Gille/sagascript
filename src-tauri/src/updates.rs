@@ -6,6 +6,7 @@ use serde::Deserialize;
 const LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/Magnus-Gille/sagascript/releases/latest";
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(target_os = "macos")]
 pub const SIGNED_UPDATE_MANIFEST_URL: &str =
     "https://github.com/Magnus-Gille/sagascript/releases/latest/download/latest.json";
 

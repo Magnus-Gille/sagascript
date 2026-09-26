@@ -97,7 +97,10 @@ window.qa = {
 mockIPC(async (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
-    case "load_update_recovery": return window.qaRecovery ?? null;
+    case "load_update_recovery":
+      if (window.qaRecoveryDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaRecoveryDelayMs));
+      if (window.qaRecoveryLoadError) throw new Error("Synthetic recovery read failure");
+      return window.qaRecovery ?? null;
     case "save_update_recovery": window.qaRecovery = args.payload; return null;
     case "clear_update_recovery": window.qaRecovery = null; return null;
     case "complete_update_preparation": return null;

@@ -15,6 +15,7 @@ test("Settings restores every persisted result as a completed, reviewable job", 
 
 test("update preparation snapshots current dictation, file, and meeting entries", () => {
   const preparation = source.slice(source.indexOf("async function prepareForUpdate"), source.indexOf("async function copyTestResult"));
+  assert.match(preparation, /await recoveryRestore;/);
   assert.match(preparation, /await tick\(\)/);
   assert.match(preparation, /createUpdateRecoveryPayload\(\{/);
   assert.match(preparation, /dictation: testResultRecoveryPending && testResult\.trim\(\) \? \{ text: testResult \} : null/);
@@ -24,6 +25,13 @@ test("update preparation snapshots current dictation, file, and meeting entries"
   assert.match(preparation, /await saveUpdateRecovery\(payload\)/);
   assert.match(preparation, /await completeUpdatePreparation\(nonce, null\)/);
   assert.match(preparation, /await completeUpdatePreparation\(nonce, message\)/);
+});
+
+test("a failed startup recovery read prevents update installation", () => {
+  const restore = source.slice(source.indexOf("async function restoreUpdateRecovery"), source.indexOf("async function discardRecoveredDrafts"));
+  assert.match(restore, /throw error;/);
+  assert.match(source, /recoveryRestore = restoreUpdateRecovery\(\)/);
+  assert.match(source, /void recoveryRestore\.catch/);
 });
 
 test("recovery callbacks are wired to clear entries after explicit result actions", () => {

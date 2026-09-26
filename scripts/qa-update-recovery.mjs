@@ -37,11 +37,20 @@ if (process.env.QA_ONLY === "file") recovery.meetings = [];
 if (process.env.QA_ONLY === "meeting") recovery.files = [];
 const url = process.env.QA_URL || "http://127.0.0.1:5243/?tab=transcribe";
 await page.route(url, (route) => route.fulfill({ contentType: "text/html",
-  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};</script><script type="module">${mock}</script></body></html>`,
+  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryDelayMs=300;</script><script type="module">${mock}</script></body></html>`,
 }));
 
 try {
   await page.goto(url);
+  await page.waitForFunction(() => window.qa?.calls.some((call) => call.cmd === "load_update_recovery"));
+  await page.evaluate(() => window.qa.prepareUpdate("qa-early-nonce"));
+  await page.waitForFunction(() => window.qa.calls.some((call) =>
+    call.cmd === "complete_update_preparation" && call.args.nonce === "qa-early-nonce"));
+  const earlyCalls = await page.evaluate(() => window.qa.calls);
+  const earlySaved = earlyCalls.find((call) => call.cmd === "save_update_recovery");
+  assert.equal(earlySaved.args.payload.files.length, 1);
+  assert.equal(earlySaved.args.payload.meetings.length, 1);
+  await page.evaluate(() => window.qa.abortUpdate());
   await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
   await page.getByRole("tab", { name: "recovered.wav completed" }).waitFor({ timeout: 5000 });
   await page.getByRole("tab", { name: "recovered-meeting.wav completed" }).waitFor();

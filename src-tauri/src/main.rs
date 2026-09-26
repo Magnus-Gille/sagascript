@@ -248,6 +248,7 @@ const UPDATE_CHECK_ACTION: &str = "Check for Updates…";
 #[derive(Clone)]
 enum UpdateMenuMode {
     Available(semver::Version),
+    #[cfg(target_os = "macos")]
     Installing,
     Idle,
 }
@@ -314,6 +315,7 @@ fn set_update_menu(
                     state.installing = false;
                     state.available_version = Some(version);
                 }
+                #[cfg(target_os = "macos")]
                 UpdateMenuMode::Installing => {
                     state.checking = false;
                     state.installing = true;
@@ -452,6 +454,7 @@ fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: 
     });
 }
 
+#[cfg(target_os = "macos")]
 fn finish_update_check_error(app: &tauri::AppHandle, error: String) {
     warn!("Update check failed: {error}");
     set_update_menu(

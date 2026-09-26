@@ -16,6 +16,7 @@ pub struct UpdatePreparation {
 }
 
 impl UpdatePreparation {
+    #[cfg(any(target_os = "macos", test))]
     pub fn begin(&self) -> (String, oneshot::Receiver<Result<(), String>>) {
         let nonce = uuid::Uuid::new_v4().to_string();
         let (sender, receiver) = oneshot::channel();
@@ -40,6 +41,7 @@ impl UpdatePreparation {
         Ok(())
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub fn cancel(&self, nonce: &str) {
         let mut pending = self.pending.lock().unwrap();
         if pending
@@ -67,8 +69,10 @@ pub struct UpdateActivity {
 
 pub struct WorkLease(Arc<UpdateActivity>);
 
+#[cfg(any(target_os = "macos", test))]
 pub struct ExclusiveLease(Arc<UpdateActivity>);
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExclusiveError {
     WorkActive,
@@ -112,6 +116,7 @@ impl UpdateActivity {
         self.state.lock().unwrap().unsaved_results.len()
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub fn try_exclusive(
         self: &Arc<Self>,
         require_no_pending_results: bool,
@@ -138,6 +143,7 @@ impl Drop for WorkLease {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl Drop for ExclusiveLease {
     fn drop(&mut self) {
         self.0.state.lock().unwrap().exclusive = false;
