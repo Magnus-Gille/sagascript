@@ -5,6 +5,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, realpathSync } from 'node:fs';
 import { resolve, join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { prepareUpdaterSmokeEnvironment } from './updater-smoke-environment.mjs';
 
 const [appArgument, archiveArgument, signatureArgument, oldVersion, newVersion] = process.argv.slice(2);
 if (!appArgument || !archiveArgument || !signatureArgument || !/^\d+\.\d+\.\d+$/.test(oldVersion) || !/^\d+\.\d+\.\d+$/.test(newVersion)) {
@@ -69,7 +70,7 @@ try {
   });
   child = spawn(executable, ['--install-update'], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: process.env,
+    env: prepareUpdaterSmokeEnvironment(runnerTemp),
   });
   const appendLog = (chunk) => {
     logs = `${logs}${chunk}`.slice(-20000);
