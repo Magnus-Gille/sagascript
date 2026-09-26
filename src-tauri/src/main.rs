@@ -432,6 +432,8 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
     match state {
         hotkey::BareHotkeyState::Pressed => {
             info!("Hotkey pressed: {shortcut}");
+            #[cfg(target_os = "macos")]
+            let pressed_target = platform::macos::frontmost_pid();
             let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
             let safe_fallback = {
                 let c = ctrl.lock().unwrap();
@@ -503,6 +505,8 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
             };
             match result {
                 HotkeyDownResult::StartedRecording => {
+                    #[cfg(target_os = "macos")]
+                    platform::macos::remember_dictation_target(pressed_target);
                     let show_overlay = {
                         let c = ctrl.lock().unwrap();
                         c.settings().show_overlay
@@ -515,6 +519,10 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                     update_tray_status(app, "recording");
                     if show_overlay {
                         overlay::show(app);
+                        #[cfg(target_os = "macos")]
+                        if let Err(error) = platform::macos::restore_dictation_target_if_stolen() {
+                            warn!("Could not return focus after showing the recording overlay: {error}");
+                        }
                     }
                 }
                 HotkeyDownResult::StopRecording => {
@@ -1748,6 +1756,13 @@ fn stop_recording_and_transcribe(
                     let paste_started = std::time::Instant::now();
                     let (paste_tx, paste_rx) = tokio::sync::oneshot::channel();
                     let paste_task = move || {
+                        #[cfg(target_os = "macos")]
+                        let paste_result = crate::paste::PasteService::new()
+                            .paste_checked(&text_for_paste, || {
+                                platform::macos::dictation_paste_target_is_valid()
+                            })
+                            .map_err(|error| error.to_string());
+                        #[cfg(not(target_os = "macos"))]
                         let paste_result = crate::paste::PasteService::new()
                             .paste(&text_for_paste)
                             .map_err(|error| error.to_string());
