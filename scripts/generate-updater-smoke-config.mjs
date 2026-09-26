@@ -1,5 +1,5 @@
 // Tauri deserializes plugins.updater before the Rust plugin builder supplies
-// its key, so the HTTP-only smoke config must also contain the current key.
+// its key. Both the loopback old app and the secure updated app need a config.
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const [source, output] = process.argv.slice(2);
@@ -9,8 +9,8 @@ if (!source || !output || !pubkey) {
 }
 
 const config = JSON.parse(readFileSync(source, 'utf8'));
-if (config.plugins?.updater?.dangerousInsecureTransportProtocol !== true) {
-  throw new Error('Smoke config must explicitly allow the loopback update feed');
+if (typeof config.plugins?.updater?.dangerousInsecureTransportProtocol !== 'boolean') {
+  throw new Error('Smoke config must explicitly specify whether insecure transport is allowed');
 }
 config.plugins.updater.pubkey = pubkey;
 writeFileSync(output, JSON.stringify(config));

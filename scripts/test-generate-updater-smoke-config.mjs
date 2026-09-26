@@ -8,6 +8,7 @@ import test from 'node:test';
 
 const script = fileURLToPath(new URL('./generate-updater-smoke-config.mjs', import.meta.url));
 const source = fileURLToPath(new URL('./tauri-updater-smoke-old.json', import.meta.url));
+const updatedSource = fileURLToPath(new URL('./tauri-updater-smoke-new.json', import.meta.url));
 
 test('smoke updater config includes the current public key and loopback allowance', () => {
   const directory = mkdtempSync(join(tmpdir(), 'sagascript-updater-config-'));
@@ -20,6 +21,22 @@ test('smoke updater config includes the current public key and loopback allowanc
     assert.equal(config.plugins.updater.pubkey, 'test-public-key');
     assert.equal(config.plugins.updater.dangerousInsecureTransportProtocol, true);
     assert.equal(config.version, '1.3.3');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('updated smoke app has a deserializable updater config without loopback transport', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'sagascript-updater-config-'));
+  try {
+    const output = join(directory, 'updated.json');
+    execFileSync(process.execPath, [script, updatedSource, output], {
+      env: { SAGASCRIPT_UPDATER_PUBKEY: 'test-public-key' },
+    });
+    const config = JSON.parse(readFileSync(output, 'utf8'));
+    assert.equal(config.plugins.updater.pubkey, 'test-public-key');
+    assert.equal(config.plugins.updater.dangerousInsecureTransportProtocol, false);
+    assert.equal(config.version, '1.3.4');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
