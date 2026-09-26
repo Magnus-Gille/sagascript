@@ -1,11 +1,11 @@
 <script module lang="ts">
-  import type { MeetingDraftState, MeetingTranscript } from "./meeting-types";
+  import type { MeetingDraftState as DraftState, MeetingTranscript as Transcript } from "./meeting-types";
 
   /** Serializable editor state owned by the parent recovery store. */
   export interface MeetingReviewDraftSnapshot {
     source_sha256: string;
     review_revision: string;
-    drafts: MeetingDraftState;
+    drafts: DraftState;
   }
 
   function stringMap(value: unknown): Record<string, string> {
@@ -30,12 +30,12 @@
    * Unknown IDs and invalid speaker merge targets are intentionally dropped.
    */
   export function restoreMeetingDraftSnapshot(
-    base: MeetingDraftState,
+    base: DraftState,
     snapshot: MeetingReviewDraftSnapshot | null | undefined,
-    transcript: MeetingTranscript,
+    transcript: Transcript,
     sourceSha256: string,
     reviewRevision: string,
-  ): MeetingDraftState {
+  ): DraftState {
     if (
       !snapshot
       || snapshot.source_sha256 !== sourceSha256
@@ -66,7 +66,7 @@
   export function createMeetingReviewDraftSnapshot(
     sourceSha256: string,
     reviewRevision: string,
-    drafts: MeetingDraftState,
+    drafts: DraftState,
   ): MeetingReviewDraftSnapshot {
     return {
       source_sha256: sourceSha256,
@@ -133,6 +133,7 @@
     onAttachAudio,
     onDetachAudio,
     onDraftDirtyChange = () => undefined,
+    initialDraftSnapshot,
     onDraftSnapshotChange = () => undefined,
     resetDraftKey = 0,
   }: Props = $props();
