@@ -105,7 +105,9 @@ mockIPC(async (cmd, args = {}) => {
     case "get_model_info": return [{ id: "base.en", display_name: "Base English", description: "Fixture",
       size_mb: 0, downloaded: true, active: true }];
     case "get_file_model_options": return [{ id: "base.en", display_name: "Base English", description: "Fixture",
-      size_mb: 0, downloaded: true, active: false }];
+      size_mb: 0, downloaded: true, active: false },
+      { id: "pianissimo-sv", display_name: "Pianissimo Q8", description: "Fixture",
+        size_mb: 714, downloaded: pianissimoDownloaded, active: pianissimoDictation }];
     case "set_pianissimo_dictation": pianissimoDictation = args.enabled; return null;
     case "download_pianissimo_model": pianissimoDownloaded = true; return null;
     case "get_dictation_model_info":

@@ -68,6 +68,7 @@
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);
   let models: WhisperModel[] = $state([]);
+  let pianissimoDictationModel: WhisperModel | null = $state(null);
   let fileModelOptions: WhisperModel[] = $state([]);
   let fileAutoModel: WhisperModel | null = $state(null);
   let fileModelError = $state("");
@@ -500,20 +501,60 @@
   });
 
   let dictationModelSaving = $state(false);
-  async function onPianissimoDictationChange(event: Event) {
-    if (!settings || dictationModelSaving) return;
-    const checkbox = event.currentTarget as HTMLInputElement;
-    const enabled = checkbox.checked;
+
+  async function refreshPianissimoDictationModel(): Promise<void> {
+    try {
+      const options = await getFileModelOptions("sv");
+      pianissimoDictationModel = options.find((model) => model.id === "pianissimo-sv") ?? null;
+    } catch (error) {
+      pianissimoDictationModel = null;
+      console.warn("Could not check Pianissimo availability", error);
+    }
+  }
+
+  async function selectDictationModel(model: WhisperModel): Promise<void> {
+    if (!settings || selecting || dictationModelSaving) return;
+    if (model.id === "pianissimo-sv" && settings.pianissimo_dictation) return;
+
+    if (model.id !== "pianissimo-sv" && settings.pianissimo_dictation) {
+      dictationModelSaving = true;
+      settingsError = "";
+      try {
+        await setPianissimoDictation(false);
+        settings = await getSettings();
+      } catch (error: any) {
+        settingsError = typeof error === "string" ? error : error?.message || "Could not change dictation model.";
+        dictationModelSaving = false;
+        return;
+      }
+      dictationModelSaving = false;
+    }
+
+    if (model.id !== "pianissimo-sv") {
+      await selectModel(model);
+      return;
+    }
+
     dictationModelSaving = true;
+    modelError = "";
     settingsError = "";
     try {
-      await setPianissimoDictation(enabled);
+      if (!pianissimoDictationModel?.downloaded) {
+        downloading = model.id;
+        downloadingName = model.display_name;
+        downloadProgress = 0;
+        await downloadPianissimoModel();
+      }
+      await setPianissimoDictation(true);
       settings = await getSettings();
+      models = await getModelInfo();
+      await refreshPianissimoDictationModel();
       await refreshProfileModels(settings.hotkey_profiles);
-    } catch (error) {
-      settingsError = String(error);
+    } catch (error: any) {
+      modelError = typeof error === "string" ? error : error?.message || "Model selection failed.";
     } finally {
-      checkbox.checked = settings?.pianissimo_dictation ?? false;
+      downloading = null;
+      downloadProgress = 0;
       dictationModelSaving = false;
     }
   }
@@ -549,6 +590,7 @@
       downloading = null;
       downloadProgress = 0;
       models = await getModelInfo();
+      await refreshPianissimoDictationModel();
       if (settings) await refreshProfileModels(settings.hotkey_profiles);
     });
 
@@ -570,6 +612,7 @@
       if (nextState === "settings_reloaded") {
         settings = await getSettings();
         models = await getModelInfo();
+        await refreshPianissimoDictationModel();
         await refreshProfileModels(settings.hotkey_profiles);
         return;
       }
@@ -625,6 +668,7 @@
           accessibilityGranted = await checkAccessibilityPermission();
         }
         models = await getModelInfo();
+        await refreshPianissimoDictationModel();
         supportedFormats = await getSupportedFormats();
         const status = await hotkeyStatus();
         hotkeyStatusOk = status.ok;
@@ -1438,16 +1482,66 @@
         </div>
       {/if}
       {#if activeTab === "dictate"}
-        <div class="field profile-field">
-          <label class="diarize-option">
-            <input type="checkbox" checked={settings.pianissimo_dictation ?? false}
-              onchange={onPianissimoDictationChange}
-              disabled={dictationModelSaving || backendDictationState !== "idle" || transcribing || downloading !== null} />
-            Use Pianissimo for Swedish dictation (experimental)
-          </label>
-          <div class="hotkey-hint">Swedish dictation uses Pianissimo, including Swedish test recordings. Other languages use Whisper.
-            Add a Swedish shortcut to download the 714 MB model; it is shared with file transcription.
-            Dictionary replacements work, but decoder vocabulary hints are not supported.</div>
+        <div class="field model-selection-field">
+          <div class="model-section-label">Dictation model · push-to-speak</div>
+          <div class="hotkey-hint model-selection-hint">
+            Choose the model used by push-to-speak and the recording test below. Pianissimo applies to Swedish profiles only and is experimental.
+          </div>
+          <div class="model-picker">
+            {#each models as model (model.id)}
+              <button
+                class="model-card"
+                class:active={!settings.pianissimo_dictation && model.active}
+                class:downloading={downloading === model.id}
+                onclick={() => selectDictationModel(model)}
+                disabled={downloading !== null || selecting || dictationModelSaving}
+              >
+                <div class="model-card-header">
+                  <span class="model-card-name">{model.display_name}</span>
+                  {#if !settings.pianissimo_dictation && model.active}
+                    <span class="model-badge active-badge">Active</span>
+                  {:else if model.downloaded}
+                    <span class="model-badge ready-badge">Ready</span>
+                  {:else}
+                    <span class="model-badge download-badge">Download · {model.size_mb} MB</span>
+                  {/if}
+                </div>
+                <div class="model-card-desc">{model.description}</div>
+                {#if downloading === model.id}
+                  <div class="progress-bar">
+                    <div class="progress-fill" style="width: {downloadProgress}%"></div>
+                  </div>
+                {/if}
+              </button>
+            {/each}
+            {#if pianissimoDictationModel}
+              <button
+                class="model-card experimental-model-card"
+                class:active={settings.pianissimo_dictation}
+                class:downloading={downloading === pianissimoDictationModel.id}
+                onclick={() => selectDictationModel(pianissimoDictationModel!)}
+                disabled={downloading !== null || selecting || dictationModelSaving}
+              >
+                <div class="model-card-header">
+                  <span class="model-card-name">Pianissimo Q8</span>
+                  {#if settings.pianissimo_dictation}
+                    <span class="model-badge active-badge">Active</span>
+                  {:else if pianissimoDictationModel.downloaded}
+                    <span class="model-badge experimental-badge">Swedish · Experimental</span>
+                  {:else}
+                    <span class="model-badge experimental-badge">Swedish only · Experimental</span>
+                  {/if}
+                </div>
+                <div class="model-card-desc">Swedish profiles only · 714 MB download · local model. Add a Swedish shortcut below to use it. Dictionary replacements work; decoder vocabulary hints are unavailable.</div>
+                {#if downloading === pianissimoDictationModel.id}
+                  <div class="progress-bar">
+                    <div class="progress-fill" style="width: {downloadProgress}%"></div>
+                  </div>
+                {/if}
+              </button>
+            {/if}
+          </div>
+          {#if modelError}<div class="transcribe-error" role="alert">{modelError}</div>{/if}
         </div>
         <div class="field profile-field">
           <div class="profile-heading">
@@ -1851,50 +1945,6 @@
               Sagascript automatically chooses the recommended local model for each language.
               Change these controls only when you have a specific quality or performance need.
             </p>
-
-            <div class="model-section-label">
-              Manual model choice · {languageLabel(settings.language)}
-            </div>
-
-            <div class="model-picker">
-              {#each models as model}
-                <button
-                  class="model-card"
-                  class:active={model.active}
-                  class:downloading={downloading === model.id}
-                  onclick={() => selectModel(model)}
-                  disabled={downloading !== null || selecting}
-                >
-                  <div class="model-card-header">
-                    <span class="model-card-name">{model.display_name}</span>
-                    {#if model.active}
-                      <span class="model-badge active-badge">Active</span>
-                    {:else if model.downloaded}
-                      <span class="model-badge ready-badge">Ready</span>
-                    {:else}
-                      <span class="model-badge download-badge">Download · {model.size_mb} MB</span>
-                    {/if}
-                  </div>
-                  <div class="model-card-desc">{model.description}</div>
-                  {#if downloading === model.id}
-                    <div class="progress-bar">
-                      <div class="progress-fill" style="width: {downloadProgress}%"></div>
-                    </div>
-                  {/if}
-                </button>
-              {/each}
-            </div>
-
-            {#if modelError}
-              <div class="transcribe-error">{modelError}</div>
-            {/if}
-
-            <div class="model-hint">
-              Larger models are more accurate but take longer to transcribe.
-              {#if models.some(m => !m.downloaded && !m.active)}
-                Models are downloaded once and stored locally.
-              {/if}
-            </div>
 
             <div class="field advanced-field">
               <label for="beam-size">Decoding mode</label>
@@ -2364,6 +2414,14 @@
     gap: 8px;
   }
 
+  .model-selection-field {
+    margin-bottom: 18px;
+  }
+
+  .model-selection-hint {
+    margin: -4px 0 10px;
+  }
+
   .model-card {
     display: flex;
     flex-direction: column;
@@ -2385,6 +2443,11 @@
   .model-card.active {
     border-color: var(--accent);
     background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
+  }
+
+  .experimental-model-card.active {
+    border-color: #eab308;
+    background: color-mix(in srgb, #eab308 8%, var(--bg-secondary));
   }
 
   .model-card:disabled {
@@ -2432,6 +2495,11 @@
     border: 1px solid var(--border);
   }
 
+  .experimental-badge {
+    background: color-mix(in srgb, #eab308 15%, transparent);
+    color: #a16207;
+  }
+
   .progress-bar {
     height: 4px;
     background: var(--border);
@@ -2445,13 +2513,6 @@
     background: var(--accent);
     border-radius: 2px;
     transition: width 0.2s;
-  }
-
-  .model-hint {
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1.5;
-    margin-top: 12px;
   }
 
   /* Download status bar (bottom of window, visible on all tabs) */

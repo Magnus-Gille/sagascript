@@ -43,19 +43,20 @@ try {
   await page.getByRole("button", { name: "Open Files...", exact: true }).waitFor();
   // Experimental dictation selection persists independently of file selection.
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
-  const pianissimoChoice = page.getByRole("checkbox", { name: "Use Pianissimo for Swedish dictation (experimental)", exact: true });
-  assert.equal(await pianissimoChoice.isChecked(), false);
-  await pianissimoChoice.check();
+  const pianissimoChoice = page.getByRole("button", { name: /Pianissimo Q8/ }).first();
+  await pianissimoChoice.waitFor();
+  assert.equal(await pianissimoChoice.evaluate(element => element.classList.contains("active")), false);
+  await pianissimoChoice.click();
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_pianissimo_dictation" && call.args.enabled === true));
-  await page.getByRole("button", { name: "Download speech engine", exact: true }).click();
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "download_pianissimo_model"));
   await page.getByText("Speech engine ready", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   assert.equal(await page.locator("#file-model").inputValue(), "auto");
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
-  assert.equal(await pianissimoChoice.isChecked(), true);
+  assert.equal(await pianissimoChoice.evaluate(element => element.classList.contains("active")), true);
   await page.screenshot({ path: outputPath("sagascript-pianissimo-dictation.png"), fullPage: true });
-  await pianissimoChoice.uncheck();
+  await page.getByRole("button", { name: /Base English/ }).first().click();
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_pianissimo_dictation" && call.args.enabled === false));
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   const optionsBox = await page.locator('.transcribe-options').boundingBox();
   const dropBox = await page.locator('.drop-zone').boundingBox();
