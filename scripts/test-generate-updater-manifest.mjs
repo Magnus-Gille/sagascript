@@ -3,12 +3,13 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const dir = mkdtempSync(join(tmpdir(), 'sagascript-updater-manifest-'));
 const bundle = join(dir, 'Sagascript.app.tar.gz');
 const signature = `${bundle}.sig`;
 const output = join(dir, 'latest.json');
-const script = new URL('./generate-updater-manifest.mjs', import.meta.url).pathname;
+const script = fileURLToPath(new URL('./generate-updater-manifest.mjs', import.meta.url));
 writeFileSync(bundle, 'fixture archive');
 writeFileSync(signature, 'fixture signature\n');
 
@@ -16,7 +17,8 @@ function run(version = '1.3.3') {
   return spawnSync(process.execPath, [script, version, bundle, signature, output], { encoding: 'utf8' });
 }
 
-assert.equal(run().status, 0);
+const validRun = run();
+assert.equal(validRun.status, 0, validRun.stderr);
 assert.deepEqual(JSON.parse(readFileSync(output, 'utf8')), {
   version: '1.3.3',
   platforms: {
