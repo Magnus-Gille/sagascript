@@ -90,7 +90,7 @@ fn present_existing_overlay(window: &tauri::WebviewWindow) {
     macos_show_without_focus(window);
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 fn present_existing_overlay(window: &tauri::WebviewWindow) {
     let _ = window.show();
 }
