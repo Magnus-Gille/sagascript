@@ -57,6 +57,7 @@
   let starting = $state(false);
   let hydratedFileRecoveryJobId = $state<string | null>(null);
   let hydratedMeetingRecoveryJobId = $state<string | null>(null);
+  let meetingRecoveryHydrationClosed = false;
 
   $effect(() => {
     if (job.status === "running" && !started) {
@@ -142,7 +143,8 @@
 
   $effect(() => {
     const recovery = initialRecoveryMeeting;
-    if (!recovery || recovery.job_id !== job.id || hydratedMeetingRecoveryJobId === job.id) return;
+    if (meetingRecoveryHydrationClosed || !recovery || recovery.job_id !== job.id
+      || hydratedMeetingRecoveryJobId === job.id) return;
     hydratedMeetingRecoveryJobId = job.id;
     started = true;
     const generation = ++meetingPollGeneration;
@@ -312,6 +314,11 @@
   ): Promise<void> {
     if (transcribing) return;
     if (meetingReview && !window.confirm("Start a new meeting review and replace the current review if it completes?")) return;
+    // `initialRecoveryMeeting` is also updated by the live recovery callback
+    // after this job completes. Do not mistake that in-session echo for a
+    // startup restore: hydrating it would invalidate this poll generation and
+    // could leave `meetingReviewInit` set forever.
+    meetingRecoveryHydrationClosed = true;
     if (meetingResultId) {
       try {
         await setMeetingResultPending(false);

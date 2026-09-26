@@ -86,7 +86,9 @@ try {
   await finish("/fixtures/picked.wav");
   await waitStatus("picked.wav", "completed");
   await assertSummary({ completed: 4, failed: 1, cancelled: 0, queued: 0, running: 0, "needs retry": 0 });
-  // Diarized jobs wait for terminal snapshots, and a temporary poll error holds the queue.
+  // Regression: after retrying a failed poll, the terminal review is echoed
+  // through Settings as a recovery entry. That live update must not be
+  // rehydrated over the in-flight result or strand this queue item as running.
   await page.getByRole("checkbox", { name: "Speaker diarization" }).check();
   await drop(["/fixtures/meeting-one.wav", "/fixtures/meeting-two.wav", "/fixtures/meeting-three.wav"]);
   await waitStatus("meeting-one.wav", "running");
