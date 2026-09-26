@@ -27,6 +27,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Validate TEST artifact label before signing credentials are available
+        env:
+          TEST_LABEL: ${{ inputs.label }}
+        run: |
+          if [[ ! "$TEST_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$ ]]; then
+            echo 'TEST artifact label must be 1–40 letters, digits, dots, underscores, or hyphens.' >&2
+            exit 1
+          fi
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -166,6 +175,7 @@ jobs:
 
       - name: Verify macOS test artifact and rename as TEST build
         env:
+          TEST_LABEL: ${{ inputs.label }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
@@ -174,7 +184,7 @@ jobs:
           dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
           [[ -n "$dmg" ]]
           ./scripts/verify-macos-release.sh "$app" "$dmg" "$version"
-          label="${{ inputs.label }}"
+          label="$TEST_LABEL"
           sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
           mkdir -p artifacts
           cp "$dmg" "artifacts/Sagascript-TEST-${label}-${sha}.dmg"
