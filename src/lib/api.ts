@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { UpdateRecoveryPayload } from "./update-recovery";
 import type {
   CorrectionFile,
   MeetingAudioAttachment,
@@ -246,6 +247,26 @@ export async function saveTranscriptionText(
 
 export async function copyTranscriptionText(text: string): Promise<void> {
   return invoke("copy_transcription_text", { text });
+}
+
+export async function setUpdateResultPending(resultId: string, pending: boolean): Promise<void> {
+  return invoke("set_update_result_pending", { resultId, pending });
+}
+
+export async function saveUpdateRecovery(payload: UpdateRecoveryPayload): Promise<void> {
+  return invoke("save_update_recovery", { payload });
+}
+
+export async function loadUpdateRecovery(): Promise<UpdateRecoveryPayload | null> {
+  return invoke("load_update_recovery");
+}
+
+export async function clearUpdateRecovery(): Promise<void> {
+  return invoke("clear_update_recovery");
+}
+
+export async function completeUpdatePreparation(nonce: string, error: string | null): Promise<void> {
+  return invoke("complete_update_preparation", { nonce, error });
 }
 
 export async function beginMeetingFile(

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -88,6 +89,8 @@ pub struct AppController {
     session_data: Option<serde_json::Value>,
     release_started: Option<Instant>,
     meeting_job: Option<String>,
+    update_activity: Arc<crate::update_activity::UpdateActivity>,
+    active_work_lease: Option<crate::update_activity::WorkLease>,
 }
 
 impl AppController {
@@ -124,7 +127,20 @@ impl AppController {
             session_data: None,
             release_started: None,
             meeting_job: None,
+            update_activity: Arc::new(crate::update_activity::UpdateActivity::default()),
+            active_work_lease: None,
         }
+    }
+
+    pub fn set_update_activity(
+        &mut self,
+        update_activity: Arc<crate::update_activity::UpdateActivity>,
+    ) {
+        self.update_activity = update_activity;
+    }
+
+    pub fn set_update_result_pending(&self, result_id: &str, pending: bool) -> Result<(), String> {
+        self.update_activity.set_result_pending(result_id, pending)
     }
 
     pub fn state(&self) -> AppState {
@@ -137,8 +153,13 @@ impl AppController {
         if self.state != AppState::Idle || self.meeting_job.is_some() {
             return false;
         }
+        let work_lease = match self.update_activity.begin_work() {
+            Ok(lease) => lease,
+            Err(_) => return false,
+        };
         self.meeting_job = Some(id.to_owned());
         self.state = AppState::Transcribing;
+        self.active_work_lease = Some(work_lease);
         true
     }
 
@@ -148,6 +169,7 @@ impl AppController {
         }
         self.meeting_job = None;
         self.state = AppState::Idle;
+        self.active_work_lease = None;
         true
     }
 
@@ -428,6 +450,11 @@ impl AppController {
             return Ok(false);
         }
 
+        let work_lease = self
+            .update_activity
+            .begin_work()
+            .map_err(DictationError::TranscriptionFailed)?;
+
         let next_generation = self.recording_generation.checked_add(1).ok_or_else(|| {
             DictationError::TranscriptionFailed("Recording generation exhausted; restart Sagascript.".into())
         })?;
@@ -470,6 +497,7 @@ impl AppController {
         self.toggle_key_down = false;
         self.training_recording = false;
         self.state = AppState::Recording;
+        self.active_work_lease = Some(work_lease);
         self.recording_start = Some(Instant::now());
         self.last_error = None;
 
@@ -571,8 +599,14 @@ impl AppController {
         self.end_session("success");
         self.last_error = None;
         self.last_transcription = Some(text.to_string());
+        if !text.trim().is_empty() {
+            if let Err(error) = self.update_activity.set_result_pending("live-dictation", true) {
+                warn!("Could not track the pending live transcription result: {error}");
+            }
+        }
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
+        self.active_work_lease = None;
         self.active_hotkey_profile = None;
         self.active_hotkey_shortcut = None;
         self.toggle_stop_requested = false;
@@ -587,6 +621,7 @@ impl AppController {
         self.end_session("no_speech");
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
+        self.active_work_lease = None;
         self.active_hotkey_profile = None;
         self.active_hotkey_shortcut = None;
         self.toggle_stop_requested = false;
@@ -615,6 +650,7 @@ impl AppController {
         self.end_session("error");
         self.last_error = Some(error.to_string());
         self.state = AppState::Idle;
+        self.active_work_lease = None;
         self.active_hotkey_profile = None;
         self.active_hotkey_shortcut = None;
         self.toggle_stop_requested = false;
@@ -662,6 +698,7 @@ impl AppController {
         self.end_session("cancelled");
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
+        self.active_work_lease = None;
         self.active_hotkey_profile = None;
         self.active_hotkey_mode = None;
         self.active_hotkey_shortcut = None;

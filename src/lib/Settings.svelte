@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { drainUpdateWork } from "./update-preparation";
   import FileTranscription from "./FileTranscription.svelte";
   import {
     createFileJobs, nextQueuedFile, updateFileJob, fileJobName,
@@ -6,6 +7,13 @@
   } from "./transcription-queue";
   import { onMount, tick } from "svelte";
   import { rememberTranscription, type RecentTranscription } from "./recent-transcriptions";
+  import {
+    createUpdateRecoveryPayload,
+    parseUpdateRecoveryPayload,
+    serializeUpdateRecoveryPayload,
+    type UpdateRecoveryFile,
+    type UpdateRecoveryMeeting,
+  } from "./update-recovery";
   import {
     getSettings,
     getLastError,
@@ -34,6 +42,13 @@
     retryHotkeyRegistration,
     startRecording,
     stopAndTranscribe,
+    copyTranscriptionText,
+    saveTranscriptionText,
+    setUpdateResultPending,
+    saveUpdateRecovery,
+    loadUpdateRecovery,
+    clearUpdateRecovery,
+    completeUpdatePreparation,
     hotkeyStatus,
     type Settings,
     type BuildInfo,
@@ -153,6 +168,266 @@
   let testOwnsRecording: boolean = $state(false);
   let testResult: string = $state("");
   let testError: string = $state("");
+  let testResultActionMessage: string = $state("");
+  let testResultRecoveryPending: boolean = $state(false);
+  let updatePreparing: boolean = $state(false);
+  let liveDictationRevision = 0;
+  let observedNativeDictation: string | null = null;
+  let fileComponents: Record<string, { prepareUpdateRecovery(): Promise<void> } | undefined> = $state({});
+
+  let fileRecoveryEntries = $state<UpdateRecoveryFile[]>([]);
+  let meetingRecoveryEntries = $state<UpdateRecoveryMeeting[]>([]);
+  let recoveredFileIds = $state<string[]>([]);
+  let recoveredMeetingIds = $state<string[]>([]);
+  let recoveredDictationText: string | null = $state(null);
+  let recoveredDictationActive = $state(false);
+  let recoveredDraftsNotice = $state(false);
+  let recoveryWriteQueue: Promise<void> = Promise.resolve();
+  let recoveryRestore: Promise<void> = Promise.resolve();
+
+  function persistRemainingRecoveredDrafts(): void {
+    const fileIds = new Set(recoveredFileIds);
+    const meetingIds = new Set(recoveredMeetingIds);
+    const remaining = createUpdateRecoveryPayload({
+      dictation: recoveredDictationActive && testResult.trim() ? { text: testResult } : null,
+      files: fileRecoveryEntries.filter((entry) => fileIds.has(entry.job_id)),
+      meetings: meetingRecoveryEntries.filter((entry) => meetingIds.has(entry.job_id)),
+    });
+    recoveryWriteQueue = recoveryWriteQueue.catch(() => undefined).then(async () => {
+      if (!remaining.dictation && remaining.files.length === 0 && remaining.meetings.length === 0) {
+        await clearUpdateRecovery();
+      } else {
+        serializeUpdateRecoveryPayload(remaining);
+        await saveUpdateRecovery(remaining);
+      }
+    });
+    void recoveryWriteQueue.catch((error) => {
+      settingsError = `Could not update recovered drafts: ${recoveryErrorText(error)}`;
+    });
+  }
+
+  function refreshRecoveredDraftsNotice(): void {
+    if (!recoveredDictationActive && recoveredFileIds.length === 0 && recoveredMeetingIds.length === 0) {
+      recoveredDraftsNotice = false;
+    }
+  }
+
+  function updateFileRecovery(entry: UpdateRecoveryFile): void {
+    const existing = fileRecoveryEntries.some((current) => current.job_id === entry.job_id);
+    fileRecoveryEntries = existing
+      ? fileRecoveryEntries.map((current) => current.job_id === entry.job_id ? entry : current)
+      : [...fileRecoveryEntries, entry];
+  }
+
+  function clearFileRecovery(jobId: string): void {
+    fileRecoveryEntries = fileRecoveryEntries.filter((entry) => entry.job_id !== jobId);
+    if (recoveredFileIds.includes(jobId)) {
+      recoveredFileIds = recoveredFileIds.filter((id) => id !== jobId);
+      refreshRecoveredDraftsNotice();
+      persistRemainingRecoveredDrafts();
+    }
+  }
+
+  function onFileRecoveryChange(entry: UpdateRecoveryFile | null, jobId?: string): void {
+    if (entry === null) {
+      if (jobId) clearFileRecovery(jobId);
+      return;
+    }
+    updateFileRecovery(entry);
+  }
+
+  function updateMeetingRecovery(entry: UpdateRecoveryMeeting | null): void {
+    if (entry === null) return;
+    const existing = meetingRecoveryEntries.some((current) => current.job_id === entry.job_id);
+    meetingRecoveryEntries = existing
+      ? meetingRecoveryEntries.map((current) => current.job_id === entry.job_id ? entry : current)
+      : [...meetingRecoveryEntries, entry];
+  }
+
+  function clearMeetingRecovery(jobId: string): void {
+    meetingRecoveryEntries = meetingRecoveryEntries.filter((entry) => entry.job_id !== jobId);
+    if (recoveredMeetingIds.includes(jobId)) {
+      recoveredMeetingIds = recoveredMeetingIds.filter((id) => id !== jobId);
+      refreshRecoveredDraftsNotice();
+      persistRemainingRecoveredDrafts();
+    }
+  }
+
+  function onMeetingRecoveryChange(entry: UpdateRecoveryMeeting | null, jobId?: string): void {
+    if (entry === null) {
+      if (jobId) clearMeetingRecovery(jobId);
+      return;
+    }
+    updateMeetingRecovery(entry);
+  }
+
+  function recoveryErrorText(error: unknown): string {
+    return typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
+  }
+
+  async function restoreUpdateRecovery(): Promise<void> {
+    const dictationRevision = liveDictationRevision;
+    const existingFileIds = new Set(fileJobs.map((job) => job.id));
+    const existingMeetingIds = new Set(savedReviewIds);
+    try {
+      const persisted = parseUpdateRecoveryPayload(await loadUpdateRecovery());
+      if (!persisted) return;
+
+      const recoveredDictation = persisted.dictation?.text.trim() ? persisted.dictation : null;
+      if (recoveredDictation && !testResult.trim() && liveDictationRevision === dictationRevision) {
+        testResult = recoveredDictation.text;
+        testResultRecoveryPending = true;
+        recoveredDictationText = recoveredDictation.text;
+        recoveredDictationActive = true;
+      }
+
+      const filesToRestore = persisted.files.filter((entry) => !existingFileIds.has(entry.job_id));
+      if (filesToRestore.length) {
+        fileRecoveryEntries = [...fileRecoveryEntries, ...filesToRestore];
+        recoveredFileIds = [...recoveredFileIds, ...filesToRestore.map((entry) => entry.job_id)];
+        fileJobs = [
+          ...fileJobs,
+          ...filesToRestore.map((entry) => ({
+            id: entry.job_id,
+            path: entry.path,
+            diarize: false,
+            prompt: null,
+            profileId: null,
+            status: "completed" as const,
+          })),
+        ];
+      }
+
+      const meetingsToRestore = persisted.meetings.filter((entry) => !existingMeetingIds.has(entry.job_id));
+      if (meetingsToRestore.length) {
+        meetingRecoveryEntries = [...meetingRecoveryEntries, ...meetingsToRestore];
+        recoveredMeetingIds = [...recoveredMeetingIds, ...meetingsToRestore.map((entry) => entry.job_id)];
+        fileJobs = [
+          ...fileJobs,
+          ...meetingsToRestore.map((entry) => ({
+            id: entry.job_id,
+            path: entry.path,
+            diarize: false,
+            prompt: null,
+            profileId: null,
+            status: "completed" as const,
+          })),
+        ];
+        savedReviewIds = [...savedReviewIds, ...meetingsToRestore.map((entry) => entry.job_id)];
+      }
+
+      if (selectedFileId === null) {
+        selectedFileId = filesToRestore[0]?.job_id ?? meetingsToRestore[0]?.job_id ?? null;
+      }
+
+      if (recoveredDictation || filesToRestore.length || meetingsToRestore.length) {
+        recoveredDraftsNotice = true;
+      }
+    } catch (error) {
+      console.warn("Could not restore update recovery drafts", error);
+      throw error;
+    }
+  }
+
+  async function discardRecoveredDrafts(): Promise<void> {
+    try {
+      await recoveryWriteQueue.catch(() => undefined);
+      await clearUpdateRecovery();
+    } catch (error) {
+      settingsError = `Could not discard recovered drafts: ${recoveryErrorText(error)}`;
+      return;
+    }
+
+    const recoveredFileIdSet = new Set(recoveredFileIds);
+    const recoveredMeetingIdSet = new Set(recoveredMeetingIds);
+    fileJobs = fileJobs.filter((job) => !recoveredFileIdSet.has(job.id) && !recoveredMeetingIdSet.has(job.id));
+    savedReviewIds = savedReviewIds.filter((id) => !recoveredMeetingIdSet.has(id));
+    fileRecoveryEntries = fileRecoveryEntries.filter((entry) => !recoveredFileIdSet.has(entry.job_id));
+    meetingRecoveryEntries = meetingRecoveryEntries.filter((entry) => !recoveredMeetingIdSet.has(entry.job_id));
+    if (recoveredDictationActive && testResult === recoveredDictationText) {
+      testResult = "";
+      testResultRecoveryPending = false;
+    }
+    recoveredFileIds = [];
+    recoveredMeetingIds = [];
+    recoveredDictationText = null;
+    recoveredDictationActive = false;
+    recoveredDraftsNotice = false;
+    selectedFileId = fileJobs[0]?.id ?? null;
+  }
+
+  async function prepareForUpdate(nonce: string): Promise<void> {
+    try {
+      await recoveryRestore;
+      await tick();
+      await Promise.all(fileJobs.map(async (job) => {
+        const component = fileComponents[job.id];
+        if (!component) throw new Error("A transcription result is still opening. Retry the update.");
+        await component.prepareUpdateRecovery();
+      }));
+      // The updater holds the native exclusive lease here. Its last result is
+      // stable, but the result event/command response may still be in transit.
+      const lastNativeDictation = await getLastTranscription();
+      await drainUpdateWork({
+        busy: () => testTranscribing || Boolean(lastNativeDictation?.trim()
+          && observedNativeDictation !== lastNativeDictation),
+        settle: tick,
+      });
+      await tick();
+      await recoveryWriteQueue.catch(() => undefined);
+      const payload = createUpdateRecoveryPayload({
+        dictation: testResultRecoveryPending && testResult.trim() ? { text: testResult } : null,
+        files: fileRecoveryEntries,
+        meetings: meetingRecoveryEntries,
+      });
+      // Validate the exact serialized size before handing the payload to Rust.
+      serializeUpdateRecoveryPayload(payload);
+      await saveUpdateRecovery(payload);
+      await completeUpdatePreparation(nonce, null);
+    } catch (error) {
+      const message = recoveryErrorText(error);
+      updatePreparing = false;
+      try {
+        await completeUpdatePreparation(nonce, message);
+      } catch (ackError) {
+        console.warn("Could not acknowledge failed update preparation", ackError);
+      }
+    }
+  }
+
+  async function copyTestResult(): Promise<void> {
+    if (!testResult.trim()) return;
+    try {
+      await copyTranscriptionText(testResult);
+      await setUpdateResultPending("live-dictation", false);
+      const wasRecovered = recoveredDictationActive;
+      testResultRecoveryPending = false;
+      recoveredDictationActive = false;
+      refreshRecoveredDraftsNotice();
+      if (wasRecovered) persistRemainingRecoveredDrafts();
+      testResultActionMessage = "Copied to clipboard.";
+    } catch (error) {
+      testResultActionMessage = typeof error === "string" ? error : String(error);
+    }
+  }
+
+  async function saveTestResult(): Promise<void> {
+    if (!testResult.trim()) return;
+    try {
+      const saved = await saveTranscriptionText(testResult, "dictation.txt", null);
+      if (saved) {
+        await setUpdateResultPending("live-dictation", false);
+        const wasRecovered = recoveredDictationActive;
+        testResultRecoveryPending = false;
+        recoveredDictationActive = false;
+        refreshRecoveredDraftsNotice();
+        if (wasRecovered) persistRemainingRecoveredDrafts();
+      }
+      testResultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
+    } catch (error) {
+      testResultActionMessage = typeof error === "string" ? error : String(error);
+    }
+  }
 
   onMount(() => {
     let disposed = false;
@@ -166,12 +441,17 @@
     }).then(remember);
     const resultListener = listen<string>("transcription-result", (event) => {
       revision++;
+      liveDictationRevision++;
+      testResultRecoveryPending = true;
+      recoveredDictationActive = false;
+      observedNativeDictation = event.payload;
       testResult = event.payload;
       testError = "";
     }).then(remember);
     const stateListener = listen<string>("state-changed", (event) => {
       if (event.payload === "recording") {
         revision++;
+        liveDictationRevision++;
         testError = "";
       }
     }).then(remember);
@@ -181,8 +461,15 @@
       const initialRevision = revision;
       const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
       if (!disposed && revision === initialRevision) {
+        if (!text?.trim() || text === testResult) observedNativeDictation = text;
         testError = error ?? "";
-        testResult = text ?? "";
+        if (text && !testResult.trim()) {
+          observedNativeDictation = text;
+          liveDictationRevision++;
+          testResultRecoveryPending = true;
+          recoveredDictationActive = false;
+          testResult = text;
+        }
       }
     }).catch((error) => {
       console.warn("Could not restore the last dictation result", error);
@@ -220,6 +507,7 @@
     || Object.values(fileBusy).some(Boolean));
 
   $effect(() => {
+    if (updatePreparing) return;
     const next = nextQueuedFile(fileJobs, Object.values(fileBusy).some(Boolean));
     if (next) {
       fileJobs = updateFileJob(fileJobs, next.id, "running");
@@ -227,6 +515,7 @@
   });
 
   function handleFilesTranscription(paths: string[], openReview = false): void {
+    if (updatePreparing) return;
     const jobs = createFileJobs(paths, {
       diarize: transcribeDiarize,
       prompt: transcribePrompt.trim() || null,
@@ -517,6 +806,32 @@
   }
 
   onMount(() => {
+    let disposed = false;
+    let recoveryStop: (() => void) | null = null;
+    let recoveryAbortStop: (() => void) | null = null;
+    const recoveryListener = listen<unknown>("update-preparing", (event) => {
+      const payload = event.payload;
+      const nonce = typeof payload === "string"
+        ? payload
+        : payload && typeof payload === "object" && "nonce" in payload && typeof payload.nonce === "string"
+          ? payload.nonce
+          : null;
+      if (nonce && !disposed) {
+        updatePreparing = true;
+        void prepareForUpdate(nonce);
+      }
+    });
+    recoveryListener.then((stop) => {
+      if (disposed) stop();
+      else recoveryStop = stop;
+    }).catch((error) => console.warn("Could not listen for update preparation", error));
+    listen("update-aborted", () => { updatePreparing = false; }).then((stop) => {
+      if (disposed) stop();
+      else recoveryAbortStop = stop;
+    }).catch((error) => console.warn("Could not listen for update abort", error));
+    recoveryRestore = restoreUpdateRecovery();
+    void recoveryRestore.catch(() => undefined);
+
     // Register listeners + drag-drop FIRST — they don't depend on the data
     // fetched below, so a rejected invoke in the fetch sequence must never
     // prevent them from wiring up (e.g. a stuck-at-0% download).
@@ -577,7 +892,7 @@
       } else if (event.payload.type === "drop") {
         dragOver = false;
         const paths = event.payload.paths;
-        if (paths.length > 0) {
+        if (paths.length > 0 && !updatePreparing) {
           requestTabChange("transcribe", () => handleFilesTranscription(paths));
         }
       } else {
@@ -627,6 +942,11 @@
         initError = typeof e === "string" ? e : e?.message || "Failed to load settings.";
       }
     })();
+    return () => {
+      disposed = true;
+      recoveryStop?.();
+      recoveryAbortStop?.();
+    };
   });
 
   /**
@@ -1112,6 +1432,7 @@
   }
 
   async function onTestRecord() {
+    if (updatePreparing) return;
     const action = dictateButtonAction(backendDictationState, testOwnsRecording);
     if (action === "blocked") return;
 
@@ -1124,6 +1445,8 @@
       testError = "";
       try {
         const text = await stopAndTranscribe();
+        observedNativeDictation = text;
+        testResultRecoveryPending = true;
         testResult = testResult ? testResult + " " + text : text;
       } catch (e: any) {
         testError = typeof e === "string" ? e : e.message || "Transcription failed";
@@ -1153,6 +1476,7 @@
   }
 
   async function onPickFile() {
+    if (updatePreparing) return;
     const exts = supportedFormats.length > 0 ? supportedFormats : ["wav", "mp3", "m4a", "mp4", "ogg", "flac"];
     const file = await open({
       multiple: true,
@@ -1163,7 +1487,7 @@
         },
       ],
     });
-    if (file) {
+    if (file && !updatePreparing) {
       handleFilesTranscription(file);
     }
   }
@@ -1395,6 +1719,14 @@
       {#if settingsError}
         <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
       {/if}
+      {#if recoveredDraftsNotice}
+        <section class="recovery-notice" role="status" aria-label="Recovered drafts">
+          <strong>Recovered drafts</strong>
+          <span>Unsaved dictation and transcription results were restored after the update.</span>
+          <button class="secondary" type="button" disabled={updatePreparing}
+            onclick={() => void discardRecoveredDrafts()}>Discard recovered drafts</button>
+        </section>
+      {/if}
       <p class="queue-summary" class:queue-empty={fileJobs.length === 0} role="status" aria-label="File transcription status" aria-atomic="true">
         {#if fileJobs.length}
           {fileJobs.filter(job => job.status === "completed" && !fileBusy[job.id]).length} completed ·
@@ -1539,7 +1871,7 @@
             class:recording={testRecording}
             class:transcribing={testTranscribing}
             onclick={onTestRecord}
-            disabled={dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" || downloading !== null}
+            disabled={updatePreparing || dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" || downloading !== null}
           >
             {#if testTranscribing}
               <div class="spinner small"></div>
@@ -1560,8 +1892,17 @@
           <textarea
             class="test-result"
             bind:value={testResult}
+            oninput={() => { testResultRecoveryPending = true; }}
+            disabled={updatePreparing}
             placeholder="Click here and use your hotkey, or press the button above"
           ></textarea>
+          {#if testResult.trim()}
+            <div class="result-actions">
+              <button class="secondary" onclick={() => void copyTestResult()} disabled={updatePreparing}>Copy result</button>
+              <button class="secondary" onclick={() => void saveTestResult()} disabled={updatePreparing}>Save result…</button>
+              {#if testResultActionMessage}<span role="status">{testResultActionMessage}</span>{/if}
+            </div>
+          {/if}
         </div>
 
       {/if}
@@ -1645,7 +1986,7 @@
         >
           <div class="drop-zone-icon">&#x1F4C1;</div>
           <div class="drop-zone-text">Drop audio or video files here</div>
-          <button class="primary open-file-btn" onclick={onPickFile}>Open Files...</button>
+          <button class="primary open-file-btn" onclick={onPickFile} disabled={updatePreparing}>Open Files...</button>
           {#if recentTranscriptions.length}
             <div class="rerun-controls">
               <button class="secondary rerun-highlight" onclick={retryLastTranscription}
@@ -1657,7 +1998,7 @@
               </select>
             </div>
           {/if}
-          <button class="secondary" onclick={() => handleFilesTranscription(["Saved review"], true)} disabled={transcribing}>
+          <button class="secondary" onclick={() => handleFilesTranscription(["Saved review"], true)} disabled={transcribing || updatePreparing}>
             Open saved meeting...
           </button>
         </div>
@@ -1683,13 +2024,18 @@
         {/if}
         {#each fileJobs as job (job.id)}
           <div id={`file-panel-${job.id}`} role="tabpanel" aria-labelledby={`file-tab-${job.id}`}
+            inert={updatePreparing}
             tabindex="0" hidden={selectedFileId !== job.id}>
-            <FileTranscription {job}
-              otherBusy={fileJobs.some(other => other.id !== job.id && other.status === "running")
+            <FileTranscription {job} bind:this={fileComponents[job.id]}
+              otherBusy={updatePreparing || fileJobs.some(other => other.id !== job.id && other.status === "running")
                 || Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
               openReview={savedReviewIds.includes(job.id)} onComplete={completeFile} onBusyChange={updateFileBusy}
               onMissingFile={forgetMissingFile}
               onAttentionChange={updateFileAttention}
+              initialRecoveryFile={fileRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
+              initialRecoveryMeeting={meetingRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
+              onFileRecoveryChange={(entry) => onFileRecoveryChange(entry, job.id)}
+              onMeetingRecoveryChange={(entry) => onMeetingRecoveryChange(entry, job.id)}
               active={activeTab === "transcribe" && selectedFileId === job.id} />
           </div>
         {/each}
@@ -2681,6 +3027,20 @@
     font-size: 12px;
   }
 
+  .recovery-notice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    font-size: 13px;
+  }
+
+  .recovery-notice span { flex: 1; color: var(--text-muted); }
+  .recovery-notice button { flex-shrink: 0; }
+
   .queue-summary {
     font-size: 12px;
     color: var(--text-muted);
@@ -2846,5 +3206,13 @@
 
   .test-result:focus {
     border-color: var(--accent);
+  }
+
+  .result-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 12px;
   }
 </style>

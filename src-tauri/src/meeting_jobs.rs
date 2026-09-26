@@ -256,6 +256,19 @@ async fn begin_job(
                 if let Some(job) = slot.as_mut().filter(|job| job.snapshot.id == worker_id) {
                     let controller = app.state::<SharedController>();
                     if let Ok(mut ctrl) = controller.lock() {
+                        let has_result = match &result {
+                            Ok(JobOutput::Import(_)) => true,
+                            #[cfg(feature = "diarization")]
+                            Ok(JobOutput::Reprocessing(_)) => true,
+                            _ => false,
+                        };
+                        if has_result {
+                            if let Err(error) = ctrl
+                                .set_update_result_pending(&format!("meeting:{worker_id}"), true)
+                            {
+                                tracing::warn!(%error, "Could not track pending meeting result");
+                            }
+                        }
                         released = ctrl.finish_meeting_job(&worker_id);
                     }
                     if released {
