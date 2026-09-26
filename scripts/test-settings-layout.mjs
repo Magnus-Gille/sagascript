@@ -41,6 +41,20 @@ test("recording shortcuts use clear mode names and independent helpers", () => {
   assert.doesNotMatch(content, />Toggle</);
 });
 
+test("Dictate exposes the Swedish experimental model in its model picker", () => {
+  const dictateStart = content.indexOf('{#if activeTab === "dictate"}');
+  const dictateEnd = content.indexOf('{#if activeTab === "settings"}', dictateStart);
+  assert.ok(dictateStart >= 0 && dictateEnd > dictateStart, "Dictate section is present");
+  const dictateSource = content.slice(dictateStart, dictateEnd);
+  assert.match(dictateSource, /Dictation model · push-to-speak/);
+  assert.match(dictateSource, /Pianissimo Q8/);
+  assert.match(dictateSource, /Pianissimo is experimental and applies to every Swedish dictation shortcut/);
+  assert.match(dictateSource, /experimental-model-card/);
+  assert.doesNotMatch(dictateSource, /Use Pianissimo for Swedish dictation/);
+  assert.match(content, /selectDictationModel/);
+  assert.match(content, /setPianissimoDictation/);
+});
+
 test("onboarding explains both recording modes", () => {
   assert.match(onboardingContent, /Configure separate shortcuts for these recording modes in Dictate\./);
   assert.match(onboardingContent, /Hold to record/);

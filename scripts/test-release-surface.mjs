@@ -82,7 +82,7 @@ test("release navigation exposes only Dictate, Transcribe, and Settings", () => 
   assert.doesNotMatch(settingsSource, /activeTab\s*===\s*["']teach["']/);
 });
 
-test("manual model and decoder controls stay behind Advanced", () => {
+test("dictation model choice is visible while decoder controls stay behind Advanced", () => {
   const advancedStart = settingsSource.indexOf('<details class="advanced-section">');
   const advancedEnd = settingsSource.indexOf("</details>", advancedStart);
   assert.ok(advancedStart >= 0, "Advanced disclosure is missing");
@@ -90,10 +90,14 @@ test("manual model and decoder controls stay behind Advanced", () => {
 
   const advancedSource = settingsSource.slice(advancedStart, advancedEnd);
   assert.match(advancedSource, /<summary>Advanced<\/summary>/);
-  assert.match(advancedSource, /Manual model choice/);
+  assert.doesNotMatch(advancedSource, /Manual model choice/);
   assert.match(advancedSource, /Decoding mode/);
   assert.match(advancedSource, /Temperature fallback/);
   assert.match(advancedSource, /Voice activity detection/);
+
+  const dictateSource = settingsSource.slice(0, advancedStart);
+  assert.match(dictateSource, /Dictation model · push-to-speak/);
+  assert.match(dictateSource, /Pianissimo Q8/);
 });
 
 test("ordinary settings keep the useful controls outside Advanced", () => {

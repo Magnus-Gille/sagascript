@@ -558,6 +558,21 @@ pub async fn set_whisper_model(
 }
 
 #[tauri::command]
+pub async fn set_pianissimo_dictation(
+    controller: State<'_, SharedController>,
+    enabled: bool,
+) -> Result<(), String> {
+    if enabled && !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
+        return Err("Pianissimo requires macOS 13 or later".into());
+    }
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.pianissimo_dictation = enabled;
+    })?;
+    controller.lock().unwrap().settings_mut().pianissimo_dictation = persisted.pianissimo_dictation;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn set_file_transcription_model(
     controller: State<'_, SharedController>,
     model_id: String,
@@ -968,7 +983,7 @@ async fn stop_and_transcribe_impl(
     whisper: State<'_, SharedWhisper>,
     allow_empty_not_recording: bool,
 ) -> Result<TrainingTranscript, String> {
-    let (audio, language, effective_model, opts, glossary) = {
+    let (audio, language, effective_model, opts, glossary, use_pianissimo) = {
         let mut ctrl = controller.lock().unwrap();
         // A late/duplicate normal stop racing the hotkey path remains an
         // Ok-empty no-op so it cannot clobber an in-flight transcription.
@@ -990,7 +1005,7 @@ async fn stop_and_transcribe_impl(
             .map(|profile| profile.id.as_str());
         let opts = build_transcribe_options_for_profile(ctrl.settings(), profile_id);
         let glossary = Glossary::parse(&ctrl.settings().effective_glossary_source(profile_id));
-        (audio, language, effective_model, opts, glossary)
+        (audio, language, effective_model, opts, glossary, ctrl.settings().uses_pianissimo_for_dictation(language))
     };
 
     if audio.is_empty() {
@@ -1014,11 +1029,12 @@ async fn stop_and_transcribe_impl(
         // state instead of running to completion and wedging the pipeline. The handle
         // is kept borrowed (`&mut fut`) across the timeout so we can await its actual
         // exit after abort and log whether the lock was released.
-        let whisper_ref = whisper.inner().clone();
+        let live_backend = std::sync::Arc::new(sagascript_core::transcription::live_dictation::LiveDictationBackend::new(whisper.inner().clone(), use_pianissimo));
+        let live_ref = live_backend.clone();
         let mut fut = tokio::task::spawn_blocking(move || {
             let mut timings =
                 sagascript_core::transcription::whisper_backend::DictationTimings::default();
-            let result = whisper_ref.transcribe_live_dictation(
+            let result = live_ref.transcribe(
                 effective_model,
                 &audio,
                 language,
@@ -1050,7 +1066,7 @@ async fn stop_and_transcribe_impl(
             Ok(Err(error)) => Err(format!("Transcription task failed: {error}")),
             Err(_) => {
                 warn!("Transcription timed out after {TRANSCRIPTION_TIMEOUT_SECS}s — requesting abort");
-                whisper.request_abort();
+                live_backend.request_abort();
                 // Give the aborted inference a brief grace to unwind, and log which
                 // outcome occurred so a genuine hang is distinguishable from a clean
                 // abort.
@@ -1108,7 +1124,7 @@ pub async fn transcribe_training_file(
         return Err("No audio decoded from file".to_string());
     }
 
-    let (language, effective_model, opts, glossary) = {
+    let (language, effective_model, opts, glossary, use_pianissimo) = {
         let ctrl = controller.lock().unwrap();
         ensure_known_profile(ctrl.settings(), &profile_id)?;
         let profile = ctrl
@@ -1122,19 +1138,25 @@ pub async fn transcribe_training_file(
             ctrl.settings().effective_model_for(profile.language),
             build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id)),
             Glossary::parse(&ctrl.settings().effective_glossary_source(Some(&profile_id))),
+            ctrl.settings().uses_pianissimo_for_dictation(profile.language),
         )
     };
 
-    if whisper.needs_reload(effective_model) {
+    if use_pianissimo || whisper.needs_reload(effective_model) {
         let _ = app.emit(crate::events::event::STATE_CHANGED, "loading_model");
     }
     let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 
+    let live_backend = std::sync::Arc::new(sagascript_core::transcription::live_dictation::LiveDictationBackend::new(whisper.inner().clone(), use_pianissimo));
+    let live_ref = live_backend.clone();
     let whisper_ref = whisper.inner().clone();
     let progress_app = app.clone();
     let duration_seconds = (audio.len() / 16_000) as u64;
     let timeout = Duration::from_secs((duration_seconds * 6).max(TRANSCRIPTION_TIMEOUT_SECS));
     let mut task = tokio::task::spawn_blocking(move || {
+        if use_pianissimo {
+            return live_ref.transcribe(effective_model, &audio, language, &opts, &mut Default::default());
+        }
         whisper_ref.with_model(effective_model, ContextProfile::FlashAttention, |backend| {
             backend.transcribe_sync_with_options(&audio, language, &opts, move |progress| {
                 let _ = progress_app.emit("transcription-progress", progress);
@@ -1146,7 +1168,7 @@ pub async fn transcribe_training_file(
         Ok(Ok(result)) => result.map_err(|error| error.to_string()),
         Ok(Err(error)) => Err(format!("Transcription task failed: {error}")),
         Err(_) => {
-            whisper.request_abort();
+            live_backend.request_abort();
             let _ = tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut task).await;
             Err(format!(
                 "Training transcription timed out after {}s",
@@ -1218,7 +1240,7 @@ pub async fn get_model_info(
             description: m.description().to_string(),
             size_mb: m.size_mb(),
             downloaded: model::is_model_downloaded(*m),
-            active: *m == effective,
+            active: *m == effective && !ctrl.settings().uses_pianissimo_for_dictation(language),
         })
         .collect())
 }
@@ -1289,6 +1311,25 @@ pub async fn get_effective_model_info(
         downloaded: model::is_model_downloaded(model),
         active: true,
     })
+}
+
+#[tauri::command]
+pub async fn get_dictation_model_info(
+    controller: State<'_, SharedController>,
+    language: Language,
+) -> Result<ModelInfo, String> {
+    let pianissimo = controller.lock().unwrap().settings().uses_pianissimo_for_dictation(language);
+    if pianissimo {
+        return Ok(ModelInfo {
+            id: "pianissimo-sv".into(),
+            display_name: "Pianissimo Q8 (experimental)".into(),
+            description: "Swedish dictation".into(),
+            size_mb: 714,
+            downloaded: pianissimo_model::is_downloaded(),
+            active: true,
+        });
+    }
+    get_effective_model_info(controller, language).await
 }
 
 // -- Model download --
