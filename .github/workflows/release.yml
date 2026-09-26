@@ -286,6 +286,7 @@ jobs:
           updater_bundle="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app.tar.gz"
           updater_signature="$updater_bundle.sig"
           tar -czf "$updater_bundle" -C "$(dirname "$app")" "$(basename "$app")"
+          rm -f "$updater_signature"
           npx tauri signer sign "$updater_bundle"
           [[ -s "$updater_bundle" && -s "$updater_signature" ]]
           mkdir -p artifacts
