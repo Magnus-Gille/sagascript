@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { drainUpdateWork } from "./update-preparation";
   import FileTranscription from "./FileTranscription.svelte";
   import {
     createFileJobs, nextQueuedFile, updateFileJob, fileJobName,
@@ -171,6 +172,8 @@
   let testResultRecoveryPending: boolean = $state(false);
   let updatePreparing: boolean = $state(false);
   let liveDictationRevision = 0;
+  let observedNativeDictation: string | null = null;
+  let fileComponents: Record<string, { prepareUpdateRecovery(): Promise<void> } | undefined> = $state({});
 
   let fileRecoveryEntries = $state<UpdateRecoveryFile[]>([]);
   let meetingRecoveryEntries = $state<UpdateRecoveryMeeting[]>([]);
@@ -357,6 +360,20 @@
     try {
       await recoveryRestore;
       await tick();
+      await Promise.all(fileJobs.map(async (job) => {
+        const component = fileComponents[job.id];
+        if (!component) throw new Error("A transcription result is still opening. Retry the update.");
+        await component.prepareUpdateRecovery();
+      }));
+      // The updater holds the native exclusive lease here. Its last result is
+      // stable, but the result event/command response may still be in transit.
+      const lastNativeDictation = await getLastTranscription();
+      await drainUpdateWork({
+        busy: () => testTranscribing || Boolean(lastNativeDictation?.trim()
+          && observedNativeDictation !== lastNativeDictation),
+        settle: tick,
+      });
+      await tick();
       await recoveryWriteQueue.catch(() => undefined);
       const payload = createUpdateRecoveryPayload({
         dictation: testResultRecoveryPending && testResult.trim() ? { text: testResult } : null,
@@ -427,6 +444,7 @@
       liveDictationRevision++;
       testResultRecoveryPending = true;
       recoveredDictationActive = false;
+      observedNativeDictation = event.payload;
       testResult = event.payload;
       testError = "";
     }).then(remember);
@@ -443,8 +461,10 @@
       const initialRevision = revision;
       const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
       if (!disposed && revision === initialRevision) {
+        if (!text?.trim() || text === testResult) observedNativeDictation = text;
         testError = error ?? "";
         if (text && !testResult.trim()) {
+          observedNativeDictation = text;
           liveDictationRevision++;
           testResultRecoveryPending = true;
           recoveredDictationActive = false;
@@ -1425,6 +1445,7 @@
       testError = "";
       try {
         const text = await stopAndTranscribe();
+        observedNativeDictation = text;
         testResultRecoveryPending = true;
         testResult = testResult ? testResult + " " + text : text;
       } catch (e: any) {
@@ -2005,7 +2026,7 @@
           <div id={`file-panel-${job.id}`} role="tabpanel" aria-labelledby={`file-tab-${job.id}`}
             inert={updatePreparing}
             tabindex="0" hidden={selectedFileId !== job.id}>
-            <FileTranscription {job}
+            <FileTranscription {job} bind:this={fileComponents[job.id]}
               otherBusy={updatePreparing || fileJobs.some(other => other.id !== job.id && other.status === "running")
                 || Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
               openReview={savedReviewIds.includes(job.id)} onComplete={completeFile} onBusyChange={updateFileBusy}

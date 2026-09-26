@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { drainUpdateWork } from "./update-preparation";
   import MeetingReprocessing from "./MeetingReprocessing.svelte";
   import {
     planMeetingReprocessing, beginMeetingReprocessing, previewMeetingProposal,
@@ -124,6 +125,28 @@
   let meetingActionQueue: Promise<void> = Promise.resolve();
   let meetingReviewInit: Promise<void> | null = $state(null);
   let meetingRecoveryDraft = $state<MeetingReviewDraftSnapshot | null>(null);
+
+  // Native work can finish before its IPC result or terminal meeting poll
+  // reaches this component. Drain those deliveries and pending edits before
+  // Settings snapshots the recovery entries emitted by our effects.
+  export async function prepareUpdateRecovery(): Promise<void> {
+    await drainUpdateWork({
+      busy: () => starting || transcribing || meetingPollActive
+        || meetingReviewInit !== null || meetingReprocessingBusy,
+      settle: async () => {
+        await meetingActionQueue;
+        await meetingReviewInit;
+        await tick();
+      },
+      failure: () => meetingPollingFailed
+        ? "Retry the meeting status check before installing the update."
+        : meetingJobStatus === "completed" && meetingReviewInit === null
+          && (meetingError || !meetingReview || !meetingTranscript
+            || (meetingReprocessingResult !== null && meetingProposal === null))
+          ? "Finish or retry the meeting review before installing the update."
+          : null,
+    });
+  }
 
   const emptyMeetingDraft = (): MeetingDraftState => ({
     labels: {}, mergeTargets: {}, texts: {}, speakers: {},
