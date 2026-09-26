@@ -22,28 +22,41 @@
     type MeetingJobStatus, type MeetingJobSnapshot,
   } from "./api";
   import MeetingReview from "./MeetingReview.svelte";
+  import type { MeetingReviewDraftSnapshot } from "./MeetingReview.svelte";
   import type {
     CorrectionOperation,
+    MeetingDraftState,
     MeetingAudioAttachment,
     MeetingExportFormat,
     MeetingReview as MeetingReviewDocument,
     MeetingReviewState,
     MeetingTranscript,
   } from "./meeting-types";
+  import type { UpdateRecoveryFile, UpdateRecoveryMeeting } from "./update-recovery";
   import { pollMeetingJob as pollMeetingJobClient } from "./meeting-job-client";
   import type { FileJob, FileJobStatus } from "./transcription-queue";
-  let { job, otherBusy, active, openReview = false, onComplete, onBusyChange, onMissingFile, onAttentionChange }: {
+  let {
+    job, otherBusy, active, openReview = false, initialRecoveryFile = null, initialRecoveryMeeting = null,
+    onComplete, onBusyChange, onMissingFile, onAttentionChange,
+    onFileRecoveryChange = () => undefined, onMeetingRecoveryChange = () => undefined,
+  }: {
     job: FileJob;
     otherBusy: boolean;
     active: boolean;
     openReview?: boolean;
+    initialRecoveryFile?: UpdateRecoveryFile | null;
+    initialRecoveryMeeting?: UpdateRecoveryMeeting | null;
     onComplete: (id: string, status: FileJobStatus) => void;
     onBusyChange: (id: string, busy: boolean) => void;
     onMissingFile: (path: string) => void;
     onAttentionChange: (id: string, needsRetry: boolean) => void;
+    onFileRecoveryChange?: (entry: UpdateRecoveryFile | null) => void;
+    onMeetingRecoveryChange?: (entry: UpdateRecoveryMeeting | null) => void;
   } = $props();
   let started = $state(false);
   let starting = $state(false);
+  let hydratedFileRecoveryJobId = $state<string | null>(null);
+  let hydratedMeetingRecoveryJobId = $state<string | null>(null);
 
   $effect(() => {
     if (job.status === "running" && !started) {
@@ -109,6 +122,63 @@
   let meetingReprocessingBusy = $state(false);
   let meetingActionQueue: Promise<void> = Promise.resolve();
   let meetingReviewInit: Promise<void> | null = $state(null);
+  let meetingRecoveryDraft = $state<MeetingReviewDraftSnapshot | null>(null);
+
+  const emptyMeetingDraft = (): MeetingDraftState => ({
+    labels: {}, mergeTargets: {}, texts: {}, speakers: {},
+  });
+
+  // Recovery entries belong to a queued job. Hydrate them only when the job ID
+  // matches, and mark the component as started so a recovered result cannot be
+  // accidentally submitted to the transcription backend again.
+  $effect(() => {
+    const recovery = initialRecoveryFile;
+    if (!recovery || recovery.job_id !== job.id || hydratedFileRecoveryJobId === job.id) return;
+    hydratedFileRecoveryJobId = job.id;
+    started = true;
+    transcriptionResult = recovery.text;
+    plainStages = finishStages(startStages(), "completed");
+  });
+
+  $effect(() => {
+    const recovery = initialRecoveryMeeting;
+    if (!recovery || recovery.job_id !== job.id || hydratedMeetingRecoveryJobId === job.id) return;
+    hydratedMeetingRecoveryJobId = job.id;
+    started = true;
+    const generation = ++meetingPollGeneration;
+    meetingRecoveryDraft = {
+      source_sha256: recovery.review.review.original.source_sha256,
+      review_revision: recovery.review.review.revision,
+      drafts: {
+        labels: { ...recovery.editor_draft.labels },
+        mergeTargets: { ...recovery.editor_draft.mergeTargets },
+        texts: { ...recovery.editor_draft.texts },
+        speakers: { ...recovery.editor_draft.speakers },
+      },
+    };
+    acceptMeetingReview(recovery.review, generation, true);
+    meetingResultId = recovery.job_id;
+    meetingJobStatus = "completed";
+    meetingReprocessingPlan = null;
+    meetingProposal = recovery.proposal;
+    meetingReprocessingResult = null;
+  });
+
+  $effect(() => {
+    if (transcriptionResult.trim()) {
+      onFileRecoveryChange({ job_id: job.id, path: job.path, text: transcriptionResult });
+    }
+  });
+
+  $effect(() => {
+    if (!meetingReview || !meetingTranscript) return;
+    onMeetingRecoveryChange({
+      job_id: job.id,
+      review: { review: meetingReview, transcript: meetingTranscript },
+      editor_draft: meetingRecoveryDraft?.drafts ?? emptyMeetingDraft(),
+      proposal: meetingProposal,
+    });
+  });
 
   onDestroy(() => {
     meetingPollGeneration += 1;
@@ -366,6 +436,7 @@
     try {
       await copyTranscriptionText(transcriptionResult);
       await setUpdateResultPending(job.id, false);
+      onFileRecoveryChange(null);
       resultActionMessage = "Copied to clipboard.";
     } catch (error) { resultActionMessage = meetingFailureText(error, "Could not copy."); }
   }
@@ -375,7 +446,10 @@
     const { fileName, directory } = transcribeSaveDefaults(job.path);
     try {
       const saved = await saveTranscriptionText(transcriptionResult, fileName, directory);
-      if (saved) await setUpdateResultPending(job.id, false);
+      if (saved) {
+        await setUpdateResultPending(job.id, false);
+        onFileRecoveryChange(null);
+      }
       resultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
     } catch (error) { resultActionMessage = meetingFailureText(error, "Could not save."); }
   }
@@ -418,7 +492,10 @@
 
   async function exportMeetingReview(format: MeetingExportFormat): Promise<boolean> {
     const saved = await enqueueMeetingAction((review) => saveMeetingReview(review, format));
-    if (saved) await setMeetingResultPending(false);
+    if (saved) {
+      await setMeetingResultPending(false);
+      onMeetingRecoveryChange(null);
+    }
     return saved;
   }
 
@@ -452,7 +529,10 @@
 
   async function saveCurrentMeetingReview(): Promise<boolean> {
     const saved = await enqueueMeetingAction((review) => saveMeetingReview(review, "json"));
-    if (saved) await setMeetingResultPending(false);
+    if (saved) {
+      await setMeetingResultPending(false);
+      onMeetingRecoveryChange(null);
+    }
     return saved;
   }
 
@@ -478,6 +558,17 @@
   function onMeetingReviewDraftDirtyChange(dirty: boolean): void {
     meetingReviewDraftDirty = dirty;
     if (dirty) void setMeetingResultPending(true);
+  }
+
+  function onMeetingReviewDraftSnapshotChange(snapshot: MeetingReviewDraftSnapshot): void {
+    meetingRecoveryDraft = snapshot;
+    if (!meetingReview || !meetingTranscript) return;
+    onMeetingRecoveryChange({
+      job_id: job.id,
+      review: { review: meetingReview, transcript: meetingTranscript },
+      editor_draft: snapshot.drafts,
+      proposal: meetingProposal,
+    });
   }
 
   async function detachCurrentMeetingAudio(token: string): Promise<void> {
@@ -704,6 +795,8 @@
               onAttachAudio={attachCurrentMeetingAudio}
               onDetachAudio={detachCurrentMeetingAudio}
               onDraftDirtyChange={onMeetingReviewDraftDirtyChange}
+              initialDraftSnapshot={meetingRecoveryDraft}
+              onDraftSnapshotChange={onMeetingReviewDraftSnapshotChange}
               resetDraftKey={meetingReviewResetKey}
             />
         {/if}
