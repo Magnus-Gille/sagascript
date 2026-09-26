@@ -112,7 +112,9 @@ jobs:
         run: npm ci
 
       - name: Test frontend lifecycle helpers
-        run: npm run test:frontend
+        run: |
+          npm run test:frontend
+          node scripts/test-generate-updater-manifest.mjs
 
       - name: Install browser regression runtime
         run: npx playwright install chromium

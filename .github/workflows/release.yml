@@ -72,6 +72,7 @@ jobs:
       - name: Test deterministic release helpers
         run: |
           ./scripts/test-verify-audio-entitlement.sh
+          node scripts/test-generate-updater-manifest.mjs
           en_sort=$(LC_ALL=en_US.UTF-8 node scripts/generate-third-party-notices.mjs --test-sort)
           sv_sort=$(LC_ALL=sv_SE.UTF-8 node scripts/generate-third-party-notices.mjs --test-sort)
           [[ "$en_sort" == "$sv_sort" ]]
@@ -236,9 +237,14 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          SAGASCRIPT_UPDATER_PUBKEY: ${{ vars.SAGASCRIPT_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
           : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
+          : "${SAGASCRIPT_UPDATER_PUBKEY:?SAGASCRIPT_UPDATER_PUBKEY variable is required}"
+          : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
           npx tauri build --target aarch64-apple-darwin --config scripts/tauri-pianissimo-bundle.json
 
       - name: Notarize and staple disk image
@@ -264,10 +270,16 @@ jobs:
           dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
           [[ -n "$dmg" ]]
           ./scripts/verify-macos-release.sh "$app" "$dmg" "$version"
+          updater_bundle="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app.tar.gz"
+          updater_signature="$updater_bundle.sig"
+          [[ -s "$updater_bundle" && -s "$updater_signature" ]]
           mkdir -p artifacts
           cp "$dmg" artifacts/Sagascript.dmg
-          tar -czf artifacts/Sagascript.app.tar.gz -C "$(dirname "$app")" "$(basename "$app")"
+          cp "$updater_bundle" artifacts/Sagascript.app.tar.gz
+          cp "$updater_signature" artifacts/Sagascript.app.tar.gz.sig
           cp build/pianissimo-sv-q8-melfix.gguf artifacts/pianissimo-sv-q8-melfix.gguf
+          node scripts/generate-updater-manifest.mjs \
+            "$version" artifacts/Sagascript.app.tar.gz artifacts/Sagascript.app.tar.gz.sig artifacts/latest.json
 
       - name: Gate upgrade and installed CLI transcription
         run: |
@@ -308,6 +320,8 @@ jobs:
           path: |
             artifacts/Sagascript.dmg
             artifacts/Sagascript.app.tar.gz
+            artifacts/Sagascript.app.tar.gz.sig
+            artifacts/latest.json
             artifacts/pianissimo-sv-q8-melfix.gguf
           if-no-files-found: error
 
@@ -328,9 +342,11 @@ jobs:
         run: |
           cp artifacts/macos-bundle/Sagascript.dmg artifacts/Sagascript.dmg
           cp artifacts/macos-bundle/Sagascript.app.tar.gz artifacts/Sagascript.app.tar.gz
+          cp artifacts/macos-bundle/Sagascript.app.tar.gz.sig artifacts/Sagascript.app.tar.gz.sig
+          cp artifacts/macos-bundle/latest.json artifacts/latest.json
           cp artifacts/macos-bundle/pianissimo-sv-q8-melfix.gguf artifacts/pianissimo-sv-q8-melfix.gguf
 
-          (cd artifacts && sha256sum Sagascript.dmg Sagascript.app.tar.gz pianissimo-sv-q8-melfix.gguf > SHA256SUMS)
+          (cd artifacts && sha256sum Sagascript.dmg Sagascript.app.tar.gz Sagascript.app.tar.gz.sig latest.json pianissimo-sv-q8-melfix.gguf > SHA256SUMS)
 
           echo "Stable artifacts:"
           ls -lh artifacts/Sagascript* artifacts/SHA256SUMS
@@ -343,5 +359,7 @@ jobs:
           files: |
             artifacts/Sagascript.dmg
             artifacts/Sagascript.app.tar.gz
+            artifacts/Sagascript.app.tar.gz.sig
+            artifacts/latest.json
             artifacts/pianissimo-sv-q8-melfix.gguf
             artifacts/SHA256SUMS
