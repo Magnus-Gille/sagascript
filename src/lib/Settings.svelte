@@ -587,8 +587,9 @@
     });
 
     listen("model-ready", async () => {
-      downloading = null;
-      downloadProgress = 0;
+      // The event can arrive before the download command settles. Its caller
+      // owns the busy flag through its finally block so a second operation
+      // cannot start during the remaining selection or refresh work.
       models = await getModelInfo();
       await refreshPianissimoDictationModel();
       if (settings) await refreshProfileModels(settings.hotkey_profiles);
