@@ -247,13 +247,23 @@ jobs:
           : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
           npx tauri build --target aarch64-apple-darwin --config scripts/tauri-pianissimo-bundle.json
 
-      - name: Notarize and staple disk image
+      - name: Notarize app and disk image
         env:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: |
           : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
           : "${APPLE_API_KEY:?APPLE_API_KEY secret is required}"
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
+          app_zip="$RUNNER_TEMP/Sagascript-notarization.zip"
+          ditto -c -k --keepParent "$app" "$app_zip"
+          xcrun notarytool submit "$app_zip" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
           dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
           [[ -n "$dmg" ]]
           xcrun notarytool submit "$dmg" \
@@ -264,6 +274,9 @@ jobs:
           xcrun stapler staple "$dmg"
 
       - name: Verify macOS release artifact
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           version=$(node -p "require('./package.json').version")
           app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
@@ -272,6 +285,8 @@ jobs:
           ./scripts/verify-macos-release.sh "$app" "$dmg" "$version"
           updater_bundle="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app.tar.gz"
           updater_signature="$updater_bundle.sig"
+          tar -czf "$updater_bundle" -C "$(dirname "$app")" "$(basename "$app")"
+          npx tauri signer sign "$updater_bundle"
           [[ -s "$updater_bundle" && -s "$updater_signature" ]]
           mkdir -p artifacts
           cp "$dmg" artifacts/Sagascript.dmg
