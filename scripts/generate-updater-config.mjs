@@ -1,11 +1,11 @@
 // Tauri deserializes plugins.updater before the Rust plugin builder supplies
-// its key. Both the loopback old app and the secure updated app need a config.
+// its key. The shipped app and both sides of the isolated upgrade need a config.
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const [source, output] = process.argv.slice(2);
 const pubkey = process.env.SAGASCRIPT_UPDATER_PUBKEY?.trim();
 if (!source || !output || !pubkey) {
-  throw new Error('Usage: SAGASCRIPT_UPDATER_PUBKEY=... generate-updater-smoke-config.mjs SOURCE OUTPUT');
+  throw new Error('Usage: SAGASCRIPT_UPDATER_PUBKEY=... generate-updater-config.mjs SOURCE OUTPUT');
 }
 
 const config = JSON.parse(readFileSync(source, 'utf8'));

@@ -246,7 +246,9 @@ jobs:
           : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
           : "${SAGASCRIPT_UPDATER_PUBKEY:?SAGASCRIPT_UPDATER_PUBKEY variable is required}"
           : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
-          npx tauri build --target aarch64-apple-darwin --config scripts/tauri-pianissimo-bundle.json
+          signed_config="$RUNNER_TEMP/sagascript-updater-signed.json"
+          node scripts/generate-updater-config.mjs scripts/tauri-updater-signed.json "$signed_config"
+          npx tauri build --target aarch64-apple-darwin --config scripts/tauri-pianissimo-bundle.json --config "$signed_config"
 
       - name: Notarize app and disk image
         env:
@@ -273,6 +275,9 @@ jobs:
             --issuer "$APPLE_API_ISSUER" \
             --wait
           xcrun stapler staple "$dmg"
+
+      - name: Gate signed app startup
+        run: node scripts/smoke-signed-app-start.mjs src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app
 
       - name: Verify macOS release artifact
         env:

@@ -146,7 +146,9 @@ jobs:
           : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
           : "${SAGASCRIPT_UPDATER_PUBKEY:?SAGASCRIPT_UPDATER_PUBKEY variable is required}"
           : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
-          npx tauri build --config scripts/tauri-ci-prebuilt.json --config scripts/tauri-pianissimo-bundle.json --target aarch64-apple-darwin
+          signed_config="$RUNNER_TEMP/sagascript-updater-signed.json"
+          node scripts/generate-updater-config.mjs scripts/tauri-updater-signed.json "$signed_config"
+          npx tauri build --config scripts/tauri-ci-prebuilt.json --config scripts/tauri-pianissimo-bundle.json --config "$signed_config" --target aarch64-apple-darwin
 
       - name: Notarize app and disk image
         env:
@@ -173,6 +175,9 @@ jobs:
             --issuer "$APPLE_API_ISSUER" \
             --wait
           xcrun stapler staple "$dmg"
+
+      - name: Gate signed app startup
+        run: node scripts/smoke-signed-app-start.mjs src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app
 
       - name: Verify macOS test artifact and rename as TEST build
         env:
@@ -240,7 +245,7 @@ jobs:
             exit 1
           }
           smoke_config="$RUNNER_TEMP/sagascript-updater-smoke-old.json"
-          node scripts/generate-updater-smoke-config.mjs \
+          node scripts/generate-updater-config.mjs \
             scripts/tauri-updater-smoke-old.json "$smoke_config"
           npx tauri build --ci --target aarch64-apple-darwin --bundles app \
             --features updater-smoke-test \
@@ -253,7 +258,7 @@ jobs:
           ditto "$source_app" "$test_dir/Sagascript.app"
           codesign --verify --deep --strict "$test_dir/Sagascript.app"
           updated_smoke_config="$RUNNER_TEMP/sagascript-updater-smoke-new.json"
-          node scripts/generate-updater-smoke-config.mjs \
+          node scripts/generate-updater-config.mjs \
             scripts/tauri-updater-smoke-new.json "$updated_smoke_config"
           npx tauri build --ci --target aarch64-apple-darwin --bundles app \
             --config scripts/tauri-ci-prebuilt.json \
