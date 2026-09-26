@@ -289,6 +289,11 @@ jobs:
           rm -f "$updater_signature"
           npx tauri signer sign "$updater_bundle"
           [[ -s "$updater_bundle" && -s "$updater_signature" ]]
+          archive_check="$RUNNER_TEMP/sagascript-updater-archive-check"
+          mkdir -p "$archive_check"
+          tar -xzf "$updater_bundle" -C "$archive_check"
+          xcrun stapler validate "$archive_check/Sagascript.app"
+          spctl --assess --type execute --verbose=2 "$archive_check/Sagascript.app"
           mkdir -p artifacts
           cp "$dmg" artifacts/Sagascript.dmg
           cp "$updater_bundle" artifacts/Sagascript.app.tar.gz

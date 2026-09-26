@@ -184,6 +184,11 @@ jobs:
           rm -f "$updater_signature"
           npx tauri signer sign "$updater_bundle"
           [[ -s "$updater_bundle" && -s "$updater_signature" ]]
+          archive_check="$RUNNER_TEMP/sagascript-updater-archive-check"
+          mkdir -p "$archive_check"
+          tar -xzf "$updater_bundle" -C "$archive_check"
+          xcrun stapler validate "$archive_check/Sagascript.app"
+          spctl --assess --type execute --verbose=2 "$archive_check/Sagascript.app"
           cp "$updater_bundle" "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz"
           cp "$updater_signature" "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz.sig"
           cp build/pianissimo-sv-q8-melfix.gguf artifacts/pianissimo-sv-q8-melfix.gguf
