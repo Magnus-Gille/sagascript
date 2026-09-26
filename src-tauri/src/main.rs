@@ -598,6 +598,7 @@ async fn install_signed_update(
                 );
                 if let Err(error) = prepare_update_recovery(&app).await {
                     warn!("Could not safely prepare update: {error}");
+                    let _ = app.emit_to("settings", "update-aborted", &error);
                     drop(update_permit);
                     set_update_menu(
                         &app,
@@ -617,6 +618,7 @@ async fn install_signed_update(
                 );
                 if let Err(error) = update.install(&bytes) {
                     warn!("Signed updater installation failed: {error}");
+                    let _ = app.emit_to("settings", "update-aborted", error.to_string());
                     drop(update_permit);
                     set_update_menu(
                         &app,

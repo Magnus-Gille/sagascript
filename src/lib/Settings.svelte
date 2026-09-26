@@ -179,6 +179,28 @@
   let recoveredDictationText: string | null = $state(null);
   let recoveredDictationActive = $state(false);
   let recoveredDraftsNotice = $state(false);
+  let recoveryWriteQueue: Promise<void> = Promise.resolve();
+
+  function persistRemainingRecoveredDrafts(): void {
+    const fileIds = new Set(recoveredFileIds);
+    const meetingIds = new Set(recoveredMeetingIds);
+    const remaining = createUpdateRecoveryPayload({
+      dictation: recoveredDictationActive && testResult.trim() ? { text: testResult } : null,
+      files: fileRecoveryEntries.filter((entry) => fileIds.has(entry.job_id)),
+      meetings: meetingRecoveryEntries.filter((entry) => meetingIds.has(entry.job_id)),
+    });
+    recoveryWriteQueue = recoveryWriteQueue.catch(() => undefined).then(async () => {
+      if (!remaining.dictation && remaining.files.length === 0 && remaining.meetings.length === 0) {
+        await clearUpdateRecovery();
+      } else {
+        serializeUpdateRecoveryPayload(remaining);
+        await saveUpdateRecovery(remaining);
+      }
+    });
+    void recoveryWriteQueue.catch((error) => {
+      settingsError = `Could not update recovered drafts: ${recoveryErrorText(error)}`;
+    });
+  }
 
   function refreshRecoveredDraftsNotice(): void {
     if (!recoveredDictationActive && recoveredFileIds.length === 0 && recoveredMeetingIds.length === 0) {
@@ -198,6 +220,7 @@
     if (recoveredFileIds.includes(jobId)) {
       recoveredFileIds = recoveredFileIds.filter((id) => id !== jobId);
       refreshRecoveredDraftsNotice();
+      persistRemainingRecoveredDrafts();
     }
   }
 
@@ -222,6 +245,7 @@
     if (recoveredMeetingIds.includes(jobId)) {
       recoveredMeetingIds = recoveredMeetingIds.filter((id) => id !== jobId);
       refreshRecoveredDraftsNotice();
+      persistRemainingRecoveredDrafts();
     }
   }
 
@@ -278,7 +302,7 @@
           ...fileJobs,
           ...meetingsToRestore.map((entry) => ({
             id: entry.job_id,
-            path: `Recovered meeting ${entry.job_id}`,
+            path: entry.path,
             diarize: false,
             prompt: null,
             profileId: null,
@@ -302,6 +326,7 @@
 
   async function discardRecoveredDrafts(): Promise<void> {
     try {
+      await recoveryWriteQueue.catch(() => undefined);
       await clearUpdateRecovery();
     } catch (error) {
       settingsError = `Could not discard recovered drafts: ${recoveryErrorText(error)}`;
@@ -329,6 +354,7 @@
   async function prepareForUpdate(nonce: string): Promise<void> {
     try {
       await tick();
+      await recoveryWriteQueue.catch(() => undefined);
       const payload = createUpdateRecoveryPayload({
         dictation: testResultRecoveryPending && testResult.trim() ? { text: testResult } : null,
         files: fileRecoveryEntries,
@@ -354,9 +380,11 @@
     try {
       await copyTranscriptionText(testResult);
       await setUpdateResultPending("live-dictation", false);
+      const wasRecovered = recoveredDictationActive;
       testResultRecoveryPending = false;
       recoveredDictationActive = false;
       refreshRecoveredDraftsNotice();
+      if (wasRecovered) persistRemainingRecoveredDrafts();
       testResultActionMessage = "Copied to clipboard.";
     } catch (error) {
       testResultActionMessage = typeof error === "string" ? error : String(error);
@@ -369,9 +397,11 @@
       const saved = await saveTranscriptionText(testResult, "dictation.txt", null);
       if (saved) {
         await setUpdateResultPending("live-dictation", false);
+        const wasRecovered = recoveredDictationActive;
         testResultRecoveryPending = false;
         recoveredDictationActive = false;
         refreshRecoveredDraftsNotice();
+        if (wasRecovered) persistRemainingRecoveredDrafts();
       }
       testResultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
     } catch (error) {
@@ -1668,7 +1698,8 @@
         <section class="recovery-notice" role="status" aria-label="Recovered drafts">
           <strong>Recovered drafts</strong>
           <span>Unsaved dictation and transcription results were restored after the update.</span>
-          <button class="secondary" type="button" onclick={() => void discardRecoveredDrafts()}>Discard recovered drafts</button>
+          <button class="secondary" type="button" disabled={updatePreparing}
+            onclick={() => void discardRecoveredDrafts()}>Discard recovered drafts</button>
         </section>
       {/if}
       <p class="queue-summary" class:queue-empty={fileJobs.length === 0} role="status" aria-label="File transcription status" aria-atomic="true">

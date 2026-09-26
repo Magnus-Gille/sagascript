@@ -180,6 +180,8 @@ function createHarness(controls) {
       return true;
     }
 
+    async function setMeetingResultPending() {}
+
     async function createMeetingReview() {
       return { review: controls.initialReview, transcript: controls.initialTranscript };
     }

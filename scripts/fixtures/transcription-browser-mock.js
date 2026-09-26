@@ -72,6 +72,8 @@ function reprocessingResult(task) {
 }
 window.qa = {
   calls,
+  prepareUpdate: (nonce) => emit("update-preparing", nonce),
+  abortUpdate: () => emit("update-aborted", "Synthetic install failure"),
   progress: (runId, phase, percent) => emit("plain-transcription-progress", { runId, phase, percent }),
   drop: (paths) => emit(TauriEvent.DRAG_DROP, { paths, position: { x: 20, y: 20 } }),
   finish: (path, error = null) => {
@@ -95,6 +97,10 @@ window.qa = {
 mockIPC(async (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
+    case "load_update_recovery": return window.qaRecovery ?? null;
+    case "save_update_recovery": window.qaRecovery = args.payload; return null;
+    case "clear_update_recovery": window.qaRecovery = null; return null;
+    case "complete_update_preparation": return null;
     case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
     case "get_settings": return { language: "en", whisper_model: "base.en", file_transcription_model: "auto", hotkey_mode: "toggle",
       show_overlay: true, auto_paste: false, auto_select_model: true, hotkey: "Control+Shift+Space",

@@ -23,7 +23,7 @@ function completePayload() {
   return recovery.createUpdateRecoveryPayload({
     dictation: { text: "En osparad diktering" },
     files: [{ job_id: "file-1", path: "/tmp/interview.wav", text: "En osparad filtranskribering" }],
-    meetings: [{ job_id: "meeting-1",
+    meetings: [{ job_id: "meeting-1", path: "/tmp/interview-meeting.wav",
       review: {
         review: {
           schema_version: 1,

@@ -241,18 +241,18 @@
     const currentTranscript = committedTranscript;
     if (
       !draftsReady
-      || initialDraftSnapshot === undefined
       || draftRevision !== review.revision
       || currentTranscript === null
       || currentTranscript.source_sha256 !== transcript.source_sha256
       || currentTranscript.language !== transcript.language
       || currentTranscript.model !== transcript.model
     ) return;
-    onDraftSnapshotChange(createMeetingReviewDraftSnapshot(
+    const snapshot = createMeetingReviewDraftSnapshot(
       currentSourceSha,
       review.revision,
       { labels: labelDrafts, mergeTargets, texts: textDrafts, speakers: speakerDrafts },
-    ));
+    );
+    untrack(() => onDraftSnapshotChange(snapshot));
   });
 
   $effect(() => {

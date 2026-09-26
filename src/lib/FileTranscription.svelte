@@ -7,7 +7,7 @@
   import type {
     ReprocessingMode, SelectedReprocessingPlan, ProposalState, ReprocessingResult,
   } from "./meeting-reprocessing-types";
-  import { onDestroy, tick } from "svelte";
+  import { onDestroy, tick, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import TranscriptionStages from "./TranscriptionStages.svelte";
   import { initialStages, startStages, acceptRunProgress, finishStages } from "./transcribe-stages";
@@ -166,18 +166,20 @@
 
   $effect(() => {
     if (transcriptionResult.trim()) {
-      onFileRecoveryChange({ job_id: job.id, path: job.path, text: transcriptionResult });
+      untrack(() => onFileRecoveryChange({ job_id: job.id, path: job.path, text: transcriptionResult }));
     }
   });
 
   $effect(() => {
     if (!meetingReview || !meetingTranscript) return;
-    onMeetingRecoveryChange({
+    const entry: UpdateRecoveryMeeting = {
       job_id: job.id,
+      path: job.path,
       review: { review: meetingReview, transcript: meetingTranscript },
       editor_draft: meetingRecoveryDraft?.drafts ?? emptyMeetingDraft(),
       proposal: meetingProposal,
-    });
+    };
+    untrack(() => onMeetingRecoveryChange(entry));
   });
 
   onDestroy(() => {
@@ -563,12 +565,15 @@
   function onMeetingReviewDraftSnapshotChange(snapshot: MeetingReviewDraftSnapshot): void {
     meetingRecoveryDraft = snapshot;
     if (!meetingReview || !meetingTranscript) return;
-    onMeetingRecoveryChange({
+    const review = meetingReview;
+    const transcript = meetingTranscript;
+    untrack(() => onMeetingRecoveryChange({
       job_id: job.id,
-      review: { review: meetingReview, transcript: meetingTranscript },
+      path: job.path,
+      review: { review, transcript },
       editor_draft: snapshot.drafts,
       proposal: meetingProposal,
-    });
+    }));
   }
 
   async function detachCurrentMeetingAudio(token: string): Promise<void> {

@@ -46,6 +46,7 @@ export interface UpdateRecoveryFile {
 
 export interface UpdateRecoveryMeeting {
   job_id: string;
+  path: string;
   review: MeetingReviewState;
   editor_draft: MeetingDraftState;
   proposal: ProposalState | null;
@@ -280,7 +281,9 @@ function normalizeMeeting(value: unknown): UpdateRecoveryMeeting | null {
   };
   const jobId = stringValue(source.job_id, UPDATE_RECOVERY_LIMITS.maxIdLength, false);
   if (jobId === null) return null;
-  return { job_id: jobId, review, editor_draft, proposal: normalizeProposalState(source.proposal) };
+  const path = stringValue(source.path, UPDATE_RECOVERY_LIMITS.maxPathLength, false)
+    ?? `Meeting ${jobId}`;
+  return { job_id: jobId, path, review, editor_draft, proposal: normalizeProposalState(source.proposal) };
 }
 
 function normalizeFile(value: unknown): UpdateRecoveryFile | null {
