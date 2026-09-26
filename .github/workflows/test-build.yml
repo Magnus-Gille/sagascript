@@ -224,6 +224,43 @@ jobs:
             "$RUNNER_TEMP/pianissimo-signed-smoke.json"
           rm "$HOME/Library/Application Support/Sagascript/Models/pianissimo-sv-q8-melfix.gguf"
 
+      - name: Gate real signed self-upgrade in an isolated app
+        if: inputs.label == 'issue-255-updater-smoke'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SAGASCRIPT_UPDATER_PUBKEY: ${{ vars.SAGASCRIPT_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
+          : "${SAGASCRIPT_UPDATER_PUBKEY:?SAGASCRIPT_UPDATER_PUBKEY variable is required}"
+          : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
+          [[ ! -e /Applications/Sagascript.app ]] || {
+            echo 'Hosted runner has an installed Sagascript; refusing smoke test' >&2
+            exit 1
+          }
+          npx tauri build --ci --target aarch64-apple-darwin --bundles app \
+            --features updater-smoke-test \
+            --config scripts/tauri-ci-prebuilt.json \
+            --config scripts/tauri-pianissimo-bundle.json \
+            --config scripts/tauri-updater-smoke-old.json
+          source_app=src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app
+          test_dir="$RUNNER_TEMP/sagascript-signed-updater-smoke"
+          mkdir -p "$test_dir"
+          ditto "$source_app" "$test_dir/Sagascript.app"
+          codesign --verify --deep --strict "$test_dir/Sagascript.app"
+          npx tauri build --ci --target aarch64-apple-darwin --bundles app \
+            --config scripts/tauri-ci-prebuilt.json \
+            --config scripts/tauri-pianissimo-bundle.json \
+            --config scripts/tauri-updater-smoke-new.json
+          codesign --verify --deep --strict "$source_app"
+          archive="$test_dir/Sagascript.app.tar.gz"
+          tar -czf "$archive" -C "$(dirname "$source_app")" "$(basename "$source_app")"
+          npx tauri signer sign "$archive"
+          [[ -s "$archive" && -s "$archive.sig" ]]
+          node scripts/smoke-signed-updater.mjs \
+            "$test_dir/Sagascript.app" "$archive" "$archive.sig" 1.3.3 1.3.4
+
       - name: Upload macOS test artifacts (no GitHub Release is created)
         uses: actions/upload-artifact@v4
         with:
