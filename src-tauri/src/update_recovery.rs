@@ -294,10 +294,19 @@ fn ensure_snapshot_size(size: usize) -> Result<(), RecoveryError> {
 fn ensure_private_parent(parent: &Path) -> Result<(), RecoveryError> {
     let mut current = PathBuf::new();
     for component in parent.components() {
-        if component == Component::ParentDir {
-            return Err(RecoveryError::InvalidPath(parent.to_path_buf()));
+        match component {
+            // A Windows drive or UNC prefix is syntax, not a directory entry.
+            // Inspecting `\\?\C:` on its own fails with ERROR_INVALID_FUNCTION;
+            // the following root component makes it a valid path to inspect.
+            Component::Prefix(prefix) => {
+                current.push(prefix.as_os_str());
+                continue;
+            }
+            Component::ParentDir => {
+                return Err(RecoveryError::InvalidPath(parent.to_path_buf()));
+            }
+            component => current.push(component.as_os_str()),
         }
-        current.push(component.as_os_str());
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(RecoveryError::PathContainsSymlink(current));
@@ -336,10 +345,18 @@ fn ensure_private_parent(parent: &Path) -> Result<(), RecoveryError> {
 fn reject_symlink_components(parent: &Path) -> Result<(), RecoveryError> {
     let mut current = PathBuf::new();
     for component in parent.components() {
-        if component == Component::ParentDir {
-            return Err(RecoveryError::InvalidPath(parent.to_path_buf()));
+        match component {
+            // Preserve the prefix while assembling the path, but do not ask
+            // the filesystem for metadata until the root completes it.
+            Component::Prefix(prefix) => {
+                current.push(prefix.as_os_str());
+                continue;
+            }
+            Component::ParentDir => {
+                return Err(RecoveryError::InvalidPath(parent.to_path_buf()));
+            }
+            component => current.push(component.as_os_str()),
         }
-        current.push(component.as_os_str());
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(RecoveryError::PathContainsSymlink(current));
@@ -528,6 +545,23 @@ mod tests {
 
         let error = load(&path).unwrap_err();
         assert!(matches!(error, RecoveryError::Corrupt { .. }));
+        remove_test_directory(&directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn canonical_windows_prefix_is_preserved_until_root_is_added() {
+        let directory = test_directory("windows-prefix");
+        assert!(matches!(
+            directory.components().next(),
+            Some(Component::Prefix(_))
+        ));
+
+        // Loading corrupt data reaches JSON parsing only if path validation
+        // accepts the canonicalized drive/UNC prefix and root.
+        let path = directory.join("snapshot.json");
+        fs::write(&path, b"{not json").unwrap();
+        assert!(matches!(load(&path), Err(RecoveryError::Corrupt { .. })));
         remove_test_directory(&directory);
     }
 
