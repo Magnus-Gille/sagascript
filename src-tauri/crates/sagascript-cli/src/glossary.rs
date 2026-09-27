@@ -5,8 +5,10 @@ use clap::{Args, Subcommand};
 use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings;
-use sagascript_core::settings::Language;
+use sagascript_core::settings::{FileModel, Language};
 use sagascript_core::transcription::model;
+use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
+use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::{
     suggest_glossary_candidates, Glossary, GlossarySuggestion, GlossarySuggestionKind,
     WhisperBackend,
@@ -22,48 +24,42 @@ pub struct GlossaryArgs {
 
 #[derive(Subcommand)]
 pub enum GlossaryAction {
-    /// Print the external personal-dictionary file path. The global file is
-    /// legacy storage and supplies hint terms; use `--profile ID` for aliases.
+    /// Print a profile's personal-dictionary path (default profile if omitted).
     Path {
-        /// Print this profile's dictionary path instead of the global path
+        /// Choose a profile instead of the default profile
         #[arg(long)]
         profile: Option<String>,
     },
-    /// List canonical terms and their explicit aliases. The legacy global
-    /// dictionary is retained and displayed, but its aliases are hint-only;
-    /// deterministic replacement requires `--profile ID`.
+    /// List the selected profile's canonical terms and aliases.
     List {
         /// Show entries saved only for this dictation profile
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Add a term or merge aliases into an existing term. Global aliases are
-    /// retained for compatibility but are hint-only at transcription time.
+    /// Add a term or merge aliases into a profile dictionary.
     Add {
         /// Preferred spelling written to the transcript
         term: String,
         /// Exact mishearing to replace (repeat for more aliases)
         #[arg(long = "alias", value_name = "TEXT")]
         aliases: Vec<String>,
-        /// Save to this dictation profile instead of the legacy global dictionary
+        /// Choose a profile instead of the default profile
         #[arg(long)]
         profile: Option<String>,
     },
     /// Remove a canonical term and all of its aliases from the selected scope
     Remove {
         term: String,
-        /// Remove from this dictation profile instead of the legacy global dictionary
+        /// Choose a profile instead of the default profile
         #[arg(long)]
         profile: Option<String>,
     },
-    /// Remove every entry from the selected personal dictionary. Clearing the
-    /// global dictionary is optional migration cleanup; it is not required to
-    /// disable its aliases.
+    /// Remove every entry from the selected profile dictionary.
     Clear {
         /// Confirm destructive removal of the selected dictionary
         #[arg(long)]
         yes: bool,
-        /// Clear this profile instead of the legacy global dictionary
+        /// Choose a profile instead of the default profile
         #[arg(long)]
         profile: Option<String>,
     },
@@ -74,9 +70,9 @@ pub enum GlossaryAction {
         /// UTF-8 text file containing the final corrected transcript
         #[arg(long, value_name = "FILE")]
         corrected: PathBuf,
-        /// Dictation profile that owns learned entries
+        /// Dictation profile that owns learned entries (default profile if omitted)
         #[arg(long)]
-        profile: String,
+        profile: Option<String>,
         /// Emit a stable machine-readable result
         #[arg(long)]
         json: bool,
@@ -96,21 +92,15 @@ pub fn run(args: GlossaryArgs) -> Result<(), DictationError> {
         GlossaryAction::Remove { term, profile } => remove(&term, profile.as_deref()),
         GlossaryAction::Clear { yes, profile } => clear(yes, profile.as_deref()),
         GlossaryAction::Suggest { heard, corrected, profile, json, apply } => {
-            suggest(&heard, &corrected, &profile, json, apply)
+            suggest(&heard, &corrected, profile.as_deref(), json, apply)
         }
     }
 }
 
 fn path(profile: Option<&str>) -> Result<(), DictationError> {
-    let path = match profile {
-        Some(profile) => {
-            let stored = settings::store::load();
-            validate_profile(&stored, profile)?;
-            settings::store::profile_glossary_path(profile)
-                .map_err(DictationError::SettingsError)?
-        }
-        None => settings::store::global_glossary_path(),
-    };
+    let stored = settings::store::load();
+    let profile = resolved_profile_id(&stored, profile)?;
+    let path = settings::store::profile_glossary_path(&profile).map_err(DictationError::SettingsError)?;
     println!("{}", path.display());
     Ok(())
 }
@@ -135,13 +125,22 @@ fn add(term: &str, aliases: &[String], profile: Option<&str>) -> Result<(), Dict
         .iter()
         .map(|alias| validate_component("alias", alias))
         .collect::<Result<Vec<_>, _>>()?;
-    if let Some(profile) = profile {
-        validate_learning_profile(&settings::store::load(), profile)?;
+    let current = settings::store::load();
+    let profile_id = resolved_profile_id(&current, profile)?;
+    if profile.is_some() {
+        validate_profile(&current, &profile_id)?;
+    }
+    if !aliases.is_empty() {
+        validate_learning_profile(&current, &profile_id)?;
     }
 
     settings::store::try_update(|stored| {
-        if let Some(profile) = profile {
-            validate_learning_profile(stored, profile).map_err(|error| error.to_string())?;
+        let profile_id = resolved_profile_id(stored, profile).map_err(|error| error.to_string())?;
+        if profile.is_some() {
+            validate_profile(stored, &profile_id).map_err(|error| error.to_string())?;
+        }
+        if !aliases.is_empty() {
+            validate_learning_profile(stored, &profile_id).map_err(|error| error.to_string())?;
         }
         let source = glossary_source_mut(stored, profile)?;
         let mut glossary = Glossary::parse(source);
@@ -196,7 +195,7 @@ fn clear(confirmed: bool, profile: Option<&str>) -> Result<(), DictationError> {
 fn suggest(
     heard_path: &PathBuf,
     corrected_path: &PathBuf,
-    profile: &str,
+    profile: Option<&str>,
     json: bool,
     apply: bool,
 ) -> Result<(), DictationError> {
@@ -208,9 +207,10 @@ fn suggest(
     })?;
 
     let stored = settings::store::load();
-    validate_learning_profile(&stored, profile)?;
-    let glossary = effective_glossary(&stored, Some(profile), None, None)?;
-    let heard = load_training_input(heard_path, &stored, profile, &glossary)?;
+    let profile_id = resolved_profile_id(&stored, profile)?;
+    validate_learning_profile(&stored, &profile_id)?;
+    let glossary = effective_glossary(&stored, Some(&profile_id), None, None)?;
+    let heard = load_training_input(heard_path, &stored, &profile_id, &glossary)?;
     let suggestions = suggest_glossary_candidates(&heard, &corrected, &glossary);
 
     if apply {
@@ -221,8 +221,8 @@ fn suggest(
         }
         let reviewed = suggestions.clone();
         settings::store::try_update(|latest| {
-            validate_learning_profile(latest, profile).map_err(|error| error.to_string())?;
-            let effective = effective_glossary(latest, Some(profile), None, None)
+            validate_learning_profile(latest, &profile_id).map_err(|error| error.to_string())?;
+            let effective = effective_glossary(latest, Some(&profile_id), None, None)
                 .map_err(|error| error.to_string())?;
             let current = suggest_glossary_candidates(&heard, &corrected, &effective);
             if current != reviewed {
@@ -231,7 +231,7 @@ fn suggest(
                 );
             }
 
-            let source = latest.profile_glossaries.entry(profile.to_string()).or_default();
+            let source = latest.profile_glossaries.entry(profile_id.clone()).or_default();
             let mut scoped = Glossary::parse(source);
             apply_candidates(&mut scoped, &reviewed);
             *source = scoped.render();
@@ -244,7 +244,7 @@ fn suggest(
         println!(
             "{}",
             serde_json::json!({
-                "profile": profile,
+                "profile": profile_id,
                 "applied": apply,
                 "suggestions": suggestions,
             })
@@ -291,13 +291,20 @@ fn load_training_input(
         .into_iter()
         .find(|profile| profile.id == profile_id)
         .expect("validated profile must still exist");
-    let model = stored.effective_model_for(profile.language);
-    if !model::is_model_downloaded(model) {
-        return Err(DictationError::TranscriptionFailed(format!(
-            "Model '{}' is not downloaded. Run: sagascript download-model {}",
-            model.display_name(),
-            model_id_string(model)
-        )));
+    let choice = stored.dictation_model_for_profile(profile_id).map_err(DictationError::SettingsError)?;
+    match choice {
+        FileModel::Whisper(model) if !model::is_model_downloaded(model) => {
+            return Err(DictationError::TranscriptionFailed(format!(
+                "Model '{}' is not downloaded. Run: sagascript download-model {}",
+                model.display_name(), model_id_string(model)
+            )));
+        }
+        FileModel::PianissimoOriginal if !pianissimo_model::is_downloaded() => {
+            return Err(DictationError::TranscriptionFailed(
+                "Pianissimo Q8 is not downloaded. Run: sagascript download-model pianissimo-sv".into()
+            ));
+        }
+        _ => {}
     }
 
     let audio = decode_audio_file(path)?;
@@ -307,15 +314,20 @@ fn load_training_input(
             path.display()
         )));
     }
-    eprintln!("Transcribing training input locally with {}...", model.display_name());
-    let backend = WhisperBackend::new();
-    backend.load_model(model)?;
-    let raw = backend.transcribe_sync_with_progress_and_prompt(
-        &audio,
-        profile.language,
-        glossary.decoder_prompt().as_deref(),
-        |_| {},
-    )?;
+    let raw = match choice {
+        FileModel::Whisper(model) => {
+            eprintln!("Transcribing training input locally with {}...", model.display_name());
+            let backend = WhisperBackend::new();
+            backend.load_model(model)?;
+            backend.transcribe_sync_with_progress_and_prompt(
+                &audio, profile.language, glossary.decoder_prompt().as_deref(), |_| {},
+            )?
+        }
+        FileModel::PianissimoOriginal => {
+            eprintln!("Transcribing training input locally with Pianissimo Q8...");
+            PianissimoBackend::start()?.transcribe(&audio, |_| {})?.text
+        }
+    };
     Ok(glossary.correct_text(&raw).0)
 }
 
@@ -336,31 +348,31 @@ fn glossary_source<'a>(
     stored: &'a settings::Settings,
     profile: Option<&str>,
 ) -> Result<&'a str, DictationError> {
-    match profile {
-        Some(profile) => {
-            if let Some(source) = stored.profile_glossaries.get(profile) {
-                return Ok(source);
-            }
-            validate_profile(stored, profile)?;
-            Ok("")
-        }
-        None => Ok(&stored.initial_prompt),
-    }
+    let id = resolved_profile_id(stored, profile)?;
+    Ok(stored.profile_glossaries.get(&id).map(String::as_str).unwrap_or(""))
 }
 
 fn glossary_source_mut<'a>(
     stored: &'a mut settings::Settings,
     profile: Option<&str>,
 ) -> Result<&'a mut String, String> {
-    match profile {
-        Some(profile) => {
-            if !stored.profile_glossaries.contains_key(profile) {
-                validate_profile(stored, profile).map_err(|error| error.to_string())?;
-            }
-            Ok(stored.profile_glossaries.entry(profile.to_string()).or_default())
+    let id = resolved_profile_id(stored, profile).map_err(|error| error.to_string())?;
+    Ok(stored.profile_glossaries.entry(id).or_default())
+}
+
+fn resolved_profile_id(stored: &settings::Settings, profile: Option<&str>) -> Result<String, DictationError> {
+    if let Some(id) = profile {
+        if stored.profile_glossaries.contains_key(id) {
+            return Ok(id.to_string());
         }
-        None => Ok(&mut stored.initial_prompt),
     }
+    let id = profile.map(str::to_string).unwrap_or_else(|| {
+        let profiles = stored.resolved_hotkey_profiles();
+        profiles.iter().find(|candidate| candidate.id == "default")
+            .unwrap_or(&profiles[0]).id.clone()
+    });
+    validate_profile(stored, &id)?;
+    Ok(id)
 }
 
 fn validate_profile(stored: &settings::Settings, profile: &str) -> Result<(), DictationError> {
@@ -440,13 +452,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_global_alias_remains_stored_but_is_hint_only() {
-        let stored = settings::Settings {
+    fn legacy_global_alias_migrates_as_hint_to_default_profile() {
+        let mut stored = settings::Settings {
             initial_prompt: "merge = merch".to_string(),
             ..Default::default()
         };
-
-        assert_eq!(glossary_source(&stored, None).unwrap(), "merge = merch");
+        stored.materialize_profile_models();
+        stored.migrate_global_glossary_to_profiles();
+        assert_eq!(stored.initial_prompt, "merge = merch"); // rollback source is retained
+        assert_eq!(glossary_source(&stored, None).unwrap(), "merge");
         let effective = effective_glossary(&stored, None, None, None).unwrap();
         assert_eq!(effective.correct_text("merch").0, "merch");
         assert!(effective.decoder_prompt().is_some());

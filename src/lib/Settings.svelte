@@ -20,19 +20,16 @@
     getLastTranscription,
     setLanguage,
     setHotkeyProfiles,
+    setProfileModel,
     setAutoPaste,
-    setInitialPrompt,
     setProfileGlossary,
     setShowOverlay,
-    setWhisperModel,
     setFileTranscriptionModel,
-    setPianissimoDictation,
-    getDictationModelInfo,
+    getProfileModelInfo,
     setBeamSize,
     setTemperatureFallback,
     setVadEnabled,
     getBuildInfo,
-    getModelInfo,
     getFileModelOptions,
     getEffectiveModelInfo,
     downloadModel,
@@ -82,8 +79,6 @@
 
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);
-  let models: WhisperModel[] = $state([]);
-  let pianissimoDictationModel: WhisperModel | null = $state(null);
   let fileModelOptions: WhisperModel[] = $state([]);
   let fileAutoModel: WhisperModel | null = $state(null);
   let fileModelError = $state("");
@@ -94,6 +89,7 @@
   let downloadingName: string = $state("");
   let downloadProgress: number = $state(0);
   let profileModels: Record<string, WhisperModel> = $state({});
+  let profileModelOptions: Record<string, WhisperModel[]> = $state({});
   let profileModelErrors: Record<string, string> = $state({});
   let profileModelRefresh = 0;
 
@@ -124,8 +120,6 @@
   }
 
   // Model selection state
-  let selecting: boolean = $state(false);
-  let modelError: string = $state("");
 
   let accessibilityGranted: boolean = $state(true); // assume true; checked on mount for macOS
   let accessibilityChecking: boolean = $state(false);
@@ -589,12 +583,8 @@
     document.getElementById(`file-tab-${selectedFileId}`)?.focus();
   }
 
-  // The global dictionary is retained as a decoder hint source. Explicit
-  // language profiles are the only selectable sources for deterministic
-  // glossary replacements.
-  // Empty string is the UI-only global sentinel; profile IDs may legally be
-  // "global", so that name cannot identify the global scope.
-  let glossaryScopeId: string = $state("");
+  // Every editable dictionary belongs to a named dictation profile.
+  let glossaryScopeId: string = $state("default");
   let glossaryDraft: string = $state("");
   let glossaryDraftInitialized = false;
   let glossaryScopeGeneration = $state(0);
@@ -646,7 +636,7 @@
   });
 
   function explicitProfiles(source: Settings | null = settings): HotkeyProfile[] {
-    return source?.hotkey_profiles.filter((profile) => profile.language !== "auto") ?? [];
+    return source?.hotkey_profiles ?? [];
   }
 
   function profileForId(profileId: string | null, source: Settings | null = settings): HotkeyProfile | null {
@@ -655,16 +645,14 @@
   }
 
   function glossarySourceForScope(scopeId: string, source: Settings | null = settings): string {
-    if (!source || scopeId === "") return source?.initial_prompt ?? "";
-    return source.profile_glossaries[scopeId] ?? "";
+    return source?.profile_glossaries[scopeId] ?? "";
   }
 
   function isValidGlossaryScope(scopeId: string, source: Settings | null = settings): boolean {
-    return scopeId === "" || profileForId(scopeId, source) !== null;
+    return profileForId(scopeId, source) !== null;
   }
 
   function glossaryScopeLabel(scopeId: string, source: Settings | null = settings): string {
-    if (scopeId === "") return "Global hints";
     return profileForId(scopeId, source)?.name ?? scopeId;
   }
 
@@ -696,11 +684,14 @@
   }
 
   function selectedTranscribeProfile(): HotkeyProfile | null {
-    return profileForId(transcribeProfileId);
+    return profileForId(transcribeProfileId)
+      ?? settings?.hotkey_profiles.find((profile) => profile.id === "default")
+      ?? settings?.hotkey_profiles[0]
+      ?? null;
   }
 
   function transcribeLanguage(): Language {
-    return selectedTranscribeProfile()?.language ?? settings?.language ?? "auto";
+    return selectedTranscribeProfile()?.language ?? "auto";
   }
 
   $effect(() => {
@@ -765,8 +756,7 @@
     }
     lastStoredGlossarySources[currentScope] = currentStored;
     if (!isValidGlossaryScope(currentScope, currentSettings)) {
-      const removedProfileHasDraft = currentScope !== ""
-        && (
+       const removedProfileHasDraft = (
           glossaryEditBaseline?.scopeId === currentScope
           || (glossaryDraftInitialized && glossaryDraft !== (previousStored ?? currentStored))
         );
@@ -777,76 +767,20 @@
           glossaryConflictScopeId === currentScope && settingsError.startsWith(dictionaryConflictPrefix),
         );
       }
-      glossaryScopeGeneration += 1;
-      glossaryScopeId = "";
-      glossaryDraft = currentSettings.initial_prompt;
+       glossaryScopeGeneration += 1;
+       glossaryScopeId = currentSettings.hotkey_profiles[0]?.id ?? "default";
+       glossaryDraft = glossarySourceForScope(glossaryScopeId, currentSettings);
       glossaryDraftGeneration += 1;
       glossaryEditBaseline = null;
       glossaryConflictScopeId = null;
     }
-    if (currentTranscribeProfile && !profileForId(currentTranscribeProfile, currentSettings)) {
-      transcribeProfileId = null;
+    if (!currentTranscribeProfile || !profileForId(currentTranscribeProfile, currentSettings)) {
+      transcribeProfileId = currentSettings.hotkey_profiles.find((profile) => profile.id === "default")?.id
+        ?? currentSettings.hotkey_profiles[0]?.id ?? null;
     }
   });
 
   let dictationModelSaving = $state(false);
-
-  async function refreshPianissimoDictationModel(): Promise<void> {
-    try {
-      const options = await getFileModelOptions("sv");
-      pianissimoDictationModel = options.find((model) => model.id === "pianissimo-sv") ?? null;
-    } catch (error) {
-      pianissimoDictationModel = null;
-      console.warn("Could not check Pianissimo availability", error);
-    }
-  }
-
-  async function selectDictationModel(model: WhisperModel): Promise<void> {
-    if (!settings || selecting || dictationModelSaving) return;
-    if (model.id === "pianissimo-sv" && settings.pianissimo_dictation && pianissimoDictationModel?.downloaded) return;
-
-    if (model.id !== "pianissimo-sv" && settings.pianissimo_dictation) {
-      dictationModelSaving = true;
-      settingsError = "";
-      try {
-        await setPianissimoDictation(false);
-        settings = await getSettings();
-      } catch (error: any) {
-        settingsError = typeof error === "string" ? error : error?.message || "Could not change dictation model.";
-        dictationModelSaving = false;
-        return;
-      }
-      dictationModelSaving = false;
-    }
-
-    if (model.id !== "pianissimo-sv") {
-      await selectModel(model);
-      return;
-    }
-
-    dictationModelSaving = true;
-    modelError = "";
-    settingsError = "";
-    try {
-      if (!pianissimoDictationModel?.downloaded) {
-        downloading = model.id;
-        downloadingName = model.display_name;
-        downloadProgress = 0;
-        await downloadPianissimoModel();
-      }
-      await setPianissimoDictation(true);
-      settings = await getSettings();
-      models = await getModelInfo();
-      await refreshPianissimoDictationModel();
-      await refreshProfileModels(settings.hotkey_profiles);
-    } catch (error: any) {
-      modelError = typeof error === "string" ? error : error?.message || "Model selection failed.";
-    } finally {
-      downloading = null;
-      downloadProgress = 0;
-      dictationModelSaving = false;
-    }
-  }
 
   async function refreshProfileModels(profiles: HotkeyProfile[]) {
     const generation = ++profileModelRefresh;
@@ -854,11 +788,15 @@
       const entries = await Promise.all(
         profiles.map(async (profile) => [
           profile.id,
-          await getDictationModelInfo(profile.language),
+          profile.id === draftProfileId
+            ? await getEffectiveModelInfo(profile.language)
+            : await getProfileModelInfo(profile.id),
+          await getFileModelOptions(profile.language),
         ] as const),
       );
       if (generation === profileModelRefresh) {
-        profileModels = Object.fromEntries(entries);
+        profileModels = Object.fromEntries(entries.map(([id, model]) => [id, model]));
+        profileModelOptions = Object.fromEntries(entries.map(([id, , options]) => [id, options]));
       }
     } catch (e: any) {
       if (generation === profileModelRefresh) {
@@ -905,8 +843,6 @@
       // The event can arrive before the download command settles. Its caller
       // owns the busy flag through its finally block so a second operation
       // cannot start during the remaining selection or refresh work.
-      models = await getModelInfo();
-      await refreshPianissimoDictationModel();
       if (settings) await refreshProfileModels(settings.hotkey_profiles);
     });
 
@@ -927,8 +863,6 @@
       const nextState = event.payload;
       if (nextState === "settings_reloaded") {
         settings = await getSettings();
-        models = await getModelInfo();
-        await refreshPianissimoDictationModel();
         await refreshProfileModels(settings.hotkey_profiles);
         return;
       }
@@ -983,8 +917,6 @@
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
         }
-        models = await getModelInfo();
-        await refreshPianissimoDictationModel();
         supportedFormats = await getSupportedFormats();
         const status = await hotkeyStatus();
         hotkeyStatusOk = status.ok;
@@ -1063,7 +995,6 @@
         if (source.trim()) blockedLanguageChange = { language: value, source };
         else settingsError = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
       }
-      if (ok) models = await getModelInfo();
     } catch (error: any) {
       settingsError += `${settingsError ? " " : ""}Could not refresh language settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
     } finally {
@@ -1101,7 +1032,6 @@
     } finally {
       try {
         settings = await getSettings();
-        models = await getModelInfo();
         await refreshProfileModels(settings.hotkey_profiles);
       } catch (error: any) {
         settingsError += `${settingsError ? " " : ""}Could not refresh settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
@@ -1238,9 +1168,7 @@
       glossarySaving = true;
       settingsError = "";
       try {
-        const saved = await applySetting(() => scopeId === ""
-          ? setInitialPrompt(value, expectedSource)
-          : setProfileGlossary(scopeId, value, expectedSource), saveError, false);
+        const saved = await applySetting(() => setProfileGlossary(scopeId, value, expectedSource), saveError, false);
         const conflict = saveError.value.startsWith(dictionaryConflictPrefix);
         let requestIsCurrent = isCurrentGlossaryRequest(request);
         if (conflict) {
@@ -1451,30 +1379,6 @@
     await applySetting(() => setVadEnabled(next));
   }
 
-  async function selectModel(model: WhisperModel) {
-    if (selecting) return;
-    selecting = true;
-    modelError = "";
-    try {
-      // The backend verifies Ready models and replaces only artifacts whose
-      // bytes provably fail the immutable integrity manifest.
-      downloading = model.id;
-      downloadingName = model.display_name;
-      downloadProgress = 0;
-      await downloadModel(model.id);
-      // model_ready event will refresh the list
-      await setWhisperModel(model.id);
-      settings = await getSettings();
-      models = await getModelInfo();
-    } catch (e: any) {
-      modelError = typeof e === "string" ? e : e?.message || "Model selection failed.";
-    } finally {
-      downloading = null;
-      downloadProgress = 0;
-      selecting = false;
-    }
-  }
-
   async function downloadProfileModel(profile: HotkeyProfile) {
     const model = profileModels[profile.id];
     if (!model || model.downloaded || downloading !== null) return;
@@ -1486,7 +1390,6 @@
       if (model.id === "pianissimo-sv") await downloadPianissimoModel();
       else await downloadModel(model.id);
       await refreshProfileModels(settings?.hotkey_profiles ?? []);
-      models = await getModelInfo();
     } catch (e: any) {
       profileModelErrors = {
         ...profileModelErrors,
@@ -1498,8 +1401,26 @@
     }
   }
 
+  async function changeProfileModel(profile: HotkeyProfile, event: Event) {
+    if (!settings || dictationModelSaving) return;
+    const select = event.target as HTMLSelectElement;
+    const previous = settings.profile_models[profile.id] ?? "auto";
+    dictationModelSaving = true;
+    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
+    try {
+      await setProfileModel(profile.id, select.value);
+      settings = await getSettings();
+      await refreshProfileModels(settings.hotkey_profiles);
+    } catch (error: any) {
+      select.value = previous;
+      profileModelErrors = { ...profileModelErrors, [profile.id]: typeof error === "string" ? error : error?.message || "Could not change profile model." };
+    } finally {
+      dictationModelSaving = false;
+    }
+  }
+
   async function onTestRecord() {
-    if (updatePreparing || dictationModelSaving || selecting || downloading !== null) return;
+    if (updatePreparing || dictationModelSaving || downloading !== null) return;
     const action = dictateButtonAction(backendDictationState, testOwnsRecording);
     if (action === "blocked") return;
 
@@ -1539,7 +1460,7 @@
 
   function onTranscribeProfileChange(e: Event) {
     const nextProfileId = (e.target as HTMLSelectElement).value;
-    transcribeProfileId = profileForId(nextProfileId)?.id ?? null;
+    transcribeProfileId = profileForId(nextProfileId)?.id ?? selectedTranscribeProfile()?.id ?? null;
   }
 
   async function onPickFile() {
@@ -1815,73 +1736,10 @@
         </div>
       {/if}
       {#if activeTab === "dictate"}
-        <div class="field model-selection-field">
-          <div class="model-section-label">Dictation model · push-to-speak</div>
-          <div class="hotkey-hint model-selection-hint">
-            Whisper choices follow the default language ({languageLabel(settings.language)}). Pianissimo is experimental and applies to every Swedish dictation shortcut and recording test; other languages keep Whisper.
-          </div>
-          <div class="model-picker">
-            {#each models as model (model.id)}
-              <button
-                class="model-card"
-                class:active={!settings.pianissimo_dictation && model.active}
-                class:downloading={downloading === model.id}
-                onclick={() => selectDictationModel(model)}
-                disabled={downloading !== null || selecting || dictationModelSaving || backendDictationState !== "idle" || transcribing}
-              >
-                <div class="model-card-header">
-                  <span class="model-card-name">{model.display_name}</span>
-                  {#if !settings.pianissimo_dictation && model.active}
-                    <span class="model-badge active-badge">Active</span>
-                  {:else if model.downloaded}
-                    <span class="model-badge ready-badge">Ready</span>
-                  {:else}
-                    <span class="model-badge download-badge">Download · {model.size_mb} MB</span>
-                  {/if}
-                </div>
-                <div class="model-card-desc">{model.description}</div>
-                {#if downloading === model.id}
-                  <div class="progress-bar">
-                    <div class="progress-fill" style="width: {downloadProgress}%"></div>
-                  </div>
-                {/if}
-              </button>
-            {/each}
-            {#if pianissimoDictationModel}
-              <button
-                class="model-card experimental-model-card"
-                class:active={settings.pianissimo_dictation}
-                class:downloading={downloading === pianissimoDictationModel.id}
-                onclick={() => selectDictationModel(pianissimoDictationModel!)}
-                disabled={downloading !== null || selecting || dictationModelSaving || backendDictationState !== "idle" || transcribing}
-              >
-                <div class="model-card-header">
-                  <span class="model-card-name">Pianissimo Q8</span>
-                  {#if settings.pianissimo_dictation && !pianissimoDictationModel.downloaded}
-                    <span class="model-badge download-badge">Selected · Download required</span>
-                  {:else if settings.pianissimo_dictation}
-                    <span class="model-badge active-badge">Active</span>
-                  {:else if pianissimoDictationModel.downloaded}
-                    <span class="model-badge experimental-badge">Swedish · Experimental</span>
-                  {:else}
-                    <span class="model-badge experimental-badge">Swedish only · Experimental</span>
-                  {/if}
-                </div>
-                <div class="model-card-desc">Swedish profiles only · 714 MB download · local model. Add a Swedish shortcut below to use it. Dictionary replacements work; decoder vocabulary hints are unavailable.</div>
-                {#if downloading === pianissimoDictationModel.id}
-                  <div class="progress-bar">
-                    <div class="progress-fill" style="width: {downloadProgress}%"></div>
-                  </div>
-                {/if}
-              </button>
-            {/if}
-          </div>
-          {#if modelError}<div class="transcribe-error" role="alert">{modelError}</div>{/if}
-        </div>
         <div class="field profile-field">
           <div class="profile-heading">
-            <span class="field-label">Dictation shortcuts</span>
-            <button class="link-btn" onclick={addProfile}>+ Add language</button>
+            <span class="field-label">Dictation profiles · shortcut, language, model</span>
+            <button class="link-btn" onclick={addProfile}>+ Add profile</button>
           </div>
           {#each settings.hotkey_profiles as profile (profile.id)}
             <div class="profile-card">
@@ -1905,6 +1763,20 @@
                   <option value="auto">Auto-detect</option>
                 </select>
               </div>
+              <label class="profile-model-field">
+                Speech model for {profile.name}
+                <select
+                  aria-label={`Model for ${profile.name}`}
+                  value={settings.profile_models[profile.id] ?? "auto"}
+                  onchange={(event) => changeProfileModel(profile, event)}
+                  disabled={profile.id === draftProfileId || dictationModelSaving || backendDictationState !== "idle"}
+                >
+                  <option value="auto">Recommended for {languageLabel(profile.language)}</option>
+                  {#each profileModelOptions[profile.id] ?? [] as option (option.id)}
+                    <option value={option.id}>{option.display_name}</option>
+                  {/each}
+                </select>
+              </label>
               <div class="shortcut-grid">
                 {#each shortcutControls as shortcutControl}
                   <div class="shortcut-control">
@@ -1943,8 +1815,8 @@
                 <div class="profile-engine" class:missing={!profileModels[profile.id].downloaded}>
                   <span>
                     {profileModels[profile.id].downloaded
-                      ? "Speech engine ready"
-                      : `Speech engine required · ${profileModels[profile.id].size_mb} MB`}
+                      ? `${profileModels[profile.id].display_name} · Ready`
+                      : `${profileModels[profile.id].display_name} required · ${profileModels[profile.id].size_mb} MB`}
                   </span>
                   {#if !profileModels[profile.id].downloaded}
                     <button
@@ -2001,7 +1873,7 @@
             class:recording={testRecording}
             class:transcribing={testTranscribing}
             onclick={onTestRecord}
-            disabled={updatePreparing || dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" || downloading !== null || selecting || dictationModelSaving}
+            disabled={updatePreparing || dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" || downloading !== null || dictationModelSaving}
           >
             {#if testTranscribing}
               <div class="spinner small"></div>
@@ -2047,8 +1919,7 @@
         </button>
           <div class="field profile-field">
             <label for="transcribe-profile">Profile (optional)</label>
-            <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
-              <option value="">No profile (use selected language)</option>
+            <select id="transcribe-profile" value={selectedTranscribeProfile()?.id ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
               {#each explicitProfiles() as profile (profile.id)}
                 <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
               {/each}
@@ -2173,7 +2044,8 @@
 
       {#if activeTab === "settings"}
         <div class="field">
-          <label for="language">Language</label>
+          <label for="language">Default profile language</label>
+          <div class="hotkey-hint">This edits the default profile in Dictate. Other profiles keep their own language and model.</div>
           <select id="language" bind:this={languageSelectEl} value={settings.language} onchange={onLanguageChange} disabled={languageSaving || glossarySaving}>
             <option value="en">English</option>
             <option value="sv">Swedish</option>
@@ -2219,7 +2091,6 @@
             {/if}
           </div>
           <select id="dictionary-scope" value={glossaryScopeId} onchange={onGlossaryScopeChange} disabled={glossarySaving || languageSaving}>
-            <option value="">Global hints</option>
             {#each explicitProfiles() as profile (profile.id)}
               <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
             {/each}
@@ -2247,15 +2118,9 @@
               disabled={!glossaryHasUnsavedChanges() || glossarySaving || languageSaving}
             >Discard changes</button>
           </div>
-          {#if glossaryScopeId === ""}
-            <div class="hotkey-hint glossary-migration">
-              Global entries are hint-only and remain stored. To enable deterministic alias replacements, copy an entry into the explicit-language profile that should use it.
-            </div>
-          {:else}
-            <div class="hotkey-hint glossary-migration">
-              This explicit-language profile supplies deterministic aliases for its language. Save changes explicitly; switching scope never moves entries to another dictionary.
-            </div>
-          {/if}
+          <div class="hotkey-hint glossary-migration">
+            This profile owns its dictionary. Save changes explicitly; switching profiles never moves entries to another dictionary.
+          </div>
           {#if glossaryConflictScopeId === glossaryScopeId && settingsError.startsWith(dictionaryConflictPrefix)}
             <div class="hotkey-hint glossary-migration">
               This dictionary changed elsewhere. Your draft is preserved; copy it if needed, then switch scopes and reselect this scope to reload the saved value. If it still shows the old text, close and reopen Settings.
@@ -2585,6 +2450,20 @@
     flex: 1 1 48%;
   }
 
+  .profile-model-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .profile-model-field select {
+    width: 100%;
+    color: var(--text);
+  }
+
   .shortcut-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2746,122 +2625,6 @@
 
   .advanced-toggle {
     margin-top: 16px;
-  }
-
-  .model-section-label {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-muted);
-    margin-bottom: 10px;
-    font-weight: 600;
-  }
-
-  .model-picker {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .model-selection-field {
-    margin-bottom: 18px;
-  }
-
-  .model-selection-hint {
-    margin: -4px 0 10px;
-  }
-
-  .model-card {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 14px 16px;
-    background: var(--bg-secondary);
-    border: 2px solid var(--border);
-    border-radius: 10px;
-    cursor: pointer;
-    text-align: left;
-    transition: border-color 0.15s, background 0.15s;
-    width: 100%;
-  }
-
-  .model-card:hover:not(:disabled) {
-    border-color: var(--text-muted);
-  }
-
-  .model-card.active {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
-  }
-
-  .experimental-model-card.active {
-    border-color: #eab308;
-    background: color-mix(in srgb, #eab308 8%, var(--bg-secondary));
-  }
-
-  .model-card:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .model-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .model-card-name {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-  }
-
-  .model-card-desc {
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-
-  .model-badge {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-weight: 500;
-  }
-
-  .active-badge {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    color: var(--accent);
-  }
-
-  .ready-badge {
-    background: color-mix(in srgb, var(--success, #34c759) 15%, transparent);
-    color: var(--success, #34c759);
-  }
-
-  .download-badge {
-    background: var(--bg);
-    color: var(--text-muted);
-    border: 1px solid var(--border);
-  }
-
-  .experimental-badge {
-    background: color-mix(in srgb, #eab308 15%, transparent);
-    color: #a16207;
-  }
-
-  .progress-bar {
-    height: 4px;
-    background: var(--border);
-    border-radius: 2px;
-    margin-top: 6px;
-    overflow: hidden;
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--accent);
-    border-radius: 2px;
-    transition: width 0.2s;
   }
 
   /* Download status bar (bottom of window, visible on all tabs) */

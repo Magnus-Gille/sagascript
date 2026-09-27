@@ -6,7 +6,7 @@ use std::{
 
 use fs2::FileExt;
 
-use crate::settings::Settings;
+use crate::settings::{FileModelPreference, Settings};
 
 const APP_IDENTIFIER: &str = "ai.gille.sagascript";
 const LEGACY_APP_IDENTIFIERS: &[&str] = &["com.sagascript.app"];
@@ -224,16 +224,16 @@ fn load_at_with_legacy_sources(
     // Existing settings are installed with atomic rename, so an ordinary read
     // needs no lock. Embedded dictionaries from older releases are the one
     // exception: migrate those under the writer lock before returning.
-    if path.exists() && !has_embedded_glossary_fields(path) {
+    if path.exists() && !has_embedded_glossary_fields(path) && !needs_profile_model_migration(path) {
         return load_from(path);
     }
     with_settings_lock(path, || {
         migrate_legacy_identifier_settings_locked(path, legacy_sources);
         let settings = load_from(path);
-        if has_embedded_glossary_fields(path) {
+        if has_embedded_glossary_fields(path) || needs_profile_model_migration(path) {
             if let Err(error) = save_to(path, &settings) {
                 tracing::warn!(
-                    "Failed to externalize personal dictionaries from {}: {error}",
+                    "Failed to migrate profile settings and dictionaries from {}: {error}",
                     path.display()
                 );
             }
@@ -256,6 +256,21 @@ pub fn load_from(path: &Path) -> Settings {
             match serde_json::from_str::<serde_json::Value>(&contents).and_then(|mut value| {
                 if let Some(map) = value.as_object_mut() {
                     canonicalize_legacy_keys(map);
+                    if let Some(models) = map.get_mut("profile_models") {
+                        if let Some(entries) = models.as_object_mut() {
+                            entries.retain(|id, model| {
+                                let valid = validate_profile_file_id(id).is_ok()
+                                    && model.as_str().is_some_and(|id| FileModelPreference::parse_id(id).is_ok());
+                                if !valid {
+                                    tracing::warn!("Ignoring invalid profile model setting");
+                                }
+                                valid
+                            });
+                        } else {
+                            tracing::warn!("Ignoring malformed profile model map");
+                            map.remove("profile_models");
+                        }
+                    }
                 }
                 serde_json::from_value(value)
             }) {
@@ -284,6 +299,8 @@ pub fn load_from(path: &Path) -> Settings {
         }
     });
     load_external_glossaries(path, &mut settings);
+    settings.materialize_profile_models();
+    settings.migrate_global_glossary_to_profiles();
     settings
 }
 
@@ -478,6 +495,29 @@ fn has_embedded_glossary_fields(path: &Path) -> bool {
         .and_then(|value| value.as_object().cloned())
         .is_some_and(|map| {
             map.contains_key("initial_prompt") || map.contains_key("profile_glossaries")
+        })
+}
+
+fn needs_profile_model_migration(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| serde_json::from_str::<serde_json::Value>(&contents).ok())
+        .and_then(|value| value.as_object().cloned())
+        .is_some_and(|map| {
+            if map.get("profile_glossary_migrated") != Some(&serde_json::Value::Bool(true)) {
+                return true;
+            }
+            let Some(profiles) = map.get("hotkey_profiles").and_then(serde_json::Value::as_array) else {
+                return true;
+            };
+            let Some(models) = map.get("profile_models").and_then(serde_json::Value::as_object) else {
+                return true;
+            };
+            profiles.is_empty() || profiles.iter().any(|profile| {
+                profile.get("id").and_then(serde_json::Value::as_str)
+                    .is_some_and(|id| models.get(id).and_then(serde_json::Value::as_str)
+                        .is_none_or(|model| FileModelPreference::parse_id(model).is_err()))
+            })
         })
 }
 
@@ -687,6 +727,50 @@ mod tests {
         let path = dir.join(SETTINGS_FILENAME);
         f(path);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_global_model_selection_migrates_to_each_profile_without_losing_settings() {
+        with_temp_settings(|path| {
+            fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","pianissimo_dictation":true,"auto_select_model":false,"whisper_model":"kb-whisper-small","hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"},{"id":"english","name":"English","shortcut":"Super+E","language":"en"}]}"#).unwrap();
+            let migrated = load_at_with_legacy_sources(&path, std::iter::empty());
+            assert_eq!(migrated.profile_models["default"], FileModelPreference::PianissimoOriginal);
+            assert_eq!(migrated.profile_models["english"], FileModelPreference::Auto);
+            assert_eq!(migrated.hotkey_profiles[0].shortcut, "Super+S");
+            let persisted: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(persisted["profile_models"]["default"], "pianissimo-sv");
+            let reloaded = load_from(&path);
+            assert_eq!(reloaded.profile_models, migrated.profile_models);
+        });
+    }
+
+    #[test]
+    fn global_glossary_migrates_once_to_each_profile_without_deleting_rollback_source() {
+        with_temp_settings(|path| {
+            fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","initial_prompt":"OpenRouter","hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"},{"id":"english","name":"English","shortcut":"Super+E","language":"en"}],"profile_glossaries":{"default":"merge = merch"}}"#).unwrap();
+            let migrated = load_at_with_legacy_sources(&path, std::iter::empty());
+            assert!(migrated.profile_glossary_migrated);
+            assert!(migrated.profile_glossaries["default"].contains("OpenRouter"));
+            assert!(migrated.profile_glossaries["english"].contains("OpenRouter"));
+            assert!(migrated.profile_glossaries["default"].contains("merge = merch"));
+            assert_eq!(fs::read_to_string(global_glossary_path_for_settings(&path)).unwrap(), "OpenRouter\n");
+            let reloaded = load_at_with_legacy_sources(&path, std::iter::empty());
+            assert_eq!(reloaded.profile_glossaries, migrated.profile_glossaries);
+            assert!(!reloaded.effective_glossary_source(Some("english")).contains("merge = merch"));
+        });
+    }
+
+    #[test]
+    fn invalid_profile_model_does_not_reset_language_hotkey_or_other_settings() {
+        with_temp_settings(|path| {
+            fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","profile_models":{"default":"not-a-model"}}"#).unwrap();
+            let loaded = load_at_with_legacy_sources(&path, std::iter::empty());
+            assert_eq!(loaded.default_profile().language, Language::Swedish);
+            assert_eq!(loaded.default_profile().shortcut, "Super+S");
+            assert_eq!(loaded.profile_models["default"], FileModelPreference::Auto);
+            let persisted: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(persisted["profile_models"]["default"], "auto");
+        });
     }
 
     #[test]
@@ -1499,7 +1583,7 @@ mod tests {
             assert_eq!(loaded.initial_prompt, "OpenRouter = open router");
             assert_eq!(
                 loaded.profile_glossaries.get("swedish").map(String::as_str),
-                Some("merge = merch")
+                Some("merge = merch\nOpenRouter")
             );
         });
     }

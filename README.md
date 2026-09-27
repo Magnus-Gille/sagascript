@@ -26,10 +26,10 @@ update.
 
 ## Experimental Pianissimo dictation
 
-In **Dictate**, enable **Use Pianissimo for Swedish dictation (experimental)**,
-then download its 714 MB model from a Swedish shortcut's speech-engine prompt.
-Swedish push-to-talk, toggle dictation and Swedish test recordings use Pianissimo;
-other languages retain Whisper. The file-transcription choice stays independent.
+In **Dictate**, select **Pianissimo Q8** for a Swedish profile, then download its
+714 MB model if prompted. Each profile owns its language, shortcut, dictionary,
+and model; another Swedish profile can keep Whisper. The file-transcription
+choice stays independent.
 The macOS package includes the native CPU runtime; no Python installation is needed.
 
 CLI equivalents:
@@ -37,15 +37,15 @@ CLI equivalents:
 ```bash
 sagascript download-model pianissimo-sv
 sagascript record --language sv --model pianissimo-sv
-sagascript config set pianissimo_dictation true
-# Restore Whisper for Swedish dictation:
-sagascript config set pianissimo_dictation false
+sagascript config profiles update default --language sv --model pianissimo-sv
+# Restore the Swedish recommended Whisper model for this profile:
+sagascript config profiles update default --model auto
 ```
 
 Pianissimo starts a new native process for each utterance. It supports dictionary
 replacements after transcription, but not Whisper decoder hints. Explicit
-`--hint`/`--hint-file` options are rejected with this model. File **Auto** continues
-to use the configured Whisper model; select Pianissimo explicitly for files.
+`--hint`/`--hint-file` options are rejected with this model. File **Auto** uses
+the language's recommended Whisper model; select Pianissimo explicitly for files.
 
 ## Building from source
 
@@ -106,12 +106,12 @@ sagascript config set language sv
 sagascript config get hotkey
 sagascript config path
 
-# Manage the external personal dictionary (global entries are hint-only)
+# Manage the default profile's external personal dictionary
 sagascript glossary path
 sagascript glossary add OpenRouter
 
 # Use one shortcut for English and another for Swedish
-sagascript config profiles create swedish --name Swedish --hotkey 'Option+Space' --language sv
+sagascript config profiles create swedish --name Swedish --hotkey 'Option+Space' --language sv --model kb-whisper-base
 sagascript config profiles list
 # Enable deterministic aliases only in the explicit-language profile
 sagascript glossary add OpenRouter --alias 'open router' --profile swedish

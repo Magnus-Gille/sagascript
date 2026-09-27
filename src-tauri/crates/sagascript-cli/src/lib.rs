@@ -1264,10 +1264,24 @@ mod tests {
                 } => {
                     assert_eq!(heard, PathBuf::from("heard.txt"));
                     assert_eq!(corrected, PathBuf::from("corrected.txt"));
-                    assert_eq!(profile, "swedish");
+                    assert_eq!(profile.as_deref(), Some("swedish"));
                     assert!(json);
                     assert!(!apply);
                 }
+                _ => panic!("expected glossary suggest"),
+            },
+            _ => panic!("expected Glossary"),
+        }
+    }
+
+    #[test]
+    fn parse_glossary_suggest_without_profile_uses_default_at_execution() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "glossary", "suggest", "heard.txt", "--corrected", "corrected.txt",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Glossary(args) => match args.action {
+                glossary::GlossaryAction::Suggest { profile, .. } => assert!(profile.is_none()),
                 _ => panic!("expected glossary suggest"),
             },
             _ => panic!("expected Glossary"),
@@ -1342,15 +1356,16 @@ mod tests {
     fn parse_config_profile_create() {
         let cli = Cli::try_parse_from([
             "sagascript", "config", "profiles", "create", "swedish",
-            "--name", "Swedish", "--hotkey", "Option+Space", "--language", "sv",
+            "--name", "Swedish", "--hotkey", "Option+Space", "--language", "sv", "--model", "pianissimo-sv",
         ]).unwrap();
         match cli.command.unwrap() {
             Command::Config(args) => match args.action {
-                config::ConfigAction::Profiles { action: config::ProfileAction::Create { id, name, hotkey, language, .. } } => {
+                config::ConfigAction::Profiles { action: config::ProfileAction::Create { id, name, hotkey, language, model, .. } } => {
                     assert_eq!(id, "swedish");
                     assert_eq!(name, "Swedish");
                     assert_eq!(hotkey.as_deref(), Some("Option+Space"));
                     assert_eq!(language, "sv");
+                    assert_eq!(model.as_deref(), Some("pianissimo-sv"));
                 }
                 _ => panic!("expected profile create"),
             },

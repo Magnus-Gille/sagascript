@@ -31,6 +31,8 @@ test("Settings presents build identity above the ordered navigation tabs", () =>
 });
 
 test("recording shortcuts use clear mode names and independent helpers", () => {
+  assert.match(content, />\+ Add profile<\/button>/);
+  assert.doesNotMatch(content, />\+ Add language<\/button>/);
   assert.match(content, /label: "Hold to record"/);
   assert.match(content, /label: "Press to start\/stop"/);
   assert.match(content, /Hold the shortcut while speaking\. Release to stop\./);
@@ -41,18 +43,15 @@ test("recording shortcuts use clear mode names and independent helpers", () => {
   assert.doesNotMatch(content, />Toggle</);
 });
 
-test("Dictate exposes the Swedish experimental model in its model picker", () => {
+test("Dictate offers a model per profile instead of a global dictation model picker", () => {
   const dictateStart = content.indexOf('{#if activeTab === "dictate"}');
   const dictateEnd = content.indexOf('{#if activeTab === "settings"}', dictateStart);
   assert.ok(dictateStart >= 0 && dictateEnd > dictateStart, "Dictate section is present");
   const dictateSource = content.slice(dictateStart, dictateEnd);
-  assert.match(dictateSource, /Dictation model · push-to-speak/);
-  assert.match(dictateSource, /Pianissimo Q8/);
-  assert.match(dictateSource, /Pianissimo is experimental and applies to every Swedish dictation shortcut/);
-  assert.match(dictateSource, /experimental-model-card/);
-  assert.doesNotMatch(dictateSource, /Use Pianissimo for Swedish dictation/);
-  assert.match(content, /selectDictationModel/);
-  assert.match(content, /setPianissimoDictation/);
+  assert.match(dictateSource, /Speech model for \{profile\.name\}/);
+  assert.match(dictateSource, /profileModelOptions\[profile\.id\]/);
+  assert.match(content, /getProfileModelInfo/);
+  assert.doesNotMatch(dictateSource, /Pianissimo is experimental and applies to every Swedish dictation shortcut/);
 });
 
 test("onboarding explains both recording modes", () => {

@@ -10,7 +10,7 @@ use crate::hotkey::HotkeyService;
 use crate::logging::LoggingService;
 use crate::logging::log_events;
 use crate::paste::PasteService;
-use sagascript_core::settings::{canonical_hotkey, HotkeyMode, HotkeyProfile, Settings};
+use sagascript_core::settings::{canonical_hotkey, FileModel, HotkeyMode, HotkeyProfile, Settings};
 
 /// Result of handling a hotkey-down event
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,7 +201,7 @@ impl AppController {
         self.active_hotkey_profile
             .as_ref()
             .map(|profile| profile.language)
-            .unwrap_or(self.settings.language)
+            .unwrap_or_else(|| self.settings.default_profile().language)
     }
 
     pub fn active_hotkey_profile(&self) -> Option<&HotkeyProfile> {
@@ -450,6 +450,13 @@ impl AppController {
             return Ok(false);
         }
 
+        let session_model = match self.settings.dictation_model_for_profile(&profile.id)
+            .map_err(DictationError::SettingsError)? {
+            FileModel::Whisper(model) => serde_json::to_value(model)
+                .map_err(|error| DictationError::SettingsError(error.to_string()))?,
+            FileModel::PianissimoOriginal => serde_json::Value::String("pianissimo-sv".into()),
+        };
+
         let work_lease = self
             .update_activity
             .begin_work()
@@ -471,7 +478,7 @@ impl AppController {
             "version": env!("CARGO_PKG_VERSION"),
             "git_hash": env!("GIT_HASH"),
             "language": profile.language,
-            "model": self.settings.effective_model_for(profile.language),
+            "model": session_model,
             "audio_ms": null,
             "phases_ms": {},
             "auto_paste": self.settings.auto_paste,
@@ -1448,6 +1455,17 @@ mod tests {
             Ok(true)
         ));
         assert_eq!(ctrl.state(), AppState::Recording);
+        ctrl.cancel_recording();
+    }
+
+    #[test]
+    fn recording_session_uses_selected_profiles_model_not_global_model() {
+        let mut ctrl = default_controller();
+        let profile = HotkeyProfile::legacy_default("Super+S".into(), sagascript_core::settings::Language::Swedish);
+        ctrl.settings_mut().hotkey_profiles = vec![profile.clone()];
+        ctrl.settings_mut().profile_models.insert("default".into(), sagascript_core::settings::FileModelPreference::PianissimoOriginal);
+        assert!(ctrl.start_recording_for_profile_with_capture(profile, |_| Ok(())).unwrap());
+        assert_eq!(ctrl.session_data.as_ref().unwrap()["model"], "pianissimo-sv");
         ctrl.cancel_recording();
     }
 

@@ -90,7 +90,7 @@ pub(crate) struct FileTranscriptionContext {
 }
 
 /// Freeze language, model and dictionary together before file decoding begins.
-/// A missing/Auto profile is rejected rather than silently borrowing aliases.
+/// A missing profile resolves the default profile; unknown IDs fail closed.
 pub(crate) fn file_transcription_context(
     settings: &Settings,
     profile_id: Option<&str>,
@@ -103,8 +103,10 @@ pub(crate) fn file_transcription_context(
             "Pianissimo Q8 supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".into(),
         ),
     };
-    let glossary =
-        Glossary::parse(&settings.effective_glossary_source_with_prompt(profile_id, prompt));
+    let default_id = settings.default_profile().id;
+    let glossary = Glossary::parse(&settings.effective_glossary_source_with_prompt(
+        Some(profile_id.unwrap_or(&default_id)), prompt,
+    ));
     let mut options = build_file_transcribe_options(settings, prompt.map(str::to_owned));
     options.prompt = glossary.decoder_prompt();
     Ok(FileTranscriptionContext { language, model, glossary, options })
@@ -121,7 +123,7 @@ pub(crate) fn file_transcription_language(settings: &Settings, profile_id: Optio
             .language;
         Ok(language)
     } else {
-        Ok(settings.language)
+        Ok(settings.default_profile().language)
     }
 }
 
@@ -285,14 +287,12 @@ mod glossary_options_tests {
             "merge OpenRouter"
         );
         assert_eq!(context.options.prompt, context.glossary.decoder_prompt());
-        for profile in [None, Some("english")] {
-            let context = file_transcription_context(&settings, profile, None).unwrap();
-            assert_eq!(context.language, Language::English);
-            assert_eq!(
-                apply_glossary("company merch".into(), &context.glossary),
-                "company merch"
-            );
-        }
+        let default = file_transcription_context(&settings, None, None).unwrap();
+        assert_eq!(default.language, Language::Swedish);
+        assert_eq!(apply_glossary("company merch".into(), &default.glossary), "company merge");
+        let english = file_transcription_context(&settings, Some("english"), None).unwrap();
+        assert_eq!(english.language, Language::English);
+        assert_eq!(apply_glossary("company merch".into(), &english.glossary), "company merch");
     }
 
     #[test]
@@ -314,15 +314,11 @@ mod glossary_options_tests {
     }
 
     #[test]
-    fn gui_file_rejects_unknown_and_auto_profile_before_io() {
+    fn gui_file_rejects_unknown_but_accepts_auto_profile_before_io() {
         let settings = scoped_file_settings();
         assert!(file_transcription_context(&settings, Some("missing"), None).is_err());
-        assert!(file_transcription_context(&settings, Some("automatic"), None).is_err());
-        let auto = Settings {
-            language: Language::Auto,
-            ..settings
-        };
-        let context = file_transcription_context(&auto, None, None).unwrap();
+        assert_eq!(file_transcription_context(&settings, Some("automatic"), None).unwrap().language, Language::Auto);
+        let context = file_transcription_context(&settings, Some("automatic"), None).unwrap();
         assert_eq!(context.language, Language::Auto);
         assert_eq!(apply_glossary("merch".into(), &context.glossary), "merch");
     }
@@ -428,7 +424,17 @@ pub async fn get_loaded_model(
     whisper: State<'_, SharedWhisper>,
 ) -> Result<LoadedModelInfo, String> {
     let ctrl = controller.lock().unwrap();
-    let effective = ctrl.settings().effective_model();
+    let chosen = ctrl.settings().dictation_model_for_profile(&ctrl.settings().default_profile().id)?;
+    if chosen == FileModel::PianissimoOriginal {
+        return Ok(LoadedModelInfo {
+            effective_model: "Pianissimo Q8".into(),
+            effective_model_id: "pianissimo-sv".into(),
+            loaded_model: None,
+            is_loaded: false,
+            is_downloaded: pianissimo_model::is_downloaded(),
+        });
+    }
+    let FileModel::Whisper(effective) = chosen else { unreachable!() };
     let loaded = whisper.loaded_model();
     Ok(LoadedModelInfo {
         effective_model: effective.display_name().to_string(),
@@ -470,7 +476,7 @@ fn set_language_for_controller(
 
 // Keep profile/dictionary validation ahead of all preset mutations.
 fn apply_language_selection(settings: &mut Settings, language: Language) -> Result<(), String> {
-    settings.set_legacy_language(language)?;
+    settings.set_default_profile_language(language)?;
     settings.whisper_model = WhisperModel::recommended(language);
     settings.auto_select_model = true;
     Ok(())
@@ -546,15 +552,10 @@ pub async fn set_whisper_model(
     controller: State<'_, SharedController>,
     model: WhisperModel,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
-        settings.whisper_model = model;
-        settings.auto_select_model = false;
-    })?;
-    let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().whisper_model = persisted.whisper_model;
-    ctrl.settings_mut().auto_select_model = persisted.auto_select_model;
-    info!("Model set to {:?}", model);
-    Ok(())
+    let id = serde_json::to_value(model).and_then(serde_json::from_value::<String>)
+        .map_err(|error| error.to_string())?;
+    let profile_id = controller.lock().unwrap().settings().default_profile().id;
+    set_profile_model(controller, profile_id, id).await
 }
 
 #[tauri::command]
@@ -562,14 +563,8 @@ pub async fn set_pianissimo_dictation(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
-    if enabled && !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
-        return Err("Pianissimo requires macOS 13 or later".into());
-    }
-    let persisted = sagascript_core::settings::store::update(|settings| {
-        settings.pianissimo_dictation = enabled;
-    })?;
-    controller.lock().unwrap().settings_mut().pianissimo_dictation = persisted.pianissimo_dictation;
-    Ok(())
+    let profile_id = controller.lock().unwrap().settings().default_profile().id;
+    set_profile_model(controller, profile_id, if enabled { "pianissimo-sv" } else { "auto" }.into()).await
 }
 
 #[tauri::command]
@@ -586,17 +581,40 @@ pub async fn set_file_transcription_model(
 }
 
 #[tauri::command]
+pub async fn set_profile_model(
+    controller: State<'_, SharedController>,
+    profile_id: String,
+    model_id: String,
+) -> Result<(), String> {
+    let preference = FileModelPreference::parse_id(&model_id)?;
+    if preference == FileModelPreference::PianissimoOriginal
+        && !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os()
+    {
+        return Err("Pianissimo requires macOS 13 or later".into());
+    }
+    let _recording_lease = acquire_hotkey_configuration(&controller)?;
+    let persisted = sagascript_core::settings::store::try_update(|settings| {
+        settings.set_profile_model(&profile_id, preference)
+    })?;
+    controller.lock().unwrap().update_settings(persisted);
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn set_auto_select_model(
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
-    let persisted = sagascript_core::settings::store::update(|settings| {
-        settings.auto_select_model = enabled;
-    })?;
-    let mut ctrl = controller.lock().unwrap();
-    ctrl.settings_mut().auto_select_model = persisted.auto_select_model;
-    info!("Auto-select model: {enabled}");
-    Ok(())
+    let (profile_id, model_id) = {
+        let ctrl = controller.lock().unwrap();
+        let settings = ctrl.settings();
+        let model_id = if enabled { "auto".into() } else {
+            serde_json::to_value(settings.whisper_model).and_then(serde_json::from_value::<String>)
+                .map_err(|error| error.to_string())?
+        };
+        (settings.default_profile().id, model_id)
+    };
+    set_profile_model(controller, profile_id, model_id).await
 }
 
 #[tauri::command]
@@ -999,13 +1017,21 @@ async fn stop_and_transcribe_impl(
             StopRecordingOutcome::Stopped(audio) => audio,
         };
         let language = ctrl.language();
-        let effective_model = ctrl.settings().effective_model_for(language);
         let profile_id = ctrl
             .active_hotkey_profile()
-            .map(|profile| profile.id.as_str());
-        let opts = build_transcribe_options_for_profile(ctrl.settings(), profile_id);
-        let glossary = Glossary::parse(&ctrl.settings().effective_glossary_source(profile_id));
-        (audio, language, effective_model, opts, glossary, ctrl.settings().uses_pianissimo_for_dictation(language))
+            .map(|profile| profile.id.as_str())
+            .unwrap_or("default")
+            .to_string();
+        let (effective_model, use_pianissimo) = match ctrl.settings().live_model_for_profile(&profile_id) {
+            Ok(choice) => choice,
+            Err(error) => {
+                let completion = ctrl.finish_transcription(Err(error.clone()));
+                return Err(completion.err().unwrap_or(error));
+            }
+        };
+        let opts = build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id));
+        let glossary = Glossary::parse(&ctrl.settings().effective_glossary_source(Some(&profile_id)));
+        (audio, language, effective_model, opts, glossary, use_pianissimo)
     };
 
     if audio.is_empty() {
@@ -1136,12 +1162,13 @@ pub async fn transcribe_training_file(
             .into_iter()
             .find(|profile| profile.id == profile_id)
             .expect("validated profile must exist");
+        let (effective_model, use_pianissimo) = ctrl.settings().live_model_for_profile(&profile_id)?;
         (
             profile.language,
-            ctrl.settings().effective_model_for(profile.language),
+            effective_model,
             build_transcribe_options_for_profile(ctrl.settings(), Some(&profile_id)),
             Glossary::parse(&ctrl.settings().effective_glossary_source(Some(&profile_id))),
-            ctrl.settings().uses_pianissimo_for_dictation(profile.language),
+            use_pianissimo,
         )
     };
 
@@ -1229,8 +1256,9 @@ pub async fn get_model_info(
     controller: State<'_, SharedController>,
 ) -> Result<Vec<ModelInfo>, String> {
     let ctrl = controller.lock().unwrap();
-    let language = ctrl.settings().language;
-    let effective = ctrl.settings().effective_model();
+    let profile = ctrl.settings().default_profile();
+    let language = profile.language;
+    let effective = ctrl.settings().dictation_model_for_profile(&profile.id)?;
     let models = WhisperModel::models_for_language(language);
 
     Ok(models
@@ -1243,7 +1271,7 @@ pub async fn get_model_info(
             description: m.description().to_string(),
             size_mb: m.size_mb(),
             downloaded: model::is_model_downloaded(*m),
-            active: *m == effective && !ctrl.settings().uses_pianissimo_for_dictation(language),
+            active: effective == FileModel::Whisper(*m),
         })
         .collect())
 }
@@ -1276,6 +1304,34 @@ pub async fn get_file_model_options(language: Language) -> Result<Vec<ModelInfo>
 }
 
 #[tauri::command]
+pub async fn get_profile_model_info(
+    controller: State<'_, SharedController>,
+    profile_id: String,
+) -> Result<ModelInfo, String> {
+    let ctrl = controller.lock().unwrap();
+    let choice = ctrl.settings().dictation_model_for_profile(&profile_id)?;
+    Ok(match choice {
+        sagascript_core::settings::FileModel::Whisper(model) => ModelInfo {
+            id: serde_json::to_value(model).and_then(serde_json::from_value::<String>)
+                .expect("Whisper model has a stable ID"),
+            display_name: model.display_name().to_string(),
+            description: model.description().to_string(),
+            size_mb: model.size_mb(),
+            downloaded: model::is_model_downloaded(model),
+            active: true,
+        },
+        sagascript_core::settings::FileModel::PianissimoOriginal => ModelInfo {
+            id: "pianissimo-sv".into(),
+            display_name: "Pianissimo Q8 (experimental)".into(),
+            description: "Swedish dictation".into(),
+            size_mb: 714,
+            downloaded: pianissimo_model::is_downloaded(),
+            active: true,
+        },
+    })
+}
+
+#[tauri::command]
 pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Emitter;
     if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
@@ -1299,11 +1355,10 @@ pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), Stri
 /// offer a direct download when an upgraded or newly added profile is not ready.
 #[tauri::command]
 pub async fn get_effective_model_info(
-    controller: State<'_, SharedController>,
+    _controller: State<'_, SharedController>,
     language: Language,
 ) -> Result<ModelInfo, String> {
-    let ctrl = controller.lock().unwrap();
-    let model = ctrl.settings().effective_model_for(language);
+    let model = WhisperModel::recommended(language);
     Ok(ModelInfo {
         id: serde_json::to_value(model)
             .and_then(serde_json::from_value::<String>)
@@ -1321,16 +1376,9 @@ pub async fn get_dictation_model_info(
     controller: State<'_, SharedController>,
     language: Language,
 ) -> Result<ModelInfo, String> {
-    let pianissimo = controller.lock().unwrap().settings().uses_pianissimo_for_dictation(language);
-    if pianissimo {
-        return Ok(ModelInfo {
-            id: "pianissimo-sv".into(),
-            display_name: "Pianissimo Q8 (experimental)".into(),
-            description: "Swedish dictation".into(),
-            size_mb: 714,
-            downloaded: pianissimo_model::is_downloaded(),
-            active: true,
-        });
+    let profile = controller.lock().unwrap().settings().default_profile();
+    if profile.language == language {
+        return get_profile_model_info(controller, profile.id).await;
     }
     get_effective_model_info(controller, language).await
 }
@@ -1429,42 +1477,8 @@ pub async fn set_initial_prompt(
     prompt: String,
     expected_source: Option<String>,
 ) -> Result<(), String> {
-    let mut conflict_source = None;
-    let persisted = sagascript_core::settings::store::try_update(|settings| {
-        let current_source = expected_source
-            .as_ref()
-            .map(|_| settings.initial_prompt.clone());
-        match set_initial_prompt_in(settings, &prompt, expected_source.as_deref()) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                if error.starts_with(DICTIONARY_CHANGED_ELSEWHERE_PREFIX) {
-                    conflict_source = current_source;
-                }
-                Err(error)
-            }
-        }
-    });
-    match persisted {
-        Ok(persisted) => {
-            let mut ctrl = controller.lock().unwrap();
-            ctrl.settings_mut().initial_prompt = persisted.initial_prompt;
-            info!("Initial prompt set ({} chars)", prompt.len());
-            Ok(())
-        }
-        Err(error) => {
-            if let (Some(expected), Some(persisted_source)) =
-                (expected_source.as_deref(), conflict_source.as_deref())
-            {
-                let mut ctrl = controller.lock().unwrap();
-                reconcile_global_dictionary_after_conflict(
-                    ctrl.settings_mut(),
-                    expected,
-                    persisted_source,
-                );
-            }
-            Err(error)
-        }
-    }
+    let profile_id = controller.lock().unwrap().settings().default_profile().id;
+    set_profile_glossary(controller, profile_id, prompt, expected_source).await
 }
 
 const DICTIONARY_CHANGED_ELSEWHERE_PREFIX: &str = "Dictionary changed elsewhere:";
@@ -1506,6 +1520,7 @@ fn profile_dictionary_source_snapshot(
         })
 }
 
+#[cfg(test)]
 fn reconcile_global_dictionary_after_conflict(
     settings: &mut Settings,
     expected_source: &str,
@@ -1543,6 +1558,7 @@ fn reconcile_profile_dictionary_after_conflict(
     }
 }
 
+#[cfg(test)]
 fn set_initial_prompt_in(
     settings: &mut Settings,
     prompt: &str,
@@ -1554,15 +1570,20 @@ fn set_initial_prompt_in(
 }
 
 fn ensure_known_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
-    let profile = settings
+    settings
         .resolved_hotkey_profiles()
         .into_iter()
         .find(|profile| profile.id == profile_id)
         .ok_or_else(|| format!("Unknown dictation profile '{profile_id}'"))?;
-    if profile.language == Language::Auto {
-        return Err(
-            "Personal dictionary aliases require a profile with an explicit language".to_string(),
-        );
+    Ok(())
+}
+
+fn ensure_learning_profile(settings: &Settings, profile_id: &str) -> Result<(), String> {
+    ensure_known_profile(settings, profile_id)?;
+    if settings.resolved_hotkey_profiles().iter().any(|profile| {
+        profile.id == profile_id && profile.language == Language::Auto
+    }) {
+        return Err("Deterministic dictionary training requires a profile with an explicit language".into());
     }
     Ok(())
 }
@@ -1574,6 +1595,12 @@ fn set_profile_glossary_in(
     expected_source: Option<&str>,
 ) -> Result<(), String> {
     ensure_known_profile(settings, profile_id)?;
+    let auto_language = settings.resolved_hotkey_profiles().iter().any(|profile| {
+        profile.id == profile_id && profile.language == Language::Auto
+    });
+    if auto_language && Glossary::parse(&source).entries().iter().any(|entry| !entry.aliases.is_empty()) {
+        return Err("Auto-detect profiles support dictionary hints, not deterministic aliases".into());
+    }
     let current_source = settings
         .profile_glossaries
         .get(profile_id)
@@ -1849,7 +1876,7 @@ fn apply_reviewed_training_candidates(
     profile_id: &str,
     accepted: &[GlossarySuggestion],
 ) -> Result<(), String> {
-    ensure_known_profile(settings, profile_id)?;
+    ensure_learning_profile(settings, profile_id)?;
     let effective = Glossary::parse(&settings.effective_glossary_source(Some(profile_id)));
     let allowed = suggest_glossary_candidates(heard, corrected, &effective);
     let mut matched = vec![false; allowed.len()];
@@ -1939,7 +1966,7 @@ pub async fn suggest_training_glossary(
     profile_id: String,
 ) -> Result<Vec<GlossarySuggestion>, String> {
     let settings = sagascript_core::settings::store::load();
-    ensure_known_profile(&settings, &profile_id)?;
+    ensure_learning_profile(&settings, &profile_id)?;
     let glossary = Glossary::parse(&settings.effective_glossary_source(Some(&profile_id)));
     Ok(suggest_glossary_candidates(&heard, &corrected, &glossary))
 }
@@ -2496,8 +2523,8 @@ pub async fn transcribe_file(
         let _ = app.emit(crate::events::event::STATE_CHANGED, "transcribing");
 
         let whisper_ref = whisper.inner().clone();
-        // Fall back to the saved initial_prompt when the file-dialog prompt is
-        // empty (matches the standard file path).
+        // Profile-scoped dictionary hints are already frozen in the glossary;
+        // an empty one-run prompt leaves that profile source intact.
         let prompt_ref = glossary.decoder_prompt();
         let audio_for_diarize = audio.clone();
         let audio_for_transcribe = audio.clone();

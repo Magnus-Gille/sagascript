@@ -96,8 +96,8 @@ test("dictation model choice is visible while decoder controls stay behind Advan
   assert.match(advancedSource, /Voice activity detection/);
 
   const dictateSource = settingsSource.slice(0, advancedStart);
-  assert.match(dictateSource, /Dictation model · push-to-speak/);
-  assert.match(dictateSource, /Pianissimo Q8/);
+  assert.match(dictateSource, /Speech model for \{profile\.name\}/);
+  assert.match(dictateSource, /profileModelOptions\[profile\.id\]/);
 });
 
 test("ordinary settings keep the useful controls outside Advanced", () => {
@@ -125,7 +125,7 @@ test("cross-platform onboarding copy never identifies every device as a Mac", ()
     .replace(/\s+/g, " ");
 
   assert.doesNotMatch(visibleCopy, /\bmac(?:os)?\b/i);
-  assert.match(visibleCopy, /Speech stays on this device/);
+  assert.match(visibleCopy, /recommended local model is selected automatically/);
   assert.match(visibleCopy, /recordings are processed on this device/);
   assert.match(
     onboardingSource,
@@ -145,9 +145,9 @@ test("dictation profiles expose missing speech engines without opening Advanced"
   const advancedStart = settingsSource.indexOf('<details class="advanced-section">');
   const ordinarySource = settingsSource.slice(0, advancedStart);
 
-  assert.match(ordinarySource, /getEffectiveModelInfo/);
+  assert.match(ordinarySource, /getProfileModelInfo/);
   assert.match(ordinarySource, /Download speech engine/);
-  assert.match(ordinarySource, /Speech engine ready/);
+  assert.match(ordinarySource, /profileModels\[profile\.id\]\.display_name/);
   assert.match(ordinarySource, /class="link-btn profile-engine-action"/);
   assert.match(
     settingsSource,

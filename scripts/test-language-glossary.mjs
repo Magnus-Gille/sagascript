@@ -16,34 +16,31 @@ test("profile glossary API preserves the validated camelCase command payload", (
     apiSource,
     /export async function setProfileGlossary\(profileId: string, source: string, expectedSource\?: string\): Promise<void> \{\s*return invoke\("set_profile_glossary", \{ profileId, source, expectedSource \}\);/,
   );
-  assert.match(
-    apiSource,
-    /export async function setInitialPrompt\(prompt: string, expectedSource\?: string\): Promise<void> \{\s*return invoke\("set_initial_prompt", \{ prompt, expectedSource \}\);/,
-  );
+  assert.doesNotMatch(settingsSource, /setInitialPrompt/);
 });
 
-test("file transcription carries an optional profile without changing no-profile behavior", () => {
+test("file transcription resolves a profile by default", () => {
   assert.match(apiSource, /options\?: \{ prompt\?: string; diarize\?: boolean; profileId\?: string; runId\?: string \}/);
   assert.match(apiSource, /profileId: options\?\.profileId \?\? null/);
   assert.match(apiSource, /invoke\("transcribe_file", \{[^}]*autoPaste: false/s, "queued file imports must use explicit Copy, never auto-paste");
   assert.match(settingsSource, /createFileJobs\(paths, \{[\s\S]*diarize: transcribeDiarize/);
   assert.match(settingsSource, /prompt: transcribePrompt\.trim\(\) \|\| null/);
   assert.match(settingsSource, /profileId: selectedTranscribeProfile\(\)\?\.id \?\? null/);
-  assert.match(settingsSource, /No profile \(use selected language\)/);
+  assert.doesNotMatch(settingsSource, /No profile \(use selected language\)/);
+  assert.match(settingsSource, /settings\?\.hotkey_profiles\.find\(\(profile\) => profile\.id === "default"\)/);
 });
 
-test("dictionary scope exposes only explicit profiles and keeps migration guidance visible", () => {
+test("dictionary scope contains profiles, not a global tier", () => {
   assert.match(settingsSource, /function explicitProfiles\(source: Settings \| null = settings\)/);
-  assert.match(settingsSource, /profile\.language !== "auto"/);
-  assert.match(settingsSource, /let glossaryScopeId: string = \$state\(""\)/);
+  assert.match(settingsSource, /return source\?\.hotkey_profiles \?\? \[\]/);
+  assert.match(settingsSource, /let glossaryScopeId: string = \$state\("default"\)/);
   assert.match(settingsSource, /<select id="dictionary-scope" value=\{glossaryScopeId\} onchange=\{onGlossaryScopeChange\} disabled=\{glossarySaving \|\| languageSaving\}>/);
-  assert.match(settingsSource, /<option value="">Global hints<\/option>/);
-  assert.match(settingsSource, /Global entries are hint-only and remain stored/);
-  assert.match(settingsSource, /copy an entry into the explicit-language profile/);
+  assert.doesNotMatch(settingsSource, /<option value="">Global hints<\/option>/);
+  assert.match(settingsSource, /This profile owns its dictionary/);
 });
 
-test("a real profile named global does not collide with the global hints scope", () => {
-  assert.match(settingsSource, /scopeId === ""/);
+test("a real profile named global remains a normal profile", () => {
+  assert.doesNotMatch(settingsSource, /scopeId === ""/);
   assert.doesNotMatch(settingsSource, /profile\.id\s*!==\s*"global"/);
   assert.match(settingsSource, /profileForId\(scopeId, source\)/);
 });
@@ -74,7 +71,6 @@ test("dictionary saves use the edit baseline and preserve concurrent conflicts",
   assert.match(settingsSource, /let glossaryEditBaseline: \{ scopeId: string; source: string; generation: number \} \| null = \$state\(null\)/);
   assert.match(settingsSource, /const editBaseline = glossaryEditBaseline/);
   assert.match(settingsSource, /editBaseline\.generation <= draftGeneration/);
-  assert.match(settingsSource, /setInitialPrompt\(value, expectedSource\)/);
   assert.match(settingsSource, /setProfileGlossary\(scopeId, value, expectedSource\)/);
   assert.match(settingsSource, /async function refreshDictionaryAfterConflict\(primaryError: string, request: GlossarySaveRequest\)/);
   assert.match(settingsSource, /settings = await getSettings\(\);[\s\S]*settingsError = primaryError/);
@@ -117,7 +113,7 @@ test("non-CAS dictionary failures retain the typed draft and baseline", () => {
 
 test("selected profile fixes the file language and dictionary together", () => {
   assert.match(settingsSource, /languageLabel\(transcribeLanguage\(\)\)/);
-  assert.match(settingsSource, /return selectedTranscribeProfile\(\)\?\.language \?\? settings\?\.language \?\? "auto"/);
+  assert.match(settingsSource, /return selectedTranscribeProfile\(\)\?\.language \?\? "auto"/);
   assert.match(settingsSource, /This profile fixes the file language and uses its personal dictionary/);
   assert.match(settingsSource, /names to listen for: Astrid, Grimnir/);
   assert.doesNotMatch(settingsSource, /Temporary hint-only context for this import/);

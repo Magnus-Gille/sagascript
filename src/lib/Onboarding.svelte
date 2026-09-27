@@ -429,8 +429,8 @@
         </div>
         <h1>Set up Sagascript</h1>
         <p class="description">
-          Choose your first dictation language. Speech stays on this device, and
-          you can add more language profiles later.
+          Choose your first profile's language. Its recommended local model is
+          selected automatically; you can add more profiles later.
         </p>
         <div class="language-options">
           <button

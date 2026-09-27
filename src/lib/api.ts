@@ -41,6 +41,7 @@ export interface Settings {
   auto_select_model: boolean;
   hotkey: string;
   hotkey_profiles: HotkeyProfile[];
+  profile_models: Record<string, string>;
   initial_prompt: string;
   profile_glossaries: Record<string, string>;
   beam_size: number;
@@ -145,6 +146,14 @@ export async function setHotkey(shortcut: string): Promise<void> {
 
 export async function setHotkeyProfiles(profiles: HotkeyProfile[]): Promise<void> {
   return invoke("set_hotkey_profiles", { profiles });
+}
+
+export async function setProfileModel(profileId: string, modelId: string): Promise<void> {
+  return invoke("set_profile_model", { profileId, modelId });
+}
+
+export async function getProfileModelInfo(profileId: string): Promise<WhisperModel> {
+  return invoke("get_profile_model_info", { profileId });
 }
 
 export async function getActiveHotkeyProfile(): Promise<HotkeyProfile | null> {

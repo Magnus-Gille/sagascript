@@ -504,8 +504,8 @@ pub enum FileModel {
 
 /// Persisted preference for file transcription.
 ///
-/// `Auto` inherits the effective Whisper model for the requested language.
-/// The separate experimental Pianissimo live-dictation choice does not affect it.
+/// `Auto` chooses the requested language's recommended Whisper model,
+/// independently of every live-dictation profile.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FileModelPreference {
     #[default]
@@ -643,12 +643,19 @@ pub struct Settings {
     /// Explicit dictation profiles. Empty means a legacy settings file; callers
     /// use `resolved_hotkey_profiles()` to synthesize its default profile.
     pub hotkey_profiles: Vec<HotkeyProfile>,
+    /// Live model owned by each profile id. `Auto` selects the recommendation
+    /// for that profile's language; file transcription has its own preference.
+    pub profile_models: BTreeMap<String, FileModelPreference>,
     /// Optional initial prompt that primes the decoder with domain vocabulary
     /// (names, jargon, spellings) for more accurate transcription. Empty = none.
     pub initial_prompt: String,
     /// Additional personal dictionary entries scoped to a dictation profile.
-    /// The legacy `initial_prompt` remains the global compatibility layer.
+    /// The legacy `initial_prompt` remains on disk only for rollback.
     pub profile_glossaries: BTreeMap<String, String>,
+    /// Legacy global glossary has been copied into the profile dictionaries.
+    /// The original file remains on disk for rollback, but no longer affects
+    /// dictation once this marker is set.
+    pub profile_glossary_migrated: bool,
     /// Beam search width. 0 = greedy decoding (fastest); >=2 enables beam search
     /// (more accurate on hard audio, several times slower).
     pub beam_size: u32,
@@ -676,8 +683,10 @@ impl Default for Settings {
             auto_select_model: true,
             hotkey: "Control+Shift+Space".to_string(),
             hotkey_profiles: Vec::new(),
+            profile_models: BTreeMap::new(),
             initial_prompt: String::new(),
             profile_glossaries: BTreeMap::new(),
+            profile_glossary_migrated: false,
             beam_size: 0,
             temperature_fallback: true,
             vad_enabled: false,
@@ -687,10 +696,111 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Combine the legacy global dictionary with the selected profile's
-    /// private additions. The legacy source is hint-only: aliases from the
-    /// unscoped compatibility dictionary must not become replacements in an
-    /// explicitly selected language profile.
+    pub fn default_profile(&self) -> HotkeyProfile {
+        let profiles = self.resolved_hotkey_profiles();
+        profiles.iter().find(|profile| profile.id == "default")
+            .unwrap_or(&profiles[0]).clone()
+    }
+
+    /// Preserve the effective live model of every existing profile before
+    /// global model preferences stop being consulted for live dictation.
+    pub fn materialize_profile_models(&mut self) {
+        if self.hotkey_profiles.is_empty() {
+            self.hotkey_profiles.push(HotkeyProfile::legacy_default(self.hotkey.clone(), self.language));
+        }
+        for profile in &self.hotkey_profiles {
+            let preference = if self.pianissimo_dictation && profile.language == Language::Swedish {
+                FileModelPreference::PianissimoOriginal
+            } else if self.auto_select_model || !self.whisper_model.is_compatible_with(profile.language) {
+                FileModelPreference::Auto
+            } else {
+                FileModelPreference::Whisper(self.whisper_model)
+            };
+            self.profile_models.entry(profile.id.clone()).or_insert(preference);
+        }
+    }
+
+    pub fn migrate_global_glossary_to_profiles(&mut self) {
+        if self.profile_glossary_migrated {
+            return;
+        }
+        let hints = Glossary::parse(&self.initial_prompt).decoder_prompt().unwrap_or_default();
+        if !hints.trim().is_empty() {
+            for profile in self.resolved_hotkey_profiles() {
+                let source = self.profile_glossaries.entry(profile.id).or_default();
+                if source.trim().is_empty() {
+                    *source = hints.clone();
+                } else {
+                    source.push('\n');
+                    source.push_str(&hints);
+                }
+            }
+        }
+        self.profile_glossary_migrated = true;
+    }
+
+    /// Resolve the live engine for one profile. Unmigrated settings retain
+    /// their previous global selection until the profile migration is saved.
+    pub fn dictation_model_for_profile(&self, profile_id: &str) -> Result<FileModel, String> {
+        let profile = self.resolved_hotkey_profiles().into_iter()
+            .find(|profile| profile.id == profile_id)
+            .ok_or_else(|| format!("Unknown profile '{profile_id}'"))?;
+        let preference = self.profile_models.get(profile_id).copied().unwrap_or_else(|| {
+            if self.uses_pianissimo_for_dictation(profile.language) {
+                FileModelPreference::PianissimoOriginal
+            } else if self.auto_select_model || !self.whisper_model.is_compatible_with(profile.language) {
+                FileModelPreference::Auto
+            } else {
+                FileModelPreference::Whisper(self.whisper_model)
+            }
+        });
+        match preference {
+            FileModelPreference::Auto => Ok(FileModel::Whisper(WhisperModel::recommended(profile.language))),
+            FileModelPreference::Whisper(model) if model.is_compatible_with(profile.language) => Ok(FileModel::Whisper(model)),
+            FileModelPreference::Whisper(model) => Err(format!("Model '{}' is incompatible with profile '{}'", model.display_name(), profile_id)),
+            FileModelPreference::PianissimoOriginal if profile.language == Language::Swedish => Ok(FileModel::PianissimoOriginal),
+            FileModelPreference::PianissimoOriginal => Err(format!("Pianissimo is only available for Swedish profile '{profile_id}'")),
+        }
+    }
+
+    pub fn live_model_for_profile(&self, profile_id: &str) -> Result<(WhisperModel, bool), String> {
+        match self.dictation_model_for_profile(profile_id)? {
+            FileModel::Whisper(model) => Ok((model, false)),
+            FileModel::PianissimoOriginal => Ok((WhisperModel::recommended(Language::Swedish), true)),
+        }
+    }
+
+    pub fn set_profile_model(&mut self, profile_id: &str, preference: FileModelPreference) -> Result<(), String> {
+        let profile = self.resolved_hotkey_profiles().into_iter()
+            .find(|profile| profile.id == profile_id)
+            .ok_or_else(|| format!("Unknown profile '{profile_id}'"))?;
+        match preference {
+            FileModelPreference::Whisper(model) if !model.is_compatible_with(profile.language) => {
+                return Err(format!("Model '{}' is incompatible with profile '{profile_id}'", model.display_name()));
+            }
+            FileModelPreference::PianissimoOriginal if profile.language != Language::Swedish => {
+                return Err("Pianissimo requires a Swedish profile".to_string());
+            }
+            _ => {}
+        }
+        self.profile_models.insert(profile_id.to_string(), preference);
+        Ok(())
+    }
+
+    pub fn set_default_profile_language(&mut self, language: Language) -> Result<(), String> {
+        let mut candidate = self.clone();
+        let mut profiles = candidate.resolved_hotkey_profiles();
+        let index = profiles.iter().position(|profile| profile.id == "default").unwrap_or(0);
+        let id = profiles[index].id.clone();
+        profiles[index].language = language;
+        candidate.profile_models.insert(id, FileModelPreference::Auto);
+        candidate.replace_hotkey_profiles(profiles)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Resolve the selected profile's dictionary. Unmigrated in-memory legacy
+    /// settings keep their old hint-only global behavior until first load.
     pub fn effective_glossary_source(&self, profile_id: Option<&str>) -> String {
         self.effective_glossary_source_with_prompt(profile_id, None)
     }
@@ -704,6 +814,25 @@ impl Settings {
         profile_id: Option<&str>,
         prompt: Option<&str>,
     ) -> String {
+        if self.profile_glossary_migrated {
+            let id = profile_id.map(str::to_string)
+                .or_else(|| Some(self.default_profile().id));
+            let scoped = id.as_deref().and_then(|id| self.profile_glossaries.get(id)).map(String::as_str).unwrap_or("");
+            let auto_language = id.as_deref().is_some_and(|id| {
+                self.resolved_hotkey_profiles().iter().any(|profile| profile.id == id && profile.language == Language::Auto)
+            });
+            // Auto-detect cannot safely apply deterministic replacements in an
+            // unknown language, but its dictionary hints remain available.
+            let auto_hints = auto_language.then(|| Glossary::parse(scoped).decoder_prompt().unwrap_or_default());
+            let scoped = auto_hints.as_deref().unwrap_or(scoped);
+            let prompt_hints = prompt.filter(|source| !source.trim().is_empty())
+                .and_then(|source| Glossary::parse(source).decoder_prompt());
+            return match prompt_hints.as_deref() {
+                Some(source) if scoped.trim().is_empty() => source.to_string(),
+                Some(source) => format!("{source}\n{scoped}"),
+                None => scoped.to_string(),
+            };
+        }
         let base_source = prompt
             .filter(|candidate| !candidate.trim().is_empty())
             .unwrap_or(self.initial_prompt.as_str());
@@ -729,7 +858,7 @@ impl Settings {
         }
     }
 
-    /// Returns the effective model considering auto-selection
+    /// Legacy model helper for settings predating profile-owned model choices.
     pub fn effective_model(&self) -> WhisperModel {
         self.effective_model_for(self.language)
     }
@@ -742,8 +871,8 @@ impl Settings {
         }
     }
 
-    /// Whether live dictation should use Pianissimo for this language.
-    /// Other languages always retain the configured Whisper model.
+    /// Legacy pre-migration Pianissimo switch, consulted only when a profile
+    /// has not yet received its own model preference.
     pub fn uses_pianissimo_for_dictation(&self, language: Language) -> bool {
         self.pianissimo_dictation && language == Language::Swedish
     }
@@ -752,7 +881,7 @@ impl Settings {
     /// dictation model preference.
     pub fn effective_file_model_for(&self, language: Language) -> Result<FileModel, String> {
         match self.file_transcription_model {
-            FileModelPreference::Auto => Ok(FileModel::Whisper(self.effective_model_for(language))),
+            FileModelPreference::Auto => Ok(FileModel::Whisper(WhisperModel::recommended(language))),
             FileModelPreference::Whisper(model) if model.is_compatible_with(language) => {
                 Ok(FileModel::Whisper(model))
             }
@@ -901,7 +1030,7 @@ impl Settings {
                     && self
                         .profile_glossaries
                         .get(&profile.id)
-                        .is_some_and(|source| !source.trim().is_empty())
+                        .is_some_and(|source| Glossary::parse(source).entries().iter().any(|entry| !entry.aliases.is_empty()))
             })
         }) {
             return Err(format!(
@@ -930,10 +1059,19 @@ impl Settings {
         candidate.hotkey = legacy.shortcut.clone();
         candidate.language = legacy.language;
         candidate.hotkey_profiles = profiles;
+        let active_ids: HashSet<&str> = candidate.hotkey_profiles.iter().map(|profile| profile.id.as_str()).collect();
+        candidate.profile_models.retain(|id, _| active_ids.contains(id.as_str()));
+        for profile in &candidate.hotkey_profiles {
+            candidate.profile_models.entry(profile.id.clone()).or_insert(FileModelPreference::Auto);
+        }
+        for profile in &candidate.hotkey_profiles {
+            candidate.dictation_model_for_profile(&profile.id)?;
+        }
         candidate.validate_shortcut_configuration()?;
         self.hotkey = candidate.hotkey;
         self.language = candidate.language;
         self.hotkey_profiles = candidate.hotkey_profiles;
+        self.profile_models = candidate.profile_models;
         Ok(())
     }
 
@@ -958,7 +1096,7 @@ impl Settings {
             && self
                 .profile_glossaries
                 .get("default")
-                .is_some_and(|source| !source.trim().is_empty())
+                .is_some_and(|source| Glossary::parse(source).entries().iter().any(|entry| !entry.aliases.is_empty()))
         {
             return Err(
                 "Profile 'default' has a personal dictionary; clear it before changing the profile language"
@@ -1003,7 +1141,7 @@ impl Settings {
         let profiles: Vec<_> = self
             .resolved_hotkey_profiles()
             .into_iter()
-            .filter(|profile| !self.uses_pianissimo_for_dictation(profile.language))
+            .filter(|profile| matches!(self.dictation_model_for_profile(&profile.id), Ok(FileModel::Whisper(_))))
             .collect();
         let Some(primary_index) = profiles
             .iter()
@@ -1021,7 +1159,9 @@ impl Settings {
 
         for index in ordered_indices {
             let profile = &profiles[index];
-            let model = self.effective_model_for(profile.language);
+            let Ok(FileModel::Whisper(model)) = self.dictation_model_for_profile(&profile.id) else {
+                continue;
+            };
             if plan.iter().any(|(resident, _)| *resident == model) {
                 continue;
             }
@@ -1770,6 +1910,17 @@ mod tests {
     }
 
     #[test]
+    fn migrated_hint_only_dictionary_does_not_lock_profile_language() {
+        let mut settings = Settings { language: Language::Swedish, ..Default::default() };
+        settings.materialize_profile_models();
+        settings.profile_glossaries.insert("default".into(), "OpenRouter".into());
+        settings.set_default_profile_language(Language::English).unwrap();
+        assert_eq!(settings.default_profile().language, Language::English);
+        assert_eq!(settings.profile_glossaries["default"], "OpenRouter");
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Auto);
+    }
+
+    #[test]
     fn legacy_language_change_with_implicit_default_dictionary_is_atomic() {
         let mut settings = Settings {
             language: Language::Swedish,
@@ -1894,6 +2045,89 @@ mod tests {
             push_to_talk_shortcut: None,
             toggle_shortcut: None,
         }
+    }
+
+    #[test]
+    fn profiles_choose_independent_compatible_dictation_models() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![
+                profile("swedish", "Super+S", Language::Swedish),
+                profile("english", "Super+E", Language::English),
+            ],
+            ..Default::default()
+        };
+        settings.profile_models.insert("swedish".into(), FileModelPreference::PianissimoOriginal);
+        settings.profile_models.insert("english".into(), FileModelPreference::Whisper(WhisperModel::BaseEn));
+
+        assert_eq!(settings.dictation_model_for_profile("swedish").unwrap(), FileModel::PianissimoOriginal);
+        assert_eq!(settings.dictation_model_for_profile("english").unwrap(), FileModel::Whisper(WhisperModel::BaseEn));
+        assert!(settings.set_profile_model("english", FileModelPreference::PianissimoOriginal).is_err());
+        assert_eq!(settings.dictation_model_for_profile("english").unwrap(), FileModel::Whisper(WhisperModel::BaseEn));
+    }
+
+    #[test]
+    fn incompatible_language_change_preserves_explicit_model_until_caller_selects_new_one() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![profile("default", "Super+S", Language::Swedish)],
+            ..Default::default()
+        };
+        settings.set_profile_model("default", FileModelPreference::PianissimoOriginal).unwrap();
+        let error = settings.replace_hotkey_profiles(vec![profile("default", "Super+S", Language::English)])
+            .unwrap_err();
+        assert!(error.contains("Pianissimo"));
+        assert_eq!(settings.default_profile().language, Language::Swedish);
+        assert_eq!(settings.profile_models["default"], FileModelPreference::PianissimoOriginal);
+
+        // The explicit default-language command chooses the new language's
+        // recommendation without mutating another profile or its dictionary.
+        settings.set_default_profile_language(Language::English).unwrap();
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Auto);
+        assert_eq!(settings.dictation_model_for_profile("default").unwrap(), FileModel::Whisper(WhisperModel::BaseEn));
+    }
+
+    #[test]
+    fn warm_model_plan_uses_profile_models_instead_of_legacy_global_choice() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![
+                profile("default", "Super+E", Language::English),
+                profile("swedish", "Super+S", Language::Swedish),
+            ],
+            ..Default::default()
+        };
+        settings.profile_models.insert("default".into(), FileModelPreference::Whisper(WhisperModel::SmallEn));
+        settings.profile_models.insert("swedish".into(), FileModelPreference::Whisper(WhisperModel::KbWhisperSmall));
+        assert_eq!(settings.warm_model_plan(2, 1000), vec![
+            (WhisperModel::SmallEn, Language::English),
+            (WhisperModel::KbWhisperSmall, Language::Swedish),
+        ]);
+    }
+
+    #[test]
+    fn migrated_auto_profile_keeps_hints_without_cross_language_alias_replacement() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![profile("auto", "Super+A", Language::Auto)],
+            profile_glossary_migrated: true,
+            ..Default::default()
+        };
+        settings.profile_glossaries.insert("auto".into(), "OpenRouter = open router".into());
+        let source = settings.effective_glossary_source(Some("auto"));
+        assert!(source.contains("OpenRouter"));
+        assert_eq!(Glossary::parse(&source).correct_text("open router").0, "open router");
+    }
+
+    #[test]
+    fn one_run_prompt_is_hint_only_while_profile_aliases_still_apply() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![profile("default", "Super+S", Language::Swedish)],
+            profile_glossary_migrated: true,
+            ..Default::default()
+        };
+        settings.profile_glossaries.insert("default".into(), "merge = merch".into());
+        let source = settings.effective_glossary_source_with_prompt(Some("default"), Some("Cloudflare = cloud flare"));
+        let glossary = Glossary::parse(&source);
+        assert_eq!(glossary.correct_text("cloud flare merch").0, "cloud flare merge");
+        assert!(glossary.decoder_prompt().unwrap().contains("Cloudflare"));
     }
 
     #[test]
@@ -2211,6 +2445,7 @@ mod tests {
                 profile("english", "Super+E", Language::English),
             ])
             .unwrap();
+        settings.set_profile_model("default", FileModelPreference::PianissimoOriginal).unwrap();
 
         assert_eq!(
             settings.warm_model_plan(2, 384),
@@ -2240,6 +2475,8 @@ mod tests {
                 profile("english", "Super+E", Language::English),
             ])
             .unwrap();
+        settings.set_profile_model("default", FileModelPreference::Whisper(WhisperModel::Base)).unwrap();
+        settings.set_profile_model("english", FileModelPreference::Whisper(WhisperModel::Base)).unwrap();
 
         assert_eq!(
             settings.warm_model_plan(2, 384),

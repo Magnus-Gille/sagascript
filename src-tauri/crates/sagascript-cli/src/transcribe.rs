@@ -713,23 +713,22 @@ fn validate_meeting_input_scope(
 
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     let stored = sagascript_core::settings::store::load();
-    let profile = args
-        .profile
-        .as_deref()
-        .map(|profile_id| resolve_profile(&stored, profile_id))
-        .transpose()?;
-    let language = match (&profile, &args.language) {
-        (Some(profile), _) => profile.language,
-        (None, Some(language)) => parse_language(language)?,
-        (None, None) => stored.language,
+    let profile = match args.profile.as_deref() {
+        Some(id) => resolve_profile(&stored, id)?,
+        None => {
+            let profiles = stored.resolved_hotkey_profiles();
+            profiles.iter().find(|candidate| candidate.id == "default")
+                .unwrap_or(&profiles[0]).clone()
+        }
     };
+    let language = args.language.as_deref().map(parse_language).transpose()?.unwrap_or(profile.language);
 
-    let glossary = effective_glossary(
-        &stored,
-        args.profile.as_deref(),
-        args.prompt.as_deref(),
-        args.prompt_file.as_deref(),
-    )?;
+    let glossary = if language == profile.language {
+        effective_glossary(&stored, Some(&profile.id), args.prompt.as_deref(), args.prompt_file.as_deref())?
+    } else {
+        let hint = resolve_one_run_prompt(args.prompt.as_deref(), args.prompt_file.as_deref())?;
+        Glossary::parse(hint.as_deref().unwrap_or(""))
+    };
 
     let files = expand_inputs(&args.files, args.recursive)?;
     #[cfg(feature = "diarization")]
@@ -2290,11 +2289,6 @@ pub(crate) fn resolve_profile(
         .ok_or_else(|| {
             DictationError::SettingsError(format!("Unknown dictation profile '{profile_id}'"))
         })?;
-    if profile.language == Language::Auto {
-        return Err(DictationError::SettingsError(
-            "Profile-scoped dictionaries require an explicit language".to_string(),
-        ));
-    }
     Ok(profile)
 }
 
@@ -2363,8 +2357,7 @@ pub fn resolve_file_model(
         return run.effective_file_model_for(language).map_err(DictationError::SettingsError);
     }
     if settings.file_transcription_model == FileModelPreference::Auto {
-        return resolve_effective_model(None, language, settings.auto_select_model,
-            settings.whisper_model).map(FileModel::Whisper);
+        return Ok(FileModel::Whisper(WhisperModel::recommended(language)));
     }
     settings.effective_file_model_for(language).map_err(DictationError::SettingsError)
 }
@@ -2384,7 +2377,7 @@ pub(crate) fn effective_glossary(
     Ok(Glossary::parse(&source))
 }
 
-fn resolve_one_run_prompt(
+pub(crate) fn resolve_one_run_prompt(
     cli_prompt: Option<&str>,
     cli_prompt_file: Option<&Path>,
 ) -> Result<Option<String>, DictationError> {
@@ -3386,14 +3379,14 @@ mod tests {
     }
 
     #[test]
-    fn file_model_auto_preserves_existing_cli_fallback() {
+    fn file_model_auto_uses_language_recommendation_independent_of_profile_choice() {
         let settings = Settings {
             auto_select_model: false,
             whisper_model: WhisperModel::KbWhisperLarge,
             ..Default::default()
         };
         assert_eq!(resolve_file_model(None, Language::English, &settings).unwrap(),
-            FileModel::Whisper(WhisperModel::KbWhisperLarge));
+            FileModel::Whisper(WhisperModel::BaseEn));
         assert!(resolve_file_model(Some("pianissimo-sv"), Language::English, &settings).is_err());
         assert!(resolve_file_model(Some("auto"), Language::Swedish, &settings).is_err());
     }

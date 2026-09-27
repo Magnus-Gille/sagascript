@@ -947,7 +947,10 @@ fn main() {
             // rejected before it loads settings, opens audio resources, or
             // creates a Whisper backend.
             let settings = load_settings_with_permission_gate();
-            info!("Loaded settings: language={:?}, model={:?}, hotkey={}", settings.language, settings.whisper_model, settings.hotkey);
+            let default_profile = settings.default_profile();
+            info!("Loaded settings: default_profile={}, language={:?}, model={:?}, hotkey={}",
+                default_profile.id, default_profile.language,
+                settings.dictation_model_for_profile(&default_profile.id), settings.hotkey);
             let initial_hotkey = settings.hotkey.clone();
             let update_activity = Arc::new(update_activity::UpdateActivity::default());
             let mut app_controller = AppController::new(settings);
@@ -1357,6 +1360,8 @@ fn main() {
             commands::set_language,
             commands::set_whisper_model,
             commands::set_file_transcription_model,
+            commands::set_profile_model,
+            commands::get_profile_model_info,
             commands::set_pianissimo_dictation,
             commands::set_auto_select_model,
             commands::set_hotkey_mode,
@@ -1966,18 +1971,36 @@ fn stop_recording_and_transcribe(
         let whisper: tauri::State<'_, SharedWhisper> = app_handle.state();
 
         // Extract what we need for transcription (lock briefly)
-        let (language, effective_model, opts, glossary, use_pianissimo) = {
+        let selection = {
             let c = ctrl.lock().unwrap();
-            let profile_id = c.active_hotkey_profile().map(|profile| profile.id.as_str());
-            (
+            let profile_id = c.active_hotkey_profile()
+                .map(|profile| profile.id.as_str())
+                .unwrap_or("default");
+            c.settings().live_model_for_profile(profile_id).map(|(effective_model, use_pianissimo)| (
                 c.language(),
-                c.settings().effective_model_for(c.language()),
-                commands::build_transcribe_options_for_profile(c.settings(), profile_id),
+                effective_model,
+                commands::build_transcribe_options_for_profile(c.settings(), Some(profile_id)),
                 sagascript_core::transcription::Glossary::parse(
-                    &c.settings().effective_glossary_source(profile_id),
+                    &c.settings().effective_glossary_source(Some(profile_id)),
                 ),
-                c.settings().uses_pianissimo_for_dictation(c.language()),
-            )
+                use_pianissimo,
+            ))
+        };
+        let (language, effective_model, opts, glossary, use_pianissimo) = match selection {
+            Ok(selection) => selection,
+            Err(error) => {
+                error!("Cannot resolve profile model: {error}");
+                if let Err(finish_error) = ctrl.lock().unwrap().finish_transcription(Err(error.clone())) {
+                    error!("Profile-model failure completion: {finish_error}");
+                }
+                dispatch_to_main(&app_handle, |app| {
+                    overlay::hide(app);
+                    update_tray_status(app, "idle");
+                });
+                let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
+                let _ = app_handle.emit(events::event::ERROR, error);
+                return;
+            }
         };
 
         let model_name = if use_pianissimo { "Pianissimo Q8" } else { effective_model.display_name() }.to_string();
@@ -2396,6 +2419,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 let change = if let Some(error) = validation_error {
                     new_settings.hotkey = old_settings.hotkey.clone();
                     new_settings.language = old_settings.language;
+                    new_settings.profile_models = old_settings.profile_models.clone();
                     new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
                     new_settings.hotkey_mode = old_settings.hotkey_mode;
                     health.record(
@@ -2406,6 +2430,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 } else if let Some(error) = unregister_error {
                     new_settings.hotkey = old_settings.hotkey.clone();
                     new_settings.language = old_settings.language;
+                    new_settings.profile_models = old_settings.profile_models.clone();
                     new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
                     new_settings.hotkey_mode = old_settings.hotkey_mode;
                     health.record(
@@ -2423,6 +2448,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                         Err(error) => {
                             new_settings.hotkey = old_settings.hotkey.clone();
                             new_settings.language = old_settings.language;
+                            new_settings.profile_models = old_settings.profile_models.clone();
                             new_settings.hotkey_profiles = old_settings.hotkey_profiles.clone();
                             new_settings.hotkey_mode = old_settings.hotkey_mode;
                             match hotkey::unregister_shortcuts(&app, &new_shortcuts) {

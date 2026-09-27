@@ -7,7 +7,7 @@ const pending = new Map();
 const meetings = new Map();
 const calls = [];
 let active = 0;
-let pianissimoDictation = false;
+const profileModels = { swedish: "auto", english: "base.en" };
 let pianissimoDownloaded = false;
 let holdPianissimoDownload = false;
 let releasePianissimoDownload = null;
@@ -115,17 +115,27 @@ mockIPC(async (cmd, args = {}) => {
     case "clear_update_recovery": window.qaRecovery = null; return null;
     case "complete_update_preparation": return null;
     case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
-    case "get_settings": return { language: "en", whisper_model: "base.en", file_transcription_model: "auto", pianissimo_dictation: pianissimoDictation, hotkey_mode: "toggle",
+    case "get_settings": return { language: "sv", whisper_model: "kb-whisper-base", file_transcription_model: "auto", pianissimo_dictation: false, hotkey_mode: "toggle",
       show_overlay: true, auto_paste: false, auto_select_model: true, hotkey: "Control+Shift+Space",
-      hotkey_profiles: [{ id: "swedish", name: "Swedish", language: "sv", shortcut: "Control+Shift+S" }], initial_prompt: "", profile_glossaries: {}, beam_size: 0,
+      hotkey_profiles: [
+        { id: "swedish", name: "Swedish", language: "sv", shortcut: "Control+Shift+S" },
+        { id: "english", name: "English", language: "en", shortcut: "Control+Shift+E" },
+      ], profile_models: { ...profileModels }, profile_glossaries: {}, profile_glossary_migrated: true, initial_prompt: "", beam_size: 0,
       temperature_fallback: true, vad_enabled: false, has_completed_onboarding: true };
     case "get_model_info": return [{ id: "base.en", display_name: "Base English", description: "Fixture",
       size_mb: 0, downloaded: true, active: true }];
-    case "get_file_model_options": return [{ id: "base.en", display_name: "Base English", description: "Fixture",
+    case "get_file_model_options": return args.language === "en"
+      ? [{ id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: false }]
+      : [{ id: "kb-whisper-base", display_name: "KB-Whisper Base", description: "Fixture",
       size_mb: 0, downloaded: true, active: false },
       { id: "pianissimo-sv", display_name: "Pianissimo Q8", description: "Fixture",
-        size_mb: 714, downloaded: pianissimoDownloaded, active: pianissimoDictation }];
-    case "set_pianissimo_dictation": pianissimoDictation = args.enabled; return null;
+        size_mb: 714, downloaded: pianissimoDownloaded, active: false }];
+    case "set_profile_model": profileModels[args.profileId] = args.modelId; return null;
+    case "get_profile_model_info": return profileModels[args.profileId] === "pianissimo-sv"
+      ? { id: "pianissimo-sv", display_name: "Pianissimo Q8", description: "Fixture", size_mb: 714, downloaded: pianissimoDownloaded, active: true }
+      : args.profileId === "english"
+        ? { id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: true }
+      : { id: "kb-whisper-base", display_name: "KB-Whisper Base", description: "Fixture", size_mb: 0, downloaded: true, active: true };
     case "download_pianissimo_model": {
       pianissimoDownloaded = true;
       if (holdPianissimoDownload) {
@@ -136,8 +146,6 @@ mockIPC(async (cmd, args = {}) => {
       }
       return null;
     }
-    case "get_dictation_model_info":
-      if (pianissimoDictation && args.language === "sv") return { id: "pianissimo-sv", display_name: "Pianissimo Q8", description: "Fixture", size_mb: 714, downloaded: pianissimoDownloaded, active: true };
     case "get_effective_model_info": return { id: "base.en", display_name: "Base English", description: "Fixture",
       size_mb: 0, downloaded: true, active: true };
     case "get_platform": return "macos";

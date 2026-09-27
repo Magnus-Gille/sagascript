@@ -7,15 +7,14 @@ choose a language, and dictate.
 ## Product decisions
 
 - Keep local transcription as the default and make every remote behavior opt-in.
-- Show one recommended speech model per explicit language. Download it when a
-  profile first needs it. Keep manual model selection in **Advanced**.
-- Make dictation profiles the primary language control. Each profile has a name,
-  language, and global shortcut; users may add more than two profiles.
+- Each dictation profile owns its language, model (recommended Whisper by
+  default, optional Swedish Pianissimo), shortcut(s), and dictionary. Show
+  its effective engine and download state in Dictate.
 - Keep **Dictate**, **Transcribe**, and **Settings** as the visible app surfaces.
 - Remove **Teach** from the release UI. Keep the reviewed glossary and CLI
   capabilities intact so the feature can return later without a data migration.
-- Keep ordinary settings short. Manual model choice, decoder strategy,
-  temperature fallback, and VAD belong in a collapsed **Advanced** section.
+- Keep ordinary settings short. Profile model choice is visible; decoder
+  strategy, temperature fallback, and VAD remain in **Advanced**.
 - Keep the menu-bar menu task-oriented: current state, profiles, transcribe a
   file, updates, settings, and quit.
 - Use compact native macOS text in the menu bar: **S** while idle, **●** while
@@ -27,7 +26,13 @@ choose a language, and dictate.
   mark, and future platform assets from one vector master; do not maintain a
   separate parchment/document icon family.
 
-## Current implementation checkpoint — 2026-09-07
+The owner made #239 and #260 blockers for the next stable release on
+2026-09-27. Existing global language/model/glossary settings must migrate to a
+working default profile without losing data; CLI commands without `--profile`
+use that profile. Do not release solely on the earlier signed integrated QA
+result until these migrations and their live acceptance have passed.
+
+## Historical implementation checkpoint — 2026-09-07
 
 The latest published stable release remains [Sagascript v1.1.3](https://github.com/Magnus-Gille/sagascript/releases/tag/v1.1.3)
 at exact Git revision
@@ -91,7 +96,8 @@ Acceptance:
 
 ### 2. Make profiles first-class
 
-- Keep name, language, and shortcut editable in the Dictate view.
+- Keep name, language, compatible model, dictionary, and shortcut(s) editable
+  per profile in Dictate. The creation button says **Add profile**.
 - Add a **Profiles** menu in the macOS menu-bar menu, including each profile's
   language and shortcut.
 - Make the selected profile unambiguous and keep shortcut-triggered profile
@@ -103,7 +109,8 @@ Acceptance:
   without restarting the app.
 - Invalid or conflicting shortcuts fail closed and explain how to recover.
 - Equivalent profile management remains available through
-  `sagascript config profiles`.
+  `sagascript config profiles`, including model choice and automatic migration
+  of existing global preferences into the default profile.
 - Idle, recording, loading/transcribing, and hotkey-error states render the
   native markers S, ●, …, and ! respectively.
 

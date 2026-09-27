@@ -41,34 +41,42 @@ async function writeFailureDiagnostics(error) {
 try {
   await page.goto(url);
   await page.getByRole("button", { name: "Open Files...", exact: true }).waitFor();
-  // Experimental dictation selection persists independently of file selection.
+  // A Swedish profile owns its model independently of file selection.
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
-  const pianissimoChoice = page.getByRole("button", { name: /Pianissimo Q8/ }).first();
-  await pianissimoChoice.waitFor();
-  assert.equal(await pianissimoChoice.evaluate(element => element.classList.contains("active")), false);
-  await pianissimoChoice.click();
-  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_pianissimo_dictation" && call.args.enabled === true));
+  const profileModelChoice = page.getByRole("combobox", { name: "Model for Swedish" });
+  const englishModelChoice = page.getByRole("combobox", { name: "Model for English" });
+  await englishModelChoice.waitFor();
+  assert.equal(await englishModelChoice.inputValue(), "base.en");
+  await profileModelChoice.selectOption("pianissimo-sv");
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv"));
+  await page.getByRole("button", { name: "Download speech engine" }).click();
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "download_pianissimo_model"));
-  await page.getByText("Speech engine ready", { exact: true }).waitFor();
+  await page.getByText("Pianissimo Q8 · Ready", { exact: true }).waitFor();
+  assert.equal(await englishModelChoice.inputValue(), "base.en", "Swedish model changes cannot rewrite another profile");
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   assert.equal(await page.locator("#file-model").inputValue(), "auto");
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
-  assert.equal(await pianissimoChoice.evaluate(element => element.classList.contains("active")), true);
+  assert.equal(await profileModelChoice.inputValue(), "pianissimo-sv");
   // Repair a selected model whose cached artifact was removed outside the UI.
   await page.evaluate(() => window.qa.removePianissimo());
-  await page.getByText("Selected · Download required", { exact: true }).waitFor();
+  await page.getByText("Pianissimo Q8 required · 714 MB", { exact: true }).waitFor();
   await page.evaluate(() => window.qa.holdNextPianissimoDownload());
-  await pianissimoChoice.click();
+  await page.getByRole("button", { name: "Download speech engine" }).click();
   await page.waitForFunction(() => window.qa.calls.filter(call => call.cmd === "download_pianissimo_model").length === 2);
   assert.equal(await page.locator('.test-record-btn').isDisabled(), true,
     'model-ready must not re-enable recording before the download command settles');
   await page.evaluate(() => window.qa.releasePianissimo());
-  await pianissimoChoice.waitFor({ state: 'visible' });
+  await profileModelChoice.waitFor({ state: 'visible' });
   await page.waitForFunction(() => !document.querySelector('.test-record-btn').disabled);
-  await page.getByText("Speech engine ready", { exact: true }).waitFor();
+  await page.getByText("Pianissimo Q8 · Ready", { exact: true }).waitFor();
   await page.screenshot({ path: outputPath("sagascript-pianissimo-dictation.png"), fullPage: true });
-  await page.getByRole("button", { name: /Base English/ }).first().click();
-  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_pianissimo_dictation" && call.args.enabled === false));
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  assert.equal(await page.locator("#dictionary-scope").inputValue(), "swedish");
+  assert.equal(await page.getByText("Global hints", { exact: true }).count(), 0);
+  await page.screenshot({ path: outputPath("sagascript-profile-dictionary.png"), fullPage: true });
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await profileModelChoice.selectOption("kb-whisper-base");
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.modelId === "kb-whisper-base"));
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   const optionsBox = await page.locator('.transcribe-options').boundingBox();
   const dropBox = await page.locator('.drop-zone').boundingBox();
