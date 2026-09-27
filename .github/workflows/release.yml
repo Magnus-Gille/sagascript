@@ -235,6 +235,7 @@ jobs:
 
       - name: Build, sign, notarize, and staple Apple Silicon app
         env:
+          SAGASCRIPT_REQUIRE_UPDATER_PUBKEY: "1"
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}

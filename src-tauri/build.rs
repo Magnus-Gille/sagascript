@@ -72,8 +72,12 @@ fn main() {
     let updater_pubkey_configured = std::env::var("SAGASCRIPT_UPDATER_PUBKEY")
         .ok()
         .is_some_and(|key| !key.trim().is_empty());
-    if is_macos_release && !updater_pubkey_configured {
-        panic!("macOS release builds require SAGASCRIPT_UPDATER_PUBKEY");
+    println!("cargo:rerun-if-env-changed=SAGASCRIPT_REQUIRE_UPDATER_PUBKEY");
+    if is_macos_release
+        && std::env::var("SAGASCRIPT_REQUIRE_UPDATER_PUBKEY").as_deref() == Ok("1")
+        && !updater_pubkey_configured
+    {
+        panic!("signed macOS distribution builds require SAGASCRIPT_UPDATER_PUBKEY");
     }
 
     let git_hash = metadata_value("SAGASCRIPT_GIT_HASH", local_git_hash);

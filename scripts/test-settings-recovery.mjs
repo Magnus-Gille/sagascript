@@ -18,7 +18,8 @@ test("update preparation snapshots current dictation, file, and meeting entries"
   assert.match(preparation, /await recoveryRestore;/);
   assert.match(preparation, /await tick\(\)/);
   assert.match(preparation, /createUpdateRecoveryPayload\(\{/);
-  assert.match(preparation, /dictation: testResultRecoveryPending && testResult\.trim\(\) \? \{ text: testResult \} : null/);
+  assert.match(preparation, /nativeResultPending = await getUpdateResultPending\("live-dictation"\)/);
+  assert.match(preparation, /dictation: testResultRecoveryPending && \(nativeResultPending \|\| recoveredDictationActive \|\| testResultEdited\)/);
   assert.match(preparation, /files: fileRecoveryEntries/);
   assert.match(preparation, /meetings: meetingRecoveryEntries/);
   assert.match(preparation, /serializeUpdateRecoveryPayload\(payload\)/);
@@ -30,6 +31,7 @@ test("update preparation snapshots current dictation, file, and meeting entries"
 test("a failed startup recovery read prevents update installation", () => {
   const restore = source.slice(source.indexOf("async function restoreUpdateRecovery"), source.indexOf("async function discardRecoveredDrafts"));
   assert.match(restore, /throw error;/);
+  assert.match(restore, /recoveryReadError = `Update blocked: unreadable recovery drafts were retained/);
   assert.match(source, /recoveryRestore = restoreUpdateRecovery\(\)/);
   assert.match(source, /void recoveryRestore\.catch/);
 });

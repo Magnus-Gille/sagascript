@@ -135,6 +135,7 @@ jobs:
 
       - name: Build, sign, notarize, and staple Apple Silicon app
         env:
+          SAGASCRIPT_REQUIRE_UPDATER_PUBKEY: "1"
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -232,6 +233,7 @@ jobs:
       - name: Gate real signed self-upgrade in an isolated app
         if: inputs.label == 'issue-255-updater-smoke'
         env:
+          SAGASCRIPT_REQUIRE_UPDATER_PUBKEY: "1"
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           SAGASCRIPT_UPDATER_PUBKEY: ${{ vars.SAGASCRIPT_UPDATER_PUBKEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

@@ -263,6 +263,14 @@ export async function setUpdateResultPending(resultId: string, pending: boolean)
   return invoke("set_update_result_pending", { resultId, pending });
 }
 
+export async function getUpdateResultPending(resultId: string): Promise<boolean> {
+  return invoke("get_update_result_pending", { resultId });
+}
+
+export async function acknowledgeUpdateResult(expectedText: string): Promise<boolean> {
+  return invoke("acknowledge_update_result", { expectedText });
+}
+
 export async function saveUpdateRecovery(payload: UpdateRecoveryPayload): Promise<void> {
   return invoke("save_update_recovery", { payload });
 }

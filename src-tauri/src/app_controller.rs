@@ -143,6 +143,22 @@ impl AppController {
         self.update_activity.set_result_pending(result_id, pending)
     }
 
+    pub fn is_update_result_pending(&self, result_id: &str) -> bool {
+        self.update_activity.is_result_pending(result_id)
+    }
+
+    /// Acknowledge exactly the result the UI delivered. Hold the controller
+    /// lock across text comparison and activity update so a newer result cannot
+    /// arrive between them.
+    pub fn acknowledge_update_result(&self, expected_text: &str) -> Result<bool, String> {
+        if self.last_transcription() != Some(expected_text)
+            || !self.is_update_result_pending("live-dictation") {
+            return Ok(false);
+        }
+        self.set_update_result_pending("live-dictation", false)?;
+        Ok(true)
+    }
+
     pub fn state(&self) -> AppState {
         self.state
     }
@@ -1030,6 +1046,12 @@ mod tests {
         let result = ctrl.finish_transcription(Ok("Hello again".to_string()));
 
         assert_eq!(result, Ok("Hello again".to_string()));
+        assert_eq!(ctrl.last_transcription(), Some("Hello again"));
+        assert!(ctrl.is_update_result_pending("live-dictation"));
+        assert!(!ctrl.acknowledge_update_result("Older text").unwrap());
+        assert!(ctrl.is_update_result_pending("live-dictation"));
+        assert!(ctrl.acknowledge_update_result("Hello again").unwrap());
+        assert!(!ctrl.is_update_result_pending("live-dictation"));
         assert_eq!(ctrl.last_transcription(), Some("Hello again"));
         assert_eq!(ctrl.state(), AppState::Idle);
     }

@@ -488,12 +488,12 @@ async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
     // its last result without creating or focusing a window during an update.
     let last_text = {
         let controller: tauri::State<'_, SharedController> = app.state();
-        let text = controller
-            .lock()
-            .unwrap()
-            .last_transcription()
-            .map(str::to_owned);
-        text
+        let ctrl = controller.lock().unwrap();
+        if ctrl.is_update_result_pending("live-dictation") {
+            ctrl.last_transcription().map(str::to_owned)
+        } else {
+            None
+        }
     };
     let Some(last_text) = last_text.filter(|text| !text.trim().is_empty()) else {
         return Ok(());
@@ -516,6 +516,9 @@ async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
                 }),
                 |snapshot| snapshot.payload,
             );
+        if native_recovery_conflicts(&payload, &last_text) {
+            return Err("A different unsaved dictation already exists in update recovery. Save or discard that draft before retrying the update.".into());
+        }
         payload["dictation"] = serde_json::json!({ "text": last_text });
         payload["saved_at"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
         let timestamp = std::time::SystemTime::now()
@@ -526,6 +529,14 @@ async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|error| format!("Could not finish saving dictation draft: {error}"))?
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn native_recovery_conflicts(payload: &serde_json::Value, text: &str) -> bool {
+    payload.get("dictation")
+        .and_then(|dictation| dictation.get("text"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|existing| !existing.trim().is_empty() && existing != text)
 }
 
 #[cfg(target_os = "macos")]
@@ -589,6 +600,7 @@ async fn install_signed_update(
     };
 
     let activity: Arc<UpdateActivity> = app.state::<Arc<UpdateActivity>>().inner().clone();
+    let work_wait_started = Instant::now();
     loop {
         match activity.try_exclusive(false) {
             Ok(update_permit) => {
@@ -648,9 +660,15 @@ async fn install_signed_update(
             }
             Err(ExclusiveError::ResultsPending) => {
                 warn!("Update activity unexpectedly rejected the recovery path");
+                set_update_menu(&app, "Update preparation blocked", "Try Again…", true, UpdateMenuMode::Idle);
                 return;
             }
             Err(ExclusiveError::WorkActive) => {
+                if update_work_wait_expired(work_wait_started, Instant::now()) {
+                    warn!("Update wait exceeded ten minutes; current work remains untouched");
+                    set_update_menu(&app, "Update wait timed out", "Try Again…", true, UpdateMenuMode::Idle);
+                    return;
+                }
                 set_update_menu(
                     &app,
                     "Waiting for current dictation or transcription to finish…",
@@ -659,10 +677,19 @@ async fn install_signed_update(
                     UpdateMenuMode::Installing,
                 );
             }
-            Err(error) => warn!(?error, "Could not safely apply update"),
+            Err(error) => {
+                warn!(?error, "Could not safely apply update");
+                set_update_menu(&app, "Update preparation failed", "Try Again…", true, UpdateMenuMode::Idle);
+                return;
+            }
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn update_work_wait_expired(start: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(start) >= Duration::from_secs(600)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -1244,12 +1271,8 @@ fn main() {
                 }
             }
 
-            if gui_launch_mode == GuiLaunchMode::InstallUpdate {
+            if should_install_update_at_launch(gui_launch_mode) {
                 check_for_updates_and_install(app.handle().clone());
-            } else if cfg!(target_os = "macos") && updates::updater_public_key().is_some() {
-                // Manifest checks only; downloads and installation remain an
-                // explicit user action from the tray or `sagascript update`.
-                check_for_updates(app.handle().clone());
             }
 
             // Preload + warm the bounded set of models selected by the hotkey
@@ -1395,6 +1418,8 @@ fn main() {
             commands::transcribe_file,
             commands::cancel_file_transcription,
             commands::set_update_result_pending,
+            commands::get_update_result_pending,
+            commands::acknowledge_update_result,
             commands::save_update_recovery,
             commands::load_update_recovery,
             commands::clear_update_recovery,
@@ -1655,6 +1680,12 @@ enum GuiLaunchMode {
     ShowSettings,
     Background,
     InstallUpdate,
+}
+
+/// Ordinary foreground/background launches never check the network for
+/// updates. Only the explicit private install marker may contact the manifest.
+fn should_install_update_at_launch(mode: GuiLaunchMode) -> bool {
+    mode == GuiLaunchMode::InstallUpdate
 }
 
 fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLaunchMode {
@@ -1974,14 +2005,14 @@ fn stop_recording_and_transcribe(
         let selection = {
             let c = ctrl.lock().unwrap();
             let profile_id = c.active_hotkey_profile()
-                .map(|profile| profile.id.as_str())
-                .unwrap_or("default");
-            c.settings().live_model_for_profile(profile_id).map(|(effective_model, use_pianissimo)| (
+                .map(|profile| profile.id.clone())
+                .unwrap_or_else(|| c.settings().default_profile().id);
+            c.settings().live_model_for_profile(&profile_id).map(|(effective_model, use_pianissimo)| (
                 c.language(),
                 effective_model,
-                commands::build_transcribe_options_for_profile(c.settings(), Some(profile_id)),
+                commands::build_transcribe_options_for_profile(c.settings(), Some(&profile_id)),
                 sagascript_core::transcription::Glossary::parse(
-                    &c.settings().effective_glossary_source(Some(profile_id)),
+                    &c.settings().effective_glossary_source(Some(&profile_id)),
                 ),
                 use_pianissimo,
             ))
@@ -2213,6 +2244,9 @@ fn stop_recording_and_transcribe(
                     // then finish the terminal session exactly once as error.
                     // The successful recognition remains available for copy.
                     c.preserve_transcription(&text);
+                    if let Err(error) = c.set_update_result_pending("live-dictation", true) {
+                        warn!("Could not mark failed paste result for recovery: {error}");
+                    }
                     c.on_transcription_error(&message);
                     drop(c);
                     let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
@@ -2229,6 +2263,11 @@ fn stop_recording_and_transcribe(
                     return;
                 }
                 c.on_transcription_success(&text);
+                if paste_outcome == "succeeded" {
+                    if let Err(error) = c.set_update_result_pending("live-dictation", false) {
+                        warn!("Could not clear successfully pasted result from recovery: {error}");
+                    }
+                }
                 drop(c);
 
                 let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
@@ -2936,6 +2975,29 @@ mod tests {
         assert!(auto_paste_permitted(false, true));
         assert!(!auto_paste_permitted(true, false));
         assert!(auto_paste_permitted(true, true));
+    }
+
+    #[test]
+    fn update_wait_times_out_without_stopping_active_work() {
+        let start = Instant::now();
+        assert!(!update_work_wait_expired(start, start + Duration::from_secs(599)));
+        assert!(update_work_wait_expired(start, start + Duration::from_secs(600)));
+    }
+
+    #[test]
+    fn pending_native_dictation_cannot_replace_a_different_recovered_draft() {
+        let old = serde_json::json!({ "dictation": { "text": "Older unsaved draft" } });
+        assert!(native_recovery_conflicts(&old, "New unsaved dictation"));
+        assert!(!native_recovery_conflicts(&old, "Older unsaved draft"));
+        assert!(!native_recovery_conflicts(&serde_json::json!({ "dictation": null }), "New unsaved dictation"));
+    }
+
+    #[test]
+    fn normal_gui_launches_never_check_for_updates_implicitly() {
+        for mode in [GuiLaunchMode::Standard, GuiLaunchMode::ShowSettings, GuiLaunchMode::Background] {
+            assert!(!should_install_update_at_launch(mode));
+        }
+        assert!(should_install_update_at_launch(GuiLaunchMode::InstallUpdate));
     }
 
     #[test]

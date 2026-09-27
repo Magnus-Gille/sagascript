@@ -724,15 +724,16 @@ impl Settings {
         if self.profile_glossary_migrated {
             return;
         }
-        let hints = Glossary::parse(&self.initial_prompt).decoder_prompt().unwrap_or_default();
-        if !hints.trim().is_empty() {
-            for profile in self.resolved_hotkey_profiles() {
-                let source = self.profile_glossaries.entry(profile.id).or_default();
-                if source.trim().is_empty() {
-                    *source = hints.clone();
-                } else {
-                    source.push('\n');
-                    source.push_str(&hints);
+        let hints: Vec<String> = Glossary::parse(&self.initial_prompt).entries().iter()
+            .map(|entry| entry.canonical.clone()).collect();
+        for profile in self.resolved_hotkey_profiles() {
+            let source = self.profile_glossaries.entry(profile.id).or_default();
+            let mut known: HashSet<String> = Glossary::parse(source).entries().iter()
+                .map(|entry| entry.canonical.to_lowercase()).collect();
+            for hint in &hints {
+                if known.insert(hint.to_lowercase()) {
+                    if !source.trim().is_empty() { source.push('\n'); }
+                    source.push_str(hint);
                 }
             }
         }
@@ -771,6 +772,11 @@ impl Settings {
     }
 
     pub fn set_profile_model(&mut self, profile_id: &str, preference: FileModelPreference) -> Result<(), String> {
+        if preference == FileModelPreference::PianissimoOriginal
+            && !crate::transcription::pianissimo_backend::runtime_supported_on_this_os()
+        {
+            return Err("Pianissimo requires macOS 13 or later".into());
+        }
         let profile = self.resolved_hotkey_profiles().into_iter()
             .find(|profile| profile.id == profile_id)
             .ok_or_else(|| format!("Unknown profile '{profile_id}'"))?;
@@ -793,7 +799,15 @@ impl Settings {
         let index = profiles.iter().position(|profile| profile.id == "default").unwrap_or(0);
         let id = profiles[index].id.clone();
         profiles[index].language = language;
-        candidate.profile_models.insert(id, FileModelPreference::Auto);
+        let compatible = match candidate.profile_models.get(&id) {
+            Some(FileModelPreference::Auto) => true,
+            Some(FileModelPreference::Whisper(model)) => model.is_compatible_with(language),
+            Some(FileModelPreference::PianissimoOriginal) => language == Language::Swedish,
+            None => false,
+        };
+        if !compatible {
+            candidate.profile_models.insert(id, FileModelPreference::Auto);
+        }
         candidate.replace_hotkey_profiles(profiles)?;
         *self = candidate;
         Ok(())
@@ -2087,6 +2101,21 @@ mod tests {
     }
 
     #[test]
+    fn reapplying_or_compatibly_changing_default_language_keeps_selected_model() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![profile("default", "Super+S", Language::Swedish)],
+            ..Default::default()
+        };
+        settings.set_profile_model("default", FileModelPreference::Whisper(WhisperModel::KbWhisperBase)).unwrap();
+        settings.set_default_profile_language(Language::Swedish).unwrap();
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Whisper(WhisperModel::KbWhisperBase));
+        settings.set_profile_model("default", FileModelPreference::Whisper(WhisperModel::Base)).unwrap();
+        settings.set_default_profile_language(Language::English).unwrap();
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Whisper(WhisperModel::Base));
+    }
+
+    #[test]
     fn warm_model_plan_uses_profile_models_instead_of_legacy_global_choice() {
         let mut settings = Settings {
             hotkey_profiles: vec![
@@ -2128,6 +2157,23 @@ mod tests {
         let glossary = Glossary::parse(&source);
         assert_eq!(glossary.correct_text("cloud flare merch").0, "cloud flare merge");
         assert!(glossary.decoder_prompt().unwrap().contains("Cloudflare"));
+    }
+
+    #[test]
+    fn repeated_migration_preserves_multiple_hints_without_duplicate_entries() {
+        let mut settings = Settings {
+            initial_prompt: "OpenRouter = open router\nCloudflare = cloud flare".into(),
+            ..Default::default()
+        };
+        settings.materialize_profile_models();
+        settings.migrate_global_glossary_to_profiles();
+        let once = settings.profile_glossaries["default"].clone();
+        let glossary = Glossary::parse(&once);
+        assert_eq!(glossary.entries().len(), 2);
+        assert!(glossary.entries().iter().all(|entry| entry.aliases.is_empty()));
+        settings.profile_glossary_migrated = false; // an older version lost the new marker
+        settings.migrate_global_glossary_to_profiles();
+        assert_eq!(settings.profile_glossaries["default"], once);
     }
 
     #[test]

@@ -78,6 +78,7 @@ window.qa = {
   calls,
   prepareUpdate: (nonce) => emit("update-preparing", nonce),
   abortUpdate: () => emit("update-aborted", "Synthetic install failure"),
+  dictationResult: (text) => emit("transcription-result", text),
   holdNextPianissimoDownload: () => { holdPianissimoDownload = true; },
   releasePianissimo: () => { releasePianissimoDownload?.(); },
   removePianissimo: () => {
@@ -115,6 +116,19 @@ mockIPC(async (cmd, args = {}) => {
     case "clear_update_recovery": window.qaRecovery = null; return null;
     case "complete_update_preparation": return null;
     case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
+    case "get_last_transcription":
+      if (window.qaLastNativeDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaLastNativeDelayMs));
+      return window.qaLastNativeDictation ?? null;
+    case "get_update_result_pending": return window.qaNativePending ?? false;
+    case "set_update_result_pending":
+      if (args.resultId === "live-dictation") window.qaNativePending = args.pending;
+      return null;
+    case "acknowledge_update_result":
+      if (window.qaNativePending && window.qaLastNativeDictation === args.expectedText) {
+        window.qaNativePending = false;
+        return true;
+      }
+      return false;
     case "get_settings": return { language: "sv", whisper_model: "kb-whisper-base", file_transcription_model: "auto", pianissimo_dictation: false, hotkey_mode: "toggle",
       show_overlay: true, auto_paste: false, auto_select_model: true, hotkey: "Control+Shift+Space",
       hotkey_profiles: [

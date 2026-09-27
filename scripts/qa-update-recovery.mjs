@@ -36,8 +36,10 @@ const recovery = {
 if (process.env.QA_ONLY === "file") recovery.meetings = [];
 if (process.env.QA_ONLY === "meeting") recovery.files = [];
 const url = process.env.QA_URL || "http://127.0.0.1:5243/?tab=transcribe";
+let corruptRecovery = false;
+let nativeFirst = false;
 await page.route(url, (route) => route.fulfill({ contentType: "text/html",
-  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryDelayMs=300;</script><script type="module">${mock}</script></body></html>`,
+  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryLoadError=${corruptRecovery};window.qaRecoveryDelayMs=${nativeFirst ? 650 : 300};window.qaLastNativeDictation="Earlier native result";window.qaLastNativeDelayMs=${nativeFirst ? 0 : 650};</script><script type="module">${mock}</script></body></html>`,
 }));
 
 try {
@@ -70,6 +72,47 @@ try {
   assert.equal(saved.args.payload.files.length, 1);
   assert.equal(saved.args.payload.meetings.length, 1);
   assert.equal(saved.args.payload.dictation.text, "Återställd diktering");
+  const saveCount = await page.evaluate(() => window.qa.calls.filter(call => call.cmd === "save_update_recovery").length);
+  await page.evaluate(() => { window.qaNativePending = true; window.qaLastNativeDictation = "New unsaved dictation"; window.qa.prepareUpdate("qa-conflicting-native-result"); });
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "complete_update_preparation" && call.args.nonce === "qa-conflicting-native-result"));
+  const collision = await page.evaluate(() => ({
+    ack: window.qa.calls.findLast(call => call.cmd === "complete_update_preparation").args,
+    saves: window.qa.calls.filter(call => call.cmd === "save_update_recovery").length,
+  }));
+  assert.match(collision.ack.error, /different unsaved dictation/i);
+  assert.equal(collision.saves, saveCount, "a second pending result must never replace the recovered draft");
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.getByRole("button", { name: "Copy result" }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "New unsaved dictation");
+  assert.equal(await page.evaluate(() => window.qaNativePending), true, "copying the recovered draft must leave the other native result pending");
+  nativeFirst = true;
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Återställd diktering");
+  await page.locator("textarea.test-result").fill("Återställd diktering, korrigerad");
+  await page.evaluate(() => window.qa.prepareUpdate("qa-edited-recovered"));
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "complete_update_preparation" && call.args.nonce === "qa-edited-recovered"));
+  assert.equal(await page.evaluate(() => window.qa.calls.findLast(call => call.cmd === "complete_update_preparation").args.error), null);
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation.text), "Återställd diktering, korrigerad");
+  await page.evaluate(() => window.qa.abortUpdate());
+  await page.evaluate(() => { window.qaNativePending = true; window.qaLastNativeDictation = "New unsaved dictation"; window.qa.dictationResult("New unsaved dictation"); });
+  await page.getByRole("button", { name: "Transcribe", exact: true }).click();
+  const beforeRedictation = await page.evaluate(() => window.qa.calls.filter(call => call.cmd === "save_update_recovery").length);
+  await page.evaluate(() => window.qa.prepareUpdate("qa-redictation-conflict"));
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "complete_update_preparation" && call.args.nonce === "qa-redictation-conflict"));
+  const redictation = await page.evaluate(() => ({
+    ack: window.qa.calls.findLast(call => call.cmd === "complete_update_preparation").args,
+    saves: window.qa.calls.filter(call => call.cmd === "save_update_recovery").length,
+  }));
+  assert.match(redictation.ack.error, /different unsaved dictation/i);
+  assert.equal(redictation.saves, beforeRedictation);
+  corruptRecovery = true;
+  await page.goto(url);
+  await page.getByRole("alert").filter({ hasText: "Update blocked: unreadable recovery drafts were retained" }).waitFor();
+  await page.evaluate(() => window.qa.prepareUpdate("qa-unreadable"));
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "complete_update_preparation" && call.args.nonce === "qa-unreadable"));
+  const rejected = await page.evaluate(() => window.qa.calls.findLast(call => call.cmd === "complete_update_preparation").args);
+  assert.match(rejected.error, /Synthetic recovery read failure/);
   assert.deepEqual(errors, []);
   console.log("PASS: recovered dictation/file/meeting visible, meeting draft restored, update snapshot acknowledged; no page errors.");
 } catch (error) {

@@ -5,6 +5,7 @@ use sagascript_core::settings::{
     self, validate_hotkey, FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings,
     WhisperModel,
 };
+use sagascript_core::transcription::Glossary;
 
 #[derive(Args)]
 pub struct ConfigArgs {
@@ -47,7 +48,8 @@ EXAMPLES:
         long_about = "\
 Update a setting. The new value takes effect immediately — the GUI \
  hot-reloads changes made via CLI. Legacy language, whisper_model, auto_select_model, \
- pianissimo_dictation, and initial_prompt keys edit the default profile; prefer \
+ pianissimo_dictation, and initial_prompt keys edit the default profile. The \
+ initial_prompt alias only merges entries and never erases saved aliases; prefer \
  `config profiles update ID --language ... --model ...`.
 
 Valid values per key:
@@ -581,7 +583,7 @@ fn apply_setting_value(
                 .map_err(DictationError::SettingsError)?;
         }
         "initial_prompt" => {
-            settings.profile_glossaries.insert(settings.default_profile().id, value.to_string());
+            append_legacy_hints(settings, value)?;
         }
         "beam_size" => {
             settings.beam_size = value.parse::<u32>().map_err(|_| {
@@ -598,6 +600,26 @@ fn apply_setting_value(
         }
         _ => unreachable!(), // validate_key already checked
     }
+    Ok(())
+}
+
+/// The old `initial_prompt` command is a compatibility alias for *merging*
+/// default-profile entries and aliases. Never replace a profile dictionary: it may
+/// contain the user's reviewed deterministic aliases and has no implicit
+/// rollback file of its own.
+fn append_legacy_hints(settings: &mut Settings, value: &str) -> Result<(), DictationError> {
+    let id = settings.default_profile().id;
+    let source = settings.profile_glossaries.entry(id).or_default();
+    if value.trim().is_empty() && !source.trim().is_empty() {
+        return Err(DictationError::SettingsError(
+            "Use `sagascript glossary clear --yes` to remove reviewed profile entries".into(),
+        ));
+    }
+    let mut glossary = Glossary::parse(source);
+    for entry in Glossary::parse(value).entries() {
+        glossary.upsert(entry.canonical.clone(), entry.aliases.clone());
+    }
+    *source = glossary.render();
     Ok(())
 }
 
@@ -668,8 +690,12 @@ fn reset_setting_value(
         }
         "hotkey" => unreachable!("hotkey reset handled transactionally above"),
         "initial_prompt" => {
-            settings.profile_glossaries.insert(settings.default_profile().id, String::new());
-            Ok(())
+            if settings.profile_glossaries.get(&settings.default_profile().id)
+                .is_some_and(|source| !source.trim().is_empty()) {
+                Err("Default profile dictionary contains entries; use `sagascript glossary clear --yes` after reviewing them".into())
+            } else {
+                Ok(())
+            }
         }
         "beam_size" => {
             settings.beam_size = defaults.beam_size;
@@ -1292,6 +1318,20 @@ mod tests {
             get_setting_value(&settings, "pianissimo_dictation"),
             defaults.pianissimo_dictation.to_string()
         );
+    }
+
+    #[test]
+    fn legacy_initial_prompt_alias_never_overwrites_default_profile_aliases() {
+        let mut settings = Settings::default();
+        settings.profile_glossaries.insert("default".into(), "merge = merch".into());
+        apply_setting_value(&mut settings, "initial_prompt", "OpenRouter").unwrap();
+        assert!(settings.profile_glossaries["default"].contains("merge = merch"));
+        assert!(settings.profile_glossaries["default"].contains("OpenRouter"));
+        apply_setting_value(&mut settings, "initial_prompt", "OpenRouter = open router").unwrap();
+        assert!(settings.profile_glossaries["default"].contains("OpenRouter = open router"));
+        let before = settings.profile_glossaries["default"].clone();
+        assert!(reset_setting_value(&mut settings, "initial_prompt", &Settings::default()).is_err());
+        assert_eq!(settings.profile_glossaries["default"], before);
     }
 
     #[test]

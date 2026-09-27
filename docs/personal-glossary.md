@@ -85,7 +85,9 @@ additional confidence-gated one-edit correction for plain single-word hints.
   does not inspect or migrate legacy settings. This is useful for automation,
   end-to-end tests, and disposable training profiles.
 - `sagascript config set initial_prompt ...` remains a compatibility alias for
-  changing the default profile's dictionary, not a global source.
+  **adding or merging entries** in the default profile. It never replaces that
+  profile's reviewed aliases. `config reset initial_prompt` refuses to clear a
+  nonempty profile dictionary; review it before using `glossary clear --yes`.
 
 The CLI exposes the complete review workflow without requiring an interactive
 prompt. Run `glossary suggest` as a dry run, then either apply every displayed

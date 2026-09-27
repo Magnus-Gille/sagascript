@@ -44,6 +44,8 @@
     copyTranscriptionText,
     saveTranscriptionText,
     setUpdateResultPending,
+    getUpdateResultPending,
+    acknowledgeUpdateResult,
     saveUpdateRecovery,
     loadUpdateRecovery,
     clearUpdateRecovery,
@@ -167,6 +169,7 @@
   let testError: string = $state("");
   let testResultActionMessage: string = $state("");
   let testResultRecoveryPending: boolean = $state(false);
+  let testResultEdited: boolean = $state(false);
   let updatePreparing: boolean = $state(false);
   let liveDictationRevision = 0;
   let observedNativeDictation: string | null = null;
@@ -179,6 +182,7 @@
   let recoveredDictationText: string | null = $state(null);
   let recoveredDictationActive = $state(false);
   let recoveredDraftsNotice = $state(false);
+  let recoveryReadError: string = $state("");
   let recoveryWriteQueue: Promise<void> = Promise.resolve();
   let recoveryRestore: Promise<void> = Promise.resolve();
 
@@ -268,12 +272,14 @@
     const existingMeetingIds = new Set(savedReviewIds);
     try {
       const persisted = parseUpdateRecoveryPayload(await loadUpdateRecovery());
+      recoveryReadError = "";
       if (!persisted) return;
 
       const recoveredDictation = persisted.dictation?.text.trim() ? persisted.dictation : null;
       if (recoveredDictation && !testResult.trim() && liveDictationRevision === dictationRevision) {
         testResult = recoveredDictation.text;
         testResultRecoveryPending = true;
+        testResultEdited = false;
         recoveredDictationText = recoveredDictation.text;
         recoveredDictationActive = true;
       }
@@ -322,6 +328,7 @@
       }
     } catch (error) {
       console.warn("Could not restore update recovery drafts", error);
+      recoveryReadError = `Update blocked: unreadable recovery drafts were retained. ${recoveryErrorText(error)}. Back up or repair update-recovery.json in Sagascript's Application Support directory before retrying.`;
       throw error;
     }
   }
@@ -344,6 +351,7 @@
     if (recoveredDictationActive && testResult === recoveredDictationText) {
       testResult = "";
       testResultRecoveryPending = false;
+      testResultEdited = false;
     }
     recoveredFileIds = [];
     recoveredMeetingIds = [];
@@ -365,18 +373,35 @@
       // The updater holds the native exclusive lease here. Its last result is
       // stable, but the result event/command response may still be in transit.
       const lastNativeDictation = await getLastTranscription();
+      const nativeResultPending = await getUpdateResultPending("live-dictation");
+      const editedNativeResult = testResultEdited && !recoveredDictationActive
+        && observedNativeDictation === lastNativeDictation;
+      if (nativeResultPending && lastNativeDictation?.trim() && testResult.trim()
+        && testResult !== lastNativeDictation && !editedNativeResult) {
+        throw new Error("A different unsaved dictation is already open. Copy or save both results before retrying the update.");
+      }
       await drainUpdateWork({
-        busy: () => testTranscribing || Boolean(lastNativeDictation?.trim()
+        busy: () => testTranscribing || Boolean(nativeResultPending && lastNativeDictation?.trim()
           && observedNativeDictation !== lastNativeDictation),
         settle: tick,
       });
       await tick();
       await recoveryWriteQueue.catch(() => undefined);
       const payload = createUpdateRecoveryPayload({
-        dictation: testResultRecoveryPending && testResult.trim() ? { text: testResult } : null,
+        dictation: testResultRecoveryPending && (nativeResultPending || recoveredDictationActive || testResultEdited)
+          && testResult.trim() ? { text: testResult } : null,
         files: fileRecoveryEntries,
         meetings: meetingRecoveryEntries,
       });
+      // A result event can arrive before recovery is hydrated (or replace an
+      // older recovered draft). Never overwrite a distinct persisted result.
+      const previous = parseUpdateRecoveryPayload(await loadUpdateRecovery());
+      const editedRecoveredDraft = recoveredDictationActive
+        && previous?.dictation?.text === recoveredDictationText;
+      if (previous?.dictation?.text.trim() && previous.dictation.text !== payload.dictation?.text
+        && !editedRecoveredDraft) {
+        throw new Error("A different unsaved dictation is already in update recovery. Copy or save both results before retrying the update.");
+      }
       // Validate the exact serialized size before handing the payload to Rust.
       serializeUpdateRecoveryPayload(payload);
       await saveUpdateRecovery(payload);
@@ -395,14 +420,12 @@
   async function copyTestResult(): Promise<void> {
     if (!testResult.trim()) return;
     try {
-      await copyTranscriptionText(testResult);
-      await setUpdateResultPending("live-dictation", false);
-      const wasRecovered = recoveredDictationActive;
-      testResultRecoveryPending = false;
-      recoveredDictationActive = false;
-      refreshRecoveredDraftsNotice();
-      if (wasRecovered) persistRemainingRecoveredDrafts();
-      testResultActionMessage = "Copied to clipboard.";
+      const text = testResult;
+      await copyTranscriptionText(text);
+      const nextResultShown = await markTestResultDelivered(text);
+      testResultActionMessage = nextResultShown
+        ? "Copied result. Another unsaved dictation is now shown."
+        : "Copied to clipboard.";
     } catch (error) {
       testResultActionMessage = typeof error === "string" ? error : String(error);
     }
@@ -411,19 +434,57 @@
   async function saveTestResult(): Promise<void> {
     if (!testResult.trim()) return;
     try {
-      const saved = await saveTranscriptionText(testResult, "dictation.txt", null);
+      const text = testResult;
+      const saved = await saveTranscriptionText(text, "dictation.txt", null);
       if (saved) {
-        await setUpdateResultPending("live-dictation", false);
-        const wasRecovered = recoveredDictationActive;
-        testResultRecoveryPending = false;
-        recoveredDictationActive = false;
-        refreshRecoveredDraftsNotice();
-        if (wasRecovered) persistRemainingRecoveredDrafts();
+        const nextResultShown = await markTestResultDelivered(text);
+        testResultActionMessage = nextResultShown
+          ? "Saved result. Another unsaved dictation is now shown."
+          : "Saved.";
       }
-      testResultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
+      if (!saved) testResultActionMessage = "Save cancelled — nothing was written.";
     } catch (error) {
       testResultActionMessage = typeof error === "string" ? error : String(error);
     }
+  }
+
+  async function markTestResultDelivered(text: string): Promise<boolean> {
+    const nativePending = await getUpdateResultPending("live-dictation");
+    const nativeText = nativePending ? await getLastTranscription() : null;
+    const matchesNative = nativePending && (nativeText === text
+      || (testResultEdited && !recoveredDictationActive && observedNativeDictation === nativeText));
+    const deliveredNative = matchesNative && nativeText !== null
+      ? await acknowledgeUpdateResult(nativeText) : false;
+    if (!recoveredDictationActive) await clearDeliveredRecoveryDraft(text);
+    if (testResult !== text) return false; // a newer result arrived during Copy/Save
+    const wasRecovered = recoveredDictationActive;
+    testResultRecoveryPending = false;
+    testResultEdited = false;
+    recoveredDictationActive = false;
+    refreshRecoveredDraftsNotice();
+    if (wasRecovered) persistRemainingRecoveredDrafts();
+    const currentNative = nativePending && !deliveredNative && await getUpdateResultPending("live-dictation")
+      ? await getLastTranscription() : null;
+    if (currentNative?.trim()) {
+      // The copied recovered draft was not the latest native dictation. Show
+      // that still-unsaved result next, keeping its update guard intact.
+      testResult = currentNative;
+      testResultRecoveryPending = true;
+      observedNativeDictation = currentNative;
+      return true;
+    }
+    return false;
+  }
+
+  async function clearDeliveredRecoveryDraft(text: string): Promise<void> {
+    recoveryWriteQueue = recoveryWriteQueue.catch(() => undefined).then(async () => {
+      const previous = parseUpdateRecoveryPayload(await loadUpdateRecovery());
+      if (previous?.dictation?.text !== text) return;
+      const remaining = { ...previous, dictation: null };
+      if (remaining.files.length || remaining.meetings.length) await saveUpdateRecovery(remaining);
+      else await clearUpdateRecovery();
+    });
+    await recoveryWriteQueue;
   }
 
   onMount(() => {
@@ -440,6 +501,7 @@
       revision++;
       liveDictationRevision++;
       testResultRecoveryPending = true;
+      testResultEdited = false;
       recoveredDictationActive = false;
       observedNativeDictation = event.payload;
       testResult = event.payload;
@@ -456,9 +518,13 @@
     // Recover the persisted-in-memory result without racing newer events.
     Promise.all([errorListener, resultListener, stateListener]).then(async () => {
       const initialRevision = revision;
+      await recoveryRestore.catch(() => undefined);
       const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
       if (!disposed && revision === initialRevision) {
-        if (!text?.trim() || text === testResult) observedNativeDictation = text;
+        // Native delivery has settled even if a different recovered draft is
+        // already visible in the editor. Otherwise updater preparation waits
+        // forever for an event that preceded listener registration.
+        observedNativeDictation = text;
         testError = error ?? "";
         if (text && !testResult.trim()) {
           observedNativeDictation = text;
@@ -1704,6 +1770,9 @@
       {#if initError}
         <div class="transcribe-error">{initError}</div>
       {/if}
+      {#if recoveryReadError}
+        <div class="transcribe-error" role="alert">{recoveryReadError}</div>
+      {/if}
       {#if settingsError}
         <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
       {/if}
@@ -1894,7 +1963,7 @@
           <textarea
             class="test-result"
             bind:value={testResult}
-            oninput={() => { testResultRecoveryPending = true; }}
+            oninput={() => { testResultRecoveryPending = true; testResultEdited = true; }}
             disabled={updatePreparing}
             placeholder="Click here and use your hotkey, or press the button above"
           ></textarea>

@@ -106,6 +106,10 @@ impl UpdateActivity {
         Ok(())
     }
 
+    pub fn is_result_pending(&self, result_id: &str) -> bool {
+        self.state.lock().unwrap().unsaved_results.contains(result_id)
+    }
+
     #[cfg(test)]
     pub fn active_work_count(&self) -> usize {
         self.state.lock().unwrap().active_work
@@ -153,6 +157,16 @@ impl Drop for ExclusiveLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn successfully_delivered_result_can_leave_memory_without_remaining_a_recovery_draft() {
+        let activity = UpdateActivity::default();
+        assert!(!activity.is_result_pending("live-dictation"));
+        activity.set_result_pending("live-dictation", true).unwrap();
+        assert!(activity.is_result_pending("live-dictation"));
+        activity.set_result_pending("live-dictation", false).unwrap();
+        assert!(!activity.is_result_pending("live-dictation"));
+    }
 
     #[test]
     fn preparation_accepts_only_the_current_nonce() {

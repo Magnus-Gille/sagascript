@@ -3,6 +3,8 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 
 const workflow = await readFile(new URL("../.github/workflows/test-build.yml", import.meta.url), "utf8");
+const releaseWorkflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+const buildScript = await readFile(new URL("../src-tauri/build.rs", import.meta.url), "utf8");
 const steps = workflow.split(/(?=^      - name: )/m);
 
 test("TEST label is validated before updater signing credentials enter the job", () => {
@@ -42,4 +44,13 @@ test("downloadable signed app uses generated secure config and is launched befor
   assert.match(build, /--config "\$signed_config"/);
   assert.ok(launch > 0 && upload > launch);
   assert.match(steps[launch], /smoke-signed-app-start\.mjs/);
+});
+
+test("updater key requirement applies only to intentional signed distribution builds", () => {
+  const signed = steps.find((step) => step.includes("name: Build, sign, notarize"));
+  const release = releaseWorkflow.split(/(?=^      - name: )/m).find((step) => step.includes("name: Build, sign, notarize"));
+  assert.match(signed, /SAGASCRIPT_REQUIRE_UPDATER_PUBKEY: ['"]?1['"]?/);
+  assert.match(release, /SAGASCRIPT_REQUIRE_UPDATER_PUBKEY: ['"]?1['"]?/);
+  assert.match(buildScript, /SAGASCRIPT_REQUIRE_UPDATER_PUBKEY/);
+  assert.doesNotMatch(buildScript, /if is_macos_release && !updater_pubkey_configured/);
 });

@@ -587,11 +587,6 @@ pub async fn set_profile_model(
     model_id: String,
 ) -> Result<(), String> {
     let preference = FileModelPreference::parse_id(&model_id)?;
-    if preference == FileModelPreference::PianissimoOriginal
-        && !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os()
-    {
-        return Err("Pianissimo requires macOS 13 or later".into());
-    }
     let _recording_lease = acquire_hotkey_configuration(&controller)?;
     let persisted = sagascript_core::settings::store::try_update(|settings| {
         settings.set_profile_model(&profile_id, preference)
@@ -1019,9 +1014,8 @@ async fn stop_and_transcribe_impl(
         let language = ctrl.language();
         let profile_id = ctrl
             .active_hotkey_profile()
-            .map(|profile| profile.id.as_str())
-            .unwrap_or("default")
-            .to_string();
+            .map(|profile| profile.id.clone())
+            .unwrap_or_else(|| ctrl.settings().default_profile().id);
         let (effective_model, use_pianissimo) = match ctrl.settings().live_model_for_profile(&profile_id) {
             Ok(choice) => choice,
             Err(error) => {
@@ -2233,6 +2227,25 @@ pub async fn set_update_result_pending(
     pending: bool,
 ) -> Result<(), String> {
     activity.set_result_pending(&result_id, pending)
+}
+
+#[tauri::command]
+pub async fn get_update_result_pending(
+    activity: State<'_, Arc<crate::update_activity::UpdateActivity>>,
+    result_id: String,
+) -> Result<bool, String> {
+    if result_id.is_empty() || result_id.len() > 128 {
+        return Err("Invalid transcription result ID.".into());
+    }
+    Ok(activity.is_result_pending(&result_id))
+}
+
+#[tauri::command]
+pub async fn acknowledge_update_result(
+    controller: State<'_, SharedController>,
+    expected_text: String,
+) -> Result<bool, String> {
+    controller.lock().unwrap().acknowledge_update_result(&expected_text)
 }
 
 fn update_recovery_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
