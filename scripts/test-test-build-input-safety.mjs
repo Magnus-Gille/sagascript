@@ -54,3 +54,32 @@ test("updater key requirement applies only to intentional signed distribution bu
   assert.match(buildScript, /SAGASCRIPT_REQUIRE_UPDATER_PUBKEY/);
   assert.doesNotMatch(buildScript, /if is_macos_release && !updater_pubkey_configured/);
 });
+
+test("experimental Pianissimo Metal is opt-in to TEST, built before credentials, and signed-smoked", () => {
+  assert.match(workflow, /pianissimo_banded_runtime:\s*\n(?:\s+[^\n]+\n)*?\s+type: boolean/);
+  const validation = steps.find((step) => step.includes("name: Validate TEST artifact label"));
+  assert.ok(validation?.includes("PIANISSIMO_BANDED_RUNTIME: ${{ inputs.pianissimo_banded_runtime }}"),
+    "the optional build must require an explicit TEST label before credentials");
+  assert.ok(validation?.includes('"$TEST_LABEL" != *banded*'),
+    "experimental artifacts must be identifiable by name");
+  const cpu = steps.findIndex((step) => step.includes("name: Build bundled Pianissimo CPU runtime"));
+  const metal = steps.findIndex((step) => step.includes("name: Build experimental banded Pianissimo Metal runtime"));
+  const reference = steps.findIndex((step) => step.includes("name: Stage pinned unpatched Pianissimo Metal reference"));
+  const long = steps.findIndex((step) => step.includes("name: Gate experimental long Pianissimo Metal parity"));
+  const certificate = steps.findIndex((step) => step.includes("name: Import Developer ID certificate"));
+  const signedMetal = steps.findIndex((step) => step.includes("name: Gate signed Pianissimo Metal transcription"));
+  const signedLong = steps.findIndex((step) => step.includes("name: Gate signed long Pianissimo Metal transcription"));
+  assert.ok(cpu > 0 && metal > cpu && reference > metal && long > reference
+    && certificate > long && signedMetal > certificate && signedLong > signedMetal,
+    "both unsigned parity and signed long-path smoke must gate the experimental TEST");
+  assert.match(steps[cpu], /if:.*!inputs\.pianissimo_banded_runtime/);
+  assert.match(steps[metal], /if:.*inputs\.pianissimo_banded_runtime/);
+  assert.match(steps[signedMetal], /if:.*inputs\.pianissimo_banded_runtime/);
+  assert.match(steps[signedMetal], /--pianissimo-device metal/);
+  assert.ok(steps[long].includes("make-pianissimo-long-smoke.py"));
+  assert.ok(steps[long].includes("--quality-only"));
+  assert.ok(steps[long].includes("--require-exact-text"));
+  assert.doesNotMatch(steps[long], /--max-timestamp-(?:delta-ms|changed-words)\s+[1-9]/);
+  assert.ok(steps[signedLong].includes("--pianissimo-device metal"));
+  assert.doesNotMatch(releaseWorkflow, /build-pianissimo-banded-runtime/);
+});

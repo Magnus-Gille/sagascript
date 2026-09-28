@@ -23,7 +23,7 @@ use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTrans
 use sagascript_core::settings::{
     FileModel, FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel,
 };
-use sagascript_core::transcription::pianissimo_backend::PianissimoBackend;
+use sagascript_core::transcription::pianissimo_backend::{PianissimoBackend, PianissimoDevice};
 use sagascript_core::transcription::pianissimo_model;
 use sagascript_core::transcription::diagnostics::{
     analyze_coverage, analyze_language_windows, analyze_repetition, language_mismatch_warning,
@@ -67,6 +67,11 @@ pub struct TranscribeArgs {
     /// File model ID to use [see: sagascript list-models]
     #[arg(short, long, value_name = "MODEL_ID")]
     pub model: Option<String>,
+
+    /// Experimental Pianissimo Q8 backend for this file run (cpu or metal).
+    /// The default remains CPU. Requires a Metal-capable native runtime when set to metal.
+    #[arg(long, value_name = "DEVICE", value_parser = ["cpu", "metal"])]
+    pub pianissimo_device: Option<String>,
 
     /// Output result as JSON: text, language, model, duration, and a
     /// `segments` array with per-segment timing/confidence plus
@@ -652,6 +657,7 @@ fn transcribe_meeting_file_inner(
         language: Some(language.whisper_code().unwrap_or("auto").to_string()),
         profile: None,
         model: Some(model_id_string(model).to_string()),
+        pianissimo_device: None,
         json: false,
         jsonl: false,
         fail_fast: true,
@@ -761,6 +767,11 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             ));
         }
         return run_pianissimo_batch(&args, &files, &stored, language, &glossary);
+    }
+    if args.pianissimo_device.is_some() {
+        return Err(DictationError::SettingsError(
+            "--pianissimo-device applies only to the Pianissimo Q8 file model".into(),
+        ));
     }
     let FileModel::Whisper(model) = selected_model else { unreachable!() };
 
@@ -928,6 +939,11 @@ fn run_pianissimo_batch(
     if glossary.decoder_prompt().is_some() {
         eprintln!("Pianissimo does not use Whisper decoder hints; saved glossary replacements still apply after transcription.");
     }
+    let device = match args.pianissimo_device.as_deref() {
+        None | Some("cpu") => PianissimoDevice::Cpu,
+        Some("metal") => PianissimoDevice::Metal,
+        Some(_) => return Err(DictationError::SettingsError("Unknown Pianissimo device".into())),
+    };
     let load_started = Instant::now();
     let backend = PianissimoBackend::start()?;
     let model_verification_seconds = load_started.elapsed().as_secs_f64();
@@ -948,9 +964,9 @@ fn run_pianissimo_batch(
             let duration = audio.len() as f64 / 16_000.0;
             let decode_resample_seconds = started.elapsed().as_secs_f64();
             emit_progress(args.progress_json, started, "transcribing", Some(0));
-            let result = backend.transcribe(&audio, |pct| {
+            let result = backend.transcribe_with_device(&audio, |pct| {
                 emit_progress(args.progress_json, started, "transcribing", Some(pct));
-            })?;
+            }, device)?;
             let (text, corrections) = glossary.correct_text(&result.text);
             let segments: Vec<_> = result.words.iter().map(|word| serde_json::json!({
                 "start": word.start,
@@ -965,6 +981,7 @@ fn run_pianissimo_batch(
                 "segments": segments,
                 "language": language,
                 "model": "pianissimo-sv",
+                "requested_device": device.as_str(),
                 "file": file.display().to_string(),
                 "duration_seconds": duration,
                 "coverage_ratio": null,

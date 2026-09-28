@@ -4,6 +4,7 @@ name: Test Build
 # Deliberately separate from release.yml: uploads a workflow artifact only and
 # never creates a GitHub Release, so test builds stay off the stable channel.
 # Run with: gh workflow run test-build.yml --ref <branch> [-f label=<name>]
+# Experimental opt-in: -F pianissimo_banded_runtime=true
 # Heavy inference smoke tests are skipped here on purpose — the PR-gating CI
 # already runs the full workspace test suites before merge.
 
@@ -15,6 +16,11 @@ on:
         required: false
         default: "F13-F24"
         type: string
+      pianissimo_banded_runtime:
+        description: "Build and signed-smoke the experimental source-pinned Pianissimo Metal runtime"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -31,9 +37,14 @@ jobs:
       - name: Validate TEST artifact label before signing credentials are available
         env:
           TEST_LABEL: ${{ inputs.label }}
+          PIANISSIMO_BANDED_RUNTIME: ${{ inputs.pianissimo_banded_runtime }}
         run: |
           if [[ ! "$TEST_LABEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$ ]]; then
             echo 'TEST artifact label must be 1–40 letters, digits, dots, underscores, or hyphens.' >&2
+            exit 1
+          fi
+          if [[ "$PIANISSIMO_BANDED_RUNTIME" == "true" && "$TEST_LABEL" != *banded* ]]; then
+            echo 'Experimental Pianissimo artifacts require banded in the TEST label.' >&2
             exit 1
           fi
 
@@ -60,8 +71,21 @@ jobs:
       - name: Verify release metadata (no tag check for test builds)
         run: npm run release:check
 
-      - name: Build bundled Pianissimo runtime
+      - name: Build bundled Pianissimo CPU runtime
+        if: ${{ !inputs.pianissimo_banded_runtime }}
         run: ./scripts/build-pianissimo-native-runtime.sh
+
+      - name: Build experimental banded Pianissimo Metal runtime
+        if: ${{ inputs.pianissimo_banded_runtime }}
+        run: |
+          mkdir -p build
+          ./scripts/build-pianissimo-banded-runtime.sh build/pianissimo-native-runtime
+
+      - name: Stage pinned unpatched Pianissimo Metal reference
+        if: ${{ inputs.pianissimo_banded_runtime }}
+        env:
+          PIANISSIMO_NATIVE_VARIANT: metal
+        run: ./scripts/build-pianissimo-native-runtime.sh "$RUNNER_TEMP/pianissimo-reference-metal"
 
       - name: Install Python for build-time model conversion
         uses: actions/setup-python@v6
@@ -78,6 +102,27 @@ jobs:
             > "$RUNNER_TEMP/pianissimo-unsigned-smoke.json"
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["words"]' \
             "$RUNNER_TEMP/pianissimo-unsigned-smoke.json"
+
+      - name: Gate experimental native Pianissimo Metal inference
+        if: ${{ inputs.pianissimo_banded_runtime }}
+        run: |
+          build/pianissimo-native-runtime/bin/nemo-speech transcribe test-audio/english-jfk.wav \
+            --model build/pianissimo-sv-q8-melfix.gguf --language sv --device metal --format json \
+            > "$RUNNER_TEMP/pianissimo-unsigned-metal-smoke.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["words"]' \
+            "$RUNNER_TEMP/pianissimo-unsigned-metal-smoke.json"
+
+      - name: Gate experimental long Pianissimo Metal parity
+        if: ${{ inputs.pianissimo_banded_runtime }}
+        run: |
+          python3 scripts/make-pianissimo-long-smoke.py \
+            test-audio/english-jfk.wav "$RUNNER_TEMP/pianissimo-public-long.wav"
+          python3 scripts/eval-pianissimo-native.py \
+            --baseline "$RUNNER_TEMP/pianissimo-reference-metal/bin/nemo-speech" \
+            --candidate build/pianissimo-native-runtime/bin/nemo-speech \
+            --audio "$RUNNER_TEMP/pianissimo-public-long.wav" \
+            --model build/pianissimo-sv-q8-melfix.gguf --device metal --quality-only \
+            --require-exact-text
 
       - name: Verify third-party notices
         run: npm run licenses:check
@@ -116,6 +161,15 @@ jobs:
             > "$RUNNER_TEMP/pianissimo-signed-native-smoke.json"
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["words"]' \
             "$RUNNER_TEMP/pianissimo-signed-native-smoke.json"
+
+      - name: Gate signed native Pianissimo Metal inference before bundling
+        if: ${{ inputs.pianissimo_banded_runtime }}
+        run: |
+          build/pianissimo-native-runtime/bin/nemo-speech transcribe test-audio/english-jfk.wav \
+            --model build/pianissimo-sv-q8-melfix.gguf --language sv --device metal --format json \
+            > "$RUNNER_TEMP/pianissimo-signed-native-metal-smoke.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["words"]' \
+            "$RUNNER_TEMP/pianissimo-signed-native-metal-smoke.json"
 
       - name: Prepare notarization credentials and build metadata
         env:
@@ -228,6 +282,34 @@ jobs:
           fi
           python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["segments"]' \
             "$RUNNER_TEMP/pianissimo-signed-smoke.json"
+          rm "$HOME/Library/Application Support/Sagascript/Models/pianissimo-sv-q8-melfix.gguf"
+
+      - name: Gate signed Pianissimo Metal transcription through installed CLI symlink
+        if: ${{ inputs.pianissimo_banded_runtime }}
+        run: |
+          mkdir -p "$HOME/Library/Application Support/Sagascript/Models"
+          cp build/pianissimo-sv-q8-melfix.gguf "$HOME/Library/Application Support/Sagascript/Models/"
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
+          cli_link="$RUNNER_TEMP/sagascript-pianissimo-metal-cli"
+          ln -s "$GITHUB_WORKSPACE/$app/Contents/MacOS/sagascript" "$cli_link"
+          "$cli_link" transcribe --language sv --model pianissimo-sv --pianissimo-device metal --json \
+            test-audio/english-jfk.wav > "$RUNNER_TEMP/pianissimo-signed-metal-smoke.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["segments"] and d["requested_device"] == "metal"' \
+            "$RUNNER_TEMP/pianissimo-signed-metal-smoke.json"
+          rm "$HOME/Library/Application Support/Sagascript/Models/pianissimo-sv-q8-melfix.gguf"
+
+      - name: Gate signed long Pianissimo Metal transcription through installed CLI symlink
+        if: ${{ inputs.pianissimo_banded_runtime }}
+        run: |
+          mkdir -p "$HOME/Library/Application Support/Sagascript/Models"
+          cp build/pianissimo-sv-q8-melfix.gguf "$HOME/Library/Application Support/Sagascript/Models/"
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
+          cli_link="$RUNNER_TEMP/sagascript-pianissimo-long-cli"
+          ln -s "$GITHUB_WORKSPACE/$app/Contents/MacOS/sagascript" "$cli_link"
+          "$cli_link" transcribe --language sv --model pianissimo-sv --pianissimo-device metal --json \
+            "$RUNNER_TEMP/pianissimo-public-long.wav" > "$RUNNER_TEMP/pianissimo-signed-metal-long-smoke.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["duration_seconds"] > 180 and len(d["segments"]) > 100 and "country" in d["text"].lower() and d["requested_device"] == "metal"' \
+            "$RUNNER_TEMP/pianissimo-signed-metal-long-smoke.json"
           rm "$HOME/Library/Application Support/Sagascript/Models/pianissimo-sv-q8-melfix.gguf"
 
       - name: Gate real signed self-upgrade in an isolated app

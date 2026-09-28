@@ -44,6 +44,21 @@ pub struct PianissimoBackend {
     operation: Mutex<()>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PianissimoDevice {
+    Cpu,
+    Metal,
+}
+
+impl PianissimoDevice {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Metal => "metal",
+        }
+    }
+}
+
 struct TemporaryWav(PathBuf);
 
 impl Drop for TemporaryWav {
@@ -110,8 +125,8 @@ fn resolve_executable() -> PathBuf {
     PathBuf::from("nemo-speech")
 }
 
-fn backend_device() -> &'static str {
-    "cpu"
+fn backend_device() -> PianissimoDevice {
+    PianissimoDevice::Cpu
 }
 
 fn parse_transcript_json(bytes: &[u8]) -> Result<PianissimoResult, String> {
@@ -176,6 +191,28 @@ impl PianissimoBackend {
         progress: impl Fn(u8),
         cancelled: &AtomicBool,
     ) -> Result<PianissimoResult, DictationError> {
+        self.transcribe_with_cancel_on_device(samples, progress, cancelled, backend_device())
+    }
+
+    /// Explicit device selection for file-CLI evaluation; live dictation
+    /// remains on the existing CPU path until signed latency/quality QA.
+    pub fn transcribe_with_device(
+        &self,
+        samples: &[f32],
+        progress: impl Fn(u8),
+        device: PianissimoDevice,
+    ) -> Result<PianissimoResult, DictationError> {
+        static NEVER_CANCEL: AtomicBool = AtomicBool::new(false);
+        self.transcribe_with_cancel_on_device(samples, progress, &NEVER_CANCEL, device)
+    }
+
+    fn transcribe_with_cancel_on_device(
+        &self,
+        samples: &[f32],
+        progress: impl Fn(u8),
+        cancelled: &AtomicBool,
+        device: PianissimoDevice,
+    ) -> Result<PianissimoResult, DictationError> {
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
@@ -184,6 +221,19 @@ impl PianissimoBackend {
         })?;
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
+        }
+        // The shipped CPU-only runtime cannot satisfy an explicit CLI Metal
+        // request. Fail before writing audio or spawning a child rather than
+        // reporting an ambiguous native exit status.
+        if device == PianissimoDevice::Metal && self.executable.is_absolute() {
+            let metal_library = self.executable.parent()
+                .and_then(Path::parent)
+                .map(|root| root.join("lib/libggml-metal.dylib"));
+            if !metal_library.is_some_and(|path| path.is_file()) {
+                return Err(DictationError::TranscriptionFailed(
+                    "Pianissimo Metal runtime is unavailable; use the CPU device or a Metal-enabled TEST build".into(),
+                ));
+            }
         }
         let path = std::env::temp_dir().join(format!(
             "sagascript-pianissimo-{}.wav",
@@ -206,7 +256,7 @@ impl PianissimoBackend {
             .arg("--language")
             .arg("sv")
             .arg("--device")
-            .arg(backend_device())
+            .arg(device.as_str())
             .arg("--format")
             .arg("json")
             .arg("--word-times")
@@ -371,7 +421,61 @@ mod tests {
 
     #[test]
     fn uses_cpu_backend_on_all_platforms() {
-        assert_eq!(backend_device(), "cpu");
+        assert_eq!(backend_device(), PianissimoDevice::Cpu);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_metal_device_is_sent_to_native_child() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-pianissimo-device-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::write(root.join("lib/libggml-metal.dylib"), b"fixture").unwrap();
+        let executable = root.join("bin/expect-metal");
+        std::fs::write(
+            &executable,
+            b"#!/bin/sh\nfound=0\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = '--device' ]; then\n    [ \"$2\" = 'metal' ] || exit 12\n    found=1\n  fi\n  shift\ndone\n[ \"$found\" = 1 ] || exit 13\nprintf '%s\\n' '{\"text\":\"Hej\",\"words\":[{\"word\":\"Hej\",\"start\":0.0,\"end\":0.1}]}'\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+        let backend = PianissimoBackend {
+            executable,
+            active_child: Mutex::new(None),
+            operation: Mutex::new(()),
+        };
+        let result = backend
+            .transcribe_with_device(&[0.0; 1600], |_| {}, PianissimoDevice::Metal)
+            .unwrap();
+        assert_eq!(result.text, "Hej");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_metal_rejects_cpu_only_runtime_before_spawn() {
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-pianissimo-no-metal-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        let backend = PianissimoBackend {
+            executable: root.join("bin/nemo-speech"),
+            active_child: Mutex::new(None),
+            operation: Mutex::new(()),
+        };
+        let error = backend
+            .transcribe_with_device(&[0.0; 1600], |_| {}, PianissimoDevice::Metal)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Metal runtime is unavailable"), "{error}");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

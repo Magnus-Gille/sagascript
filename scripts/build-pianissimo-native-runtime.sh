@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Stage NVIDIA NeMo-Speech.cpp's pinned Apple Silicon CPU runtime.
+# Stage NVIDIA NeMo-Speech.cpp's pinned Apple Silicon runtime. CPU is the
+# production default; the Metal variant is a pinned TEST reference only.
 # The archive is verified before it is unpacked.  Set
 # PIANISSIMO_NATIVE_ARCHIVE to use a local archive in offline builds/tests.
 
@@ -14,9 +15,19 @@ archive_override=${PIANISSIMO_NATIVE_ARCHIVE:-}
   exit 1
 }
 
-archive_name="nemo-speech-0.1.0-macos-aarch64-cpu.tar.gz"
+variant=${PIANISSIMO_NATIVE_VARIANT:-cpu}
+case "$variant" in
+  cpu)
+    archive_name="nemo-speech-0.1.0-macos-aarch64-cpu.tar.gz"
+    archive_sha256="971661d38d4bf97a63c528d13041a964316d25068d8df045e5b4839848092f25"
+    ;;
+  metal)
+    archive_name="nemo-speech-0.1.0-macos-aarch64-metal.tar.gz"
+    archive_sha256="f1dff4f9dd9c96214f8cb78b982812459132df8a4ad1a42409fd94de4a366244"
+    ;;
+  *) echo "Unknown Pianissimo runtime variant: $variant" >&2; exit 1 ;;
+esac
 archive_url="https://github.com/NVIDIA/NeMo-Speech.cpp/releases/download/v0.1.0/$archive_name"
-archive_sha256="971661d38d4bf97a63c528d13041a964316d25068d8df045e5b4839848092f25"
 
 [[ ! -e "$output" ]] || {
   echo "Native runtime output already exists: $output" >&2
@@ -132,6 +143,10 @@ for library in \
     exit 1
   }
 done
+if [[ "$variant" == metal && ! -e "$output/lib/libggml-metal.dylib" ]]; then
+  echo "Pinned Metal archive is missing libggml-metal.dylib" >&2
+  exit 1
+fi
 for notice in \
   share/licenses/nemo-speech/LICENSE \
   share/licenses/nemo-speech/NOTICE \

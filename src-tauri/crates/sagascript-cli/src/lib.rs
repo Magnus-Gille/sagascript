@@ -1031,6 +1031,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_explicit_pianissimo_metal_device() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "transcribe", "file.wav", "--language", "sv",
+            "--model", "pianissimo-sv", "--pianissimo-device", "metal",
+        ])
+        .unwrap();
+        let Command::Transcribe(args) = cli.command.unwrap() else {
+            panic!("expected Transcribe");
+        };
+        assert_eq!(args.pianissimo_device.as_deref(), Some("metal"));
+        assert!(Cli::try_parse_from([
+            "sagascript", "transcribe", "file.wav", "--pianissimo-device", "cuda",
+        ])
+        .is_err());
+    }
+
     #[cfg(feature = "diarization")]
     #[test]
     fn diarization_cache_requires_diarization() {

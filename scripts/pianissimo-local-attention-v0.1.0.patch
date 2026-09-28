@@ -1,0 +1,213 @@
+diff --git a/src/asr/encoder/fastconformer.cpp b/src/asr/encoder/fastconformer.cpp
+index ec039c8..9489c01 100644
+--- a/src/asr/encoder/fastconformer.cpp
++++ b/src/asr/encoder/fastconformer.cpp
+@@ -710,8 +710,13 @@ ConformerLayer::build_graph(
+         if (input_tensors.tensor_count() >= 3) {
+             offline_mask = input_tensors.get_tensor(2).tensor;
+         }
+-        auto mha_out =
+-            self_attn_->build_graph_masked(session, mha_in, session_tensor_container, offline_mask);
++        // Only regular local windows can be tiled by an encoder-frame band.
++        // Chunked-limited attention uses a different mask geometry and keeps
++        // the original dense path until it has its own parity tests.
++        const int local_left = cfg_.chunked_limited_attention ? -1 : cfg_.offline_left_ctx;
++        const int local_right = cfg_.chunked_limited_attention ? -1 : cfg_.offline_right_ctx;
++        auto mha_out = self_attn_->build_graph_masked(
++            session, mha_in, session_tensor_container, offline_mask, local_left, local_right);
+         attn_tensor = mha_out.get_tensor(0).tensor;
+     } else {
+         auto mha_out = build_mha_cached(session, session_tensor_container, x_normed, cache);
+diff --git a/src/asr/encoder/rel_pos_attention.cpp b/src/asr/encoder/rel_pos_attention.cpp
+index f7fceda..6543d63 100644
+--- a/src/asr/encoder/rel_pos_attention.cpp
++++ b/src/asr/encoder/rel_pos_attention.cpp
+@@ -11,8 +11,10 @@
+ #include <ggml-backend.h>
+ #include <ggml.h>
+ 
++#include <algorithm>
+ #include <cmath>
+ #include <stdexcept>
++#include <utility>
+ #include <vector>
+ 
+ namespace ggml_runtime {
+@@ -163,7 +165,7 @@ RelPositionMultiHeadAttention::build_graph(
+ TensorBag
+ RelPositionMultiHeadAttention::build_graph_masked(
+     Session* session, TensorBag input_tensors, TensorContainer* session_tensor_container,
+-    ggml_tensor* attn_mask) {
++    ggml_tensor* attn_mask, int local_left_context, int local_right_context) {
+     auto input_tensor = input_tensors.get_tensor(0);
+     auto bf_ctx = session_tensor_container->get_ctx_of_buffer_type(input_tensor.buft);
+ 
+@@ -226,6 +228,22 @@ RelPositionMultiHeadAttention::build_graph_masked(
+ 
+     auto scale_factor = 1.0f / sqrtf(d_k);
+ 
++    auto finish_attention = [&](ggml_tensor* context, bool heads_merged) -> TensorBag {
++        if (heads_merged) {
++            context = ggml_reshape_3d(
++                bf_ctx.ctx, context, n_head * d_k, context->ne[2], context->ne[3]);
++        } else {
++            context = ggml_reshape_3d(
++                bf_ctx.ctx, ggml_cont(bf_ctx.ctx, context), n_head * d_k,
++                context->ne[2], context->ne[3]);
++        }
++        auto out_bag = TensorBag();
++        out_bag.add_tensor(ggml_bf_tensor(context, bf_ctx.buft));
++        out_bag = linear_out->build_graph(session, out_bag, session_tensor_container);
++        out_bag.add_tensor(ggml_bf_tensor(context, bf_ctx.buft));
++        return out_bag;
++    };
++
+     // attn: attention context in [d_k, n_head, q_len, batch] layout, ready for
+     // the shared merge-heads reshape below.
+     ggml_tensor* attn = nullptr;
+@@ -267,10 +285,101 @@ RelPositionMultiHeadAttention::build_graph_masked(
+     if (!use_fused)
+ #endif
+     {
+-        // Batch-preserving formulation: Q/K/V [dk,T,H,B], P [dk,2T-1,H].
+-        // Every reshape and view must retain the B stride.
+         const int64_t T = input_tensor.tensor->ne[1];
+         const int64_t B = input_tensor.tensor->ne[2];
++        // Use small dense products restricted to each query tile's
++        // actual key window. Keep the original path for short input, batches,
++        // unbounded attention, and non-regular masks. Slicing the existing
++        // additive mask preserves every boundary and external exclusion.
++        const bool tile_local = attn_mask != nullptr && B == 1 && T > 2048 &&
++                                local_left_context >= 0 && local_right_context >= 0 &&
++                                static_cast<int64_t>(local_left_context) + local_right_context + 1 < T &&
++                                p->ne[2] == 2 * T - 1 &&
++                                attn_mask->ne[0] == T && attn_mask->ne[1] == T &&
++                                attn_mask->ne[2] == 1 && attn_mask->ne[3] == 1;
++        if (tile_local) {
++            constexpr int64_t kQueryTile = 256;
++            std::vector<ggml_tensor*> tiles;
++            tiles.reserve((T + kQueryTile - 1) / kQueryTile);
++            auto bu = ggml_reshape_4d(bf_ctx.ctx, pos_bias_u_tensor.tensor, d_k, 1, n_head, 1);
++            auto bv = ggml_reshape_4d(bf_ctx.ctx, pos_bias_v_tensor.tensor, d_k, 1, n_head, 1);
++            for (int64_t qs = 0; qs < T; qs += kQueryTile) {
++                const int64_t qe = std::min(T, qs + kQueryTile);
++                const int64_t Q = qe - qs;
++                const int64_t ks = std::max<int64_t>(0, qs - local_left_context);
++                const int64_t ke = std::min<int64_t>(T, qe + local_right_context);
++                const int64_t K = ke - ks;
++
++                auto q_slice = ggml_view_4d(
++                    bf_ctx.ctx, q_multi_head, d_k, n_head, Q, B, q_multi_head->nb[1],
++                    q_multi_head->nb[2], q_multi_head->nb[3], qs * q_multi_head->nb[2]);
++                auto k_slice = ggml_view_4d(
++                    bf_ctx.ctx, k_multi_head, d_k, K, n_head, B, k_multi_head->nb[1],
++                    k_multi_head->nb[2], k_multi_head->nb[3], ks * k_multi_head->nb[1]);
++                auto v_slice = ggml_view_4d(
++                    bf_ctx.ctx, v_reshaped, d_k, n_head, K, B, v_reshaped->nb[1],
++                    v_reshaped->nb[2], v_reshaped->nb[3], ks * v_reshaped->nb[2]);
++                auto qh = ggml_cont(bf_ctx.ctx, ggml_permute(bf_ctx.ctx, q_slice, 0, 2, 1, 3));
++                auto kh = ggml_cont(bf_ctx.ctx, k_slice);
++                auto vh = ggml_cont(bf_ctx.ctx, ggml_permute(bf_ctx.ctx, v_slice, 0, 2, 1, 3));
++                auto qu = ggml_add(bf_ctx.ctx, qh, bu);
++                auto qv = ggml_add(bf_ctx.ctx, qh, bv);
++                auto matrix_ac = ggml_mul_mat(bf_ctx.ctx, kh, qu);  // [K,Q,H,B]
++
++                // Global relative-position index is T-1+key-query. For the
++                // window [ks,ke) and tile [qs,qe), the required slice starts
++                // at T+ks-qe and has K+Q-1 positions. After this translation
++                // the standard relative shift uses Q instead of full T.
++                const int64_t relative_start = T + ks - qe;
++                const int64_t S = K + Q - 1;
++                auto p_slice = ggml_view_3d(
++                    bf_ctx.ctx, p, d_k, n_head, S, p->nb[1], p->nb[2],
++                    relative_start * p->nb[2]);
++                auto ph = ggml_cont(bf_ctx.ctx, ggml_permute(bf_ctx.ctx, p_slice, 0, 2, 1, 3));
++                auto matrix_bd = ggml_mul_mat(bf_ctx.ctx, ph, qv);  // [S,Q,H,B]
++                auto first_row = ggml_view_4d(
++                    bf_ctx.ctx, matrix_bd, 1, Q, n_head, B, matrix_bd->nb[1],
++                    matrix_bd->nb[2], matrix_bd->nb[3], 0);
++                auto zero_row = ggml_scale(bf_ctx.ctx, ggml_cont(bf_ctx.ctx, first_row), 0.0f);
++                matrix_bd = ggml_concat(bf_ctx.ctx, zero_row, matrix_bd, 0);  // [S+1,Q,H,B]
++                matrix_bd = ggml_reshape_4d(bf_ctx.ctx, matrix_bd, Q, S + 1, n_head, B);
++                matrix_bd = ggml_view_4d(
++                    bf_ctx.ctx, matrix_bd, Q, S, n_head, B, matrix_bd->nb[1],
++                    matrix_bd->nb[2], matrix_bd->nb[3], matrix_bd->nb[1]);
++                matrix_bd = ggml_cont(bf_ctx.ctx, matrix_bd);
++                matrix_bd = ggml_reshape_4d(bf_ctx.ctx, matrix_bd, S, Q, n_head, B);
++                matrix_bd = ggml_view_4d(
++                    bf_ctx.ctx, matrix_bd, K, Q, n_head, B, matrix_bd->nb[1],
++                    matrix_bd->nb[2], matrix_bd->nb[3], 0);
++                matrix_bd = ggml_cont(bf_ctx.ctx, matrix_bd);
++
++                auto scores = ggml_scale_inplace(
++                    bf_ctx.ctx, ggml_add(bf_ctx.ctx, matrix_ac, matrix_bd), scale_factor);
++                auto mask_slice = ggml_view_2d(
++                    bf_ctx.ctx, attn_mask, K, Q, attn_mask->nb[1],
++                    ks * attn_mask->nb[0] + qs * attn_mask->nb[1]);
++                scores = ggml_add(bf_ctx.ctx, scores, mask_slice);
++                auto soft = ggml_soft_max_inplace(bf_ctx.ctx, scores);
++                auto vtk = ggml_cont(bf_ctx.ctx, ggml_permute(bf_ctx.ctx, vh, 1, 0, 2, 3));
++                auto ctxh = ggml_mul_mat(bf_ctx.ctx, vtk, soft);
++                tiles.push_back(ggml_cont(bf_ctx.ctx, ggml_permute(bf_ctx.ctx, ctxh, 0, 2, 1, 3)));
++            }
++            // Balanced concatenation keeps intermediate copies bounded while
++            // preserving query order and the original [dk,H,T,B] layout.
++            while (tiles.size() > 1) {
++                std::vector<ggml_tensor*> next;
++                next.reserve((tiles.size() + 1) / 2);
++                for (size_t i = 0; i < tiles.size(); i += 2) {
++                    next.push_back(i + 1 < tiles.size()
++                                       ? ggml_concat(bf_ctx.ctx, tiles[i], tiles[i + 1], 2)
++                                       : tiles[i]);
++                }
++                tiles = std::move(next);
++            }
++            return finish_attention(tiles.front(), /*heads_merged=*/false);
++        }
++        // Batch-preserving formulation: Q/K/V [dk,T,H,B], P [dk,2T-1,H].
++        // Every reshape and view must retain the B stride.
+         auto qh = ggml_cont(bf_ctx.ctx, ggml_permute(bf_ctx.ctx, q_multi_head, 0, 2, 1, 3));
+         auto kh = ggml_cont(bf_ctx.ctx, k_multi_head);
+         auto vh = ggml_cont(bf_ctx.ctx, ggml_permute(bf_ctx.ctx, v_reshaped, 0, 2, 1, 3));
+@@ -318,22 +427,7 @@ RelPositionMultiHeadAttention::build_graph_masked(
+         attn = ggml_permute(bf_ctx.ctx, ctxh, 0, 2, 1, 3);  // [dk,H,T,B]
+     }
+ 
+-    if (attn_heads_merged) {
+-        // merge_heads=true makes the permuted view above contiguous as
+-        // [d_k*n_head, q, batch], so reshape it directly without a copy.
+-        attn = ggml_reshape_3d(bf_ctx.ctx, attn, n_head * d_k, attn->ne[2], attn->ne[3]);
+-    } else {
+-        attn = ggml_reshape_3d(
+-            bf_ctx.ctx, ggml_cont(bf_ctx.ctx, attn), n_head * d_k, attn->ne[2], attn->ne[3]);
+-    }
+-
+-    auto out_bag = TensorBag();
+-    out_bag.add_tensor(ggml_bf_tensor(attn, bf_ctx.buft));
+-
+-    out_bag = linear_out->build_graph(session, out_bag, session_tensor_container);
+-    out_bag.add_tensor(ggml_bf_tensor(attn, bf_ctx.buft));
+-
+-    return out_bag;
++    return finish_attention(attn, attn_heads_merged);
+ }
+ 
+ void
+diff --git a/src/asr/encoder/rel_pos_attention.h b/src/asr/encoder/rel_pos_attention.h
+index e20ef0d..9b6eece 100644
+--- a/src/asr/encoder/rel_pos_attention.h
++++ b/src/asr/encoder/rel_pos_attention.h
+@@ -71,10 +71,11 @@ class RelPositionMultiHeadAttention : public Module {
+     // the scaled-dot-product scores and the softmax. Pass `attn_mask=nullptr`
+     // to behave identically to `build_graph` - i.e. fully bidirectional
+     // attention. Mask must broadcast onto the scores tensor of shape
+-    // (kv_len, q_len, n_head, batch).
++    // (kv_len, q_len, n_head, batch). Finite local contexts are measured in
++    // encoder frames and must be the ones used to construct attn_mask.
+     TensorBag build_graph_masked(
+         Session* session, TensorBag input_tensors, TensorContainer* session_tensor_container,
+-        ggml_tensor* attn_mask);
++        ggml_tensor* attn_mask, int local_left_context = -1, int local_right_context = -1);
+     void set_data(Session* session) override;
+ 
+    private:
