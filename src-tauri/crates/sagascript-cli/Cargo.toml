@@ -44,3 +44,6 @@ diarization = ["sagascript-core/diarization"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3"

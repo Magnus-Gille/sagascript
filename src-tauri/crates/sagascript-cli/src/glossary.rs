@@ -301,7 +301,7 @@ fn load_training_input(
         }
         FileModel::PianissimoOriginal if !pianissimo_model::is_downloaded() => {
             return Err(DictationError::TranscriptionFailed(
-                "Pianissimo Q8 is not downloaded. Run: sagascript download-model pianissimo-sv".into()
+                "Pianissimo is not downloaded. Run: sagascript download-model pianissimo-sv".into()
             ));
         }
         _ => {}
@@ -324,7 +324,7 @@ fn load_training_input(
             )?
         }
         FileModel::PianissimoOriginal => {
-            eprintln!("Transcribing training input locally with Pianissimo Q8...");
+            eprintln!("Transcribing training input locally with Pianissimo...");
             PianissimoBackend::start()?.transcribe(&audio, |_| {})?.text
         }
     };

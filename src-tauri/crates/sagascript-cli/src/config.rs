@@ -2,7 +2,7 @@ use clap::{Args, Subcommand};
 
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{
-    self, validate_hotkey, FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings,
+    self, validate_hotkey, EnginePrewarm, FileModelPreference, HotkeyMode, HotkeyProfile, Language, Settings,
     WhisperModel,
 };
 use sagascript_core::transcription::Glossary;
@@ -21,7 +21,7 @@ Show all settings in a table with their current values and defaults.
 
 Valid keys: language, whisper_model, file_transcription_model, hotkey_mode (push, toggle), show_overlay, \
 auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, \
-beam_size, temperature_fallback, vad_enabled.")]
+beam_size, temperature_fallback, vad_enabled, engine_prewarm, engine_idle_unload_minutes.")]
     List,
 
     /// Get a single setting value
@@ -31,7 +31,7 @@ Print the current value of a single setting to stdout.
 
 Valid keys: language, whisper_model, file_transcription_model, hotkey_mode (push, toggle), show_overlay, \
 auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, \
-beam_size, temperature_fallback, vad_enabled",
+beam_size, temperature_fallback, vad_enabled, engine_prewarm, engine_idle_unload_minutes",
         after_long_help = "\
 EXAMPLES:
   sagascript config get language
@@ -39,7 +39,7 @@ EXAMPLES:
   sagascript config get initial_prompt"
     )]
     Get {
-        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
+        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled, engine_prewarm, engine_idle_unload_minutes]
         key: String,
     },
 
@@ -67,7 +67,9 @@ Valid values per key:
   initial_prompt       Personal dictionary text; aliases use TERM = ALIAS | ALIAS
   beam_size            Integer >= 0 (0 = greedy/fast, 5 = beam search/accurate)
   temperature_fallback true, false
-  vad_enabled          true, false",
+  vad_enabled          true, false
+  engine_prewarm       off, on_app_start, on_key_down (when the Pianissimo engine loads its model)
+  engine_idle_unload_minutes  Integer >= 0 (default 10; engine host exits after twice this; 0 = never unload)",
         after_long_help = "\
 EXAMPLES:
   sagascript config set language sv
@@ -79,7 +81,7 @@ EXAMPLES:
   sagascript config set initial_prompt $'OpenRouter = open router | open vrouter\\nmerge = merch'"
     )]
     Set {
-        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled]
+        /// Setting key [possible values: language, whisper_model, file_transcription_model, hotkey_mode, show_overlay, auto_paste, auto_select_model, pianissimo_dictation, hotkey, initial_prompt, beam_size, temperature_fallback, vad_enabled, engine_prewarm, engine_idle_unload_minutes]
         key: String,
         /// New value for the setting
         value: String,
@@ -187,6 +189,8 @@ const VALID_KEYS: &[&str] = &[
     "beam_size",
     "temperature_fallback",
     "vad_enabled",
+    "engine_prewarm",
+    "engine_idle_unload_minutes",
 ];
 
 pub fn run(args: ConfigArgs) -> Result<(), DictationError> {
@@ -454,6 +458,14 @@ fn cmd_list() -> Result<(), DictationError> {
         "{:<20} {:<24} {}",
         "vad_enabled", current.vad_enabled, defaults.vad_enabled
     );
+    println!(
+        "{:<20} {:<24} {}",
+        "engine_prewarm", current.engine_prewarm.id(), defaults.engine_prewarm.id()
+    );
+    println!(
+        "{:<20} {:<24} {}",
+        "engine_idle_unload_minutes", current.engine_idle_unload_minutes, defaults.engine_idle_unload_minutes
+    );
     Ok(())
 }
 
@@ -598,6 +610,16 @@ fn apply_setting_value(
         "vad_enabled" => {
             settings.vad_enabled = parse_bool(value, "vad_enabled")?;
         }
+        "engine_prewarm" => {
+            settings.engine_prewarm = EnginePrewarm::parse_id(value).map_err(DictationError::SettingsError)?;
+        }
+        "engine_idle_unload_minutes" => {
+            settings.engine_idle_unload_minutes = value.parse::<u32>().map_err(|_| {
+                DictationError::SettingsError(format!(
+                    "engine_idle_unload_minutes must be a non-negative integer, got '{value}'"
+                ))
+            })?;
+        }
         _ => unreachable!(), // validate_key already checked
     }
     Ok(())
@@ -709,6 +731,14 @@ fn reset_setting_value(
             settings.vad_enabled = defaults.vad_enabled;
             Ok(())
         }
+        "engine_prewarm" => {
+            settings.engine_prewarm = defaults.engine_prewarm;
+            Ok(())
+        }
+        "engine_idle_unload_minutes" => {
+            settings.engine_idle_unload_minutes = defaults.engine_idle_unload_minutes;
+            Ok(())
+        }
         _ => unreachable!("validate_key already checked the setting key"),
     }
 }
@@ -777,6 +807,8 @@ fn get_setting_value(settings: &Settings, key: &str) -> String {
         "beam_size" => settings.beam_size.to_string(),
         "temperature_fallback" => settings.temperature_fallback.to_string(),
         "vad_enabled" => settings.vad_enabled.to_string(),
+        "engine_prewarm" => settings.engine_prewarm.id().to_string(),
+        "engine_idle_unload_minutes" => settings.engine_idle_unload_minutes.to_string(),
         _ => "unknown".to_string(),
     }
 }
@@ -1300,6 +1332,8 @@ mod tests {
         assert_eq!(get_setting_value(&settings, "file_transcription_model"), "pianissimo-sv");
     }
 
+    // Selecting Pianissimo is refused unless the platform gate is open.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[test]
     fn pianissimo_dictation_can_be_set_and_reset_to_default() {
         let mut settings = Settings::default();
@@ -1371,6 +1405,29 @@ mod tests {
         assert_eq!(get_setting_value(&settings, "beam_size"), "0");
         assert_eq!(get_setting_value(&settings, "temperature_fallback"), "true");
         assert_eq!(get_setting_value(&settings, "vad_enabled"), "false");
+    }
+
+    #[test]
+    fn engine_settings_can_be_set_reset_and_reject_bad_values() {
+        let mut settings = Settings::default();
+        assert_eq!(get_setting_value(&settings, "engine_prewarm"), "on_key_down");
+        assert_eq!(get_setting_value(&settings, "engine_idle_unload_minutes"), "10");
+
+        apply_setting_value(&mut settings, "engine_prewarm", "on_app_start").unwrap();
+        apply_setting_value(&mut settings, "engine_idle_unload_minutes", "3").unwrap();
+        assert_eq!(get_setting_value(&settings, "engine_prewarm"), "on_app_start");
+        assert_eq!(get_setting_value(&settings, "engine_idle_unload_minutes"), "3");
+
+        assert!(apply_setting_value(&mut settings, "engine_prewarm", "always").is_err());
+        assert!(apply_setting_value(&mut settings, "engine_idle_unload_minutes", "-1").is_err());
+        assert!(apply_setting_value(&mut settings, "engine_idle_unload_minutes", "ten").is_err());
+        assert_eq!(get_setting_value(&settings, "engine_prewarm"), "on_app_start");
+
+        let defaults = Settings::default();
+        reset_setting_value(&mut settings, "engine_prewarm", &defaults).unwrap();
+        reset_setting_value(&mut settings, "engine_idle_unload_minutes", &defaults).unwrap();
+        assert_eq!(get_setting_value(&settings, "engine_prewarm"), "on_key_down");
+        assert_eq!(get_setting_value(&settings, "engine_idle_unload_minutes"), "10");
     }
 
     #[test]

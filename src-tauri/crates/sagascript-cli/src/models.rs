@@ -62,8 +62,8 @@ pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
             println!(
                 "{:<20} {:<10} {:>5} MB  {:<12} {:<12}",
                 "pianissimo-sv",
-                "Pianissimo Q8",
-                714,
+                "Pianissimo",
+                (pianissimo_model::installed_size_bytes() / 1_048_576) as u32,
                 if pianissimo_model::is_downloaded() { "yes" } else { "no" },
                 lang.display_name(),
             );
@@ -110,7 +110,7 @@ pub struct DeleteModelArgs {
 pub fn delete(args: DeleteModelArgs) -> Result<(), DictationError> {
     if args.model == "pianissimo-sv" {
         pianissimo_model::delete()?;
-        eprintln!("Deleted Pianissimo Q8 and any legacy original checkpoint");
+        eprintln!("Deleted Pianissimo (Core ML model and any legacy NeMo/GGUF files)");
         return Ok(());
     }
     let whisper_model = parse_model(&args.model)?;
@@ -145,10 +145,13 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
     if args.model == "pianissimo-sv" {
         if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
             return Err(DictationError::TranscriptionFailed(
-                "Pianissimo requires macOS 13 or later".into(),
+                sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into(),
             ));
         }
-        eprintln!("Downloading Pianissimo Q8 (~714 MB, CC BY 4.0)...");
+        eprintln!(
+            "Downloading Pianissimo Core ML model (~{} MB, CC BY 4.0)...",
+            pianissimo_model::download_size_bytes() / 1_048_576
+        );
         let path = pianissimo_model::download(|downloaded, total| {
             if total > 0 {
                 eprint!("\r  {:.1}/{:.1} MB ({:.0}%)", downloaded as f64 / 1_048_576.0,

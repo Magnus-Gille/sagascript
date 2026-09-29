@@ -757,7 +757,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
         #[cfg(feature = "diarization")]
         if args.diarize || args.meeting_json {
             return Err(DictationError::SettingsError(
-                "Pianissimo Q8 supports plain Swedish file transcription only; select a Whisper model for diarization or meeting output".into(),
+                "Pianissimo supports plain Swedish file transcription only; select a Whisper model for diarization or meeting output".into(),
             ));
         }
         return run_pianissimo_batch(&args, &files, &stored, language, &glossary);
@@ -901,6 +901,60 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     Ok(())
 }
 
+struct PianissimoPerformance {
+    model_load_seconds: f64,
+    model_verification_seconds: f64,
+    decode_resample_seconds: f64,
+    total_seconds: f64,
+    engine_warm: bool,
+}
+
+/// Per-file JSON for `--model pianissimo-sv`. The key set is a compatibility
+/// contract: only additive keys (`performance.engine`, `performance.engine_warm`)
+/// may be added to what the NeMo-based release emitted.
+fn pianissimo_file_json(
+    text: &str,
+    words: &[sagascript_core::transcription::pianissimo_backend::PianissimoWord],
+    language: Language,
+    file: &Path,
+    duration: f64,
+    corrections: &impl serde::Serialize,
+    perf: &PianissimoPerformance,
+) -> serde_json::Value {
+    let segments: Vec<_> = words.iter().map(|word| serde_json::json!({
+        "start": word.start,
+        "end": word.end,
+        "text": word.word,
+        "avg_logprob": null,
+        "no_speech_prob": null,
+        "quarantined": false,
+    })).collect();
+    serde_json::json!({
+        "text": text,
+        "segments": segments,
+        "language": language,
+        "model": "pianissimo-sv",
+        "file": file.display().to_string(),
+        "duration_seconds": duration,
+        "coverage_ratio": null,
+        "uncovered_spans": [],
+        "repetition_spans": [],
+        "detected_language": null,
+        "language_redetection_enabled": false,
+        "language_regions": null,
+        "warnings": [],
+        "vocabulary_corrections": corrections,
+        "performance": {
+            "model_load_seconds": perf.model_load_seconds,
+            "model_verification_seconds": perf.model_verification_seconds,
+            "decode_resample_seconds": perf.decode_resample_seconds,
+            "total_seconds": perf.total_seconds,
+            "engine": "coreml",
+            "engine_warm": perf.engine_warm,
+        },
+    })
+}
+
 fn run_pianissimo_batch(
     args: &TranscribeArgs,
     files: &[PathBuf],
@@ -910,19 +964,24 @@ fn run_pianissimo_batch(
 ) -> Result<(), DictationError> {
     if language != Language::Swedish {
         return Err(DictationError::SettingsError(
-            "Pianissimo Q8 supports Swedish files only".into(),
+            "Pianissimo supports Swedish files only".into(),
         ));
     }
     if args.vad || args.beam_size.is_some() || args.parallel.is_some() || args.correct_hints
         || args.prompt.is_some() || args.prompt_file.is_some()
     {
         return Err(DictationError::SettingsError(
-            "Pianissimo Q8 does not support --vad, --beam, --parallel, --correct-hints, or decoder --prompt/--prompt-file".into(),
+            "Pianissimo does not support --vad, --beam, --parallel, --correct-hints, or decoder --prompt/--prompt-file".into(),
+        ));
+    }
+    if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
+        return Err(DictationError::TranscriptionFailed(
+            sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into(),
         ));
     }
     if !pianissimo_model::is_downloaded() {
         return Err(DictationError::TranscriptionFailed(
-            "Pianissimo Q8 is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
+            "Pianissimo is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
         ));
     }
     if glossary.decoder_prompt().is_some() {
@@ -931,6 +990,8 @@ fn run_pianissimo_batch(
     let load_started = Instant::now();
     let backend = PianissimoBackend::start()?;
     let model_verification_seconds = load_started.elapsed().as_secs_f64();
+    // Start the engine host and load the model once for the whole batch.
+    let warm = backend.warm_up()?;
     let mut items = Vec::with_capacity(if args.json { files.len() } else { 0 });
     let (processed, failures) = process_batch(
         files,
@@ -952,36 +1013,21 @@ fn run_pianissimo_batch(
                 emit_progress(args.progress_json, started, "transcribing", Some(pct));
             })?;
             let (text, corrections) = glossary.correct_text(&result.text);
-            let segments: Vec<_> = result.words.iter().map(|word| serde_json::json!({
-                "start": word.start,
-                "end": word.end,
-                "text": word.word,
-                "avg_logprob": null,
-                "no_speech_prob": null,
-                "quarantined": false,
-            })).collect();
-            let output = serde_json::json!({
-                "text": text,
-                "segments": segments,
-                "language": language,
-                "model": "pianissimo-sv",
-                "file": file.display().to_string(),
-                "duration_seconds": duration,
-                "coverage_ratio": null,
-                "uncovered_spans": [],
-                "repetition_spans": [],
-                "detected_language": null,
-                "language_redetection_enabled": false,
-                "language_regions": null,
-                "warnings": [],
-                "vocabulary_corrections": corrections,
-                "performance": {
-                    "model_load_seconds": 0.0,
-                    "model_verification_seconds": if index == 0 { model_verification_seconds } else { 0.0 },
-                    "decode_resample_seconds": decode_resample_seconds,
-                    "total_seconds": started.elapsed().as_secs_f64(),
+            let output = pianissimo_file_json(
+                &text,
+                &result.words,
+                language,
+                file,
+                duration,
+                &corrections,
+                &PianissimoPerformance {
+                    model_load_seconds: if index == 0 { warm.load_seconds } else { 0.0 },
+                    model_verification_seconds: if index == 0 { model_verification_seconds } else { 0.0 },
+                    decode_resample_seconds,
+                    total_seconds: started.elapsed().as_secs_f64(),
+                    engine_warm: index > 0 || warm.was_warm,
                 },
-            });
+            );
             emit_progress(args.progress_json, started, "completed", Some(100));
             Ok(FileTranscription {
                 json: output,
@@ -3508,5 +3554,56 @@ mod diarize_threshold_tests {
                 "meeting JSON should conflict with {conflict}"
             );
         }
+    }
+
+    #[test]
+    fn pianissimo_json_keeps_the_pre_sidecar_keys_and_only_adds_engine_fields() {
+        use sagascript_core::transcription::pianissimo_backend::PianissimoWord;
+        let words = vec![PianissimoWord { word: "hej".into(), start: 0.1, end: 0.4 }];
+        let corrections: Vec<String> = Vec::new();
+        let json = pianissimo_file_json(
+            "hej",
+            &words,
+            Language::Swedish,
+            Path::new("a.wav"),
+            1.5,
+            &corrections,
+            &PianissimoPerformance {
+                model_load_seconds: 1.25,
+                model_verification_seconds: 0.5,
+                decode_resample_seconds: 0.1,
+                total_seconds: 2.0,
+                engine_warm: false,
+            },
+        );
+
+        // Frozen from the NeMo-era release: removing or renaming any of these breaks scripts.
+        const FROZEN_TOP: [&str; 15] = [
+            "text", "segments", "language", "model", "file", "duration_seconds", "coverage_ratio",
+            "uncovered_spans", "repetition_spans", "detected_language", "language_redetection_enabled",
+            "language_regions", "warnings", "vocabulary_corrections", "performance",
+        ];
+        const FROZEN_PERFORMANCE: [&str; 4] = [
+            "model_load_seconds", "model_verification_seconds", "decode_resample_seconds", "total_seconds",
+        ];
+        const FROZEN_SEGMENT: [&str; 6] =
+            ["start", "end", "text", "avg_logprob", "no_speech_prob", "quarantined"];
+        let keys = |value: &serde_json::Value| -> std::collections::BTreeSet<String> {
+            value.as_object().unwrap().keys().cloned().collect()
+        };
+        let expect = |frozen: &[&str], extra: &[&str]| -> std::collections::BTreeSet<String> {
+            frozen.iter().chain(extra).map(|k| k.to_string()).collect()
+        };
+        assert_eq!(keys(&json), expect(&FROZEN_TOP, &[]));
+        assert_eq!(
+            keys(&json["performance"]),
+            expect(&FROZEN_PERFORMANCE, &["engine", "engine_warm"])
+        );
+        assert_eq!(keys(&json["segments"][0]), expect(&FROZEN_SEGMENT, &[]));
+        assert_eq!(json["performance"]["engine"], "coreml");
+        assert_eq!(json["performance"]["engine_warm"], false);
+        assert_eq!(json["performance"]["model_load_seconds"], 1.25);
+        assert_eq!(json["model"], "pianissimo-sv");
+        assert_eq!(json["language"], "sv");
     }
 }
