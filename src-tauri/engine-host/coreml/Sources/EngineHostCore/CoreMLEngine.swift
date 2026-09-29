@@ -278,14 +278,19 @@ public final class CoreMLEngine: EngineBackend {
 
     private var configuredMaxInFlight: Int { Self.configuredMaxInFlight }
 
-    /// Measured on the 15-minute Swedish benchmark: 1 -> 5.3 s, 2 -> 3.2 s,
-    /// 3 -> 2.9 s, 4 -> 2.8 s, 6 -> 2.8 s. The Neural Engine encoder becomes the
-    /// bottleneck at 3 (about 2.2 s of serialized encoder time), so 3 is the
-    /// smallest value on the plateau. `SAGASCRIPT_ENGINE_MAX_IN_FLIGHT` overrides
-    /// it for benchmarking.
+    /// Host scheduler slots. Measured on the 15-minute Swedish benchmark: 1 -> 5.3 s,
+    /// 2 -> 3.2 s, 3 -> 2.9 s, 4 -> 2.8 s, 6 -> 2.8 s. The Neural Engine encoder
+    /// becomes the bottleneck at 3 batch windows, so batch work needs 3. The client
+    /// keeps one slot reserved for interactive dictation (it caps batch windows at
+    /// `max_in_flight - 1`), hence 4 slots. `SAGASCRIPT_ENGINE_MAX_IN_FLIGHT`
+    /// overrides it for benchmarking.
+    static func configuredMaxInFlight(environment: [String: String]) -> Int {
+        environment["SAGASCRIPT_ENGINE_MAX_IN_FLIGHT"]
+            .flatMap(Int.init).map { max(1, min(8, $0)) } ?? 4
+    }
+
     private static var configuredMaxInFlight: Int {
-        ProcessInfo.processInfo.environment["SAGASCRIPT_ENGINE_MAX_IN_FLIGHT"]
-            .flatMap(Int.init).map { max(1, min(8, $0)) } ?? 3
+        configuredMaxInFlight(environment: ProcessInfo.processInfo.environment)
     }
 
     private func tuningUnits(_ variable: String, default fallback: MLComputeUnits) throws -> MLComputeUnits {

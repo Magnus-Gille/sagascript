@@ -173,7 +173,8 @@ fn model_missing_is_reported_as_remote_error() {
 
 #[test]
 fn out_of_order_responses_are_routed_by_id() {
-    let f = fixture(&[("FAKE_FIRST_SLOW_MS", "400")]);
+    // 3 host slots => batch lane of 2 (one slot stays reserved for dictation).
+    let f = fixture(&[("FAKE_FIRST_SLOW_MS", "400"), ("FAKE_MAX_IN_FLIGHT", "3")]);
     let samples = pcm(4.0);
     let pcm_file = sagascript_core::transcription::engine_host::pipeline::PcmFile::write(
         &samples,
@@ -768,4 +769,285 @@ fn crash_mid_long_job_resubmits_and_still_reconstructs() {
         expected_ids(samples.len())
     );
     assert_eq!(f.client.snapshot().crashes_in_window, 1);
+}
+
+// ------------------------------------------------ review fixes (2026-09)
+
+use sagascript_core::transcription::engine_host::TestHook;
+use std::sync::mpsc;
+use std::sync::Mutex;
+
+fn ops_of(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.split(' ').next().unwrap().to_string())
+        .collect()
+}
+
+/// Finding 1: `hello` advertises 30 s but the loaded model only takes 15 s.
+#[test]
+fn load_window_bounds_the_effective_capabilities() {
+    let env = [
+        ("FAKE_WINDOW_S", "30"),
+        ("FAKE_LOAD_WINDOW_S", "15"),
+        ("FAKE_OVERLAP_S", "4"),
+    ];
+    let f = fixture(&env);
+    let caps = f.client.warm().unwrap();
+    assert!((caps.max_window_s - 15.0).abs() < 1e-9, "{caps:?}");
+    assert!(caps.preferred_window_s <= 15.0, "{caps:?}");
+    assert_eq!(f.client.capabilities().unwrap().max_window_s, 15.0);
+
+    for seconds in [20.0, 29.0, 40.0] {
+        let samples = pcm(seconds);
+        let out = f
+            .client
+            .transcribe_file_samples(&samples, &CancelToken::new(), None)
+            .unwrap();
+        assert!(out.windows.len() >= 2, "{seconds}s: {}", out.windows.len());
+        assert!(out
+            .windows
+            .iter()
+            .all(|w| w.end_sample - w.start_sample <= 15 * SR));
+        assert_eq!(
+            out.tokens.iter().map(|t| t.id).collect::<Vec<_>>(),
+            expected_ids(samples.len()),
+            "{seconds}s"
+        );
+    }
+    // Dictation takes the same path.
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(20.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(out.windows.len(), 2);
+}
+
+#[test]
+fn effective_window_survives_restart_and_reload() {
+    let env = [
+        ("FAKE_WINDOW_S", "30"),
+        ("FAKE_LOAD_WINDOW_S", "15"),
+        ("FAKE_OVERLAP_S", "4"),
+    ];
+    let f = fixture(&env);
+    f.client.warm().unwrap();
+    f.client.unload().unwrap();
+    assert!(f.client.warm().unwrap().max_window_s <= 15.0);
+    f.client.shutdown();
+    assert!(f.client.warm().unwrap().max_window_s <= 15.0);
+    let out = f
+        .client
+        .transcribe_file_samples(&pcm(20.0), &CancelToken::new(), None)
+        .unwrap();
+    assert_eq!(out.windows.len(), 2);
+}
+
+/// Finding 2: with 3 host slots, batch work may use 2 so dictation starts at once.
+#[test]
+fn interactive_request_gets_a_reserved_host_slot() {
+    let log = tempfile::tempdir().unwrap();
+    let log_path = log.path().join("ops.log");
+    let f = fixture(&[
+        ("FAKE_WINDOW_S", "10"),
+        ("FAKE_OVERLAP_S", "4"),
+        ("FAKE_MAX_IN_FLIGHT", "3"),
+        ("FAKE_BATCH_DELAY_MS", "1500"),
+        ("FAKE_LOG", log_path.to_str().unwrap()),
+    ]);
+    f.client.warm().unwrap();
+    let job = {
+        let client = f.client.clone();
+        std::thread::spawn(move || {
+            client
+                .transcribe_file_samples(&pcm(47.0), &CancelToken::new(), None)
+                .map(|o| o.tokens.len())
+        })
+    };
+    // Wait until the batch lane is full.
+    wait_until("batch lane full", Duration::from_secs(5), || {
+        ops_of(&log_path)
+            .iter()
+            .filter(|o| *o == "transcribe_window")
+            .count()
+            >= 2
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    let batch_started = ops_of(&log_path)
+        .iter()
+        .filter(|o| *o == "transcribe_window")
+        .count();
+    assert_eq!(batch_started, 2, "batch must leave one slot free");
+    let t = Instant::now();
+    let d = f
+        .client
+        .transcribe_dictation(&pcm(3.0), &CancelToken::new())
+        .unwrap();
+    let latency = t.elapsed();
+    assert_eq!(d.tokens.len(), 6);
+    assert!(
+        latency < Duration::from_millis(700),
+        "dictation waited for a batch window: {latency:?}"
+    );
+    assert!(!job.is_finished());
+    job.join().unwrap().unwrap();
+}
+
+/// Finding 3: the idle supervisor must not unload between readiness and dispatch.
+#[test]
+fn idle_unload_cannot_race_with_a_batch_request() {
+    let log = tempfile::tempdir().unwrap();
+    let log_path = log.path().join("ops.log");
+    let (reached_tx, reached_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let reached_tx = Mutex::new(reached_tx);
+    let f = fixture_with(&[("FAKE_LOG", log_path.to_str().unwrap())], |cfg| {
+        cfg.idle_unload = Some(Duration::ZERO);
+        cfg.supervisor_tick = Duration::from_secs(3600);
+        cfg.test_hook = Some(TestHook(Arc::new(move |point| {
+            if point == "after_ready" {
+                let _ = reached_tx.lock().unwrap().send(());
+                let _ = release_rx.lock().unwrap().recv_timeout(Duration::from_secs(5));
+            }
+        })));
+    });
+    f.client.warm().unwrap();
+    let t = {
+        let client = f.client.clone();
+        std::thread::spawn(move || {
+            let dir = tempfile::tempdir().unwrap();
+            let pcm_path = dir.path().join("a.f32le");
+            let bytes: Vec<u8> = (0..8000u32)
+                .flat_map(|i| (i as f32).to_le_bytes())
+                .collect();
+            std::fs::write(&pcm_path, bytes).unwrap();
+            let req = WindowRequest {
+                pcm_path,
+                offset_samples: 0,
+                num_samples: 8000,
+                sample_rate: 16000,
+                priority: Priority::Batch,
+            };
+            let ticket = client
+                .submit_window(&req, &CancelToken::new(), Duration::from_secs(2))?
+                .expect("slot");
+            ticket.wait(&CancelToken::new())
+        })
+    };
+    reached_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    f.client.run_idle_check_now();
+    release_tx.send(()).unwrap();
+    let out = t.join().unwrap().unwrap();
+    assert_eq!(out.tokens.len(), 1);
+    assert!(
+        !ops_of(&log_path).iter().any(|o| o == "unload"),
+        "supervisor unloaded under an in-progress request: {:?}",
+        ops_of(&log_path)
+    );
+}
+
+/// Finding 3 (defense in depth): a `not_loaded` answer reloads and resends once.
+#[test]
+fn not_loaded_response_is_retried_once_after_reload() {
+    let log = tempfile::tempdir().unwrap();
+    let log_path = log.path().join("ops.log");
+    let (reached_tx, reached_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let reached_tx = Mutex::new(reached_tx);
+    let f = fixture_with(&[("FAKE_LOG", log_path.to_str().unwrap())], |cfg| {
+        cfg.test_hook = Some(TestHook(Arc::new(move |point| {
+            if point == "after_ready" {
+                let _ = reached_tx.lock().unwrap().send(());
+                let _ = release_rx.lock().unwrap().recv_timeout(Duration::from_secs(5));
+            }
+        })));
+    });
+    f.client.warm().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let pcm_path = dir.path().join("a.f32le");
+    let bytes: Vec<u8> = (0..8000u32)
+        .flat_map(|i| (i as f32).to_le_bytes())
+        .collect();
+    std::fs::write(&pcm_path, bytes).unwrap();
+    let t = {
+        let client = f.client.clone();
+        let pcm_path = pcm_path.clone();
+        std::thread::spawn(move || {
+            let req = WindowRequest {
+                pcm_path,
+                offset_samples: 0,
+                num_samples: 8000,
+                sample_rate: 16000,
+                priority: Priority::Interactive,
+            };
+            let ticket = client
+                .submit_window(&req, &CancelToken::new(), Duration::from_secs(2))?
+                .expect("slot");
+            ticket.wait(&CancelToken::new())
+        })
+    };
+    reached_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    f.client.unload().unwrap();
+    release_tx.send(()).unwrap();
+    let out = t.join().unwrap().unwrap();
+    assert_eq!(out.tokens.len(), 1);
+    let loads = ops_of(&log_path).iter().filter(|o| *o == "load").count();
+    assert_eq!(loads, 2, "{:?}", ops_of(&log_path));
+}
+
+/// Finding 4: cancelling while the model loads returns promptly and keeps the host.
+#[test]
+fn cancel_during_slow_load_returns_promptly_without_killing_the_host() {
+    let log = tempfile::tempdir().unwrap();
+    let log_path = log.path().join("ops.log");
+    let f = fixture(&[
+        ("FAKE_LOAD_DELAY_MS", "2500"),
+        ("FAKE_LOG", log_path.to_str().unwrap()),
+    ]);
+    let cancel = CancelToken::new();
+    let canceller = {
+        let cancel = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            cancel.cancel();
+            Instant::now()
+        })
+    };
+    let r = f.client.warm_with_cancel(&cancel);
+    let returned = Instant::now();
+    let cancelled_at = canceller.join().unwrap();
+    assert!(matches!(r, Err(EngineHostError::Cancelled)), "{r:?}");
+    assert!(
+        returned.saturating_duration_since(cancelled_at) < Duration::from_millis(250),
+        "cancel took {:?}",
+        returned.saturating_duration_since(cancelled_at)
+    );
+    let pid = f.client.snapshot().pid.expect("host must stay alive");
+    assert!(pid_alive(pid));
+    // The in-progress load completes and is reused by the next caller.
+    f.client.warm().unwrap();
+    assert_eq!(f.client.snapshot().pid, Some(pid));
+    let loads = ops_of(&log_path).iter().filter(|o| *o == "load").count();
+    assert_eq!(loads, 1, "{:?}", ops_of(&log_path));
+}
+
+/// Finding 6: a newline-less flood is bounded; the host is killed.
+#[test]
+fn newline_less_flood_kills_the_host_and_fails_in_flight_requests() {
+    let f = fixture(&[("FAKE_FLOOD", "1")]);
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+    let t = Instant::now();
+    let r = f
+        .client
+        .transcribe_dictation(&pcm(2.0), &CancelToken::new());
+    assert!(
+        matches!(&r, Err(EngineHostError::Protocol(m)) if m.contains("16 MiB")),
+        "{r:?}"
+    );
+    assert!(t.elapsed() < Duration::from_secs(4), "{:?}", t.elapsed());
+    wait_until("host killed", Duration::from_secs(3), || !pid_alive(pid));
 }
