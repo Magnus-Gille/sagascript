@@ -100,7 +100,7 @@ pub(crate) fn file_transcription_context(
     let model = match settings.effective_file_model_for(language)? {
         FileModel::Whisper(model) => model,
         FileModel::PianissimoOriginal => return Err(
-            "Pianissimo Q8 supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".into(),
+            "Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".into(),
         ),
     };
     let default_id = settings.default_profile().id;
@@ -427,7 +427,7 @@ pub async fn get_loaded_model(
     let chosen = ctrl.settings().dictation_model_for_profile(&ctrl.settings().default_profile().id)?;
     if chosen == FileModel::PianissimoOriginal {
         return Ok(LoadedModelInfo {
-            effective_model: "Pianissimo Q8".into(),
+            effective_model: "Pianissimo".into(),
             effective_model_id: "pianissimo-sv".into(),
             loaded_model: None,
             is_loaded: false,
@@ -1287,14 +1287,19 @@ pub async fn get_file_model_options(language: Language) -> Result<Vec<ModelInfo>
     if language == Language::Swedish && sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
         models.push(ModelInfo {
             id: "pianissimo-sv".into(),
-            display_name: "Pianissimo Q8".into(),
-            description: "Swedish file transcription · corrected Q8 conversion · macOS 13+ app runtime included".into(),
-            size_mb: 714,
+            display_name: "Pianissimo".into(),
+            description: "Swedish file transcription · Core ML on the Neural Engine · macOS 14+ on Apple Silicon".into(),
+            size_mb: pianissimo_model_size_mb(),
             downloaded: pianissimo_model::is_downloaded(),
             active: false,
         });
     }
     Ok(models)
+}
+
+/// Download size of the Pianissimo Core ML archive, in MB, for model listings.
+fn pianissimo_model_size_mb() -> u32 {
+    (pianissimo_model::download_size_bytes() / 1_048_576) as u32
 }
 
 #[tauri::command]
@@ -1316,9 +1321,9 @@ pub async fn get_profile_model_info(
         },
         sagascript_core::settings::FileModel::PianissimoOriginal => ModelInfo {
             id: "pianissimo-sv".into(),
-            display_name: "Pianissimo Q8 (experimental)".into(),
+            display_name: "Pianissimo (experimental)".into(),
             description: "Swedish dictation".into(),
-            size_mb: 714,
+            size_mb: pianissimo_model_size_mb(),
             downloaded: pianissimo_model::is_downloaded(),
             active: true,
         },
@@ -1329,7 +1334,7 @@ pub async fn get_profile_model_info(
 pub async fn download_pianissimo_model(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Emitter;
     if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
-        return Err("Pianissimo requires macOS 13 or later".into());
+        return Err(sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into());
     }
     let progress_app = app.clone();
     pianissimo_model::download(move |downloaded, total| {
@@ -2207,6 +2212,38 @@ pub async fn set_vad_enabled(
     Ok(())
 }
 
+/// `engine_prewarm`: `off`, `on_app_start` or `on_key_down`.
+#[tauri::command]
+pub async fn set_engine_prewarm(
+    controller: State<'_, SharedController>,
+    mode: String,
+) -> Result<(), String> {
+    let mode = sagascript_core::settings::EnginePrewarm::parse_id(&mode)?;
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.engine_prewarm = mode;
+    })?;
+    controller.lock().unwrap().settings_mut().engine_prewarm = persisted.engine_prewarm;
+    info!("Engine prewarm: {}", mode.id());
+    Ok(())
+}
+
+/// Minutes of inactivity before the engine host unloads its model (0 = never).
+/// Takes effect the next time the engine client is created (next Pianissimo use
+/// after the settings change).
+#[tauri::command]
+pub async fn set_engine_idle_unload_minutes(
+    controller: State<'_, SharedController>,
+    minutes: u32,
+) -> Result<(), String> {
+    let persisted = sagascript_core::settings::store::update(|settings| {
+        settings.engine_idle_unload_minutes = minutes;
+    })?;
+    controller.lock().unwrap().settings_mut().engine_idle_unload_minutes =
+        persisted.engine_idle_unload_minutes;
+    info!("Engine idle unload: {minutes} min");
+    Ok(())
+}
+
 // -- File transcription --
 
 /// User-requested abort for the plain (non-diarized) `transcribe_file` path
@@ -2439,7 +2476,7 @@ pub async fn transcribe_file(
     };
     if let Some(glossary) = pianissimo_glossary {
         if diarize.unwrap_or(false) {
-            return Err("Pianissimo Q8 supports plain Swedish file transcription only; choose a Whisper file model for diarization".into());
+            return Err("Pianissimo supports plain Swedish file transcription only; choose a Whisper file model for diarization".into());
         }
         let text = crate::plain_file_jobs::transcribe_pianissimo(
             app.clone(), jobs.inner().clone(), result_id.clone(),

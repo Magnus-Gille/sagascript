@@ -760,6 +760,34 @@ fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
     settings
 }
 
+/// True when any dictation profile's live model is Pianissimo.
+fn any_profile_uses_pianissimo(settings: &sagascript_core::settings::Settings) -> bool {
+    settings
+        .resolved_hotkey_profiles()
+        .iter()
+        .any(|profile| settings.live_model_for_profile(&profile.id).is_ok_and(|(_, pianissimo)| pianissimo))
+}
+
+/// `engine_prewarm = on_key_down`: start loading the Pianissimo model while the
+/// user is still speaking. Never blocks the hotkey path: the work runs on its
+/// own thread and this only reads settings.
+fn prewarm_engine_on_key_down(ctrl: &tauri::State<'_, SharedController>) {
+    let wanted = {
+        let c = ctrl.lock().unwrap();
+        let profile_id = c
+            .active_hotkey_profile()
+            .map(|profile| profile.id.clone())
+            .unwrap_or_else(|| c.settings().default_profile().id);
+        c.settings().engine_prewarm == sagascript_core::settings::EnginePrewarm::OnKeyDown
+            && c.settings()
+                .live_model_for_profile(&profile_id)
+                .is_ok_and(|(_, pianissimo)| pianissimo)
+    };
+    if wanted {
+        sagascript_core::transcription::pianissimo_backend::warm_in_background("key_down");
+    }
+}
+
 fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::BareHotkeyState) {
     let ctrl: tauri::State<'_, SharedController> = app.state();
 
@@ -842,6 +870,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                 HotkeyDownResult::StartedRecording => {
                     #[cfg(target_os = "macos")]
                     platform::macos::remember_dictation_target(pressed_target);
+                    prewarm_engine_on_key_down(&ctrl);
                     let show_overlay = {
                         let c = ctrl.lock().unwrap();
                         c.settings().show_overlay
@@ -895,6 +924,15 @@ fn main() {
             return;
         }
     }
+
+    // Build identity announced to the Pianissimo engine host (same values as the tray menu).
+    sagascript_core::transcription::pianissimo_backend::set_client_identity(
+        sagascript_core::transcription::engine_host::ClientIdentity {
+            name: "sagascript".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            git_sha: env!("GIT_HASH").into(),
+        },
+    );
 
     // GUI mode: initialize tracing (console logging)
     let configured_filter = std::env::var("RUST_LOG").ok();
@@ -1293,6 +1331,17 @@ fn main() {
                         c.settings().vad_enabled,
                     )
                 };
+                {
+                    // `engine_prewarm = on_app_start`: load the Pianissimo engine in
+                    // the background when a dictation profile uses it.
+                    let ctrl: tauri::State<'_, SharedController> = app.state();
+                    let c = ctrl.lock().unwrap();
+                    if c.settings().engine_prewarm == sagascript_core::settings::EnginePrewarm::OnAppStart
+                        && any_profile_uses_pianissimo(c.settings())
+                    {
+                        sagascript_core::transcription::pianissimo_backend::warm_in_background("app_start");
+                    }
+                }
                 std::thread::spawn(move || {
                     let Some(&(primary_model, primary_language)) = warm_plan.first() else {
                         return;
@@ -1414,6 +1463,8 @@ fn main() {
             commands::set_beam_size,
             commands::set_temperature_fallback,
             commands::set_vad_enabled,
+            commands::set_engine_prewarm,
+            commands::set_engine_idle_unload_minutes,
             commands::get_build_info,
             commands::transcribe_file,
             commands::cancel_file_transcription,
@@ -1466,6 +1517,10 @@ fn main() {
                 tauri::RunEvent::ExitRequested {
                     api, code: None, ..
                 } => api.prevent_exit(),
+                // Stop the Pianissimo engine host with the app instead of leaving it to stdin EOF.
+                tauri::RunEvent::Exit => {
+                    sagascript_core::transcription::pianissimo_backend::shutdown_shared_client()
+                }
                 // Finder/Spotlight sends Reopen when the already-running app is
                 // launched again. A miniaturized NSWindow may still count as
                 // "visible", so always run the full reveal path.
@@ -2034,12 +2089,16 @@ fn stop_recording_and_transcribe(
             }
         };
 
-        let model_name = if use_pianissimo { "Pianissimo Q8" } else { effective_model.display_name() }.to_string();
+        let model_name = if use_pianissimo { "Pianissimo" } else { effective_model.display_name() }.to_string();
         let language_name = language.display_name().to_string();
         let beam_size = if use_pianissimo { 0 } else { opts.beam_size };
         let temperature_fallback = !use_pianissimo && opts.temperature_fallback;
         let vad_enabled = !use_pianissimo && opts.vad_model_path.is_some();
-        let mut model_was_warm = !use_pianissimo && !whisper.needs_reload(effective_model);
+        let mut model_was_warm = if use_pianissimo {
+            sagascript_core::transcription::pianissimo_backend::engine_is_warm()
+        } else {
+            !whisper.needs_reload(effective_model)
+        };
         info!("Transcribing with model: {model_name}");
 
         // Show model loading status in tray
