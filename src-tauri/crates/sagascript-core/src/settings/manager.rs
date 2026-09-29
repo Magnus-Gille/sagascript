@@ -587,6 +587,42 @@ impl HotkeyMode {
     }
 }
 
+/// When the Pianissimo engine host loads its model ahead of the first utterance.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnginePrewarm {
+    /// Load lazily when the first transcription needs the model.
+    Off,
+    /// Load in the background when the app starts (Pianissimo active only).
+    OnAppStart,
+    /// Load in the background when the push-to-talk key goes down.
+    #[default]
+    OnKeyDown,
+}
+
+impl EnginePrewarm {
+    pub const ALL: [EnginePrewarm; 3] = [Self::Off, Self::OnAppStart, Self::OnKeyDown];
+
+    /// Stable identifier used in the settings file and by `sagascript config`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::OnAppStart => "on_app_start",
+            Self::OnKeyDown => "on_key_down",
+        }
+    }
+
+    pub fn parse_id(value: &str) -> Result<Self, String> {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.id() == value)
+            .ok_or_else(|| format!("engine_prewarm must be off, on_app_start or on_key_down, got '{value}'"))
+    }
+}
+
+/// Default minutes of inactivity before the engine host unloads its model.
+pub const DEFAULT_ENGINE_IDLE_UNLOAD_MINUTES: u32 = 10;
+
 /// One global shortcut and the transcription language selected when it fires.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HotkeyProfile {
@@ -634,6 +670,11 @@ pub struct Settings {
     /// Use the experimental native Pianissimo runtime for Swedish live dictation.
     /// File transcription continues to use `file_transcription_model`.
     pub pianissimo_dictation: bool,
+    /// When the engine host loads the Pianissimo model ahead of use.
+    pub engine_prewarm: EnginePrewarm,
+    /// Minutes of inactivity before the engine host unloads its model; the host
+    /// process itself exits after twice this. 0 disables idle unloading.
+    pub engine_idle_unload_minutes: u32,
     pub hotkey_mode: HotkeyMode,
     pub show_overlay: bool,
     pub auto_paste: bool,
@@ -677,6 +718,8 @@ impl Default for Settings {
             whisper_model: WhisperModel::default(),
             file_transcription_model: FileModelPreference::default(),
             pianissimo_dictation: false,
+            engine_prewarm: EnginePrewarm::default(),
+            engine_idle_unload_minutes: DEFAULT_ENGINE_IDLE_UNLOAD_MINUTES,
             hotkey_mode: HotkeyMode::default(),
             show_overlay: true,
             auto_paste: true,
@@ -772,10 +815,22 @@ impl Settings {
     }
 
     pub fn set_profile_model(&mut self, profile_id: &str, preference: FileModelPreference) -> Result<(), String> {
-        if preference == FileModelPreference::PianissimoOriginal
-            && !crate::transcription::pianissimo_backend::runtime_supported_on_this_os()
-        {
-            return Err("Pianissimo requires macOS 13 or later".into());
+        self.set_profile_model_gated(
+            profile_id,
+            preference,
+            crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+        )
+    }
+
+    /// [`Self::set_profile_model`] with the Pianissimo platform gate supplied by the caller.
+    pub fn set_profile_model_gated(
+        &mut self,
+        profile_id: &str,
+        preference: FileModelPreference,
+        pianissimo_supported: bool,
+    ) -> Result<(), String> {
+        if preference == FileModelPreference::PianissimoOriginal && !pianissimo_supported {
+            return Err(crate::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into());
         }
         let profile = self.resolved_hotkey_profiles().into_iter()
             .find(|profile| profile.id == profile_id)
@@ -791,6 +846,38 @@ impl Settings {
         }
         self.profile_models.insert(profile_id.to_string(), preference);
         Ok(())
+    }
+
+    /// Settings migration for systems that cannot run Pianissimo (anything but
+    /// macOS 14+ on Apple Silicon): every selection of it falls back to the
+    /// recommended Whisper model (`Auto`). Returns true when anything changed.
+    pub fn demote_unsupported_pianissimo(&mut self, pianissimo_supported: bool) -> bool {
+        if pianissimo_supported {
+            return false;
+        }
+        let mut changed = false;
+        for (profile, preference) in self.profile_models.iter_mut() {
+            if *preference == FileModelPreference::PianissimoOriginal {
+                tracing::warn!(
+                    "Pianissimo is not supported on this system; profile '{profile}' now uses the recommended Whisper model"
+                );
+                *preference = FileModelPreference::Auto;
+                changed = true;
+            }
+        }
+        if self.file_transcription_model == FileModelPreference::PianissimoOriginal {
+            tracing::warn!(
+                "Pianissimo is not supported on this system; file transcription now uses the recommended Whisper model"
+            );
+            self.file_transcription_model = FileModelPreference::Auto;
+            changed = true;
+        }
+        if self.pianissimo_dictation {
+            tracing::warn!("Pianissimo is not supported on this system; disabling the legacy Pianissimo dictation flag");
+            self.pianissimo_dictation = false;
+            changed = true;
+        }
+        changed
     }
 
     pub fn set_default_profile_language(&mut self, language: Language) -> Result<(), String> {
@@ -2086,7 +2173,7 @@ mod tests {
             hotkey_profiles: vec![profile("default", "Super+S", Language::Swedish)],
             ..Default::default()
         };
-        settings.set_profile_model("default", FileModelPreference::PianissimoOriginal).unwrap();
+        settings.set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true).unwrap();
         let error = settings.replace_hotkey_profiles(vec![profile("default", "Super+S", Language::English)])
             .unwrap_err();
         assert!(error.contains("Pianissimo"));
@@ -2491,7 +2578,7 @@ mod tests {
                 profile("english", "Super+E", Language::English),
             ])
             .unwrap();
-        settings.set_profile_model("default", FileModelPreference::PianissimoOriginal).unwrap();
+        settings.set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true).unwrap();
 
         assert_eq!(
             settings.warm_model_plan(2, 384),
@@ -2752,5 +2839,72 @@ mod tests {
         ] {
             assert!(!model.is_compatible_with(Language::Finnish), "{model:?}");
         }
+    }
+
+    #[test]
+    fn engine_settings_default_roundtrip_and_tolerate_missing_keys() {
+        let defaults = Settings::default();
+        assert_eq!(defaults.engine_prewarm, EnginePrewarm::OnKeyDown);
+        assert_eq!(defaults.engine_idle_unload_minutes, 10);
+        let legacy: Settings = serde_json::from_str(r#"{"language":"sv"}"#).unwrap();
+        assert_eq!(legacy.engine_prewarm, EnginePrewarm::OnKeyDown);
+        assert_eq!(legacy.engine_idle_unload_minutes, 10);
+        let json = serde_json::to_value(Settings {
+            engine_prewarm: EnginePrewarm::OnAppStart,
+            engine_idle_unload_minutes: 3,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(json["engine_prewarm"], "on_app_start");
+        assert_eq!(json["engine_idle_unload_minutes"], 3);
+        for mode in EnginePrewarm::ALL {
+            assert_eq!(EnginePrewarm::parse_id(mode.id()).unwrap(), mode);
+            assert_eq!(serde_json::to_value(mode).unwrap(), mode.id());
+        }
+        assert!(EnginePrewarm::parse_id("always").is_err());
+    }
+
+    #[test]
+    fn unsupported_system_demotes_every_pianissimo_selection_to_recommended_whisper() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            pianissimo_dictation: true,
+            file_transcription_model: FileModelPreference::PianissimoOriginal,
+            hotkey_profiles: vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("second", "Super+T", Language::Swedish),
+            ],
+            ..Default::default()
+        };
+        settings.materialize_profile_models();
+        settings.profile_models.insert("second".into(), FileModelPreference::Whisper(WhisperModel::KbWhisperBase));
+        assert_eq!(settings.profile_models["default"], FileModelPreference::PianissimoOriginal);
+
+        assert!(!settings.clone().demote_unsupported_pianissimo(true), "supported: untouched");
+        assert!(settings.demote_unsupported_pianissimo(false));
+
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Auto);
+        assert_eq!(settings.profile_models["second"], FileModelPreference::Whisper(WhisperModel::KbWhisperBase));
+        assert_eq!(settings.file_transcription_model, FileModelPreference::Auto);
+        assert!(!settings.pianissimo_dictation);
+        assert_eq!(
+            settings.dictation_model_for_profile("default").unwrap(),
+            FileModel::Whisper(WhisperModel::recommended(Language::Swedish))
+        );
+        assert!(!settings.demote_unsupported_pianissimo(false), "idempotent");
+    }
+
+    #[test]
+    fn selecting_pianissimo_is_refused_when_the_platform_gate_is_closed() {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![profile("default", "Super+S", Language::Swedish)],
+            ..Default::default()
+        };
+        let error = settings
+            .set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, false)
+            .unwrap_err();
+        assert!(error.contains("macOS 14"), "{error}");
+        assert_ne!(settings.profile_models.get("default"), Some(&FileModelPreference::PianissimoOriginal));
     }
 }

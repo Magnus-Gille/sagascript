@@ -1,29 +1,41 @@
-//! Local subprocess adapter for the native NeMo-Speech.cpp Pianissimo runtime.
+//! Pianissimo (KlangAI's Swedish ASR) on the persistent Core ML engine host.
 //!
-//! The native executable is started for each transcription request. Keeping the
-//! process short lived makes cancellation reliable and avoids shipping Python,
-//! while the model itself remains in Sagascript's normal local model cache.
+//! [`PianissimoBackend`] keeps its historical public API but is now a thin
+//! adapter over a process-global [`EngineHostClient`]: one `sagascript-engine-host`
+//! child per app (or CLI) process that keeps the model loaded between
+//! utterances (see `docs/engine-host-protocol.md`). Long-audio windowing,
+//! merging, progress and cancellation live in the `engine_host` module.
+//!
+//! Platform gate: Pianissimo needs macOS 14+ on Apple Silicon
+//! ([`runtime_supported_on_this_os`]); everything else keeps using Whisper.
 
-use std::io::Read;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::audio::wav::encode_wav;
 use crate::error::DictationError;
+use crate::settings::Settings;
+use crate::transcription::engine_host::{
+    CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, LoadSpec,
+    Transcription,
+};
 use crate::transcription::pianissimo_model;
 
-const MIN_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(180);
-const SAMPLE_RATE: u64 = 16_000;
+/// Shown wherever Pianissimo is refused for platform reasons.
+pub const UNSUPPORTED_MESSAGE: &str = "Pianissimo requires macOS 14 or later on Apple Silicon";
 
-fn transcription_timeout(sample_count: usize) -> Duration {
-    let audio_seconds = (sample_count as u64).saturating_add(SAMPLE_RATE - 1) / SAMPLE_RATE;
-    MIN_TRANSCRIPTION_TIMEOUT.max(Duration::from_secs(audio_seconds.saturating_mul(10)))
-}
+/// Environment override (development): path of the `sagascript-engine-host` binary.
+pub const ENGINE_HOST_ENV: &str = "SAGASCRIPT_ENGINE_HOST";
+/// Environment override: Core ML compute units (`ane`, `gpu`, `cpu`, `all`).
+pub const COMPUTE_UNITS_ENV: &str = "SAGASCRIPT_ENGINE_COMPUTE_UNITS";
+const DEFAULT_COMPUTE_UNITS: &str = "ane";
+
+/// Bundle-relative location of the host, below `Contents/`.
+const BUNDLED_HOST: &str = "Resources/EngineHost/sagascript-engine-host";
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct PianissimoWord {
@@ -38,95 +50,329 @@ pub struct PianissimoResult {
     pub words: Vec<PianissimoWord>,
 }
 
-pub struct PianissimoBackend {
-    executable: PathBuf,
-    active_child: Mutex<Option<Child>>,
-    operation: Mutex<()>,
+/// What [`PianissimoBackend::warm_up`] found and did.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WarmInfo {
+    /// The model was already loaded (no spawn, no load).
+    pub was_warm: bool,
+    /// Wall time spent making the engine ready (about zero when warm).
+    pub load_seconds: f64,
 }
 
-struct TemporaryWav(PathBuf);
+// ---- platform gate --------------------------------------------------------
 
-impl Drop for TemporaryWav {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
+fn macos_major(version: &str) -> Option<u32> {
+    version.trim().split('.').next()?.parse().ok()
 }
 
-/// Return whether this OS can run the bundled native runtime.
-///
-/// The native NeMo-Speech.cpp runtime is built for macOS 13 and later. Other
-/// platforms use the CPU backend and are allowed through for development and
-/// future packaging.
-pub fn runtime_supported_on_this_os() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        let Ok(output) = Command::new("/usr/bin/sw_vers")
-            .arg("-productVersion")
-            .output()
-        else {
-            return false;
-        };
-        output.status.success()
-            && std::str::from_utf8(&output.stdout)
-                .ok()
-                .is_some_and(macos_version_supported)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        true
-    }
+/// Pure gate: macOS >= 14 on aarch64 and nothing else. `macos_version` is the
+/// `sw_vers -productVersion` string (only meaningful on macOS).
+pub fn platform_supported(os: &str, arch: &str, macos_version: Option<&str>) -> bool {
+    os == "macos"
+        && arch == "aarch64"
+        && macos_version.and_then(macos_major).is_some_and(|major| major >= 14)
 }
 
 #[cfg(target_os = "macos")]
-fn macos_version_supported(version: &str) -> bool {
-    version
-        .trim()
-        .split('.')
-        .next()
-        .and_then(|major| major.parse::<u32>().ok())
-        .is_some_and(|major| major >= 13)
+fn detect_macos_version() -> Option<String> {
+    let output = std::process::Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8(output.stdout).ok())
+        .flatten()
 }
 
-fn bundled_executable(current_exe: &Path) -> Option<PathBuf> {
+#[cfg(not(target_os = "macos"))]
+fn detect_macos_version() -> Option<String> {
+    None
+}
+
+/// Whether this machine can run Pianissimo: macOS 14+ on Apple Silicon. False on
+/// every other OS or architecture (Windows will get an ONNX host later).
+pub fn runtime_supported_on_this_os() -> bool {
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        let os = std::env::consts::OS;
+        let arch = std::env::consts::ARCH;
+        let version = if os == "macos" && arch == "aarch64" {
+            detect_macos_version()
+        } else {
+            None
+        };
+        platform_supported(os, arch, version.as_deref())
+    })
+}
+
+// ---- host resolution ------------------------------------------------------
+
+/// `Sagascript.app/Contents/Resources/EngineHost/sagascript-engine-host` next to
+/// `current_exe`. The path is canonicalized first so the installed CLI symlink
+/// (`/usr/local/bin/sagascript` -> the app bundle executable) finds the bundle.
+fn bundled_host(current_exe: &Path) -> Option<PathBuf> {
     let current_exe = current_exe.canonicalize().ok()?;
     let contents = current_exe.parent()?.parent()?;
-    let executable = contents.join("Resources/PianissimoRuntime/bin/nemo-speech");
-    executable.is_file().then_some(executable)
+    let host = contents.join(BUNDLED_HOST);
+    host.is_file().then_some(host)
 }
 
-fn resolve_executable() -> PathBuf {
-    if let Some(executable) = std::env::var_os("SAGASCRIPT_PIANISSIMO_EXECUTABLE") {
-        return PathBuf::from(executable);
+fn resolve_host_with(env_value: Option<OsString>, current_exe: Option<&Path>) -> Option<PathBuf> {
+    if let Some(path) = env_value.filter(|value| !value.is_empty()) {
+        // Honoured as given even if missing, so the spawn error names the path.
+        return Some(PathBuf::from(path));
     }
+    current_exe.and_then(bundled_host)
+}
 
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(executable) = bundled_executable(&current_exe) {
-            return executable;
+/// Resolve the engine host: `SAGASCRIPT_ENGINE_HOST` (dev), then the bundled
+/// host, else `None`.
+pub fn resolve_host() -> Option<PathBuf> {
+    let current_exe = std::env::current_exe().ok();
+    resolve_host_with(std::env::var_os(ENGINE_HOST_ENV), current_exe.as_deref())
+}
+
+// ---- identity and configuration ------------------------------------------
+
+static IDENTITY: OnceLock<ClientIdentity> = OnceLock::new();
+
+/// Register the build identity announced to the engine host. The app and the
+/// CLI call this once with their generated build metadata (the same values as
+/// the tray menu / `--version`). Later calls are ignored.
+pub fn set_client_identity(identity: ClientIdentity) {
+    let _ = IDENTITY.set(identity);
+}
+
+fn client_identity() -> ClientIdentity {
+    IDENTITY.get().cloned().unwrap_or_default()
+}
+
+fn compute_units() -> String {
+    std::env::var(COMPUTE_UNITS_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_COMPUTE_UNITS.to_string())
+}
+
+/// Idle policy from settings: unload after N minutes, shut the host down after 2N.
+/// 0 disables both.
+fn idle_policy(minutes: u32) -> (Option<Duration>, Option<Duration>) {
+    if minutes == 0 {
+        return (None, None);
+    }
+    let unload = Duration::from_secs(u64::from(minutes) * 60);
+    (Some(unload), Some(unload * 2))
+}
+
+fn config_for(host: PathBuf, settings: &Settings) -> EngineHostConfig {
+    let mut config = EngineHostConfig::new(
+        host,
+        LoadSpec {
+            model_dir: pianissimo_model::model_dir(),
+            model_id: pianissimo_model::model_id(),
+            compute_units: compute_units(),
+        },
+    );
+    config.identity = client_identity();
+    let (unload, shutdown) = idle_policy(settings.engine_idle_unload_minutes);
+    config.idle_unload = unload;
+    config.idle_shutdown = shutdown;
+    config
+}
+
+/// Why Pianissimo cannot start right now, checked cheaply and in order.
+fn precheck() -> Result<PathBuf, DictationError> {
+    if !runtime_supported_on_this_os() {
+        return Err(DictationError::TranscriptionFailed(UNSUPPORTED_MESSAGE.into()));
+    }
+    let host = resolve_host().ok_or_else(|| {
+        DictationError::TranscriptionFailed(format!(
+            "Pianissimo engine host not found: this build has no bundled EngineHost and \
+             {ENGINE_HOST_ENV} is not set"
+        ))
+    })?;
+    if !pianissimo_model::is_downloaded() {
+        return Err(DictationError::TranscriptionFailed(
+            "Pianissimo model is not downloaded. Run 'sagascript download-model pianissimo-sv'".into(),
+        ));
+    }
+    Ok(host)
+}
+
+/// Engine-host configuration for the current machine and settings, after the
+/// platform, host and model-presence checks (no model verification, no spawn).
+pub fn engine_config() -> Result<EngineHostConfig, DictationError> {
+    let host = precheck()?;
+    Ok(config_for(host, &crate::settings::store::load()))
+}
+
+// ---- process-global client ------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SharedKey {
+    host: PathBuf,
+    model_dir: PathBuf,
+    model_id: String,
+    compute_units: String,
+    idle_minutes: u32,
+}
+
+struct Shared {
+    key: SharedKey,
+    client: EngineHostClient,
+}
+
+fn shared_slot() -> &'static Mutex<Option<Shared>> {
+    static SHARED: OnceLock<Mutex<Option<Shared>>> = OnceLock::new();
+    SHARED.get_or_init(|| Mutex::new(None))
+}
+
+/// The one [`EngineHostClient`] of this process. Created lazily (this does not
+/// spawn the host); recreated when the host path, model or idle settings change.
+/// The model artifact is verified once, when the client is created.
+pub fn shared_client() -> Result<EngineHostClient, DictationError> {
+    let host = precheck()?;
+    let settings = crate::settings::store::load();
+    let config = config_for(host, &settings);
+    let key = SharedKey {
+        host: config.host_path.clone(),
+        model_dir: config.load.model_dir.clone(),
+        model_id: config.load.model_id.clone(),
+        compute_units: config.load.compute_units.clone(),
+        idle_minutes: settings.engine_idle_unload_minutes,
+    };
+    let mut slot = shared_slot()
+        .lock()
+        .map_err(|_| DictationError::TranscriptionFailed("Pianissimo client lock was poisoned".into()))?;
+    if let Some(shared) = slot.as_ref() {
+        if shared.key == key {
+            return Ok(shared.client.clone());
         }
     }
-
-    // Leave PATH lookup to Command::new so development can use an installed
-    // `nemo-speech` without requiring a machine-specific absolute path.
-    PathBuf::from("nemo-speech")
-}
-
-fn backend_device() -> &'static str {
-    "cpu"
-}
-
-fn parse_transcript_json(bytes: &[u8]) -> Result<PianissimoResult, String> {
-    #[derive(Deserialize)]
-    struct NativeTranscript {
-        text: String,
-        words: Vec<PianissimoWord>,
+    pianissimo_model::verify_downloaded()?;
+    if let Some(old) = slot.take() {
+        old.client.shutdown();
     }
+    let client = EngineHostClient::new(config);
+    *slot = Some(Shared {
+        key,
+        client: client.clone(),
+    });
+    Ok(client)
+}
 
-    let transcript: NativeTranscript = serde_json::from_slice(bytes)
-        .map_err(|error| format!("native runtime returned invalid JSON: {error}"))?;
-    Ok(PianissimoResult {
-        text: transcript.text,
-        words: transcript.words,
+/// Shut the shared host down (CLI exit, model deletion, app quit). No-op when
+/// none was created.
+pub fn shutdown_shared_client() {
+    let shared = shared_slot().lock().ok().and_then(|mut slot| slot.take());
+    if let Some(shared) = shared {
+        shared.client.shutdown();
+    }
+}
+
+/// Load the model in the background so the next utterance starts warm. Returns
+/// immediately; never blocks the caller (hotkey path, main thread). Silently
+/// does nothing when Pianissimo is unsupported or not installed.
+pub fn warm_in_background(reason: &'static str) {
+    static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+    if !runtime_supported_on_this_os() || !pianissimo_model::is_downloaded() {
+        return;
+    }
+    if IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("pianissimo-warm".into())
+        .spawn(move || {
+            let started = Instant::now();
+            match shared_client().map_err(|e| e.to_string()).and_then(|client| {
+                if client.snapshot().loaded {
+                    return Ok(false);
+                }
+                client.warm().map(|_| true).map_err(|e| e.to_string())
+            }) {
+                Ok(true) => tracing::info!(reason, ms = started.elapsed().as_millis() as u64, "Pianissimo engine pre-warmed"),
+                Ok(false) => tracing::debug!(reason, "Pianissimo engine already warm"),
+                Err(error) => tracing::warn!(reason, %error, "Pianissimo engine pre-warm failed"),
+            }
+            IN_FLIGHT.store(false, Ordering::SeqCst);
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "could not start Pianissimo pre-warm thread");
+        IN_FLIGHT.store(false, Ordering::SeqCst);
+    }
+}
+
+// ---- adapter --------------------------------------------------------------
+
+pub(crate) fn map_engine_error(error: EngineHostError) -> DictationError {
+    if error.is_cancelled() {
+        return cancelled_error();
+    }
+    DictationError::TranscriptionFailed(format!("Pianissimo engine: {error}"))
+}
+
+pub(crate) fn cancelled_error() -> DictationError {
+    DictationError::TranscriptionFailed("Pianissimo transcription cancelled".into())
+}
+
+pub(crate) fn to_result(transcription: Transcription) -> PianissimoResult {
+    PianissimoResult {
+        text: transcription.text,
+        words: transcription
+            .words
+            .into_iter()
+            .map(|word| PianissimoWord {
+                word: word.word,
+                start: word.start,
+                end: word.end,
+            })
+            .collect(),
+    }
+}
+
+/// Make the engine ready and report whether it already was.
+pub(crate) fn warm_client(client: &EngineHostClient) -> Result<WarmInfo, DictationError> {
+    let was_warm = client.snapshot().loaded;
+    let started = Instant::now();
+    client.warm().map_err(map_engine_error)?;
+    Ok(WarmInfo {
+        was_warm,
+        load_seconds: if was_warm { 0.0 } else { started.elapsed().as_secs_f64() },
     })
+}
+
+/// Run `job` while a scoped watcher forwards a caller-owned `AtomicBool` to the
+/// job's [`CancelToken`] (the engine client polls tokens, callers own flags).
+pub(crate) fn with_cancel_bridge<T>(
+    cancelled: &AtomicBool,
+    token: &CancelToken,
+    job: impl FnOnce() -> T,
+) -> T {
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !done.load(Ordering::SeqCst) {
+                if cancelled.load(Ordering::SeqCst) {
+                    token.cancel();
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let result = job();
+        done.store(true, Ordering::SeqCst);
+        result
+    })
+}
+
+/// Adapter with the pre-sidecar public API over an [`EngineHostClient`].
+pub struct PianissimoBackend {
+    client: EngineHostClient,
+    active: Mutex<Option<CancelToken>>,
 }
 
 impl PianissimoBackend {
@@ -135,27 +381,34 @@ impl PianissimoBackend {
         Self::start_with_cancel(&NEVER_CANCEL)
     }
 
+    /// Attach to the process-global engine client. Does not load the model; the
+    /// first transcription (or [`Self::warm_up`]) does.
     pub fn start_with_cancel(cancelled: &AtomicBool) -> Result<Self, DictationError> {
-        if !runtime_supported_on_this_os() {
-            return Err(DictationError::TranscriptionFailed(
-                "Pianissimo requires macOS 13 or later".into(),
-            ));
-        }
-        if cancelled.load(Ordering::SeqCst) {
-            return Err(DictationError::TranscriptionFailed(
-                "Pianissimo load cancelled".into(),
-            ));
-        }
-        pianissimo_model::verify_downloaded()?;
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
+        let client = shared_client()?;
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(cancelled_error());
+        }
+        Ok(Self::with_client(client))
+    }
 
-        Ok(Self {
-            executable: resolve_executable(),
-            active_child: Mutex::new(None),
-            operation: Mutex::new(()),
-        })
+    /// Use an explicit client (tests, benchmarks).
+    pub fn with_client(client: EngineHostClient) -> Self {
+        Self {
+            client,
+            active: Mutex::new(None),
+        }
+    }
+
+    pub fn client(&self) -> &EngineHostClient {
+        &self.client
+    }
+
+    /// Start the host and load the model now, reporting whether it was warm.
+    pub fn warm_up(&self) -> Result<WarmInfo, DictationError> {
+        warm_client(&self.client)
     }
 
     pub fn transcribe(
@@ -167,9 +420,9 @@ impl PianissimoBackend {
         self.transcribe_with_cancel(samples, progress, &NEVER_CANCEL)
     }
 
-    /// Run one native transcription while observing a caller-owned cancellation
-    /// flag before work, immediately before spawn, and after the child is
-    /// registered so an abort racing with process startup still kills it.
+    /// Transcribe 16 kHz mono samples as a file job (batch priority, windows
+    /// merged in order). `progress` receives real 0..=100 percentages as windows
+    /// are merged; `cancelled` is observed continuously.
     pub fn transcribe_with_cancel(
         &self,
         samples: &[f32],
@@ -179,181 +432,35 @@ impl PianissimoBackend {
         if cancelled.load(Ordering::SeqCst) {
             return Err(cancelled_error());
         }
-        let _operation = self.operation.lock().map_err(|_| {
-            DictationError::TranscriptionFailed("Pianissimo operation lock was poisoned".into())
-        })?;
-        if cancelled.load(Ordering::SeqCst) {
-            return Err(cancelled_error());
-        }
-        let path = std::env::temp_dir().join(format!(
-            "sagascript-pianissimo-{}.wav",
-            uuid::Uuid::new_v4()
-        ));
-        let wav = TemporaryWav(path);
-        std::fs::write(&wav.0, encode_wav(samples)).map_err(|error| {
-            DictationError::FileDecodeError(format!("Could not prepare Pianissimo audio: {error}"))
-        })?;
-        if cancelled.load(Ordering::SeqCst) {
-            return Err(cancelled_error());
-        }
-
-        progress(0);
-        let mut child = Command::new(&self.executable)
-            .arg("transcribe")
-            .arg(&wav.0)
-            .arg("--model")
-            .arg(pianissimo_model::path())
-            .arg("--language")
-            .arg("sv")
-            .arg("--device")
-            .arg(backend_device())
-            .arg("--format")
-            .arg("json")
-            .arg("--word-times")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .map_err(|error| {
-                DictationError::TranscriptionFailed(format!(
-                    "Could not start Pianissimo native runtime ({}): {error}",
-                    self.executable.display()
-                ))
-            })?;
-        let mut stdout = match child.stdout.take() {
-            Some(stdout) => stdout,
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(DictationError::TranscriptionFailed(
-                    "Pianissimo native runtime did not provide stdout".into(),
-                ));
-            }
-        };
-
-        match self.active_child.lock() {
-            Ok(mut active) => *active = Some(child),
-            Err(_) => {
-                // The process is already running; close its output before
-                // waiting so a full pipe cannot keep it alive after the kill.
-                let _ = child.kill();
-                drop(stdout);
-                let _ = child.wait();
-                return Err(DictationError::TranscriptionFailed(
-                    "Pianissimo process lock was poisoned".into(),
-                ));
-            }
-        }
-        let stdout_reader = std::thread::spawn(move || {
-            let mut output = Vec::new();
-            let result = stdout.read_to_end(&mut output);
-            (result, output)
-        });
-
-        if cancelled.load(Ordering::SeqCst) {
-            self.stop_active_child();
-            let _ = stdout_reader.join();
-            return Err(cancelled_error());
-        }
-
-        let deadline = Instant::now() + transcription_timeout(samples.len());
-        let status = loop {
-            if cancelled.load(Ordering::SeqCst) {
-                self.stop_active_child();
-                let _ = stdout_reader.join();
-                return Err(cancelled_error());
-            }
-            if Instant::now() >= deadline {
-                self.stop_active_child();
-                let _ = stdout_reader.join();
-                return Err(DictationError::TranscriptionFailed(
-                    "Pianissimo native runtime timed out while transcribing".into(),
-                ));
-            }
-            let status = {
-                let mut active = self.active_child.lock().map_err(|_| {
-                    DictationError::TranscriptionFailed(
-                        "Pianissimo process lock was poisoned".into(),
-                    )
-                })?;
-                active.as_mut().map(|child| child.try_wait())
-            };
-            match status {
-                Some(Ok(Some(status))) => break status,
-                Some(Ok(None)) => std::thread::sleep(Duration::from_millis(25)),
-                Some(Err(error)) => {
-                    self.stop_active_child();
-                    let _ = stdout_reader.join();
-                    return Err(DictationError::TranscriptionFailed(format!(
-                        "Pianissimo native runtime status check failed: {error}"
-                    )));
-                }
-                None => {
-                    let _ = stdout_reader.join();
-                    return Err(DictationError::TranscriptionFailed(
-                        "Pianissimo native runtime disappeared before completing".into(),
-                    ));
-                }
-            }
-        };
-
-        let output = stdout_reader.join().map_err(|_| {
-            DictationError::TranscriptionFailed(
-                "Pianissimo native runtime output reader stopped".into(),
-            )
-        })?;
+        let token = CancelToken::new();
         {
-            let mut active = self.active_child.lock().map_err(|_| {
-                DictationError::TranscriptionFailed("Pianissimo process lock was poisoned".into())
+            let mut active = self.active.lock().map_err(|_| {
+                DictationError::TranscriptionFailed("Pianissimo operation lock was poisoned".into())
             })?;
+            *active = Some(token.clone());
+        }
+        progress(0);
+        let outcome = with_cancel_bridge(cancelled, &token, || {
+            let mut report = |merged: usize, total: usize| {
+                let percent = (merged * 100).checked_div(total).unwrap_or(100).min(100);
+                progress(percent as u8);
+            };
+            self.client
+                .transcribe_file_samples(samples, &token, Some(&mut report))
+        });
+        if let Ok(mut active) = self.active.lock() {
             let _ = active.take();
         }
-
-        if !status.success() {
-            return Err(DictationError::TranscriptionFailed(format!(
-                "Pianissimo native runtime exited with {status}"
-            )));
-        }
-        let (read_result, output) = output;
-        read_result.map_err(|error| {
-            DictationError::TranscriptionFailed(format!(
-                "Pianissimo native runtime output read failed: {error}"
-            ))
-        })?;
-        let result = parse_transcript_json(&output).map_err(DictationError::TranscriptionFailed)?;
+        let transcription = outcome.map_err(map_engine_error)?;
         progress(100);
-        Ok(result)
+        Ok(to_result(transcription))
     }
 
+    /// Cancel the running transcription (best effort, non-sticky).
     pub fn request_abort(&self) {
-        if let Ok(mut active) = self.active_child.lock() {
-            if let Some(child) = active.as_mut() {
-                let _ = child.kill();
-            }
-        }
-    }
-
-    fn stop_active_child(&self) {
-        self.request_abort();
-        if let Ok(mut active) = self.active_child.lock() {
-            if let Some(child) = active.as_mut() {
-                let _ = child.wait();
-            }
-            let _ = active.take();
-        }
-    }
-}
-
-fn cancelled_error() -> DictationError {
-    DictationError::TranscriptionFailed("Pianissimo transcription cancelled".into())
-}
-
-impl Drop for PianissimoBackend {
-    fn drop(&mut self) {
-        self.request_abort();
-        if let Ok(mut active) = self.active_child.lock() {
-            if let Some(mut child) = active.take() {
-                let _ = child.wait();
+        if let Ok(active) = self.active.lock() {
+            if let Some(token) = active.as_ref() {
+                token.cancel();
             }
         }
     }
@@ -364,149 +471,100 @@ mod tests {
     use super::*;
 
     #[test]
-    fn long_files_get_a_duration_scaled_deadline() {
-        assert_eq!(transcription_timeout(16_000), Duration::from_secs(180));
-        assert_eq!(transcription_timeout(16_000 * 60), Duration::from_secs(600));
-    }
-
-    #[test]
-    fn uses_cpu_backend_on_all_platforms() {
-        assert_eq!(backend_device(), "cpu");
-    }
-
-    #[test]
-    fn parses_native_json_with_extra_metadata_and_confidence() {
-        let result = parse_transcript_json(
-            r#"{"file":"recording.wav","text":"Hej världen.","confidence":0.98,"duration":1.2,"languages":["sv"],"words":[{"word":"Hej","start":0.1,"end":0.4,"confidence":0.99},{"word":"världen.","start":0.5,"end":1.1,"confidence":0.97}]}"#
-                .as_bytes(),
-        )
-        .unwrap();
-        assert_eq!(result.text, "Hej världen.");
-        assert_eq!(result.words.len(), 2);
-        assert_eq!(result.words[1].word, "världen.");
-        assert!((result.words[1].start - 0.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn rejects_native_json_without_word_timestamps() {
-        let error = parse_transcript_json(br#"{"text":"Hej"}"#).unwrap_err();
-        assert!(error.contains("missing field `words`"), "{error}");
-    }
-
-    #[test]
-    fn bundled_runtime_resolves_relative_to_app_executable() {
-        let root =
-            std::env::temp_dir().join(format!("sagascript-runtime-test-{}", uuid::Uuid::new_v4()));
-        let contents = root.join("Sagascript.app/Contents");
-        let runtime = contents.join("Resources/PianissimoRuntime/bin");
-        let app_executable = contents.join("MacOS/sagascript");
-        std::fs::create_dir_all(&runtime).unwrap();
-        std::fs::create_dir_all(app_executable.parent().unwrap()).unwrap();
-        let executable = runtime.join("nemo-speech");
-        std::fs::write(&executable, b"").unwrap();
-        std::fs::write(&app_executable, b"").unwrap();
-        let found = bundled_executable(&app_executable).unwrap();
-        assert_eq!(found, executable.canonicalize().unwrap());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn bundled_runtime_resolves_from_cli_symlink_outside_app_bundle() {
-        use std::os::unix::fs::symlink;
-
-        let root =
-            std::env::temp_dir().join(format!("sagascript-runtime-test-{}", uuid::Uuid::new_v4()));
-        let contents = root.join("Sagascript.app/Contents");
-        let runtime = contents.join("Resources/PianissimoRuntime/bin");
-        let app_executable = contents.join("MacOS/sagascript");
-        let cli_dir = root.join("usr-local-bin");
-        std::fs::create_dir_all(&runtime).unwrap();
-        std::fs::create_dir_all(app_executable.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(&cli_dir).unwrap();
-        let executable = runtime.join("nemo-speech");
-        std::fs::write(&executable, b"").unwrap();
-        std::fs::write(&app_executable, b"").unwrap();
-        let cli_symlink = cli_dir.join("sagascript");
-        symlink(&app_executable, &cli_symlink).unwrap();
-
-        let found = bundled_executable(&cli_symlink).unwrap();
-
-        assert_eq!(found, executable.canonicalize().unwrap());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn request_abort_kills_fake_sleeping_runtime() {
-        let child = Command::new("/bin/sleep").arg("10").spawn().unwrap();
-        let backend = PianissimoBackend {
-            executable: PathBuf::from("/bin/sleep"),
-            active_child: Mutex::new(Some(child)),
-            operation: Mutex::new(()),
-        };
-        let started = Instant::now();
-        backend.request_abort();
-        let mut active = backend.active_child.lock().unwrap();
-        let status = active.as_mut().unwrap().wait().unwrap();
-        assert!(!status.success());
-        assert!(started.elapsed() < Duration::from_secs(2));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cancellation_after_native_child_registration_kills_fake_runtime() {
-        use std::os::unix::fs::PermissionsExt;
-        use std::sync::Arc;
-
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-pianissimo-cancel-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        let executable = root.join("sleeping-runtime");
-        std::fs::write(&executable, b"#!/bin/sh\nexec /bin/sleep 10\n").unwrap();
-        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&executable, permissions).unwrap();
-
-        let backend = Arc::new(PianissimoBackend {
-            executable,
-            active_child: Mutex::new(None),
-            operation: Mutex::new(()),
-        });
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let transcribe_backend = Arc::clone(&backend);
-        let transcribe_cancelled = Arc::clone(&cancelled);
-        let transcribe = std::thread::spawn(move || {
-            transcribe_backend.transcribe_with_cancel(&[0.1; 1_600], |_| {}, &transcribe_cancelled)
-        });
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            if backend.active_child.lock().unwrap().is_some() {
-                break;
-            }
-            assert!(Instant::now() < deadline, "native child did not start");
-            std::thread::sleep(Duration::from_millis(5));
+    fn gate_matrix_allows_only_macos_14_on_apple_silicon() {
+        // (os, arch, macOS version, expected)
+        let cases = [
+            ("macos", "aarch64", Some("14.0"), true),
+            ("macos", "aarch64", Some("14.7.6\n"), true),
+            ("macos", "aarch64", Some("26.6.2"), true),
+            ("macos", "aarch64", Some("13.7.6"), false),
+            ("macos", "aarch64", Some("12.6.9"), false),
+            ("macos", "aarch64", Some("unknown"), false),
+            ("macos", "aarch64", None, false),
+            ("macos", "x86_64", Some("15.0"), false),
+            ("windows", "x86_64", None, false),
+            ("windows", "aarch64", None, false),
+            ("windows", "aarch64", Some("14.0"), false),
+            ("linux", "x86_64", None, false),
+            ("linux", "aarch64", Some("14.0"), false),
+        ];
+        for (os, arch, version, expected) in cases {
+            assert_eq!(
+                platform_supported(os, arch, version),
+                expected,
+                "{os}/{arch}/{version:?}"
+            );
         }
-        let cancelled_at = Instant::now();
-        cancelled.store(true, Ordering::SeqCst);
-        let result = transcribe.join().unwrap();
-
-        assert!(result.unwrap_err().to_string().contains("cancelled"));
-        assert!(cancelled_at.elapsed() < Duration::from_secs(2));
-        assert!(backend.active_child.lock().unwrap().is_none());
-        std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     #[test]
-    fn macos_13_is_supported_by_native_runtime() {
-        assert!(macos_version_supported("13.7.6"));
-        assert!(macos_version_supported("14.0"));
-        assert!(macos_version_supported("26.6.2\n"));
-        assert!(!macos_version_supported("12.6.9"));
-        assert!(!macos_version_supported("unknown"));
+    fn unsupported_hosts_report_unsupported() {
+        assert!(!runtime_supported_on_this_os());
+    }
+
+    #[test]
+    fn idle_policy_shuts_down_after_twice_the_unload_time() {
+        assert_eq!(idle_policy(0), (None, None));
+        assert_eq!(
+            idle_policy(10),
+            (Some(Duration::from_secs(600)), Some(Duration::from_secs(1200)))
+        );
+    }
+
+    fn app_layout(root: &Path) -> (PathBuf, PathBuf) {
+        let contents = root.join("Sagascript.app/Contents");
+        let host_dir = contents.join("Resources/EngineHost");
+        let app_executable = contents.join("MacOS/sagascript");
+        std::fs::create_dir_all(&host_dir).unwrap();
+        std::fs::create_dir_all(app_executable.parent().unwrap()).unwrap();
+        let host = host_dir.join("sagascript-engine-host");
+        std::fs::write(&host, b"").unwrap();
+        std::fs::write(&app_executable, b"").unwrap();
+        (host, app_executable)
+    }
+
+    #[test]
+    fn bundled_host_resolves_relative_to_app_executable() {
+        let root = tempfile::tempdir().unwrap();
+        let (host, app_executable) = app_layout(root.path());
+        assert_eq!(bundled_host(&app_executable).unwrap(), host.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn bundled_host_is_none_when_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let (host, app_executable) = app_layout(root.path());
+        std::fs::remove_file(host).unwrap();
+        assert!(bundled_host(&app_executable).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundled_host_resolves_from_cli_symlink_outside_app_bundle() {
+        let root = tempfile::tempdir().unwrap();
+        let (host, app_executable) = app_layout(root.path());
+        let cli_dir = root.path().join("usr-local-bin");
+        std::fs::create_dir_all(&cli_dir).unwrap();
+        let cli_symlink = cli_dir.join("sagascript");
+        std::os::unix::fs::symlink(&app_executable, &cli_symlink).unwrap();
+
+        assert_eq!(bundled_host(&cli_symlink).unwrap(), host.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn env_override_wins_over_bundle_and_empty_env_is_ignored() {
+        let root = tempfile::tempdir().unwrap();
+        let (host, app_executable) = app_layout(root.path());
+        assert_eq!(
+            resolve_host_with(Some("/dev/host".into()), Some(&app_executable)),
+            Some(PathBuf::from("/dev/host"))
+        );
+        assert_eq!(
+            resolve_host_with(Some("".into()), Some(&app_executable)).unwrap(),
+            host.canonicalize().unwrap()
+        );
+        assert_eq!(resolve_host_with(None, Some(&root.path().join("nope"))), None);
+        assert_eq!(resolve_host_with(None, None), None);
     }
 }

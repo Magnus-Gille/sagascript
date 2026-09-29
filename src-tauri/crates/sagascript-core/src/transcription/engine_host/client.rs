@@ -5,7 +5,7 @@ use super::pipeline::CancelToken;
 use super::process::{crashed, Delivery, HostProcess, Pending};
 use super::{EngineHostError, Result};
 use sagascript_engine_protocol::{
-    parse_result, Capabilities, ClientInfo, ErrorCode, HelloResult, LoadResult, Priority,
+    parse_result, Capabilities, ClientInfo, ErrorCode, HelloResult, HostInfo, LoadResult, Priority,
     RequestOp, StatusResult, TranscribeWindowResult, WindowTimings, WireToken, PROTOCOL_VERSION,
 };
 use std::collections::VecDeque;
@@ -142,6 +142,10 @@ pub struct HostSnapshot {
     pub pid: Option<u32>,
     pub crashes_in_window: usize,
     pub capabilities: Option<Capabilities>,
+    /// Host build identity from the last successful `hello`.
+    pub host: Option<HostInfo>,
+    /// Result of the last successful `load` on the current process.
+    pub last_load: Option<LoadResult>,
 }
 
 /// One transcribed window as returned by the host.
@@ -156,6 +160,8 @@ pub struct WindowOutput {
 struct State {
     proc: Option<Arc<HostProcess>>,
     caps: Option<Capabilities>,
+    host_info: Option<HostInfo>,
+    last_load: Option<LoadResult>,
     loaded: bool,
     crashes: VecDeque<Instant>,
     failed: Option<String>,
@@ -188,6 +194,8 @@ impl EngineHostClient {
             state: Mutex::new(State {
                 proc: None,
                 caps: None,
+                host_info: None,
+                last_load: None,
                 loaded: false,
                 crashes: VecDeque::new(),
                 failed: None,
@@ -232,6 +240,8 @@ impl EngineHostClient {
             pid: st.proc.as_ref().filter(|p| p.is_alive()).map(|p| p.pid()),
             crashes_in_window: st.crashes.len(),
             capabilities: st.caps.clone(),
+            host: st.host_info.clone(),
+            last_load: st.last_load.clone(),
         }
     }
 
@@ -525,7 +535,9 @@ impl Inner {
             )?;
             let r: LoadResult = parse_result(v).map_err(|e| EngineHostError::Protocol(e.0))?;
             tracing::info!(model_id = %r.model_id, load_ms = r.load_ms, compiled = r.compiled, "engine host model loaded");
-            self.state.lock().unwrap().loaded = true;
+            let mut st = self.state.lock().unwrap();
+            st.loaded = true;
+            st.last_load = Some(r);
         }
         self.state.lock().unwrap().last_activity = Instant::now();
         Ok((proc, caps))
@@ -583,10 +595,12 @@ impl Inner {
             std::thread::sleep(backoff);
         }
         match self.start_and_handshake() {
-            Ok((proc, caps)) => {
+            Ok((proc, caps, host_info)) => {
                 let mut st = self.state.lock().unwrap();
                 st.proc = Some(proc.clone());
                 st.caps = Some(caps.clone());
+                st.host_info = Some(host_info);
+                st.last_load = None;
                 st.loaded = false;
                 Ok((proc, caps))
             }
@@ -597,7 +611,7 @@ impl Inner {
         }
     }
 
-    fn start_and_handshake(&self) -> Result<(Arc<HostProcess>, Capabilities)> {
+    fn start_and_handshake(&self) -> Result<(Arc<HostProcess>, Capabilities, HostInfo)> {
         let mut args = vec!["--protocol".to_string(), PROTOCOL_VERSION.to_string()];
         args.extend(self.cfg.extra_args.iter().cloned());
         let proc = HostProcess::spawn(&self.cfg.host_path, &args, &self.cfg.env)?;
@@ -621,7 +635,7 @@ impl Inner {
             engine = %hello.host.engine,
             "engine host started"
         );
-        Ok((Arc::new(proc), caps))
+        Ok((Arc::new(proc), caps, hello.host))
     }
 
     fn unload_locked(&self) -> Result<()> {
