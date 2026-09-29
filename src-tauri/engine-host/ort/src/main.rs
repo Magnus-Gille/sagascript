@@ -20,6 +20,8 @@ fn fail(message: &str) -> ! {
 }
 
 fn main() {
+    #[cfg(windows)]
+    ort_engine::restrict_dll_search();
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments.iter().any(|a| a == "--version") {
         println!(

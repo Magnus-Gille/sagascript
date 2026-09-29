@@ -90,17 +90,9 @@ fn ensure_runtime() -> Result<&'static str, HostError> {
                 .ok()
                 .and_then(|p| p.parent().map(Path::to_path_buf))
                 .unwrap_or_default();
-            let path = match std::env::var_os("ORT_DYLIB_PATH").filter(|v| !v.is_empty()) {
-                Some(value) => {
-                    let value = PathBuf::from(value);
-                    if value.is_absolute() {
-                        value
-                    } else {
-                        executable_dir.join(value)
-                    }
-                }
-                None => executable_dir.join(ORT_LIBRARY),
-            };
+            let path = resolve_library_path(&executable_dir);
+            #[cfg(windows)]
+            preload_windows_providers(&executable_dir);
             ort::init_from(&path)
                 .map_err(|e| format!("cannot load ONNX Runtime from {}: {e}", path.display()))?
                 .commit();
@@ -109,6 +101,77 @@ fn ensure_runtime() -> Result<&'static str, HostError> {
         .as_ref()
         .map(String::as_str)
         .map_err(|message| HostError::new(ErrorCode::ModelLoadFailed, message.clone()))
+}
+
+/// `ORT_DYLIB_PATH` is a development aid: honoured in debug builds or with the
+/// `dev-overrides` feature, otherwise only the library beside the executable is used.
+const DEV_OVERRIDES: bool = cfg!(any(debug_assertions, feature = "dev-overrides"));
+
+fn resolve_library_path(executable_dir: &Path) -> PathBuf {
+    library_path(executable_dir, std::env::var_os("ORT_DYLIB_PATH"), DEV_OVERRIDES)
+}
+
+fn library_path(executable_dir: &Path, env_value: Option<std::ffi::OsString>, dev_overrides: bool) -> PathBuf {
+    match env_value.filter(|v| !v.is_empty()) {
+        Some(value) if dev_overrides => {
+            let value = PathBuf::from(value);
+            if value.is_absolute() {
+                value
+            } else {
+                executable_dir.join(value)
+            }
+        }
+        Some(_) => {
+            eprintln!(
+                "warning: ORT_DYLIB_PATH is ignored in this build (no dev-overrides); using {}",
+                executable_dir.join(ORT_LIBRARY).display()
+            );
+            executable_dir.join(ORT_LIBRARY)
+        }
+        None => executable_dir.join(ORT_LIBRARY),
+    }
+}
+
+/// Restrict the Windows DLL search to the application directory and System32, so neither
+/// the current directory nor PATH can supply `onnxruntime*.dll`. Call first thing in `main`.
+#[cfg(windows)]
+pub fn restrict_dll_search() {
+    use windows_sys::Win32::System::LibraryLoader::{
+        SetDefaultDllDirectories, LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
+    };
+    // SAFETY: plain Win32 call with constant flags.
+    let ok = unsafe {
+        SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)
+    };
+    if ok == 0 {
+        eprintln!("warning: SetDefaultDllDirectories failed: {}", std::io::Error::last_os_error());
+    }
+}
+
+/// Preload `onnxruntime_providers_shared.dll` by absolute path beside the executable (if
+/// present) so ONNX Runtime's own delay-load resolves to it. The handle is intentionally leaked.
+#[cfg(windows)]
+fn preload_windows_providers(executable_dir: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::LibraryLoader::{
+        LoadLibraryExW, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32,
+    };
+    let dll = executable_dir.join("onnxruntime_providers_shared.dll");
+    if !dll.is_file() {
+        return;
+    }
+    let wide: Vec<u16> = dll.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    // SAFETY: `wide` is a NUL-terminated absolute path; the reserved handle argument is null.
+    let handle = unsafe {
+        LoadLibraryExW(
+            wide.as_ptr(),
+            0,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+        )
+    };
+    if handle == 0 {
+        eprintln!("warning: cannot preload {}: {}", dll.display(), std::io::Error::last_os_error());
+    }
 }
 
 /// Exact library version via `OrtGetApiBase()->GetVersionString()`; the `ort` crate does not
@@ -481,5 +544,20 @@ impl Engine for OrtEngine {
 
     fn rss_bytes(&self) -> u64 {
         memory_stats::memory_stats().map_or(0, |s| s.physical_mem as u64)
+    }
+}
+
+#[cfg(test)]
+mod dll_path_tests {
+    use super::*;
+
+    #[test]
+    fn env_override_needs_dev_overrides() {
+        let dir = Path::new("app");
+        let custom = Some(std::ffi::OsString::from("custom/ort.dll"));
+        assert_eq!(library_path(dir, custom.clone(), true), dir.join("custom/ort.dll"));
+        assert_eq!(library_path(dir, custom, false), dir.join(ORT_LIBRARY));
+        assert_eq!(library_path(dir, None, false), dir.join(ORT_LIBRARY));
+        assert_eq!(library_path(dir, Some("".into()), true), dir.join(ORT_LIBRARY));
     }
 }

@@ -183,6 +183,7 @@ dependencies = [
  "ort",
  "sagascript-engine-protocol",
  "serde_json",
+ "windows-sys",
 ]
 
 [[package]]
