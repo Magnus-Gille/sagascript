@@ -1,0 +1,25 @@
+[package]
+name = "sagascript-engine-host-ort"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ONNX Runtime (CPU) engine host for Pianissimo, protocol v1 (see docs/engine-host-protocol.md)"
+build = "build.rs"
+
+[[bin]]
+name = "sagascript-engine-host-ort"
+path = "src/main.rs"
+
+[dependencies]
+sagascript-engine-protocol = { path = "../sagascript-engine-protocol" }
+serde_json = "1"
+# The ONNX Runtime shared library is loaded at run time (ORT_DYLIB_PATH or next to the
+# executable), so building needs no ORT binary and works on every CI platform. Keep
+# default-features off: the defaults enable `download-binaries`, which has no CPU-only
+# prebuilt for aarch64-apple-darwin / aarch64-pc-windows-msvc.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-27"] }
+memory-stats = "1"
+libloading = "0.9"
+
+[lints]
+workspace = true

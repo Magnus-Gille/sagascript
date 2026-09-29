@@ -130,8 +130,30 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
   bounded restart backoff. A request that was in flight when the host crashed fails with the
   stderr tail; it is not silently retried more than once.
 
+## Engine hosts
+
+| Host | Location | Engine | Platforms |
+|---|---|---|---|
+| Core ML | `src-tauri/engine-host/coreml/` (`sagascript-engine-host`) | `coreml` | macOS 14+ Apple silicon |
+| ONNX Runtime | `src-tauri/crates/sagascript-engine-host-ort/` (`sagascript-engine-host-ort`) | `onnx` | any (CPU); shipped for Windows on ARM |
+
+The ONNX host runs KlangAI's official `int8` ONNX export (`encoder-model.int8.onnx`,
+`decoder_joint-model.int8.onnx`, `nemo128.onnx`, `vocab.txt`, `config.json` in `model_dir`) on
+the ONNX Runtime CPU execution provider. Differences visible on the wire: `hello.host.engine`
+is `onnx`; `engine_version` is `unloaded` until the first `load` has loaded ONNX Runtime;
+`capabilities.compute_units` is `["cpu"]` and `min_macos` is absent (clients must treat it as
+optional); `load` accepts any `compute_units` value and runs on the CPU; `load_ms`/`compiled`
+follow the same rules (`compiled` is always false). It advertises `max_in_flight` 2 so the
+client reserves an interactive slot, but executes one window at a time and starts queued
+interactive windows first. ONNX Runtime is loaded at run time from `ORT_DYLIB_PATH` or from
+next to the executable (`onnxruntime.dll` on Windows, `libonnxruntime.dylib` on macOS). Tuning
+variables for measurements only: `SAGASCRIPT_ORT_THREADS`, `SAGASCRIPT_ORT_DEC_THREADS`,
+`SAGASCRIPT_ORT_PRE_THREADS`, `SAGASCRIPT_ORT_ARENA=1`, `SAGASCRIPT_ORT_SLOTS`.
+
 ## Conformance
 
 `scripts/engine-host-conformance.py <host binary> --model-dir <dir>` exercises `hello`, `load`,
 `transcribe_window` (including out-of-order concurrent responses and an over-long window),
 `cancel`, `status`, `ping`, `unload`, EOF exit and `shutdown`. Every engine host must pass it.
+The script is engine-agnostic (it sends `compute_units:"ane"`, which non-Core ML hosts map to
+their only device); set `ORT_DYLIB_PATH` when running it against the ONNX host.
