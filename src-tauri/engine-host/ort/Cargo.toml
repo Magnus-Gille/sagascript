@@ -26,5 +26,15 @@ ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "
 memory-stats = "1"
 libloading = "0.9"
 
+# Windows only: restrict the DLL search path (SetDefaultDllDirectories) and load the ONNX
+# Runtime DLLs by absolute path. 0.52 is already in Cargo.lock via other dependencies.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
+
+[features]
+# Honour ORT_DYLIB_PATH in release builds too (always honoured in debug builds). Off by default
+# so a shipped host only ever loads the ONNX Runtime DLL beside it.
+dev-overrides = []
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
