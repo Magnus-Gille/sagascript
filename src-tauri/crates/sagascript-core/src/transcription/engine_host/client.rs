@@ -11,7 +11,7 @@ use sagascript_engine_protocol::{
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::RecvTimeoutError;
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
 /// Identity announced in `hello`; compared with the host's build for a warning.
@@ -79,6 +79,18 @@ impl Timeouts {
     }
 }
 
+/// Test-only synchronization hook, called with a named point of the request
+/// path (`"after_ready"`). Lets tests interleave lifecycle operations
+/// deterministically; production code never sets it.
+#[derive(Clone)]
+pub struct TestHook(pub Arc<dyn Fn(&str) + Send + Sync>);
+
+impl std::fmt::Debug for TestHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TestHook")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EngineHostConfig {
     pub host_path: PathBuf,
@@ -104,6 +116,9 @@ pub struct EngineHostConfig {
     pub busy_retry_delay: Duration,
     /// Parent for the private PCM temp dir (`None`: the system temp dir).
     pub temp_dir: Option<PathBuf>,
+    /// See [`TestHook`].
+    #[doc(hidden)]
+    pub test_hook: Option<TestHook>,
 }
 
 impl EngineHostConfig {
@@ -129,6 +144,7 @@ impl EngineHostConfig {
             busy_retries: 3,
             busy_retry_delay: Duration::from_millis(50),
             temp_dir: None,
+            test_hook: None,
         }
     }
 }
@@ -157,9 +173,21 @@ pub struct WindowOutput {
     pub round_trip_ms: u64,
 }
 
+/// A `load` whose waiter was cancelled; the host keeps loading, so the next
+/// caller waits on this instead of sending a second `load`.
+struct LoadPending {
+    pending: Pending,
+    deadline: Instant,
+}
+
 struct State {
     proc: Option<Arc<HostProcess>>,
+    /// Effective capabilities: `hello` capabilities bounded by the loaded
+    /// model's `LoadResult.window_s` (see [`effective_capabilities`]).
     caps: Option<Capabilities>,
+    /// Capabilities exactly as announced in `hello` (before any load).
+    base_caps: Option<Capabilities>,
+    load_pending: Option<LoadPending>,
     host_info: Option<HostInfo>,
     last_load: Option<LoadResult>,
     loaded: bool,
@@ -194,6 +222,8 @@ impl EngineHostClient {
             state: Mutex::new(State {
                 proc: None,
                 caps: None,
+                base_caps: None,
+                load_pending: None,
                 host_info: None,
                 last_load: None,
                 loaded: false,
@@ -226,7 +256,21 @@ impl EngineHostClient {
 
     /// Start the host and load the model now (pre-warm). Returns its capabilities.
     pub fn warm(&self) -> Result<Capabilities> {
-        self.inner.ensure_ready().map(|(_, caps)| caps)
+        self.inner.ensure_ready(None).map(|(_, caps)| caps)
+    }
+
+    /// Like [`Self::warm`], but returns `Cancelled` promptly when `cancel` fires.
+    ///
+    /// Cancelling stops the wait only: the host is not killed and keeps
+    /// loading, so a first-use compile still finishes for the next caller.
+    pub fn warm_with_cancel(&self, cancel: &CancelToken) -> Result<Capabilities> {
+        self.inner.ensure_ready(Some(cancel)).map(|(_, caps)| caps)
+    }
+
+    /// Run one idle-supervision pass now (tests; the supervisor thread does this on a timer).
+    #[doc(hidden)]
+    pub fn run_idle_check_now(&self) {
+        self.inner.idle_check();
     }
 
     pub fn snapshot(&self) -> HostSnapshot {
@@ -308,15 +352,21 @@ impl EngineHostClient {
         let inner = &self.inner;
         // Interactive registers first so queued batch windows step aside while it
         // is starting the host or loading the model.
-        let mut slot = if req.priority == Priority::Interactive {
-            Some(inner.acquire_interactive())
+        //
+        // A batch request holds an activity reservation from before the
+        // readiness check until its slot is acquired, so the idle supervisor
+        // can never unload the model in between.
+        let (mut slot, reservation) = if req.priority == Priority::Interactive {
+            (Some(inner.acquire_interactive()), None)
         } else {
-            None
+            (None, Some(inner.reserve_activity()))
         };
-        let (proc, caps) = inner.ensure_ready()?;
+        let (proc, caps) = inner.ensure_ready(Some(cancel))?;
+        inner.hook("after_ready");
         if slot.is_none() {
-            slot = inner.acquire_batch(caps.max_in_flight.max(1) as usize, cancel, wait_slot)?;
+            slot = inner.acquire_batch(batch_lane(caps.max_in_flight), cancel, wait_slot)?;
         }
+        drop(reservation);
         let Some(slot) = slot else { return Ok(None) };
         let timeout = inner
             .cfg
@@ -332,6 +382,7 @@ impl EngineHostClient {
             deadline: Instant::now() + timeout,
             started: Instant::now(),
             busy_attempts: 0,
+            reloaded: false,
             _slot: slot,
         }))
     }
@@ -368,6 +419,8 @@ pub struct WindowTicket {
     deadline: Instant,
     started: Instant,
     busy_attempts: u32,
+    /// The window was already resent once after a `not_loaded` answer.
+    reloaded: bool,
     _slot: Slot,
 }
 
@@ -408,6 +461,18 @@ impl WindowTicket {
                 }
                 Ok(Delivery::Response(Err(e))) => {
                     self.pending = None;
+                    if e.code == ErrorCode::NotLoaded && !self.reloaded {
+                        // The model went away between readiness and dispatch
+                        // (idle unload, host restart): reload and resend once.
+                        self.reloaded = true;
+                        tracing::warn!("engine host reported not_loaded; reloading and resending");
+                        self.inner.mark_unloaded(&self.proc);
+                        let (proc, _) = self.inner.ensure_ready(Some(cancel))?;
+                        self.proc = proc;
+                        self.deadline = Instant::now() + self.timeout;
+                        self.pending = Some(self.proc.send(&window_op(&self.req))?);
+                        continue;
+                    }
                     let busy = e.code == ErrorCode::Busy && e.retryable;
                     if busy && self.busy_attempts < self.inner.cfg.busy_retries {
                         self.busy_attempts += 1;
@@ -470,7 +535,123 @@ impl Drop for Slot {
     }
 }
 
+/// Counts as activity (blocks idle unload) without occupying a scheduling slot.
+struct Reservation {
+    inner: Arc<Inner>,
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        let mut st = self.inner.state.lock().unwrap();
+        st.active -= 1;
+        st.last_activity = Instant::now();
+    }
+}
+
+/// Batch windows in flight at most: one host slot stays free for interactive work.
+pub(crate) fn batch_lane(max_in_flight: u32) -> usize {
+    match max_in_flight {
+        0 | 1 => 1,
+        n => n as usize - 1,
+    }
+}
+
+/// `hello` capabilities bounded by what the loaded model accepts. The window
+/// in `LoadResult.window_s` is authoritative; the pre-load values are defaults.
+pub fn effective_capabilities(base: &Capabilities, load_window_s: f64) -> Result<Capabilities> {
+    if !load_window_s.is_finite() || load_window_s <= 0.0 {
+        return Err(EngineHostError::Protocol(format!(
+            "load reported an invalid window_s ({load_window_s})"
+        )));
+    }
+    let mut c = base.clone();
+    c.max_window_s = c.max_window_s.min(load_window_s);
+    c.preferred_window_s = c.preferred_window_s.min(c.max_window_s);
+    if c.preferred_overlap_s >= c.preferred_window_s {
+        c.preferred_overlap_s = c.preferred_window_s / 2.0;
+    }
+    Ok(c)
+}
+
 impl Inner {
+    fn reserve_activity(self: &Arc<Self>) -> Reservation {
+        self.state.lock().unwrap().active += 1;
+        Reservation {
+            inner: self.clone(),
+        }
+    }
+
+    fn mark_unloaded(&self, proc: &Arc<HostProcess>) {
+        let mut st = self.state.lock().unwrap();
+        if st.proc.as_ref().is_some_and(|p| Arc::ptr_eq(p, proc)) {
+            st.loaded = false;
+        }
+    }
+
+    /// `lifecycle.lock()`, but a cancelled caller stops waiting for it.
+    fn lock_lifecycle(&self, cancel: Option<&CancelToken>) -> Result<MutexGuard<'_, ()>> {
+        let Some(cancel) = cancel else {
+            return Ok(self.lifecycle.lock().unwrap());
+        };
+        loop {
+            match self.lifecycle.try_lock() {
+                Ok(g) => return Ok(g),
+                Err(TryLockError::WouldBlock) => {
+                    if cancel.is_cancelled() {
+                        return Err(EngineHostError::Cancelled);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(TryLockError::Poisoned(_)) => panic!("engine host lifecycle lock poisoned"),
+            }
+        }
+    }
+
+    /// Send `load` (or resume waiting for one a cancelled caller left running).
+    fn load_locked(
+        &self,
+        proc: &Arc<HostProcess>,
+        cancel: Option<&CancelToken>,
+    ) -> Result<LoadResult> {
+        let resumed = self.state.lock().unwrap().load_pending.take();
+        let (pending, deadline) = match resumed {
+            Some(p) => (p.pending, p.deadline),
+            None => {
+                let load = &self.cfg.load;
+                let pending = proc.send(&RequestOp::Load {
+                    model_dir: load.model_dir.display().to_string(),
+                    model_id: load.model_id.clone(),
+                    compute_units: load.compute_units.clone(),
+                })?;
+                (pending, Instant::now() + self.cfg.timeouts.load)
+            }
+        };
+        let value = loop {
+            if cancel.is_some_and(CancelToken::is_cancelled) {
+                self.state.lock().unwrap().load_pending = Some(LoadPending { pending, deadline });
+                return Err(EngineHostError::Cancelled);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                proc.forget(pending.id);
+                return Err(EngineHostError::Timeout {
+                    op: "load",
+                    after: self.cfg.timeouts.load,
+                });
+            }
+            match pending.recv_timeout((deadline - now).min(Duration::from_millis(20))) {
+                Ok(Delivery::Event { .. }) | Err(RecvTimeoutError::Timeout) => {}
+                Ok(Delivery::Response(Ok(v))) => break v,
+                Ok(Delivery::Response(Err(e))) => return Err(super::process::remote(e)),
+                Ok(Delivery::Closed(info)) => return Err(crashed(&info)),
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(EngineHostError::Protocol("response channel dropped".into()))
+                }
+            }
+        };
+        parse_result(value).map_err(|e| EngineHostError::Protocol(e.0))
+    }
+
     fn acquire_interactive(self: &Arc<Self>) -> Slot {
         let mut st = self.state.lock().unwrap();
         st.active += 1;
@@ -510,6 +691,12 @@ impl Inner {
         }
     }
 
+    fn hook(&self, point: &str) {
+        if let Some(h) = &self.cfg.test_hook {
+            (h.0)(point);
+        }
+    }
+
     fn live_proc(&self) -> Result<Arc<HostProcess>> {
         let st = self.state.lock().unwrap();
         match &st.proc {
@@ -519,7 +706,11 @@ impl Inner {
     }
 
     /// Lazy start + handshake + load. Fast path when everything is ready.
-    fn ensure_ready(&self) -> Result<(Arc<HostProcess>, Capabilities)> {
+    /// Returns the effective capabilities (bounded by the loaded model).
+    fn ensure_ready(
+        &self,
+        cancel: Option<&CancelToken>,
+    ) -> Result<(Arc<HostProcess>, Capabilities)> {
         {
             let mut st = self.state.lock().unwrap();
             if let (Some(p), Some(c)) = (&st.proc, &st.caps) {
@@ -530,26 +721,24 @@ impl Inner {
                 }
             }
         }
-        let _g = self.lifecycle.lock().unwrap();
-        let (proc, caps) = self.ensure_started_locked()?;
+        let _g = self.lock_lifecycle(cancel)?;
+        if cancel.is_some_and(CancelToken::is_cancelled) {
+            return Err(EngineHostError::Cancelled);
+        }
+        let (proc, _) = self.ensure_started_locked()?;
         let loaded = self.state.lock().unwrap().loaded;
         if !loaded {
-            let load = &self.cfg.load;
-            let v = proc.request(
-                &RequestOp::Load {
-                    model_dir: load.model_dir.display().to_string(),
-                    model_id: load.model_id.clone(),
-                    compute_units: load.compute_units.clone(),
-                },
-                self.cfg.timeouts.load,
-            )?;
-            let r: LoadResult = parse_result(v).map_err(|e| EngineHostError::Protocol(e.0))?;
-            tracing::info!(model_id = %r.model_id, load_ms = r.load_ms, compiled = r.compiled, "engine host model loaded");
+            let r = self.load_locked(&proc, cancel)?;
+            tracing::info!(model_id = %r.model_id, load_ms = r.load_ms, window_s = r.window_s, compiled = r.compiled, "engine host model loaded");
             let mut st = self.state.lock().unwrap();
+            let base = st.base_caps.clone().expect("base caps set with proc");
+            st.caps = Some(effective_capabilities(&base, r.window_s)?);
             st.loaded = true;
             st.last_load = Some(r);
         }
-        self.state.lock().unwrap().last_activity = Instant::now();
+        let mut st = self.state.lock().unwrap();
+        st.last_activity = Instant::now();
+        let caps = st.caps.clone().expect("caps set with proc");
         Ok((proc, caps))
     }
 
@@ -568,6 +757,8 @@ impl Inner {
             }
             let dead = st.proc.take();
             st.caps = None;
+            st.base_caps = None;
+            st.load_pending = None;
             st.loaded = false;
             if let Some((info, p)) = dead.as_ref().and_then(|p| p.closed().map(|i| (i, p))) {
                 if !info.expected && p.claim_crash() {
@@ -609,8 +800,10 @@ impl Inner {
                 let mut st = self.state.lock().unwrap();
                 st.proc = Some(proc.clone());
                 st.caps = Some(caps.clone());
+                st.base_caps = Some(caps.clone());
                 st.host_info = Some(host_info);
                 st.last_load = None;
+                st.load_pending = None;
                 st.loaded = false;
                 Ok((proc, caps))
             }
@@ -656,6 +849,7 @@ impl Inner {
                 _ => return Ok(()),
             }
         };
+        self.state.lock().unwrap().load_pending = None;
         proc.request(&RequestOp::Unload, self.cfg.timeouts.unload)?;
         let mut st = self.state.lock().unwrap();
         st.loaded = false;
@@ -668,6 +862,8 @@ impl Inner {
             let mut st = self.state.lock().unwrap();
             st.loaded = false;
             st.caps = None;
+            st.base_caps = None;
+            st.load_pending = None;
             st.proc.take()
         };
         if let Some(p) = proc {
@@ -716,10 +912,16 @@ impl Inner {
             return;
         };
         // Re-check under the lifecycle lock: a request may have slipped in.
+        // Marking the model unloaded in the same critical section makes any
+        // later request take the (lifecycle-serialized) reload path instead of
+        // dispatching to a host that is about to unload.
         {
-            let st = self.state.lock().unwrap();
+            let mut st = self.state.lock().unwrap();
             if st.active > 0 {
                 return;
+            }
+            if unload {
+                st.loaded = false;
             }
         }
         if unload {

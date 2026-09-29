@@ -19,6 +19,9 @@
 //!   FAKE_IGNORE_CANCEL=1                                answer cancel but keep working
 //!   FAKE_BUSY=1                                         reject with busy when slots are full
 //!   FAKE_LOAD_DELAY_MS                                  delay `load`
+//!   FAKE_LOAD_WINDOW_S                                  `LoadResult.window_s` and the enforced limit
+//!                                                       (default: FAKE_MAX_WINDOW_S / FAKE_WINDOW_S)
+//!   FAKE_FLOOD=1                                        on the first window, write 17 MiB without a newline
 //!   FAKE_LOG=<path>                                     append "<op> <id>" lines
 
 use sagascript_engine_protocol::{
@@ -46,6 +49,13 @@ fn env_u64(k: &str, d: u64) -> u64 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(d)
+}
+/// The window the loaded model really accepts (what `load` reports).
+fn enforced_window_s() -> f64 {
+    env_f64(
+        "FAKE_LOAD_WINDOW_S",
+        env_f64("FAKE_MAX_WINDOW_S", env_f64("FAKE_WINDOW_S", 30.0)),
+    )
 }
 fn env_flag(k: &str) -> bool {
     std::env::var(k).is_ok_and(|v| !v.is_empty() && v != "0")
@@ -195,7 +205,7 @@ fn handle(host: &Arc<Host>, id: u64, op: RequestOp) {
                 *host.loaded.lock().unwrap() = Some(model_id.clone());
                 host.write(&encode_ok(
                     id,
-                    json!({"model_id":model_id,"load_ms":1,"compiled":false,"window_s":env_f64("FAKE_WINDOW_S",30.0),
+                    json!({"model_id":model_id,"load_ms":1,"compiled":false,"window_s":enforced_window_s(),
                       "frame_s":0.08,"vocab_size":1025,"blank_id":1024}),
                 ));
             });
@@ -212,8 +222,7 @@ fn handle(host: &Arc<Host>, id: u64, op: RequestOp) {
                 host.write(&encode_err(id, ErrorCode::NotLoaded, "load first", false));
                 return;
             }
-            let max_samples =
-                (env_f64("FAKE_MAX_WINDOW_S", env_f64("FAKE_WINDOW_S", 30.0)) * 16000.0) as u64;
+            let max_samples = (enforced_window_s() * 16000.0) as u64;
             if num_samples > max_samples {
                 host.write(&encode_err(
                     id,
@@ -221,6 +230,17 @@ fn handle(host: &Arc<Host>, id: u64, op: RequestOp) {
                     "window too long",
                     false,
                 ));
+                return;
+            }
+            if env_flag("FAKE_FLOOD") {
+                let chunk = vec![b'x'; 1 << 20];
+                let mut o = host.out.lock().unwrap();
+                for _ in 0..17 {
+                    let _ = o.write_all(&chunk);
+                }
+                let _ = o.flush();
+                drop(o);
+                std::thread::sleep(Duration::from_secs(30));
                 return;
             }
             if env_flag("FAKE_CRASH_ON_WINDOW") {

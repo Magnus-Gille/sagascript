@@ -45,7 +45,7 @@ Result:
 {"protocol":1,
  "host":{"name":"sagascript-engine-host","version":"1.4.0","git_sha":"<40 hex>","engine":"coreml","engine_version":"<os/framework info>"},
  "capabilities":{"sample_rate":16000,"max_window_s":30.0,"preferred_window_s":30.0,"preferred_overlap_s":6.0,
-                 "max_in_flight":2,"token_timestamps":true,"languages":["sv"],
+                 "max_in_flight":4,"token_timestamps":true,"languages":["sv"],
                  "compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0"}}
 ```
 The client rejects a host whose `protocol` differs or whose `git_sha` is missing, and logs a
@@ -60,7 +60,12 @@ compiled-model cache (`~/Library/Caches/Sagascript/EngineHost/<key>/<Name>.mlmod
 `.complete` marker exists) reports false. The host loads from that stable path so the OS Neural
 Engine compile cache is reused, and accepts float16 or float32 tensors on the model interface.
 Loading the already-loaded model is a no-op success; loading another model replaces it.
-`window_s` is the model's fixed input length; `capabilities.max_window_s` never exceeds it.
+`window_s` is the model's fixed input length and **the effective window**: the `hello`
+capabilities are announced before any model is loaded and are only defaults. After `load` the
+client uses `max_window_s = min(hello.max_window_s, LoadResult.window_s)` and
+`preferred_window_s ≤ max_window_s` (overlap is reduced if it no longer fits); it must never send
+a window longer than `LoadResult.window_s` (the host answers `bad_request`). The client
+recomputes this after every `load` (restart, reload after idle unload).
 
 ### `transcribe_window`
 Request:
@@ -73,7 +78,8 @@ Request:
 - `num_samples ≤ max_window_s × sample_rate`, else `bad_request`. Shorter windows are padded
   internally; tokens beyond the real audio are dropped.
 - `priority` is `interactive` (dictation) or `batch` (file chunks). When more requests are queued
-  than `max_in_flight`, interactive ones run first.
+  than `max_in_flight`, interactive ones run first. A host that is not loaded answers `not_loaded`;
+  the client then reloads and resends the window once.
 
 Result:
 ```json
@@ -101,12 +107,25 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
 - Timeouts: `hello` 10 s, `load` 180 s (first-time ANE compile), `ping` 2 s, `transcribe_window`
   max(15 s, 3 × window seconds); `shutdown` grace 2 s, then kill.
 - Long audio: decode to 16 kHz mono f32 once, write one PCM file, plan windows with
-  `chunk_merge::plan_windows(preferred_window_s, preferred_overlap_s)`, keep ≤ `max_in_flight`
-  windows in flight, merge strictly in window order with `chunk_merge::merge_window`, report
+  `chunk_merge::plan_windows(preferred_window_s, preferred_overlap_s)` with the effective window
+  (see `load`), keep at most `max_in_flight − 1` batch windows in flight (`max_in_flight` when it
+  is 1), merge strictly in window order with `chunk_merge::merge_window`, report
   progress as merged windows / total, cancel by not sending further windows and cancelling the
   ones in flight.
 - Dictation: one window (utterances longer than `max_window_s` use the long-audio path) with
-  `priority:"interactive"`; the client never queues it behind file windows.
+  `priority:"interactive"`; the client never queues it behind file windows. One host slot is
+  therefore reserved for interactive work (batch is capped at `max_in_flight − 1`), so a dictation
+  request starts immediately even while a file job saturates the batch lane. The Core ML host
+  advertises `max_in_flight` 4 for this reason (3 batch windows is where throughput plateaus).
+- Cancelling a wait for `load` (for example the user aborts dictation during the first-use compile)
+  stops the client's wait only: the host is not killed and keeps loading, and the next caller
+  resumes waiting for that same `load`.
+- Stdout lines are read with a hard 16 MiB bound. A longer line (or a flood without a newline)
+  is a protocol violation: the client kills the host and fails in-flight requests with a protocol
+  error; the restart budget applies.
+- `SAGASCRIPT_ENGINE_HOST` and `SAGASCRIPT_PIANISSIMO_MODEL_DIR` are honored in development builds
+  only (debug, or the `dev-overrides` cargo feature); release and signed builds ignore them (with
+  one warning) and use the bundled host and the manifest-verified model.
 - Lifecycle: lazy start, optional pre-warm, idle `unload` then `shutdown`, crash detection with
   bounded restart backoff. A request that was in flight when the host crashed fails with the
   stderr tail; it is not silently retried more than once.

@@ -25,6 +25,10 @@ pub struct CrashInfo {
     pub stderr_tail: String,
     /// True when the client asked for the exit (shutdown/kill/drop).
     pub expected: bool,
+    /// Set when the client ended the host for breaking the protocol
+    /// (for example an over-long line); in-flight requests then fail with a
+    /// protocol error instead of a crash.
+    pub violation: Option<String>,
 }
 
 /// What a waiter receives for a request id.
@@ -49,6 +53,53 @@ struct Shared {
     closed_cv: Condvar,
     stderr_tail: Mutex<VecDeque<u8>>,
     expected_exit: AtomicBool,
+}
+
+/// Outcome of [`read_bounded_line`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LineRead {
+    Eof,
+    /// A complete line (including its `\n`) is in the buffer.
+    Line,
+    /// More than `max` bytes arrived without a newline; the buffer holds at most `max` bytes.
+    TooLong,
+}
+
+/// `read_until(b'\n')` that never buffers more than `max` bytes per line.
+pub(crate) fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    max: usize,
+) -> std::io::Result<LineRead> {
+    buf.clear();
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(a) => a,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if available.is_empty() {
+            return Ok(if buf.is_empty() {
+                LineRead::Eof
+            } else {
+                LineRead::Line // final line without a trailing newline
+            });
+        }
+        let (take, found) = match available.iter().position(|&b| b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (available.len(), false),
+        };
+        if buf.len() + take > max {
+            let room = max - buf.len();
+            buf.extend_from_slice(&available[..room]);
+            return Ok(LineRead::TooLong);
+        }
+        buf.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if found {
+            return Ok(LineRead::Line);
+        }
+    }
 }
 
 impl Shared {
@@ -278,6 +329,9 @@ impl Drop for HostProcess {
 }
 
 pub(crate) fn crashed(info: &CrashInfo) -> EngineHostError {
+    if let Some(v) = &info.violation {
+        return EngineHostError::Protocol(v.clone());
+    }
     EngineHostError::Crashed {
         status: info.status.clone(),
         stderr_tail: info.stderr_tail.clone(),
@@ -323,19 +377,19 @@ fn read_stdout(
 ) {
     let mut reader = BufReader::new(stdout);
     let mut buf = Vec::new();
+    let mut violation: Option<String> = None;
     loop {
-        buf.clear();
-        match reader.read_until(b'\n', &mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-        if buf.len() > MAX_LINE_BYTES {
-            tracing::warn!(
-                pid,
-                len = buf.len(),
-                "engine host line exceeds 16 MiB; dropped"
-            );
-            continue;
+        match read_bounded_line(&mut reader, &mut buf, MAX_LINE_BYTES) {
+            Ok(LineRead::Eof) | Err(_) => break,
+            Ok(LineRead::Line) => {}
+            Ok(LineRead::TooLong) => {
+                tracing::error!(pid, "engine host line exceeds 16 MiB; killing the host");
+                violation = Some("engine host line exceeds 16 MiB without a newline".into());
+                // Ending the process closes stdout, which then completes the
+                // shutdown path below and fails every in-flight request.
+                let _ = child.lock().unwrap().kill();
+                break;
+            }
         }
         let line = String::from_utf8_lossy(&buf);
         if line.trim().is_empty() {
@@ -381,6 +435,7 @@ fn read_stdout(
         status,
         stderr_tail: shared.tail_string(),
         expected: shared.expected_exit.load(Ordering::SeqCst),
+        violation,
     };
     let mut r = shared.routing.lock().unwrap();
     let waiters: Vec<_> = r.waiters.drain().collect();
@@ -389,5 +444,34 @@ fn read_stdout(
     shared.closed_cv.notify_all();
     for (_, w) in waiters {
         let _ = w.send(Delivery::Closed(info.clone()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_line_reader_splits_lines_and_bounds_memory() {
+        let mut r = std::io::Cursor::new(b"ab\ncd\nlast".to_vec());
+        let mut buf = Vec::new();
+        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"ab\n");
+        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"cd\n");
+        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"last");
+        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::Eof);
+
+        // Exactly max bytes including the newline is fine; one more is not.
+        let mut r = std::io::Cursor::new(b"1234567\n12345678\n".to_vec());
+        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::Line);
+        assert_eq!(read_bounded_line(&mut r, &mut buf, 8).unwrap(), LineRead::TooLong);
+        assert!(buf.len() <= 8);
+
+        // Tiny BufReader capacity: the bound holds across refills.
+        let mut r = BufReader::with_capacity(3, std::io::Cursor::new(vec![b'x'; 100]));
+        assert_eq!(read_bounded_line(&mut r, &mut buf, 10).unwrap(), LineRead::TooLong);
+        assert_eq!(buf.len(), 10);
     }
 }

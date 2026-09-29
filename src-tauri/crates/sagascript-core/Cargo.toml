@@ -58,6 +58,9 @@ whisper-rs = { version = "0.15", features = ["tracing_backend"] }
 default = []
 record = ["dep:cpal"]
 diarization = ["dep:ort", "dep:rustfft", "dep:kodama", "dep:ndarray"]
+# Honor SAGASCRIPT_ENGINE_HOST / SAGASCRIPT_PIANISSIMO_MODEL_DIR in a release build.
+# Off by default: signed builds must not trust the environment for the sidecar or model.
+dev-overrides = []
 
 [lints]
 workspace = true

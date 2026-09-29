@@ -1,7 +1,7 @@
 //! Long-audio pipeline: one PCM file, planned windows, bounded in-flight
 //! windows, strictly ordered merge, progress and cancellation.
 
-use super::client::{EngineHostClient, WindowOutput, WindowRequest, WindowTicket};
+use super::client::{batch_lane, EngineHostClient, WindowOutput, WindowRequest, WindowTicket};
 use super::{EngineHostError, Result};
 use crate::transcription::chunk_merge::{
     merge_window, offset_tokens, plan_windows, tokens_to_text, tokens_to_words, AlignedToken,
@@ -168,7 +168,7 @@ impl EngineHostClient {
             });
         }
         let cfg = self.config();
-        let caps = self.warm()?;
+        let caps = self.warm_with_cancel(cancel)?;
         let sr = caps.sample_rate;
         let max_window = (caps.max_window_s * f64::from(sr)) as usize;
         let plan: Vec<Window> = if samples.len() <= max_window {
@@ -185,7 +185,12 @@ impl EngineHostClient {
             )
         };
         let total = plan.len();
-        let max_in_flight = (caps.max_in_flight.max(1) as usize).min(total);
+        // Batch work leaves one host slot free for dictation (see `batch_lane`).
+        let lane = match opts.priority {
+            Priority::Batch => batch_lane(caps.max_in_flight),
+            Priority::Interactive => caps.max_in_flight.max(1) as usize,
+        };
+        let max_in_flight = lane.min(total);
         let pcm = PcmFile::write(samples, cfg.temp_dir.as_deref())?;
         let max_retries = cfg.max_crash_retries;
 

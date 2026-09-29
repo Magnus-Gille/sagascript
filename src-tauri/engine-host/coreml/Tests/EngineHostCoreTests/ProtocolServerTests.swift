@@ -32,12 +32,16 @@ private final class RecordingOutput {
 }
 
 private final class FakeEngine: EngineBackend {
-    let capabilities = HostCapabilities(
-        maxWindowSeconds: 1,
-        preferredWindowSeconds: 1,
-        preferredOverlapSeconds: 0.2,
-        maxInFlight: 2
-    )
+    let capabilities: HostCapabilities
+
+    init(maxInFlight: Int = 2) {
+        capabilities = HostCapabilities(
+            maxWindowSeconds: 1,
+            preferredWindowSeconds: 1,
+            preferredOverlapSeconds: 0.2,
+            maxInFlight: maxInFlight
+        )
+    }
     private let lock = NSLock()
     private let gateCondition = NSCondition()
     private var loaded = false
@@ -182,6 +186,33 @@ private func sendWindow(_ server: EngineHostServer, id: UInt64, path: String, pr
     for id: UInt64 in [10, 11, 12, 13] {
         #expect(output.responses(for: id).first?["ok"] as? Bool == true)
     }
+}
+
+/// The client caps batch windows at `max_in_flight - 1`. With that lane full and
+/// gated, an interactive request must start at once, without any batch completing.
+@Test func interactiveRequestStartsWhileTheBatchLaneIsFull() {
+    let output = RecordingOutput()
+    let fake = FakeEngine(maxInFlight: 3)
+    let server = EngineHostServer(engine: fake, output: output.append)
+    sendRequest(server, ["v": 1, "id": 1, "op": "hello", "client": [:]])
+    sendRequest(server, ["v": 1, "id": 2, "op": "load", "model_dir": "/tmp/model", "model_id": "fake", "compute_units": "ane"])
+    _ = output.waitFor(id: 2)
+    sendWindow(server, id: 10, path: "/tmp/gate-1", priority: "batch")
+    sendWindow(server, id: 11, path: "/tmp/gate-2", priority: "batch")
+    #expect(fake.waitUntilStarted(count: 2))
+    sendWindow(server, id: 12, path: "/tmp/fast-interactive", priority: "interactive")
+    #expect(fake.waitUntilStarted(count: 3))
+    #expect(output.waitFor(id: 12).first?["ok"] as? Bool == true)
+    // Both batch windows are still held: the interactive one did not wait for them.
+    #expect(output.responses(for: 10).isEmpty && output.responses(for: 11).isEmpty)
+    fake.openGates()
+    _ = output.waitFor(id: 10); _ = output.waitFor(id: 11)
+}
+
+@Test func hostReservesAnInteractiveSlotByDefault() {
+    #expect(CoreMLEngine.configuredMaxInFlight(environment: [:]) == 4)
+    #expect(CoreMLEngine.configuredMaxInFlight(environment: ["SAGASCRIPT_ENGINE_MAX_IN_FLIGHT": "2"]) == 2)
+    #expect(CoreMLEngine.configuredMaxInFlight(environment: ["SAGASCRIPT_ENGINE_MAX_IN_FLIGHT": "99"]) == 8)
 }
 
 @Test func cancelProducesAckAndCancelledTerminalResponse() {
