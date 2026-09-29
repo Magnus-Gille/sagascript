@@ -80,6 +80,23 @@ Warm decode is about 11.6x faster than 1.3.2's per-utterance spawn (0.684 s vs 0
 
 1.3.2 medium measured 14.7% pooled on the same two files; the fixed build was only measured with large. The cause was decoding with timestamps off: whisper.cpp skipped the rest of a 30 s window after an early end-of-text, visible as 63 and 209 deletions in the old runs vs 7 and 18 now (GitHub issue #236). Speed is unchanged within run-to-run noise. On the same two files Whisper large has 128 errors in 2,127 words (6.02%) vs 143 (6.72%) for the new CLI, at 30x and 50x the time.
 
+### Swedish model lineup (same files, fixed KB-Whisper, new CLI)
+
+| Model | Download | WER 5 min | WER 15 min | Time 5 / 15 min |
+|---|---|---|---|---|
+| Pianissimo (Core ML) | 608 MB | 7.04% | 6.62% | 1.27 / 2.78 s |
+| KB-Whisper Large | 1,031 MB | 6.11% | 5.99% | 62 / 174 s |
+| KB-Whisper Medium | 514 MB | 7.96% | 8.57% | 31 / 91 s |
+| KB-Whisper Small | 190 MB | 12.04% | 10.21% | 13 / 28 s |
+| KB-Whisper Base | 60 MB | 12.41% | 11.91% | 6 / 11 s |
+| KB-Whisper Tiny | 40 MB | 64.63% | 46.25% | 7 / 14 s |
+
+Pianissimo and Large come from the AC-power runs above; Tiny to Medium were measured the same way but
+on battery power (`results/lineup-20260929.jsonl`, one rep), so their times are indicative while WER
+is deterministic. Tiny collapses on long Swedish audio (171 and 303 deleted words). Pianissimo is both
+faster and more accurate than Base, Small and Medium; Large is 0.6–1.0 points more accurate but about
+60x slower.
+
 ## 3. Method
 
 - **Hardware:** MacBook Air 13" M4 (Mac16,12), 4 performance + 6 efficiency cores, 10-core GPU, 16-core Neural Engine, 32 GB, fanless, macOS 27.0, on AC power (battery 97 to 100% in every final-run row).
