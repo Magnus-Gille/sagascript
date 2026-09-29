@@ -98,49 +98,93 @@ impl ModelManifest {
     }
 }
 
-// TODO(conductor): fill from conversion output. Every constant below (revision,
-// URL, archive size + SHA-256, per-file sizes + SHA-256) is a placeholder until
-// the converted Core ML artifact is published. The all-zero digests make
-// `download()` refuse to run instead of failing confusingly on a hash mismatch.
-const ZERO_SHA: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-
-macro_rules! placeholder_file {
-    ($path:literal) => {
-        ManifestFile {
-            path: $path,
-            size: 0, // TODO(conductor): fill from conversion output
-            sha256: ZERO_SHA,
-        }
-    };
-}
-
-/// The published artifact.
+/// The published artifact: our Core ML conversion of Klang Pianissimo (CC BY 4.0), revision r1,
+/// hosted on Hugging Face and pinned to an immutable commit. Produced by
+/// `scripts/pianissimo-coreml/` (see its README); sizes and SHA-256 generated from the archive.
 pub const MANIFEST: ModelManifest = ModelManifest {
     model_id: MODEL_ID,
-    revision: "r0", // TODO(conductor): fill from conversion output
-    // TODO(conductor): fill from conversion output
-    url: "https://github.com/Magnus-Gille/sagascript/releases/download/TODO/pianissimo-sv-coreml.zip",
+    revision: "r1",
+    url: "https://huggingface.co/magnusgille/pianissimo-sv-coreml/resolve/6e33b64e174330a13bd61b9e40cfef7cfa2d28ce/pianissimo-sv-coreml-r1.zip",
     archive: DownloadIntegrity {
-        sha256: ZERO_SHA, // TODO(conductor): fill from conversion output
-        size: 0,          // TODO(conductor): fill from conversion output
+        sha256: "4f2b7456f2c29e5325deefd99db36ebe713f17d479a15e10ce099215ec17babe",
+        size: 637642054,
     },
-    // TODO(conductor): replace with the real file list from the conversion output
-    // (every file inside each .mlpackage, not just the samples below).
     files: &[
-        placeholder_file!("Preprocessor.mlpackage/Manifest.json"),
-        placeholder_file!("Preprocessor.mlpackage/Data/com.apple.CoreML/model.mlmodel"),
-        placeholder_file!("Encoder.mlpackage/Manifest.json"),
-        placeholder_file!("Encoder.mlpackage/Data/com.apple.CoreML/model.mlmodel"),
-        placeholder_file!("Encoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin"),
-        placeholder_file!("Decoder.mlpackage/Manifest.json"),
-        placeholder_file!("Decoder.mlpackage/Data/com.apple.CoreML/model.mlmodel"),
-        placeholder_file!("Decoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin"),
-        placeholder_file!("JointDecisionv3.mlpackage/Manifest.json"),
-        placeholder_file!("JointDecisionv3.mlpackage/Data/com.apple.CoreML/model.mlmodel"),
-        placeholder_file!("JointDecisionv3.mlpackage/Data/com.apple.CoreML/weights/weight.bin"),
-        placeholder_file!("parakeet_vocab.json"),
-        placeholder_file!("manifest.json"),
-        placeholder_file!("LICENSE-and-attribution.txt"),
+        ManifestFile {
+            path: "Decoder.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+            size: 12030,
+            sha256: "e435cb83c473cad193b41a286cf9b7fe769aea5694ccab2a920aba6f8b67f716",
+        },
+        ManifestFile {
+            path: "Decoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+            size: 23604992,
+            sha256: "9e34a5cc5da3477cf0e49126f55d4754a6a332b5df52a22812d6ddbd84af0e39",
+        },
+        ManifestFile {
+            path: "Decoder.mlpackage/Manifest.json",
+            size: 617,
+            sha256: "11b04a6c4199b9cd0cf252b9acb99398b432dcf0f3f4cff39985c0fc788eefbe",
+        },
+        ManifestFile {
+            path: "Encoder.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+            size: 1147431,
+            sha256: "994cb4b612993e1342cfa2ec01a457e249ff12a989e19f765158e8b0f4c29745",
+        },
+        ManifestFile {
+            path: "Encoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+            size: 598079680,
+            sha256: "2e3faba772246a8099720e4a75051b8ff94438703340feafd412c0305c55802f",
+        },
+        ManifestFile {
+            path: "Encoder.mlpackage/Manifest.json",
+            size: 617,
+            sha256: "b69acb955cdfff40b5ba9ed6c0a7f830459ff66a42a90921995c58a274938844",
+        },
+        ManifestFile {
+            path: "JointDecisionv3.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+            size: 10910,
+            sha256: "da5c72b90912c05bba6675a3f7a5f5de79be55a7a16e51834acc5587c6205b1a",
+        },
+        ManifestFile {
+            path: "JointDecisionv3.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+            size: 12642764,
+            sha256: "1f841daf3a6ce483ac136cd7a5e48d6071543e7c5eddcbba4525bda74695cb61",
+        },
+        ManifestFile {
+            path: "JointDecisionv3.mlpackage/Manifest.json",
+            size: 617,
+            sha256: "3e4c032878210899a8c7ca2faed2f8c64232e8051cced7da7c0901f255d97888",
+        },
+        ManifestFile {
+            path: "LICENSE-and-attribution.txt",
+            size: 1519,
+            sha256: "120ec444d3f3ba73fb9acbbb6f0a978e3d21da59c32b5529e75525e05404fb3d",
+        },
+        ManifestFile {
+            path: "Preprocessor.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+            size: 18124,
+            sha256: "0a52730e0e7bf579828368620bbd3007cbcdb6bbfc1cb623f048ae7f5b804db5",
+        },
+        ManifestFile {
+            path: "Preprocessor.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+            size: 1953088,
+            sha256: "c69139820fc62c199f92c83d2c97458f8aaff337e5026abd9606ff03ba52b8e1",
+        },
+        ManifestFile {
+            path: "Preprocessor.mlpackage/Manifest.json",
+            size: 617,
+            sha256: "ee1c3a7783cff2a4b3c9b7b67058b71c47f78bc152b333e91181aabc0fc0ab7e",
+        },
+        ManifestFile {
+            path: "manifest.json",
+            size: 6367,
+            sha256: "004aa7b0153b9ffe16ec65ad790b97c4d25b4d22ed60e59b685fa1dfaa6b4b94",
+        },
+        ManifestFile {
+            path: "parakeet_vocab.json",
+            size: 159467,
+            sha256: "bcc938d57eb0b26a6d69e5be1f367c97767d8e91484f42fcc814948e662d04a8",
+        },
     ],
 };
 
@@ -597,9 +641,20 @@ mod tests {
     }
 
     #[test]
-    fn production_manifest_is_named_and_marked_as_placeholder() {
+    fn production_manifest_is_published_pinned_and_complete() {
         assert_eq!(MANIFEST.versioned_id(), format!("pianissimo-sv-coreml-{}", MANIFEST.revision));
-        assert!(MANIFEST.is_placeholder(), "update this test when the real artifact lands");
+        assert!(!MANIFEST.is_placeholder(), "production manifest must reference the published artifact");
+        let pinned = regex_lite_commit(MANIFEST.url);
+        assert!(pinned, "model URL must be pinned to a 40-hex Hugging Face commit: {}", MANIFEST.url);
+        assert!(!MANIFEST.url.contains("/resolve/main/"));
+        assert!(MANIFEST.url.ends_with(".zip"));
+        let hex64 = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+        assert!(hex64(MANIFEST.archive.sha256));
+        assert!(MANIFEST.archive.size > MANIFEST.installed_size());
+        for file in MANIFEST.files {
+            assert!(hex64(file.sha256), "{} has no real digest", file.path);
+            assert!(file.size > 0, "{} has no size", file.path);
+        }
         for required in REQUIRED_ITEMS {
             assert!(
                 MANIFEST.files.iter().any(|f| f.path.starts_with(required) || f.path == required),
@@ -609,6 +664,16 @@ mod tests {
         for extra in ["manifest.json", "LICENSE-and-attribution.txt"] {
             assert!(MANIFEST.files.iter().any(|f| f.path == extra));
         }
+    }
+
+    /// `https://huggingface.co/<owner>/<repo>/resolve/<40-hex commit>/<file>`.
+    fn regex_lite_commit(url: &str) -> bool {
+        let Some(rest) = url.strip_prefix("https://huggingface.co/") else { return false };
+        let parts: Vec<&str> = rest.split('/').collect();
+        parts.len() == 5
+            && parts[2] == "resolve"
+            && parts[3].len() == 40
+            && parts[3].bytes().all(|b| b.is_ascii_hexdigit())
     }
 
     #[test]
@@ -777,7 +842,7 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_manifest_is_never_reported_as_downloaded() {
+    fn empty_models_dir_is_never_reported_as_downloaded() {
         let root = tmp();
         assert!(!is_downloaded_in(&MANIFEST, root.path()));
         assert!(verify_in(&MANIFEST, root.path(), false).is_err());
