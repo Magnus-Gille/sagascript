@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "macOS": {
+      "files": {
+        "Resources/EngineHost/sagascript-engine-host": "../build/engine-host/sagascript-engine-host"
+      }
+    }
+  }
+}
