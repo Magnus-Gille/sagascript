@@ -508,8 +508,10 @@ mod tests {
     }
 
     /// Reader that blocks until released, then fails with a non-EOF I/O error.
+    #[cfg(unix)]
     struct FailingReader(Mutex<Receiver<()>>);
 
+    #[cfg(unix)]
     impl Read for FailingReader {
         fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
             let _ = self.0.lock().unwrap().recv();
@@ -519,6 +521,7 @@ mod tests {
 
     /// A stdout read error is not EOF: waiters get the I/O error text and the
     /// child is killed and reaped.
+    #[cfg(unix)]
     #[test]
     fn stdout_read_error_fails_waiters_and_reaps_child() {
         let (release, rx) = mpsc::channel::<()>();
