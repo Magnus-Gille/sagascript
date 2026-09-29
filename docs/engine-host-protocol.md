@@ -139,7 +139,7 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
 | Host | Location | Engine | Platforms |
 |---|---|---|---|
 | Core ML | `src-tauri/engine-host/coreml/` (`sagascript-engine-host`) | `coreml` | macOS 14+ Apple silicon |
-| ONNX Runtime | `src-tauri/crates/sagascript-engine-host-ort/` (`sagascript-engine-host-ort`) | `onnx` | any (CPU); shipped for Windows on ARM |
+| ONNX Runtime | `src-tauri/engine-host/ort/` (`sagascript-engine-host-ort`) | `onnx` | any (CPU); shipped for Windows on ARM |
 
 The ONNX host runs KlangAI's official `int8` ONNX export (`encoder-model.int8.onnx`,
 `decoder_joint-model.int8.onnx`, `nemo128.onnx`, `vocab.txt`, `config.json` in `model_dir`) on
