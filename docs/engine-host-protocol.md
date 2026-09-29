@@ -117,6 +117,10 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
   therefore reserved for interactive work (batch is capped at `max_in_flight − 1`), so a dictation
   request starts immediately even while a file job saturates the batch lane. The Core ML host
   advertises `max_in_flight` 4 for this reason (3 batch windows is where throughput plateaus).
+  Hosts SHOULD advertise `max_in_flight` ≥ 2 so a client can reserve one slot for interactive
+  work. A host advertising 1 gets no interactive reservation: the client logs a warning once per
+  host, and dictation may wait for at most one running batch window (it is still sent ahead of any
+  queued batch window).
 - Cancelling a wait for `load` (for example the user aborts dictation during the first-use compile)
   stops the client's wait only: the host is not killed and keeps loading, and the next caller
   resumes waiting for that same `load`.
