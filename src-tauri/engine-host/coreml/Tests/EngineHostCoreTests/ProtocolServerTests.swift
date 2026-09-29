@@ -1,3 +1,4 @@
+import CoreML
 import Foundation
 import Testing
 @testable import SagascriptEngineHostCore
@@ -168,4 +169,22 @@ private func sendWindow(_ server: EngineHostServer, id: UInt64, path: String, pr
     server.receiveEOF()
     sendRequest(server, ["v": 1, "id": 4, "op": "ping"])
     #expect((output.waitFor(id: 4).first?["error"] as? [String: Any])?["code"] as? String == "protocol")
+}
+
+@Test func alignedArrayPadsInnermostDimensionToTile() throws {
+    let array = try makeAlignedArray(shape: [1, 1024, 1], dataType: .float32)
+    #expect(array.strides.map(\.intValue) == [16384, 16, 1])
+    #expect(Int(bitPattern: array.dataPointer) % 64 == 0)
+}
+
+@Test func encoderFramesCopiesStridedColumn() throws {
+    // [1, hidden=4, time=3]: time is innermost, so its stride is padded to 16.
+    let array = try makeAlignedArray(shape: [1, 4, 3], dataType: .float32)
+    let pointer = array.dataPointer.bindMemory(to: Float.self, capacity: array.count)
+    let strides = array.strides.map(\.intValue)
+    for hidden in 0..<4 { for time in 0..<3 { pointer[hidden * strides[1] + time * strides[2]] = Float(hidden * 10 + time) } }
+    let frames = try EncoderFrames(array, validLength: 3, hiddenSize: 4)
+    var destination = [Float](repeating: 0, count: 4)
+    destination.withUnsafeMutableBufferPointer { frames.copyFrame(2, to: $0.baseAddress!, stride: 1) }
+    #expect(destination == [2, 12, 22, 32])
 }

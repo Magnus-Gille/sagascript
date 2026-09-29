@@ -67,7 +67,7 @@ public final class CoreMLEngine: EngineBackend {
             self.cacheDirectory = home
                 .appendingPathComponent("Library/Caches/Sagascript/EngineHost", isDirectory: true)
         }
-        self.currentCapabilities = HostCapabilities()
+        self.currentCapabilities = HostCapabilities(maxInFlight: Self.configuredMaxInFlight)
     }
 
     public var capabilities: HostCapabilities {
@@ -119,12 +119,20 @@ public final class CoreMLEngine: EngineBackend {
         )
         let configuration = MLModelConfiguration()
         configuration.computeUnits = units
+        // The mel front end has ops that only run on the CPU; requesting the
+        // Neural Engine for it only adds dispatch overhead. The per-token
+        // decoder/joint networks are tiny, so the same applies to them when
+        // measured (see docs/engine-host-protocol.md tuning notes).
+        let preprocessorConfiguration = MLModelConfiguration()
+        preprocessorConfiguration.computeUnits = try tuningUnits("SAGASCRIPT_ENGINE_PREPROCESSOR_UNITS", default: .cpuOnly)
+        let decoderConfiguration = MLModelConfiguration()
+        decoderConfiguration.computeUnits = try tuningUnits("SAGASCRIPT_ENGINE_DECODER_UNITS", default: units)
 
         do {
-            let preprocessor = try MLModel(contentsOf: prepared["Preprocessor"]!, configuration: configuration)
+            let preprocessor = try MLModel(contentsOf: prepared["Preprocessor"]!, configuration: preprocessorConfiguration)
             let encoder = try MLModel(contentsOf: prepared["Encoder"]!, configuration: configuration)
-            let decoder = try MLModel(contentsOf: prepared["Decoder"]!, configuration: configuration)
-            let joint = try MLModel(contentsOf: prepared["JointDecisionv3"]!, configuration: configuration)
+            let decoder = try MLModel(contentsOf: prepared["Decoder"]!, configuration: decoderConfiguration)
+            let joint = try MLModel(contentsOf: prepared["JointDecisionv3"]!, configuration: decoderConfiguration)
             let vocabulary = try loadVocabulary(at: prepared.vocabularyURL)
             let loaded = try makeLoadedModel(
                 preprocessor: preprocessor,
@@ -144,7 +152,7 @@ public final class CoreMLEngine: EngineBackend {
                 maxWindowSeconds: loaded.windowSeconds,
                 preferredWindowSeconds: loaded.windowSeconds,
                 preferredOverlapSeconds: overlap,
-                maxInFlight: 1
+                maxInFlight: configuredMaxInFlight
             )
             lock.unlock()
 
@@ -187,7 +195,10 @@ public final class CoreMLEngine: EngineBackend {
 
         let preprocessStart = Date()
         let audioSignal = try makeFloatArray(samples)
-        let audioLength = try makeIntArray([request.numSamples])
+        // Like the reference pipeline, declare the length rounded up to a whole
+        // encoder frame (1280 samples); the zero padding is already in place.
+        let declaredSamples = min(loaded.windowSamples, (request.numSamples + 1279) / 1280 * 1280)
+        let audioLength = try makeIntArray([declaredSamples])
         let preprocessorInput = try MLDictionaryFeatureProvider(dictionary: [
             "audio_signal": MLFeatureValue(multiArray: audioSignal),
             "audio_length": MLFeatureValue(multiArray: audioLength),
@@ -218,11 +229,12 @@ public final class CoreMLEngine: EngineBackend {
         try checkCancelled(isCancelled)
 
         let decodeStart = Date()
+        let realAudioSeconds = Double(request.numSamples) / Double(request.sampleRate)
         let tokens = try decode(
             encoderOutput: encoderOutput,
             sequenceLength: sequenceLength,
             loaded: loaded,
-            realAudioSeconds: Double(request.numSamples) / Double(request.sampleRate),
+            realAudioSeconds: realAudioSeconds,
             isCancelled: isCancelled
         )
         let decodeMilliseconds = Date().timeIntervalSince(decodeStart) * 1000
@@ -240,7 +252,7 @@ public final class CoreMLEngine: EngineBackend {
         lock.lock()
         model = nil
         loadedSourcePath = nil
-        currentCapabilities = HostCapabilities()
+        currentCapabilities = HostCapabilities(maxInFlight: configuredMaxInFlight)
         lock.unlock()
     }
 
@@ -249,6 +261,23 @@ public final class CoreMLEngine: EngineBackend {
     private func snapshotModel() -> LoadedModel? {
         lock.lock(); defer { lock.unlock() }
         return model
+    }
+
+    private var configuredMaxInFlight: Int { Self.configuredMaxInFlight }
+
+    /// Measured on the 15-minute Swedish benchmark: 1 -> 5.3 s, 2 -> 3.2 s,
+    /// 3 -> 2.9 s, 4 -> 2.8 s, 6 -> 2.8 s. The Neural Engine encoder becomes the
+    /// bottleneck at 3 (about 2.2 s of serialized encoder time), so 3 is the
+    /// smallest value on the plateau. `SAGASCRIPT_ENGINE_MAX_IN_FLIGHT` overrides
+    /// it for benchmarking.
+    private static var configuredMaxInFlight: Int {
+        ProcessInfo.processInfo.environment["SAGASCRIPT_ENGINE_MAX_IN_FLIGHT"]
+            .flatMap(Int.init).map { max(1, min(8, $0)) } ?? 3
+    }
+
+    private func tuningUnits(_ variable: String, default fallback: MLComputeUnits) throws -> MLComputeUnits {
+        guard let value = ProcessInfo.processInfo.environment[variable] else { return fallback }
+        return try makeComputeUnits(value)
     }
 
     private func makeComputeUnits(_ name: String) throws -> MLComputeUnits {
@@ -518,119 +547,29 @@ public final class CoreMLEngine: EngineBackend {
         realAudioSeconds: Double,
         isCancelled: @escaping () -> Bool
     ) throws -> [TranscriptionToken] {
-        guard sequenceLength > 0 else { return [] }
         let actualFrameCount = min(
             sequenceLength,
             max(1, Int(ceil(realAudioSeconds / loaded.frameSeconds)))
         )
-        let hiddenShape = [NSNumber(value: 1), NSNumber(value: loaded.encoderHidden), NSNumber(value: 1)]
-        let encoderStep = try MLMultiArray(shape: hiddenShape, dataType: .float32)
-        let decoderProjectionArray = try MLMultiArray(shape: [1, NSNumber(value: loaded.decoderHidden), 1], dataType: .float32)
-        var hidden = try MLMultiArray(shape: [NSNumber(value: loaded.decoderLayers), 1, NSNumber(value: loaded.decoderHidden)], dataType: .float32)
-        var cell = try MLMultiArray(shape: hidden.shape, dataType: .float32)
-        zero(hidden); zero(cell)
-        let target = try MLMultiArray(shape: [1, 1], dataType: .int32)
-        let targetLength = try MLMultiArray(shape: [1], dataType: .int32)
-        targetLength[0] = 1
-
-        let prime = try decoderStep(
-            token: loaded.blankID, hidden: hidden, cell: cell, target: target,
-            targetLength: targetLength, model: loaded.decoder
+        let session = try TdtDecodeSession(
+            decoder: loaded.decoder,
+            joint: loaded.joint,
+            blankID: loaded.blankID,
+            encoderHidden: loaded.encoderHidden,
+            decoderHidden: loaded.decoderHidden,
+            decoderLayers: loaded.decoderLayers
         )
-        hidden = prime.hidden; cell = prime.cell
-        try normalize(prime.projection, into: decoderProjectionArray, hiddenSize: loaded.decoderHidden)
-
-        struct Emission { let id: Int; let frame: Int; let duration: Int; let confidence: Double }
-        var emissions: [Emission] = []
-        var time = 0
-        var sameFrameEmissions = 0
-        let maxSymbolsPerStep = 10
-        let maxTokens = 150
-
-        func joint(at frame: Int) throws -> (id: Int, confidence: Double, duration: Int) {
-            try copyEncoderFrame(encoderOutput, frame: frame, into: encoderStep, hiddenSize: loaded.encoderHidden)
-            let input = try MLDictionaryFeatureProvider(dictionary: [
-                "encoder_step": MLFeatureValue(multiArray: encoderStep),
-                "decoder_step": MLFeatureValue(multiArray: decoderProjectionArray),
-            ])
-            let output = try loaded.joint.prediction(from: input)
-            guard let token = output.featureValue(for: "token_id")?.multiArrayValue,
-                  let probability = output.featureValue(for: "token_prob")?.multiArrayValue,
-                  let duration = output.featureValue(for: "duration")?.multiArrayValue else {
-                throw EngineHostError(code: "engine", message: "Joint output is incomplete")
-            }
-            let tokenID = Int(token.dataPointer.bindMemory(to: Int32.self, capacity: token.count)[0])
-            let score = max(0.1, min(1.0, Double(probability.dataPointer.bindMemory(to: Float.self, capacity: probability.count)[0])))
-            let durationBin = Int(duration.dataPointer.bindMemory(to: Int32.self, capacity: duration.count)[0])
-            return (tokenID, score, max(1, min(4, durationBin)))
-        }
-
-        var lastEmissionFrame = -1
-        while time < actualFrameCount && emissions.count < maxTokens {
-            try checkCancelled(isCancelled)
-            var frame = time
-            var decision = try joint(at: frame)
-            var duration = decision.duration
-            if decision.id == loaded.blankID && duration == 0 {
-                duration = 1
-            } else if decision.id != loaded.blankID && duration == 0
-                        && frame == lastEmissionFrame && sameFrameEmissions >= 1 {
-                duration = 1
-            }
-            time += duration
-            while decision.id == loaded.blankID && time < actualFrameCount {
-                try checkCancelled(isCancelled)
-                frame = time
-                decision = try joint(at: frame)
-                duration = decision.duration
-                if duration == 0 { duration = 1 }
-                time += duration
-            }
-            if decision.id != loaded.blankID && time < actualFrameCount {
-                if frame == (emissions.last?.frame ?? -1) { sameFrameEmissions += 1 } else { sameFrameEmissions = 1 }
-                lastEmissionFrame = frame
-                if sameFrameEmissions >= maxSymbolsPerStep { time = min(actualFrameCount, time + 1); sameFrameEmissions = 0 }
-                emissions.append(Emission(id: decision.id, frame: frame, duration: duration, confidence: decision.confidence))
-                let next = try decoderStepResult(
-                    token: decision.id, hidden: hidden, cell: cell, target: target,
-                    targetLength: targetLength, model: loaded.decoder
-                )
-                hidden = next.hidden; cell = next.cell
-                try normalize(next.projection, into: decoderProjectionArray, hiddenSize: loaded.decoderHidden)
-            }
-        }
-
         // A full-sized request is normally an interior sliding-window chunk;
         // its caller will merge it with the next window. Only a short final
         // request gets the reference decoder's end-of-chunk flush.
         let isFinalWindow = realAudioSeconds < loaded.windowSeconds - 0.000_001
-        var flushSteps = 0
-        var consecutiveBlanks = 0
-        while isFinalWindow && flushSteps < maxSymbolsPerStep
-            && consecutiveBlanks < 5 && emissions.count < maxTokens {
-            try checkCancelled(isCancelled)
-            let decision = try joint(at: min(max(time, 0), actualFrameCount - 1))
-            if decision.id == loaded.blankID {
-                consecutiveBlanks += 1
-            } else {
-                consecutiveBlanks = 0
-                emissions.append(Emission(
-                    id: decision.id,
-                    frame: min(max(time, 0), actualFrameCount - 1),
-                    duration: decision.duration,
-                    confidence: decision.confidence
-                ))
-                let next = try decoderStepResult(
-                    token: decision.id, hidden: hidden, cell: cell, target: target,
-                    targetLength: targetLength, model: loaded.decoder
-                )
-                hidden = next.hidden; cell = next.cell
-                try normalize(next.projection, into: decoderProjectionArray, hiddenSize: loaded.decoderHidden)
-            }
-            time = min(sequenceLength, time + max(1, decision.duration))
-            flushSteps += 1
-        }
-
+        let emissions = try session.decode(
+            encoderOutput: encoderOutput,
+            sequenceLength: sequenceLength,
+            actualFrames: actualFrameCount,
+            isLastChunk: isFinalWindow,
+            isCancelled: isCancelled
+        )
         return emissions.compactMap { emission in
             let correctedFrame = max(0, emission.frame - 1)
             let start = Double(correctedFrame) * loaded.frameSeconds
@@ -643,72 +582,6 @@ public final class CoreMLEngine: EngineBackend {
                 confidence: emission.confidence
             )
         }
-    }
-
-    private func decoderStepResult(
-        token: Int,
-        hidden: MLMultiArray,
-        cell: MLMultiArray,
-        target: MLMultiArray,
-        targetLength: MLMultiArray,
-        model: MLModel
-    ) throws -> (projection: MLMultiArray, hidden: MLMultiArray, cell: MLMultiArray) {
-        target[0] = NSNumber(value: token)
-        let input = try MLDictionaryFeatureProvider(dictionary: [
-            "targets": MLFeatureValue(multiArray: target),
-            "target_length": MLFeatureValue(multiArray: targetLength),
-            "h_in": MLFeatureValue(multiArray: hidden),
-            "c_in": MLFeatureValue(multiArray: cell),
-        ])
-        let output = try model.prediction(from: input)
-        guard let projection = output.featureValue(for: "decoder")?.multiArrayValue,
-              let nextHidden = output.featureValue(for: "h_out")?.multiArrayValue,
-              let nextCell = output.featureValue(for: "c_out")?.multiArrayValue else {
-            throw EngineHostError(code: "engine", message: "Decoder output is incomplete")
-        }
-        return (projection, nextHidden, nextCell)
-    }
-
-    private func decoderStep(
-        token: Int,
-        hidden: MLMultiArray,
-        cell: MLMultiArray,
-        target: MLMultiArray,
-        targetLength: MLMultiArray,
-        model: MLModel
-    ) throws -> (projection: MLMultiArray, hidden: MLMultiArray, cell: MLMultiArray) {
-        try decoderStepResult(token: token, hidden: hidden, cell: cell, target: target, targetLength: targetLength, model: model)
-    }
-
-    private func copyEncoderFrame(_ source: MLMultiArray, frame: Int, into destination: MLMultiArray, hiddenSize: Int) throws {
-        let shape = source.shape.map(\.intValue)
-        let strides = source.strides.map(\.intValue)
-        guard shape.count == 3, frame >= 0 else { throw EngineHostError(code: "engine", message: "Invalid encoder frame") }
-        let hiddenAxis = shape[1] == hiddenSize ? 1 : 2
-        let timeAxis = hiddenAxis == 1 ? 2 : 1
-        guard frame < shape[timeAxis] else { throw EngineHostError(code: "engine", message: "Encoder frame out of bounds") }
-        let sourcePointer = source.dataPointer.bindMemory(to: Float.self, capacity: source.count)
-        let destinationPointer = destination.dataPointer.bindMemory(to: Float.self, capacity: destination.count)
-        for hidden in 0..<hiddenSize {
-            let sourceIndex = frame * strides[timeAxis] + hidden * strides[hiddenAxis]
-            destinationPointer[hidden] = sourcePointer[sourceIndex]
-        }
-    }
-
-    private func normalize(_ source: MLMultiArray, into destination: MLMultiArray, hiddenSize: Int) throws {
-        let shape = source.shape.map(\.intValue)
-        let strides = source.strides.map(\.intValue)
-        guard shape.count == 3 else { throw EngineHostError(code: "engine", message: "Invalid decoder projection") }
-        let hiddenAxis = shape[2] == hiddenSize ? 2 : 1
-        guard shape[hiddenAxis] == hiddenSize else { throw EngineHostError(code: "engine", message: "Decoder hidden size mismatch") }
-        let sourcePointer = source.dataPointer.bindMemory(to: Float.self, capacity: source.count)
-        let destinationPointer = destination.dataPointer.bindMemory(to: Float.self, capacity: destination.count)
-        for hidden in 0..<hiddenSize { destinationPointer[hidden] = sourcePointer[hidden * strides[hiddenAxis]] }
-    }
-
-    private func zero(_ array: MLMultiArray) {
-        let pointer = array.dataPointer.bindMemory(to: Float.self, capacity: array.count)
-        for index in 0..<array.count { pointer[index] = 0 }
     }
 
     private func checkCancelled(_ isCancelled: () -> Bool) throws {
