@@ -17,7 +17,11 @@ in fp16 by default (`--encoder-precision fp16`) so it runs on the Apple Neural
 Engine, which executes fp16 only; `--encoder-precision fp32` keeps the older
 CPU/GPU-only variant (about 7x slower on `CPU_AND_NE`). The preprocessor
 computes in fp32 (its fp16 form yields NaN mel on the ANE path for 30 s windows
-and 2-4 % mel error for 15 s); decoder and joint are fp16. Every output
+and 2-4 % mel error for 15 s); decoder and joint compute in fp16. Every model's
+*interface* is float32 (int32 for lengths and token ids), identical to the
+community conversion and FluidAudio: fp16 compute happens inside the program,
+so hosts never see fp16 tensors from the packages. (A float16 interface made
+the host reject the encoder output; the host now accepts either.) Every output
 directory contains a manifest with per-file sizes, SHA-256 checksums and the
 encoder precision.
 
@@ -68,14 +72,11 @@ hf_hub_download(
 PY
 shasum -a 256 $PIANISSIMO_NEMO
 
-# Neural-Engine artifacts (default --encoder-precision fp16)
-$PY scripts/pianissimo-coreml/convert.py --window-s 15 --encoder-precision fp16 \
-  --nemo $PIANISSIMO_NEMO --out $SCRATCH/out/pianissimo-sv-coreml-own-15s-fp16
-$PY scripts/pianissimo-coreml/convert.py --window-s 30 --encoder-precision fp16 \
-  --nemo $PIANISSIMO_NEMO --out $SCRATCH/out/pianissimo-sv-coreml-own-30s-fp16
-# Optional fp32 encoder (CPU/GPU only), for comparison
-$PY scripts/pianissimo-coreml/convert.py --window-s 15 --encoder-precision fp32 \
+# Shipping artifact: 15 s window, Neural-Engine encoder (default --encoder-precision fp16)
+$PY scripts/pianissimo-coreml/convert.py --window-s 15 \
   --nemo $PIANISSIMO_NEMO --out $SCRATCH/out/pianissimo-sv-coreml-own-15s
+# Optional: --window-s 30 (see the 30 s findings below), or --encoder-precision fp32
+# (CPU/GPU-only encoder) for comparison.
 ```
 
 The conversion basis is Fluid Inference Mobius commit
@@ -102,9 +103,9 @@ full-pipeline runs. Set `SAGASCRIPT_BENCH_DIR` (default
 ```bash
 export SAGASCRIPT_BENCH_DIR=$HOME/.cache/sagascript-bench
 $PY scripts/pianissimo-coreml/validate.py \
-  --model-dir $SCRATCH/out/pianissimo-sv-coreml-own-15s-fp16 --nemo $PIANISSIMO_NEMO \
+  --model-dir $SCRATCH/out/pianissimo-sv-coreml-own-15s --nemo $PIANISSIMO_NEMO \
   --window-s 15 --num-windows 8 --compute-units CPU_AND_NE \
-  --speed --report $SCRATCH/validate-15-fp16.json
+  --speed --report $SCRATCH/validate-15.json
 
 # Baseline: community conversion (same package names and contracts)
 $PY scripts/pianissimo-coreml/validate.py \
@@ -116,7 +117,7 @@ Op placement per compute unit (`MLComputePlan`, `const`/`constexpr` ops skipped)
 
 ```bash
 $PY scripts/pianissimo-coreml/placement.py \
-  $SCRATCH/out/pianissimo-sv-coreml-own-15s-fp16/Encoder.mlpackage --compute-units CPU_AND_NE
+  $SCRATCH/out/pianissimo-sv-coreml-own-15s/Encoder.mlpackage --compute-units CPU_AND_NE
 ```
 
 30 s windows: the fp16 encoder is numerically sound (the earlier reported fp16
@@ -125,7 +126,8 @@ divergence came from the fp16 *preprocessor*, which produced non-finite mel on
 about 96 % of the 30 s fp16 encoder ops on the ANE, but measured warm latency on
 `CPU_AND_NE` is about 235 ms (roughly 7x the 15 s encoder for 2x the audio) and
 the first load compiles for minutes, so treat 30 s fp16 as unproven on the ANE;
-prefer the 15 s fp16 artifact.
+prefer the 15 s fp16 artifact. (The 30 s outputs were removed after these findings;
+regenerate with `--window-s 30` if needed.)
 
 Long-form WER is deliberately not computed here. A standalone Python pipeline
 gave about 10 % WER even for the community model (5.9 % through FluidAudio), so

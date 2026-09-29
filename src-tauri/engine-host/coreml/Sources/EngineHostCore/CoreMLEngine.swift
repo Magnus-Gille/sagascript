@@ -19,6 +19,7 @@ public final class CoreMLEngine: EngineBackend {
         let decoderLayers: Int
         let decoderHidden: Int
         let blankID: Int
+        let encoderMelPrecision: TensorPrecision
 
         init(
             preprocessor: MLModel,
@@ -34,7 +35,8 @@ public final class CoreMLEngine: EngineBackend {
             encoderHidden: Int,
             decoderLayers: Int,
             decoderHidden: Int,
-            blankID: Int
+            blankID: Int,
+            encoderMelPrecision: TensorPrecision
         ) {
             self.preprocessor = preprocessor
             self.encoder = encoder
@@ -50,6 +52,7 @@ public final class CoreMLEngine: EngineBackend {
             self.decoderLayers = decoderLayers
             self.decoderHidden = decoderHidden
             self.blankID = blankID
+            self.encoderMelPrecision = encoderMelPrecision
         }
     }
 
@@ -206,21 +209,28 @@ public final class CoreMLEngine: EngineBackend {
         ])
         let preprocessed = try loaded.preprocessor.prediction(from: preprocessorInput)
         guard let mel = preprocessed.featureValue(for: "mel")?.multiArrayValue else {
-            throw EngineHostError(code: "engine", message: "Preprocessor output is missing mel")
+            throw EngineHostError(
+                code: "engine",
+                message: "Preprocessor output 'mel' is missing (outputs: \(preprocessed.featureNames.sorted()))"
+            )
         }
         let melLength = intValue(preprocessed, name: "mel_length", fallback: mel.shape.last?.intValue ?? 0)
         let preprocessMilliseconds = Date().timeIntervalSince(preprocessStart) * 1000
         try checkCancelled(isCancelled)
 
         let encodeStart = Date()
+        let melInput = try converted(mel, to: loaded.encoderMelPrecision, feature: "Encoder input 'mel'")
         let encoderLengthInput = try makeIntArray([melLength])
         let encoderInput = try MLDictionaryFeatureProvider(dictionary: [
-            "mel": MLFeatureValue(multiArray: mel),
+            "mel": MLFeatureValue(multiArray: melInput),
             "mel_length": MLFeatureValue(multiArray: encoderLengthInput),
         ])
         let encoded = try loaded.encoder.prediction(from: encoderInput)
         guard let encoderOutput = encoded.featureValue(for: "encoder")?.multiArrayValue else {
-            throw EngineHostError(code: "engine", message: "Encoder output is missing encoder")
+            throw EngineHostError(
+                code: "engine",
+                message: "Encoder output 'encoder' is missing (outputs: \(encoded.featureNames.sorted()))"
+            )
         }
         let sequenceLength = min(
             intValue(encoded, name: "encoder_length", fallback: loaded.encoderFrames),
@@ -320,7 +330,8 @@ public final class CoreMLEngine: EngineBackend {
             return PreparedComponents(paths: paths, vocabularyURL: vocabularyURL, compiled: false)
         }
 
-        var parts = [modelID]
+        // Compiled models are tied to the OS/Core ML version that produced them.
+        var parts = [modelID, "os:\(ProcessInfo.processInfo.operatingSystemVersionString)"]
         for name in names {
             if let path = paths[name] {
                 parts.append("\(name):\(try hashURL(path))")
@@ -331,29 +342,12 @@ public final class CoreMLEngine: EngineBackend {
         }
         parts.append("vocab:\(try hashURL(vocabularyURL))")
         let key = sha256Data(Data(parts.sorted().joined(separator: "\n").utf8))
-        let destination = cacheDirectory.appendingPathComponent(key, isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        } catch {
-            throw EngineHostError(code: "model_load_failed", message: "Cannot create CoreML cache: \(error.localizedDescription)")
-        }
-
-        var didCompile = false
-        for name in names {
-            guard let package = packages[name] else { continue }
-            let target = destination.appendingPathComponent("\(name).mlmodelc", isDirectory: true)
-            if !FileManager.default.fileExists(atPath: target.path) {
-                do {
-                    let compiled = try MLModel.compileModel(at: package)
-                    try FileManager.default.copyItem(at: compiled, to: target)
-                    didCompile = true
-                } catch {
-                    throw EngineHostError(code: "model_load_failed", message: "CoreML compilation failed for \(name): \(error.localizedDescription)")
-                }
-            }
-            paths[name] = target
-        }
-        return PreparedComponents(paths: paths, vocabularyURL: vocabularyURL, compiled: didCompile)
+        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        let cache = CompiledModelCache(root: cacheDirectory) { try MLModel.compileModel(at: $0) }
+        cache.removeStaleScratch()
+        let prepared = try cache.prepare(key: key, packages: packages, required: Array(packages.keys))
+        for name in packages.keys { paths[name] = cache.modelURL(key: key, name: name) }
+        return PreparedComponents(paths: paths, vocabularyURL: vocabularyURL, compiled: prepared.compiled)
     }
 
     private func findComponent(named name: String, suffix: String, in directory: URL) -> URL? {
@@ -473,7 +467,8 @@ public final class CoreMLEngine: EngineBackend {
             encoderHidden: encoderHidden,
             decoderLayers: decoderLayers,
             decoderHidden: decoderHidden,
-            blankID: blankID
+            blankID: blankID,
+            encoderMelPrecision: try floatPrecision(of: encoder, input: "mel", model: "Encoder")
         )
     }
 

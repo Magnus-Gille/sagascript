@@ -58,40 +58,62 @@ final class PreparedFeatureProvider: NSObject, MLFeatureProvider {
 }
 
 /// Stride-aware view over the encoder output that copies single frames.
+/// Accepts float32 and float16 encoder outputs.
 struct EncoderFrames {
     let count: Int
-    private let base: UnsafePointer<Float>
+    private let base: UnsafeRawPointer
+    private let precision: TensorPrecision
     private let hiddenSize: Int
     private let hiddenStride: Int
     private let timeStride: Int
 
     init(_ array: MLMultiArray, validLength: Int, hiddenSize: Int) throws {
         let shape = array.shape.map(\.intValue)
-        guard shape.count == 3, shape[0] == 1, array.dataType == .float32 else {
-            throw EngineHostError(code: "engine", message: "Unexpected encoder output layout")
+        guard shape.count == 3, shape[0] == 1, let precision = TensorPrecision(array.dataType) else {
+            throw EngineHostError(
+                code: "engine",
+                message: "Encoder output 'encoder': unexpected layout, \(describe(array)); expected [1, \(hiddenSize), frames] float32 or float16"
+            )
         }
         let hiddenAxis = shape[1] == hiddenSize ? 1 : 2
         guard shape[hiddenAxis] == hiddenSize else {
-            throw EngineHostError(code: "engine", message: "Encoder hidden size mismatch")
+            throw EngineHostError(
+                code: "engine",
+                message: "Encoder output 'encoder': hidden size mismatch, \(describe(array)); expected \(hiddenSize)"
+            )
         }
         let timeAxis = hiddenAxis == 1 ? 2 : 1
         let strides = array.strides.map(\.intValue)
         guard strides[hiddenAxis] > 0, strides[timeAxis] > 0 else {
-            throw EngineHostError(code: "engine", message: "Unexpected encoder strides")
+            throw EngineHostError(
+                code: "engine",
+                message: "Encoder output 'encoder': unexpected strides \(strides), \(describe(array))"
+            )
         }
         self.hiddenSize = hiddenSize
         self.hiddenStride = strides[hiddenAxis]
         self.timeStride = strides[timeAxis]
         self.count = min(validLength, shape[timeAxis])
-        self.base = UnsafePointer(array.dataPointer.bindMemory(to: Float.self, capacity: array.count))
+        self.precision = precision
+        self.base = UnsafeRawPointer(array.dataPointer)
     }
 
+    func copyFrame(_ index: Int, to destination: FloatVectorDestination) {
+        let offset = index * timeStride
+        if precision == .float32 && destination.precision == .float32 && hiddenStride == 1 && destination.stride == 1 {
+            destination.raw.assumingMemoryBound(to: Float.self)
+                .update(from: base.assumingMemoryBound(to: Float.self) + offset, count: hiddenSize)
+            return
+        }
+        for hidden in 0..<hiddenSize {
+            destination.store(hidden, loadFloat(base, precision, offset + hidden * hiddenStride))
+        }
+    }
+
+    /// Float32 convenience used by tests.
     func copyFrame(_ index: Int, to destination: UnsafeMutablePointer<Float>, stride destinationStride: Int) {
-        let source = base + index * timeStride
-        if hiddenStride == 1 && destinationStride == 1 {
-            destination.update(from: source, count: hiddenSize)
-        } else {
-            for hidden in 0..<hiddenSize { destination[hidden * destinationStride] = source[hidden * hiddenStride] }
+        for hidden in 0..<hiddenSize {
+            destination[hidden * destinationStride] = loadFloat(base, precision, index * timeStride + hidden * hiddenStride)
         }
     }
 }
@@ -121,10 +143,9 @@ final class TdtDecodeSession {
     private let jointInput: PreparedFeatureProvider
     private let decoderOptions = MLPredictionOptions()
     private let jointOptions = MLPredictionOptions()
-    private let encoderStepPointer: UnsafeMutablePointer<Float>
-    private let encoderStepStride: Int
-    private let decoderStepPointer: UnsafeMutablePointer<Float>
-    private let decoderStepStride: Int
+    private let encoderStepDestination: FloatVectorDestination
+    private let decoderStepDestination: FloatVectorDestination
+    private let tokenProbPrecision: TensorPrecision
 
     init(decoder: MLModel, joint: MLModel, blankID: Int, encoderHidden: Int, decoderHidden: Int, decoderLayers: Int) throws {
         self.decoder = decoder
@@ -132,15 +153,33 @@ final class TdtDecodeSession {
         self.blankID = blankID
         self.encoderHidden = encoderHidden
         self.decoderHidden = decoderHidden
+        // Interface dtypes are read from the models, so float16 and float32
+        // packages both work without conversion.
+        let statePrecision = try floatPrecision(of: decoder, input: "h_in", model: "Decoder")
+        for (kind, name, precision) in [
+            ("input", "c_in", try floatPrecision(of: decoder, input: "c_in", model: "Decoder")),
+            ("output", "h_out", try floatPrecision(of: decoder, output: "h_out", model: "Decoder")),
+            ("output", "c_out", try floatPrecision(of: decoder, output: "c_out", model: "Decoder")),
+        ] where precision != statePrecision {
+            throw EngineHostError(
+                code: "model_load_failed",
+                message: "Decoder \(kind) '\(name)' is \(precision.rawValue) but h_in is \(statePrecision.rawValue)"
+            )
+        }
+        let encoderStepPrecision = try floatPrecision(of: joint, input: "encoder_step", model: "JointDecisionv3")
+        let decoderStepPrecision = try floatPrecision(of: joint, input: "decoder_step", model: "JointDecisionv3")
+        tokenProbPrecision = try floatPrecision(of: joint, output: "token_prob", model: "JointDecisionv3")
+        try requireInt32(of: joint, output: "token_id", model: "JointDecisionv3")
+        try requireInt32(of: joint, output: "duration", model: "JointDecisionv3")
         target = try MLMultiArray(shape: [1, 1], dataType: .int32)
         targetLength = try MLMultiArray(shape: [1], dataType: .int32)
         targetLength[0] = 1
-        hidden = try makeAlignedArray(shape: [decoderLayers, 1, decoderHidden], dataType: .float32)
-        cell = try makeAlignedArray(shape: [decoderLayers, 1, decoderHidden], dataType: .float32)
-        encoderStep = try makeAlignedArray(shape: [1, encoderHidden, 1], dataType: .float32)
-        decoderStep = try makeAlignedArray(shape: [1, decoderHidden, 1], dataType: .float32)
+        hidden = try makeAlignedArray(shape: [decoderLayers, 1, decoderHidden], dataType: statePrecision.dataType)
+        cell = try makeAlignedArray(shape: [decoderLayers, 1, decoderHidden], dataType: statePrecision.dataType)
+        encoderStep = try makeAlignedArray(shape: [1, encoderHidden, 1], dataType: encoderStepPrecision.dataType)
+        decoderStep = try makeAlignedArray(shape: [1, decoderHidden, 1], dataType: decoderStepPrecision.dataType)
         tokenIDBacking = try MLMultiArray(shape: [1, 1, 1], dataType: .int32)
-        tokenProbBacking = try MLMultiArray(shape: [1, 1, 1], dataType: .float32)
+        tokenProbBacking = try MLMultiArray(shape: [1, 1, 1], dataType: tokenProbPrecision.dataType)
         durationBacking = try MLMultiArray(shape: [1, 1, 1], dataType: .int32)
         decoderInput = PreparedFeatureProvider(arrays: [
             "targets": target, "target_length": targetLength, "h_in": hidden, "c_in": cell,
@@ -150,10 +189,8 @@ final class TdtDecodeSession {
         jointOptions.outputBackings = [
             "token_id": tokenIDBacking, "token_prob": tokenProbBacking, "duration": durationBacking,
         ]
-        encoderStepPointer = encoderStep.dataPointer.bindMemory(to: Float.self, capacity: encoderStep.count)
-        encoderStepStride = encoderStep.strides[1].intValue
-        decoderStepPointer = decoderStep.dataPointer.bindMemory(to: Float.self, capacity: decoderStep.count)
-        decoderStepStride = decoderStep.strides[1].intValue
+        encoderStepDestination = FloatVectorDestination(encoderStep, precision: encoderStepPrecision, axis: 1)
+        decoderStepDestination = FloatVectorDestination(decoderStep, precision: decoderStepPrecision, axis: 1)
     }
 
     private struct Decision {
@@ -168,7 +205,10 @@ final class TdtDecodeSession {
         target[0] = NSNumber(value: token)
         let output = try decoder.prediction(from: decoderInput, options: decoderOptions)
         guard let projection = output.featureValue(for: "decoder")?.multiArrayValue else {
-            throw EngineHostError(code: "engine", message: "Decoder output is incomplete")
+            throw EngineHostError(
+                code: "engine",
+                message: "Decoder output 'decoder' is missing (outputs: \(output.featureNames.sorted()))"
+            )
         }
         try normalize(projection)
     }
@@ -176,26 +216,32 @@ final class TdtDecodeSession {
     private func normalize(_ source: MLMultiArray) throws {
         let shape = source.shape.map(\.intValue)
         let strides = source.strides.map(\.intValue)
-        guard shape.count == 3, source.dataType == .float32 else {
-            throw EngineHostError(code: "engine", message: "Invalid decoder projection")
+        guard shape.count == 3, let precision = TensorPrecision(source.dataType) else {
+            throw EngineHostError(
+                code: "engine",
+                message: "Decoder output 'decoder': invalid projection, \(describe(source)); expected rank 3 float32 or float16"
+            )
         }
         let hiddenAxis = shape[2] == decoderHidden ? 2 : 1
         guard shape[hiddenAxis] == decoderHidden else {
-            throw EngineHostError(code: "engine", message: "Decoder hidden size mismatch")
+            throw EngineHostError(
+                code: "engine",
+                message: "Decoder output 'decoder': hidden size mismatch, \(describe(source)); expected \(decoderHidden)"
+            )
         }
-        let pointer = source.dataPointer.bindMemory(to: Float.self, capacity: source.count)
+        let raw = UnsafeRawPointer(source.dataPointer)
         let sourceStride = strides[hiddenAxis]
         for index in 0..<decoderHidden {
-            decoderStepPointer[index * decoderStepStride] = pointer[index * sourceStride]
+            decoderStepDestination.store(index, loadFloat(raw, precision, index * sourceStride))
         }
     }
 
     private func runJoint(frames: EncoderFrames, frame: Int) throws -> Decision {
-        frames.copyFrame(frame, to: encoderStepPointer, stride: encoderStepStride)
+        frames.copyFrame(frame, to: encoderStepDestination)
         _ = try joint.prediction(from: jointInput, options: jointOptions)
         return Decision(
             token: Int(tokenIDBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0]),
-            probability: tokenProbBacking.dataPointer.bindMemory(to: Float.self, capacity: 1)[0],
+            probability: loadFloat(UnsafeRawPointer(tokenProbBacking.dataPointer), tokenProbPrecision, 0),
             duration: Int(durationBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0])
         )
     }

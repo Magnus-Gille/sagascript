@@ -103,6 +103,8 @@ def convert_model(
         minimum_deployment_target=ct.target.iOS17,
         compute_precision=precision,
     )
+    # The interface is float32 (FluidAudio / community-conversion parity); the compute
+    # precision inside the program is set by `precision`.
     model.short_description = description
     model.author = "Klang AI AB (Klang Pianissimo, CC BY 4.0); Sagascript CoreML conversion"
     model.version = f"{SOURCE_REPO}@{SOURCE_REVISION[:8]}"
@@ -195,7 +197,7 @@ def build_manifest(out: Path, nemo_path: Path, nemo_sha: str, window_s: int, sam
             "encoder_compute_precision": "float16" if encoder_precision == "fp16" else "float32",
             "decoder": "fp16",
             "joint": "fp16",
-            "preprocessor": "fp32 compute (fp16 I/O)",
+            "preprocessor": "fp32 compute",
         },
         "converter_versions": {
             "python": platform.python_version(),
@@ -253,8 +255,8 @@ def main() -> None:
     pre_trace = torch.jit.trace(pre, (audio, audio_length), strict=False).eval()
     pre_ml = convert_model(
         pre_trace,
-        [ct.TensorType(name="audio_signal", shape=(1, samples), dtype=np.float16), ct.TensorType(name="audio_length", shape=(1,), dtype=np.int32)],
-        [ct.TensorType(name="mel", dtype=np.float16), ct.TensorType(name="mel_length", dtype=np.int32)],
+        [ct.TensorType(name="audio_signal", shape=(1, samples), dtype=np.float32), ct.TensorType(name="audio_length", shape=(1,), dtype=np.int32)],
+        [ct.TensorType(name="mel", dtype=np.float32), ct.TensorType(name="mel_length", dtype=np.int32)],
         f"Pianissimo preprocessor ({args.window_s} s window)",
         # fp16 STFT power overflows (inf/NaN mel) on loud 30 s windows and costs 2-4 %
         # mel error on 15 s windows; the preprocessor is cheap, so compute it in fp32.
@@ -275,8 +277,8 @@ def main() -> None:
     )
     enc_fp32 = convert_model(
         enc_trace,
-        [ct.TensorType(name="mel", shape=(1, 128, mel_frames), dtype=np.float16), ct.TensorType(name="mel_length", shape=(1,), dtype=np.int32)],
-        [ct.TensorType(name="encoder", dtype=np.float16), ct.TensorType(name="encoder_length", dtype=np.int32)],
+        [ct.TensorType(name="mel", shape=(1, 128, mel_frames), dtype=np.float32), ct.TensorType(name="mel_length", shape=(1,), dtype=np.int32)],
+        [ct.TensorType(name="encoder", dtype=np.float32), ct.TensorType(name="encoder_length", dtype=np.int32)],
         f"Pianissimo encoder ({args.window_s} s window, exact +/-256 local attention, {args.encoder_precision} pre-quantization)",
         precision=encoder_precision,
     )
@@ -303,8 +305,8 @@ def main() -> None:
     dec_trace = torch.jit.trace(decoder, (targets, target_length, state, state), strict=False).eval()
     dec_ml = convert_model(
         dec_trace,
-        [ct.TensorType(name="targets", shape=(1, 1), dtype=np.int32), ct.TensorType(name="target_length", shape=(1,), dtype=np.int32), ct.TensorType(name="h_in", shape=tuple(state.shape), dtype=np.float16), ct.TensorType(name="c_in", shape=tuple(state.shape), dtype=np.float16)],
-        [ct.TensorType(name="decoder", dtype=np.float16), ct.TensorType(name="h_out", dtype=np.float16), ct.TensorType(name="c_out", dtype=np.float16)],
+        [ct.TensorType(name="targets", shape=(1, 1), dtype=np.int32), ct.TensorType(name="target_length", shape=(1,), dtype=np.int32), ct.TensorType(name="h_in", shape=tuple(state.shape), dtype=np.float32), ct.TensorType(name="c_in", shape=tuple(state.shape), dtype=np.float32)],
+        [ct.TensorType(name="decoder", dtype=np.float32), ct.TensorType(name="h_out", dtype=np.float32), ct.TensorType(name="c_out", dtype=np.float32)],
         "Pianissimo decoder (TDT prediction network)",
     )
     save(dec_ml, out / "Decoder.mlpackage")
@@ -315,8 +317,8 @@ def main() -> None:
     jd_trace = torch.jit.trace(jd, (encoder_step, decoder_step), strict=False).eval()
     jd_ml = convert_model(
         jd_trace,
-        [ct.TensorType(name="encoder_step", shape=(1, 1024, 1), dtype=np.float16), ct.TensorType(name="decoder_step", shape=(1, 640, 1), dtype=np.float16)],
-        [ct.TensorType(name="token_id", dtype=np.int32), ct.TensorType(name="token_prob", dtype=np.float16), ct.TensorType(name="duration", dtype=np.int32), ct.TensorType(name="top_k_ids", dtype=np.int32), ct.TensorType(name="top_k_logits", dtype=np.float16)],
+        [ct.TensorType(name="encoder_step", shape=(1, 1024, 1), dtype=np.float32), ct.TensorType(name="decoder_step", shape=(1, 640, 1), dtype=np.float32)],
+        [ct.TensorType(name="token_id", dtype=np.int32), ct.TensorType(name="token_prob", dtype=np.float32), ct.TensorType(name="duration", dtype=np.int32), ct.TensorType(name="top_k_ids", dtype=np.int32), ct.TensorType(name="top_k_logits", dtype=np.float32)],
         "Pianissimo JointDecisionv3 (single-step TDT decision head)",
     )
     save(jd_ml, out / "JointDecisionv3.mlpackage")

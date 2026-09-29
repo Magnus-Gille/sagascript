@@ -55,6 +55,10 @@ warning when the host build differs from its own (build-identity invariant).
 Request: `{"model_dir":"<abs path>","model_id":"pianissimo-sv-coreml-<rev>","compute_units":"ane"}`.
 Result: `{"model_id","load_ms","compiled":<bool: first-time device compile happened>,
 "window_s","frame_s","vocab_size","blank_id"}`. May emit `{"event":"load_progress","phase":"compiling"}`.
+`compiled` is true only when this load compiled at least one `.mlpackage`; a load served from the
+compiled-model cache (`~/Library/Caches/Sagascript/EngineHost/<key>/<Name>.mlmodelc`, valid once its
+`.complete` marker exists) reports false. The host loads from that stable path so the OS Neural
+Engine compile cache is reused, and accepts float16 or float32 tensors on the model interface.
 Loading the already-loaded model is a no-op success; loading another model replaces it.
 `window_s` is the model's fixed input length; `capabilities.max_window_s` never exceeds it.
 
