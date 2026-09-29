@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -29,6 +29,9 @@ pub struct CrashInfo {
     /// (for example an over-long line); in-flight requests then fail with a
     /// protocol error instead of a crash.
     pub violation: Option<String>,
+    /// Set when reading the host's stdout failed with an I/O error (not EOF);
+    /// in-flight requests then fail with that error.
+    pub io_error: Option<String>,
 }
 
 /// What a waiter receives for a request id.
@@ -139,6 +142,16 @@ pub struct HostProcess {
 
 impl HostProcess {
     pub fn spawn(path: &Path, args: &[String], env: &[(String, String)]) -> Result<Self> {
+        Self::spawn_with(path, args, env, |s| Box::new(s))
+    }
+
+    /// Like `spawn`, but lets the caller wrap the host's stdout (fault injection in tests).
+    pub(crate) fn spawn_with(
+        path: &Path,
+        args: &[String],
+        env: &[(String, String)],
+        wrap_stdout: impl FnOnce(ChildStdout) -> Box<dyn Read + Send + 'static>,
+    ) -> Result<Self> {
         let mut cmd = Command::new(path);
         cmd.args(args)
             .stdin(Stdio::piped())
@@ -153,7 +166,7 @@ impl HostProcess {
         })?;
         let pid = child.id();
         let stdin = child.stdin.take();
-        let stdout = child.stdout.take().expect("piped stdout");
+        let stdout = wrap_stdout(child.stdout.take().expect("piped stdout"));
         let stderr = child.stderr.take().expect("piped stderr");
         let shared = Arc::new(Shared {
             routing: Mutex::new(Routing::default()),
@@ -332,6 +345,12 @@ pub(crate) fn crashed(info: &CrashInfo) -> EngineHostError {
     if let Some(v) = &info.violation {
         return EngineHostError::Protocol(v.clone());
     }
+    if let Some(e) = &info.io_error {
+        return EngineHostError::Io(std::io::Error::other(format!(
+            "reading engine host stdout failed: {e}; host killed (status {}); stderr tail:\n{}",
+            info.status, info.stderr_tail
+        )));
+    }
     EngineHostError::Crashed {
         status: info.status.clone(),
         stderr_tail: info.stderr_tail.clone(),
@@ -378,9 +397,15 @@ fn read_stdout(
     let mut reader = BufReader::new(stdout);
     let mut buf = Vec::new();
     let mut violation: Option<String> = None;
+    let mut io_error: Option<String> = None;
     loop {
         match read_bounded_line(&mut reader, &mut buf, MAX_LINE_BYTES) {
-            Ok(LineRead::Eof) | Err(_) => break,
+            Ok(LineRead::Eof) => break,
+            Err(e) => {
+                tracing::error!(pid, error = %e, "reading engine host stdout failed; killing the host");
+                io_error = Some(e.to_string());
+                break;
+            }
             Ok(LineRead::Line) => {}
             Ok(LineRead::TooLong) => {
                 tracing::error!(pid, "engine host line exceeds 16 MiB; killing the host");
@@ -419,6 +444,12 @@ fn read_stdout(
             }
         }
     }
+    if io_error.is_some() {
+        // The stream is unusable: end the host now and reap it so nothing is orphaned.
+        let mut c = child.lock().unwrap();
+        let _ = c.kill();
+        let _ = c.wait();
+    }
     // stdout closed: the host exited (or closed its stdout). Collect stderr, then status.
     let _ = stderr_thread.join();
     let deadline = Instant::now() + Duration::from_millis(500);
@@ -436,6 +467,7 @@ fn read_stdout(
         stderr_tail: shared.tail_string(),
         expected: shared.expected_exit.load(Ordering::SeqCst),
         violation,
+        io_error,
     };
     let mut r = shared.routing.lock().unwrap();
     let waiters: Vec<_> = r.waiters.drain().collect();
@@ -473,5 +505,50 @@ mod tests {
         let mut r = BufReader::with_capacity(3, std::io::Cursor::new(vec![b'x'; 100]));
         assert_eq!(read_bounded_line(&mut r, &mut buf, 10).unwrap(), LineRead::TooLong);
         assert_eq!(buf.len(), 10);
+    }
+
+    /// Reader that blocks until released, then fails with a non-EOF I/O error.
+    struct FailingReader(Mutex<Receiver<()>>);
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            let _ = self.0.lock().unwrap().recv();
+            Err(std::io::Error::other("injected stdout failure"))
+        }
+    }
+
+    /// A stdout read error is not EOF: waiters get the I/O error text and the
+    /// child is killed and reaped.
+    #[test]
+    fn stdout_read_error_fails_waiters_and_reaps_child() {
+        let (release, rx) = mpsc::channel::<()>();
+        let proc = HostProcess::spawn_with(Path::new("/bin/cat"), &[], &[], |_real| {
+            Box::new(FailingReader(Mutex::new(rx)))
+        })
+        .unwrap();
+        let pending = proc.send(&RequestOp::Ping).unwrap();
+        release.send(()).unwrap();
+
+        match pending.recv_timeout(Duration::from_secs(5)) {
+            Ok(Delivery::Closed(info)) => {
+                assert!(info.io_error.as_deref().unwrap().contains("injected stdout failure"));
+                match crashed(&info) {
+                    EngineHostError::Io(e) => {
+                        assert!(e.to_string().contains("injected stdout failure"), "{e}")
+                    }
+                    other => panic!("expected Io error, got {other:?}"),
+                }
+            }
+            _ => panic!("waiter did not receive the close"),
+        }
+        assert!(!proc.is_alive());
+        // Reaped: the exit status is already collected and it was killed.
+        let status = proc.child.lock().unwrap().try_wait().unwrap();
+        assert!(status.is_some_and(|s| !s.success()), "{status:?}");
+        // New requests fail the same way.
+        match proc.send(&RequestOp::Ping) {
+            Err(EngineHostError::Io(e)) => assert!(e.to_string().contains("injected")),
+            other => panic!("{:?}", other.err()),
+        }
     }
 }

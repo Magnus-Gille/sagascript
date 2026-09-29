@@ -894,6 +894,49 @@ fn interactive_request_gets_a_reserved_host_slot() {
     job.join().unwrap().unwrap();
 }
 
+/// A host with a single slot cannot reserve one for dictation, but dictation is
+/// still sent right after the running window and before any further batch window.
+#[test]
+fn single_slot_host_sends_dictation_before_next_batch_window() {
+    let log = tempfile::tempdir().unwrap();
+    let log_path = log.path().join("ops.log");
+    let f = fixture(&[
+        ("FAKE_WINDOW_S", "10"),
+        ("FAKE_OVERLAP_S", "4"),
+        ("FAKE_MAX_IN_FLIGHT", "1"),
+        ("FAKE_BATCH_DELAY_MS", "1500"),
+        ("FAKE_LOG", log_path.to_str().unwrap()),
+    ]);
+    f.client.warm().unwrap();
+    let job = {
+        let client = f.client.clone();
+        std::thread::spawn(move || {
+            client
+                .transcribe_file_samples(&pcm(47.0), &CancelToken::new(), None)
+                .map(|o| o.tokens.len())
+        })
+    };
+    let windows = |p: &Path| ops_of(p).iter().filter(|o| *o == "transcribe_window").count();
+    wait_until("first batch window running", Duration::from_secs(5), || {
+        windows(&log_path) >= 1
+    });
+    let started = Instant::now();
+    let d = f
+        .client
+        .transcribe_dictation(&pcm(3.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(d.tokens.len(), 6);
+    // Dictation waits for the running window (~1.5 s) only. If a further batch
+    // window (another 1.5 s) were sent first this would take about 3 s.
+    let waited = started.elapsed();
+    assert!(
+        waited < Duration::from_millis(2200),
+        "dictation waited behind another batch window: {waited:?}"
+    );
+    assert!(!job.is_finished());
+    job.join().unwrap().unwrap();
+}
+
 /// Finding 3: the idle supervisor must not unload between readiness and dispatch.
 #[test]
 fn idle_unload_cannot_race_with_a_batch_request() {

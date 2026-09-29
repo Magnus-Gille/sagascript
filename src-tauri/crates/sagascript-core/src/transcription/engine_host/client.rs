@@ -11,6 +11,7 @@ use sagascript_engine_protocol::{
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::RecvTimeoutError;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
@@ -206,6 +207,8 @@ pub(crate) struct Inner {
     cv: Condvar,
     /// Serializes start / load / unload / shutdown.
     lifecycle: Mutex<()>,
+    /// Pid of the host we last warned about having no interactive reservation.
+    warned_no_reserve_pid: AtomicU32,
 }
 
 /// Handle to one (lazily started) engine host. Cheap to clone.
@@ -236,6 +239,7 @@ impl EngineHostClient {
             }),
             cv: Condvar::new(),
             lifecycle: Mutex::new(()),
+            warned_no_reserve_pid: AtomicU32::new(0),
         });
         if supervise {
             let weak = Arc::downgrade(&inner);
@@ -364,6 +368,15 @@ impl EngineHostClient {
         let (proc, caps) = inner.ensure_ready(Some(cancel))?;
         inner.hook("after_ready");
         if slot.is_none() {
+            if caps.max_in_flight == 1
+                && inner.warned_no_reserve_pid.swap(proc.pid(), Ordering::SeqCst) != proc.pid()
+            {
+                tracing::warn!(
+                    pid = proc.pid(),
+                    "engine host advertises max_in_flight = 1: no slot can be reserved for \
+                     interactive requests, so dictation may wait for one running batch window"
+                );
+            }
             slot = inner.acquire_batch(batch_lane(caps.max_in_flight), cancel, wait_slot)?;
         }
         drop(reservation);
@@ -549,6 +562,8 @@ impl Drop for Reservation {
 }
 
 /// Batch windows in flight at most: one host slot stays free for interactive work.
+/// A host advertising 1 slot cannot reserve one; batch then uses that slot and an
+/// interactive request is sent next, ahead of queued batch windows.
 pub(crate) fn batch_lane(max_in_flight: u32) -> usize {
     match max_in_flight {
         0 | 1 => 1,
