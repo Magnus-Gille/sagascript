@@ -31,8 +31,8 @@ already-installed Homebrew xz headers, and `compat.py` activates it before NeMo
 imports.
 
 ```bash
-cd /Users/magnus/repos/sagascript-rn-coreml-convert
-export SCRATCH=/Users/magnus/.cache/sagascript-bench/convert
+cd "$(git rev-parse --show-toplevel)"
+export SCRATCH=$HOME/.cache/sagascript-bench/convert
 export UV_CACHE_DIR=$SCRATCH/.uv-cache
 export PIP_CACHE_DIR=$SCRATCH/.pip-cache
 export HF_HOME=$SCRATCH/hf
@@ -57,12 +57,13 @@ $SCRATCH/uv-tools/bin/uv pip install --python $PY --index-url https://pypi.org/s
   'scipy==1.14.1' 'backports.lzma==0.0.14'
 
 $PY - <<'PY'
+import os
 from huggingface_hub import hf_hub_download
 hf_hub_download(
     repo_id='KlangAI/pianissimo-sv',
     filename='pianissimo-sv.nemo',
     revision='8f1f6d8f8bd7482a5ea1d2bfaf6ef5be61597138',
-    local_dir='/Users/magnus/.cache/sagascript-bench/convert/model',
+    local_dir=os.path.expanduser('~/.cache/sagascript-bench/convert/model'),
 )
 PY
 shasum -a 256 $PIANISSIMO_NEMO
@@ -99,7 +100,7 @@ full-pipeline runs. Set `SAGASCRIPT_BENCH_DIR` (default
 `~/.cache/sagascript-bench`) or pass `--audio`.
 
 ```bash
-export SAGASCRIPT_BENCH_DIR=/Users/magnus/.cache/sagascript-bench
+export SAGASCRIPT_BENCH_DIR=$HOME/.cache/sagascript-bench
 $PY scripts/pianissimo-coreml/validate.py \
   --model-dir $SCRATCH/out/pianissimo-sv-coreml-own-15s-fp16 --nemo $PIANISSIMO_NEMO \
   --window-s 15 --num-windows 8 --compute-units CPU_AND_NE \
