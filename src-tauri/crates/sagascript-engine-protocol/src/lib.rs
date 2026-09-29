@@ -271,11 +271,30 @@ pub struct HelloResult {
     pub capabilities: Capabilities,
 }
 
+/// Accept a non-negative integer, or a finite non-negative float (rounded).
+/// Hosts written in languages whose JSON encoders emit doubles for millisecond
+/// counters (e.g. Swift `Double`) must not break the client over `95520.4`.
+fn lenient_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Number::deserialize(deserializer)?;
+    if let Some(n) = value.as_u64() {
+        return Ok(n);
+    }
+    match value.as_f64() {
+        Some(f) if f.is_finite() && f >= 0.0 && f <= u64::MAX as f64 => Ok(f.round() as u64),
+        _ => Err(serde::de::Error::custom(format!(
+            "expected a non-negative number, got {value}"
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoadResult {
     #[serde(default)]
     pub model_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_u64")]
     pub load_ms: u64,
     #[serde(default)]
     pub compiled: bool,
@@ -302,11 +321,11 @@ pub struct WireToken {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WindowTimings {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_u64")]
     pub preprocess_ms: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_u64")]
     pub encode_ms: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_u64")]
     pub decode_ms: u64,
 }
 
@@ -331,7 +350,7 @@ pub struct StatusResult {
     pub model_id: Option<String>,
     #[serde(default)]
     pub in_flight: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_u64")]
     pub rss_bytes: u64,
     #[serde(default)]
     pub uptime_s: f64,

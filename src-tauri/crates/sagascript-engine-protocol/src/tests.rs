@@ -195,3 +195,16 @@ fn malformed_incoming_rejected() {
     assert!(decode_incoming(r#"{"ok":true}"#).is_err());
     assert!(decode_incoming(r#"{"id":1}"#).is_err());
 }
+
+
+#[test]
+fn millisecond_fields_accept_float_encoders() {
+    let load: LoadResult =
+        serde_json::from_str(r#"{"model_id":"m","load_ms":95520.4529762268,"compiled":true}"#).unwrap();
+    assert_eq!(load.load_ms, 95520);
+    let timings: WindowTimings =
+        serde_json::from_str(r#"{"preprocess_ms":1.9,"encode_ms":30,"decode_ms":24.5}"#).unwrap();
+    assert_eq!((timings.preprocess_ms, timings.encode_ms, timings.decode_ms), (2, 30, 25));
+    assert!(serde_json::from_str::<WindowTimings>(r#"{"encode_ms":-1}"#).is_err());
+    assert!(serde_json::from_str::<WindowTimings>(r#"{"encode_ms":"30"}"#).is_err());
+}

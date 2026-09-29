@@ -33,6 +33,9 @@ Error codes: `protocol` (e.g. op before `hello`, bad envelope), `bad_request`, `
 `not_loaded`, `model_missing`, `model_load_failed`, `busy` (retryable), `cancelled`, `engine`,
 `internal`.
 
+All `*_ms` and `*_bytes` fields are non-negative JSON integers (clients also accept and round
+non-negative floats for robustness).
+
 ## Operations
 
 ### `hello` (must be first)

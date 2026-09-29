@@ -90,6 +90,13 @@ def assert_success(response, request_id):
     require(response.get("ok") is True, f"request {request_id} failed: {response}")
 
 
+def require_int(obj, key, where):
+    value = obj.get(key)
+    # JSON integers only: typed clients (Rust u64) reject floats such as 95520.45.
+    require(isinstance(value, int) and not isinstance(value, bool) and value >= 0,
+            f"{where}.{key} must be a non-negative JSON integer, got {value!r}")
+
+
 def assert_failure(response, request_id, code):
     require(response.get("id") == request_id, f"response id mismatch: {response}")
     require(response.get("ok") is False, f"request {request_id} unexpectedly succeeded: {response}")
@@ -114,6 +121,8 @@ def hello_and_load(host, model_dir):
     assert_success(load, load_id)
     require(load.get("window_s", 0) > 0, f"load did not report window_s: {load}")
     require(load.get("blank_id", 0) >= 0, f"load did not report blank_id: {load}")
+    require_int(load, "load_ms", "load")
+    require_int(capabilities, "max_in_flight", "hello.capabilities")
     return hello, load
 
 
@@ -154,6 +163,10 @@ def exercise_host(binary, model_dir, cache_dir, pcm_path, expect_exit_on_eof=Fal
         busy_response = host.wait_for(busy, 45)
         assert_success(busy_response, busy)
         require(isinstance(busy_response.get("tokens"), list), f"missing tokens: {busy_response}")
+        for key in ("preprocess_ms", "encode_ms", "decode_ms"):
+            require_int(busy_response.get("timings", {}), key, "transcribe_window.timings")
+        for key in ("in_flight", "rss_bytes"):
+            require_int(status_response, key, "status")
         for token in busy_response["tokens"]:
             require("id" in token and "text" in token and "start" in token and "duration" in token, f"bad token: {token}")
             require(token["text"].startswith("▁") or token["text"], f"empty token text: {token}")

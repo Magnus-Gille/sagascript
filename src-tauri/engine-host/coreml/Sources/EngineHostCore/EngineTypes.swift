@@ -60,7 +60,7 @@ public struct LoadResult: Sendable {
     public func jsonObject() -> [String: Any] {
         [
             "model_id": modelID,
-            "load_ms": loadMilliseconds,
+            "load_ms": Int(loadMilliseconds.rounded()),
             "compiled": compiled,
             "window_s": windowSeconds,
             "frame_s": frameSeconds,
@@ -125,9 +125,9 @@ public struct WindowResult: Sendable {
             "tokens": tokens.map { $0.jsonObject() },
             "audio_s": audioSeconds,
             "timings": [
-                "preprocess_ms": preprocessMilliseconds,
-                "encode_ms": encodeMilliseconds,
-                "decode_ms": decodeMilliseconds,
+                "preprocess_ms": Int(preprocessMilliseconds.rounded()),
+                "encode_ms": Int(encodeMilliseconds.rounded()),
+                "decode_ms": Int(decodeMilliseconds.rounded()),
             ],
         ]
     }
