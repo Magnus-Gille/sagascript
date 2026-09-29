@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Usage: smoke-pianissimo-installed.sh CLI_PATH_OR_SYMLINK AUDIO_FILE
+# Usage: smoke-pianissimo-installed.sh CLI_PATH_OR_SYMLINK AUDIO_FILE [EXPECT_WORD]
 # Exercises Pianissimo end to end through an installed CLI path (for example a
 # symlink to Sagascript.app/Contents/MacOS/sagascript): engine status, model
 # download, engine doctor, and a Swedish-mode transcription. Every step fails
 # loudly; nothing is skipped when the model download is unavailable.
 set -euo pipefail
 
-[[ $# -eq 2 ]] || { echo "Usage: $0 CLI AUDIO_FILE" >&2; exit 2; }
+[[ $# -eq 2 || $# -eq 3 ]] || { echo "Usage: $0 CLI AUDIO_FILE [EXPECT_WORD]" >&2; exit 2; }
 cli=$1
 audio=$2
+expect=${3:-}
 [[ -x "$cli" ]] || { echo "CLI is not executable: $cli" >&2; exit 1; }
 [[ -f "$audio" ]] || { echo "Audio sample is missing: $audio" >&2; exit 1; }
 
@@ -33,10 +34,13 @@ echo "== engine doctor"
 
 echo "== transcribe"
 "$cli" transcribe --language sv --model pianissimo-sv --json "$audio" > "$work/transcript.json"
-python3 - "$work/transcript.json" <<'PY'
+python3 - "$work/transcript.json" "$expect" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 assert isinstance(d.get("text"), str) and d["text"].strip(), "empty transcript text"
 print("transcript:", d["text"][:200])
+expect = sys.argv[2].lower()
+if expect:
+    assert expect in d["text"].lower(), f"expected word {expect!r} not in transcript"
 PY
 echo "Pianissimo installed-CLI smoke passed"

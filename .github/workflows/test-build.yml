@@ -198,7 +198,7 @@ jobs:
           app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
           cli_link="$RUNNER_TEMP/sagascript-pianissimo-cli"
           ln -s "$GITHUB_WORKSPACE/$app/Contents/MacOS/sagascript" "$cli_link"
-          ./scripts/smoke-pianissimo-installed.sh "$cli_link" test-audio/english-jfk.wav
+          ./scripts/smoke-pianissimo-installed.sh "$cli_link" test-audio/swedish-fleurs-hongkong.wav hongkong
 
       - name: Gate real signed self-upgrade in an isolated app
         if: inputs.label == 'issue-255-updater-smoke'

@@ -329,7 +329,7 @@ jobs:
             test-audio/norwegian-short-3s.mp3
 
       - name: Gate signed Pianissimo through /usr/local/bin/sagascript
-        run: ./scripts/smoke-pianissimo-installed.sh /usr/local/bin/sagascript test-audio/english-jfk.wav
+        run: ./scripts/smoke-pianissimo-installed.sh /usr/local/bin/sagascript test-audio/swedish-fleurs-hongkong.wav hongkong
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
