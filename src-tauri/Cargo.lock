@@ -4479,15 +4479,26 @@ dependencies = [
  "reqwest 0.12.28",
  "rubato",
  "rustfft",
+ "sagascript-engine-protocol",
  "serde",
  "serde_json",
  "sha2",
  "symphonia",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "uuid",
  "whisper-rs",
+]
+
+[[package]]
+name = "sagascript-engine-protocol"
+version = "1.3.2"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
