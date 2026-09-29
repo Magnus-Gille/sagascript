@@ -118,6 +118,14 @@ $PY scripts/pianissimo-coreml/placement.py \
   $SCRATCH/out/pianissimo-sv-coreml-own-15s-fp16/Encoder.mlpackage --compute-units CPU_AND_NE
 ```
 
+30 s windows: the fp16 encoder is numerically sound (the earlier reported fp16
+divergence came from the fp16 *preprocessor*, which produced non-finite mel on
+`CPU_AND_NE`; the preprocessor now computes in fp32). Core ML's plan reports
+about 96 % of the 30 s fp16 encoder ops on the ANE, but measured warm latency on
+`CPU_AND_NE` is about 235 ms (roughly 7x the 15 s encoder for 2x the audio) and
+the first load compiles for minutes, so treat 30 s fp16 as unproven on the ANE;
+prefer the 15 s fp16 artifact.
+
 Long-form WER is deliberately not computed here. A standalone Python pipeline
 gave about 10 % WER even for the community model (5.9 % through FluidAudio), so
 its long-form numbers were misleading; measure long-form WER through the engine
