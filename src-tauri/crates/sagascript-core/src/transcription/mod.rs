@@ -1,4 +1,5 @@
 pub(crate) mod chunking;
+pub mod chunk_merge;
 pub mod diagnostics;
 pub mod glossary;
 pub mod glossary_suggestions;
