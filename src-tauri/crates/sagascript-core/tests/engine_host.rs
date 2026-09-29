@@ -725,6 +725,7 @@ fn temp_pcm_is_removed_after_error() {
     assert_eq!(temp_entries(f.tmp.path()), 0);
 }
 
+#[cfg(unix)]
 #[test]
 fn temp_pcm_is_private() {
     use std::os::unix::fs::PermissionsExt;
