@@ -195,10 +195,11 @@ public final class CoreMLEngine: EngineBackend {
 
         let preprocessStart = Date()
         let audioSignal = try makeFloatArray(samples)
-        // Like the reference pipeline, declare the length rounded up to a whole
-        // encoder frame (1280 samples); the zero padding is already in place.
-        let declaredSamples = min(loaded.windowSamples, (request.numSamples + 1279) / 1280 * 1280)
-        let audioLength = try makeIntArray([declaredSamples])
+        // The reference pipeline rounds the declared length up to a whole
+        // encoder frame (1280 samples), which reproduces its text exactly on the
+        // ten fleurs clips but costs one word (Aristoteles -> Aristotels) versus
+        // declaring the true length, so the true length is kept.
+        let audioLength = try makeIntArray([request.numSamples])
         let preprocessorInput = try MLDictionaryFeatureProvider(dictionary: [
             "audio_signal": MLFeatureValue(multiArray: audioSignal),
             "audio_length": MLFeatureValue(multiArray: audioLength),
