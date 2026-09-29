@@ -189,7 +189,15 @@ jobs:
 
       - name: Swift test (Core ML engine host)
         working-directory: src-tauri/engine-host/coreml
-        run: swift test
+        # The tests use Swift Testing (`import Testing`), which ships with Xcode 16+;
+        # the runner's default Xcode may be older, so run them with the newest one installed.
+        run: |
+          newest=$(find /Applications -maxdepth 1 -name "Xcode_*.app" | sort -V | tail -1)
+          if [ -z "$newest" ]; then echo "No Xcode found in /Applications" >&2; exit 1; fi
+          export DEVELOPER_DIR="$newest/Contents/Developer"
+          echo "Swift tests with $newest"
+          swift --version
+          swift test
 
   build-macos:
     needs: scope
