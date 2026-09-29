@@ -179,16 +179,10 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build bundled Pianissimo runtime
-        run: ./scripts/build-pianissimo-native-runtime.sh
-
-      - name: Install Python for build-time model conversion
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Build verified optional Pianissimo Q8 model
-        run: ./scripts/prepare-pianissimo-release-model.sh
+      - name: Build and stage Core ML engine host
+        run: |
+          ./scripts/stage-engine-host.sh
+          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
 
       - name: Verify release metadata and tag
         env:
@@ -214,10 +208,14 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
           security list-keychains -d user -s "$keychain"
 
-      - name: Sign bundled Pianissimo native libraries
+      - name: Sign Core ML engine host (hardened runtime)
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: python3 scripts/sign-pianissimo-runtime.py build/pianissimo-native-runtime
+        run: |
+          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" build/engine-host/sagascript-engine-host
+          codesign --verify --strict --verbose=2 build/engine-host/sagascript-engine-host
+          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
 
       - name: Prepare notarization credentials and build metadata
         env:
@@ -249,7 +247,7 @@ jobs:
           : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
           signed_config="$RUNNER_TEMP/sagascript-updater-signed.json"
           node scripts/generate-updater-config.mjs scripts/tauri-updater-signed.json "$signed_config"
-          npx tauri build --target aarch64-apple-darwin --config scripts/tauri-pianissimo-bundle.json --config "$signed_config"
+          npx tauri build --target aarch64-apple-darwin --config scripts/tauri-engine-host-bundle.json --config "$signed_config"
 
       - name: Notarize app and disk image
         env:
@@ -289,7 +287,7 @@ jobs:
           app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
           dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
           [[ -n "$dmg" ]]
-          ./scripts/verify-macos-release.sh "$app" "$dmg" "$version"
+          ./scripts/verify-macos-release.sh "$app" "$dmg" "$version" "$GITHUB_SHA"
           updater_bundle="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app.tar.gz"
           updater_signature="$updater_bundle.sig"
           tar -czf "$updater_bundle" -C "$(dirname "$app")" "$(basename "$app")"
@@ -305,7 +303,6 @@ jobs:
           cp "$dmg" artifacts/Sagascript.dmg
           cp "$updater_bundle" artifacts/Sagascript.app.tar.gz
           cp "$updater_signature" artifacts/Sagascript.app.tar.gz.sig
-          cp build/pianissimo-sv-q8-melfix.gguf artifacts/pianissimo-sv-q8-melfix.gguf
           node scripts/generate-updater-manifest.mjs \
             "$version" artifacts/Sagascript.app.tar.gz artifacts/Sagascript.app.tar.gz.sig artifacts/latest.json
 
@@ -331,15 +328,8 @@ jobs:
             "${SAGASCRIPT_GIT_HASH}" \
             test-audio/norwegian-short-3s.mp3
 
-      - name: Gate signed Pianissimo transcription
-        run: |
-          mkdir -p "$HOME/Library/Application Support/Sagascript/Models"
-          cp build/pianissimo-sv-q8-melfix.gguf "$HOME/Library/Application Support/Sagascript/Models/"
-          /usr/local/bin/sagascript transcribe --language sv --model pianissimo-sv --json \
-            test-audio/english-jfk.wav > "$RUNNER_TEMP/pianissimo-signed-smoke.json"
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["segments"]' \
-            "$RUNNER_TEMP/pianissimo-signed-smoke.json"
-          rm "$HOME/Library/Application Support/Sagascript/Models/pianissimo-sv-q8-melfix.gguf"
+      - name: Gate signed Pianissimo through /usr/local/bin/sagascript
+        run: ./scripts/smoke-pianissimo-installed.sh /usr/local/bin/sagascript test-audio/english-jfk.wav
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -350,7 +340,6 @@ jobs:
             artifacts/Sagascript.app.tar.gz
             artifacts/Sagascript.app.tar.gz.sig
             artifacts/latest.json
-            artifacts/pianissimo-sv-q8-melfix.gguf
           if-no-files-found: error
 
   publish-release:
@@ -372,9 +361,8 @@ jobs:
           cp artifacts/macos-bundle/Sagascript.app.tar.gz artifacts/Sagascript.app.tar.gz
           cp artifacts/macos-bundle/Sagascript.app.tar.gz.sig artifacts/Sagascript.app.tar.gz.sig
           cp artifacts/macos-bundle/latest.json artifacts/latest.json
-          cp artifacts/macos-bundle/pianissimo-sv-q8-melfix.gguf artifacts/pianissimo-sv-q8-melfix.gguf
 
-          (cd artifacts && sha256sum Sagascript.dmg Sagascript.app.tar.gz Sagascript.app.tar.gz.sig latest.json pianissimo-sv-q8-melfix.gguf > SHA256SUMS)
+          (cd artifacts && sha256sum Sagascript.dmg Sagascript.app.tar.gz Sagascript.app.tar.gz.sig latest.json > SHA256SUMS)
 
           echo "Stable artifacts:"
           ls -lh artifacts/Sagascript* artifacts/SHA256SUMS
@@ -389,5 +377,4 @@ jobs:
             artifacts/Sagascript.app.tar.gz
             artifacts/Sagascript.app.tar.gz.sig
             artifacts/latest.json
-            artifacts/pianissimo-sv-q8-melfix.gguf
             artifacts/SHA256SUMS

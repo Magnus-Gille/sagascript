@@ -182,6 +182,15 @@ jobs:
       - name: Svelte check
         run: npx svelte-check --tsconfig ./tsconfig.json
 
+      - name: Build Core ML engine host and check its revision
+        run: |
+          ./scripts/stage-engine-host.sh
+          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
+
+      - name: Swift test (Core ML engine host)
+        working-directory: src-tauri/engine-host/coreml
+        run: swift test
+
   build-macos:
     needs: scope
     if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}

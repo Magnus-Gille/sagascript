@@ -60,24 +60,10 @@ jobs:
       - name: Verify release metadata (no tag check for test builds)
         run: npm run release:check
 
-      - name: Build bundled Pianissimo runtime
-        run: ./scripts/build-pianissimo-native-runtime.sh
-
-      - name: Install Python for build-time model conversion
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Build verified optional Pianissimo Q8 model
-        run: ./scripts/prepare-pianissimo-release-model.sh
-
-      - name: Gate unsigned native Pianissimo CPU inference
+      - name: Build and stage Core ML engine host
         run: |
-          build/pianissimo-native-runtime/bin/nemo-speech transcribe test-audio/english-jfk.wav \
-            --model build/pianissimo-sv-q8-melfix.gguf --language sv --device cpu --format json \
-            > "$RUNNER_TEMP/pianissimo-unsigned-smoke.json"
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["words"]' \
-            "$RUNNER_TEMP/pianissimo-unsigned-smoke.json"
+          ./scripts/stage-engine-host.sh
+          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
 
       - name: Verify third-party notices
         run: npm run licenses:check
@@ -104,18 +90,14 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
           security list-keychains -d user -s "$keychain"
 
-      - name: Sign bundled Pianissimo native libraries
+      - name: Sign Core ML engine host (hardened runtime)
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: python3 scripts/sign-pianissimo-runtime.py build/pianissimo-native-runtime
-
-      - name: Gate signed native Pianissimo CPU inference before bundling
         run: |
-          build/pianissimo-native-runtime/bin/nemo-speech transcribe test-audio/english-jfk.wav \
-            --model build/pianissimo-sv-q8-melfix.gguf --language sv --device cpu --format json \
-            > "$RUNNER_TEMP/pianissimo-signed-native-smoke.json"
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["words"]' \
-            "$RUNNER_TEMP/pianissimo-signed-native-smoke.json"
+          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" build/engine-host/sagascript-engine-host
+          codesign --verify --strict --verbose=2 build/engine-host/sagascript-engine-host
+          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
 
       - name: Prepare notarization credentials and build metadata
         env:
@@ -149,7 +131,7 @@ jobs:
           : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
           signed_config="$RUNNER_TEMP/sagascript-updater-signed.json"
           node scripts/generate-updater-config.mjs scripts/tauri-updater-signed.json "$signed_config"
-          npx tauri build --config scripts/tauri-ci-prebuilt.json --config scripts/tauri-pianissimo-bundle.json --config "$signed_config" --target aarch64-apple-darwin
+          npx tauri build --config scripts/tauri-ci-prebuilt.json --config scripts/tauri-engine-host-bundle.json --config "$signed_config" --target aarch64-apple-darwin
 
       - name: Notarize app and disk image
         env:
@@ -190,7 +172,7 @@ jobs:
           app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
           dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
           [[ -n "$dmg" ]]
-          ./scripts/verify-macos-release.sh "$app" "$dmg" "$version"
+          ./scripts/verify-macos-release.sh "$app" "$dmg" "$version" "$GITHUB_SHA"
           label="$TEST_LABEL"
           sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
           mkdir -p artifacts
@@ -208,27 +190,15 @@ jobs:
           spctl --assess --type execute --verbose=2 "$archive_check/Sagascript.app"
           cp "$updater_bundle" "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz"
           cp "$updater_signature" "artifacts/Sagascript-TEST-${label}-${sha}.app.tar.gz.sig"
-          cp build/pianissimo-sv-q8-melfix.gguf artifacts/pianissimo-sv-q8-melfix.gguf
-          (cd artifacts && shasum -a 256 Sagascript-TEST-* pianissimo-sv-q8-melfix.gguf > SHA256SUMS)
+          (cd artifacts && shasum -a 256 Sagascript-TEST-* > SHA256SUMS)
           ls -lh artifacts/
 
-      - name: Gate signed Pianissimo transcription through installed CLI symlink
+      - name: Gate signed Pianissimo through installed CLI symlink
         run: |
-          mkdir -p "$HOME/Library/Application Support/Sagascript/Models"
-          cp build/pianissimo-sv-q8-melfix.gguf "$HOME/Library/Application Support/Sagascript/Models/"
           app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
           cli_link="$RUNNER_TEMP/sagascript-pianissimo-cli"
           ln -s "$GITHUB_WORKSPACE/$app/Contents/MacOS/sagascript" "$cli_link"
-          if ! "$cli_link" transcribe --language sv --model pianissimo-sv --json \
-            test-audio/english-jfk.wav > "$RUNNER_TEMP/pianissimo-signed-smoke.json"; then
-            sleep 2
-            find "$HOME/Library/Logs/DiagnosticReports" -maxdepth 1 -name 'nemo-speech*.ips' \
-              -print -exec sed -n '1,90p' {} \; 2>/dev/null || true
-            exit 1
-          fi
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "country" in d["text"].lower(); assert d["segments"]' \
-            "$RUNNER_TEMP/pianissimo-signed-smoke.json"
-          rm "$HOME/Library/Application Support/Sagascript/Models/pianissimo-sv-q8-melfix.gguf"
+          ./scripts/smoke-pianissimo-installed.sh "$cli_link" test-audio/english-jfk.wav
 
       - name: Gate real signed self-upgrade in an isolated app
         if: inputs.label == 'issue-255-updater-smoke'
@@ -252,7 +222,7 @@ jobs:
           npx tauri build --ci --target aarch64-apple-darwin --bundles app \
             --features updater-smoke-test \
             --config scripts/tauri-ci-prebuilt.json \
-            --config scripts/tauri-pianissimo-bundle.json \
+            --config scripts/tauri-engine-host-bundle.json \
             --config "$smoke_config"
           source_app=src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app
           test_dir="$RUNNER_TEMP/sagascript-signed-updater-smoke"
@@ -264,7 +234,7 @@ jobs:
             scripts/tauri-updater-smoke-new.json "$updated_smoke_config"
           npx tauri build --ci --target aarch64-apple-darwin --bundles app \
             --config scripts/tauri-ci-prebuilt.json \
-            --config scripts/tauri-pianissimo-bundle.json \
+            --config scripts/tauri-engine-host-bundle.json \
             --config "$updated_smoke_config"
           codesign --verify --deep --strict "$source_app"
           archive="$test_dir/Sagascript.app.tar.gz"
@@ -280,6 +250,5 @@ jobs:
           name: test-dmg-${{ inputs.label }}
           path: |
             artifacts/Sagascript-TEST-*
-            artifacts/pianissimo-sv-q8-melfix.gguf
             artifacts/SHA256SUMS
           if-no-files-found: error
