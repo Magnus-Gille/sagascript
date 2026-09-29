@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "resources": {
+      "../build/engine-host/win-arm64/sagascript-engine-host-ort.exe": "engine-host/sagascript-engine-host-ort.exe",
+      "../build/engine-host/win-arm64/onnxruntime.dll": "engine-host/onnxruntime.dll",
+      "../build/engine-host/win-arm64/onnxruntime_providers_shared.dll": "engine-host/onnxruntime_providers_shared.dll"
+    }
+  }
+}
