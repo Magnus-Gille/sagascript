@@ -530,9 +530,11 @@ fn cache_verified_metadata(
 // stable token in std (Windows overwrites can retain size and mtime), so they
 // keep the always-hash behaviour and never write stamps.
 
+#[cfg(unix)]
 const STAMP_SCHEMA: u32 = 1;
 const STAMP_SUFFIX: &str = ".verified.json";
 
+#[cfg(unix)]
 #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct VerificationStamp {
     schema: u32,

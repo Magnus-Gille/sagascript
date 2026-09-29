@@ -180,10 +180,9 @@ impl ProgressThrottle {
             return ProgressAction::Skip;
         }
         // Unknown total: step by 50 MiB instead of percent.
-        let step = if total > 0 {
-            (bytes.min(total) * 10 / total).min(10)
-        } else {
-            bytes / (50 * 1_048_576)
+        let step = match (bytes.min(total) * 10).checked_div(total) {
+            Some(tenths) => tenths.min(10),
+            None => bytes / (50 * 1_048_576),
         };
         if self.last_step.is_none_or(|last| step > last) {
             self.last_step = Some(step);
