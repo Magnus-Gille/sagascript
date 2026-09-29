@@ -38,7 +38,7 @@
   .step-title { font-weight: 500; }
   .step-status { font-size: 11px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
   .stage-meter { height: 4px; overflow: hidden; background: var(--border); border-radius: 2px; margin-top: 4px; }
-  .stage-fill { height: 100%; background: var(--accent); transition: width 150ms linear; }
+  .stage-fill { height: 100%; background: var(--accent); transition: width 300ms ease-out; }
   .active { color: var(--text); }
   .active .step-icon { border-color: var(--accent); color: var(--accent); }
   .done .step-icon { background: #82d996; color: #111113; border-color: #82d996; font-weight: 700; }

@@ -29,6 +29,9 @@
     setBeamSize,
     setTemperatureFallback,
     setVadEnabled,
+    setEnginePrewarm,
+    setEngineIdleUnloadMinutes,
+    getEngineStatus,
     getBuildInfo,
     getFileModelOptions,
     getEffectiveModelInfo,
@@ -53,6 +56,8 @@
     hotkeyStatus,
     type Settings,
     type BuildInfo,
+    type EnginePrewarm,
+    type EngineStatus,
     type Language,
     type WhisperModel,
     type HotkeyStatus,
@@ -81,7 +86,17 @@
 
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);
+  let engineStatus = $state<EngineStatus | null>(null);
+  const engineIdleChoices = [5, 10, 30, 60, 0];
+  const engineHostIdentity = $derived(
+    engineStatus?.host_version
+      ? `Engine ${engineStatus.host_version}${engineStatus.host_git_sha ? ` (${engineStatus.host_git_sha.slice(0, 7)})` : ""}`
+      : "",
+  );
   let fileModelOptions: WhisperModel[] = $state([]);
+  const pianissimoSizeMb = $derived(
+    fileModelOptions.find((model) => model.id === "pianissimo-sv")?.size_mb ?? 0,
+  );
   let fileAutoModel: WhisperModel | null = $state(null);
   let fileModelError = $state("");
   let fileModelSaving = $state(false);
@@ -976,6 +991,10 @@
         // settings bootstrap so it remains visible when another query fails.
         console.warn("Failed to load build information", error);
       }
+      getEngineStatus().then((status) => { engineStatus = status; }).catch((error) => {
+        // Diagnostic and optional: Pianissimo controls stay hidden without it.
+        console.warn("Failed to load engine status", error);
+      });
       try {
         settings = await getSettings();
         await refreshProfileModels(settings.hotkey_profiles);
@@ -1439,6 +1458,16 @@
     await applySetting(() => setTemperatureFallback(next));
   }
 
+  async function onEnginePrewarmChange(e: Event) {
+    const value = (e.target as HTMLSelectElement).value as EnginePrewarm;
+    await applySetting(() => setEnginePrewarm(value));
+  }
+
+  async function onEngineIdleChange(e: Event) {
+    const value = Number((e.target as HTMLSelectElement).value);
+    await applySetting(() => setEngineIdleUnloadMinutes(value));
+  }
+
   async function onVadToggle() {
     if (!settings) return;
     const next = !settings.vad_enabled;
@@ -1746,7 +1775,7 @@
     <h1 class="window-title">Sagascript</h1>
     <div class="build-info" aria-label="Build information">
       {#if buildInfo}
-        Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}
+        Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}{engineHostIdentity ? ` · ${engineHostIdentity}` : ""}
       {:else}
         Version information unavailable
       {/if}
@@ -1885,7 +1914,7 @@
                   <span>
                     {profileModels[profile.id].downloaded
                       ? `${profileModels[profile.id].display_name} · Ready`
-                      : `${profileModels[profile.id].display_name} required · ${profileModels[profile.id].size_mb} MB`}
+                      : `${profileModels[profile.id].display_name} required${profileModels[profile.id].size_mb > 0 ? ` · ${profileModels[profile.id].size_mb} MB` : ""}`}
                   </span>
                   {#if !profileModels[profile.id].downloaded}
                     <button
@@ -2021,7 +2050,7 @@
               </button>
             {/if}
             {#if settings.file_transcription_model === "pianissimo-sv"}
-              <div class="hotkey-hint">The macOS 13+ app includes Pianissimo's local runtime. Download the corrected 714 MB Q8 model once. Peak memory was about 0.9 GB in our test.</div>
+              <div class="hotkey-hint">Requires macOS 14 or later on Apple Silicon. Runs locally on the Neural Engine{pianissimoSizeMb > 0 ? `; one-time download of about ${pianissimoSizeMb} MB` : "; downloaded once"}.</div>
             {/if}
             {#if fileModelError}<div class="transcribe-error" role="alert">{fileModelError}</div>{/if}
           </div>
@@ -2250,6 +2279,31 @@
               ></button>
             </div>
             <div class="hotkey-hint">Re-decode hard segments; off is faster but less robust.</div>
+
+            {#if engineStatus?.supported}
+              <div class="field advanced-field">
+                <label for="engine-prewarm">Prepare Pianissimo when</label>
+                <select id="engine-prewarm" value={settings.engine_prewarm} onchange={onEnginePrewarmChange}>
+                  <option value="on_key_down">When I press the dictation key</option>
+                  <option value="on_app_start">When Sagascript starts</option>
+                  <option value="off">Only when needed</option>
+                </select>
+              </div>
+              <div class="hotkey-hint">Earlier preparation uses more memory but makes the first word faster.</div>
+
+              <div class="field advanced-field">
+                <label for="engine-idle">Unload after idle</label>
+                <select id="engine-idle" value={settings.engine_idle_unload_minutes} onchange={onEngineIdleChange}>
+                  {#each engineIdleChoices as minutes}
+                    <option value={minutes}>{minutes === 0 ? "Never" : `${minutes} minutes`}</option>
+                  {/each}
+                  {#if !engineIdleChoices.includes(settings.engine_idle_unload_minutes)}
+                    <option value={settings.engine_idle_unload_minutes}>{settings.engine_idle_unload_minutes} minutes</option>
+                  {/if}
+                </select>
+              </div>
+              <div class="hotkey-hint">Frees the Pianissimo model's memory after this much inactivity.</div>
+            {/if}
 
             <div class="field-row advanced-toggle">
               <span class="field-label">Voice activity detection</span>

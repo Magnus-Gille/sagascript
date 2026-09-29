@@ -9,6 +9,8 @@ const calls = [];
 let active = 0;
 const profileModels = { swedish: "auto", english: "base.en" };
 let pianissimoDownloaded = false;
+let pianissimoSizeMb = 0;
+const engineSettings = { engine_prewarm: "on_key_down", engine_idle_unload_minutes: 10 };
 let holdPianissimoDownload = false;
 let releasePianissimoDownload = null;
 let maximum = 0;
@@ -81,6 +83,7 @@ window.qa = {
   dictationResult: (text) => emit("transcription-result", text),
   holdNextPianissimoDownload: () => { holdPianissimoDownload = true; },
   releasePianissimo: () => { releasePianissimoDownload?.(); },
+  setPianissimoSize: (mb) => { pianissimoSizeMb = mb; },
   removePianissimo: () => {
     pianissimoDownloaded = false;
     emit("model-ready", {});
@@ -135,18 +138,18 @@ mockIPC(async (cmd, args = {}) => {
         { id: "swedish", name: "Swedish", language: "sv", shortcut: "Control+Shift+S" },
         { id: "english", name: "English", language: "en", shortcut: "Control+Shift+E" },
       ], profile_models: { ...profileModels }, profile_glossaries: {}, profile_glossary_migrated: true, initial_prompt: "", beam_size: 0,
-      temperature_fallback: true, vad_enabled: false, has_completed_onboarding: true };
+      temperature_fallback: true, vad_enabled: false, ...engineSettings, has_completed_onboarding: true };
     case "get_model_info": return [{ id: "base.en", display_name: "Base English", description: "Fixture",
       size_mb: 0, downloaded: true, active: true }];
     case "get_file_model_options": return args.language === "en"
       ? [{ id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: false }]
       : [{ id: "kb-whisper-base", display_name: "KB-Whisper Base", description: "Fixture",
       size_mb: 0, downloaded: true, active: false },
-      { id: "pianissimo-sv", display_name: "Pianissimo Q8", description: "Fixture",
-        size_mb: 714, downloaded: pianissimoDownloaded, active: false }];
+      { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture",
+        size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: false }];
     case "set_profile_model": profileModels[args.profileId] = args.modelId; return null;
     case "get_profile_model_info": return profileModels[args.profileId] === "pianissimo-sv"
-      ? { id: "pianissimo-sv", display_name: "Pianissimo Q8", description: "Fixture", size_mb: 714, downloaded: pianissimoDownloaded, active: true }
+      ? { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true }
       : args.profileId === "english"
         ? { id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: true }
       : { id: "kb-whisper-base", display_name: "KB-Whisper Base", description: "Fixture", size_mb: 0, downloaded: true, active: true };
@@ -162,6 +165,10 @@ mockIPC(async (cmd, args = {}) => {
     }
     case "get_effective_model_info": return { id: "base.en", display_name: "Base English", description: "Fixture",
       size_mb: 0, downloaded: true, active: true };
+    case "engine_status": return { installed: pianissimoDownloaded, supported: true, host_path: "/fixture/sagascript-engine-host",
+      host_version: "1.3.2", host_git_sha: "abcdef0123456789", warm: false };
+    case "set_engine_prewarm": engineSettings.engine_prewarm = args.mode; return null;
+    case "set_engine_idle_unload_minutes": engineSettings.engine_idle_unload_minutes = args.minutes; return null;
     case "get_platform": return "macos";
     case "check_accessibility_permission": return true;
     case "get_supported_formats": return ["wav", "mp3", "m4a"];

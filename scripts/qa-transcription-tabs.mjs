@@ -51,7 +51,7 @@ try {
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv"));
   await page.getByRole("button", { name: "Download speech engine" }).click();
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "download_pianissimo_model"));
-  await page.getByText("Pianissimo Q8 · Ready", { exact: true }).waitFor();
+  await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
   assert.equal(await englishModelChoice.inputValue(), "base.en", "Swedish model changes cannot rewrite another profile");
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   assert.equal(await page.locator("#file-model").inputValue(), "auto");
@@ -59,7 +59,7 @@ try {
   assert.equal(await profileModelChoice.inputValue(), "pianissimo-sv");
   // Repair a selected model whose cached artifact was removed outside the UI.
   await page.evaluate(() => window.qa.removePianissimo());
-  await page.getByText("Pianissimo Q8 required · 714 MB", { exact: true }).waitFor();
+  await page.getByText("Pianissimo required", { exact: true }).waitFor();
   await page.evaluate(() => window.qa.holdNextPianissimoDownload());
   await page.getByRole("button", { name: "Download speech engine" }).click();
   await page.waitForFunction(() => window.qa.calls.filter(call => call.cmd === "download_pianissimo_model").length === 2);
@@ -68,12 +68,37 @@ try {
   await page.evaluate(() => window.qa.releasePianissimo());
   await profileModelChoice.waitFor({ state: 'visible' });
   await page.waitForFunction(() => !document.querySelector('.test-record-btn').disabled);
-  await page.getByText("Pianissimo Q8 · Ready", { exact: true }).waitFor();
+  await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
   await page.screenshot({ path: outputPath("sagascript-pianissimo-dictation.png"), fullPage: true });
+  // Engine host identity sits next to the build identity.
+  await page.getByText("Engine 1.3.2 (abcdef0)").waitFor();
+  // The size comes from the backend model list, never a hardcoded string.
+  await page.evaluate(() => window.qa.setPianissimoSize(321));
+  await page.evaluate(() => window.qa.removePianissimo());
+  await page.getByText("Pianissimo required · 321 MB", { exact: true }).waitFor();
+  await page.evaluate(() => { window.qa.setPianissimoSize(0); window.qa.removePianissimo(); });
+  await page.getByText("Pianissimo required", { exact: true }).waitFor();
+  assert.equal(await page.getByText(/714|Q8|macOS 13/).count(), 0, "No outdated Pianissimo strings");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   assert.equal(await page.locator("#dictionary-scope").inputValue(), "swedish");
   assert.equal(await page.getByText("Global hints", { exact: true }).count(), 0);
   await page.screenshot({ path: outputPath("sagascript-profile-dictionary.png"), fullPage: true });
+  // Pianissimo engine controls (Advanced): prewarm mode and idle unload.
+  await page.locator("details.advanced-section > summary").click();
+  const prewarm = page.getByLabel("Prepare Pianissimo when");
+  assert.equal(await prewarm.inputValue(), "on_key_down");
+  assert.deepEqual(await prewarm.locator("option").allTextContents(),
+    ["When I press the dictation key", "When Sagascript starts", "Only when needed"]);
+  await prewarm.selectOption("off");
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_engine_prewarm" && call.args.mode === "off"));
+  const idle = page.getByLabel("Unload after idle");
+  assert.equal(await idle.inputValue(), "10");
+  assert.deepEqual(await idle.locator("option").allTextContents(),
+    ["5 minutes", "10 minutes", "30 minutes", "60 minutes", "Never"]);
+  await idle.selectOption("0");
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_engine_idle_unload_minutes" && call.args.minutes === 0));
+  await page.getByText("first word faster", { exact: false }).waitFor();
+  await page.screenshot({ path: outputPath("sagascript-pianissimo-engine-settings.png"), fullPage: true });
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
   await profileModelChoice.selectOption("kb-whisper-base");
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.modelId === "kb-whisper-base"));
