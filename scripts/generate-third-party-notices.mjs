@@ -149,7 +149,7 @@ const reviewedNpmLicenses = new Set([
   "MIT OR Apache-2.0",
 ]);
 
-function cargoMetadata(target) {
+function cargoMetadata(target, manifestPath = "src-tauri/Cargo.toml") {
   return JSON.parse(
     execFileSync(
       "cargo",
@@ -161,7 +161,7 @@ function cargoMetadata(target) {
         "--filter-platform",
         target,
         "--manifest-path",
-        "src-tauri/Cargo.toml",
+        manifestPath,
       ],
       {
         cwd: root,
@@ -192,8 +192,15 @@ function rootLicenseFiles(directory) {
 }
 
 const rustById = new Map();
-for (const target of ["aarch64-apple-darwin"]) {
-  const metadata = cargoMetadata(target);
+// The Windows-on-ARM Pianissimo engine host is a separate Cargo workspace with
+// its own lockfile; include it for both platforms it can be built for.
+const rustInventories = [
+  { manifest: "src-tauri/Cargo.toml", target: "aarch64-apple-darwin" },
+  { manifest: "src-tauri/engine-host/ort/Cargo.toml", target: "aarch64-apple-darwin" },
+  { manifest: "src-tauri/engine-host/ort/Cargo.toml", target: "aarch64-pc-windows-msvc" },
+];
+for (const { manifest, target } of rustInventories) {
+  const metadata = cargoMetadata(target, manifest);
   const nodes = new Map(metadata.resolve.nodes.map((node) => [node.id, node]));
   const resolvedIds = new Set();
   const queue = [...metadata.workspace_members];
@@ -350,6 +357,7 @@ link; the upstream repository is authoritative for its license terms.
 |---|---|---|---|
 | OpenAI Whisper GGML + Core ML encoders | Tiny, Base, Small, Medium, Large v3 Turbo variants | MIT | [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) |
 | KB-Whisper | Tiny, Base, Small, Medium, Large Swedish models | Apache-2.0 | [KBLab, National Library of Sweden](https://huggingface.co/KBLab) |
+| Klang Pianissimo (ONNX, Windows on ARM) | \`KlangAI/pianissimo-sv-onnx\` @ \`32118e6c01a88e3c4b4b735971195303a88d21ce\`: \`encoder-model.int8.onnx\`, \`decoder_joint-model.int8.onnx\`, \`nemo128.onnx\`, \`vocab.txt\`, \`config.json\`; downloaded on Windows on ARM only | CC-BY-4.0 | [Klang AI AB, model card and attribution](https://huggingface.co/KlangAI/pianissimo-sv-onnx/tree/32118e6c01a88e3c4b4b735971195303a88d21ce), reviewed 2026-09-29 |
 | Klang Pianissimo (Core ML conversion) | Core ML archive converted from the original NeMo checkpoint (encoder int8, decoder and joint fp16); optional Swedish model | CC-BY-4.0 | [Klang AI model card and attribution](https://huggingface.co/KlangAI/pianissimo-sv), reviewed 2026-09-25 |
 | NB-Whisper | Tiny, Base, Small, Medium, Large Norwegian models | Apache-2.0 | [NbAiLab, National Library of Norway](https://huggingface.co/NbAiLab) |
 | Finnish-NLP Whisper Tiny | Unmodified \`ggml-model-fi-tiny.bin\`, optional Finnish specialist | Apache-2.0 | [Finnish-NLP pinned GGML repository](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d), reviewed 2026-09-06 |
@@ -364,7 +372,7 @@ Its [source-model card](https://huggingface.co/Finnish-NLP/whisper-tiny-finnish/
 identifies OpenAI Whisper Tiny as the base; retain the OpenAI Whisper MIT
 attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 
-## Rust dependencies in the macOS application and build
+## Rust dependencies in the macOS application, build, and Windows engine host
 
 ${table(rustPackages)}
 
@@ -380,6 +388,18 @@ Apple Neural Engine. Its TDT greedy decoding structure is adapted from
 [FluidAudio v0.17.4](https://github.com/FluidInference/FluidAudio) (Copyright 2024
 FluidInference / FluidAudio contributors), licensed under the
 [Apache-2.0 License](https://www.apache.org/licenses/LICENSE-2.0).
+
+The Windows on ARM installer bundles \`engine-host\\sagascript-engine-host-ort.exe\`
+(\`src-tauri/engine-host/ort\`, a separate Cargo workspace whose crates are listed in
+the Rust table above) together with **ONNX Runtime 1.28.2** (\`onnxruntime.dll\`,
+\`onnxruntime_providers_shared.dll\`) from the official
+[Microsoft ONNX Runtime release](https://github.com/microsoft/onnxruntime/releases/tag/v1.28.2)
+(\`onnxruntime-win-arm64-1.28.2.zip\`), Copyright (c) Microsoft Corporation, licensed
+under the [MIT License](https://github.com/microsoft/onnxruntime/blob/v1.28.2/LICENSE).
+ONNX Runtime's own third-party notices are published in
+[ThirdPartyNotices.txt](https://github.com/microsoft/onnxruntime/blob/v1.28.2/ThirdPartyNotices.txt)
+of that release and apply to the bundled binaries. The Pianissimo ONNX model
+(CC BY 4.0, Klang AI AB) is downloaded on demand and is not bundled.
 
 The downloadable Pianissimo Core ML model is converted from Klang AI AB's
 [Pianissimo](https://huggingface.co/KlangAI/pianissimo-sv) (CC BY 4.0, converted, not
