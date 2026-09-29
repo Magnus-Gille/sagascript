@@ -1,11 +1,24 @@
 #!/usr/bin/env python3
-"""Numerical, greedy-decode, long-form, and latency validation for a model set."""
+"""Numerical, greedy-decode, and latency validation of a Pianissimo Core ML model set.
+
+Compares mel and encoder outputs with NeMo PyTorch fp32, and compares greedy TDT
+token sequences. The Core ML decode loop is a port of FluidAudio's ``TdtDecoderV3``
+main loop (blank handling, duration bins, force-advance after ``max_symbols_per_step``
+symbols at one frame, decoder state updated only on non-blank emissions, a token is
+emitted only when the frame index is still inside the window after its duration).
+The last-chunk finalization pass of FluidAudio is not ported.
+
+Long-form WER is intentionally not computed here: a standalone Python pipeline gave
+misleading numbers (about 10 % for the community model versus 5.9 % through
+FluidAudio). Measure long-form WER through the engine host instead.
+"""
 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
+import os
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -17,29 +30,18 @@ from compat import install_lzma_backport  # noqa: E402
 install_lzma_backport()
 
 import coremltools as ct  # noqa: E402
-import jiwer  # noqa: E402
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
 import torch  # noqa: E402
 import nemo.collections.asr as nemo_asr  # noqa: E402
 
-from components import patch_local_attention, trace_inputs  # noqa: E402
+from components import trace_inputs  # noqa: E402
 
 
 BLANK_ID = 8192
-FRAME_S = 0.08
-BENCH_ROOT = Path("/Users/magnus/.cache/sagascript-bench/bench")
-ALIGNMENT_PATH = BENCH_ROOT / ".venv/lib/python3.12/site-packages/parakeet_mlx/alignment.py"
-NORM_PATH = BENCH_ROOT / "norm.py"
-
-
-def load_module(path: Path, name: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+DURATION_BINS = (0, 1, 2, 3, 4)
+MAX_SYMBOLS_PER_STEP = 10
+MAX_TOKENS_PER_CHUNK = 150
 
 
 def rel_l2(actual: np.ndarray, reference: np.ndarray) -> float:
@@ -128,45 +130,104 @@ def nemo_greedy_tokens(model, encoded: np.ndarray, encoded_length: int) -> list[
 def coreml_greedy_emissions(
     bundle: dict[str, ct.models.MLModel], encoded: np.ndarray, encoded_length: int
 ) -> list[tuple[int, int, int]]:
+    """Port of FluidAudio TdtDecoderV3.decodeWithTimings for one window.
+
+    Returns (token, frame, duration) per emitted token.
+    """
     decoder = bundle["Decoder"]
     joint = bundle["JointDecisionv3"]
-    h = np.zeros((2, 1, 640), dtype=np.float16)
-    c = np.zeros((2, 1, 640), dtype=np.float16)
-    last_token = BLANK_ID
-    time_index = 0
-    tokens: list[tuple[int, int, int]] = []
-    symbols_at_time = 0
-    while time_index < encoded_length:
-        decoder_output = decoder.predict(
+    if encoded_length <= 1:
+        return []
+
+    def run_decoder(token: int, h: np.ndarray, c: np.ndarray):
+        out = decoder.predict(
             {
-                "targets": np.array([[last_token]], dtype=np.int32),
+                "targets": np.array([[token]], dtype=np.int32),
                 "target_length": np.array([1], dtype=np.int32),
                 "h_in": h,
                 "c_in": c,
             }
         )
+        return (
+            np.asarray(out["decoder"], dtype=np.float32),
+            np.asarray(out["h_out"], dtype=np.float16),
+            np.asarray(out["c_out"], dtype=np.float16),
+        )
+
+    def run_joint(frame: int, decoder_step: np.ndarray) -> tuple[int, int]:
         decision = joint.predict(
             {
-                "encoder_step": encoded[:, :, time_index : time_index + 1].astype(np.float16),
-                "decoder_step": np.asarray(decoder_output["decoder"], dtype=np.float16),
+                "encoder_step": np.ascontiguousarray(encoded[:, :, frame : frame + 1], dtype=np.float16),
+                "decoder_step": decoder_step.astype(np.float16),
             }
         )
-        token = int(np.asarray(decision["token_id"]).reshape(-1)[0])
-        duration = int(np.asarray(decision["duration"]).reshape(-1)[0])
-        if token == BLANK_ID:
-            time_index += max(duration, 1)
-            symbols_at_time = 0
-            continue
+        return (
+            int(np.asarray(decision["token_id"]).reshape(-1)[0]),
+            int(np.asarray(decision["duration"]).reshape(-1)[0]),
+        )
 
-        tokens.append((token, time_index, duration))
-        h = np.asarray(decoder_output["h_out"], dtype=np.float16)
-        c = np.asarray(decoder_output["c_out"], dtype=np.float16)
-        last_token = token
-        symbols_at_time += 1
+    effective = encoded_length
+    last_timestep = effective - 1
+    time_index = 0
+    safe_time = 0
+    active = time_index < effective
+    # Prime with blank as start-of-sequence (zero state).
+    zeros = np.zeros((2, 1, 640), dtype=np.float16)
+    predictor_out, h, c = run_decoder(BLANK_ID, zeros, zeros.copy())
+    last_token: int | None = None
+    last_emission_ts = -1
+    emissions_at_ts = 0
+    processed = 0
+    tokens: list[tuple[int, int, int]] = []
+    current_label_time = time_index
+
+    while active:
+        decision_token, duration_bin = run_joint(safe_time, predictor_out)
+        label = decision_token
+        duration = DURATION_BINS[duration_bin]
+        blank = label == BLANK_ID
+        current_time = time_index
+        if not blank and duration == 0 and current_time == last_emission_ts and emissions_at_ts >= 1:
+            duration = 1
+        if blank and duration == 0:
+            duration = 1
+        current_label_time = time_index
         time_index += duration
-        if symbols_at_time >= 10:
-            time_index += 1
-            symbols_at_time = 0
+        safe_time = min(time_index, last_timestep)
+        active = time_index < effective
+        advance = active and blank
+        # Inner loop: skip blanks reusing the same decoder projection.
+        while advance:
+            current_label_time = time_index
+            label, duration_bin = run_joint(safe_time, predictor_out)
+            duration = DURATION_BINS[duration_bin]
+            blank = label == BLANK_ID
+            if blank and duration == 0:
+                duration = 1
+            time_index += duration
+            safe_time = min(time_index, last_timestep)
+            active = time_index < effective
+            advance = active and blank
+        if active and label != BLANK_ID:
+            processed += 1
+            if processed > MAX_TOKENS_PER_CHUNK:
+                break
+            tokens.append((label, current_label_time, duration))
+            last_token = label
+            # Decoder state advances only on non-blank emissions.
+            predictor_out, h, c = run_decoder(label, h, c)
+            if current_label_time == last_emission_ts:
+                emissions_at_ts += 1
+            else:
+                last_emission_ts = current_label_time
+                emissions_at_ts = 1
+            if emissions_at_ts >= MAX_SYMBOLS_PER_STEP:
+                time_index = min(time_index + 1, last_timestep)
+                safe_time = min(time_index, last_timestep)
+                emissions_at_ts = 0
+                last_emission_ts = -1
+        active = time_index < effective
+    del last_token
     return tokens
 
 
@@ -176,162 +237,104 @@ def coreml_greedy_tokens(
     return [token for token, _, _ in coreml_greedy_emissions(bundle, encoded, encoded_length)]
 
 
+def edit_distance(a: list[int], b: list[int]) -> int:
+    previous = list(range(len(b) + 1))
+    for i, x in enumerate(a, 1):
+        current = [i]
+        for j, y in enumerate(b, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (x != y)))
+        previous = current
+    return previous[-1]
+
+
+def token_agreement(hyp: list[int], ref: list[int]) -> float:
+    """1 - token edit distance / reference length (1.0 = identical)."""
+    return 1.0 - edit_distance(hyp, ref) / max(len(ref), 1)
+
+
+def bench_dir() -> Path:
+    value = os.environ.get("SAGASCRIPT_BENCH_DIR")
+    return Path(value) if value else Path.home() / ".cache" / "sagascript-bench"
+
+
 def numerical(args: argparse.Namespace) -> dict[str, Any]:
-    samples, mel_frames, encoder_frames = trace_inputs(args.window_s)
+    samples, _, _ = trace_inputs(args.window_s)
     audio_path = args.audio.resolve()
     model = restore(args.nemo.resolve())
-    starts = [0, samples, 2 * samples]
     results: list[dict[str, Any]] = []
-    for start in starts:
+    bundles = {
+        name: load_bundle(args.model_dir.resolve(), compute_units(name)) for name in args.compute_units
+    }
+    fp32 = {
+        name: ct.models.MLModel(str(args.fp32_encoder.resolve()), compute_units=compute_units(name))
+        for name in args.compute_units
+    } if args.fp32_encoder is not None else {}
+    for index in range(args.num_windows):
+        start = index * samples
         audio, valid = read_window(audio_path, start, samples)
+        if valid < samples:
+            break
         mel_ref, mel_length, enc_ref, enc_length = reference_features(model, audio, valid)
-        row: dict[str, Any] = {"start_s": start / 16_000, "valid_s": valid / 16_000}
-        for units_name in args.compute_units:
+        ref_tokens = nemo_greedy_tokens(model, enc_ref, enc_length)
+        row: dict[str, Any] = {"start_s": start / 16_000, "nemo_tokens": len(ref_tokens)}
+        for units_name, bundle in bundles.items():
             try:
-                bundle = load_bundle(args.model_dir.resolve(), compute_units(units_name))
                 pre = bundle["Preprocessor"].predict(
                     {"audio_signal": audio, "audio_length": np.array([valid], dtype=np.int32)}
                 )
                 core_mel = np.asarray(pre["mel"], dtype=np.float32)
                 row[f"{units_name}.mel_rel_l2"] = rel_l2(core_mel, mel_ref)
-                row[f"{units_name}.mel_max_abs"] = max_abs(core_mel, mel_ref)
+                # Encoder alone, fed the NeMo mel to isolate encoder error.
                 enc = bundle["Encoder"].predict(
-                    {
-                        "mel": mel_ref.astype(np.float16),
-                        "mel_length": np.array([mel_length], dtype=np.int32),
-                    }
+                    {"mel": mel_ref.astype(np.float16), "mel_length": np.array([mel_length], dtype=np.int32)}
                 )
                 core_enc = np.asarray(enc["encoder"], dtype=np.float32)
                 row[f"{units_name}.encoder_rel_l2"] = rel_l2(core_enc, enc_ref)
-                row[f"{units_name}.encoder_max_abs"] = max_abs(core_enc, enc_ref)
-                row[f"{units_name}.tokens"] = coreml_greedy_tokens(bundle, core_enc.astype(np.float16), enc_length)
-                if units_name == args.compute_units[0]:
-                    row["nemo.tokens"] = nemo_greedy_tokens(model, enc_ref, enc_length)
-                    row[f"{units_name}.tokens_identical"] = row[f"{units_name}.tokens"] == row["nemo.tokens"]
-                if args.fp32_encoder is not None:
-                    fp32 = ct.models.MLModel(
-                        str(args.fp32_encoder.resolve()), compute_units=compute_units(units_name)
+                # Loop parity: Core ML decoder/joint on the NeMo fp32 encoder output.
+                loop_tokens = coreml_greedy_tokens(bundle, enc_ref, enc_length)
+                row[f"{units_name}.loop_on_nemo_encoder.identical"] = loop_tokens == ref_tokens
+                row[f"{units_name}.loop_on_nemo_encoder.agreement"] = token_agreement(loop_tokens, ref_tokens)
+                # Deployment pipeline: Core ML preprocessor -> encoder -> decode loop.
+                enc_full = bundle["Encoder"].predict(
+                    {
+                        "mel": np.asarray(pre["mel"], dtype=np.float16),
+                        "mel_length": np.asarray(pre["mel_length"], dtype=np.int32),
+                    }
+                )
+                pipe_tokens = coreml_greedy_tokens(
+                    bundle, np.asarray(enc_full["encoder"], dtype=np.float32), enc_length
+                )
+                row[f"{units_name}.pipeline.identical"] = pipe_tokens == ref_tokens
+                row[f"{units_name}.pipeline.agreement"] = token_agreement(pipe_tokens, ref_tokens)
+                if units_name in fp32:
+                    fp32_out = fp32[units_name].predict(
+                        {"mel": mel_ref.astype(np.float16), "mel_length": np.array([mel_length], dtype=np.int32)}
                     )
-                    fp32_out = fp32.predict(
-                        {
-                            "mel": mel_ref.astype(np.float16),
-                            "mel_length": np.array([mel_length], dtype=np.int32),
-                        }
+                    row[f"{units_name}.pre_quantization_encoder_rel_l2"] = rel_l2(
+                        np.asarray(fp32_out["encoder"], dtype=np.float32), enc_ref
                     )
-                    fp32_enc = np.asarray(fp32_out["encoder"], dtype=np.float32)
-                    row[f"{units_name}.fp32_encoder_rel_l2"] = rel_l2(fp32_enc, enc_ref)
-                    row[f"{units_name}.fp32_vs_int8_rel_l2"] = rel_l2(fp32_enc, core_enc)
             except Exception as exc:
                 row[f"{units_name}.error"] = f"{type(exc).__name__}: {exc}"
         results.append(row)
 
     summary: dict[str, Any] = {"windows": results, "window_s": args.window_s}
     for units_name in args.compute_units:
-        available = [row for row in results if f"{units_name}.mel_rel_l2" in row]
-        if not available:
+        ok = [row for row in results if f"{units_name}.mel_rel_l2" in row]
+        if not ok:
             summary[f"{units_name}.error"] = next(
-                row[f"{units_name}.error"] for row in results if f"{units_name}.error" in row
+                (row[f"{units_name}.error"] for row in results if f"{units_name}.error" in row), "no windows"
             )
             continue
-        for key in ("mel_rel_l2", "mel_max_abs", "encoder_rel_l2", "encoder_max_abs"):
-            values = [float(row[f"{units_name}.{key}"]) for row in available]
+        for key in ("mel_rel_l2", "encoder_rel_l2"):
+            values = [float(row[f"{units_name}.{key}"]) for row in ok]
             summary[f"{units_name}.{key}.mean"] = float(np.mean(values))
             summary[f"{units_name}.{key}.max"] = float(np.max(values))
-        if args.fp32_encoder is not None:
-            for key in ("fp32_encoder_rel_l2", "fp32_vs_int8_rel_l2"):
-                values = [float(row[f"{units_name}.{key}"]) for row in available]
-                summary[f"{units_name}.{key}.mean"] = float(np.mean(values))
-                summary[f"{units_name}.{key}.max"] = float(np.max(values))
-        identities = [bool(row.get(f"{units_name}.tokens_identical", False)) for row in available]
-        summary[f"{units_name}.token_identity"] = f"{sum(identities)}/{len(identities)}"
-    return summary
-
-
-def aligned_tokens(bundle, audio: np.ndarray, valid: int, offset_s: float, vocabulary: dict[str, str]):
-    pre = bundle["Preprocessor"].predict(
-        {"audio_signal": audio, "audio_length": np.array([valid], dtype=np.int32)}
-    )
-    mel = np.asarray(pre["mel"], dtype=np.float16)
-    mel_length = int(np.asarray(pre["mel_length"]).reshape(-1)[0])
-    enc = bundle["Encoder"].predict(
-        {"mel": mel, "mel_length": np.array([mel_length], dtype=np.int32)}
-    )
-    encoded = np.asarray(enc["encoder"], dtype=np.float16)
-    encoded_length = int(np.asarray(enc["encoder_length"]).reshape(-1)[0])
-    emissions = coreml_greedy_emissions(bundle, encoded, encoded_length)
-    alignment = load_module(ALIGNMENT_PATH, "pianissimo_alignment")
-    result = []
-    for token_id, frame, duration in emissions:
-        piece = vocabulary[str(token_id)].replace("▁", " ")
-        result.append(
-            alignment.AlignedToken(
-                id=token_id,
-                text=piece,
-                start=offset_s + frame * FRAME_S,
-                duration=duration * FRAME_S,
+        for stage in ("loop_on_nemo_encoder", "pipeline"):
+            summary[f"{units_name}.{stage}.identical"] = f"{sum(bool(r[f'{units_name}.{stage}.identical']) for r in ok)}/{len(ok)}"
+            summary[f"{units_name}.{stage}.agreement.mean"] = float(
+                np.mean([r[f"{units_name}.{stage}.agreement"] for r in ok])
             )
-        )
-    return result
-
-
-def longform_one(model_dir: Path, audio_path: Path, reference_path: Path, window_s: int, overlap_s: float, units_name: str) -> dict[str, Any]:
-    samples = window_s * 16_000
-    audio, rate = sf.read(str(audio_path), dtype="float32")
-    if rate != 16_000:
-        raise ValueError(f"Expected 16 kHz audio, got {rate}")
-    if audio.ndim > 1:
-        audio = audio[:, 0]
-    bundle = load_bundle(model_dir, compute_units(units_name))
-    vocabulary = json.loads((model_dir / "parakeet_vocab.json").read_text())
-    step = int(round((window_s - overlap_s) * 16_000))
-    if len(audio) <= samples:
-        starts = [0]
-    else:
-        starts = []
-        for start in range(0, len(audio), step):
-            starts.append(start)
-            if start + samples >= len(audio):
-                break
-    merged = []
-    for start in starts:
-        chunk = audio[start : start + samples]
-        valid = int(chunk.size)
-        if valid < samples:
-            chunk = np.pad(chunk, (0, samples - valid))
-        tokens = aligned_tokens(
-            bundle,
-            chunk.astype(np.float16, copy=False).reshape(1, samples),
-            valid,
-            start / 16_000,
-            vocabulary,
-        )
-        if not merged:
-            merged = tokens
-        else:
-            alignment = load_module(ALIGNMENT_PATH, "pianissimo_alignment_merge")
-            try:
-                merged = alignment.merge_longest_contiguous(
-                    merged, tokens, overlap_duration=overlap_s
-                )
-            except RuntimeError:
-                merged = alignment.merge_longest_common_subsequence(
-                    merged, tokens, overlap_duration=overlap_s
-                )
-    hypothesis = "".join(token.text for token in merged).strip()
-    norm = load_module(NORM_PATH, "bench_norm")
-    reference = reference_path.read_text()
-    details = jiwer.process_words(norm.norm(reference), norm.norm(hypothesis))
-    return {
-        "model_dir": str(model_dir),
-        "window_s": window_s,
-        "overlap_s": overlap_s,
-        "compute_units": units_name,
-        "windows": len(starts),
-        "reference_words": len(norm.norm(reference).split()),
-        "hypothesis_words": len(norm.norm(hypothesis).split()),
-        "wer": float(details.wer),
-        "text": hypothesis,
-    }
+    return summary
 
 
 def speed(args: argparse.Namespace) -> dict[str, Any]:
@@ -352,10 +355,11 @@ def speed(args: argparse.Namespace) -> dict[str, Any]:
             )
             mel = np.asarray(pre["mel"], dtype=np.float16)
             ml = np.asarray(pre["mel_length"], dtype=np.int32)
-            bundle["Encoder"].predict({"mel": mel, "mel_length": ml})
+            enc_warm = bundle["Encoder"].predict({"mel": mel, "mel_length": ml})
             first_predict = time.perf_counter() - first
-            for _ in range(2):
+            for _ in range(3):
                 bundle["Encoder"].predict({"mel": mel, "mel_length": ml})
+                coreml_greedy_tokens(bundle, np.asarray(enc_warm["encoder"], dtype=np.float16), 188 if args.window_s == 15 else 376)
             enc_times = []
             full_times = []
             for _ in range(args.runs):
@@ -374,9 +378,10 @@ def speed(args: argparse.Namespace) -> dict[str, Any]:
             output[units_name] = {
                 "first_load_s": first_load,
                 "first_window_predict_s": first_predict,
-                "encoder_ms_mean": float(np.mean(enc_times)),
+                "runs": args.runs,
+                "encoder_ms_median": statistics.median(enc_times),
                 "encoder_ms_p95": float(np.percentile(enc_times, 95)),
-                "full_pipeline_ms_mean": float(np.mean(full_times)),
+                "full_pipeline_ms_median": statistics.median(full_times),
                 "full_pipeline_ms_p95": float(np.percentile(full_times, 95)),
             }
         except Exception as exc:
@@ -385,34 +390,28 @@ def speed(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model-dir", type=Path, required=True)
-    parser.add_argument("--nemo", type=Path, required=True)
-    parser.add_argument("--audio", type=Path, required=True)
+    parser.add_argument("--nemo", type=Path, default=Path(os.environ.get("PIANISSIMO_NEMO", "")))
+    parser.add_argument(
+        "--audio",
+        type=Path,
+        default=bench_dir() / "longform" / "fleurs-sv-distinct-5min.wav",
+        help="16 kHz mono wav (default: $SAGASCRIPT_BENCH_DIR/longform/fleurs-sv-distinct-5min.wav)",
+    )
     parser.add_argument("--window-s", type=int, choices=(15, 30), required=True)
-    parser.add_argument("--compute-units", nargs="+", default=["CPU_AND_NE", "ALL"])
+    parser.add_argument("--num-windows", type=int, default=8, help="consecutive full windows from t=0")
+    parser.add_argument("--compute-units", nargs="+", default=["CPU_AND_NE"])
     parser.add_argument("--report", type=Path)
-    parser.add_argument("--fp32-encoder", type=Path)
-    parser.add_argument("--runs", type=int, default=3)
-    parser.add_argument("--longform", action="store_true")
+    parser.add_argument("--fp32-encoder", type=Path, help="optional pre-quantization encoder package")
     parser.add_argument("--speed", action="store_true")
-    parser.add_argument("--reference-5min", type=Path, default=Path("/Users/magnus/.cache/sagascript-bench/longform/fleurs-sv-distinct-5min.txt"))
-    parser.add_argument("--audio-5min", type=Path, default=Path("/Users/magnus/.cache/sagascript-bench/longform/fleurs-sv-distinct-5min.wav"))
-    parser.add_argument("--reference-15min", type=Path, default=Path("/Users/magnus/.cache/sagascript-bench/longform/fleurs-sv-distinct-15min.txt"))
-    parser.add_argument("--audio-15min", type=Path, default=Path("/Users/magnus/.cache/sagascript-bench/longform/fleurs-sv-distinct-15min.wav"))
+    parser.add_argument("--runs", type=int, default=20)
     args = parser.parse_args()
-    report: dict[str, Any] = {"numerical": numerical(args)}
+    if not str(args.nemo) or str(args.nemo) == ".":
+        parser.error("--nemo is required (or set PIANISSIMO_NEMO)")
+    report: dict[str, Any] = {"model_dir": str(args.model_dir), "numerical": numerical(args)}
     if args.speed:
         report["speed"] = speed(args)
-    if args.longform:
-        if args.window_s == 15:
-            overlap_s = 2
-        else:
-            overlap_s = 6
-        report["longform"] = [
-            longform_one(args.model_dir.resolve(), args.audio_5min.resolve(), args.reference_5min.resolve(), args.window_s, overlap_s, args.compute_units[0]),
-            longform_one(args.model_dir.resolve(), args.audio_15min.resolve(), args.reference_15min.resolve(), args.window_s, overlap_s, args.compute_units[0]),
-        ]
     text = json.dumps(report, indent=2, ensure_ascii=False)
     print(text)
     if args.report:

@@ -12,10 +12,14 @@ four-model layout loaded by FluidAudio Parakeet TDT v3:
 
 The packages use fixed 16 kHz windows: 240,000 samples / 1,501 mel frames /
 188 encoder frames for 15 s, and 480,000 / 3,001 / 376 for 30 s. The encoder
-weights alone use CoreML linear int8 per-channel quantization; its Core ML
-compute precision is float32 to preserve the 30 s local-attention boundary
-numerics. The other three components are fp16. Every output directory contains
-a manifest with per-file sizes and SHA-256 checksums.
+weights use CoreML linear int8 per-channel quantization. The encoder computes
+in fp16 by default (`--encoder-precision fp16`) so it runs on the Apple Neural
+Engine, which executes fp16 only; `--encoder-precision fp32` keeps the older
+CPU/GPU-only variant (about 7x slower on `CPU_AND_NE`). The preprocessor
+computes in fp32 (its fp16 form yields NaN mel on the ANE path for 30 s windows
+and 2-4 % mel error for 15 s); decoder and joint are fp16. Every output
+directory contains a manifest with per-file sizes, SHA-256 checksums and the
+encoder precision.
 
 ## Exact reproduction
 
@@ -63,12 +67,14 @@ hf_hub_download(
 PY
 shasum -a 256 $PIANISSIMO_NEMO
 
-$PY scripts/pianissimo-coreml/convert.py --window-s 15 \
-  --nemo $PIANISSIMO_NEMO \
-  --out $SCRATCH/out/pianissimo-sv-coreml-own-15s
-$PY scripts/pianissimo-coreml/convert.py --window-s 30 \
-  --nemo $PIANISSIMO_NEMO \
-  --out $SCRATCH/out/pianissimo-sv-coreml-own-30s
+# Neural-Engine artifacts (default --encoder-precision fp16)
+$PY scripts/pianissimo-coreml/convert.py --window-s 15 --encoder-precision fp16 \
+  --nemo $PIANISSIMO_NEMO --out $SCRATCH/out/pianissimo-sv-coreml-own-15s-fp16
+$PY scripts/pianissimo-coreml/convert.py --window-s 30 --encoder-precision fp16 \
+  --nemo $PIANISSIMO_NEMO --out $SCRATCH/out/pianissimo-sv-coreml-own-30s-fp16
+# Optional fp32 encoder (CPU/GPU only), for comparison
+$PY scripts/pianissimo-coreml/convert.py --window-s 15 --encoder-precision fp32 \
+  --nemo $PIANISSIMO_NEMO --out $SCRATCH/out/pianissimo-sv-coreml-own-15s
 ```
 
 The conversion basis is Fluid Inference Mobius commit
@@ -78,70 +84,50 @@ and quantizes only the encoder.
 
 ## Validation
 
-Run numerical parity on three real windows from the supplied FLEURS Swedish
-audio. `validate.py` runs both `CPU_AND_NE` and `ALL`, compares mel and encoder
-relative L2 to NeMo, and compares TDT greedy token IDs. It loads the supplied
-`parakeet_mlx` alignment module directly from the benchmark venv so importing
-the package does not require a Metal device in a headless shell.
+`validate.py` compares, on consecutive full windows of the FLEURS Swedish
+audio, the Core ML mel and encoder outputs with NeMo PyTorch fp32 (relative
+L2) and the greedy TDT token sequences. Its decode loop is a port of
+FluidAudio's `TdtDecoderV3` main loop (blank inner loop, duration bins
+`[0..4]`, force-advance after 10 symbols at one frame, decoder state updated
+only on non-blank emissions); the last-chunk finalization pass is not ported.
+It reports two token checks against NeMo's own greedy decode: the loop on the
+NeMo fp32 encoder output (isolates the loop and decoder/joint) and the full Core
+ML pipeline (preprocessor, encoder, loop). Agreement is
+`1 - token edit distance / reference length`. `--speed` reports first load and
+first prediction, and the median/p95 of `--runs` (default 20) warm encoder and
+full-pipeline runs. Set `SAGASCRIPT_BENCH_DIR` (default
+`~/.cache/sagascript-bench`) or pass `--audio`.
 
 ```bash
+export SAGASCRIPT_BENCH_DIR=/Users/magnus/.cache/sagascript-bench
 $PY scripts/pianissimo-coreml/validate.py \
-  --model-dir $SCRATCH/out/pianissimo-sv-coreml-own-15s \
-  --fp32-encoder $SCRATCH/out/.pianissimo-sv-coreml-own-15s.work/Encoder.fp32.mlpackage \
-  --nemo $PIANISSIMO_NEMO \
-  --audio /Users/magnus/.cache/sagascript-bench/longform/fleurs-sv-distinct-5min.wav \
-  --window-s 15 --compute-units CPU_AND_NE ALL --speed --report $SCRATCH/validate-15.json
+  --model-dir $SCRATCH/out/pianissimo-sv-coreml-own-15s-fp16 --nemo $PIANISSIMO_NEMO \
+  --window-s 15 --num-windows 8 --compute-units CPU_AND_NE \
+  --speed --report $SCRATCH/validate-15-fp16.json
 
+# Baseline: community conversion (same package names and contracts)
 $PY scripts/pianissimo-coreml/validate.py \
-  --model-dir $SCRATCH/out/pianissimo-sv-coreml-own-30s \
-  --fp32-encoder $SCRATCH/out/.pianissimo-sv-coreml-own-30s.work/Encoder.fp32.mlpackage \
-  --nemo $PIANISSIMO_NEMO \
-  --audio /Users/magnus/.cache/sagascript-bench/longform/fleurs-sv-distinct-5min.wav \
-  --window-s 30 --compute-units CPU_AND_NE ALL --speed --report $SCRATCH/validate-30.json
+  --model-dir $SAGASCRIPT_BENCH_DIR/models/pianissimo-sv-coreml-markstrom \
+  --nemo $PIANISSIMO_NEMO --window-s 15 --num-windows 8 --compute-units CPU_AND_NE
 ```
 
-For the long-form measurements used in this task, run the matching fixed-window
-variant separately:
+Op placement per compute unit (`MLComputePlan`, `const`/`constexpr` ops skipped):
 
 ```bash
-$PY scripts/pianissimo-coreml/validate.py \
-  --model-dir $SCRATCH/out/pianissimo-sv-coreml-own-15s \
-  --nemo $PIANISSIMO_NEMO \
-  --audio /Users/magnus/.cache/sagascript-bench/longform/fleurs-sv-distinct-5min.wav \
-  --window-s 15 --compute-units CPU_AND_NE --longform \
-  --report $SCRATCH/longform-own-15.json
-$PY scripts/pianissimo-coreml/validate.py \
-  --model-dir $SCRATCH/out/pianissimo-sv-coreml-own-30s \
-  --nemo $PIANISSIMO_NEMO \
-  --audio /Users/magnus/.cache/sagascript-bench/longform/fleurs-sv-distinct-5min.wav \
-  --window-s 30 --compute-units CPU_AND_NE --longform \
-  --report $SCRATCH/longform-own-30.json
-$PY scripts/pianissimo-coreml/validate.py \
-  --model-dir /Users/magnus/.cache/sagascript-bench/models/pianissimo-sv-coreml-markstrom \
-  --nemo $PIANISSIMO_NEMO \
-  --audio /Users/magnus/.cache/sagascript-bench/longform/fleurs-sv-distinct-5min.wav \
-  --window-s 15 --compute-units CPU_AND_NE --longform \
-  --report $SCRATCH/longform-markstrom-15.json
+$PY scripts/pianissimo-coreml/placement.py \
+  $SCRATCH/out/pianissimo-sv-coreml-own-15s-fp16/Encoder.mlpackage --compute-units CPU_AND_NE
 ```
 
-For long-form scoring, add `--longform`. It uses the same two overlap settings
-as the benchmark runner (15 s / 2 s and 30 s / 6 s),
-`merge_longest_contiguous` with the benchmark fallback to
-`merge_longest_common_subsequence`, `norm.py`, and `jiwer.process_words`.
-The supplied `fleurs-sv-distinct-5min` and `-15min` audio/reference paths are
-defaults. To compare the community conversion, pass its model directory to a
-separate invocation; its package names and contracts are identical.
+Long-form WER is deliberately not computed here. A standalone Python pipeline
+gave about 10 % WER even for the community model (5.9 % through FluidAudio), so
+its long-form numbers were misleading; measure long-form WER through the engine
+host.
 
-The 30 s attention proof is also available independently in the conversion
-implementation: it uses NeMo's same relative-position table and dense scores,
-with a constant additive mask for `abs(key-query) > 256`. The conversion check
-compares this patched PyTorch forward to NeMo's original local-attention forward
-before export; `validate.py` then checks the resulting CoreML encoder. The
-optional fp32 pre-quantization packages are retained only in the scratch work
-directory for validation. `--speed` reports first model load, first prediction,
-warmed encoder, and warmed full-pipeline latency for the requested compute units.
-On the reference headless host, `CPU_AND_NE` executes successfully; Core ML
-`ALL` model-plan creation returns error code `-6` before prediction.
+The 30 s attention adapter uses NeMo's relative-position table and dense scores
+with a constant additive mask for `abs(key-query) > 256`; the conversion checks
+it against NeMo's original local-attention forward before export.
 
 Do not commit `.nemo` files, `.mlpackage` outputs, `.venv`, caches, or the
-conversion work directories.
+conversion work directories. Core ML also keeps a compiled-model cache
+(`~/Library/Caches/*/com.apple.e5rt.e5bundlecache`, about 1 GB per loaded
+variant); first-load timings include that compilation.

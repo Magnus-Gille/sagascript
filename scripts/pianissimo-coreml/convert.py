@@ -164,7 +164,7 @@ model card; the present checkpoint is Klang AI AB's fine-tune.
     )
 
 
-def build_manifest(out: Path, nemo_path: Path, nemo_sha: str, window_s: int, samples: int, mel_frames: int, enc_frames: int) -> None:
+def build_manifest(out: Path, nemo_path: Path, nemo_sha: str, window_s: int, samples: int, mel_frames: int, enc_frames: int, encoder_precision: str) -> None:
     components = {}
     for name in ("Preprocessor", "Encoder", "Decoder", "JointDecisionv3"):
         package = out / f"{name}.mlpackage"
@@ -192,10 +192,10 @@ def build_manifest(out: Path, nemo_path: Path, nemo_sha: str, window_s: int, sam
         "attention": {"kind": "rel_pos_local_attn", "left_frames": 256, "right_frames": 256, "export": "dense constant additive band mask"},
         "quantization": {
             "encoder": "int8 linear per-channel weights",
-            "encoder_compute_precision": "float32",
+            "encoder_compute_precision": "float16" if encoder_precision == "fp16" else "float32",
             "decoder": "fp16",
             "joint": "fp16",
-            "preprocessor": "fp16",
+            "preprocessor": "fp32 compute (fp16 I/O)",
         },
         "converter_versions": {
             "python": platform.python_version(),
@@ -214,6 +214,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--window-s", type=int, choices=(15, 30), required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--encoder-precision",
+        choices=("fp16", "fp32"),
+        default="fp16",
+        help="Core ML compute precision of the encoder. The Neural Engine executes fp16 only; "
+        "fp32 ops fall back to CPU/GPU.",
+    )
     parser.add_argument("--nemo", type=Path, default=Path(os.environ.get("PIANISSIMO_NEMO", "")))
     args = parser.parse_args()
     if not args.nemo:
@@ -229,6 +236,7 @@ def main() -> None:
     model, nemo_sha = restore(args.nemo)
     print(f"source={SOURCE_REPO}@{SOURCE_REVISION}")
     print(f"nemo={args.nemo} sha256={nemo_sha}")
+    print(f"encoder_precision={args.encoder_precision}")
     print(f"window={args.window_s}s samples={samples} mel_frames={mel_frames} encoder_frames={enc_frames}")
 
     work = out.parent / f".{out.name}.work"
@@ -248,6 +256,9 @@ def main() -> None:
         [ct.TensorType(name="audio_signal", shape=(1, samples), dtype=np.float16), ct.TensorType(name="audio_length", shape=(1,), dtype=np.int32)],
         [ct.TensorType(name="mel", dtype=np.float16), ct.TensorType(name="mel_length", dtype=np.int32)],
         f"Pianissimo preprocessor ({args.window_s} s window)",
+        # fp16 STFT power overflows (inf/NaN mel) on loud 30 s windows and costs 2-4 %
+        # mel error on 15 s windows; the preprocessor is cheap, so compute it in fp32.
+        precision=ct.precision.FLOAT32,
     )
     save(pre_ml, out / "Preprocessor.mlpackage")
 
@@ -259,14 +270,17 @@ def main() -> None:
     encoded_length = encoded_length.to(dtype=torch.int32).clone()
     print(f"trace encoder={tuple(encoded.shape)} encoder_length={encoded_length.tolist()}")
     enc_trace = torch.jit.trace(encoder, (mel, mel_length), strict=False).eval()
+    encoder_precision = (
+        ct.precision.FLOAT16 if args.encoder_precision == "fp16" else ct.precision.FLOAT32
+    )
     enc_fp32 = convert_model(
         enc_trace,
         [ct.TensorType(name="mel", shape=(1, 128, mel_frames), dtype=np.float16), ct.TensorType(name="mel_length", shape=(1,), dtype=np.int32)],
         [ct.TensorType(name="encoder", dtype=np.float16), ct.TensorType(name="encoder_length", dtype=np.int32)],
-        f"Pianissimo encoder ({args.window_s} s window, exact +/-256 local attention, fp32 pre-quantization)",
-        precision=ct.precision.FLOAT32,
+        f"Pianissimo encoder ({args.window_s} s window, exact +/-256 local attention, {args.encoder_precision} pre-quantization)",
+        precision=encoder_precision,
     )
-    fp32_path = work / "Encoder.fp32.mlpackage"
+    fp32_path = work / f"Encoder.{args.encoder_precision}.mlpackage"
     save(enc_fp32, fp32_path)
     quant_cfg = OptimizationConfig(
         global_config=OpLinearQuantizerConfig(mode="linear", granularity="per_channel")
@@ -309,7 +323,7 @@ def main() -> None:
 
     vocabulary(model, out / "parakeet_vocab.json")
     copy_attribution(out / "LICENSE-and-attribution.txt")
-    build_manifest(out, args.nemo, nemo_sha, args.window_s, samples, mel_frames, enc_frames)
+    build_manifest(out, args.nemo, nemo_sha, args.window_s, samples, mel_frames, enc_frames, args.encoder_precision)
     print(f"wrote={out}")
 
 
