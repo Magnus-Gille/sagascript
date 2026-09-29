@@ -1,8 +1,13 @@
+# Standalone workspace: this host pins ort 2.0.0-rc.13 (load-dynamic), while the main
+# workspace keeps ort rc.12 for diarization. Keeping it separate leaves the main
+# Cargo.lock untouched. Keep `version` in step with the app release version.
+[workspace]
+
 [package]
 name = "sagascript-engine-host-ort"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
+version = "1.3.2"
+edition = "2021"
+license = "MIT"
 description = "ONNX Runtime (CPU) engine host for Pianissimo, protocol v1 (see docs/engine-host-protocol.md)"
 build = "build.rs"
 
@@ -11,7 +16,7 @@ name = "sagascript-engine-host-ort"
 path = "src/main.rs"
 
 [dependencies]
-sagascript-engine-protocol = { path = "../sagascript-engine-protocol" }
+sagascript-engine-protocol = { path = "../../crates/sagascript-engine-protocol" }
 serde_json = "1"
 # The ONNX Runtime shared library is loaded at run time (ORT_DYLIB_PATH or next to the
 # executable), so building needs no ORT binary and works on every CI platform. Keep
@@ -21,5 +26,5 @@ ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "
 memory-stats = "1"
 libloading = "0.9"
 
-[lints]
-workspace = true
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
