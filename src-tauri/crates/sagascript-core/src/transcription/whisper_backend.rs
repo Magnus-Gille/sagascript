@@ -240,7 +240,7 @@ pub struct TranscribeOptions {
     /// to disable VAD. The caller must ensure the file exists.
     pub vad_model_path: Option<String>,
     /// Request real Whisper segment timestamps for structured outputs such as
-    /// CLI JSON. Text decoding remains in no-timestamps mode.
+    /// CLI JSON (DTW token timing). Generative timestamps are always on.
     pub segment_timestamps: bool,
     /// Number of independent Whisper states used for long-file transcription.
     /// Values are clamped to [`MAX_PARALLEL_CHUNKS`]; `0` and `1` are serial.
@@ -567,11 +567,103 @@ fn separate_sentence_boundaries(text: &str) -> String {
     result
 }
 
+/// Which decoding call site is asking for flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecodePath {
+    /// File transcription (single or parallel chunk), live dictation, CLI
+    /// record and every other text path that goes through `full_params`.
+    Text { segment_timestamps: bool },
+    /// Word-timestamp / diarization / meeting path.
+    #[cfg(feature = "diarization")]
+    WordTimestamps,
+}
+
+/// Per-call-site whisper decoding flags, kept pure so they can be unit tested.
+///
+/// Generative timestamps must stay ON everywhere: with `no_timestamps` whisper.cpp
+/// advances its seek by a full 30 s window after each decode, so an early
+/// end-of-text after a pause silently drops the rest of the window (issue #236,
+/// about 11% of words on long Swedish audio, and the tail of any <=30 s clip).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DecodeFlags {
+    no_timestamps: bool,
+    token_timestamps: bool,
+}
+
+impl DecodeFlags {
+    fn for_path(path: DecodePath) -> Self {
+        match path {
+            DecodePath::Text { segment_timestamps } => Self {
+                no_timestamps: false,
+                token_timestamps: segment_timestamps,
+            },
+            #[cfg(feature = "diarization")]
+            DecodePath::WordTimestamps => Self {
+                no_timestamps: false,
+                token_timestamps: true,
+            },
+        }
+    }
+}
+
+/// Remove any `<|...|>` special/timestamp tokens that could leak into segment
+/// text now that generative timestamps are enabled.
+fn strip_timestamp_tokens(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("<|") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("|>") {
+            Some(end) => rest = &rest[start + end + 2..],
+            None => {
+                rest = &rest[start..];
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod decode_flags_tests {
+    use super::*;
+
+    #[test]
+    fn every_path_decodes_with_timestamps() {
+        for segment_timestamps in [false, true] {
+            let flags = DecodeFlags::for_path(DecodePath::Text { segment_timestamps });
+            assert!(!flags.no_timestamps);
+            assert_eq!(flags.token_timestamps, segment_timestamps);
+        }
+        #[cfg(feature = "diarization")]
+        {
+            let flags = DecodeFlags::for_path(DecodePath::WordTimestamps);
+            assert!(!flags.no_timestamps);
+            assert!(flags.token_timestamps);
+        }
+    }
+
+    #[test]
+    fn strips_leaked_timestamp_tokens() {
+        assert_eq!(strip_timestamp_tokens("<|0.00|> Hej där<|2.40|>"), " Hej där");
+        assert_eq!(strip_timestamp_tokens("plain text"), "plain text");
+        assert_eq!(strip_timestamp_tokens("a <|unterminated"), "a <|unterminated");
+    }
+
+    #[test]
+    fn real_timestamps_pass_through_sanitizer() {
+        assert_eq!(sanitize_segment_bounds(31.2, 44.8, 71.0, 30.0), (31.2, 44.8));
+        // Padded final window end is clamped to the audio duration.
+        assert_eq!(sanitize_segment_bounds(60.0, 90.0, 71.0, 58.0), (60.0, 71.0));
+    }
+}
+
 /// Bound whisper's segment timestamps to the source audio and preserve output
-/// ordering. With `no_timestamps` enabled, whisper.cpp can expose its internal
-/// seek offset as a large negative segment start and its padded 30-second
-/// window as the end. Those values are not valid media timestamps and must not
-/// leak into the CLI JSON contract.
+/// ordering. Whisper can report an end past the audio duration on the padded
+/// final window, or (historically, with `no_timestamps`) an internal seek offset
+/// as a negative start. Those are not valid media timestamps and must not leak
+/// into the CLI JSON contract.
 fn sanitize_segment_bounds(
     raw_start: f64,
     raw_end: f64,
@@ -1577,7 +1669,7 @@ impl WhisperBackend {
                 continue;
             };
             let text = match segment.to_str() {
-                Ok(text) => text.to_string(),
+                Ok(text) => strip_timestamp_tokens(text),
                 Err(error) => {
                     warn!(
                         "Segment {index} failed UTF-8 conversion, dropping from transcript: {error}"
@@ -1654,8 +1746,13 @@ impl WhisperBackend {
         params.set_temperature(0.0);
         params.set_temperature_inc(if opts.temperature_fallback { 0.2 } else { 0.0 });
         params.set_translate(false);
-        params.set_no_timestamps(true);
-        params.set_token_timestamps(opts.segment_timestamps);
+        let flags = DecodeFlags::for_path(DecodePath::Text {
+            segment_timestamps: opts.segment_timestamps,
+        });
+        params.set_no_timestamps(flags.no_timestamps);
+        params.set_token_timestamps(flags.token_timestamps);
+        params.set_print_timestamps(false);
+        params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_no_speech_thold(model.no_speech_threshold());
@@ -1797,9 +1894,10 @@ impl WhisperBackend {
     /// `granularity` controls whether to emit one entry per Whisper segment
     /// (`Segment`) or one entry per word (`Word`).
     ///
-    /// Uses `set_no_timestamps(true)` for clean text generation, then derives
-    /// timing from `token.t_dtw` (cross-attention DTW alignment) rather than
-    /// the generative `<|t.xx|>` tokens that degrade quality.
+    /// Decodes with generative timestamps ON (see [`DecodeFlags`]) so whisper.cpp
+    /// seeks to the last real timestamp instead of skipping a whole 30 s window
+    /// after an early end-of-text. Word timing still comes from `token.t_dtw`
+    /// (cross-attention DTW alignment); timestamp tokens are skipped when grouping.
     /// `t_offset` (seconds) is added to all returned timestamps.
     #[cfg(feature = "diarization")]
     fn transcribe_chunk_timestamps_profiled(
@@ -1821,8 +1919,11 @@ impl WhisperBackend {
         params.set_temperature(0.0);
         params.set_temperature_inc(0.2);
         params.set_translate(false);
-        params.set_no_timestamps(true); // clean text — no generative timestamp tokens
-        params.set_token_timestamps(true); // populate token.t0/t1/t_dtw via cross-attention
+        let flags = DecodeFlags::for_path(DecodePath::WordTimestamps);
+        params.set_no_timestamps(flags.no_timestamps);
+        params.set_token_timestamps(flags.token_timestamps); // token.t0/t1/t_dtw via cross-attention
+        params.set_print_timestamps(false);
+        params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_no_speech_thold(no_speech_thold);
@@ -1860,7 +1961,7 @@ impl WhisperBackend {
                                 continue;
                             }
                         };
-                        let text = text.trim().to_string();
+                        let text = strip_timestamp_tokens(text).trim().to_string();
                         if text.is_empty() {
                             continue;
                         }
