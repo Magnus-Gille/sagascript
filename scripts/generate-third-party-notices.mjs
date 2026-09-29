@@ -22,14 +22,6 @@ function normalizeNewlines(text) {
   return text.replace(/\r\n?/g, "\n");
 }
 
-function parsePianissimoRequirements(source) {
-  return normalizeNewlines(source).trim().split("\n").map((line) => {
-    const match = /^([A-Za-z0-9_.-]+)==([^\s]+)$/.exec(line);
-    if (!match) throw new Error(`Invalid Pianissimo runtime requirement: ${line}`);
-    return `${match[1].toLowerCase().replaceAll(/[_.]/g, "-")}==${match[2]}`;
-  }).sort(compareCodeUnits);
-}
-
 function npmInstallationError(pkg, installedVersion, directoryExists) {
   const path = relative(root, pkg.directory);
   if (!directoryExists) {
@@ -53,18 +45,6 @@ if (mode === "--test-sort") {
     throw new Error(`Unexpected deterministic sort order: ${fixture.join(", ")}`);
   }
   console.log(createHash("sha256").update(fixture.join("\n")).digest("hex"));
-  process.exit(0);
-}
-
-if (mode === "--test-pianissimo-line-endings") {
-  const expected = ["absl-py==2.5.0", "torch==2.14.0"];
-  for (const separator of ["\n", "\r\n"]) {
-    const parsed = parsePianissimoRequirements(expected.join(separator) + separator);
-    if (JSON.stringify(parsed) !== JSON.stringify(expected)) {
-      throw new Error(`Pianissimo requirement parser failed for ${JSON.stringify(separator)}`);
-    }
-  }
-  console.log("Pianissimo requirements accept LF and CRLF");
   process.exit(0);
 }
 
@@ -155,6 +135,7 @@ const reviewedRustLicenses = new Set([
   "Unlicense",
   "Unlicense OR MIT",
   "Unlicense/MIT",
+  "Zlib",
   "Zlib OR Apache-2.0 OR MIT",
 ]);
 
@@ -342,31 +323,12 @@ function table(packages) {
   ].join("\n");
 }
 
-const pianissimoPackages = JSON.parse(readFileSync(join(root, "scripts/pianissimo-runtime-inventory.json"), "utf8"));
-const pianissimoRequirements = parsePianissimoRequirements(
-  readFileSync(join(root, "scripts/pianissimo-runtime-requirements.txt"), "utf8"),
-);
-const pianissimoInventory = pianissimoPackages.map((pkg) => {
-  if (!pkg.license || !pkg.source) throw new Error(`Incomplete Pianissimo runtime notice: ${pkg.name}`);
-  return `${pkg.name.toLowerCase().replaceAll(/[_.]/g, "-")}==${pkg.version}`;
-}).sort(compareCodeUnits);
-if (JSON.stringify(pianissimoRequirements) !== JSON.stringify(pianissimoInventory)) {
-  throw new Error("Pianissimo runtime notices do not match pinned requirements");
-}
-
-const pianissimoTable = [
-  "| Python package | Version | Declared license | Source |",
-  "|---|---:|---|---|",
-  ...pianissimoPackages.map((pkg) =>
-    `| ${pkg.name} | ${pkg.version} | ${pkg.license.replaceAll("|", "\\|")} | [upstream](${pkg.source}) |`),
-].join("\n");
-
 const generated = `# Third-party notices
 
 This notice covers the runtime and build-time dependencies used to produce the
 official Apple Silicon macOS build, plus the separately downloaded models
 Sagascript can use. It is generated from the locked Rust and npm dependency
-graphs and the pinned Pianissimo Python environment; do not edit the generated inventories by hand. Sagascript itself is
+graphs; do not edit the generated inventories by hand. Sagascript itself is
 licensed under the MIT License in \`LICENSE\`.
 
 Generate this file with \`npm run licenses:generate\`. The release gate runs
@@ -388,7 +350,7 @@ link; the upstream repository is authoritative for its license terms.
 |---|---|---|---|
 | OpenAI Whisper GGML + Core ML encoders | Tiny, Base, Small, Medium, Large v3 Turbo variants | MIT | [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) |
 | KB-Whisper | Tiny, Base, Small, Medium, Large Swedish models | Apache-2.0 | [KBLab, National Library of Sweden](https://huggingface.co/KBLab) |
-| Klang Pianissimo Q8 | Corrected \`pianissimo-sv-q8-melfix.gguf\` conversion, optional Swedish file model | CC-BY-4.0 | [Klang AI model card and attribution](https://huggingface.co/KlangAI/pianissimo-sv), reviewed 2026-09-25 |
+| Klang Pianissimo (Core ML conversion) | Core ML archive converted from the original NeMo checkpoint (encoder int8, decoder and joint fp16); optional Swedish model | CC-BY-4.0 | [Klang AI model card and attribution](https://huggingface.co/KlangAI/pianissimo-sv), reviewed 2026-09-25 |
 | NB-Whisper | Tiny, Base, Small, Medium, Large Norwegian models | Apache-2.0 | [NbAiLab, National Library of Norway](https://huggingface.co/NbAiLab) |
 | Finnish-NLP Whisper Tiny | Unmodified \`ggml-model-fi-tiny.bin\`, optional Finnish specialist | Apache-2.0 | [Finnish-NLP pinned GGML repository](https://huggingface.co/Finnish-NLP/Finnish-finetuned-whisper-models-ggml-format/tree/c58924b6deb4438756b3d38ecd67d65bdf20298d), reviewed 2026-09-06 |
 | Silero VAD (GGML conversion) | \`ggml-silero-v5.1.2.bin\` | MIT | [ggml-org/whisper-vad](https://huggingface.co/ggml-org/whisper-vad) |
@@ -410,11 +372,22 @@ ${table(rustPackages)}
 
 ${table(npmPackages)}
 
-## Pianissimo native runtime
+## Pianissimo engine host
 
-The Apple Silicon app includes [NVIDIA NeMo-Speech.cpp v0.1.0](https://github.com/NVIDIA/NeMo-Speech.cpp/releases/tag/v0.1.0).
-Its license and third-party notices are shipped under
-\`PianissimoRuntime/share/licenses/nemo-speech/\`.
+The Apple Silicon app bundles \`Resources/EngineHost/sagascript-engine-host\`, a Swift
+Core ML host (\`src-tauri/engine-host/coreml\`) that runs the Pianissimo model on the
+Apple Neural Engine. Its TDT greedy decoding structure is adapted from
+[FluidAudio v0.17.4](https://github.com/FluidInference/FluidAudio) (Copyright 2024
+FluidInference / FluidAudio contributors), licensed under the
+[Apache-2.0 License](https://www.apache.org/licenses/LICENSE-2.0).
+
+The downloadable Pianissimo Core ML model is converted from Klang AI AB's
+[Pianissimo](https://huggingface.co/KlangAI/pianissimo-sv) (CC BY 4.0, converted, not
+retrained) with scripts in \`scripts/pianissimo-coreml\` that are derived from
+[FluidInference/mobius](https://github.com/FluidInference/mobius) (commit
+864ef8050f2f281d0761de26e3a03108f9f1ce73), licensed under the
+[Apache-2.0 License](https://www.apache.org/licenses/LICENSE-2.0). Attribution and
+conversion details are kept in \`scripts/pianissimo-coreml/LICENSE-and-attribution.txt\`.
 
 ## Ported source code
 
@@ -423,14 +396,6 @@ Sagascript's engine-agnostic long-audio window planning and token merging
 alignment and merge logic in [parakeet-mlx](https://github.com/senstella/parakeet-mlx)
 (\`parakeet_mlx/alignment.py\`), copyright its contributors, licensed under the
 [Apache-2.0 License](https://www.apache.org/licenses/LICENSE-2.0).
-
-## Historical Python runtime dependency inventory
-
-Earlier test builds used [CPython 3.12.9](https://github.com/python/cpython/tree/v3.12.9)
-and these pinned packages. They are not included in the native app bundle.
-The inventory is retained for reproducibility of that evaluation.
-
-${pianissimoTable}
 
 ## License and notice texts shipped by dependencies
 
