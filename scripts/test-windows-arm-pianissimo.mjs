@@ -86,6 +86,17 @@ test("owner test script covers every listed step", () => {
   assert.doesNotMatch(script, /RunAs|Set-ExecutionPolicy|Add-MpPreference|reg add/i);
 });
 
+test("owner test script prefers -Cli, then known installs with a sibling host, then PATH", () => {
+  const explicit = script.indexOf("if ($Cli)");
+  const known = script.indexOf("$known +=");
+  const onPath = script.indexOf("Get-Command sagascript");
+  assert.ok(explicit >= 0 && known > explicit && onPath > known, "selection order must be -Cli, known installs, PATH");
+  assert.ok(script.includes("engine-host\\sagascript-engine-host-ort.exe"));
+  assert.ok(script.includes("Pass -Cli"), "ambiguity must ask for -Cli");
+  assert.ok(script.includes("CLI chosen"), "must say which CLI was chosen and why");
+  assert.ok(script.includes("onnxruntime_providers_shared.dll"));
+});
+
 test("docs cover artifact, SmartScreen, script and hand-back", () => {
   for (const needle of ["windows-arm64-unsigned-candidate", "SmartScreen", "Defender", "windows-arm-pianissimo-test.ps1", ORT_SHA256])
     assert.ok(docs.includes(needle), `docs missing ${needle}`);
