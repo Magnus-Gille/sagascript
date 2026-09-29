@@ -210,3 +210,30 @@ fn live_abort_during_inference_cancels_promptly() {
     assert!(error.to_string().contains("cancelled"), "{error}");
     assert!(at.elapsed() < Duration::from_secs(2), "{:?}", at.elapsed());
 }
+
+#[test]
+fn live_abort_during_model_load_returns_promptly_and_keeps_the_host() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let shared = client(
+        &[("FAKE_LOAD_DELAY_MS", "3000"), ("FAKE_LOG", log.to_str().unwrap())],
+        tmp.path(),
+    );
+    let backend = Arc::new(live(&shared));
+    let job = {
+        let backend = backend.clone();
+        std::thread::spawn(move || dictate(&backend))
+    };
+    std::thread::sleep(Duration::from_millis(500));
+    let at = Instant::now();
+    backend.request_abort();
+
+    let (result, timings) = job.join().unwrap();
+
+    assert!(result.unwrap_err().to_string().contains("cancelled"));
+    assert!(at.elapsed() < Duration::from_millis(250), "{:?}", at.elapsed());
+    assert!(!timings.inference_started);
+    // The host survives so the first-use load can finish for the next utterance.
+    assert!(shared.snapshot().running, "host must not be killed");
+    assert_eq!(spawn_count(&log), 1);
+}

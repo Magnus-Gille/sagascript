@@ -374,10 +374,13 @@ pub(crate) fn to_result(transcription: Transcription) -> PianissimoResult {
 }
 
 /// Make the engine ready and report whether it already was.
-pub(crate) fn warm_client(client: &EngineHostClient) -> Result<WarmInfo, DictationError> {
+pub(crate) fn warm_client(
+    client: &EngineHostClient,
+    cancel: &CancelToken,
+) -> Result<WarmInfo, DictationError> {
     let was_warm = client.snapshot().loaded;
     let started = Instant::now();
-    client.warm().map_err(map_engine_error)?;
+    client.warm_with_cancel(cancel).map_err(map_engine_error)?;
     Ok(WarmInfo {
         was_warm,
         load_seconds: if was_warm { 0.0 } else { started.elapsed().as_secs_f64() },
@@ -447,7 +450,7 @@ impl PianissimoBackend {
 
     /// Start the host and load the model now, reporting whether it was warm.
     pub fn warm_up(&self) -> Result<WarmInfo, DictationError> {
-        warm_client(&self.client)
+        warm_client(&self.client, &CancelToken::new())
     }
 
     pub fn transcribe(

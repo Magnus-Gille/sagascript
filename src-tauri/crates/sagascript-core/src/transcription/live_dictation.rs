@@ -84,27 +84,9 @@ impl LiveDictationBackend {
             return Ok(String::new());
         }
 
-        // Model acquisition = attaching to the shared host and making sure the
-        // model is loaded. When warm this is a state check (about 0 ms).
-        timings.model_acquisition_started = true;
-        let model_started = Instant::now();
-        let acquired = match &self.engine {
-            Some(client) => Ok(client.clone()),
-            None => shared_client(),
-        }
-        .and_then(|client| warm_client(&client).map(|warm| (client, warm)));
-        timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
-        let (client, warm) = acquired?;
-        timings.model_cached = warm.was_warm;
-        timings.model_ready_at = Some(Instant::now());
-
-        if self.cancelled.load(Ordering::SeqCst) {
-            return Err(cancelled_error());
-        }
-
-        // The selected model and decoder options belong to Whisper. Pianissimo
-        // uses its fixed Swedish model and decoder defaults.
-        let _ = (model, options);
+        // The cancel token exists before the model is acquired, so an abort
+        // during a first-use compile/load is observed immediately (without
+        // killing the host: the load still finishes for next time).
         let token = CancelToken::new();
         {
             let mut active = self.active_job.lock().map_err(|_| {
@@ -112,10 +94,37 @@ impl LiveDictationBackend {
             })?;
             *active = Some(token.clone());
         }
+
+        // Model acquisition = attaching to the shared host and making sure the
+        // model is loaded. When warm this is a state check (about 0 ms).
+        timings.model_acquisition_started = true;
+        let model_started = Instant::now();
+        let acquired = with_cancel_bridge(&self.cancelled, &token, || {
+            match &self.engine {
+                Some(client) => Ok(client.clone()),
+                None => shared_client(),
+            }
+            .and_then(|client| warm_client(&client, &token).map(|warm| (client, warm)))
+        });
+        timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
+        let (client, warm) = match acquired {
+            Ok(acquired) => acquired,
+            Err(error) => {
+                self.clear_active_job();
+                return Err(error);
+            }
+        };
+        timings.model_cached = warm.was_warm;
+        timings.model_ready_at = Some(Instant::now());
+
         if self.cancelled.load(Ordering::SeqCst) {
             self.clear_active_job();
             return Err(cancelled_error());
         }
+
+        // The selected model and decoder options belong to Whisper. Pianissimo
+        // uses its fixed Swedish model and decoder defaults.
+        let _ = (model, options);
         timings.inference_started = true;
         let inference_started = Instant::now();
         let result = with_cancel_bridge(&self.cancelled, &token, || {
