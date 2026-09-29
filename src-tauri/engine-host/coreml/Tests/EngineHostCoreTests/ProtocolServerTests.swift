@@ -39,8 +39,31 @@ private final class FakeEngine: EngineBackend {
         maxInFlight: 2
     )
     private let lock = NSLock()
+    private let gateCondition = NSCondition()
     private var loaded = false
-    private(set) var startedPaths: [String] = []
+    private var gateOpen = false
+    private var started: [String] = []
+
+    /// Paths containing "gate" block inside `transcribe` until `openGates()`,
+    /// which lets a test hold the in-flight slots without any timing assumptions.
+    var startedPaths: [String] {
+        gateCondition.lock(); defer { gateCondition.unlock() }
+        return started
+    }
+
+    /// Blocks until `count` requests have entered `transcribe` (10 s safety timeout).
+    func waitUntilStarted(count: Int) -> Bool {
+        let deadline = Date().addingTimeInterval(10)
+        gateCondition.lock(); defer { gateCondition.unlock() }
+        while started.count < count {
+            if !gateCondition.wait(until: deadline) { return false }
+        }
+        return true
+    }
+
+    func openGates() {
+        gateCondition.lock(); gateOpen = true; gateCondition.broadcast(); gateCondition.unlock()
+    }
 
     var loadedModelID: String? { loaded ? "fake" : nil }
     var isLoading: Bool { false }
@@ -63,7 +86,16 @@ private final class FakeEngine: EngineBackend {
 
     func transcribe(_ request: WindowRequest, isCancelled: @escaping () -> Bool) throws -> WindowResult {
         guard loaded else { throw EngineHostError(code: "not_loaded", message: "fake not loaded") }
-        lock.lock(); startedPaths.append(request.pcmPath); lock.unlock()
+        gateCondition.lock()
+        started.append(request.pcmPath)
+        gateCondition.broadcast()
+        if request.pcmPath.contains("gate") {
+            while !gateOpen {
+                if isCancelled() { gateCondition.unlock(); throw EngineHostError(code: "cancelled", message: "fake cancelled") }
+                _ = gateCondition.wait(until: Date().addingTimeInterval(0.01))
+            }
+        }
+        gateCondition.unlock()
         let delay = request.pcmPath.contains("slow") ? 160_000 : 5_000
         var waited = 0
         while waited < delay {
@@ -131,17 +163,25 @@ private func sendWindow(_ server: EngineHostServer, id: UInt64, path: String, pr
     sendRequest(server, ["v": 1, "id": 1, "op": "hello", "client": [:]])
     sendRequest(server, ["v": 1, "id": 2, "op": "load", "model_dir": "/tmp/model", "model_id": "fake", "compute_units": "ane"])
     _ = output.waitFor(id: 2)
-    sendWindow(server, id: 10, path: "/tmp/slow-1", priority: "batch")
-    sendWindow(server, id: 11, path: "/tmp/slow-2", priority: "batch")
+    // Occupy both in-flight slots with gated requests, and only then queue the
+    // contenders, so the scheduling decision cannot race with completions.
+    sendWindow(server, id: 10, path: "/tmp/gate-1", priority: "batch")
+    sendWindow(server, id: 11, path: "/tmp/gate-2", priority: "batch")
+    #expect(fake.waitUntilStarted(count: 2))
     sendWindow(server, id: 12, path: "/tmp/fast-batch", priority: "batch")
     sendWindow(server, id: 13, path: "/tmp/fast-interactive", priority: "interactive")
+    fake.openGates()
     _ = output.waitFor(id: 10); _ = output.waitFor(id: 11); _ = output.waitFor(id: 12); _ = output.waitFor(id: 13)
-    let ids = output.values.compactMap { ($0["id"] as? NSNumber)?.uint64Value }
-    let firstFast = ids.firstIndex(of: 13)
-    let batchFast = ids.firstIndex(of: 12)
-    #expect(firstFast != nil)
-    #expect(batchFast != nil)
-    #expect(firstFast! < batchFast!)
+    // The interactive request was queued last but must be started first.
+    let started = fake.startedPaths
+    #expect(started.count == 4)
+    let interactive = started.firstIndex(of: "/tmp/fast-interactive")
+    let batch = started.firstIndex(of: "/tmp/fast-batch")
+    #expect(interactive != nil && batch != nil)
+    #expect(interactive! < batch!)
+    for id: UInt64 in [10, 11, 12, 13] {
+        #expect(output.responses(for: id).first?["ok"] as? Bool == true)
+    }
 }
 
 @Test func cancelProducesAckAndCancelledTerminalResponse() {
