@@ -84,6 +84,7 @@ pub async fn download(
 }
 
 fn remove_if_present(path: &Path) -> Result<(), DictationError> {
+    crate::download::remove_verification_stamp(path);
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

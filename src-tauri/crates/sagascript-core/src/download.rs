@@ -134,9 +134,9 @@ pub async fn download_to_path(
 
     // The streamed bytes were verified immediately above. Cache that result
     // against the installed file's filesystem fingerprint so normal model
-    // loads in this process do not rehash multi-gigabyte artifacts. The cache
-    // is deliberately process-memory-only: every new app/CLI launch performs
-    // at least one exact hash before its first native parse.
+    // loads do not rehash multi-gigabyte artifacts. The cache
+    // is also persisted as a verification stamp so later launches skip the hash
+    // while the file's identity is unchanged.
     cache_verified_file(dest, integrity);
 
     Ok(())
@@ -275,13 +275,29 @@ pub fn validate_download(
 /// Verify an already-present artifact before handing it to native model
 /// parsers. This also covers models downloaded by older Sagascript versions,
 /// which predate the immutable integrity manifest.
+///
+/// Successful full hashes are remembered (in-process, and on unix in a
+/// persistent `<file>.verified.json` stamp) so later calls skip the hash while
+/// the file's identity and the manifest digest are unchanged.
 pub fn verify_file(path: &Path, integrity: DownloadIntegrity) -> Result<(), DictationError> {
-    verify_file_detailed(path, integrity).map_err(|failure| match failure {
+    verify_file_detailed(path, integrity).map_err(failure_into_error)
+}
+
+/// Like [`verify_file`] but ignores the in-process cache and the persistent
+/// stamp, always re-hashing the file (and refreshing the stamp on success).
+/// Intended for explicit user-requested verification such as a future
+/// `sagascript engine doctor --verify-model`.
+pub fn verify_file_forced(path: &Path, integrity: DownloadIntegrity) -> Result<(), DictationError> {
+    verify_file_detailed_with(path, integrity, true, &sha256_of_file).map_err(failure_into_error)
+}
+
+fn failure_into_error(failure: VerificationFailure) -> DictationError {
+    match failure {
         VerificationFailure::IntegrityMismatch(message) => {
             DictationError::ModelDownloadFailed(message)
         }
         VerificationFailure::Other(error) => error,
-    })
+    }
 }
 
 /// Verify an app-managed artifact and remove it only when its bytes are proven
@@ -314,6 +330,7 @@ pub fn prepare_existing_artifact(
                     path.display()
                 ))
             })?;
+            remove_verification_stamp(path);
             tracing::warn!(
                 "Removed invalid app-managed artifact {}; downloading a verified replacement",
                 path.display()
@@ -326,6 +343,18 @@ pub fn prepare_existing_artifact(
 fn verify_file_detailed(
     path: &Path,
     integrity: DownloadIntegrity,
+) -> Result<(), VerificationFailure> {
+    verify_file_detailed_with(path, integrity, false, &sha256_of_file)
+}
+
+/// Hashing is injected so tests can observe whether a verification hashed.
+type FileHasher<'a> = &'a dyn Fn(std::fs::File, &Path) -> Result<String, VerificationFailure>;
+
+fn verify_file_detailed_with(
+    path: &Path,
+    integrity: DownloadIntegrity,
+    force: bool,
+    hasher: FileHasher<'_>,
 ) -> Result<(), VerificationFailure> {
     // Validate trusted program metadata before inspecting or mutating a user
     // file. A packaging bug must never turn into an artifact deletion.
@@ -358,10 +387,29 @@ fn verify_file_detailed(
         )));
     }
 
-    if verification_cache_matches(path, &metadata, integrity) {
+    if !force
+        && (verification_cache_matches(path, &metadata, integrity)
+            || verification_stamp_matches(path, &metadata, integrity))
+    {
         return Ok(());
     }
 
+    let actual = hasher(file, path)?;
+    if !actual.eq_ignore_ascii_case(integrity.sha256) {
+        remove_verification_stamp(path);
+        return Err(VerificationFailure::IntegrityMismatch(format!(
+            "Model integrity check failed for {}: SHA-256 mismatch. Delete and re-download the model.",
+            path.display()
+        )));
+    }
+    // Record the identity captured *before* hashing: if the file changed
+    // while it was being read, the stamp then simply fails to match later.
+    cache_verified_metadata(path, &metadata, integrity);
+    write_verification_stamp(path, &metadata, integrity);
+    Ok(())
+}
+
+fn sha256_of_file(file: std::fs::File, path: &Path) -> Result<String, VerificationFailure> {
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
     // Keep the multi-megabyte artifact hash buffer off the thread stack. The
@@ -381,15 +429,7 @@ fn verify_file_detailed(
         }
         hasher.update(&buffer[..read]);
     }
-    let actual = format!("{:x}", hasher.finalize());
-    if !actual.eq_ignore_ascii_case(integrity.sha256) {
-        return Err(VerificationFailure::IntegrityMismatch(format!(
-            "Model integrity check failed for {}: SHA-256 mismatch. Delete and re-download the model.",
-            path.display()
-        )));
-    }
-    cache_verified_file(path, integrity);
-    Ok(())
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -426,21 +466,187 @@ fn verification_cache_matches(
     false
 }
 
-#[cfg(unix)]
+/// Record a just-verified installed file (download path): stat it now and
+/// remember it in-process and in the persistent stamp.
 fn cache_verified_file(path: &Path, integrity: DownloadIntegrity) {
     let Ok(metadata) = std::fs::metadata(path) else {
         return;
     };
+    cache_verified_metadata(path, &metadata, integrity);
+    write_verification_stamp(path, &metadata, integrity);
+}
+
+#[cfg(unix)]
+fn cache_verified_metadata(path: &Path, metadata: &std::fs::Metadata, integrity: DownloadIntegrity) {
     let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if let Ok(mut cache) = verification_cache().lock() {
-        cache.insert(key, integrity_cache_record(&metadata, integrity));
+        cache.insert(key, integrity_cache_record(metadata, integrity));
     }
 }
 
 #[cfg(not(unix))]
-fn cache_verified_file(_path: &Path, _integrity: DownloadIntegrity) {
+fn cache_verified_metadata(
+    _path: &Path,
+    _metadata: &std::fs::Metadata,
+    _integrity: DownloadIntegrity,
+) {
     // See `verification_cache_matches`: without a trustworthy filesystem
     // identity/change token, caching a successful hash would be unsafe.
+}
+
+// ---- Persistent verification stamp -------------------------------------
+//
+// `<model>.verified.json` records the digest a file was verified against plus
+// the filesystem identity (size, mtime, inode, ctime) observed at that time.
+// A later process trusts the stamp only if every field still matches the
+// file's current stat AND the stamp digest equals the manifest digest, so a
+// replaced, truncated, touched or re-downloaded file always gets re-hashed.
+// ctime cannot be set by ordinary userland, which is what makes a same-size,
+// mtime-preserving overwrite detectable. Non-unix targets have no equivalent
+// stable token in std (Windows overwrites can retain size and mtime), so they
+// keep the always-hash behaviour and never write stamps.
+
+const STAMP_SCHEMA: u32 = 1;
+const STAMP_SUFFIX: &str = ".verified.json";
+
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct VerificationStamp {
+    schema: u32,
+    sha256: String,
+    size: u64,
+    mtime_ns: u128,
+    inode: u64,
+    ctime_ns: i128,
+    verified_by: String,
+}
+
+/// Path of the stamp that belongs to `model` (`<file name>.verified.json`).
+pub fn verification_stamp_path(model: &Path) -> PathBuf {
+    let mut name = model.as_os_str().to_os_string();
+    name.push(STAMP_SUFFIX);
+    PathBuf::from(name)
+}
+
+/// Best-effort removal of a model's verification stamp. Call whenever the
+/// model file is deleted or replaced.
+pub fn remove_verification_stamp(model: &Path) {
+    match std::fs::remove_file(verification_stamp_path(model)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => tracing::warn!(
+            "Could not remove verification stamp for {}: {error}",
+            model.display()
+        ),
+    }
+}
+
+#[cfg(unix)]
+fn stamp_for(metadata: &std::fs::Metadata, integrity: DownloadIntegrity) -> VerificationStamp {
+    use std::os::unix::fs::MetadataExt;
+
+    VerificationStamp {
+        schema: STAMP_SCHEMA,
+        sha256: integrity.sha256.to_ascii_lowercase(),
+        size: metadata.len(),
+        mtime_ns: metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default(),
+        inode: metadata.ino(),
+        ctime_ns: i128::from(metadata.ctime()) * 1_000_000_000 + i128::from(metadata.ctime_nsec()),
+        verified_by: format!("sagascript-core {}", env!("CARGO_PKG_VERSION")),
+    }
+}
+
+#[cfg(unix)]
+fn verification_stamp_matches(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    integrity: DownloadIntegrity,
+) -> bool {
+    let stamp_path = verification_stamp_path(path);
+    let bytes = match std::fs::read(&stamp_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) => {
+            tracing::debug!("Cannot read verification stamp {}: {error}", stamp_path.display());
+            return false;
+        }
+    };
+    let Ok(stamp) = serde_json::from_slice::<VerificationStamp>(&bytes) else {
+        tracing::debug!("Ignoring corrupt verification stamp {}", stamp_path.display());
+        return false;
+    };
+    let current = stamp_for(metadata, integrity);
+    let matches = stamp.schema == STAMP_SCHEMA
+        && stamp.sha256.eq_ignore_ascii_case(integrity.sha256)
+        && stamp.size == current.size
+        && stamp.mtime_ns == current.mtime_ns
+        && stamp.inode == current.inode
+        && stamp.ctime_ns == current.ctime_ns;
+    if matches {
+        // Promote to the in-process cache so this process never re-reads it.
+        cache_verified_metadata(path, metadata, integrity);
+    }
+    matches
+}
+
+#[cfg(not(unix))]
+fn verification_stamp_matches(
+    _path: &Path,
+    _metadata: &std::fs::Metadata,
+    _integrity: DownloadIntegrity,
+) -> bool {
+    false
+}
+
+/// Atomically (temp file + rename in the same directory) write the stamp.
+/// Never fails verification: errors are logged and swallowed.
+#[cfg(unix)]
+fn write_verification_stamp(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+    integrity: DownloadIntegrity,
+) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let stamp_path = verification_stamp_path(path);
+    let result = (|| -> std::io::Result<()> {
+        let json = serde_json::to_vec_pretty(&stamp_for(metadata, integrity))
+            .map_err(std::io::Error::other)?;
+        let tmp = unique_tmp_path(&stamp_path, "json");
+        let write = (|| {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(&json)?;
+            file.sync_all()
+        })();
+        if let Err(error) = write.and_then(|()| std::fs::rename(&tmp, &stamp_path)) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(error);
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        tracing::debug!(
+            "Could not write verification stamp {}: {error}",
+            stamp_path.display()
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn write_verification_stamp(
+    _path: &Path,
+    _metadata: &std::fs::Metadata,
+    _integrity: DownloadIntegrity,
+) {
 }
 
 #[cfg(unix)]
@@ -661,6 +867,197 @@ mod tests {
         std::fs::write(&path, b"tampered model").unwrap();
         assert!(verify_file(&path, expected).is_err());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // -- persistent verification stamp (unix only) --
+
+    #[cfg(unix)]
+    mod stamp {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const BODY: &[u8] = b"verified model";
+        const SHA: &str = "6c736b3dfa943bf4e7c61df78d1dfcad9a3d8b56369f0559670497b19127e74d";
+        const INTEGRITY: DownloadIntegrity = DownloadIntegrity { sha256: SHA, size: 14 };
+
+        /// Run one verification with a counting hasher; returns hash count.
+        fn run(path: &Path, integrity: DownloadIntegrity, force: bool) -> (usize, bool) {
+            let count = AtomicUsize::new(0);
+            let hasher = |file, p: &Path| {
+                count.fetch_add(1, Ordering::SeqCst);
+                sha256_of_file(file, p)
+            };
+            let ok = verify_file_detailed_with(path, integrity, force, &hasher).is_ok();
+            (count.load(Ordering::SeqCst), ok)
+        }
+
+        /// Fresh dir + model file. Each test uses its own path, so the
+        /// process-wide cache (keyed by path) never leaks between tests; to
+        /// exercise the *stamp* we clear that cache entry before each run.
+        fn setup() -> (PathBuf, PathBuf) {
+            let dir = temp_test_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("model.bin");
+            std::fs::write(&path, BODY).unwrap();
+            (dir, path)
+        }
+
+        fn forget_process_cache(path: &Path) {
+            let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            verification_cache().lock().unwrap().remove(&key);
+        }
+
+        fn stamped(path: &Path) -> (PathBuf, PathBuf) {
+            let (count, ok) = run(path, INTEGRITY, false);
+            assert!((count, ok) == (1, true));
+            forget_process_cache(path);
+            (path.to_path_buf(), verification_stamp_path(path))
+        }
+
+        #[test]
+        fn first_verify_hashes_and_writes_stamp_then_skips() {
+            use std::os::unix::fs::PermissionsExt;
+            let (dir, path) = setup();
+            assert_eq!(run(&path, INTEGRITY, false), (1, true));
+            let stamp_path = verification_stamp_path(&path);
+            let stamp: VerificationStamp =
+                serde_json::from_slice(&std::fs::read(&stamp_path).unwrap()).unwrap();
+            assert_eq!(stamp.schema, 1);
+            assert_eq!(stamp.sha256, SHA);
+            assert_eq!(stamp.size, 14);
+            let mode = std::fs::metadata(&stamp_path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+
+            // Same process: in-process cache. New "process": stamp only.
+            assert_eq!(run(&path, INTEGRITY, false), (0, true));
+            forget_process_cache(&path);
+            assert_eq!(run(&path, INTEGRITY, false), (0, true));
+            // Forced verification always hashes.
+            assert_eq!(run(&path, INTEGRITY, true), (1, true));
+            assert!(verify_file_forced(&path, INTEGRITY).is_ok());
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn touched_mtime_rehashes() {
+            let (dir, path) = setup();
+            stamped(&path);
+            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_modified(SystemTime::now() + Duration::from_secs(5)).unwrap();
+            drop(file);
+            assert_eq!(run(&path, INTEGRITY, false), (1, true));
+            forget_process_cache(&path);
+            assert_eq!(run(&path, INTEGRITY, false), (0, true), "stamp was rewritten");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn changed_size_rehashes_and_fails() {
+            let (dir, path) = setup();
+            stamped(&path);
+            std::fs::write(&path, b"longer verified model").unwrap();
+            // Size mismatch is rejected before hashing.
+            assert_eq!(run(&path, INTEGRITY, false), (0, false));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn replaced_file_new_inode_rehashes() {
+            let (dir, path) = setup();
+            stamped(&path);
+            let replacement = dir.join("other.bin");
+            std::fs::write(&replacement, BODY).unwrap();
+            std::fs::rename(&replacement, &path).unwrap();
+            assert_eq!(run(&path, INTEGRITY, false), (1, true));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn same_size_tampering_is_caught() {
+            let (dir, path) = setup();
+            stamped(&path);
+            std::fs::write(&path, b"tampered model").unwrap();
+            assert_eq!(run(&path, INTEGRITY, false), (1, false));
+            assert!(!verification_stamp_path(&path).exists(), "stale stamp removed");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn stamp_for_a_different_expected_sha_is_ignored() {
+            let (dir, path) = setup();
+            stamped(&path);
+            let other = DownloadIntegrity {
+                sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                size: 14,
+            };
+            assert_eq!(run(&path, other, false), (1, false));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn corrupt_stamp_rehashes_and_is_rewritten() {
+            let (dir, path) = setup();
+            let (_, stamp_path) = stamped(&path);
+            std::fs::write(&stamp_path, b"{not json").unwrap();
+            assert_eq!(run(&path, INTEGRITY, false), (1, true));
+            forget_process_cache(&path);
+            assert_eq!(run(&path, INTEGRITY, false), (0, true));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn unwritable_directory_does_not_fail_verification() {
+            use std::os::unix::fs::PermissionsExt;
+            let (dir, path) = setup();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            let result = run(&path, INTEGRITY, false);
+            let wrote = verification_stamp_path(&path).exists();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(result, (1, true));
+            // (Running as root would bypass the mode bits.)
+            assert!(!wrote || unsafe_is_root());
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        fn unsafe_is_root() -> bool {
+            std::env::var("USER").is_ok_and(|user| user == "root")
+        }
+
+        #[test]
+        fn concurrent_verifiers_leave_a_valid_stamp() {
+            let (dir, path) = setup();
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let path = path.clone();
+                    std::thread::spawn(move || {
+                        // Bypass the shared in-process cache so all race on the stamp.
+                        verify_file_forced(&path, INTEGRITY).is_ok()
+                    })
+                })
+                .collect();
+            for handle in handles {
+                assert!(handle.join().unwrap());
+            }
+            forget_process_cache(&path);
+            assert_eq!(run(&path, INTEGRITY, false), (0, true));
+            let leftovers = std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+                .count();
+            assert_eq!(leftovers, 0);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+
+        #[test]
+        fn removing_a_stamp_is_idempotent() {
+            let (dir, path) = setup();
+            stamped(&path);
+            remove_verification_stamp(&path);
+            remove_verification_stamp(&path);
+            assert!(!verification_stamp_path(&path).exists());
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     #[test]

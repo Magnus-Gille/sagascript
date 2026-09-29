@@ -131,6 +131,8 @@ pub fn delete(args: DeleteModelArgs) -> Result<(), DictationError> {
         ))
     })?;
 
+    sagascript_core::download::remove_verification_stamp(&path);
+
     eprintln!(
         "Deleted {} ({})",
         whisper_model.display_name(),
