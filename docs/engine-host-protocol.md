@@ -149,8 +149,10 @@ is `onnx`; `engine_version` is `unloaded` until the first `load` has loaded ONNX
 optional); `load` accepts any `compute_units` value and runs on the CPU; `load_ms`/`compiled`
 follow the same rules (`compiled` is always false). It advertises `max_in_flight` 2 so the
 client reserves an interactive slot, but executes one window at a time and starts queued
-interactive windows first. ONNX Runtime is loaded at run time from `ORT_DYLIB_PATH` or from
-next to the executable (`onnxruntime.dll` on Windows, `libonnxruntime.dylib` on macOS). Tuning
+interactive windows first. ONNX Runtime is loaded at run time from next to the executable
+(`onnxruntime.dll` on Windows, `libonnxruntime.dylib` on macOS); `ORT_DYLIB_PATH` is honoured only in
+debug builds or with the `dev-overrides` feature. On Windows the DLL search path is restricted to the
+application directory and System32. Tuning
 variables for measurements only: `SAGASCRIPT_ORT_THREADS`, `SAGASCRIPT_ORT_DEC_THREADS`,
 `SAGASCRIPT_ORT_PRE_THREADS`, `SAGASCRIPT_ORT_ARENA=1`, `SAGASCRIPT_ORT_SLOTS`.
 
