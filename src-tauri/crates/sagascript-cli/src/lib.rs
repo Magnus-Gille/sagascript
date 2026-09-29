@@ -1,6 +1,7 @@
 pub(crate) mod benchmark_config;
 mod benchmark_quality;
 pub mod config;
+pub mod engine;
 pub mod benchmark_dictation;
 pub mod glossary;
 pub mod latency;
@@ -67,6 +68,20 @@ pub const LONG_VERSION: &str = concat!(
     env!("SAGASCRIPT_CLI_BUILD_DATE"),
     ")"
 );
+
+/// Short source revision of this build (`--version`, tray menu, engine host handshake).
+pub const GIT_HASH: &str = env!("SAGASCRIPT_CLI_GIT_HASH");
+
+/// Announce this build's identity to the Pianissimo engine host.
+pub fn install_engine_identity() {
+    sagascript_core::transcription::pianissimo_backend::set_client_identity(
+        sagascript_core::transcription::engine_host::ClientIdentity {
+            name: "sagascript".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            git_sha: GIT_HASH.into(),
+        },
+    );
+}
 
 // Root help text is feature-aware: a batch-only build (`--no-default-features`)
 // has no `record` subcommand, so the workflow/examples must not advertise it.
@@ -310,6 +325,19 @@ EXAMPLES:
     )]
     Record(record::RecordArgs),
 
+    /// Inspect and exercise the Pianissimo engine host
+    #[command(
+        long_about = "\
+Inspect and exercise the persistent engine host that runs Pianissimo (Swedish, \
+Core ML on the Apple Neural Engine). Requires macOS 14 or later on Apple Silicon.
+
+  status   host path and build identity, protocol version, model state
+  doctor   run host -> load -> transcribe end to end (non-zero exit on failure)
+  warm     load the model and hold it warm (benchmarks, smoke tests)",
+        after_long_help = "EXAMPLES:\n  sagascript engine status --json\n  sagascript engine doctor --verify-model\n  sagascript engine warm --seconds 30"
+    )]
+    Engine(engine::EngineArgs),
+
     /// List available whisper models
     #[command(
         long_about = "\
@@ -538,6 +566,7 @@ pub fn try_parse() -> Option<Cli> {
 
 /// Run the CLI subcommand. Blocks until complete, then exits.
 pub fn run(cli: Cli) {
+    install_engine_identity();
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
     let result = match cli.command.unwrap() {
@@ -565,6 +594,7 @@ pub fn run(cli: Cli) {
                 })
         }
         Command::Config(args) => config::run(args),
+        Command::Engine(args) => engine::run(args),
         Command::Glossary(args) => glossary::run(args),
         Command::Formats => {
             formats();
@@ -576,6 +606,9 @@ pub fn run(cli: Cli) {
         }
         Command::Manpages { dir } => generate_manpages(dir),
     };
+
+    // Stop the engine host (if this command started one) before exiting.
+    sagascript_core::transcription::pianissimo_backend::shutdown_shared_client();
 
     if let Err(e) = result {
         eprintln!("Error: {e}");

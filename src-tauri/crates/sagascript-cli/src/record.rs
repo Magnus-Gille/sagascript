@@ -112,9 +112,14 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
                 }
             }
             RecordModel::Pianissimo => {
+                if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
+                    return Err(DictationError::TranscriptionFailed(
+                        sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into(),
+                    ));
+                }
                 if !pianissimo_model::is_downloaded() {
                     return Err(DictationError::TranscriptionFailed(
-                        "Pianissimo Q8 is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
+                        "Pianissimo is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
                     ));
                 }
             }
@@ -210,7 +215,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
             if glossary.decoder_prompt().is_some() {
                 eprintln!("Pianissimo does not use Whisper decoder hints; aliases in the selected profile still correct the transcript after inference.");
             }
-            eprintln!("Loading model: Pianissimo Q8...");
+            eprintln!("Loading model: Pianissimo...");
             let text = transcribe_pianissimo_record(&audio, duration)?;
             (text, "pianissimo-sv")
         }
@@ -275,7 +280,7 @@ fn resolve_record_model(
         Some("pianissimo-sv") => {
             if language != Language::Swedish {
                 return Err(DictationError::SettingsError(
-                    "Pianissimo Q8 supports Swedish dictation only; use --language sv or choose a Whisper model".into(),
+                    "Pianissimo supports Swedish dictation only; use --language sv or choose a Whisper model".into(),
                 ));
             }
             Ok(RecordModel::Pianissimo)
@@ -301,7 +306,7 @@ fn validate_pianissimo_record_options(
 ) -> Result<(), DictationError> {
     if prompt || prompt_file {
         return Err(DictationError::SettingsError(
-            "Pianissimo Q8 does not support Whisper decoder hints (--hint/--prompt/--prompt-file); remove that option, add replacement aliases to a profile with `sagascript glossary add TERM --alias ALIAS --profile ID` and select it with --profile ID, or choose a Whisper model with --model MODEL_ID".into(),
+            "Pianissimo does not support Whisper decoder hints (--hint/--prompt/--prompt-file); remove that option, add replacement aliases to a profile with `sagascript glossary add TERM --alias ALIAS --profile ID` and select it with --profile ID, or choose a Whisper model with --model MODEL_ID".into(),
         ));
     }
     Ok(())

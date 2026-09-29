@@ -214,7 +214,13 @@ fn migrate_legacy_identifier_settings_locked(
 /// Partial JSON files are handled by `#[serde(default)]` on Settings.
 pub fn load() -> Settings {
     let path = settings_path();
-    load_at_with_legacy_sources(&path, legacy_settings_paths())
+    let mut settings = load_at_with_legacy_sources(&path, legacy_settings_paths());
+    // A settings file copied from a supported machine must not select an engine
+    // this system cannot run. In memory only: the file keeps the user's choice.
+    settings.demote_unsupported_pianissimo(
+        crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+    );
+    settings
 }
 
 fn load_at_with_legacy_sources(

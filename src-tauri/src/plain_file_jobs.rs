@@ -102,9 +102,13 @@ pub async fn transcribe_pianissimo(
             let backend = Arc::new(PianissimoBackend::start_with_cancel(&run.cancelled)?);
             *worker_lease.jobs.pianissimo_backend.lock().unwrap() = Some(backend.clone());
             run.check()?;
+            // Load the model before the deadline starts: a first-time Core ML
+            // compile can take minutes and is not inference time.
+            backend.warm_up()?;
+            run.check()?;
             *run.deadline.lock().unwrap() = Some(Instant::now() + timeout);
             progress("transcribing", Some(0));
-            let result = backend.transcribe(&audio, |pct| progress("transcribing", Some(pct)))?;
+            let result = backend.transcribe_with_cancel(&audio, |pct| progress("transcribing", Some(pct)), &run.cancelled)?;
             run.check()?;
             progress("finalizing", None);
             Ok(crate::commands::apply_glossary(result.text, &glossary))

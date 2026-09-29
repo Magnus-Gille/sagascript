@@ -7,7 +7,10 @@ use std::time::Instant;
 use crate::error::DictationError;
 use crate::settings::{Language, WhisperModel};
 
-use super::pianissimo_backend::PianissimoBackend;
+use super::engine_host::{CancelToken, EngineHostClient};
+use super::pianissimo_backend::{
+    cancelled_error, map_engine_error, shared_client, warm_client, with_cancel_bridge,
+};
 use super::whisper_backend::DictationTimings;
 use super::{TranscribeOptions, WhisperBackend};
 
@@ -15,13 +18,17 @@ use super::{TranscribeOptions, WhisperBackend};
 ///
 /// Instances are intended to belong to one operation, so cancellation cannot
 /// leak from one recording into a later one. Whisper receives the original
-/// model, options, and timings unchanged. Pianissimo starts its native runtime
-/// for the operation and ignores Whisper-only decoder settings.
+/// model, options, and timings unchanged. Pianissimo uses the process-global
+/// engine host (the model stays loaded between utterances, so a warm
+/// utterance spends no time on model acquisition) with interactive priority
+/// and ignores Whisper-only decoder settings.
 pub struct LiveDictationBackend {
     whisper: Arc<WhisperBackend>,
     pianissimo: bool,
+    /// Explicit engine client (tests); `None` uses the process-global one.
+    engine: Option<EngineHostClient>,
     cancelled: AtomicBool,
-    active_pianissimo: Mutex<Option<Arc<PianissimoBackend>>>,
+    active_job: Mutex<Option<CancelToken>>,
 }
 
 impl LiveDictationBackend {
@@ -29,8 +36,18 @@ impl LiveDictationBackend {
         Self {
             whisper,
             pianissimo,
+            engine: None,
             cancelled: AtomicBool::new(false),
-            active_pianissimo: Mutex::new(None),
+            active_job: Mutex::new(None),
+        }
+    }
+
+    /// Pianissimo dictation on an explicit engine client instead of the
+    /// process-global one.
+    pub fn with_engine(whisper: Arc<WhisperBackend>, engine: EngineHostClient) -> Self {
+        Self {
+            engine: Some(engine),
+            ..Self::new(whisper, true)
         }
     }
 
@@ -67,48 +84,58 @@ impl LiveDictationBackend {
             return Ok(String::new());
         }
 
-        // Startup verifies the downloaded artifact; it does not load the
-        // recognizer. The native command loads and infers in one process with
-        // no stage markers, so keep model_ready_at unset and report the full
-        // subprocess duration as inference latency.
-        timings.model_cached = false;
+        // Model acquisition = attaching to the shared host and making sure the
+        // model is loaded. When warm this is a state check (about 0 ms).
         timings.model_acquisition_started = true;
         let model_started = Instant::now();
-        let backend_result = PianissimoBackend::start_with_cancel(&self.cancelled);
-        timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
-        let backend = Arc::new(backend_result?);
-        {
-            let mut active = self.active_pianissimo.lock().map_err(|_| {
-                DictationError::TranscriptionFailed("Pianissimo backend lock was poisoned".into())
-            })?;
-            *active = Some(Arc::clone(&backend));
+        let acquired = match &self.engine {
+            Some(client) => Ok(client.clone()),
+            None => shared_client(),
         }
+        .and_then(|client| warm_client(&client).map(|warm| (client, warm)));
+        timings.model_ms = model_started.elapsed().as_secs_f64() * 1000.0;
+        let (client, warm) = acquired?;
+        timings.model_cached = warm.was_warm;
+        timings.model_ready_at = Some(Instant::now());
 
         if self.cancelled.load(Ordering::SeqCst) {
-            backend.request_abort();
-            self.clear_active_pianissimo();
             return Err(cancelled_error());
         }
 
         // The selected model and decoder options belong to Whisper. Pianissimo
-        // uses its fixed Swedish Pianissimo model and native decoder defaults.
+        // uses its fixed Swedish model and decoder defaults.
         let _ = (model, options);
+        let token = CancelToken::new();
+        {
+            let mut active = self.active_job.lock().map_err(|_| {
+                DictationError::TranscriptionFailed("Pianissimo backend lock was poisoned".into())
+            })?;
+            *active = Some(token.clone());
+        }
+        if self.cancelled.load(Ordering::SeqCst) {
+            self.clear_active_job();
+            return Err(cancelled_error());
+        }
         timings.inference_started = true;
         let inference_started = Instant::now();
-        let result = backend.transcribe_with_cancel(samples, |_| {}, &self.cancelled);
+        let result = with_cancel_bridge(&self.cancelled, &token, || {
+            client.transcribe_dictation(samples, &token)
+        });
         timings.inference_ms = inference_started.elapsed().as_secs_f64() * 1000.0;
-        self.clear_active_pianissimo();
-        result.map(|transcript| transcript.text)
+        self.clear_active_job();
+        result
+            .map(|transcription| transcription.text)
+            .map_err(map_engine_error)
     }
 
-    /// Abort this operation. Native cancellation is sticky, covering requests
-    /// made before process startup as well as requests during the subprocess.
+    /// Abort this operation. Cancellation is sticky, covering requests made
+    /// before the engine is reached as well as requests during inference.
     pub fn request_abort(&self) {
         if self.pianissimo {
             self.cancelled.store(true, Ordering::SeqCst);
-            if let Ok(active) = self.active_pianissimo.lock() {
-                if let Some(backend) = active.as_ref() {
-                    backend.request_abort();
+            if let Ok(active) = self.active_job.lock() {
+                if let Some(token) = active.as_ref() {
+                    token.cancel();
                 }
             }
         } else {
@@ -116,15 +143,11 @@ impl LiveDictationBackend {
         }
     }
 
-    fn clear_active_pianissimo(&self) {
-        if let Ok(mut active) = self.active_pianissimo.lock() {
+    fn clear_active_job(&self) {
+        if let Ok(mut active) = self.active_job.lock() {
             let _ = active.take();
         }
     }
-}
-
-fn cancelled_error() -> DictationError {
-    DictationError::TranscriptionFailed("Pianissimo transcription cancelled".into())
 }
 
 #[cfg(test)]

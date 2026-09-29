@@ -291,6 +291,19 @@ pub fn verify_file_forced(path: &Path, integrity: DownloadIntegrity) -> Result<(
     verify_file_detailed_with(path, integrity, true, &sha256_of_file).map_err(failure_into_error)
 }
 
+/// [`verify_file`] / [`verify_file_forced`] with the persistent stamp stored at
+/// `stamp_path` instead of beside the file. Used for files inside directory
+/// packages (Core ML `.mlpackage`) that must not gain foreign files.
+pub fn verify_file_with_stamp(
+    path: &Path,
+    stamp_path: &Path,
+    integrity: DownloadIntegrity,
+    force: bool,
+) -> Result<(), DictationError> {
+    verify_file_detailed_at(path, stamp_path, integrity, force, &sha256_of_file)
+        .map_err(failure_into_error)
+}
+
 fn failure_into_error(failure: VerificationFailure) -> DictationError {
     match failure {
         VerificationFailure::IntegrityMismatch(message) => {
@@ -356,6 +369,17 @@ fn verify_file_detailed_with(
     force: bool,
     hasher: FileHasher<'_>,
 ) -> Result<(), VerificationFailure> {
+    let stamp = verification_stamp_path(path);
+    verify_file_detailed_at(path, &stamp, integrity, force, hasher)
+}
+
+fn verify_file_detailed_at(
+    path: &Path,
+    stamp_path: &Path,
+    integrity: DownloadIntegrity,
+    force: bool,
+    hasher: FileHasher<'_>,
+) -> Result<(), VerificationFailure> {
     // Validate trusted program metadata before inspecting or mutating a user
     // file. A packaging bug must never turn into an artifact deletion.
     if !is_sha256(integrity.sha256) {
@@ -389,14 +413,14 @@ fn verify_file_detailed_with(
 
     if !force
         && (verification_cache_matches(path, &metadata, integrity)
-            || verification_stamp_matches(path, &metadata, integrity))
+            || verification_stamp_matches(path, stamp_path, &metadata, integrity))
     {
         return Ok(());
     }
 
     let actual = hasher(file, path)?;
     if !actual.eq_ignore_ascii_case(integrity.sha256) {
-        remove_verification_stamp(path);
+        let _ = std::fs::remove_file(stamp_path);
         return Err(VerificationFailure::IntegrityMismatch(format!(
             "Model integrity check failed for {}: SHA-256 mismatch. Delete and re-download the model.",
             path.display()
@@ -405,7 +429,7 @@ fn verify_file_detailed_with(
     // Record the identity captured *before* hashing: if the file changed
     // while it was being read, the stamp then simply fails to match later.
     cache_verified_metadata(path, &metadata, integrity);
-    write_verification_stamp(path, &metadata, integrity);
+    write_verification_stamp(path, stamp_path, &metadata, integrity);
     Ok(())
 }
 
@@ -473,7 +497,7 @@ fn cache_verified_file(path: &Path, integrity: DownloadIntegrity) {
         return;
     };
     cache_verified_metadata(path, &metadata, integrity);
-    write_verification_stamp(path, &metadata, integrity);
+    write_verification_stamp(path, &verification_stamp_path(path), &metadata, integrity);
 }
 
 #[cfg(unix)]
@@ -563,11 +587,11 @@ fn stamp_for(metadata: &std::fs::Metadata, integrity: DownloadIntegrity) -> Veri
 #[cfg(unix)]
 fn verification_stamp_matches(
     path: &Path,
+    stamp_path: &Path,
     metadata: &std::fs::Metadata,
     integrity: DownloadIntegrity,
 ) -> bool {
-    let stamp_path = verification_stamp_path(path);
-    let bytes = match std::fs::read(&stamp_path) {
+    let bytes = match std::fs::read(stamp_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
         Err(error) => {
@@ -596,6 +620,7 @@ fn verification_stamp_matches(
 #[cfg(not(unix))]
 fn verification_stamp_matches(
     _path: &Path,
+    _stamp_path: &Path,
     _metadata: &std::fs::Metadata,
     _integrity: DownloadIntegrity,
 ) -> bool {
@@ -606,18 +631,18 @@ fn verification_stamp_matches(
 /// Never fails verification: errors are logged and swallowed.
 #[cfg(unix)]
 fn write_verification_stamp(
-    path: &Path,
+    _path: &Path,
+    stamp_path: &Path,
     metadata: &std::fs::Metadata,
     integrity: DownloadIntegrity,
 ) {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
-    let stamp_path = verification_stamp_path(path);
     let result = (|| -> std::io::Result<()> {
         let json = serde_json::to_vec_pretty(&stamp_for(metadata, integrity))
             .map_err(std::io::Error::other)?;
-        let tmp = unique_tmp_path(&stamp_path, "json");
+        let tmp = unique_tmp_path(stamp_path, "json");
         let write = (|| {
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
@@ -627,7 +652,7 @@ fn write_verification_stamp(
             file.write_all(&json)?;
             file.sync_all()
         })();
-        if let Err(error) = write.and_then(|()| std::fs::rename(&tmp, &stamp_path)) {
+        if let Err(error) = write.and_then(|()| std::fs::rename(&tmp, stamp_path)) {
             let _ = std::fs::remove_file(&tmp);
             return Err(error);
         }
@@ -644,6 +669,7 @@ fn write_verification_stamp(
 #[cfg(not(unix))]
 fn write_verification_stamp(
     _path: &Path,
+    _stamp_path: &Path,
     _metadata: &std::fs::Metadata,
     _integrity: DownloadIntegrity,
 ) {

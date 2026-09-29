@@ -31,6 +31,7 @@ rubato = "0.14"
 regex = "1"
 sagascript-engine-protocol = { path = "../sagascript-engine-protocol" }
 tempfile = "3"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 # Live audio capture (optional): a pure batch-transcribe build
 # (`--no-default-features` on sagascript-cli) needs no cpal — and on Linux, no ALSA.
