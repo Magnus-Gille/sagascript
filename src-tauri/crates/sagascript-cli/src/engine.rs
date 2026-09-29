@@ -32,9 +32,10 @@ read its identity and is stopped again; no model is loaded.
 Pianissimo requires macOS 14 or later on Apple Silicon; on other systems the \
 report says so and exits zero.
 
-The host is found through SAGASCRIPT_ENGINE_HOST (development) or the copy \
-bundled in Sagascript.app. SAGASCRIPT_PIANISSIMO_MODEL_DIR points at an \
-existing model directory instead of the downloaded one.",
+The host is found in the copy bundled in Sagascript.app. Development builds \
+(debug, or built with the `dev-overrides` feature) also honor \
+SAGASCRIPT_ENGINE_HOST and SAGASCRIPT_PIANISSIMO_MODEL_DIR (an existing model \
+directory instead of the downloaded one); release builds ignore both.",
         after_long_help = "EXAMPLES:\n  sagascript engine status\n  sagascript engine status --json"
     )]
     Status {

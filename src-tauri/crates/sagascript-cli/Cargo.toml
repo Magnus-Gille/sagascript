@@ -41,6 +41,8 @@ ctrlc = { version = "3", optional = true }
 default = ["record", "diarization"]
 record = ["sagascript-core/record", "dep:ctrlc"]
 diarization = ["sagascript-core/diarization"]
+# Development builds only: honor SAGASCRIPT_ENGINE_HOST / SAGASCRIPT_PIANISSIMO_MODEL_DIR in release.
+dev-overrides = ["sagascript-core/dev-overrides"]
 
 [lints]
 workspace = true

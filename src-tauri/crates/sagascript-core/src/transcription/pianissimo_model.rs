@@ -190,11 +190,11 @@ pub const MANIFEST: ModelManifest = ModelManifest {
 
 // ---- locations ------------------------------------------------------------
 
-/// Developer override directory, when set and non-empty.
+/// Developer override directory, when set and non-empty. Honored only in
+/// development builds (see [`super::dev_overrides`]); release builds always
+/// use the manifest-verified download.
 pub fn override_dir() -> Option<PathBuf> {
-    std::env::var_os(MODEL_DIR_ENV)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+    super::dev_overrides::env_override(MODEL_DIR_ENV).map(PathBuf::from)
 }
 
 /// Installed model directory for `manifest` under `models`.

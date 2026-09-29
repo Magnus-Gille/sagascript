@@ -23,12 +23,13 @@ use crate::transcription::engine_host::{
     CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, LoadSpec,
     Transcription,
 };
+use crate::transcription::dev_overrides::env_override;
 use crate::transcription::pianissimo_model;
 
 /// Shown wherever Pianissimo is refused for platform reasons.
 pub const UNSUPPORTED_MESSAGE: &str = "Pianissimo requires macOS 14 or later on Apple Silicon";
 
-/// Environment override (development): path of the `sagascript-engine-host` binary.
+/// Environment override (development builds only): path of the `sagascript-engine-host` binary.
 pub const ENGINE_HOST_ENV: &str = "SAGASCRIPT_ENGINE_HOST";
 /// Environment override: Core ML compute units (`ane`, `gpu`, `cpu`, `all`).
 pub const COMPUTE_UNITS_ENV: &str = "SAGASCRIPT_ENGINE_COMPUTE_UNITS";
@@ -127,11 +128,11 @@ fn resolve_host_with(env_value: Option<OsString>, current_exe: Option<&Path>) ->
     current_exe.and_then(bundled_host)
 }
 
-/// Resolve the engine host: `SAGASCRIPT_ENGINE_HOST` (dev), then the bundled
-/// host, else `None`.
+/// Resolve the engine host: `SAGASCRIPT_ENGINE_HOST` (development builds only,
+/// see [`super::dev_overrides`]), then the bundled host, else `None`.
 pub fn resolve_host() -> Option<PathBuf> {
     let current_exe = std::env::current_exe().ok();
-    resolve_host_with(std::env::var_os(ENGINE_HOST_ENV), current_exe.as_deref())
+    resolve_host_with(env_override(ENGINE_HOST_ENV), current_exe.as_deref())
 }
 
 // ---- identity and configuration ------------------------------------------
