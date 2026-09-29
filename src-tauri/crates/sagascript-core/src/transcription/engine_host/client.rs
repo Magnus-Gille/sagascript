@@ -245,6 +245,16 @@ impl EngineHostClient {
         }
     }
 
+    /// Start the host and complete the `hello` handshake without loading the
+    /// model (diagnostics). The returned snapshot carries the host identity.
+    pub fn connect(&self) -> Result<HostSnapshot> {
+        {
+            let _g = self.inner.lifecycle.lock().unwrap();
+            self.inner.ensure_started_locked()?;
+        }
+        Ok(self.snapshot())
+    }
+
     /// Clear the `Failed` state and the crash history.
     pub fn reset(&self) {
         let mut st = self.inner.state.lock().unwrap();

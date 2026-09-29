@@ -167,7 +167,8 @@ fn idle_policy(minutes: u32) -> (Option<Duration>, Option<Duration>) {
     (Some(unload), Some(unload * 2))
 }
 
-fn config_for(host: PathBuf, settings: &Settings) -> EngineHostConfig {
+/// Engine-host configuration for an explicit host binary (no presence checks).
+pub fn config_for_host(host: PathBuf, settings: &Settings) -> EngineHostConfig {
     let mut config = EngineHostConfig::new(
         host,
         LoadSpec {
@@ -206,7 +207,7 @@ fn precheck() -> Result<PathBuf, DictationError> {
 /// platform, host and model-presence checks (no model verification, no spawn).
 pub fn engine_config() -> Result<EngineHostConfig, DictationError> {
     let host = precheck()?;
-    Ok(config_for(host, &crate::settings::store::load()))
+    Ok(config_for_host(host, &crate::settings::store::load()))
 }
 
 // ---- process-global client ------------------------------------------------
@@ -236,7 +237,7 @@ fn shared_slot() -> &'static Mutex<Option<Shared>> {
 pub fn shared_client() -> Result<EngineHostClient, DictationError> {
     let host = precheck()?;
     let settings = crate::settings::store::load();
-    let config = config_for(host, &settings);
+    let config = config_for_host(host, &settings);
     let key = SharedKey {
         host: config.host_path.clone(),
         model_dir: config.load.model_dir.clone(),
@@ -271,6 +272,15 @@ pub fn shutdown_shared_client() {
     if let Some(shared) = shared {
         shared.client.shutdown();
     }
+}
+
+/// Whether the shared engine currently has the model loaded (never starts anything).
+pub fn engine_is_warm() -> bool {
+    shared_slot()
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|shared| shared.client.snapshot().loaded))
+        .unwrap_or(false)
 }
 
 /// Load the model in the background so the next utterance starts warm. Returns
