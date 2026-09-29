@@ -373,7 +373,11 @@ fn is_downloaded_in(manifest: &ModelManifest, dir: &Path) -> bool {
 pub fn is_downloaded() -> bool {
     match override_dir() {
         Some(dir) => override_is_usable(active(), &dir),
-        None => is_downloaded_in(active(), &installed_dir_in(active(), &models_dir())),
+        None => {
+            let models = models_dir();
+            recover_in(active(), &models);
+            is_downloaded_in(active(), &installed_dir_in(active(), &models))
+        }
     }
 }
 
@@ -428,7 +432,9 @@ fn verify_installed(force: bool) -> Result<(), DictationError> {
             )))
         };
     }
-    verify_in(active(), &installed_dir_in(active(), &models_dir()), force)
+    let models = models_dir();
+    recover_in(active(), &models);
+    verify_in(active(), &installed_dir_in(active(), &models), force)
 }
 
 // ---- install --------------------------------------------------------------
@@ -511,6 +517,154 @@ fn content_root(extracted: &Path, manifest: &ModelManifest) -> PathBuf {
     extracted.to_path_buf()
 }
 
+/// Suffix marker for a previous install moved aside during promotion.
+const PREVIOUS_MARKER: &str = ".previous-";
+const STAGING_PREFIX: &str = ".pianissimo-extract-";
+const LEGACY_TRASH_PREFIX: &str = ".pianissimo-old-";
+/// Staging directories younger than this may belong to a concurrent install
+/// in another process (app + CLI) and are left alone.
+const STALE_STAGING_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Move the verified `root` into `final_dir`, keeping any previous install as
+/// `<final>.previous-<uuid>` until the new one is in place.
+///
+/// Crash consistency: a directory rename is atomic, but two renames are not.
+/// The states a crash can leave are: (a) old install at `final`, nothing
+/// else (before step 1); (b) old install only at the backup name, `final`
+/// missing (between the renames); (c) new install at `final` with a leftover
+/// backup (after step 2). [`recover_in`] runs on every entry point: in (b) it
+/// renames a verifying backup back to `final`, in (c) it deletes the backup
+/// once `final` verifies. So an active install is never lost, only briefly
+/// absent until the next check.
+fn promote_in(root: &Path, final_dir: &Path) -> Result<(), DictationError> {
+    let backup = final_dir.file_name().map(|name| {
+        final_dir.with_file_name(format!(
+            "{}{PREVIOUS_MARKER}{}",
+            name.to_string_lossy(),
+            uuid::Uuid::new_v4()
+        ))
+    });
+    let backup = match backup {
+        Some(backup) if final_dir.exists() => {
+            std::fs::rename(final_dir, &backup)
+                .map_err(|e| install_err(format!("Cannot replace existing model: {e}")))?;
+            Some(backup)
+        }
+        _ => None,
+    };
+    if let Err(e) = std::fs::rename(root, final_dir) {
+        if let Some(backup) = &backup {
+            let _ = std::fs::rename(backup, final_dir);
+        }
+        return Err(install_err(format!("Cannot move model into place: {e}")));
+    }
+    if let Some(backup) = backup {
+        let _ = std::fs::remove_dir_all(backup);
+    }
+    Ok(())
+}
+
+fn previous_backups(manifest: &ModelManifest, models: &Path) -> Vec<PathBuf> {
+    let prefix = format!("{}{PREVIOUS_MARKER}", manifest.versioned_id());
+    let Ok(entries) = std::fs::read_dir(models) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix) && e.path().is_dir())
+        .map(|e| e.path())
+        .collect()
+}
+
+/// Cheap recovery from an interrupted promotion: restore a verifying backup
+/// when the final directory is missing; delete backups once the final install
+/// verifies. Never removes the only usable copy.
+fn recover_in(manifest: &ModelManifest, models: &Path) {
+    if manifest.is_placeholder() {
+        return;
+    }
+    let backups = previous_backups(manifest, models);
+    if backups.is_empty() {
+        return;
+    }
+    let final_dir = installed_dir_in(manifest, models);
+    if final_dir.exists() {
+        if is_downloaded_in(manifest, &final_dir) && verify_in(manifest, &final_dir, false).is_ok() {
+            for backup in backups {
+                let _ = std::fs::remove_dir_all(backup);
+            }
+        }
+        return;
+    }
+    for backup in backups {
+        if is_downloaded_in(manifest, &backup) && verify_in(manifest, &backup, false).is_ok() {
+            match std::fs::rename(&backup, &final_dir) {
+                Ok(()) => {
+                    warn!("Restored previous Pianissimo install from {}", backup.display());
+                    return;
+                }
+                Err(error) => warn!("Cannot restore {}: {error}", backup.display()),
+            }
+        }
+    }
+}
+
+/// Remove abandoned staging directories (`.pianissimo-extract-*`, legacy
+/// `.pianissimo-old-*`) not modified within `min_age`. Backups and the active
+/// install are never touched here.
+fn remove_stale_staging(models: &Path, min_age: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(models) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with(STAGING_PREFIX) || name.starts_with(LEGACY_TRASH_PREFIX)) {
+            continue;
+        }
+        let age = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .unwrap_or_default();
+        if age >= min_age {
+            if let Err(error) = remove_dir_if_present(&entry.path()) {
+                warn!("{error}");
+            }
+        }
+    }
+}
+
+/// Bytes required to download and install: archive (archive sources only) +
+/// installed size + 10%.
+fn required_space(manifest: &ModelManifest) -> u64 {
+    let archive = match manifest.source {
+        ModelSource::Archive { archive, .. } => archive.size,
+        ModelSource::Files { .. } => 0,
+    };
+    let base = archive.saturating_add(manifest.installed_size());
+    base.saturating_add(base / 10)
+}
+
+fn ensure_free_space(needed: u64, available: Option<u64>) -> Result<(), DictationError> {
+    match available {
+        Some(free) if free < needed => {
+            const GB: f64 = 1_000_000_000.0;
+            Err(install_err(format!(
+                "Not enough free disk space for the Pianissimo model: need {:.1} GB, {:.1} GB available",
+                needed as f64 / GB,
+                free as f64 / GB
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Free bytes on the filesystem holding `dir`; `None` when unknown.
+fn free_space_bytes(dir: &Path) -> Option<u64> {
+    fs2::available_space(dir).ok()
+}
+
 /// Extract `archive`, verify every manifest file, and atomically move the result
 /// to its final directory under `models`. The archive itself must already have
 /// been verified by the caller. Returns the installed directory.
@@ -521,7 +675,7 @@ pub fn install_archive_in(
 ) -> Result<PathBuf, DictationError> {
     std::fs::create_dir_all(models)
         .map_err(|e| install_err(format!("Failed to create models directory: {e}")))?;
-    let staging = models.join(format!(".pianissimo-extract-{}", uuid::Uuid::new_v4()));
+    let staging = models.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4()));
     let result = (|| {
         std::fs::create_dir(&staging)
             .map_err(|e| install_err(format!("Cannot create staging directory: {e}")))?;
@@ -530,7 +684,7 @@ pub fn install_archive_in(
         verify_in(manifest, &root, true)?;
         write_attribution(manifest, &root)?;
         let final_dir = installed_dir_in(manifest, models);
-        promote(&root, &final_dir, models)?;
+        promote_in(&root, &final_dir)?;
         Ok(final_dir)
     })();
     let _ = std::fs::remove_dir_all(&staging);
@@ -547,27 +701,6 @@ fn write_attribution(manifest: &ModelManifest, dir: &Path) -> Result<(), Dictati
         .map_err(|e| install_err(format!("Cannot write attribution notice: {e}")))
 }
 
-/// Move a verified staging directory into place atomically, replacing any
-/// previous (possibly corrupt) install.
-fn promote(staged: &Path, final_dir: &Path, models: &Path) -> Result<(), DictationError> {
-    let trash = models.join(format!(".pianissimo-old-{}", uuid::Uuid::new_v4()));
-    let had_old = final_dir.exists();
-    if had_old {
-        std::fs::rename(final_dir, &trash)
-            .map_err(|e| install_err(format!("Cannot replace existing model: {e}")))?;
-    }
-    if let Err(e) = std::fs::rename(staged, final_dir) {
-        if had_old {
-            let _ = std::fs::rename(&trash, final_dir);
-        }
-        return Err(install_err(format!("Cannot move model into place: {e}")));
-    }
-    if had_old {
-        let _ = std::fs::remove_dir_all(&trash);
-    }
-    Ok(())
-}
-
 /// Verify a staging directory of individually downloaded files and install it.
 pub fn install_staged_files_in(
     manifest: &ModelManifest,
@@ -577,7 +710,7 @@ pub fn install_staged_files_in(
     verify_in(manifest, staging, true)?;
     write_attribution(manifest, staging)?;
     let final_dir = installed_dir_in(manifest, models);
-    promote(staging, &final_dir, models)?;
+    promote_in(staging, &final_dir)?;
     Ok(final_dir)
 }
 
@@ -596,7 +729,7 @@ where
 {
     std::fs::create_dir_all(models)
         .map_err(|e| install_err(format!("Failed to create models directory: {e}")))?;
-    let staging = models.join(format!(".pianissimo-extract-{}", uuid::Uuid::new_v4()));
+    let staging = models.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4()));
     let total = manifest.download_size();
     let progress = std::sync::Arc::new(std::sync::Mutex::new(progress_callback));
     let result = async {
@@ -652,13 +785,25 @@ pub async fn download(
             )))
         };
     }
-    let models = models_dir();
+    download_in(manifest, &models_dir(), free_space_bytes, progress_callback).await
+}
+
+async fn download_in(
+    manifest: &'static ModelManifest,
+    models: &Path,
+    free_space: impl Fn(&Path) -> Option<u64>,
+    progress_callback: impl Fn(u64, u64) + Send + 'static,
+) -> Result<PathBuf, DictationError> {
+    let models = models.to_path_buf();
+    std::fs::create_dir_all(&models)
+        .map_err(|e| install_err(format!("Failed to create models directory: {e}")))?;
+    recover_in(manifest, &models);
     let destination = installed_dir_in(manifest, &models);
 
     if is_downloaded_in(manifest, &destination) && verify_in(manifest, &destination, false).is_ok()
     {
         info!("Pianissimo model already exists at {}", destination.display());
-        cleanup_superseded(&models);
+        cleanup_superseded(manifest, &models);
         return Ok(destination);
     }
     if manifest.is_placeholder() {
@@ -666,6 +811,8 @@ pub async fn download(
             "The Pianissimo model has not been published yet (manifest placeholder)",
         ));
     }
+    remove_stale_staging(&models, STALE_STAGING_AGE);
+    ensure_free_space(required_space(manifest), free_space(&models))?;
 
     let installed = match manifest.source {
         ModelSource::Files { .. } => {
@@ -684,7 +831,7 @@ pub async fn download(
             let installed = tokio::task::spawn_blocking({
                 let archive = archive.clone();
                 let models = models.clone();
-                move || install_archive_in(active(), &archive, &models)
+                move || install_archive_in(manifest, &archive, &models)
             })
             .await
             .map_err(|e| install_err(format!("Model install task failed: {e}")))?;
@@ -694,7 +841,7 @@ pub async fn download(
         }
     };
 
-    cleanup_superseded(&models);
+    cleanup_superseded(manifest, &models);
     info!("Pianissimo model installed: {}", installed.display());
     Ok(installed)
 }
@@ -732,11 +879,10 @@ pub fn remove_legacy_files_in(models: &Path) -> Result<(), DictationError> {
 
 /// Best-effort cleanup after a successful install: legacy files, older
 /// revisions, and leftover staging directories.
-fn cleanup_superseded(models: &Path) {
+fn cleanup_superseded(manifest: &ModelManifest, models: &Path) {
     if let Err(error) = remove_legacy_files_in(models) {
         warn!("Could not remove legacy Pianissimo files: {error}");
     }
-    let manifest = active();
     let current = manifest.versioned_id();
     let prefix = format!("{}-", manifest.model_id);
     let Ok(entries) = std::fs::read_dir(models) else {
@@ -744,8 +890,11 @@ fn cleanup_superseded(models: &Path) {
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let stale_revision = name.starts_with(&prefix) && name != current && entry.path().is_dir();
-        let stale_staging = name.starts_with(".pianissimo-extract-") || name.starts_with(".pianissimo-old-");
+        let stale_revision = name.starts_with(&prefix)
+            && name != current
+            && !name.contains(PREVIOUS_MARKER)
+            && entry.path().is_dir();
+        let stale_staging = name.starts_with(STAGING_PREFIX) || name.starts_with(LEGACY_TRASH_PREFIX);
         if stale_revision || stale_staging {
             if let Err(error) = remove_dir_if_present(&entry.path()) {
                 warn!("{error}");
@@ -770,7 +919,7 @@ pub fn delete() -> Result<(), DictationError> {
         warn!("{MODEL_DIR_ENV} is set; leaving the override directory untouched");
     }
     delete_in(active(), &models)?;
-    cleanup_superseded(&models);
+    cleanup_superseded(active(), &models);
     Ok(())
 }
 
@@ -1225,5 +1374,137 @@ mod tests {
         }
         assert!(override_is_usable(&ONNX_MANIFEST, root.path()));
         assert!(!override_is_usable(&MANIFEST, root.path()));
+    }
+
+    fn installed_fixture(manifest: &ModelManifest, archive: &Path, models: &Path) -> PathBuf {
+        install_archive_in(manifest, archive, models).unwrap()
+    }
+
+    #[test]
+    fn crash_between_renames_restores_previous_install() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let archive = build_zip(root.path(), &FIXTURE);
+        let manifest = manifest_for(&FIXTURE, &archive);
+        let dir = installed_fixture(&manifest, &archive, &models);
+        // Simulate a crash after step 1: old install moved aside, nothing promoted.
+        let backup = models.join(format!("{}{PREVIOUS_MARKER}crash", manifest.versioned_id()));
+        fs::rename(&dir, &backup).unwrap();
+        assert!(!is_downloaded_in(&manifest, &dir));
+
+        recover_in(&manifest, &models);
+
+        assert!(is_downloaded_in(&manifest, &dir));
+        verify_in(&manifest, &dir, false).unwrap();
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn verified_final_install_deletes_stale_backups() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let archive = build_zip(root.path(), &FIXTURE);
+        let manifest = manifest_for(&FIXTURE, &archive);
+        let dir = installed_fixture(&manifest, &archive, &models);
+        let backup = models.join(format!("{}{PREVIOUS_MARKER}old", manifest.versioned_id()));
+        fs::create_dir_all(&backup).unwrap();
+
+        recover_in(&manifest, &models);
+
+        assert!(!backup.exists());
+        assert!(is_downloaded_in(&manifest, &dir));
+    }
+
+    #[test]
+    fn corrupt_backup_is_not_restored() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        fs::create_dir_all(&models).unwrap();
+        let archive = build_zip(root.path(), &FIXTURE);
+        let manifest = manifest_for(&FIXTURE, &archive);
+        let backup = models.join(format!("{}{PREVIOUS_MARKER}bad", manifest.versioned_id()));
+        fs::create_dir_all(&backup).unwrap();
+        recover_in(&manifest, &models);
+        assert!(!installed_dir_in(&manifest, &models).exists());
+    }
+
+    #[test]
+    fn failed_promotion_restores_old_install() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let archive = build_zip(root.path(), &FIXTURE);
+        let manifest = manifest_for(&FIXTURE, &archive);
+        let dir = installed_fixture(&manifest, &archive, &models);
+        let missing_root = models.join("does-not-exist");
+        assert!(promote_in(&missing_root, &dir).is_err());
+        assert!(is_downloaded_in(&manifest, &dir));
+        assert!(previous_backups(&manifest, &models).is_empty());
+    }
+
+    #[test]
+    fn stale_staging_dirs_are_removed_but_install_kept() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let archive = build_zip(root.path(), &FIXTURE);
+        let manifest = manifest_for(&FIXTURE, &archive);
+        let dir = installed_fixture(&manifest, &archive, &models);
+        let staging = models.join(format!("{STAGING_PREFIX}abc"));
+        fs::create_dir_all(staging.join("junk")).unwrap();
+        let legacy = models.join(format!("{LEGACY_TRASH_PREFIX}abc"));
+        fs::create_dir_all(&legacy).unwrap();
+
+        // Fresh dirs survive the default age guard.
+        remove_stale_staging(&models, STALE_STAGING_AGE);
+        assert!(staging.exists());
+
+        remove_stale_staging(&models, std::time::Duration::ZERO);
+        assert!(!staging.exists());
+        assert!(!legacy.exists());
+        assert!(is_downloaded_in(&manifest, &dir));
+    }
+
+    #[tokio::test]
+    async fn download_fails_on_insufficient_space_before_network() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let archive = build_zip(root.path(), &FIXTURE);
+        let manifest: &'static ModelManifest = Box::leak(Box::new(manifest_for(&FIXTURE, &archive)));
+        let result = download_in(manifest, &models, |_| Some(1), |_, _| {}).await;
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("Not enough free disk space"), "{message}");
+        assert!(message.contains("GB"), "{message}");
+        assert!(!models.join(format!("{}.zip", manifest.versioned_id())).exists());
+    }
+
+    #[test]
+    fn unknown_free_space_does_not_block() {
+        ensure_free_space(u64::MAX, None).unwrap();
+        assert!(ensure_free_space(100, Some(99)).is_err());
+        ensure_free_space(100, Some(100)).unwrap();
+    }
+
+    #[test]
+    fn onnx_file_list_install_recovers_after_crash_between_renames() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let manifest = files_manifest(&ONNX_FIXTURE);
+        let dir = block_on(run_download(&manifest, &models, None, None, Default::default())).unwrap();
+        // Crash after step 1 of promotion: old install only under the backup name.
+        let backup = models.join(format!("{}{PREVIOUS_MARKER}crash", manifest.versioned_id()));
+        fs::rename(&dir, &backup).unwrap();
+        assert!(!is_downloaded_in(&manifest, &dir));
+
+        recover_in(&manifest, &models);
+
+        assert!(is_downloaded_in(&manifest, &dir));
+        verify_in(&manifest, &dir, true).unwrap();
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn file_list_space_need_is_file_sizes_plus_margin() {
+        let manifest = files_manifest(&ONNX_FIXTURE);
+        let total: u64 = ONNX_FIXTURE.iter().map(|(_, b)| b.len() as u64).sum();
+        assert_eq!(required_space(&manifest), total + total / 10);
     }
 }

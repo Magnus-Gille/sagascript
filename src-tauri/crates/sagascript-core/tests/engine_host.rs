@@ -84,12 +84,23 @@ fn temp_entries(dir: &Path) -> usize {
     std::fs::read_dir(dir).unwrap().count()
 }
 
+#[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
         .stderr(std::process::Stdio::null())
         .status()
         .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    // `tasklist` prints the process as a CSV row containing "<pid>" while it exists.
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\"")))
         .unwrap_or(false)
 }
 
