@@ -70,23 +70,52 @@ Add-Line "RAM: $ramGb GB"
 if ($osArch -ne 'Arm64') { Stop-Test "This test is for Windows on ARM64; this machine reports $osArch. Install the arm64 build on a Snapdragon laptop." }
 
 # 2. Locate the installed CLI
-$candidates = @()
-if ($Cli) { $candidates += $Cli }
-$onPath = Get-Command sagascript -ErrorAction SilentlyContinue
-if ($onPath) { $candidates += $onPath.Source }
-foreach ($root in @($env:LOCALAPPDATA, $env:ProgramFiles)) {
-    if ($root) {
-        $candidates += (Join-Path $root 'Sagascript\sagascript.exe')
-        $candidates += (Join-Path $root 'Programs\Sagascript\sagascript.exe')
+function Test-HasHost([string]$cliPath) {
+    Test-Path -LiteralPath (Join-Path (Split-Path $cliPath -Parent) 'engine-host\sagascript-engine-host-ort.exe') -PathType Leaf
+}
+$script:CliPath = $null
+if ($Cli) {
+    if (-not (Test-Path -LiteralPath $Cli -PathType Leaf)) { Stop-Test "-Cli path not found: $Cli" }
+    $script:CliPath = $Cli
+    Add-Line "CLI chosen because -Cli was given."
+} else {
+    # Known install locations first; PATH may hold an older or x64 sagascript.exe.
+    $known = @()
+    foreach ($root in @($env:LOCALAPPDATA, $env:ProgramFiles)) {
+        if ($root) {
+            $known += (Join-Path $root 'Sagascript\sagascript.exe')
+            $known += (Join-Path $root 'Programs\Sagascript\sagascript.exe')
+        }
+    }
+    $found = @($known | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) -and (Test-HasHost $_) } | Select-Object -Unique)
+    if ($found.Count -gt 1) {
+        Stop-Test ("Several installs with an engine host found: " + ($found -join '; ') + ". Pass -Cli <path to the sagascript.exe to test>.")
+    }
+    if ($found.Count -eq 1) {
+        $script:CliPath = $found[0]
+        Add-Line "CLI chosen from a known install location with a sibling engine-host."
+    } else {
+        $onPath = @(Get-Command sagascript -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source } | Select-Object -Unique)
+        $withHost = @($onPath | Where-Object { Test-HasHost $_ })
+        if ($withHost.Count -gt 1) {
+            Stop-Test ("Several sagascript.exe on PATH have an engine host: " + ($withHost -join '; ') + ". Pass -Cli <path>.")
+        }
+        if ($withHost.Count -eq 1) {
+            $script:CliPath = $withHost[0]
+            Add-Line "CLI chosen from PATH (no known install location had an engine-host)."
+        } elseif ($onPath.Count -ge 1) {
+            $script:CliPath = $onPath[0]
+            Add-Line "WARNING: CLI taken from PATH but it has no engine-host beside it; Pianissimo will likely be unavailable."
+        }
     }
 }
-$script:CliPath = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
 if (-not $script:CliPath) { Stop-Test "Could not find sagascript.exe. Install the arm64 build, or pass -Cli <path to sagascript.exe>." }
 Add-Line "CLI: $script:CliPath"
 $summary.cli = $script:CliPath
 $hostExe = Join-Path (Split-Path $script:CliPath -Parent) 'engine-host\sagascript-engine-host-ort.exe'
 $ortDll = Join-Path (Split-Path $script:CliPath -Parent) 'engine-host\onnxruntime.dll'
-$summary.engine_host_present = (Test-Path -LiteralPath $hostExe) -and (Test-Path -LiteralPath $ortDll)
+$ortProvidersDll = Join-Path (Split-Path $script:CliPath -Parent) 'engine-host\onnxruntime_providers_shared.dll'
+$summary.engine_host_present = (Test-Path -LiteralPath $hostExe) -and (Test-Path -LiteralPath $ortDll) -and (Test-Path -LiteralPath $ortProvidersDll)
 Add-Line "Engine host beside CLI: $($summary.engine_host_present)"
 
 # 3. Version and engine status
