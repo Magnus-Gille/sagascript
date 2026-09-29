@@ -1,0 +1,10 @@
+Sagascript CoreML engine host
+
+The TDT greedy decoding structure in
+Sources/EngineHostCore/CoreMLEngine.swift is adapted from FluidAudio v0.17.4,
+available under the Apache License, Version 2.0.
+
+Copyright 2024 FluidInference / FluidAudio contributors.
+The upstream source is used as read-only reference material for this project;
+the Sagascript implementation is independently integrated with this host's
+protocol and CoreML model-loading layer.
