@@ -1,15 +1,19 @@
-//! Download metadata and lifecycle helpers for the Core ML conversion of
-//! KlangAI's Swedish Pianissimo checkpoint (`pianissimo-sv-coreml`).
+//! Download metadata and lifecycle helpers for KlangAI's Swedish Pianissimo
+//! checkpoint. Two per-platform artifacts exist (see [`active`]):
+//!
+//! - macOS: our Core ML conversion (`pianissimo-sv-coreml`), one zip archive.
+//! - Windows: KlangAI's official ONNX int8 export (`pianissimo-sv-onnx`), a fixed
+//!   list of individually downloaded files pinned to a Hugging Face commit.
 //!
 //! The checkpoint is distributed by Klang AI AB under the Creative Commons
 //! Attribution 4.0 International license (CC BY 4.0):
 //! <https://creativecommons.org/licenses/by/4.0/>.
 //! Source model card and attribution: <https://huggingface.co/KlangAI/pianissimo-sv>.
 //!
-//! The artifact is one zip archive with a pinned SHA-256. It is downloaded,
-//! verified, extracted into a temporary directory next to the final location,
+//! Every artifact has pinned SHA-256 digests. It is downloaded (and, for an
+//! archive, extracted) into a temporary directory next to the final location,
 //! verified file by file against the manifest, and only then renamed to
-//! `<models dir>/pianissimo-sv-coreml-<revision>/` so an interrupted install can
+//! `<models dir>/<model id>-<revision>/` so an interrupted install can
 //! never leave a half-populated model directory behind.
 //!
 //! Developers can point `SAGASCRIPT_PIANISSIMO_MODEL_DIR` at an existing model
@@ -31,6 +35,12 @@ use crate::transcription::model::models_dir;
 /// engine host append the revision (`pianissimo-sv-coreml-<revision>`).
 pub const MODEL_ID: &str = "pianissimo-sv-coreml";
 
+/// Model family id of the Windows ONNX artifact.
+pub const ONNX_MODEL_ID: &str = "pianissimo-sv-onnx";
+
+/// Licence and attribution for both artifacts.
+pub const ATTRIBUTION: &str = "Pianissimo by Klang AI AB, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); https://huggingface.co/KlangAI/pianissimo-sv";
+
 /// Environment override (development): use this existing model directory.
 pub const MODEL_DIR_ENV: &str = "SAGASCRIPT_PIANISSIMO_MODEL_DIR";
 
@@ -40,6 +50,9 @@ const LEGACY_NEMO_FILENAME: &str = "pianissimo-sv.nemo";
 
 /// Directory (inside the model directory) holding verification stamps. Stamps
 /// live outside the `.mlpackage` bundles so Core ML never sees foreign files.
+/// Attribution notice inside an installed model directory.
+const ATTRIBUTION_FILE: &str = "LICENSE-and-attribution.txt";
+
 const STAMP_DIR: &str = ".verified";
 
 /// Core ML packages the engine host loads, plus the vocabulary. A model
@@ -50,6 +63,15 @@ pub const REQUIRED_ITEMS: [&str; 5] = [
     "Decoder.mlpackage",
     "JointDecisionv3.mlpackage",
     "parakeet_vocab.json",
+];
+
+/// Files the ONNX engine host loads from the model directory.
+pub const ONNX_REQUIRED_ITEMS: [&str; 5] = [
+    "encoder-model.int8.onnx",
+    "decoder_joint-model.int8.onnx",
+    "nemo128.onnx",
+    "vocab.txt",
+    "config.json",
 ];
 
 /// One expected file inside the extracted archive.
@@ -70,31 +92,79 @@ impl ManifestFile {
     }
 }
 
+/// Where the manifest's files come from.
+#[derive(Debug, Clone, Copy)]
+pub enum ModelSource {
+    /// One zip archive with a pinned digest; `files` describes its contents.
+    Archive {
+        url: &'static str,
+        archive: DownloadIntegrity,
+    },
+    /// Individual files, each fetched from `<base_url>/<path>`.
+    Files { base_url: &'static str },
+}
+
 /// Immutable description of one published model artifact.
 #[derive(Debug, Clone, Copy)]
 pub struct ModelManifest {
     pub model_id: &'static str,
     pub revision: &'static str,
-    pub url: &'static str,
-    pub archive: DownloadIntegrity,
+    pub source: ModelSource,
     pub files: &'static [ManifestFile],
+    /// Items (files or directories) the engine host loads; a developer override
+    /// directory must contain all of them.
+    pub required_items: &'static [&'static str],
+    /// Licence and attribution line surfaced in status output.
+    pub attribution: &'static str,
 }
 
 impl ModelManifest {
-    /// `pianissimo-sv-coreml-<revision>`: installed directory name and the
-    /// `model_id` announced to the engine host.
+    /// `<model id>-<revision>`: installed directory name and the `model_id`
+    /// announced to the engine host.
     pub fn versioned_id(&self) -> String {
         format!("{}-{}", self.model_id, self.revision)
     }
 
-    /// Installed (extracted) size in bytes.
+    /// Installed size in bytes.
     pub fn installed_size(&self) -> u64 {
         self.files.iter().map(|file| file.size).sum()
     }
 
+    /// Bytes to download: the archive, or the sum of the files.
+    pub fn download_size(&self) -> u64 {
+        match self.source {
+            ModelSource::Archive { archive, .. } => archive.size,
+            ModelSource::Files { .. } => self.installed_size(),
+        }
+    }
+
+    /// Download URL of one manifest file (file-list sources only).
+    pub fn file_url(&self, file: &ManifestFile) -> Option<String> {
+        match self.source {
+            ModelSource::Files { base_url } => Some(format!("{base_url}/{}", file.path)),
+            ModelSource::Archive { .. } => None,
+        }
+    }
+
     /// True while the constants still hold the unpublished placeholder digests.
     pub fn is_placeholder(&self) -> bool {
-        self.archive.sha256.bytes().all(|b| b == b'0')
+        match self.source {
+            ModelSource::Archive { archive, .. } => archive.sha256.bytes().all(|b| b == b'0'),
+            ModelSource::Files { .. } => self
+                .files
+                .iter()
+                .any(|file| file.sha256.bytes().all(|b| b == b'0')),
+        }
+    }
+}
+
+/// Manifest for the current platform: the ONNX int8 file set on Windows, the
+/// Core ML archive everywhere else.
+pub fn active() -> &'static ModelManifest {
+    if cfg!(target_os = "windows") {
+        &ONNX_MANIFEST
+    } else {
+        &MANIFEST
     }
 }
 
@@ -104,11 +174,15 @@ impl ModelManifest {
 pub const MANIFEST: ModelManifest = ModelManifest {
     model_id: MODEL_ID,
     revision: "r1",
-    url: "https://huggingface.co/magnusgille/pianissimo-sv-coreml/resolve/6e33b64e174330a13bd61b9e40cfef7cfa2d28ce/pianissimo-sv-coreml-r1.zip",
-    archive: DownloadIntegrity {
-        sha256: "4f2b7456f2c29e5325deefd99db36ebe713f17d479a15e10ce099215ec17babe",
-        size: 637642054,
+    source: ModelSource::Archive {
+        url: "https://huggingface.co/magnusgille/pianissimo-sv-coreml/resolve/6e33b64e174330a13bd61b9e40cfef7cfa2d28ce/pianissimo-sv-coreml-r1.zip",
+        archive: DownloadIntegrity {
+            sha256: "4f2b7456f2c29e5325deefd99db36ebe713f17d479a15e10ce099215ec17babe",
+            size: 637642054,
+        },
     },
+    required_items: &REQUIRED_ITEMS,
+    attribution: ATTRIBUTION,
     files: &[
         ManifestFile {
             path: "Decoder.mlpackage/Data/com.apple.CoreML/model.mlmodel",
@@ -188,6 +262,46 @@ pub const MANIFEST: ModelManifest = ModelManifest {
     ],
 };
 
+/// Windows-on-ARM artifact: KlangAI's official ONNX int8 export, pinned to an
+/// immutable Hugging Face commit (CC BY 4.0, Klang AI AB). Only the int8 encoder
+/// and decoder/joint are fetched; `nemo128.onnx` is the mel front end.
+pub const ONNX_MANIFEST: ModelManifest = ModelManifest {
+    model_id: ONNX_MODEL_ID,
+    revision: "32118e6",
+    source: ModelSource::Files {
+        base_url: "https://huggingface.co/KlangAI/pianissimo-sv-onnx/resolve/32118e6c01a88e3c4b4b735971195303a88d21ce",
+    },
+    required_items: &ONNX_REQUIRED_ITEMS,
+    attribution: ATTRIBUTION,
+    files: &[
+        ManifestFile {
+            path: "config.json",
+            size: 116,
+            sha256: "f19eee59d2ba995f6d5cdb164e30dd64d2a8b7ed0ce9f2198ab68a5467445694",
+        },
+        ManifestFile {
+            path: "decoder_joint-model.int8.onnx",
+            size: 30025652,
+            sha256: "0f9213242acd8874f2717c5e3cdb888d4e7673ddf3abb9ee3a2fd2eaf0acdd03",
+        },
+        ManifestFile {
+            path: "encoder-model.int8.onnx",
+            size: 630313965,
+            sha256: "13288a5f4f009bf6bf8a3260044d098f6922e8caf1c564521d4962fa5749f66c",
+        },
+        ManifestFile {
+            path: "nemo128.onnx",
+            size: 138824,
+            sha256: "5b4a84c52eeaa615dc46d781cc7e4598f9b432184831d57493c48adcd01371a9",
+        },
+        ManifestFile {
+            path: "vocab.txt",
+            size: 93939,
+            sha256: "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+        },
+    ],
+};
+
 // ---- locations ------------------------------------------------------------
 
 /// Developer override directory, when set and non-empty. Honored only in
@@ -205,7 +319,7 @@ pub fn installed_dir_in(manifest: &ModelManifest, models: &Path) -> PathBuf {
 /// Directory the engine host should load: the override, else the installed
 /// directory in the shared model cache.
 pub fn model_dir() -> PathBuf {
-    override_dir().unwrap_or_else(|| installed_dir_in(&MANIFEST, &models_dir()))
+    override_dir().unwrap_or_else(|| installed_dir_in(active(), &models_dir()))
 }
 
 /// Alias kept for callers that prefer the older name.
@@ -218,19 +332,19 @@ pub fn model_path() -> PathBuf {
     model_dir()
 }
 
-/// Id announced to the engine host in `load` (`pianissimo-sv-coreml-<rev>`).
+/// Id announced to the engine host in `load` (`<model id>-<rev>`).
 pub fn model_id() -> String {
-    MANIFEST.versioned_id()
+    active().versioned_id()
 }
 
-/// Bytes to download (the archive).
+/// Bytes to download (the archive, or all files).
 pub fn download_size_bytes() -> u64 {
-    MANIFEST.archive.size
+    active().download_size()
 }
 
 /// Bytes on disk once installed.
 pub fn installed_size_bytes() -> u64 {
-    MANIFEST.installed_size()
+    active().installed_size()
 }
 
 /// Whether the dev override is active (downloads/deletes are then no-ops).
@@ -240,8 +354,8 @@ pub fn is_overridden() -> bool {
 
 // ---- presence and verification -------------------------------------------
 
-fn override_is_usable(dir: &Path) -> bool {
-    REQUIRED_ITEMS.iter().all(|item| dir.join(item).exists())
+fn override_is_usable(manifest: &ModelManifest, dir: &Path) -> bool {
+    manifest.required_items.iter().all(|item| dir.join(item).exists())
 }
 
 fn is_downloaded_in(manifest: &ModelManifest, dir: &Path) -> bool {
@@ -258,8 +372,8 @@ fn is_downloaded_in(manifest: &ModelManifest, dir: &Path) -> bool {
 /// file). Hash verification happens through [`verify_downloaded`].
 pub fn is_downloaded() -> bool {
     match override_dir() {
-        Some(dir) => override_is_usable(&dir),
-        None => is_downloaded_in(&MANIFEST, &installed_dir_in(&MANIFEST, &models_dir())),
+        Some(dir) => override_is_usable(active(), &dir),
+        None => is_downloaded_in(active(), &installed_dir_in(active(), &models_dir())),
     }
 }
 
@@ -275,7 +389,7 @@ fn verify_in(
 ) -> Result<(), DictationError> {
     if manifest.is_placeholder() {
         return Err(DictationError::ModelDownloadFailed(
-            "The Pianissimo Core ML model manifest has not been published yet".into(),
+            "The Pianissimo model manifest has not been published yet".into(),
         ));
     }
     if dir.is_dir() {
@@ -304,17 +418,17 @@ pub fn verify_downloaded_forced() -> Result<(), DictationError> {
 
 fn verify_installed(force: bool) -> Result<(), DictationError> {
     if let Some(dir) = override_dir() {
-        return if override_is_usable(&dir) {
+        return if override_is_usable(active(), &dir) {
             Ok(())
         } else {
             Err(DictationError::ModelDownloadFailed(format!(
                 "{MODEL_DIR_ENV}={} must contain {}",
                 dir.display(),
-                REQUIRED_ITEMS.join(", ")
+                active().required_items.join(", ")
             )))
         };
     }
-    verify_in(&MANIFEST, &installed_dir_in(&MANIFEST, &models_dir()), force)
+    verify_in(active(), &installed_dir_in(active(), &models_dir()), force)
 }
 
 // ---- install --------------------------------------------------------------
@@ -414,49 +528,131 @@ pub fn install_archive_in(
         extract_archive(archive, &staging, manifest.installed_size().saturating_add(1 << 20))?;
         let root = content_root(&staging, manifest);
         verify_in(manifest, &root, true)?;
+        write_attribution(manifest, &root)?;
         let final_dir = installed_dir_in(manifest, models);
-        // Replace any previous (possibly corrupt) install without ever exposing
-        // a partial directory under the final name.
-        let trash = models.join(format!(".pianissimo-old-{}", uuid::Uuid::new_v4()));
-        let had_old = final_dir.exists();
-        if had_old {
-            std::fs::rename(&final_dir, &trash)
-                .map_err(|e| install_err(format!("Cannot replace existing model: {e}")))?;
-        }
-        if let Err(e) = std::fs::rename(&root, &final_dir) {
-            if had_old {
-                let _ = std::fs::rename(&trash, &final_dir);
-            }
-            return Err(install_err(format!("Cannot move model into place: {e}")));
-        }
-        if had_old {
-            let _ = std::fs::remove_dir_all(&trash);
-        }
+        promote(&root, &final_dir, models)?;
         Ok(final_dir)
     })();
     let _ = std::fs::remove_dir_all(&staging);
     result
 }
 
-/// Download the Core ML model archive, verify, extract and install it. Removes
-/// the archive and any legacy NeMo/GGUF files afterwards.
+/// Write the licence/attribution notice into an installed directory whose
+/// artifact does not ship one itself (the ONNX file set).
+fn write_attribution(manifest: &ModelManifest, dir: &Path) -> Result<(), DictationError> {
+    if manifest.files.iter().any(|f| f.path == ATTRIBUTION_FILE) {
+        return Ok(());
+    }
+    std::fs::write(dir.join(ATTRIBUTION_FILE), format!("{}\n", manifest.attribution))
+        .map_err(|e| install_err(format!("Cannot write attribution notice: {e}")))
+}
+
+/// Move a verified staging directory into place atomically, replacing any
+/// previous (possibly corrupt) install.
+fn promote(staged: &Path, final_dir: &Path, models: &Path) -> Result<(), DictationError> {
+    let trash = models.join(format!(".pianissimo-old-{}", uuid::Uuid::new_v4()));
+    let had_old = final_dir.exists();
+    if had_old {
+        std::fs::rename(final_dir, &trash)
+            .map_err(|e| install_err(format!("Cannot replace existing model: {e}")))?;
+    }
+    if let Err(e) = std::fs::rename(staged, final_dir) {
+        if had_old {
+            let _ = std::fs::rename(&trash, final_dir);
+        }
+        return Err(install_err(format!("Cannot move model into place: {e}")));
+    }
+    if had_old {
+        let _ = std::fs::remove_dir_all(&trash);
+    }
+    Ok(())
+}
+
+/// Verify a staging directory of individually downloaded files and install it.
+pub fn install_staged_files_in(
+    manifest: &ModelManifest,
+    staging: &Path,
+    models: &Path,
+) -> Result<PathBuf, DictationError> {
+    verify_in(manifest, staging, true)?;
+    write_attribution(manifest, staging)?;
+    let final_dir = installed_dir_in(manifest, models);
+    promote(staging, &final_dir, models)?;
+    Ok(final_dir)
+}
+
+/// Download every file of a file-list manifest into a fresh staging directory,
+/// then verify and install it. `fetch(url, dest, integrity, progress)` downloads
+/// one file (injectable for tests); progress is aggregated across files.
+async fn download_files_in<F, Fut>(
+    manifest: &ModelManifest,
+    models: &Path,
+    progress_callback: impl Fn(u64, u64) + Send + 'static,
+    fetch: F,
+) -> Result<PathBuf, DictationError>
+where
+    F: Fn(String, PathBuf, DownloadIntegrity, Box<dyn Fn(u64, u64) + Send>) -> Fut,
+    Fut: std::future::Future<Output = Result<(), DictationError>>,
+{
+    std::fs::create_dir_all(models)
+        .map_err(|e| install_err(format!("Failed to create models directory: {e}")))?;
+    let staging = models.join(format!(".pianissimo-extract-{}", uuid::Uuid::new_v4()));
+    let total = manifest.download_size();
+    let progress = std::sync::Arc::new(std::sync::Mutex::new(progress_callback));
+    let result = async {
+        std::fs::create_dir(&staging)
+            .map_err(|e| install_err(format!("Cannot create staging directory: {e}")))?;
+        let mut done: u64 = 0;
+        for file in manifest.files {
+            let url = manifest
+                .file_url(file)
+                .ok_or_else(|| install_err("Model manifest has no per-file download URLs"))?;
+            info!("Downloading Pianissimo model file {url}");
+            let dest = staging.join(file.path);
+            let base = done;
+            let progress = std::sync::Arc::clone(&progress);
+            fetch(
+                url,
+                dest.clone(),
+                file.integrity(),
+                Box::new(move |downloaded, _| {
+                    if let Ok(callback) = progress.lock() {
+                        callback(base + downloaded, total);
+                    }
+                }),
+            )
+            .await?;
+            // The download helper leaves a verification stamp beside the file.
+            crate::download::remove_verification_stamp(&dest);
+            done += file.size;
+        }
+        install_staged_files_in(manifest, &staging, models)
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
+/// Download the model for this platform (Core ML archive, or the ONNX files),
+/// verify and install it. Removes the archive and any legacy NeMo/GGUF files
+/// afterwards.
 pub async fn download(
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<PathBuf, DictationError> {
+    let manifest = active();
     if let Some(dir) = override_dir() {
         info!("Using {MODEL_DIR_ENV}={}; nothing to download", dir.display());
-        return if override_is_usable(&dir) {
+        return if override_is_usable(manifest, &dir) {
             Ok(dir)
         } else {
             Err(install_err(format!(
                 "{MODEL_DIR_ENV}={} must contain {}",
                 dir.display(),
-                REQUIRED_ITEMS.join(", ")
+                manifest.required_items.join(", ")
             )))
         };
     }
     let models = models_dir();
-    let manifest = &MANIFEST;
     let destination = installed_dir_in(manifest, &models);
 
     if is_downloaded_in(manifest, &destination) && verify_in(manifest, &destination, false).is_ok()
@@ -467,34 +663,36 @@ pub async fn download(
     }
     if manifest.is_placeholder() {
         return Err(install_err(
-            "The Pianissimo Core ML model has not been published yet (manifest placeholder)",
+            "The Pianissimo model has not been published yet (manifest placeholder)",
         ));
     }
 
-    let archive = models.join(format!("{}.zip", manifest.versioned_id()));
-    if prepare_existing_artifact(&archive, manifest.archive)? != ExistingArtifact::Verified {
-        info!("Downloading Pianissimo model from {}", manifest.url);
-        download_to_path(
-            manifest.url,
-            &archive,
-            "zip",
-            manifest.archive,
-            Some(b"PK\x03\x04"),
-            progress_callback,
-        )
-        .await?;
-    }
-
-    let installed = tokio::task::spawn_blocking({
-        let archive = archive.clone();
-        let models = models.clone();
-        move || install_archive_in(&MANIFEST, &archive, &models)
-    })
-    .await
-    .map_err(|e| install_err(format!("Model install task failed: {e}")))?;
-    crate::download::remove_verification_stamp(&archive);
-    let _ = std::fs::remove_file(&archive);
-    let installed = installed?;
+    let installed = match manifest.source {
+        ModelSource::Files { .. } => {
+            download_files_in(manifest, &models, progress_callback, |url, dest, integrity, progress| async move {
+                download_to_path(&url, &dest, "onnx", integrity, None, progress).await
+            })
+            .await?
+        }
+        ModelSource::Archive { url, archive: integrity } => {
+            let archive = models.join(format!("{}.zip", manifest.versioned_id()));
+            if prepare_existing_artifact(&archive, integrity)? != ExistingArtifact::Verified {
+                info!("Downloading Pianissimo model from {url}");
+                download_to_path(url, &archive, "zip", integrity, Some(b"PK\x03\x04"), progress_callback)
+                    .await?;
+            }
+            let installed = tokio::task::spawn_blocking({
+                let archive = archive.clone();
+                let models = models.clone();
+                move || install_archive_in(active(), &archive, &models)
+            })
+            .await
+            .map_err(|e| install_err(format!("Model install task failed: {e}")))?;
+            crate::download::remove_verification_stamp(&archive);
+            let _ = std::fs::remove_file(&archive);
+            installed?
+        }
+    };
 
     cleanup_superseded(&models);
     info!("Pianissimo model installed: {}", installed.display());
@@ -538,8 +736,9 @@ fn cleanup_superseded(models: &Path) {
     if let Err(error) = remove_legacy_files_in(models) {
         warn!("Could not remove legacy Pianissimo files: {error}");
     }
-    let current = MANIFEST.versioned_id();
-    let prefix = format!("{MODEL_ID}-");
+    let manifest = active();
+    let current = manifest.versioned_id();
+    let prefix = format!("{}-", manifest.model_id);
     let Ok(entries) = std::fs::read_dir(models) else {
         return;
     };
@@ -570,7 +769,7 @@ pub fn delete() -> Result<(), DictationError> {
     if is_overridden() {
         warn!("{MODEL_DIR_ENV} is set; leaving the override directory untouched");
     }
-    delete_in(&MANIFEST, &models)?;
+    delete_in(active(), &models)?;
     cleanup_superseded(&models);
     Ok(())
 }
@@ -627,12 +826,16 @@ mod tests {
         ModelManifest {
             model_id: "pianissimo-sv-coreml",
             revision: "test1",
-            url: "http://invalid.example/model.zip",
-            archive: DownloadIntegrity {
-                sha256: leak(sha(&bytes)),
-                size: bytes.len() as u64,
+            source: ModelSource::Archive {
+                url: "http://invalid.example/model.zip",
+                archive: DownloadIntegrity {
+                    sha256: leak(sha(&bytes)),
+                    size: bytes.len() as u64,
+                },
             },
             files: Box::leak(files.into_boxed_slice()),
+            required_items: &REQUIRED_ITEMS,
+            attribution: ATTRIBUTION,
         }
     }
 
@@ -644,13 +847,16 @@ mod tests {
     fn production_manifest_is_published_pinned_and_complete() {
         assert_eq!(MANIFEST.versioned_id(), format!("pianissimo-sv-coreml-{}", MANIFEST.revision));
         assert!(!MANIFEST.is_placeholder(), "production manifest must reference the published artifact");
-        let pinned = regex_lite_commit(MANIFEST.url);
-        assert!(pinned, "model URL must be pinned to a 40-hex Hugging Face commit: {}", MANIFEST.url);
-        assert!(!MANIFEST.url.contains("/resolve/main/"));
-        assert!(MANIFEST.url.ends_with(".zip"));
+        let ModelSource::Archive { url, archive } = MANIFEST.source else {
+            panic!("Core ML manifest must be an archive");
+        };
+        let pinned = regex_lite_commit(url);
+        assert!(pinned, "model URL must be pinned to a 40-hex Hugging Face commit: {url}");
+        assert!(!url.contains("/resolve/main/"));
+        assert!(url.ends_with(".zip"));
         let hex64 = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
-        assert!(hex64(MANIFEST.archive.sha256));
-        assert!(MANIFEST.archive.size > MANIFEST.installed_size());
+        assert!(hex64(archive.sha256));
+        assert!(archive.size > MANIFEST.installed_size());
         for file in MANIFEST.files {
             assert!(hex64(file.sha256), "{} has no real digest", file.path);
             assert!(file.size > 0, "{} has no size", file.path);
@@ -829,7 +1035,7 @@ mod tests {
     #[test]
     fn override_requires_all_items() {
         let root = tmp();
-        assert!(!override_is_usable(root.path()));
+        assert!(!override_is_usable(&MANIFEST, root.path()));
         for item in REQUIRED_ITEMS {
             let path = root.path().join(item);
             if item.ends_with(".mlpackage") {
@@ -838,7 +1044,7 @@ mod tests {
                 fs::write(path, b"[]").unwrap();
             }
         }
-        assert!(override_is_usable(root.path()));
+        assert!(override_is_usable(&MANIFEST, root.path()));
     }
 
     #[test]
@@ -846,5 +1052,178 @@ mod tests {
         let root = tmp();
         assert!(!is_downloaded_in(&MANIFEST, root.path()));
         assert!(verify_in(&MANIFEST, root.path(), false).is_err());
+    }
+
+    // ---- file-list (ONNX) manifests -----------------------------------------
+
+    const ONNX_FIXTURE: [(&str, &[u8]); 3] = [
+        ("encoder-model.int8.onnx", b"encoder-bytes"),
+        ("vocab.txt", b"<blk> 0\n"),
+        ("config.json", b"{}"),
+    ];
+
+    fn files_manifest(entries: &[(&str, &[u8])]) -> ModelManifest {
+        let files: Vec<ManifestFile> = entries
+            .iter()
+            .map(|(path, bytes)| ManifestFile {
+                path: leak((*path).to_string()),
+                size: bytes.len() as u64,
+                sha256: leak(sha(bytes)),
+            })
+            .collect();
+        let required: Vec<&'static str> = files.iter().map(|f| f.path).collect();
+        ModelManifest {
+            model_id: "pianissimo-sv-onnx",
+            revision: "test1",
+            source: ModelSource::Files { base_url: "http://invalid.example/repo" },
+            files: Box::leak(files.into_boxed_slice()),
+            required_items: Box::leak(required.into_boxed_slice()),
+            attribution: ATTRIBUTION,
+        }
+    }
+
+    /// Fake fetch: writes the fixture bytes for the URL's file name (optionally
+    /// corrupted / failing) and reports progress.
+    async fn run_download(
+        manifest: &ModelManifest,
+        models: &Path,
+        corrupt: Option<&'static str>,
+        fail: Option<&'static str>,
+        seen: std::sync::Arc<std::sync::Mutex<Vec<(u64, u64)>>>,
+    ) -> Result<PathBuf, DictationError> {
+        download_files_in(
+            manifest,
+            models,
+            move |d, t| seen.lock().unwrap().push((d, t)),
+            move |url, dest, _integrity, progress| async move {
+                let name = url.rsplit('/').next().unwrap().to_string();
+                if fail == Some(name.as_str()) {
+                    return Err(install_err("network down"));
+                }
+                let mut bytes = ONNX_FIXTURE.iter().find(|(p, _)| *p == name).unwrap().1.to_vec();
+                if corrupt == Some(name.as_str()) {
+                    bytes[0] ^= 0xff;
+                }
+                std::fs::write(&dest, &bytes).unwrap();
+                progress(bytes.len() as u64, bytes.len() as u64);
+                Ok(())
+            },
+        )
+        .await
+    }
+
+    fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(future)
+    }
+
+    #[test]
+    fn onnx_manifest_is_pinned_complete_and_sized() {
+        let m = &ONNX_MANIFEST;
+        assert_eq!(m.versioned_id(), "pianissimo-sv-onnx-32118e6");
+        assert!(!m.is_placeholder());
+        let ModelSource::Files { base_url } = m.source else { panic!("ONNX manifest must be a file list") };
+        assert!(base_url.starts_with("https://huggingface.co/KlangAI/pianissimo-sv-onnx/resolve/"));
+        assert!(regex_lite_commit(&format!("{base_url}/x")), "{base_url}");
+        let hex64 = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+        for file in m.files {
+            assert!(hex64(file.sha256) && file.size > 0, "{}", file.path);
+        }
+        for required in ONNX_REQUIRED_ITEMS {
+            assert!(m.files.iter().any(|f| f.path == required), "{required}");
+        }
+        assert_eq!(m.download_size(), m.installed_size());
+        assert!((660_000_000..661_000_000).contains(&m.download_size()));
+        assert_eq!(
+            m.file_url(&m.files[0]).unwrap(),
+            format!("{base_url}/config.json")
+        );
+        assert!(MANIFEST.file_url(&MANIFEST.files[0]).is_none());
+        assert!(m.attribution.contains("CC BY 4.0") && m.attribution.contains("Klang AI AB"));
+    }
+
+    #[test]
+    fn active_manifest_matches_the_platform() {
+        if cfg!(target_os = "windows") {
+            assert_eq!(active().model_id, ONNX_MODEL_ID);
+        } else {
+            assert_eq!(active().model_id, MODEL_ID);
+        }
+    }
+
+    #[test]
+    fn file_list_download_verifies_installs_atomically_and_writes_attribution() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let manifest = files_manifest(&ONNX_FIXTURE);
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let dir = block_on(run_download(&manifest, &models, None, None, seen.clone())).unwrap();
+
+        assert_eq!(dir, models.join("pianissimo-sv-onnx-test1"));
+        assert!(is_downloaded_in(&manifest, &dir));
+        verify_in(&manifest, &dir, true).unwrap();
+        let notice = fs::read_to_string(dir.join(ATTRIBUTION_FILE)).unwrap();
+        assert!(notice.contains("CC BY 4.0") && notice.contains("Klang AI AB"));
+        let leftovers: Vec<_> = fs::read_dir(&models).unwrap().flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with('.')).collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        let seen = seen.lock().unwrap();
+        let total: u64 = ONNX_FIXTURE.iter().map(|(_, b)| b.len() as u64).sum();
+        assert!(seen.iter().all(|(_, t)| *t == total));
+        assert_eq!(seen.last().unwrap().0, total, "progress is aggregated across files");
+        assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0));
+    }
+
+    #[test]
+    fn corrupt_downloaded_file_leaves_no_install_and_no_staging() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let manifest = files_manifest(&ONNX_FIXTURE);
+        let seen = Default::default();
+
+        let error = block_on(run_download(&manifest, &models, Some("vocab.txt"), None, seen)).unwrap_err();
+
+        assert!(error.to_string().contains("integrity"), "{error}");
+        assert!(!installed_dir_in(&manifest, &models).exists());
+        assert_eq!(fs::read_dir(&models).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn failed_fetch_keeps_a_previous_install_intact() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let manifest = files_manifest(&ONNX_FIXTURE);
+        let dir = block_on(run_download(&manifest, &models, None, None, Default::default())).unwrap();
+        fs::write(dir.join("config.json"), b"XX").unwrap(); // same size, wrong bytes
+        assert!(verify_in(&manifest, &dir, true).is_err());
+
+        let error = block_on(run_download(&manifest, &models, None, Some("config.json"), Default::default())).unwrap_err();
+        assert!(error.to_string().contains("network down"), "{error}");
+        assert_eq!(fs::read(dir.join("config.json")).unwrap(), b"XX", "untouched on failure");
+
+        // A later successful run replaces the corrupt directory.
+        let dir = block_on(run_download(&manifest, &models, None, None, Default::default())).unwrap();
+        verify_in(&manifest, &dir, true).unwrap();
+        assert_eq!(fs::read_dir(&models).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn archive_manifests_have_no_per_file_urls_and_reject_file_downloads() {
+        let root = tmp();
+        let models = root.path().join("Models");
+        let error = block_on(run_download(&MANIFEST, &models, None, None, Default::default())).unwrap_err();
+        assert!(error.to_string().contains("per-file"), "{error}");
+        assert_eq!(fs::read_dir(&models).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn onnx_override_needs_the_onnx_items() {
+        let root = tmp();
+        assert!(!override_is_usable(&ONNX_MANIFEST, root.path()));
+        for item in ONNX_REQUIRED_ITEMS {
+            fs::write(root.path().join(item), b"x").unwrap();
+        }
+        assert!(override_is_usable(&ONNX_MANIFEST, root.path()));
+        assert!(!override_is_usable(&MANIFEST, root.path()));
     }
 }
