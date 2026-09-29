@@ -45,8 +45,7 @@ const BUNDLED_HOST: &str = "Resources/EngineHost/sagascript-engine-host";
 const WINDOWS_HOST_DIR: &str = "engine-host";
 const WINDOWS_HOST_EXE: &str = "sagascript-engine-host-ort.exe";
 const WINDOWS_ORT_DLL: &str = "onnxruntime.dll";
-/// Environment variable the ONNX Runtime host reads for its shared library.
-const ORT_DYLIB_ENV: &str = "ORT_DYLIB_PATH";
+const WINDOWS_ORT_PROVIDERS_DLL: &str = "onnxruntime_providers_shared.dll";
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct PianissimoWord {
@@ -122,7 +121,7 @@ pub fn runtime_supported_on_this_os() -> bool {
             None
         };
         let windows_host = os == "windows"
-            && resolve_host().is_some_and(|host| host.is_file());
+            && resolve_host().is_some_and(|host| windows_runtime_complete(&host));
         platform_gate(os, arch, version.as_deref(), windows_host)
     })
 }
@@ -146,6 +145,16 @@ fn bundled_windows_host(current_exe: &Path) -> Option<PathBuf> {
     host.is_file().then_some(host)
 }
 
+/// The Windows host is only usable with the ONNX Runtime DLLs beside it.
+fn windows_runtime_complete(host: &Path) -> bool {
+    host.is_file()
+        && host.parent().is_some_and(|dir| {
+            [WINDOWS_ORT_DLL, WINDOWS_ORT_PROVIDERS_DLL]
+                .iter()
+                .all(|dll| dir.join(dll).is_file())
+        })
+}
+
 fn resolve_host_for(
     windows: bool,
     env_value: Option<OsString>,
@@ -162,18 +171,6 @@ fn resolve_host_for(
             bundled_macos_host(exe)
         }
     })
-}
-
-/// Extra environment for the host process: on Windows the ONNX Runtime library
-/// beside the host executable.
-fn host_env(windows: bool, host: &Path) -> Vec<(String, String)> {
-    if !windows {
-        return Vec::new();
-    }
-    host.parent()
-        .map(|dir| dir.join(WINDOWS_ORT_DLL))
-        .map(|dll| vec![(ORT_DYLIB_ENV.to_string(), dll.display().to_string())])
-        .unwrap_or_default()
 }
 
 /// Resolve the engine host: `SAGASCRIPT_ENGINE_HOST` (development builds only,
@@ -236,7 +233,6 @@ pub fn config_for_host(host: PathBuf, settings: &Settings) -> EngineHostConfig {
         },
     );
     config.identity = client_identity();
-    config.env.extend(host_env(cfg!(windows), &config.host_path));
     let (unload, shutdown) = idle_policy(settings.engine_idle_unload_minutes);
     config.idle_unload = unload;
     config.idle_shutdown = shutdown;
@@ -640,16 +636,18 @@ mod tests {
     }
 
     #[test]
-    fn ort_library_is_passed_only_on_windows_and_lives_beside_the_host() {
-        let host = Path::new("app").join("engine-host").join("sagascript-engine-host-ort.exe");
-        let env = host_env(true, &host);
-        assert_eq!(env.len(), 1);
-        assert_eq!(env[0].0, "ORT_DYLIB_PATH");
-        assert_eq!(
-            Path::new(&env[0].1),
-            Path::new("app").join("engine-host").join("onnxruntime.dll")
-        );
-        assert!(host_env(false, &host).is_empty());
+    fn windows_gate_requires_host_and_both_runtime_dlls() {
+        let root = tempfile::tempdir().unwrap();
+        let host = root.path().join("sagascript-engine-host-ort.exe");
+        assert!(!windows_runtime_complete(&host));
+        std::fs::write(&host, b"x").unwrap();
+        assert!(!windows_runtime_complete(&host));
+        std::fs::write(root.path().join("onnxruntime.dll"), b"x").unwrap();
+        assert!(!windows_runtime_complete(&host));
+        std::fs::write(root.path().join("onnxruntime_providers_shared.dll"), b"x").unwrap();
+        assert!(windows_runtime_complete(&host));
+        std::fs::remove_file(root.path().join("onnxruntime.dll")).unwrap();
+        assert!(!windows_runtime_complete(&host));
     }
 
     #[test]
