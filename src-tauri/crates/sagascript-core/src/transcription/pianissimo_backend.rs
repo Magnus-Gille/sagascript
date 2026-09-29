@@ -6,7 +6,8 @@
 //! utterances (see `docs/engine-host-protocol.md`). Long-audio windowing,
 //! merging, progress and cancellation live in the `engine_host` module.
 //!
-//! Platform gate: Pianissimo needs macOS 14+ on Apple Silicon
+//! Platform gate: Pianissimo needs macOS 14+ on Apple Silicon (Core ML host), or
+//! Windows on ARM with the bundled ONNX Runtime host
 //! ([`runtime_supported_on_this_os`]); everything else keeps using Whisper.
 
 use std::ffi::OsString;
@@ -27,16 +28,25 @@ use crate::transcription::dev_overrides::env_override;
 use crate::transcription::pianissimo_model;
 
 /// Shown wherever Pianissimo is refused for platform reasons.
-pub const UNSUPPORTED_MESSAGE: &str = "Pianissimo requires macOS 14 or later on Apple Silicon";
+pub const UNSUPPORTED_MESSAGE: &str = "Pianissimo requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon)";
 
 /// Environment override (development builds only): path of the `sagascript-engine-host` binary.
 pub const ENGINE_HOST_ENV: &str = "SAGASCRIPT_ENGINE_HOST";
 /// Environment override: Core ML compute units (`ane`, `gpu`, `cpu`, `all`).
 pub const COMPUTE_UNITS_ENV: &str = "SAGASCRIPT_ENGINE_COMPUTE_UNITS";
-const DEFAULT_COMPUTE_UNITS: &str = "ane";
+/// Neural Engine on macOS (Core ML host); the ONNX Runtime host on Windows is CPU-only.
+const DEFAULT_COMPUTE_UNITS_MACOS: &str = "ane";
+const DEFAULT_COMPUTE_UNITS_WINDOWS: &str = "cpu";
 
-/// Bundle-relative location of the host, below `Contents/`.
+/// Bundle-relative location of the macOS host, below `Contents/`.
 const BUNDLED_HOST: &str = "Resources/EngineHost/sagascript-engine-host";
+
+/// Windows host and its ONNX Runtime library, in `engine-host\` beside the app executable.
+const WINDOWS_HOST_DIR: &str = "engine-host";
+const WINDOWS_HOST_EXE: &str = "sagascript-engine-host-ort.exe";
+const WINDOWS_ORT_DLL: &str = "onnxruntime.dll";
+/// Environment variable the ONNX Runtime host reads for its shared library.
+const ORT_DYLIB_ENV: &str = "ORT_DYLIB_PATH";
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct PianissimoWord {
@@ -74,6 +84,13 @@ pub fn platform_supported(os: &str, arch: &str, macos_version: Option<&str>) -> 
         && macos_version.and_then(macos_major).is_some_and(|major| major >= 14)
 }
 
+/// Full platform gate: the macOS gate, or Windows on ARM once the bundled host
+/// exists. Windows x64 and Linux are never supported.
+pub fn platform_gate(os: &str, arch: &str, macos_version: Option<&str>, windows_host_present: bool) -> bool {
+    platform_supported(os, arch, macos_version)
+        || (os == "windows" && arch == "aarch64" && windows_host_present)
+}
+
 #[cfg(target_os = "macos")]
 fn detect_macos_version() -> Option<String> {
     let output = std::process::Command::new("/usr/bin/sw_vers")
@@ -92,8 +109,8 @@ fn detect_macos_version() -> Option<String> {
     None
 }
 
-/// Whether this machine can run Pianissimo: macOS 14+ on Apple Silicon. False on
-/// every other OS or architecture (Windows will get an ONNX host later).
+/// Whether this machine can run Pianissimo: macOS 14+ on Apple Silicon, or Windows
+/// on ARM with the bundled ONNX host. False on every other OS or architecture.
 pub fn runtime_supported_on_this_os() -> bool {
     static SUPPORTED: OnceLock<bool> = OnceLock::new();
     *SUPPORTED.get_or_init(|| {
@@ -104,7 +121,9 @@ pub fn runtime_supported_on_this_os() -> bool {
         } else {
             None
         };
-        platform_supported(os, arch, version.as_deref())
+        let windows_host = os == "windows"
+            && resolve_host().is_some_and(|host| host.is_file());
+        platform_gate(os, arch, version.as_deref(), windows_host)
     })
 }
 
@@ -113,26 +132,56 @@ pub fn runtime_supported_on_this_os() -> bool {
 /// `Sagascript.app/Contents/Resources/EngineHost/sagascript-engine-host` next to
 /// `current_exe`. The path is canonicalized first so the installed CLI symlink
 /// (`/usr/local/bin/sagascript` -> the app bundle executable) finds the bundle.
-fn bundled_host(current_exe: &Path) -> Option<PathBuf> {
+fn bundled_macos_host(current_exe: &Path) -> Option<PathBuf> {
     let current_exe = current_exe.canonicalize().ok()?;
     let contents = current_exe.parent()?.parent()?;
     let host = contents.join(BUNDLED_HOST);
     host.is_file().then_some(host)
 }
 
-fn resolve_host_with(env_value: Option<OsString>, current_exe: Option<&Path>) -> Option<PathBuf> {
+/// `<exe dir>\engine-host\sagascript-engine-host-ort.exe` beside the app or CLI
+/// executable (no canonicalization: it would add a `\\?\` prefix).
+fn bundled_windows_host(current_exe: &Path) -> Option<PathBuf> {
+    let host = current_exe.parent()?.join(WINDOWS_HOST_DIR).join(WINDOWS_HOST_EXE);
+    host.is_file().then_some(host)
+}
+
+fn resolve_host_for(
+    windows: bool,
+    env_value: Option<OsString>,
+    current_exe: Option<&Path>,
+) -> Option<PathBuf> {
     if let Some(path) = env_value.filter(|value| !value.is_empty()) {
         // Honoured as given even if missing, so the spawn error names the path.
         return Some(PathBuf::from(path));
     }
-    current_exe.and_then(bundled_host)
+    current_exe.and_then(|exe| {
+        if windows {
+            bundled_windows_host(exe)
+        } else {
+            bundled_macos_host(exe)
+        }
+    })
+}
+
+/// Extra environment for the host process: on Windows the ONNX Runtime library
+/// beside the host executable.
+fn host_env(windows: bool, host: &Path) -> Vec<(String, String)> {
+    if !windows {
+        return Vec::new();
+    }
+    host.parent()
+        .map(|dir| dir.join(WINDOWS_ORT_DLL))
+        .map(|dll| vec![(ORT_DYLIB_ENV.to_string(), dll.display().to_string())])
+        .unwrap_or_default()
 }
 
 /// Resolve the engine host: `SAGASCRIPT_ENGINE_HOST` (development builds only,
-/// see [`super::dev_overrides`]), then the bundled host, else `None`.
+/// see [`super::dev_overrides`]), then the bundled host (`Resources/EngineHost`
+/// in the macOS bundle, `engine-host\` beside the Windows executable), else `None`.
 pub fn resolve_host() -> Option<PathBuf> {
     let current_exe = std::env::current_exe().ok();
-    resolve_host_with(env_override(ENGINE_HOST_ENV), current_exe.as_deref())
+    resolve_host_for(cfg!(windows), env_override(ENGINE_HOST_ENV), current_exe.as_deref())
 }
 
 // ---- identity and configuration ------------------------------------------
@@ -150,12 +199,20 @@ fn client_identity() -> ClientIdentity {
     IDENTITY.get().cloned().unwrap_or_default()
 }
 
+fn default_compute_units(windows: bool) -> &'static str {
+    if windows {
+        DEFAULT_COMPUTE_UNITS_WINDOWS
+    } else {
+        DEFAULT_COMPUTE_UNITS_MACOS
+    }
+}
+
 fn compute_units() -> String {
     std::env::var(COMPUTE_UNITS_ENV)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_COMPUTE_UNITS.to_string())
+        .unwrap_or_else(|| default_compute_units(cfg!(windows)).to_string())
 }
 
 /// Idle policy from settings: unload after N minutes, shut the host down after 2N.
@@ -179,6 +236,7 @@ pub fn config_for_host(host: PathBuf, settings: &Settings) -> EngineHostConfig {
         },
     );
     config.identity = client_identity();
+    config.env.extend(host_env(cfg!(windows), &config.host_path));
     let (unload, shutdown) = idle_policy(settings.engine_idle_unload_minutes);
     config.idle_unload = unload;
     config.idle_shutdown = shutdown;
@@ -192,7 +250,7 @@ fn precheck() -> Result<PathBuf, DictationError> {
     }
     let host = resolve_host().ok_or_else(|| {
         DictationError::TranscriptionFailed(format!(
-            "Pianissimo engine host not found: this build has no bundled EngineHost and \
+            "Pianissimo engine host not found: this build has no bundled engine host and \
              {ENGINE_HOST_ENV} is not set"
         ))
     })?;
@@ -539,6 +597,67 @@ mod tests {
         }
     }
 
+    #[test]
+    fn full_gate_adds_windows_arm_only_with_the_bundled_host() {
+        // (os, arch, macOS version, windows host present, expected)
+        let cases = [
+            ("windows", "aarch64", None, true, true),
+            ("windows", "aarch64", None, false, false),
+            ("windows", "x86_64", None, true, false),
+            ("linux", "aarch64", None, true, false),
+            ("linux", "x86_64", None, true, false),
+            ("macos", "aarch64", Some("14.0"), false, true),
+            ("macos", "aarch64", Some("13.0"), true, false),
+            ("macos", "x86_64", Some("15.0"), true, false),
+        ];
+        for (os, arch, version, host, expected) in cases {
+            assert_eq!(
+                platform_gate(os, arch, version, host),
+                expected,
+                "{os}/{arch}/{version:?}/host={host}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_host_resolves_beside_the_executable() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("sagascript.exe");
+        assert_eq!(bundled_windows_host(&exe), None);
+        let dir = root.path().join("engine-host");
+        std::fs::create_dir_all(&dir).unwrap();
+        let host = dir.join("sagascript-engine-host-ort.exe");
+        std::fs::write(&host, b"x").unwrap();
+        assert_eq!(bundled_windows_host(&exe), Some(host.clone()));
+        assert_eq!(resolve_host_for(true, None, Some(&exe)), Some(host.clone()));
+        // The macOS layout is not consulted on Windows and vice versa.
+        assert_eq!(resolve_host_for(false, None, Some(&exe)), None);
+        // An explicit override wins, even when missing.
+        assert_eq!(
+            resolve_host_for(true, Some("C:\\dev\\host.exe".into()), Some(&exe)),
+            Some(PathBuf::from("C:\\dev\\host.exe"))
+        );
+    }
+
+    #[test]
+    fn ort_library_is_passed_only_on_windows_and_lives_beside_the_host() {
+        let host = Path::new("app").join("engine-host").join("sagascript-engine-host-ort.exe");
+        let env = host_env(true, &host);
+        assert_eq!(env.len(), 1);
+        assert_eq!(env[0].0, "ORT_DYLIB_PATH");
+        assert_eq!(
+            Path::new(&env[0].1),
+            Path::new("app").join("engine-host").join("onnxruntime.dll")
+        );
+        assert!(host_env(false, &host).is_empty());
+    }
+
+    #[test]
+    fn compute_units_default_per_platform() {
+        assert_eq!(default_compute_units(false), "ane");
+        assert_eq!(default_compute_units(true), "cpu");
+    }
+
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     #[test]
     fn unsupported_hosts_report_unsupported() {
@@ -570,7 +689,7 @@ mod tests {
     fn bundled_host_resolves_relative_to_app_executable() {
         let root = tempfile::tempdir().unwrap();
         let (host, app_executable) = app_layout(root.path());
-        assert_eq!(bundled_host(&app_executable).unwrap(), host.canonicalize().unwrap());
+        assert_eq!(bundled_macos_host(&app_executable).unwrap(), host.canonicalize().unwrap());
     }
 
     #[test]
@@ -578,7 +697,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (host, app_executable) = app_layout(root.path());
         std::fs::remove_file(host).unwrap();
-        assert!(bundled_host(&app_executable).is_none());
+        assert!(bundled_macos_host(&app_executable).is_none());
     }
 
     #[cfg(unix)]
@@ -591,7 +710,7 @@ mod tests {
         let cli_symlink = cli_dir.join("sagascript");
         std::os::unix::fs::symlink(&app_executable, &cli_symlink).unwrap();
 
-        assert_eq!(bundled_host(&cli_symlink).unwrap(), host.canonicalize().unwrap());
+        assert_eq!(bundled_macos_host(&cli_symlink).unwrap(), host.canonicalize().unwrap());
     }
 
     #[test]
@@ -599,14 +718,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (host, app_executable) = app_layout(root.path());
         assert_eq!(
-            resolve_host_with(Some("/dev/host".into()), Some(&app_executable)),
+            resolve_host_for(false, Some("/dev/host".into()), Some(&app_executable)),
             Some(PathBuf::from("/dev/host"))
         );
         assert_eq!(
-            resolve_host_with(Some("".into()), Some(&app_executable)).unwrap(),
+            resolve_host_for(false, Some("".into()), Some(&app_executable)).unwrap(),
             host.canonicalize().unwrap()
         );
-        assert_eq!(resolve_host_with(None, Some(&root.path().join("nope"))), None);
-        assert_eq!(resolve_host_with(None, None), None);
+        assert_eq!(resolve_host_for(false, None, Some(&root.path().join("nope"))), None);
+        assert_eq!(resolve_host_for(false, None, None), None);
     }
 }

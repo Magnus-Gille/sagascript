@@ -24,12 +24,14 @@ update.
 - **macOS v1** -- official releases are signed and notarized for macOS 13+ on Apple Silicon (Pianissimo requires macOS 14+); Intel Macs are not supported by the v1 binary release
 - **Windows beta** -- an unsigned Windows 11 preview for x64 and ARM64 is available from the [GitHub prerelease](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905)
 
-## Pianissimo (Swedish, Core ML)
+## Pianissimo (Swedish, Core ML / ONNX)
 
 Pianissimo runs on the Apple Neural Engine through a Core ML engine host bundled
 in the app (`Sagascript.app/Contents/Resources/EngineHost/sagascript-engine-host`).
-It requires **macOS 14 or later on Apple Silicon**. In **Dictate**, select
-**Pianissimo** for a Swedish profile, then download its Core ML model if
+On Windows on ARM (Snapdragon) it runs on the CPU through an ONNX Runtime host
+bundled in `engine-host\` beside the app. It requires **macOS 14+ on Apple Silicon
+or Windows on ARM (Snapdragon)**. In **Dictate**, select
+**Pianissimo** for a Swedish profile, then download its model if
 prompted. Each profile owns its language, shortcut, dictionary, and model;
 another Swedish profile can keep Whisper. The file-transcription choice stays
 independent. No Python installation is needed.

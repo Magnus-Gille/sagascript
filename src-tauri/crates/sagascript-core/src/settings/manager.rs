@@ -1038,7 +1038,7 @@ impl Settings {
     }
 
     /// Settings migration for systems that cannot run Pianissimo (anything but
-    /// macOS 14+ on Apple Silicon): every selection of it falls back to the
+    /// macOS 14+ on Apple Silicon or Windows on ARM): every selection of it falls back to the
     /// recommended Whisper model (`Auto`). Returns true when anything changed.
     pub fn demote_unsupported_pianissimo(&mut self, pianissimo_supported: bool) -> bool {
         if pianissimo_supported {
