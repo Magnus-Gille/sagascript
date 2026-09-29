@@ -416,6 +416,14 @@ The Apple Silicon app includes [NVIDIA NeMo-Speech.cpp v0.1.0](https://github.co
 Its license and third-party notices are shipped under
 \`PianissimoRuntime/share/licenses/nemo-speech/\`.
 
+## Ported source code
+
+Sagascript's engine-agnostic long-audio window planning and token merging
+(\`src-tauri/crates/sagascript-core/src/transcription/chunk_merge.rs\`) is a Rust port of the
+alignment and merge logic in [parakeet-mlx](https://github.com/senstella/parakeet-mlx)
+(\`parakeet_mlx/alignment.py\`), copyright its contributors, licensed under the
+[Apache-2.0 License](https://www.apache.org/licenses/LICENSE-2.0).
+
 ## Historical Python runtime dependency inventory
 
 Earlier test builds used [CPython 3.12.9](https://github.com/python/cpython/tree/v3.12.9)
