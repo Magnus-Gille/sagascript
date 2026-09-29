@@ -2244,6 +2244,52 @@ pub async fn set_engine_idle_unload_minutes(
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub struct EngineStatus {
+    installed: bool,
+    supported: bool,
+    host_path: Option<String>,
+    host_version: Option<String>,
+    host_git_sha: Option<String>,
+    warm: bool,
+}
+
+/// Read-only Pianissimo engine status for Settings. Only starts the host (for
+/// `hello`, no model load) when the model is installed, Pianissimo is selected
+/// and no identity is cached yet.
+#[tauri::command]
+pub async fn engine_status(controller: State<'_, SharedController>) -> Result<EngineStatus, String> {
+    use sagascript_core::settings::FileModelPreference;
+    use sagascript_core::transcription::pianissimo_backend as backend;
+    let supported = backend::runtime_supported_on_this_os();
+    let installed = pianissimo_model::is_downloaded();
+    let host = backend::resolve_host();
+    let selected = {
+        let ctrl = controller.lock().unwrap();
+        let settings = ctrl.settings();
+        settings.file_transcription_model == FileModelPreference::PianissimoOriginal
+            || settings.profile_models.values().any(|m| *m == FileModelPreference::PianissimoOriginal)
+    };
+    let mut identity = backend::cached_host_identity();
+    if identity.is_none() && supported && installed && selected && host.as_ref().is_some_and(|p| p.is_file()) {
+        identity = tokio::task::spawn_blocking(backend::refresh_host_identity)
+            .await
+            .map_err(|e| format!("engine status task failed: {e}"))?;
+    }
+    let (host_version, host_git_sha) = match identity {
+        Some((version, sha)) => (Some(version), sha),
+        None => (None, None),
+    };
+    Ok(EngineStatus {
+        installed,
+        supported,
+        host_path: host.map(|p| p.display().to_string()),
+        host_version,
+        host_git_sha,
+        warm: backend::engine_is_warm(),
+    })
+}
+
 // -- File transcription --
 
 /// User-requested abort for the plain (non-diarized) `transcribe_file` path

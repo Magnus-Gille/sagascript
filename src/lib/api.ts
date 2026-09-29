@@ -30,6 +30,8 @@ export interface WhisperModel {
   active: boolean;
 }
 
+export type EnginePrewarm = "off" | "on_app_start" | "on_key_down";
+
 export interface Settings {
   language: Language;
   whisper_model: string;
@@ -47,6 +49,8 @@ export interface Settings {
   beam_size: number;
   temperature_fallback: boolean;
   vad_enabled: boolean;
+  engine_prewarm: EnginePrewarm;
+  engine_idle_unload_minutes: number;
   has_completed_onboarding: boolean;
 }
 
@@ -193,6 +197,27 @@ export async function setBeamSize(beamSize: number): Promise<void> {
 
 export async function setTemperatureFallback(enabled: boolean): Promise<void> {
   return invoke("set_temperature_fallback", { enabled });
+}
+
+export async function setEnginePrewarm(mode: EnginePrewarm): Promise<void> {
+  return invoke("set_engine_prewarm", { mode });
+}
+
+export async function setEngineIdleUnloadMinutes(minutes: number): Promise<void> {
+  return invoke("set_engine_idle_unload_minutes", { minutes });
+}
+
+export interface EngineStatus {
+  installed: boolean;
+  supported: boolean;
+  host_path: string | null;
+  host_version: string | null;
+  host_git_sha: string | null;
+  warm: boolean;
+}
+
+export async function getEngineStatus(): Promise<EngineStatus> {
+  return invoke("engine_status");
 }
 
 export async function setVadEnabled(enabled: boolean): Promise<void> {

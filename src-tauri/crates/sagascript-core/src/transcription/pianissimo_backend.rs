@@ -274,6 +274,34 @@ pub fn shutdown_shared_client() {
     }
 }
 
+static HOST_IDENTITY: Mutex<Option<(String, Option<String>)>> = Mutex::new(None);
+
+fn remember_host_identity(snapshot: &super::engine_host::HostSnapshot) {
+    if let (Some(host), Ok(mut cache)) = (snapshot.host.as_ref(), HOST_IDENTITY.lock()) {
+        *cache = Some((host.version.clone(), host.git_sha.clone()));
+    }
+}
+
+/// Engine-host build identity `(version, git_sha)` from the last successful
+/// `hello` in this process. Never starts the host.
+pub fn cached_host_identity() -> Option<(String, Option<String>)> {
+    if let Some(shared) = shared_slot().lock().ok().and_then(|slot| slot.as_ref().map(|s| s.client.snapshot())) {
+        remember_host_identity(&shared);
+    }
+    HOST_IDENTITY.lock().ok().and_then(|cache| cache.clone())
+}
+
+/// Start the host if needed and complete `hello` only (no model load) so the
+/// build identity is known. Blocking; call from a blocking context.
+pub fn refresh_host_identity() -> Option<(String, Option<String>)> {
+    if let Ok(client) = shared_client() {
+        if let Ok(snapshot) = client.connect() {
+            remember_host_identity(&snapshot);
+        }
+    }
+    cached_host_identity()
+}
+
 /// Whether the shared engine currently has the model loaded (never starts anything).
 pub fn engine_is_warm() -> bool {
     shared_slot()

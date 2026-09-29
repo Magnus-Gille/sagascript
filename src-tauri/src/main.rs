@@ -1465,6 +1465,7 @@ fn main() {
             commands::set_vad_enabled,
             commands::set_engine_prewarm,
             commands::set_engine_idle_unload_minutes,
+            commands::engine_status,
             commands::get_build_info,
             commands::transcribe_file,
             commands::cancel_file_transcription,

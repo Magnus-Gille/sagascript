@@ -62,3 +62,17 @@ test("onboarding explains both recording modes", () => {
   assert.match(onboardingContent, /Press the shortcut to start recording\. Press it again to stop\./);
   assert.doesNotMatch(onboardingContent, /Hold to record, release to transcribe/);
 });
+
+test("Settings shows engine host identity and Pianissimo engine controls without outdated strings", () => {
+  const header = content.slice(content.indexOf('<header class="window-header">'), content.indexOf("</header>"));
+  assert.match(header, /engineHostIdentity/);
+  assert.match(content, /getEngineStatus/);
+  for (const text of ["Prepare Pianissimo when", "When I press the dictation key", "When Sagascript starts",
+    "Only when needed", "Unload after idle", "Requires macOS 14 or later on Apple Silicon"]) {
+    assert(content.includes(text), `Settings contains "${text}"`);
+  }
+  assert.match(content, /engineIdleChoices = \[5, 10, 30, 60, 0\]/);
+  assert.match(content, /setEnginePrewarm/);
+  assert.match(content, /setEngineIdleUnloadMinutes/);
+  assert.doesNotMatch(content, /714|Pianissimo Q8|macOS 13/);
+});
