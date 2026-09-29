@@ -90,7 +90,9 @@ public final class CoreMLEngine: EngineBackend {
 
     public func load(modelDirectory: String, modelID: String, computeUnits: String) throws -> LoadResult {
         let started = Date()
-        let sourceURL = URL(fileURLWithPath: modelDirectory, isDirectory: true)
+        // Resolve symlinks once: FileManager enumerators do not descend into a symlinked
+        // directory, so a symlinked model dir (or component) would look empty.
+        let sourceURL = URL(fileURLWithPath: modelDirectory, isDirectory: true).resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: sourceURL.path) else {
             throw EngineHostError(code: "model_missing", message: "Model directory does not exist: \(modelDirectory)")
         }
@@ -373,7 +375,8 @@ public final class CoreMLEngine: EngineBackend {
         return nil
     }
 
-    private func hashURL(_ url: URL) throws -> String {
+    private func hashURL(_ unresolvedURL: URL) throws -> String {
+        let url = unresolvedURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
             throw EngineHostError(code: "model_missing", message: "Missing model component: \(url.path)")
