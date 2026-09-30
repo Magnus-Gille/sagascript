@@ -304,6 +304,69 @@ jobs:
           ./scripts/accept-windows-candidate.ps1 -CliExe "src-tauri\target\${{ matrix.rust_target }}\release\sagascript.exe" -ExpectedVersion (Get-Content package.json -Raw | ConvertFrom-Json).version -Fixture test-audio/norwegian-short-3s.mp3 -OutputPath "$env:RUNNER_TEMP\windows-acceptance-ps51.json"
           if (-not (Test-Path "$env:RUNNER_TEMP\windows-acceptance-ps51.json")) { throw "Missing PS5.1 acceptance evidence" }
 
+      - name: Build and stage ARM64 ONNX engine host
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          $ortVersion = '1.28.2'
+          $ortZipName = "onnxruntime-win-arm64-$ortVersion.zip"
+          $ortUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$ortVersion/$ortZipName"
+          $expectedHash = 'a3ab2265e52d157ef1c4f4f82f66fc582ce12a780510aac240690ce194b58510'
+          $sha = (git rev-parse HEAD).Trim()
+          $env:SAGASCRIPT_GIT_SHA = $sha
+
+          cargo build --release --manifest-path src-tauri/engine-host/ort/Cargo.toml --target aarch64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw "Engine host build failed with exit code $LASTEXITCODE" }
+          $hostExe = 'src-tauri\engine-host\ort\target\aarch64-pc-windows-msvc\release\sagascript-engine-host-ort.exe'
+          if (-not (Test-Path -LiteralPath $hostExe -PathType Leaf)) { throw "Missing engine host binary: $hostExe" }
+
+          $zipPath = Join-Path $env:RUNNER_TEMP $ortZipName
+          Invoke-WebRequest -Uri $ortUrl -OutFile $zipPath
+          $actualHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) {
+            throw "ONNX Runtime zip SHA256 mismatch: expected $expectedHash, got $actualHash"
+          }
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'ort-extract'
+          if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot
+          $libDir = Join-Path $extractRoot "onnxruntime-win-arm64-$ortVersion\lib"
+
+          # build/engine-host/ is git-ignored, so staging does not dirty the pinned source identity.
+          $stage = 'build\engine-host\win-arm64'
+          if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath $hostExe -Destination $stage
+          foreach ($dll in @('onnxruntime.dll', 'onnxruntime_providers_shared.dll')) {
+            $source = Join-Path $libDir $dll
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Missing $dll in $ortZipName" }
+            Copy-Item -LiteralPath $source -Destination $stage
+          }
+          Get-ChildItem $stage | Select-Object Name, Length | Format-Table | Out-String | Write-Output
+          ./scripts/verify-windows-engine-host.ps1 -HostDir $stage -ExpectedGitSha $sha
+
+      - name: Measure warm ONNX engine host latency (informational)
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          # Numbers only, no thresholds: short-utterance latency on windows-11-arm without the device.
+          # A failure here is reported as a warning so a model-download hiccup cannot block the candidate.
+          try {
+            # The CLI only offers Pianissimo when the ONNX host sits in engine-host\ beside it,
+            # as in the installed layout.
+            $probeDir = Join-Path $env:RUNNER_TEMP 'latency-probe'
+            New-Item -ItemType Directory -Force -Path (Join-Path $probeDir 'engine-host') | Out-Null
+            Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'sagascript-cli.exe') -Destination $probeDir
+            Copy-Item -Path 'build\engine-host\win-arm64\*' -Destination (Join-Path $probeDir 'engine-host')
+            $cli = Join-Path $probeDir 'sagascript-cli.exe'
+            & $cli download-model pianissimo-sv
+            if ($LASTEXITCODE -ne 0) { throw "Pianissimo model download failed" }
+            $status = & $cli engine status --json | ConvertFrom-Json
+            ./scripts/benchmark-windows-engine-host.ps1 -HostDir 'build\engine-host\win-arm64' -ModelDir $status.model.dir | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'engine-host-latency.txt')
+          } catch {
+            Write-Host "::warning::Engine host latency probe failed: $_"
+          }
+          $global:LASTEXITCODE = 0
+
       - name: Remove cached installer bundles
         shell: pwsh
         run: |
@@ -321,7 +384,7 @@ jobs:
       - name: Build unsigned internal installers
         env:
           CARGO_LOG: cargo::core::compiler::fingerprint=info
-        run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }} --config scripts/tauri-ci-prebuilt.json
+        run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }} --config scripts/tauri-ci-prebuilt.json ${{ matrix.architecture == 'arm64' && '--config scripts/tauri-windows-engine-host.json' || '' }}
 
       - name: Verify packaged x64 inference CPU policy
         if: matrix.architecture == 'x64'
@@ -331,6 +394,27 @@ jobs:
       - name: Verify packaged ARM64 native CPU flags
         if: matrix.architecture == 'arm64'
         run: node scripts/report-windows-arm64-native.mjs src-tauri/target
+
+      - name: Verify ARM64 installer carries the ONNX engine host
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          $release = 'src-tauri\target\${{ matrix.rust_target }}\release'
+          # Tauri stages resources beside the app executable; NSIS and MSI package this tree.
+          ./scripts/verify-windows-engine-host.ps1 -HostDir (Join-Path $release 'engine-host') -ExpectedGitSha $sha
+
+          # Administrative extraction unpacks the MSI without installing it.
+          $msi = @(Get-ChildItem (Join-Path $release 'bundle\msi') -Filter '*.msi' -File)
+          if ($msi.Count -ne 1) { throw "Expected exactly one MSI, found $($msi.Count)" }
+          $extract = Join-Path $env:RUNNER_TEMP 'msi-extract'
+          if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+          $process = Start-Process msiexec.exe -ArgumentList @('/a', $msi[0].FullName, '/qn', "TARGETDIR=$extract") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "MSI administrative extraction failed with exit code $($process.ExitCode)" }
+          $installedHost = @(Get-ChildItem $extract -Recurse -Filter 'sagascript-engine-host-ort.exe' -File)
+          if ($installedHost.Count -ne 1) { throw "Expected one engine host in MSI, found $($installedHost.Count)" }
+          if ((Split-Path $installedHost[0].DirectoryName -Leaf) -ne 'engine-host') { throw "MSI engine host is not under engine-host\: $($installedHost[0].FullName)" }
+          ./scripts/verify-windows-engine-host.ps1 -HostDir $installedHost[0].DirectoryName -ExpectedGitSha $sha
 
       - name: Verify source after installer build
         run: node scripts/ci-build-identity.mjs --verify
@@ -361,6 +445,10 @@ jobs:
           Copy-Item "docs\windows-release.md" "artifacts\README-Windows-Candidate.md"
           Copy-Item "scripts\accept-windows-candidate.ps1" "artifacts\accept-windows-candidate.ps1"
           Copy-Item "scripts\summarize-windows-dictation.ps1" "artifacts\summarize-windows-dictation.ps1"
+          if ($architecture -eq 'arm64') {
+            Copy-Item "scripts\windows-arm-pianissimo-test.ps1" "artifacts\windows-arm-pianissimo-test.ps1"
+            Copy-Item "docs\windows-arm-pianissimo-testing.md" "artifacts\README-Windows-ARM-Pianissimo.md"
+          }
           Copy-Item "docs\windows-dictation-benchmark.md" "artifacts\README-Dictation-Metrics.md"
           Copy-Item "test-audio\norwegian-short-3s.mp3" "artifacts\norwegian-short-3s.mp3"
           Copy-Item "test-audio\english-jfk.wav" "artifacts\english-jfk.wav"

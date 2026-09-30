@@ -132,6 +132,35 @@ impl LiveDictationBackend {
         });
         timings.inference_ms = inference_started.elapsed().as_secs_f64() * 1000.0;
         self.clear_active_job();
+        let snapshot = client.snapshot();
+        tracing::info!(
+            samples = samples.len(),
+            was_warm = warm.was_warm,
+            model_ms = timings.model_ms as u64,
+            inference_ms = timings.inference_ms as u64,
+            pid = snapshot.pid,
+            spawn_count = snapshot.spawns,
+            load_count = snapshot.loads,
+            ok = result.is_ok(),
+            "Pianissimo dictation request finished"
+        );
+        if let Ok(transcription) = &result {
+            // Splits the client-observed wait into host stages plus IPC/PCM overhead
+            // (round_trip_ms minus the stage sum).
+            for window in &transcription.windows {
+                tracing::info!(
+                    audio_s = transcription.audio_s,
+                    inference_ms = timings.inference_ms as u64,
+                    preprocess_ms = window.preprocess_ms,
+                    encode_ms = window.encode_ms,
+                    decode_ms = window.decode_ms,
+                    round_trip_ms = window.round_trip_ms,
+                    pcm_and_ipc_overhead_ms = (timings.inference_ms as u64).saturating_sub(window.round_trip_ms),
+                    tokens = window.tokens,
+                    "Pianissimo dictation window timings"
+                );
+            }
+        }
         result
             .map(|transcription| transcription.text)
             .map_err(map_engine_error)

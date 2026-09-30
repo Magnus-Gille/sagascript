@@ -175,6 +175,14 @@ fn second_utterance_reuses_the_warm_host() {
     assert!(second_timings.model_ms < 100.0, "{}", second_timings.model_ms);
     assert!(second_timings.inference_started);
     assert_eq!(spawn_count(&log), 1, "host must not respawn between utterances");
+    let loads = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .filter(|line| line.starts_with("load "))
+        .count();
+    assert_eq!(loads, 1, "model must not reload between utterances");
+    let snapshot = shared.snapshot();
+    assert_eq!((snapshot.spawns, snapshot.loads), (1, 1));
 }
 
 #[test]

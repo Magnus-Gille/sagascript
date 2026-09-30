@@ -1312,7 +1312,11 @@ fn model_info_for(choice: FileModel, active: bool) -> ModelInfo {
         FileModel::PianissimoOriginal => ModelInfo {
             id: "pianissimo-sv".into(),
             display_name: "Pianissimo".into(),
-            description: "Swedish speech model \u{b7} Core ML on the Neural Engine \u{b7} macOS 14+ on Apple Silicon".into(),
+            description: if cfg!(windows) {
+                "Swedish file transcription · ONNX Runtime on the CPU · Windows on ARM (Snapdragon)".into()
+            } else {
+                "Swedish file transcription · Core ML on the Neural Engine · macOS 14+ on Apple Silicon".into()
+            },
             size_mb: pianissimo_model_size_mb(),
             downloaded: pianissimo_model::is_downloaded(),
             active,
@@ -1350,7 +1354,7 @@ pub async fn get_file_model_options(
     Ok(lineup_model_infos(language, pianissimo_supported(), include, None))
 }
 
-/// Download size of the Pianissimo Core ML archive, in MB, for model listings.
+/// Download size of the Pianissimo model, in MB, for model listings.
 fn pianissimo_model_size_mb() -> u32 {
     (pianissimo_model::download_size_bytes() / 1_048_576) as u32
 }

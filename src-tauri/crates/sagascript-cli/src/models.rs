@@ -129,7 +129,7 @@ pub struct DeleteModelArgs {
 pub fn delete(args: DeleteModelArgs) -> Result<(), DictationError> {
     if args.model == "pianissimo-sv" {
         pianissimo_model::delete()?;
-        eprintln!("Deleted Pianissimo (Core ML model and any legacy NeMo/GGUF files)");
+        eprintln!("Deleted Pianissimo (model files and any legacy NeMo/GGUF files)");
         return Ok(());
     }
     let whisper_model = parse_model(&args.model)?;
@@ -269,7 +269,7 @@ pub async fn download(args: DownloadModelArgs) -> Result<(), DictationError> {
             ));
         }
         eprintln!(
-            "Downloading Pianissimo Core ML model (~{} MB, CC BY 4.0)...",
+            "Downloading Pianissimo model (~{} MB, CC BY 4.0, Klang AI AB)...",
             pianissimo_model::download_size_bytes() / 1_048_576
         );
         let progress = DownloadProgress::new();

@@ -26,13 +26,13 @@ pub enum EngineAction {
         long_about = "\
 Show which engine host would run Pianissimo (path and where it was found), the \
 host's own build identity from its protocol handshake, the protocol version, and \
-whether the Core ML model is installed and verified. The host is started only to \
+whether the model is installed and verified. The host is started only to \
 read its identity and is stopped again; no model is loaded.
 
-Pianissimo requires macOS 14 or later on Apple Silicon; on other systems the \
+Pianissimo requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon); on other systems the \
 report says so and exits zero.
 
-The host is found in the copy bundled in Sagascript.app. Development builds \
+The host is found in the copy bundled with the app (Sagascript.app, or engine-host\\ beside the Windows executable). Development builds \
 (debug, or built with the `dev-overrides` feature) also honor \
 SAGASCRIPT_ENGINE_HOST and SAGASCRIPT_PIANISSIMO_MODEL_DIR (an existing model \
 directory instead of the downloaded one); release builds ignore both.",
@@ -256,7 +256,10 @@ fn print_status(report: &Value, json: bool) {
         return;
     }
     let text = |v: &Value| v.as_str().unwrap_or("-").to_string();
-    println!("Engine (Pianissimo, Core ML)");
+    println!(
+        "Engine (Pianissimo, {})",
+        if cfg!(windows) { "ONNX Runtime" } else { "Core ML" }
+    );
     if report["supported"] == true {
         println!("  Platform:    supported ({} {})", text(&report["os"]), text(&report["arch"]));
     } else {

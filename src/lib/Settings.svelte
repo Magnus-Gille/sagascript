@@ -2143,7 +2143,7 @@
               </button>
             {/if}
             {#if settings.file_transcription_model === "pianissimo-sv"}
-              <div class="hotkey-hint">Requires macOS 14 or later on Apple Silicon. Runs locally on the Neural Engine{pianissimoSizeMb > 0 ? `; one-time download of about ${pianissimoSizeMb} MB` : "; downloaded once"}.</div>
+              <div class="hotkey-hint">Requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon). Runs locally (Neural Engine on Mac, CPU on Windows){pianissimoSizeMb > 0 ? `; one-time download of about ${pianissimoSizeMb} MB` : "; downloaded once"}.</div>
             {/if}
             {#if fileModelError}<div class="transcribe-error" role="alert">{fileModelError}</div>{/if}
           </div>

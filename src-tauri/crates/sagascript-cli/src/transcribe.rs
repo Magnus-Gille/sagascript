@@ -917,11 +917,16 @@ struct PianissimoPerformance {
     model_verification_seconds: f64,
     decode_resample_seconds: f64,
     total_seconds: f64,
+    /// Engine the host reported in `hello` (`coreml`, `onnx`); `unknown` if it never connected.
+    engine: String,
     engine_warm: bool,
+    /// Per-window host stage timings.
+    windows: Vec<sagascript_core::transcription::engine_host::WindowTiming>,
 }
 
 /// Per-file JSON for `--model pianissimo-sv`. The key set is a compatibility
-/// contract: only additive keys (`performance.engine`, `performance.engine_warm`)
+/// contract: only additive keys (`performance.engine`, `performance.engine_warm`,
+/// `performance.windows`)
 /// may be added to what the NeMo-based release emitted.
 fn pianissimo_file_json(
     text: &str,
@@ -960,8 +965,17 @@ fn pianissimo_file_json(
             "model_verification_seconds": perf.model_verification_seconds,
             "decode_resample_seconds": perf.decode_resample_seconds,
             "total_seconds": perf.total_seconds,
-            "engine": "coreml",
+            "engine": perf.engine,
             "engine_warm": perf.engine_warm,
+            "windows": perf.windows.iter().map(|w| serde_json::json!({
+                "index": w.index,
+                "audio_seconds": (w.end_sample - w.start_sample) as f64 / 16_000.0,
+                "tokens": w.tokens,
+                "preprocess_ms": w.preprocess_ms,
+                "encode_ms": w.encode_ms,
+                "decode_ms": w.decode_ms,
+                "round_trip_ms": w.round_trip_ms,
+            })).collect::<Vec<_>>(),
         },
     })
 }
@@ -1036,7 +1050,9 @@ fn run_pianissimo_batch(
                     model_verification_seconds: if index == 0 { model_verification_seconds } else { 0.0 },
                     decode_resample_seconds,
                     total_seconds: started.elapsed().as_secs_f64(),
+                    engine: backend.engine_name().unwrap_or_else(|| "unknown".into()),
                     engine_warm: index > 0 || warm.was_warm,
+                    windows: result.window_timings.clone(),
                 },
             );
             emit_progress(args.progress_json, started, "completed", Some(100));
@@ -3602,24 +3618,45 @@ mod diarize_threshold_tests {
 
     #[test]
     fn pianissimo_json_keeps_the_pre_sidecar_keys_and_only_adds_engine_fields() {
+        use sagascript_core::transcription::engine_host::WindowTiming;
         use sagascript_core::transcription::pianissimo_backend::PianissimoWord;
         let words = vec![PianissimoWord { word: "hej".into(), start: 0.1, end: 0.4 }];
         let corrections: Vec<String> = Vec::new();
-        let json = pianissimo_file_json(
-            "hej",
-            &words,
-            Language::Swedish,
-            Path::new("a.wav"),
-            1.5,
-            &corrections,
-            &PianissimoPerformance {
-                model_load_seconds: 1.25,
-                model_verification_seconds: 0.5,
-                decode_resample_seconds: 0.1,
-                total_seconds: 2.0,
-                engine_warm: false,
-            },
-        );
+        let build = |engine: &str| {
+            pianissimo_file_json(
+                "hej",
+                &words,
+                Language::Swedish,
+                Path::new("a.wav"),
+                1.5,
+                &corrections,
+                &PianissimoPerformance {
+                    model_load_seconds: 1.25,
+                    model_verification_seconds: 0.5,
+                    decode_resample_seconds: 0.1,
+                    total_seconds: 2.0,
+                    engine: engine.to_string(),
+                    engine_warm: false,
+                    windows: vec![WindowTiming {
+                        index: 0,
+                        start_sample: 0,
+                        end_sample: 24_000,
+                        tokens: 3,
+                        preprocess_ms: 4,
+                        encode_ms: 500,
+                        decode_ms: 70,
+                        round_trip_ms: 580,
+                    }],
+                },
+            )
+        };
+        // The reported engine is the backend identity, not a constant.
+        for engine in ["coreml", "onnx"] {
+            assert_eq!(build(engine)["performance"]["engine"], engine);
+        }
+        let json = build("onnx");
+        assert_eq!(json["performance"]["windows"][0]["encode_ms"], 500);
+        assert_eq!(json["performance"]["windows"][0]["audio_seconds"], 1.5);
 
         // Frozen from the NeMo-era release: removing or renaming any of these breaks scripts.
         const FROZEN_TOP: [&str; 15] = [
@@ -3641,10 +3678,10 @@ mod diarize_threshold_tests {
         assert_eq!(keys(&json), expect(&FROZEN_TOP, &[]));
         assert_eq!(
             keys(&json["performance"]),
-            expect(&FROZEN_PERFORMANCE, &["engine", "engine_warm"])
+            expect(&FROZEN_PERFORMANCE, &["engine", "engine_warm", "windows"])
         );
         assert_eq!(keys(&json["segments"][0]), expect(&FROZEN_SEGMENT, &[]));
-        assert_eq!(json["performance"]["engine"], "coreml");
+        assert_eq!(json["performance"]["engine"], "onnx");
         assert_eq!(json["performance"]["engine_warm"], false);
         assert_eq!(json["performance"]["model_load_seconds"], 1.25);
         assert_eq!(json["model"], "pianissimo-sv");
