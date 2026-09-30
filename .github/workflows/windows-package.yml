@@ -288,6 +288,10 @@ jobs:
           if ($result.text -notmatch "(?i)storting") { throw "Expected 'storting' in transcription" }
           if (-not $result.segments) { throw "Expected at least one transcription segment" }
           Copy-Item $binary (Join-Path $env:RUNNER_TEMP "sagascript-cli.exe")
+          # build/ is git-ignored. Tauri bundles this console CLI beside the app (see scripts/tauri-windows-cli.json);
+          # the installer build later overwrites target\release\sagascript.exe with the GUI binary.
+          New-Item -ItemType Directory -Force -Path 'build\cli' | Out-Null
+          Copy-Item $binary 'build\cli\sagascript-cli.exe'
 
       - name: Gate repeated English dictation with warm model reuse
         shell: pwsh
@@ -384,7 +388,7 @@ jobs:
       - name: Build unsigned internal installers
         env:
           CARGO_LOG: cargo::core::compiler::fingerprint=info
-        run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }} --config scripts/tauri-ci-prebuilt.json ${{ matrix.architecture == 'arm64' && '--config scripts/tauri-windows-engine-host.json' || '' }}
+        run: npx tauri build --ci --bundles nsis,msi --no-sign --target ${{ matrix.rust_target }} --config scripts/tauri-ci-prebuilt.json --config scripts/tauri-windows-cli.json ${{ matrix.architecture == 'arm64' && '--config scripts/tauri-windows-engine-host.json' || '' }}
 
       - name: Verify packaged x64 inference CPU policy
         if: matrix.architecture == 'x64'
@@ -415,9 +419,114 @@ jobs:
           if ($installedHost.Count -ne 1) { throw "Expected one engine host in MSI, found $($installedHost.Count)" }
           if ((Split-Path $installedHost[0].DirectoryName -Leaf) -ne 'engine-host') { throw "MSI engine host is not under engine-host\: $($installedHost[0].FullName)" }
           ./scripts/verify-windows-engine-host.ps1 -HostDir $installedHost[0].DirectoryName -ExpectedGitSha $sha
+          if (-not (Test-Path -LiteralPath (Join-Path (Split-Path $installedHost[0].DirectoryName -Parent) 'sagascript-cli.exe') -PathType Leaf)) { throw "MSI has no sagascript-cli.exe beside engine-host\" }
+
+      - name: Verify installers carry the console CLI
+        shell: pwsh
+        run: |
+          $release = 'src-tauri\target\${{ matrix.rust_target }}\release'
+          $version = node -p "require('./package.json').version"
+          $msi = @(Get-ChildItem (Join-Path $release 'bundle\msi') -Filter '*.msi' -File)
+          if ($msi.Count -ne 1) { throw "Expected exactly one MSI, found $($msi.Count)" }
+          $extract = Join-Path $env:RUNNER_TEMP 'msi-cli-extract'
+          if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+          $process = Start-Process msiexec.exe -ArgumentList @('/a', $msi[0].FullName, '/qn', "TARGETDIR=$extract") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "MSI administrative extraction failed with exit code $($process.ExitCode)" }
+          $cli = @(Get-ChildItem $extract -Recurse -Filter 'sagascript-cli.exe' -File)
+          if ($cli.Count -ne 1) { throw "Expected one sagascript-cli.exe in MSI, found $($cli.Count)" }
+          $versionOutput = (& $cli[0].FullName --version) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "MSI sagascript-cli.exe --version failed with exit code $LASTEXITCODE" }
+          Write-Host "MSI CLI: $versionOutput"
+          if ($versionOutput -notmatch [regex]::Escape($version)) { throw "MSI CLI version mismatch, expected $version" }
+
+      - name: Verify silent per-user install runs the installed ARM64 CLI
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          $release = 'src-tauri\target\${{ matrix.rust_target }}\release'
+          $version = node -p "require('./package.json').version"
+          $nsis = @(Get-ChildItem (Join-Path $release 'bundle\nsis') -Filter '*.exe' -File)
+          if ($nsis.Count -ne 1) { throw "Expected exactly one NSIS installer, found $($nsis.Count)" }
+          $installDir = Join-Path $env:RUNNER_TEMP 'sagascript-installed'
+          if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }
+          # NSIS requires /D to be the final, unquoted argument. The default Tauri install mode is per-user.
+          $process = Start-Process -FilePath $nsis[0].FullName -ArgumentList @('/S', "/D=$installDir") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "NSIS silent install failed with exit code $($process.ExitCode)" }
+          Get-ChildItem $installDir | Select-Object Name | Format-Table | Out-String | Write-Output
+          $cli = Join-Path $installDir 'sagascript-cli.exe'
+          foreach ($path in @($cli, (Join-Path $installDir 'sagascript.exe'), (Join-Path $installDir 'engine-host\sagascript-engine-host-ort.exe'), (Join-Path $installDir 'engine-host\onnxruntime.dll'))) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Installed file is missing: $path" }
+          }
+          try {
+            $versionOutput = (& $cli --version) -join "`n"
+            if ($LASTEXITCODE -ne 0) { throw "Installed CLI --version failed with exit code $LASTEXITCODE" }
+            Write-Host "Installed CLI: $versionOutput"
+            if ($versionOutput -notmatch [regex]::Escape($version)) { throw "Installed CLI version mismatch, expected $version" }
+
+            $status = (& $cli engine status --json) -join "`n" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw "Installed CLI engine status failed with exit code $LASTEXITCODE" }
+            Write-Host "Installed CLI engine status: supported=$($status.supported) host.exists=$($status.host.exists)"
+            if (-not $status.supported) { throw "Installed CLI reports Pianissimo unsupported: $($status.requirement)" }
+
+            & $cli download-model pianissimo-sv
+            if ($LASTEXITCODE -ne 0) { throw "Pianissimo model download failed with exit code $LASTEXITCODE" }
+            & $cli engine doctor
+            if ($LASTEXITCODE -ne 0) { throw "Installed CLI engine doctor failed with exit code $LASTEXITCODE" }
+            $hello = ((& $cli engine status --json) -join "`n" | ConvertFrom-Json).host.hello
+            Write-Host "Installed CLI host: engine=$($hello.engine) version=$($hello.engine_version)"
+            if ($hello.engine -ne 'onnx') { throw "Expected engine onnx, got '$($hello.engine)'" }
+
+            $out = Join-Path $env:RUNNER_TEMP 'installed-cli-sv.json'
+            & $cli transcribe --model pianissimo-sv --language sv --json test-audio/swedish-fleurs-hongkong.wav > $out
+            if ($LASTEXITCODE -ne 0) { throw "Installed CLI Swedish transcription failed with exit code $LASTEXITCODE" }
+            $result = Get-Content $out -Raw | ConvertFrom-Json
+            Write-Host "Installed CLI transcription: $($result.text)"
+            if ([string]::IsNullOrWhiteSpace($result.text)) { throw "Installed CLI returned an empty Swedish transcription" }
+          } finally {
+            $uninstaller = Join-Path $installDir 'uninstall.exe'
+            if (Test-Path -LiteralPath $uninstaller) {
+              $un = Start-Process -FilePath $uninstaller -ArgumentList @('/S') -Wait -PassThru
+              Write-Host "Uninstaller exit code: $($un.ExitCode)"
+            }
+          }
+          # The NSIS uninstaller copies itself to a temp dir and returns early; wait for removal.
+          for ($i = 0; $i -lt 30 -and (Test-Path -LiteralPath $cli); $i++) { Start-Sleep -Seconds 2 }
+          if (Test-Path -LiteralPath $cli) { throw "Uninstall left sagascript-cli.exe behind" }
+          Write-Host "Uninstall removed sagascript-cli.exe"
 
       - name: Verify source after installer build
         run: node scripts/ci-build-identity.mjs --verify
+
+      - name: Build and verify ARM64 portable zip
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          $architecture = 'arm64'
+          $desktop = "src-tauri\target\${{ matrix.rust_target }}\release\sagascript.exe"
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          # Portable layout: the platform gate resolves engine-host\ beside the executable.
+          $zipStage = Join-Path $env:RUNNER_TEMP 'portable-zip'
+          if (Test-Path -LiteralPath $zipStage) { Remove-Item -LiteralPath $zipStage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path (Join-Path $zipStage 'engine-host') | Out-Null
+          Copy-Item $desktop (Join-Path $zipStage 'sagascript.exe')
+          Copy-Item 'build\cli\sagascript-cli.exe' (Join-Path $zipStage 'sagascript-cli.exe')
+          Copy-Item 'build\engine-host\win-arm64\*' (Join-Path $zipStage 'engine-host')
+          $zipPath = "artifacts\Sagascript-Windows-$architecture-Portable.zip"
+          Compress-Archive -Path (Join-Path $zipStage '*') -DestinationPath $zipPath
+          # Verify the layout from the zip itself and run the extracted CLI.
+          $zipCheck = Join-Path $env:RUNNER_TEMP 'portable-zip-check'
+          if (Test-Path -LiteralPath $zipCheck) { Remove-Item -LiteralPath $zipCheck -Recurse -Force }
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $zipCheck
+          foreach ($entry in @('sagascript.exe', 'sagascript-cli.exe', 'engine-host\sagascript-engine-host-ort.exe', 'engine-host\onnxruntime.dll', 'engine-host\onnxruntime_providers_shared.dll')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $zipCheck $entry) -PathType Leaf)) { throw "Portable zip is missing $entry" }
+          }
+          $zipVersion = (& (Join-Path $zipCheck 'sagascript-cli.exe') --version) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "Extracted portable CLI --version failed" }
+          if ($zipVersion -notmatch [regex]::Escape($version)) { throw "Extracted portable CLI version mismatch" }
+          $zipStatus = (& (Join-Path $zipCheck 'sagascript-cli.exe') engine status --json) -join "`n" | ConvertFrom-Json
+          Write-Host "Portable zip CLI engine status: supported=$($zipStatus.supported) host.exists=$($zipStatus.host.exists)"
+          if (-not $zipStatus.supported) { throw "Extracted portable CLI reports Pianissimo unsupported" }
 
       - name: Prepare and verify candidate artifacts
         shell: pwsh
@@ -467,6 +576,11 @@ jobs:
             ) `
             -SignaturePolicy Internal `
             -ChecksumOutput "artifacts\SHA256SUMS-Windows-$architecture"
+
+          if (Test-Path -LiteralPath "artifacts\Sagascript-Windows-$architecture-Portable.zip") {
+            $zipHash = (Get-FileHash -LiteralPath "artifacts\Sagascript-Windows-$architecture-Portable.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+            [System.IO.File]::AppendAllText((Join-Path (Get-Location).Path "artifacts\SHA256SUMS-Windows-$architecture"), "$zipHash  Sagascript-Windows-$architecture-Portable.zip`n")
+          }
 
       - name: Upload internal Windows candidate
         uses: actions/upload-artifact@v4
