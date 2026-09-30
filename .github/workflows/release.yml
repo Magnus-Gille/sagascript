@@ -31,9 +31,16 @@ jobs:
           REPO: ${{ github.repository }}
           TAG_SHA: ${{ github.sha }}
         run: |
-          run_id=$(gh run list -R "$REPO" --workflow prebuild-release.yml --branch main \
-            --event push --commit "$TAG_SHA" --status success --limit 1 \
-            --json databaseId --jq '.[0].databaseId // empty')
+          # A "successful" prebuild run can also be an all-skipped one (version already
+          # tagged), so require that the manifest job actually ran and succeeded.
+          run_id=
+          for candidate in $(gh run list -R "$REPO" --workflow prebuild-release.yml --branch main \
+              --event push --commit "$TAG_SHA" --status success --limit 10 \
+              --json databaseId --jq '.[].databaseId'); do
+            built=$(gh run view "$candidate" -R "$REPO" --json jobs \
+              --jq '[.jobs[] | select(.name == "manifest" and .conclusion == "success")] | length')
+            if [[ "$built" == 1 ]]; then run_id=$candidate; break; fi
+          done
           if [[ -n "$run_id" ]]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
             echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
