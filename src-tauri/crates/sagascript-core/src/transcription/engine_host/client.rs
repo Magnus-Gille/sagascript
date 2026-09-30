@@ -648,7 +648,6 @@ impl Inner {
                 tracing::info!(
                     pid = proc.pid(),
                     load_count = n,
-                    model_dir = %load.model_dir.display(),
                     model_id = %load.model_id,
                     "engine host: sending load"
                 );
@@ -852,7 +851,8 @@ impl Inner {
         let mut args = vec!["--protocol".to_string(), PROTOCOL_VERSION.to_string()];
         args.extend(self.cfg.extra_args.iter().cloned());
         let n = self.spawns.fetch_add(1, Ordering::Relaxed) + 1;
-        tracing::info!(spawn_count = n, host = %self.cfg.host_path.display(), "engine host: spawning");
+        // No paths: the persistent log must not carry the user's home directory.
+        tracing::info!(spawn_count = n, "engine host: spawning");
         let proc = HostProcess::spawn(&self.cfg.host_path, &args, &self.cfg.env)?;
         let id = &self.cfg.identity;
         let v = proc.request(
