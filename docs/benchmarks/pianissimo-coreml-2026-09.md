@@ -138,3 +138,50 @@ The benchmark tooling is not in this repository; it lives in the local bench dir
 - Evaluation audio and transcripts: Google FLEURS, sv_se test split, CC BY 4.0.
 - FluidAudio v0.17.4 and the mobius Core ML tooling: Apache-2.0. The community Core ML conversion used in the comparison carries its own model-card license. Token merge is ported from parakeet-mlx.
 - NeMo-Speech.cpp, Parakeet TDT 0.6B v3 and KB-Whisper are used under their own licenses; check each upstream repository.
+
+## 7. Follow-up (issue #268): local attention and 30/40 s windows
+
+Measured 2026-09-30 to 2026-10-01 on the same MacBook Air M4 (AC power, thermal pressure 0 before every timed run, 1-min load 2.7 to 5.6, median 3.8 during the long-form batches, so slightly above the requested 4 at times). Raw results and tools: `docs/benchmarks/data/issue-268/`. Candidate model packages are local only (nothing published, manifest pin unchanged).
+
+**Was local attention already exported? Yes, but only as a dense masked form.** The checkpoint config has `self_attention_model: rel_pos_local_attn` and `att_context_size: [256, 256]`; `convert.py` asserts both and `components.py` replaces every layer with `DenseLocalAttention`, which computes full T x T scores and adds a -10000 mask where `abs(key - query) > 256`. Consequences: (1) for the shipped 15 s window (188 encoder frames) the band covers the whole window, so the mask is a no-op and r1 is exactly the model's local attention; (2) the export is not banded in compute, but a band of 512 frames cannot save much at 376 or 501 frames (about 10% and 24% of the score matrix is masked), so a cheaper banded formulation would not have helped. The issue's hypothesis (full attention export) is therefore not the cause of the slow 30 s build.
+
+**Actual cause of the slow 30 s build.** Core ML placement of the 30 s encoder (`placement-30s-gather.json`): 95.6% of ops on the ANE, but the 24 per-layer `gather_along_axis` ops (relative-position alignment) and 24 `select` ops run on the CPU (r1 has 4 CPU ops of 1234). Each layer therefore round-trips a 1 x 8 x T x T tensor between ANE and CPU. Replacing the gather with an exact reshape/slice skew (Transformer-XL rel-shift; `--rel-shift skew`, automatic for 256 to 512 encoder frames) gives 1354 ops with 4 on the CPU (99.7% ANE), identical to r1. The skew is exact inside the band (checked numerically against the gather for 376 and 501 frames; long-form WER of the 30 s gather and skew builds is identical on all four files). Interface (float32 I/O, names, shapes) is unchanged, so the host loads the packages with only the window differing.
+
+**Per-clip WER** (FLEURS sv_se test, all 759 clips available locally, 15,390 reference words, Klang normalization, each clip scored separately; Core ML through the engine host with its window/overlap plan; Klang's published 6.5% is per clip):
+
+| Engine | Pooled WER | Mean of per-clip WER | Median |
+|---|---|---|---|
+| Core ML r1 15 s | 6.56% | 6.87% | 4.35% |
+| Klang MLX 8-bit | 6.48% | 6.79% | 4.55% |
+| Core ML 30 s local (skew) | 6.39% | 6.77% | 4.76% |
+| Core ML 40 s local (skew) | 6.37% | 6.75% | 4.65% |
+
+Klang ONNX was not run per clip. All clips are below 35 s, so the 30/40 s builds see each clip in one window.
+
+**Long-form WER and speed** (host runner, warm host, median of 3 reps, interleaved with r1; `transcribe_s` excludes host start; not the same as the CLI wall times in section 2). Overlap is 2 s for r1 and 6 s for the 30 s build, 8 s for the 40 s build. WER is identical across reps.
+
+| Variant | 5 min WER / s | 15 min WER / s | 30 min WER | 60 min WER / s | 4-file pooled WER | 60 min vs r1 |
+|---|---|---|---|---|---|---|
+| r1 15 s / 2 s | 7.04% / 0.80 | 6.62% / 2.34 | 6.09% | 7.05% / 9.37 | 6.73% (780/11589) | 1.00x |
+| r2 30 s / 6 s, gather (first export) | 5.93% / 3.26 | 5.80% / 9.39 | 5.62% | 6.53% / 37.3 | 6.15% | 3.98x |
+| r2 30 s / 6 s, skew | 5.93% / 1.19 | 5.80% / 3.26 | 5.62% | 6.53% / 12.67 | 6.15% (713/11589) | 1.35x |
+| r2 40 s / 8 s, gather | 7.22% / 3.60 | 7.50% / 10.65 | 7.26% | 7.66% / 41.7 | 7.51% | 4.45x |
+| r2 40 s / 8 s, skew | 7.22% / 1.12 | 7.69% / 3.18 | 7.42% | 7.74% / 12.41 | 7.6% | 1.32x |
+
+For reference, Klang MLX 8-bit pooled is 6.38% (section 2). The 30 min speed was measured once without interleaving and is not tabulated. The 40 s build is worse than r1 in long-form even though it is the best per clip. On the 15 min file the overlap matters a lot: 40 s with 4/8/12 s overlap gives 8.32/7.69/6.68% and 30 s with 4/6/10 s gives 6.55/5.80/6.11% (one rep, `overlap-15min.txt`), so the loss is in window merging, not in the encoder. We did not investigate further.
+
+**Latency, memory, first use** (skew builds; r1 in the last row was re-measured after the skew runs):
+
+| Variant | Short-utterance latency, warm host (median / p90, 5 clips of 2 to 8.5 s) | Host peak RSS, 60 min | First load, empty cache (compile) | Load, warm cache |
+|---|---|---|---|---|
+| r1 15 s | 51.8 / 56.1 ms (51.3 / 55.6 re-run) | 387 MB | 9.3 s | 0.4 s |
+| r2 30 s skew | 100.1 / 103.4 ms | 453 MB | 16.9 s | 0.3 s |
+| r2 40 s skew | 132.3 / 135.9 ms | 447 MB | 18.6 s | 0.3 s |
+| r2 30 s gather | 256.9 / 262.3 ms | 3647 MB | 258 s (thermal level 2) | 134 s, then 47 s on the next load |
+| r2 40 s gather | 402.6 / 407.3 ms | 3509 MB | 327 s (thermal level 2) | 283 s on the next load |
+
+Short clips are padded to the fixed window, so dictation latency scales with the window: the 30 s build roughly doubles r1's 52 ms to 100 ms. This fails the issue's "no latency regression" criterion, although 100 ms remains short in absolute terms. No run of the skew builds recorded thermal pressure above 0.
+
+**Encoder parity** (`validate.py`, 4 consecutive windows from t=0, `CPU_AND_NE`): encoder relative L2 against NeMo fp32 is 0.060 (max 0.088) for 30 s and 0.051 (max 0.065) for 40 s, similar to r1 (0.038, max 0.053; int8 weights dominate the error). Mel error 0. Token agreement of the full Core ML pipeline with NeMo greedy is 0.998 (3 of 4 windows identical) for 30 s and 0.877 for 40 s (0 of 4 identical). For 40 s the same disagreement appears with NeMo's own fp32 encoder output, so the validator's ported decode loop diverges from NeMo's decode on 501-frame windows; this was not resolved. MLX parity was not measured separately; the per-clip WER above is the end-to-end check.
+
+**Verdict against the acceptance criteria.** Per-clip WER reported and compared: done. Long-form WER at or below 6.38% and within 2x of r1 on 60 min with no thermal pressure: met by the 30 s / 6 s skew build (6.15%, 1.35x, level 0); not met by 40 s (7.6% pooled). Short-utterance latency not regressing: not met (52 to 100 ms). Recommendation: ship the 30 s / 6 s skew build as r2 only if a 50 ms dictation regression is acceptable, or ship it with a short-window fallback for dictation (a second 15 s model, which needs a host/client change and was not built). Otherwise keep r1. Unverified: the skew build was not run on other hardware, through the real CLI end to end, or on noisy speech; r2 has not been published, pinned, or installed.

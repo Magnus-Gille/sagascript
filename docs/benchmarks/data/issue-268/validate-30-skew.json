@@ -1,0 +1,56 @@
+{
+  "model_dir": "/Users/magnus/.cache/sagascript-bench/issue-268/models/pianissimo-sv-coreml-r2s-30s",
+  "numerical": {
+    "windows": [
+      {
+        "start_s": 0.0,
+        "nemo_tokens": 138,
+        "CPU_AND_NE.mel_rel_l2": 2.226124028974609e-05,
+        "CPU_AND_NE.encoder_rel_l2": 0.08296030234827831,
+        "CPU_AND_NE.loop_on_nemo_encoder.identical": true,
+        "CPU_AND_NE.loop_on_nemo_encoder.agreement": 1.0,
+        "CPU_AND_NE.pipeline.identical": true,
+        "CPU_AND_NE.pipeline.agreement": 1.0
+      },
+      {
+        "start_s": 30.0,
+        "nemo_tokens": 110,
+        "CPU_AND_NE.mel_rel_l2": 1.1593749866636957e-05,
+        "CPU_AND_NE.encoder_rel_l2": 0.031258230725798704,
+        "CPU_AND_NE.loop_on_nemo_encoder.identical": false,
+        "CPU_AND_NE.loop_on_nemo_encoder.agreement": 0.9545454545454546,
+        "CPU_AND_NE.pipeline.identical": false,
+        "CPU_AND_NE.pipeline.agreement": 0.990909090909091
+      },
+      {
+        "start_s": 60.0,
+        "nemo_tokens": 123,
+        "CPU_AND_NE.mel_rel_l2": 2.215979766801893e-05,
+        "CPU_AND_NE.encoder_rel_l2": 0.08817549427452448,
+        "CPU_AND_NE.loop_on_nemo_encoder.identical": true,
+        "CPU_AND_NE.loop_on_nemo_encoder.agreement": 1.0,
+        "CPU_AND_NE.pipeline.identical": true,
+        "CPU_AND_NE.pipeline.agreement": 1.0
+      },
+      {
+        "start_s": 90.0,
+        "nemo_tokens": 145,
+        "CPU_AND_NE.mel_rel_l2": 2.320952427171729e-05,
+        "CPU_AND_NE.encoder_rel_l2": 0.03825262517039881,
+        "CPU_AND_NE.loop_on_nemo_encoder.identical": true,
+        "CPU_AND_NE.loop_on_nemo_encoder.agreement": 1.0,
+        "CPU_AND_NE.pipeline.identical": true,
+        "CPU_AND_NE.pipeline.agreement": 1.0
+      }
+    ],
+    "window_s": 30,
+    "CPU_AND_NE.mel_rel_l2.mean": 1.980607802402982e-05,
+    "CPU_AND_NE.mel_rel_l2.max": 2.320952427171729e-05,
+    "CPU_AND_NE.encoder_rel_l2.mean": 0.060161663129750076,
+    "CPU_AND_NE.encoder_rel_l2.max": 0.08817549427452448,
+    "CPU_AND_NE.loop_on_nemo_encoder.identical": "3/4",
+    "CPU_AND_NE.loop_on_nemo_encoder.agreement.mean": 0.9886363636363636,
+    "CPU_AND_NE.pipeline.identical": "3/4",
+    "CPU_AND_NE.pipeline.agreement.mean": 0.9977272727272728
+  }
+}
