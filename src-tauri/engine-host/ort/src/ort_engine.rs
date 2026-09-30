@@ -52,6 +52,8 @@ pub struct RuntimeConfig {
     pub max_in_flight: u32,
     /// Windows executing at once (the rest queue by priority).
     pub execution_slots: usize,
+    /// `SAGASCRIPT_ORT_TRACE=1`: one stderr line per window with per-stage detail.
+    pub trace: bool,
 }
 
 impl RuntimeConfig {
@@ -68,6 +70,7 @@ impl RuntimeConfig {
             arena: std::env::var("SAGASCRIPT_ORT_ARENA").is_ok_and(|v| v == "1"),
             max_in_flight: 2,
             execution_slots: var("SAGASCRIPT_ORT_SLOTS").unwrap_or(1),
+            trace: std::env::var("SAGASCRIPT_ORT_TRACE").is_ok_and(|v| v == "1"),
         }
     }
 }
@@ -208,6 +211,7 @@ struct Loaded {
     result: LoadResult,
     vocab: Vocab,
     max_tokens_per_step: usize,
+    trace: bool,
     preprocessor: Mutex<Session>,
     encoder: Mutex<Session>,
     decoder: Mutex<Session>,
@@ -300,11 +304,15 @@ impl OrtEngine {
             result: result.clone(),
             vocab,
             max_tokens_per_step,
+            trace: self.config.trace,
             preprocessor: Mutex::new(preprocessor),
             encoder: Mutex::new(encoder),
             decoder: Mutex::new(decoder),
         });
         *self.loaded.write().unwrap_or_else(|p| p.into_inner()) = Some(loaded);
+        if self.config.trace {
+            eprintln!("ort-trace load: {:?} load_ms={}", self.config, result.load_ms);
+        }
         Ok(result)
     }
 }
@@ -319,6 +327,9 @@ impl Drop for LoadingGuard<'_> {
 
 struct OrtJoint<'a> {
     session: &'a mut Session,
+    /// Joint evaluations and time inside `Session::run`, for the trace line.
+    steps: usize,
+    run_us: u128,
 }
 
 impl Joint for OrtJoint<'_> {
@@ -337,7 +348,10 @@ impl Joint for OrtJoint<'_> {
             "input_states_1" => Tensor::from_array((state_shape, state.s1.clone())).map_err(|x| e("input", x))?,
             "input_states_2" => Tensor::from_array((state_shape, state.s2.clone())).map_err(|x| e("input", x))?,
         ];
+        let run_started = Instant::now();
         let outputs = self.session.run(inputs).map_err(|x| e("run", x))?;
+        self.steps += 1;
+        self.run_us += run_started.elapsed().as_micros();
         let logits = outputs["outputs"]
             .try_extract_tensor::<f32>()
             .map_err(|x| e("outputs", x))?
@@ -372,9 +386,11 @@ fn transcribe_loaded(
     is_cancelled: &dyn Fn() -> bool,
 ) -> Result<TranscribeWindowResult, HostError> {
     let cancelled = || HostError::new(ErrorCode::Cancelled, "Transcription was cancelled");
+    let total_started = Instant::now();
     let samples = pcm::read_window(&request.pcm_path, request.offset_samples, request.num_samples)
         .map_err(|m| HostError::new(ErrorCode::BadRequest, m))?;
     let audio_s = samples.len() as f64 / f64::from(SAMPLE_RATE);
+    let read_ms = millis(total_started);
     if is_cancelled() {
         return Err(cancelled());
     }
@@ -407,6 +423,7 @@ fn transcribe_loaded(
 
     // Encoder: (1, 128, T) -> (1, 1024, T/8), then transpose to frame-major.
     let started = Instant::now();
+    let encoder_run_ms: u64;
     let (frames, valid) = {
         let mut session = lock(&loaded.encoder);
         let outputs = session
@@ -415,6 +432,7 @@ fn transcribe_loaded(
                 "length" => Tensor::from_array(([features_len.len()], features_len)).map_err(|e| ort_error("length", e))?,
             ])
             .map_err(|e| ort_error("encoder", e))?;
+        encoder_run_ms = millis(started);
         let (shape, data) = outputs["outputs"]
             .try_extract_tensor::<f32>()
             .map_err(|e| ort_error("encoder outputs", e))?;
@@ -442,25 +460,38 @@ fn transcribe_loaded(
     }
 
     let started = Instant::now();
+    let mut joint_steps = 0;
+    let mut joint_run_ms = 0;
     let raw = if valid == 0 {
         Vec::new()
     } else {
         let mut session = lock(&loaded.decoder);
-        let mut joint = OrtJoint { session: &mut session };
-        tdt::decode(
+        let mut joint = OrtJoint { session: &mut session, steps: 0, run_us: 0 };
+        let decoded = tdt::decode(
             &frames,
             &mut joint,
             loaded.vocab.len(),
             loaded.vocab.blank_id(),
             loaded.max_tokens_per_step,
             is_cancelled,
-        )
-        .map_err(|e| match e {
+        );
+        joint_steps = joint.steps;
+        joint_run_ms = (joint.run_us / 1000) as u64;
+        decoded.map_err(|e| match e {
             DecodeError::Cancelled => cancelled(),
             DecodeError::Joint(message) => HostError::new(ErrorCode::Engine, message),
         })?
     };
     let decode_ms = millis(started);
+    if loaded.trace {
+        eprintln!(
+            "ort-trace window: audio_s={audio_s:.2} frames={valid} read_ms={read_ms} preprocess_ms={preprocess_ms} \
+             encode_ms={encode_ms} (session_run_ms={encoder_run_ms}) decode_ms={decode_ms} \
+             (joint_steps={joint_steps} joint_run_ms={joint_run_ms}) tokens={} total_ms={}",
+            raw.len(),
+            millis(total_started)
+        );
+    }
 
     let mut tokens = Vec::with_capacity(raw.len());
     for token in raw {

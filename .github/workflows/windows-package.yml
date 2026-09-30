@@ -344,6 +344,23 @@ jobs:
           Get-ChildItem $stage | Select-Object Name, Length | Format-Table | Out-String | Write-Output
           ./scripts/verify-windows-engine-host.ps1 -HostDir $stage -ExpectedGitSha $sha
 
+      - name: Measure warm ONNX engine host latency (informational)
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          # Numbers only, no thresholds: short-utterance latency on windows-11-arm without the device.
+          # A failure here is reported as a warning so a model-download hiccup cannot block the candidate.
+          try {
+            $cli = Join-Path $env:RUNNER_TEMP 'sagascript-cli.exe'
+            & $cli download-model pianissimo-sv
+            if ($LASTEXITCODE -ne 0) { throw "Pianissimo model download failed" }
+            $status = & $cli engine status --json | ConvertFrom-Json
+            ./scripts/benchmark-windows-engine-host.ps1 -HostDir 'build\engine-host\win-arm64' -ModelDir $status.model.dir | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'engine-host-latency.txt')
+          } catch {
+            Write-Host "::warning::Engine host latency probe failed: $_"
+          }
+          $global:LASTEXITCODE = 0
+
       - name: Remove cached installer bundles
         shell: pwsh
         run: |
