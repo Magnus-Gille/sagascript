@@ -351,7 +351,13 @@ jobs:
           # Numbers only, no thresholds: short-utterance latency on windows-11-arm without the device.
           # A failure here is reported as a warning so a model-download hiccup cannot block the candidate.
           try {
-            $cli = Join-Path $env:RUNNER_TEMP 'sagascript-cli.exe'
+            # The CLI only offers Pianissimo when the ONNX host sits in engine-host\ beside it,
+            # as in the installed layout.
+            $probeDir = Join-Path $env:RUNNER_TEMP 'latency-probe'
+            New-Item -ItemType Directory -Force -Path (Join-Path $probeDir 'engine-host') | Out-Null
+            Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'sagascript-cli.exe') -Destination $probeDir
+            Copy-Item -Path 'build\engine-host\win-arm64\*' -Destination (Join-Path $probeDir 'engine-host')
+            $cli = Join-Path $probeDir 'sagascript-cli.exe'
             & $cli download-model pianissimo-sv
             if ($LASTEXITCODE -ne 0) { throw "Pianissimo model download failed" }
             $status = & $cli engine status --json | ConvertFrom-Json
