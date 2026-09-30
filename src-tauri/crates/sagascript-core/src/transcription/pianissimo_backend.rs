@@ -22,7 +22,7 @@ use crate::error::DictationError;
 use crate::settings::Settings;
 use crate::transcription::engine_host::{
     CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, LoadSpec,
-    Transcription,
+    Transcription, WindowTiming,
 };
 use crate::transcription::dev_overrides::env_override;
 use crate::transcription::pianissimo_model;
@@ -58,6 +58,8 @@ pub struct PianissimoWord {
 pub struct PianissimoResult {
     pub text: String,
     pub words: Vec<PianissimoWord>,
+    /// Per-window host stage timings (preprocess/encode/decode ms and round trip).
+    pub window_timings: Vec<WindowTiming>,
 }
 
 /// What [`PianissimoBackend::warm_up`] found and did.
@@ -414,6 +416,7 @@ pub(crate) fn cancelled_error() -> DictationError {
 
 pub(crate) fn to_result(transcription: Transcription) -> PianissimoResult {
     PianissimoResult {
+        window_timings: transcription.windows,
         text: transcription.text,
         words: transcription
             .words
@@ -500,6 +503,11 @@ impl PianissimoBackend {
 
     pub fn client(&self) -> &EngineHostClient {
         &self.client
+    }
+
+    /// Engine name the host reported in `hello` (`coreml`, `onnx`, ...), once connected.
+    pub fn engine_name(&self) -> Option<String> {
+        self.client.snapshot().host.map(|host| host.engine)
     }
 
     /// Start the host and load the model now, reporting whether it was warm.

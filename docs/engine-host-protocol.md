@@ -155,6 +155,9 @@ debug builds or with the `dev-overrides` feature. On Windows the DLL search path
 application directory and System32. Tuning
 variables for measurements only: `SAGASCRIPT_ORT_THREADS`, `SAGASCRIPT_ORT_DEC_THREADS`,
 `SAGASCRIPT_ORT_PRE_THREADS`, `SAGASCRIPT_ORT_ARENA=1`, `SAGASCRIPT_ORT_SLOTS`.
+This host does not pad short windows: the models take dynamic input lengths, so work scales with the
+real audio. `SAGASCRIPT_ORT_TRACE=1` prints one stderr line per window (frames, session-run time,
+joint steps, tokens); `scripts/benchmark-windows-engine-host.ps1` sweeps these settings on a device.
 
 ## Conformance
 
