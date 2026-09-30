@@ -20,6 +20,32 @@ pub struct DownloadModelArgs {
     pub model: String,
 }
 
+/// Marker appended to models the app's pickers no longer offer. They stay
+/// listed and usable through an explicit `--model` / `download-model` id.
+pub const HIDDEN_IN_APP_NOTE: &str = "(hidden in app)";
+
+fn list_note(model: WhisperModel, language: Language) -> &'static str {
+    if language == Language::Swedish && model.is_hidden_in_app() {
+        HIDDEN_IN_APP_NOTE
+    } else {
+        ""
+    }
+}
+
+fn whisper_row(model: WhisperModel, language: Language, downloaded: &str) -> String {
+    format!(
+        "{:<20} {:<10} {:>5} MB  {:<12} {:<12} {}",
+        model_id_string(model),
+        model.display_name(),
+        model.size_mb(),
+        downloaded,
+        language.display_name(),
+        list_note(model, language),
+    )
+    .trim_end()
+    .to_string()
+}
+
 pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
     let languages: Vec<Language> = if let Some(lang_str) = &args.language {
         vec![parse_language(lang_str)?]
@@ -49,14 +75,7 @@ pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
                 "no"
             };
 
-            println!(
-                "{:<20} {:<10} {:>5} MB  {:<12} {:<12}",
-                model_id_string(m),
-                m.display_name(),
-                m.size_mb(),
-                downloaded,
-                lang.display_name(),
-            );
+            println!("{}", whisper_row(m, *lang, downloaded));
         }
         if *lang == Language::Swedish && sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
             println!(
@@ -387,5 +406,34 @@ mod progress_tests {
         let mut t = ProgressThrottle::default();
         t.decide(1000, 1000, ms(0), false);
         assert_eq!(t.decide(2000, 1000, ms(1), false), ProgressAction::Skip);
+    }
+}
+
+#[cfg(test)]
+mod lineup_tests {
+    use super::*;
+
+    #[test]
+    fn list_marks_retired_swedish_models_but_keeps_their_ids() {
+        for (model, id) in [
+            (WhisperModel::KbWhisperTiny, "kb-whisper-tiny"),
+            (WhisperModel::KbWhisperBase, "kb-whisper-base"),
+            (WhisperModel::KbWhisperSmall, "kb-whisper-small"),
+        ] {
+            let row = whisper_row(model, Language::Swedish, "no");
+            assert!(row.starts_with(id), "{row}");
+            assert!(row.ends_with(HIDDEN_IN_APP_NOTE), "{row}");
+        }
+        for model in [WhisperModel::KbWhisperMedium, WhisperModel::KbWhisperLarge] {
+            let row = whisper_row(model, Language::Swedish, "no");
+            assert!(!row.contains("hidden"), "{row}");
+            assert!(!row.ends_with(' '), "{row:?}");
+        }
+        // Other languages are unchanged.
+        assert!(!whisper_row(WhisperModel::Tiny, Language::Auto, "no").contains("hidden"));
+        // Every Swedish model is still listed and parseable.
+        for model in WhisperModel::models_for_language(Language::Swedish) {
+            assert_eq!(parse_model(model_id_string(*model)).unwrap(), *model);
+        }
     }
 }

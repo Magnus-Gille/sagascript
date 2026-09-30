@@ -791,6 +791,7 @@ fn get_setting_value(settings: &Settings, key: &str) -> String {
         "language" => format_language(settings.default_profile().language),
         "whisper_model" => match settings.dictation_model_for_profile(&settings.default_profile().id) {
             Ok(sagascript_core::settings::FileModel::Whisper(model)) => format_model(model),
+            Ok(sagascript_core::settings::FileModel::PianissimoOriginal) => "pianissimo-sv".to_string(),
             _ => format_model(WhisperModel::recommended(settings.default_profile().language)),
         },
         "file_transcription_model" => format_file_model(settings.file_transcription_model),
@@ -1035,6 +1036,7 @@ mod tests {
             "profile_glossaries",
             "profile_models",
             "profile_glossary_migrated",
+            "model_lineup_version",
         ];
 
         let settings = Settings::default();

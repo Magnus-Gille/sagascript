@@ -47,6 +47,18 @@ try {
   const englishModelChoice = page.getByRole("combobox", { name: "Model for English" });
   await englishModelChoice.waitFor();
   assert.equal(await englishModelChoice.inputValue(), "base.en");
+  // Swedish lineup: Recommended (= Pianissimo), Pianissimo, KB-Whisper Large. The
+  // retired KB-Whisper Tiny/Base/Small are hidden.
+  assert.deepEqual(await profileModelChoice.locator("option").allTextContents(),
+    ["Recommended for Swedish", "Pianissimo", "KB-Whisper Large"]);
+  assert.equal(await profileModelChoice.inputValue(), "auto");
+  await page.getByText("Pianissimo required", { exact: true }).waitFor();
+  // Expand the list so the shot shows the choices a native dropdown would.
+  const swedishSelect = page.locator('select[aria-label="Model for Swedish"]');
+  await swedishSelect.evaluate(select => { select.size = 3; });
+  const lineupShot = process.env.QA_LINEUP_SHOT;
+  if (lineupShot) await page.locator(".profile-model-field").first().screenshot({ path: lineupShot });
+  await swedishSelect.evaluate(select => { select.removeAttribute("size"); });
   await profileModelChoice.selectOption("pianissimo-sv");
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv"));
   await page.getByRole("button", { name: "Download speech engine" }).click();
@@ -100,8 +112,23 @@ try {
   await page.getByText("first word faster", { exact: false }).waitFor();
   await page.screenshot({ path: outputPath("sagascript-pianissimo-engine-settings.png"), fullPage: true });
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
-  await profileModelChoice.selectOption("kb-whisper-base");
-  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.modelId === "kb-whisper-base"));
+  await profileModelChoice.selectOption("kb-whisper-large");
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.modelId === "kb-whisper-large"));
+  // An upgraded profile still on a retired model keeps working, stays selectable
+  // and gets a one-click switch that downloads the recommendation first.
+  await page.evaluate(() => { window.qa.setPianissimoSize(608); window.qa.removePianissimo(); window.qa.pinSwedishProfile("kb-whisper-base"); });
+  // Any profile-model change refreshes every profile's engine state.
+  await englishModelChoice.selectOption("base.en");
+  const switchButton = page.getByRole("button", { name: "Switch to Pianissimo (download 608 MB)", exact: true });
+  await switchButton.waitFor();
+  assert.equal(await profileModelChoice.inputValue(), "kb-whisper-base");
+  assert.deepEqual(await profileModelChoice.locator("option").allTextContents(),
+    ["Recommended for Swedish", "Pianissimo", "KB-Whisper Large", "KB-Whisper Base"]);
+  await page.getByText("KB-Whisper Base · Ready", { exact: true }).waitFor();
+  await switchButton.click();
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv"));
+  await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
+  assert.equal(await switchButton.count(), 0, "No suggestion once on the recommended model");
   await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   const optionsBox = await page.locator('.transcribe-options').boundingBox();
   const dropBox = await page.locator('.drop-zone').boundingBox();

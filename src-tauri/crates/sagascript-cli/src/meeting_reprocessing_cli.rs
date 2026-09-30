@@ -227,7 +227,7 @@ fn resolve_runtime(args: &RuntimeArgs) -> Result<RuntimeInputs, DictationError> 
     };
     let language = args.language.as_deref().map(crate::transcribe::parse_language)
         .transpose()?.unwrap_or(profile.language);
-    let model = match crate::transcribe::resolve_file_model(args.model.as_deref(), language, &stored)? {
+    let model = match crate::transcribe::resolve_file_model_for_run(args.model.as_deref(), language, &stored, true)? {
         FileModel::Whisper(model) => model,
         FileModel::PianissimoOriginal => return Err(DictationError::SettingsError(
             "Meeting reprocessing requires a Whisper model; select one with --model".into()

@@ -136,7 +136,7 @@ impl WhisperModel {
             WhisperModel::KbWhisperBase => "By KBLab. Swedish-optimized. Balanced speed and accuracy",
             WhisperModel::KbWhisperSmall => "By KBLab. Swedish-optimized. More accurate, slower",
             WhisperModel::KbWhisperMedium => "By KBLab. Swedish-optimized. High accuracy, slow",
-            WhisperModel::KbWhisperLarge => "By KBLab. Swedish-optimized. Highest accuracy, slowest",
+            WhisperModel::KbWhisperLarge => "By KBLab. Swedish-optimized. Most accurate, slower",
             WhisperModel::NbWhisperTiny => "By NbAiLab. Norwegian-optimized. Fastest, less accurate",
             WhisperModel::NbWhisperBase => "By NbAiLab. Norwegian-optimized. Balanced speed and accuracy",
             WhisperModel::NbWhisperSmall => "By NbAiLab. Norwegian-optimized. More accurate, slower",
@@ -443,11 +443,25 @@ impl WhisperModel {
     pub fn recommended(language: Language) -> WhisperModel {
         match language {
             Language::English => WhisperModel::BaseEn,
-            Language::Swedish => WhisperModel::KbWhisperBase,
+            // Whisper-family recommendation. Where Pianissimo runs, the Swedish
+            // recommendation is Pianissimo instead: see
+            // [`FileModel::recommended_for`], which every "Recommended" /
+            // auto resolution goes through.
+            Language::Swedish => WhisperModel::KbWhisperMedium,
             Language::Norwegian => WhisperModel::NbWhisperBase,
             Language::Finnish => WhisperModel::Base,
             Language::Auto => WhisperModel::Base,
         }
+    }
+
+    /// Swedish models that stay usable (CLI `--model`, existing settings) but
+    /// are not offered in the app's pickers: Tiny collapses on long audio and
+    /// Base/Small are beaten by Pianissimo and KB-Whisper Medium.
+    pub fn is_hidden_in_app(&self) -> bool {
+        matches!(
+            self,
+            WhisperModel::KbWhisperTiny | WhisperModel::KbWhisperBase | WhisperModel::KbWhisperSmall
+        )
     }
 
     /// Models available for a given language
@@ -500,6 +514,54 @@ impl WhisperModel {
 pub enum FileModel {
     Whisper(WhisperModel),
     PianissimoOriginal,
+}
+
+impl FileModel {
+    /// The engine behind "Recommended for <language>": Pianissimo for Swedish
+    /// where it runs (`pianissimo_supported`), otherwise the language's
+    /// recommended Whisper model. Single source of truth for every automatic
+    /// resolution (dictation profiles, file transcription, CLI, UI labels).
+    pub fn recommended_for(language: Language, pianissimo_supported: bool) -> FileModel {
+        if language == Language::Swedish && pianissimo_supported {
+            FileModel::PianissimoOriginal
+        } else {
+            FileModel::Whisper(WhisperModel::recommended(language))
+        }
+    }
+
+    /// Models the app offers for `language`, after the "Recommended" entry.
+    /// Swedish: Pianissimo + KB-Whisper Large where Pianissimo runs, otherwise
+    /// KB-Whisper Medium + Large. `include` keeps an already-selected model
+    /// (e.g. a legacy KB-Whisper Base) selectable instead of hiding the
+    /// current choice.
+    pub fn app_lineup(
+        language: Language,
+        pianissimo_supported: bool,
+        include: Option<FileModel>,
+    ) -> Vec<FileModel> {
+        let mut models: Vec<FileModel> = if language == Language::Swedish {
+            if pianissimo_supported {
+                vec![FileModel::PianissimoOriginal, FileModel::Whisper(WhisperModel::KbWhisperLarge)]
+            } else {
+                vec![
+                    FileModel::Whisper(WhisperModel::KbWhisperMedium),
+                    FileModel::Whisper(WhisperModel::KbWhisperLarge),
+                ]
+            }
+        } else {
+            WhisperModel::models_for_language(language).iter().copied().map(FileModel::Whisper).collect()
+        };
+        if let Some(extra) = include {
+            let valid = match extra {
+                FileModel::Whisper(model) => model.is_compatible_with(language),
+                FileModel::PianissimoOriginal => language == Language::Swedish && pianissimo_supported,
+            };
+            if valid && !models.contains(&extra) {
+                models.push(extra);
+            }
+        }
+        models
+    }
 }
 
 /// Persisted preference for file transcription.
@@ -709,6 +771,25 @@ pub struct Settings {
     /// Whether the user has completed the first-launch onboarding
     #[serde(alias = "hasCompletedOnboarding")]
     pub has_completed_onboarding: bool,
+    /// Version of the Swedish model-lineup migration that has run on this file
+    /// (see [`Settings::migrate_swedish_lineup`]). A missing key means 0: files
+    /// written before the lineup change are migrated once. New installs start
+    /// at the current version.
+    #[serde(default)]
+    pub model_lineup_version: u32,
+}
+
+/// Current version of the Swedish model-lineup migration.
+pub const MODEL_LINEUP_VERSION: u32 = 1;
+
+/// Machine state the lineup migration depends on, injected for testability.
+pub struct LineupEnv<'a> {
+    /// `pianissimo_backend::runtime_supported_on_this_os()`.
+    pub pianissimo_supported: bool,
+    /// `pianissimo_model::is_downloaded()`.
+    pub pianissimo_downloaded: bool,
+    /// `model::is_model_downloaded`.
+    pub whisper_downloaded: &'a dyn Fn(WhisperModel) -> bool,
 }
 
 impl Default for Settings {
@@ -734,11 +815,73 @@ impl Default for Settings {
             temperature_fallback: true,
             vad_enabled: false,
             has_completed_onboarding: false,
+            model_lineup_version: MODEL_LINEUP_VERSION,
         }
     }
 }
 
 impl Settings {
+    /// One-time move of Swedish dictation off the retired KB-Whisper
+    /// Tiny/Base/Small choices, recorded by `model_lineup_version` so a second
+    /// run is a no-op. Returns true when it ran (the caller must persist).
+    ///
+    /// Safety rule: dictation must keep working. When a profile's model is not
+    /// downloaded, the hotkey flow fails the utterance ("model not
+    /// downloaded") and Settings shows a "<model> required" download prompt,
+    /// so switching engines under a user who lacks the new one would break
+    /// dictation until they download ~608 MB. Therefore a profile only moves
+    /// when the recommended engine is already downloaded, or when its current
+    /// model is not usable either (then the move costs nothing and Settings
+    /// prompts for the recommended engine). Otherwise the old model is kept
+    /// and Settings offers a one-click switch that downloads first.
+    /// `Auto` profiles used to resolve to KB-Whisper Base; if Base is
+    /// downloaded but the new recommendation is not, they are pinned to Base
+    /// for the same reason. Explicit Medium/Large/Pianissimo are untouched.
+    pub fn migrate_swedish_lineup(&mut self, env: &LineupEnv<'_>) -> bool {
+        if self.model_lineup_version >= MODEL_LINEUP_VERSION {
+            return false;
+        }
+        self.model_lineup_version = MODEL_LINEUP_VERSION;
+        let target = FileModel::recommended_for(Language::Swedish, env.pianissimo_supported);
+        let (target_pref, target_ready) = match target {
+            FileModel::PianissimoOriginal => (FileModelPreference::PianissimoOriginal, env.pianissimo_downloaded),
+            FileModel::Whisper(model) => (FileModelPreference::Whisper(model), (env.whisper_downloaded)(model)),
+        };
+        let previous_auto = WhisperModel::KbWhisperBase;
+        let swedish: Vec<String> = self.resolved_hotkey_profiles().into_iter()
+            .filter(|profile| profile.language == Language::Swedish)
+            .map(|profile| profile.id)
+            .collect();
+        for id in swedish {
+            let Some(current) = self.profile_models.get(&id).copied() else { continue };
+            match current {
+                FileModelPreference::Whisper(old) if old.is_hidden_in_app() => {
+                    if target_ready || !(env.whisper_downloaded)(old) {
+                        tracing::info!(profile = %id, from = ?old, to = ?target_pref, "Swedish model lineup: moved profile to the recommended model");
+                        self.profile_models.insert(id, target_pref);
+                    } else {
+                        tracing::info!(profile = %id, model = ?old, "Swedish model lineup: kept profile model because the recommended model is not downloaded");
+                    }
+                }
+                FileModelPreference::Auto if !target_ready && (env.whisper_downloaded)(previous_auto) => {
+                    tracing::info!(profile = %id, model = ?previous_auto, "Swedish model lineup: pinned Auto profile to its previous model because the recommended model is not downloaded");
+                    self.profile_models.insert(id, FileModelPreference::Whisper(previous_auto));
+                }
+                _ => {}
+            }
+        }
+        // Legacy global choice (rollback compatibility): a Whisper field
+        // cannot hold Pianissimo, so it only ever moves to KB-Whisper Medium.
+        if !self.auto_select_model && self.whisper_model.is_hidden_in_app() {
+            let medium = WhisperModel::KbWhisperMedium;
+            if (env.whisper_downloaded)(medium) || !(env.whisper_downloaded)(self.whisper_model) {
+                tracing::info!(from = ?self.whisper_model, to = ?medium, "Swedish model lineup: moved legacy global model");
+                self.whisper_model = medium;
+            }
+        }
+        true
+    }
+
     pub fn default_profile(&self) -> HotkeyProfile {
         let profiles = self.resolved_hotkey_profiles();
         profiles.iter().find(|profile| profile.id == "default")
@@ -786,6 +929,18 @@ impl Settings {
     /// Resolve the live engine for one profile. Unmigrated settings retain
     /// their previous global selection until the profile migration is saved.
     pub fn dictation_model_for_profile(&self, profile_id: &str) -> Result<FileModel, String> {
+        self.dictation_model_for_profile_gated(
+            profile_id,
+            crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+        )
+    }
+
+    /// [`Self::dictation_model_for_profile`] with the Pianissimo platform gate supplied by the caller.
+    pub fn dictation_model_for_profile_gated(
+        &self,
+        profile_id: &str,
+        pianissimo_supported: bool,
+    ) -> Result<FileModel, String> {
         let profile = self.resolved_hotkey_profiles().into_iter()
             .find(|profile| profile.id == profile_id)
             .ok_or_else(|| format!("Unknown profile '{profile_id}'"))?;
@@ -799,7 +954,7 @@ impl Settings {
             }
         });
         match preference {
-            FileModelPreference::Auto => Ok(FileModel::Whisper(WhisperModel::recommended(profile.language))),
+            FileModelPreference::Auto => Ok(FileModel::recommended_for(profile.language, pianissimo_supported)),
             FileModelPreference::Whisper(model) if model.is_compatible_with(profile.language) => Ok(FileModel::Whisper(model)),
             FileModelPreference::Whisper(model) => Err(format!("Model '{}' is incompatible with profile '{}'", model.display_name(), profile_id)),
             FileModelPreference::PianissimoOriginal if profile.language == Language::Swedish => Ok(FileModel::PianissimoOriginal),
@@ -810,6 +965,8 @@ impl Settings {
     pub fn live_model_for_profile(&self, profile_id: &str) -> Result<(WhisperModel, bool), String> {
         match self.dictation_model_for_profile(profile_id)? {
             FileModel::Whisper(model) => Ok((model, false)),
+            // The Whisper slot is unused when the flag is set; keep the Whisper
+            // recommendation as a harmless placeholder.
             FileModel::PianissimoOriginal => Ok((WhisperModel::recommended(Language::Swedish), true)),
         }
     }
@@ -981,8 +1138,20 @@ impl Settings {
     /// Resolve the model for file transcription without changing the live
     /// dictation model preference.
     pub fn effective_file_model_for(&self, language: Language) -> Result<FileModel, String> {
+        self.effective_file_model_for_gated(
+            language,
+            crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+        )
+    }
+
+    /// [`Self::effective_file_model_for`] with the Pianissimo platform gate supplied by the caller.
+    pub fn effective_file_model_for_gated(
+        &self,
+        language: Language,
+        pianissimo_supported: bool,
+    ) -> Result<FileModel, String> {
         match self.file_transcription_model {
-            FileModelPreference::Auto => Ok(FileModel::Whisper(WhisperModel::recommended(language))),
+            FileModelPreference::Auto => Ok(FileModel::recommended_for(language, pianissimo_supported)),
             FileModelPreference::Whisper(model) if model.is_compatible_with(language) => {
                 Ok(FileModel::Whisper(model))
             }
@@ -998,6 +1167,18 @@ impl Settings {
                 "Pianissimo Original is only available for Swedish file transcription".to_string(),
             ),
         }
+    }
+
+    /// Like [`Self::effective_file_model_for`], but for work that needs a
+    /// Whisper model (meetings, diarization, decoder hints, beam search): an
+    /// `Auto` preference resolves to the language's recommended Whisper model
+    /// instead of Pianissimo. An explicit Pianissimo choice is returned as-is
+    /// so callers can report it clearly.
+    pub fn effective_whisper_file_model_for(&self, language: Language) -> Result<FileModel, String> {
+        if self.file_transcription_model == FileModelPreference::Auto {
+            return Ok(FileModel::Whisper(WhisperModel::recommended(language)));
+        }
+        self.effective_file_model_for(language)
     }
 
     pub fn resolved_hotkey_profiles(&self) -> Vec<HotkeyProfile> {
@@ -1239,10 +1420,24 @@ impl Settings {
         max_models: usize,
         max_total_mb: u32,
     ) -> Vec<(WhisperModel, Language)> {
+        self.warm_model_plan_gated(
+            max_models,
+            max_total_mb,
+            crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+        )
+    }
+
+    /// [`Self::warm_model_plan`] with the Pianissimo platform gate supplied by the caller.
+    pub fn warm_model_plan_gated(
+        &self,
+        max_models: usize,
+        max_total_mb: u32,
+        pianissimo_supported: bool,
+    ) -> Vec<(WhisperModel, Language)> {
         let profiles: Vec<_> = self
             .resolved_hotkey_profiles()
             .into_iter()
-            .filter(|profile| matches!(self.dictation_model_for_profile(&profile.id), Ok(FileModel::Whisper(_))))
+            .filter(|profile| matches!(self.dictation_model_for_profile_gated(&profile.id, pianissimo_supported), Ok(FileModel::Whisper(_))))
             .collect();
         let Some(primary_index) = profiles
             .iter()
@@ -1260,7 +1455,7 @@ impl Settings {
 
         for index in ordered_indices {
             let profile = &profiles[index];
-            let Ok(FileModel::Whisper(model)) = self.dictation_model_for_profile(&profile.id) else {
+            let Ok(FileModel::Whisper(model)) = self.dictation_model_for_profile_gated(&profile.id, pianissimo_supported) else {
                 continue;
             };
             if plan.iter().any(|(resident, _)| *resident == model) {
@@ -1602,7 +1797,7 @@ mod tests {
     #[test]
     fn recommended_model_per_language() {
         assert_eq!(WhisperModel::recommended(Language::English), WhisperModel::BaseEn);
-        assert_eq!(WhisperModel::recommended(Language::Swedish), WhisperModel::KbWhisperBase);
+        assert_eq!(WhisperModel::recommended(Language::Swedish), WhisperModel::KbWhisperMedium);
         assert_eq!(WhisperModel::recommended(Language::Norwegian), WhisperModel::NbWhisperBase);
         assert_eq!(WhisperModel::recommended(Language::Finnish), WhisperModel::Base);
         assert_eq!(WhisperModel::recommended(Language::Auto), WhisperModel::Base);
@@ -2116,7 +2311,7 @@ mod tests {
         assert_eq!(s.effective_model(), WhisperModel::BaseEn);
 
         s.language = Language::Swedish;
-        assert_eq!(s.effective_model(), WhisperModel::KbWhisperBase);
+        assert_eq!(s.effective_model(), WhisperModel::KbWhisperMedium);
 
         s.language = Language::Norwegian;
         assert_eq!(s.effective_model(), WhisperModel::NbWhisperBase);
@@ -2213,7 +2408,7 @@ mod tests {
         };
         settings.profile_models.insert("default".into(), FileModelPreference::Whisper(WhisperModel::SmallEn));
         settings.profile_models.insert("swedish".into(), FileModelPreference::Whisper(WhisperModel::KbWhisperSmall));
-        assert_eq!(settings.warm_model_plan(2, 1000), vec![
+        assert_eq!(settings.warm_model_plan_gated(2, 1000, false), vec![
             (WhisperModel::SmallEn, Language::English),
             (WhisperModel::KbWhisperSmall, Language::Swedish),
         ]);
@@ -2423,7 +2618,7 @@ mod tests {
     #[test]
     fn effective_model_can_be_selected_for_profile_language() {
         let settings = Settings { auto_select_model: true, ..Default::default() };
-        assert_eq!(settings.effective_model_for(Language::Swedish), WhisperModel::KbWhisperBase);
+        assert_eq!(settings.effective_model_for(Language::Swedish), WhisperModel::KbWhisperMedium);
         assert_eq!(settings.effective_model_for(Language::Norwegian), WhisperModel::NbWhisperBase);
     }
 
@@ -2481,8 +2676,8 @@ mod tests {
         };
 
         assert_eq!(
-            settings.effective_file_model_for(Language::Swedish),
-            Ok(FileModel::Whisper(WhisperModel::KbWhisperBase))
+            settings.effective_file_model_for_gated(Language::Swedish, false),
+            Ok(FileModel::Whisper(WhisperModel::KbWhisperMedium))
         );
     }
 
@@ -2554,9 +2749,10 @@ mod tests {
                 profile("english", "Super+E", Language::English),
             ])
             .unwrap();
+        settings.set_profile_model_gated("default", FileModelPreference::Whisper(WhisperModel::KbWhisperBase), false).unwrap();
 
         assert_eq!(
-            settings.warm_model_plan(2, 384),
+            settings.warm_model_plan_gated(2, 384, false),
             vec![
                 (WhisperModel::KbWhisperBase, Language::Swedish),
                 (WhisperModel::BaseEn, Language::English),
@@ -2581,7 +2777,7 @@ mod tests {
         settings.set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true).unwrap();
 
         assert_eq!(
-            settings.warm_model_plan(2, 384),
+            settings.warm_model_plan_gated(2, 384, false),
             vec![(WhisperModel::BaseEn, Language::English)]
         );
 
@@ -2592,7 +2788,7 @@ mod tests {
                 Language::Swedish,
             )])
             .unwrap();
-        assert!(settings.warm_model_plan(2, 384).is_empty());
+        assert!(settings.warm_model_plan_gated(2, 384, false).is_empty());
     }
 
     #[test]
@@ -2612,7 +2808,7 @@ mod tests {
         settings.set_profile_model("english", FileModelPreference::Whisper(WhisperModel::Base)).unwrap();
 
         assert_eq!(
-            settings.warm_model_plan(2, 384),
+            settings.warm_model_plan_gated(2, 384, false),
             vec![(WhisperModel::Base, Language::Swedish)]
         );
     }
@@ -2626,9 +2822,10 @@ mod tests {
                 profile("default", "Super+S", Language::Swedish),
             ])
             .unwrap();
+        settings.set_profile_model_gated("default", FileModelPreference::Whisper(WhisperModel::KbWhisperBase), false).unwrap();
 
         assert_eq!(
-            settings.warm_model_plan(2, 384),
+            settings.warm_model_plan_gated(2, 384, false),
             vec![
                 (WhisperModel::KbWhisperBase, Language::Swedish),
                 (WhisperModel::BaseEn, Language::English),
@@ -2645,10 +2842,11 @@ mod tests {
                 profile("english", "Super+E", Language::English),
             ])
             .unwrap();
+        settings.set_profile_model_gated("default", FileModelPreference::Whisper(WhisperModel::KbWhisperBase), false).unwrap();
 
         let primary = vec![(WhisperModel::KbWhisperBase, Language::Swedish)];
-        assert_eq!(settings.warm_model_plan(2, 100), primary);
-        assert_eq!(settings.warm_model_plan(0, 1_000), primary);
+        assert_eq!(settings.warm_model_plan_gated(2, 100, false), primary);
+        assert_eq!(settings.warm_model_plan_gated(0, 1_000, false), primary);
     }
 
     #[test]
@@ -2665,7 +2863,7 @@ mod tests {
         );
         assert_eq!(
             settings.effective_model_for(Language::Swedish),
-            WhisperModel::KbWhisperBase
+            WhisperModel::KbWhisperMedium
         );
         assert_eq!(
             settings.effective_model_for(Language::Norwegian),
@@ -2888,7 +3086,7 @@ mod tests {
         assert_eq!(settings.file_transcription_model, FileModelPreference::Auto);
         assert!(!settings.pianissimo_dictation);
         assert_eq!(
-            settings.dictation_model_for_profile("default").unwrap(),
+            settings.dictation_model_for_profile_gated("default", false).unwrap(),
             FileModel::Whisper(WhisperModel::recommended(Language::Swedish))
         );
         assert!(!settings.demote_unsupported_pianissimo(false), "idempotent");
@@ -2906,5 +3104,216 @@ mod tests {
             .unwrap_err();
         assert!(error.contains("macOS 14"), "{error}");
         assert_ne!(settings.profile_models.get("default"), Some(&FileModelPreference::PianissimoOriginal));
+    }
+
+    // -- Swedish model lineup --
+
+    #[test]
+    fn swedish_lineup_per_platform() {
+        let ids = |models: Vec<FileModel>| -> Vec<String> {
+            models
+                .into_iter()
+                .map(|m| match m {
+                    FileModel::PianissimoOriginal => "pianissimo-sv".to_string(),
+                    FileModel::Whisper(w) => w.display_name().to_string(),
+                })
+                .collect()
+        };
+        assert_eq!(
+            ids(FileModel::app_lineup(Language::Swedish, true, None)),
+            ["pianissimo-sv", "KB-Whisper Large"]
+        );
+        assert_eq!(
+            ids(FileModel::app_lineup(Language::Swedish, false, None)),
+            ["KB-Whisper Medium", "KB-Whisper Large"]
+        );
+        // Other languages are unchanged and ignore the gate.
+        for gate in [true, false] {
+            for language in [Language::English, Language::Norwegian, Language::Finnish, Language::Auto] {
+                let expected: Vec<FileModel> = WhisperModel::models_for_language(language)
+                    .iter()
+                    .copied()
+                    .map(FileModel::Whisper)
+                    .collect();
+                assert_eq!(FileModel::app_lineup(language, gate, None), expected);
+            }
+        }
+        // The retired models stay in the full catalogue.
+        let all = WhisperModel::models_for_language(Language::Swedish);
+        assert_eq!(all.len(), 5);
+        assert_eq!(all.iter().filter(|m| m.is_hidden_in_app()).count(), 3);
+    }
+
+    #[test]
+    fn lineup_keeps_the_current_hidden_choice_selectable() {
+        let base = FileModel::Whisper(WhisperModel::KbWhisperBase);
+        let lineup = FileModel::app_lineup(Language::Swedish, true, Some(base));
+        assert_eq!(lineup.last(), Some(&base));
+        assert_eq!(lineup.len(), 3);
+        // An incompatible or unsupported selection is not injected.
+        assert_eq!(
+            FileModel::app_lineup(Language::English, true, Some(base)).len(),
+            WhisperModel::models_for_language(Language::English).len()
+        );
+        assert_eq!(
+            FileModel::app_lineup(Language::Swedish, false, Some(FileModel::PianissimoOriginal)).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn recommended_swedish_resolves_by_platform_everywhere() {
+        assert_eq!(FileModel::recommended_for(Language::Swedish, true), FileModel::PianissimoOriginal);
+        assert_eq!(
+            FileModel::recommended_for(Language::Swedish, false),
+            FileModel::Whisper(WhisperModel::KbWhisperMedium)
+        );
+        assert_eq!(WhisperModel::recommended(Language::Swedish), WhisperModel::KbWhisperMedium);
+        assert_eq!(
+            FileModel::recommended_for(Language::English, true),
+            FileModel::Whisper(WhisperModel::BaseEn)
+        );
+
+        let mut settings = Settings { language: Language::Swedish, ..Default::default() };
+        settings.materialize_profile_models();
+        assert_eq!(settings.file_transcription_model, FileModelPreference::Auto);
+        for (gate, expected) in [
+            (true, FileModel::PianissimoOriginal),
+            (false, FileModel::Whisper(WhisperModel::KbWhisperMedium)),
+        ] {
+            assert_eq!(settings.dictation_model_for_profile_gated("default", gate).unwrap(), expected);
+            assert_eq!(settings.effective_file_model_for_gated(Language::Swedish, gate).unwrap(), expected);
+        }
+        // Whisper-only work (meetings, diarization) never gets Pianissimo from Auto.
+        assert_eq!(
+            settings.effective_whisper_file_model_for(Language::Swedish).unwrap(),
+            FileModel::Whisper(WhisperModel::KbWhisperMedium)
+        );
+    }
+
+    fn swedish_settings(profile: FileModelPreference) -> Settings {
+        let mut settings = Settings {
+            language: Language::Swedish,
+            model_lineup_version: 0,
+            ..Default::default()
+        };
+        settings.materialize_profile_models();
+        settings.profile_models.insert("default".into(), profile);
+        settings
+    }
+
+    fn migrate(settings: &mut Settings, supported: bool, pianissimo_downloaded: bool, downloaded: &[WhisperModel]) -> bool {
+        let downloaded = downloaded.to_vec();
+        let check = move |model: WhisperModel| downloaded.contains(&model);
+        settings.migrate_swedish_lineup(&LineupEnv {
+            pianissimo_supported: supported,
+            pianissimo_downloaded,
+            whisper_downloaded: &check,
+        })
+    }
+
+    #[test]
+    fn lineup_migration_matrix() {
+        use WhisperModel::*;
+        for old in [KbWhisperTiny, KbWhisperBase, KbWhisperSmall] {
+            for supported in [true, false] {
+                for target_ready in [true, false] {
+                    for old_ready in [true, false] {
+                        let mut downloaded = vec![];
+                        if old_ready { downloaded.push(old); }
+                        if !supported && target_ready { downloaded.push(KbWhisperMedium); }
+                        let mut settings = swedish_settings(FileModelPreference::Whisper(old));
+                        assert!(migrate(&mut settings, supported, supported && target_ready, &downloaded));
+                        let target = if supported {
+                            FileModelPreference::PianissimoOriginal
+                        } else {
+                            FileModelPreference::Whisper(KbWhisperMedium)
+                        };
+                        let expected = if target_ready || !old_ready { target } else { FileModelPreference::Whisper(old) };
+                        assert_eq!(
+                            settings.profile_models["default"], expected,
+                            "old={old:?} supported={supported} target_ready={target_ready} old_ready={old_ready}"
+                        );
+                        assert_eq!(settings.model_lineup_version, MODEL_LINEUP_VERSION);
+                        // Never left without a resolvable engine.
+                        assert!(settings.dictation_model_for_profile_gated("default", supported).is_ok());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lineup_migration_keeps_working_old_model_until_recommended_is_downloaded() {
+        let mut settings = swedish_settings(FileModelPreference::Whisper(WhisperModel::KbWhisperSmall));
+        migrate(&mut settings, true, false, &[WhisperModel::KbWhisperSmall]);
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Whisper(WhisperModel::KbWhisperSmall));
+    }
+
+    #[test]
+    fn lineup_migration_pins_auto_to_previous_model_only_when_that_keeps_dictation_working() {
+        // Auto used to mean KB-Whisper Base. Base downloaded, Pianissimo missing: pin.
+        let mut settings = swedish_settings(FileModelPreference::Auto);
+        migrate(&mut settings, true, false, &[WhisperModel::KbWhisperBase]);
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Whisper(WhisperModel::KbWhisperBase));
+        // Pianissimo already there: Auto simply follows the new recommendation.
+        let mut settings = swedish_settings(FileModelPreference::Auto);
+        migrate(&mut settings, true, true, &[WhisperModel::KbWhisperBase]);
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Auto);
+        // Nothing downloaded: pinning would not help, Auto prompts for the recommendation.
+        let mut settings = swedish_settings(FileModelPreference::Auto);
+        migrate(&mut settings, true, false, &[]);
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Auto);
+        // Unsupported platform: Medium is the recommendation.
+        let mut settings = swedish_settings(FileModelPreference::Auto);
+        migrate(&mut settings, false, false, &[WhisperModel::KbWhisperBase]);
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Whisper(WhisperModel::KbWhisperBase));
+    }
+
+    #[test]
+    fn lineup_migration_leaves_explicit_and_other_language_choices_alone() {
+        for preference in [
+            FileModelPreference::Whisper(WhisperModel::KbWhisperMedium),
+            FileModelPreference::Whisper(WhisperModel::KbWhisperLarge),
+            FileModelPreference::PianissimoOriginal,
+        ] {
+            let mut settings = swedish_settings(preference);
+            migrate(&mut settings, true, true, &[WhisperModel::KbWhisperMedium]);
+            assert_eq!(settings.profile_models["default"], preference);
+        }
+        let mut settings = Settings { language: Language::English, model_lineup_version: 0, ..Default::default() };
+        settings.materialize_profile_models();
+        settings.profile_models.insert("default".into(), FileModelPreference::Whisper(WhisperModel::SmallEn));
+        migrate(&mut settings, true, true, &[]);
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Whisper(WhisperModel::SmallEn));
+    }
+
+    #[test]
+    fn lineup_migration_moves_legacy_global_model_only_to_a_downloaded_medium() {
+        let mut settings = swedish_settings(FileModelPreference::Auto);
+        settings.auto_select_model = false;
+        settings.whisper_model = WhisperModel::KbWhisperSmall;
+        migrate(&mut settings, true, true, &[WhisperModel::KbWhisperSmall]);
+        assert_eq!(settings.whisper_model, WhisperModel::KbWhisperSmall);
+        let mut settings = swedish_settings(FileModelPreference::Auto);
+        settings.auto_select_model = false;
+        settings.whisper_model = WhisperModel::KbWhisperSmall;
+        migrate(&mut settings, true, true, &[WhisperModel::KbWhisperSmall, WhisperModel::KbWhisperMedium]);
+        assert_eq!(settings.whisper_model, WhisperModel::KbWhisperMedium);
+    }
+
+    #[test]
+    fn lineup_migration_is_idempotent_and_new_installs_skip_it() {
+        let mut settings = swedish_settings(FileModelPreference::Whisper(WhisperModel::KbWhisperBase));
+        assert!(migrate(&mut settings, true, true, &[]));
+        let after_first = settings.profile_models.clone();
+        // A later manual choice of a retired model (via CLI) is not undone.
+        settings.profile_models.insert("default".into(), FileModelPreference::Whisper(WhisperModel::KbWhisperTiny));
+        assert!(!migrate(&mut settings, true, true, &[]));
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Whisper(WhisperModel::KbWhisperTiny));
+        assert_ne!(after_first["default"], settings.profile_models["default"]);
+        assert_eq!(Settings::default().model_lineup_version, MODEL_LINEUP_VERSION);
+        let old_file: Settings = serde_json::from_str(r#"{"language":"sv"}"#).unwrap();
+        assert_eq!(old_file.model_lineup_version, 0, "files without the marker are migrated");
     }
 }

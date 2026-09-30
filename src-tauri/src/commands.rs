@@ -97,7 +97,9 @@ pub(crate) fn file_transcription_context(
     prompt: Option<&str>,
 ) -> Result<FileTranscriptionContext, String> {
     let language = file_transcription_language(settings, profile_id)?;
-    let model = match settings.effective_file_model_for(language)? {
+    // Meetings and diarization need Whisper: an Auto preference uses the
+    // recommended Whisper model rather than Pianissimo.
+    let model = match settings.effective_whisper_file_model_for(language)? {
         FileModel::Whisper(model) => model,
         FileModel::PianissimoOriginal => return Err(
             "Pianissimo supports plain Swedish file transcription only; select a Whisper file model for meetings or diarization".into(),
@@ -136,6 +138,41 @@ pub(crate) fn apply_glossary(text: String, glossary: &Glossary) -> String {
         );
     }
     corrected
+}
+
+#[cfg(test)]
+mod lineup_option_tests {
+    use super::*;
+
+    fn ids(supported: bool, language: Language, include: Option<FileModel>) -> Vec<String> {
+        lineup_model_infos(language, supported, include, None).into_iter().map(|info| info.id).collect()
+    }
+
+    #[test]
+    fn swedish_pickers_show_only_the_supported_lineup() {
+        assert_eq!(ids(true, Language::Swedish, None), ["pianissimo-sv", "kb-whisper-large"]);
+        assert_eq!(ids(false, Language::Swedish, None), ["kb-whisper-medium", "kb-whisper-large"]);
+        assert_eq!(
+            ids(true, Language::Swedish, Some(FileModel::Whisper(WhisperModel::KbWhisperBase))),
+            ["pianissimo-sv", "kb-whisper-large", "kb-whisper-base"]
+        );
+        assert_eq!(ids(true, Language::English, None), ["tiny.en", "base.en", "small.en", "medium.en"]);
+    }
+
+    #[test]
+    fn model_info_wire_keys_are_stable() {
+        let info = lineup_model_infos(Language::Swedish, true, None, None).remove(0);
+        let value = serde_json::to_value(info).unwrap();
+        let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["active", "description", "display_name", "downloaded", "id", "size_mb"]);
+    }
+
+    #[test]
+    fn recommended_info_follows_the_platform_gate() {
+        assert_eq!(model_info_for(FileModel::recommended_for(Language::Swedish, true), true).id, "pianissimo-sv");
+        assert_eq!(model_info_for(FileModel::recommended_for(Language::Swedish, false), true).id, "kb-whisper-medium");
+    }
 }
 
 #[cfg(test)]
@@ -330,7 +367,7 @@ mod glossary_options_tests {
         let error = file_transcription_context(&settings, Some("swedish"), None)
             .err().expect("meeting path must reject Pianissimo");
         assert!(error.contains("plain Swedish"));
-        assert_eq!(settings.effective_model_for(Language::Swedish), WhisperModel::KbWhisperBase);
+        assert_eq!(settings.effective_model_for(Language::Swedish), WhisperModel::KbWhisperMedium);
     }
 
     #[test]
@@ -1251,50 +1288,66 @@ pub async fn get_model_info(
 ) -> Result<Vec<ModelInfo>, String> {
     let ctrl = controller.lock().unwrap();
     let profile = ctrl.settings().default_profile();
-    let language = profile.language;
     let effective = ctrl.settings().dictation_model_for_profile(&profile.id)?;
-    let models = WhisperModel::models_for_language(language);
-
-    Ok(models
-        .iter()
-        .map(|m| ModelInfo {
-            id: serde_json::to_value(m)
-                .and_then(serde_json::from_value::<String>)
-                .unwrap_or_else(|_| format!("{:?}", m)),
-            display_name: m.display_name().to_string(),
-            description: m.description().to_string(),
-            size_mb: m.size_mb(),
-            downloaded: model::is_model_downloaded(*m),
-            active: effective == FileModel::Whisper(*m),
-        })
-        .collect())
+    Ok(lineup_model_infos(profile.language, pianissimo_supported(), Some(effective), Some(effective)))
 }
 
-#[tauri::command]
-pub async fn get_file_model_options(language: Language) -> Result<Vec<ModelInfo>, String> {
-    let mut models: Vec<ModelInfo> = WhisperModel::models_for_language(language)
-        .iter()
-        .map(|model| ModelInfo {
-            id: serde_json::to_value(model).and_then(serde_json::from_value::<String>)
+fn pianissimo_supported() -> bool {
+    sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os()
+}
+
+/// Wire description of one engine choice (Whisper model or Pianissimo).
+fn model_info_for(choice: FileModel, active: bool) -> ModelInfo {
+    match choice {
+        FileModel::Whisper(model) => ModelInfo {
+            id: serde_json::to_value(model)
+                .and_then(serde_json::from_value::<String>)
                 .expect("Whisper model has a stable ID"),
             display_name: model.display_name().to_string(),
             description: model.description().to_string(),
             size_mb: model.size_mb(),
-            downloaded: model::is_model_downloaded(*model),
-            active: false,
-        })
-        .collect();
-    if language == Language::Swedish && sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
-        models.push(ModelInfo {
+            downloaded: model::is_model_downloaded(model),
+            active,
+        },
+        FileModel::PianissimoOriginal => ModelInfo {
             id: "pianissimo-sv".into(),
             display_name: "Pianissimo".into(),
-            description: "Swedish file transcription · Core ML on the Neural Engine · macOS 14+ on Apple Silicon".into(),
+            description: "Swedish speech model \u{b7} Core ML on the Neural Engine \u{b7} macOS 14+ on Apple Silicon".into(),
             size_mb: pianissimo_model_size_mb(),
             downloaded: pianissimo_model::is_downloaded(),
-            active: false,
-        });
+            active,
+        },
     }
-    Ok(models)
+}
+
+/// The app's model choices for `language` (after the "Recommended" entry),
+/// with the platform gate injected. `include` keeps a currently selected
+/// model (for example a retired KB-Whisper Base) visible in the list.
+fn lineup_model_infos(
+    language: Language,
+    pianissimo_supported: bool,
+    include: Option<FileModel>,
+    active: Option<FileModel>,
+) -> Vec<ModelInfo> {
+    FileModel::app_lineup(language, pianissimo_supported, include)
+        .into_iter()
+        .map(|choice| model_info_for(choice, active == Some(choice)))
+        .collect()
+}
+
+/// Model choices for the pickers. `include` is the currently selected model
+/// ID (a stable persisted ID); it stays listed even when the app hides it.
+#[tauri::command]
+pub async fn get_file_model_options(
+    language: Language,
+    include: Option<String>,
+) -> Result<Vec<ModelInfo>, String> {
+    let include = include.as_deref().and_then(|id| match FileModelPreference::parse_id(id) {
+        Ok(FileModelPreference::Whisper(model)) => Some(FileModel::Whisper(model)),
+        Ok(FileModelPreference::PianissimoOriginal) => Some(FileModel::PianissimoOriginal),
+        _ => None,
+    });
+    Ok(lineup_model_infos(language, pianissimo_supported(), include, None))
 }
 
 /// Download size of the Pianissimo Core ML archive, in MB, for model listings.
@@ -1309,25 +1362,7 @@ pub async fn get_profile_model_info(
 ) -> Result<ModelInfo, String> {
     let ctrl = controller.lock().unwrap();
     let choice = ctrl.settings().dictation_model_for_profile(&profile_id)?;
-    Ok(match choice {
-        sagascript_core::settings::FileModel::Whisper(model) => ModelInfo {
-            id: serde_json::to_value(model).and_then(serde_json::from_value::<String>)
-                .expect("Whisper model has a stable ID"),
-            display_name: model.display_name().to_string(),
-            description: model.description().to_string(),
-            size_mb: model.size_mb(),
-            downloaded: model::is_model_downloaded(model),
-            active: true,
-        },
-        sagascript_core::settings::FileModel::PianissimoOriginal => ModelInfo {
-            id: "pianissimo-sv".into(),
-            display_name: "Pianissimo (experimental)".into(),
-            description: "Swedish dictation".into(),
-            size_mb: pianissimo_model_size_mb(),
-            downloaded: pianissimo_model::is_downloaded(),
-            active: true,
-        },
-    })
+    Ok(model_info_for(choice, true))
 }
 
 #[tauri::command]
@@ -1357,17 +1392,7 @@ pub async fn get_effective_model_info(
     _controller: State<'_, SharedController>,
     language: Language,
 ) -> Result<ModelInfo, String> {
-    let model = WhisperModel::recommended(language);
-    Ok(ModelInfo {
-        id: serde_json::to_value(model)
-            .and_then(serde_json::from_value::<String>)
-            .unwrap_or_else(|_| format!("{model:?}")),
-        display_name: model.display_name().to_string(),
-        description: model.description().to_string(),
-        size_mb: model.size_mb(),
-        downloaded: model::is_model_downloaded(model),
-        active: true,
-    })
+    Ok(model_info_for(FileModel::recommended_for(language, pianissimo_supported()), true))
 }
 
 #[tauri::command]
@@ -2269,6 +2294,12 @@ pub async fn engine_status(controller: State<'_, SharedController>) -> Result<En
         let settings = ctrl.settings();
         settings.file_transcription_model == FileModelPreference::PianissimoOriginal
             || settings.profile_models.values().any(|m| *m == FileModelPreference::PianissimoOriginal)
+            // "Recommended for Swedish" resolves to Pianissimo where supported.
+            || settings.resolved_hotkey_profiles().iter().any(|profile| {
+                settings
+                    .dictation_model_for_profile_gated(&profile.id, supported)
+                    .is_ok_and(|choice| choice == FileModel::PianissimoOriginal)
+            })
     };
     let mut identity = backend::cached_host_identity();
     if identity.is_none() && supported && installed && selected && host.as_ref().is_some_and(|p| p.is_file()) {
@@ -2513,7 +2544,13 @@ pub async fn transcribe_file(
         let ctrl = controller.lock().unwrap();
         let settings = ctrl.settings();
         let language = file_transcription_language(settings, profile_id.as_deref())?;
-        match settings.effective_file_model_for(language)? {
+        // Diarization needs Whisper, so an Auto preference must not pick Pianissimo for it.
+        let resolved = if diarize.unwrap_or(false) {
+            settings.effective_whisper_file_model_for(language)?
+        } else {
+            settings.effective_file_model_for(language)?
+        };
+        match resolved {
             FileModel::PianissimoOriginal => Some(Glossary::parse(
                 &settings.effective_glossary_source_with_prompt(profile_id.as_deref(), prompt.as_deref()),
             )),
