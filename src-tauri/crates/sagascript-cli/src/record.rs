@@ -84,7 +84,19 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let selected_model = if save_only {
         None
     } else {
-        let selected = resolve_record_model_for_profile(&stored, &profile, language, args.model.as_deref())?;
+        let mut selected = resolve_record_model_for_profile(&stored, &profile, language, args.model.as_deref())?;
+        // Pianissimo has no decoder hints. When it was only implied by
+        // "recommended" (no --model, profile on Auto or a language override),
+        // decode with the recommended Whisper model instead of failing.
+        let implicit_pianissimo = args.model.is_none()
+            && (language != profile.language
+                || stored.profile_models.get(&profile.id).is_none_or(|p| *p == sagascript_core::settings::FileModelPreference::Auto));
+        if selected == RecordModel::Pianissimo
+            && implicit_pianissimo
+            && (args.prompt.is_some() || args.prompt_file.is_some())
+        {
+            selected = RecordModel::Whisper(WhisperModel::recommended(language));
+        }
         if selected == RecordModel::Pianissimo {
             validate_pianissimo_record_options(args.prompt.is_some(), args.prompt_file.is_some())?;
         }
@@ -266,7 +278,14 @@ fn resolve_record_model_for_profile(
             .map_err(DictationError::SettingsError)?;
         return Ok(if pianissimo { RecordModel::Pianissimo } else { RecordModel::Whisper(whisper) });
     }
-    resolve_record_model(explicit, language, true, WhisperModel::recommended(language), false)
+    resolve_record_model(
+        explicit,
+        language,
+        true,
+        WhisperModel::recommended(language),
+        // "Recommended for Swedish" is Pianissimo wherever it runs.
+        sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+    )
 }
 
 fn resolve_record_model(

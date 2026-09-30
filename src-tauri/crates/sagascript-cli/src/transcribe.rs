@@ -751,7 +751,18 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
             "--diarize is only available when transcribing one file".to_string(),
         ));
     }
-    let selected_model = resolve_file_model(args.model.as_deref(), language, &stored)?;
+    #[cfg(feature = "diarization")]
+    let wants_diarization = args.diarize || args.meeting_json;
+    #[cfg(not(feature = "diarization"))]
+    let wants_diarization = false;
+    let needs_whisper = wants_diarization
+        || args.vad
+        || args.beam_size.is_some()
+        || args.parallel.is_some()
+        || args.correct_hints
+        || args.prompt.is_some()
+        || args.prompt_file.is_some();
+    let selected_model = resolve_file_model_for_run(args.model.as_deref(), language, &stored, needs_whisper)?;
 
     if selected_model == FileModel::PianissimoOriginal {
         #[cfg(feature = "diarization")]
@@ -2391,6 +2402,19 @@ pub fn resolve_file_model(
     language: Language,
     settings: &Settings,
 ) -> Result<FileModel, DictationError> {
+    resolve_file_model_for_run(model_arg, language, settings, false)
+}
+
+/// [`resolve_file_model`] for a run that may need Whisper-only features
+/// (diarization, meeting output, decoder hints, beam/parallel/VAD options).
+/// An implicit choice (no `--model`, file preference `Auto`) then resolves to
+/// the recommended Whisper model instead of Pianissimo.
+pub fn resolve_file_model_for_run(
+    model_arg: Option<&str>,
+    language: Language,
+    settings: &Settings,
+    needs_whisper: bool,
+) -> Result<FileModel, DictationError> {
     if let Some(id) = model_arg {
         let preference = FileModelPreference::parse_id(id).map_err(DictationError::SettingsError)?;
         if preference == FileModelPreference::Auto {
@@ -2402,8 +2426,8 @@ pub fn resolve_file_model(
         run.file_transcription_model = preference;
         return run.effective_file_model_for(language).map_err(DictationError::SettingsError);
     }
-    if settings.file_transcription_model == FileModelPreference::Auto {
-        return Ok(FileModel::Whisper(WhisperModel::recommended(language)));
+    if needs_whisper {
+        return settings.effective_whisper_file_model_for(language).map_err(DictationError::SettingsError);
     }
     settings.effective_file_model_for(language).map_err(DictationError::SettingsError)
 }
@@ -3371,6 +3395,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn explicit_model_ids_stay_accepted_and_whisper_only_auto_avoids_pianissimo() {
+        // Auto resolution depends on what is downloaded on the host, so its
+        // fallback order is covered hermetically in sagascript-core; here only
+        // host-independent properties are asserted.
+        let settings = Settings::default();
+        assert!(matches!(
+            resolve_file_model_for_run(None, Language::Swedish, &settings, true).unwrap(),
+            FileModel::Whisper(_)
+        ));
+        assert!(resolve_file_model(Some("auto"), Language::Swedish, &settings).is_err());
+        // Retired models remain usable through an explicit --model.
+        for id in ["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small", "kb-whisper-medium", "kb-whisper-large"] {
+            assert!(matches!(
+                resolve_file_model_for_run(Some(id), Language::Swedish, &settings, true).unwrap(),
+                FileModel::Whisper(_)
+            ));
+        }
+    }
+
     // -- resolve_effective_model --
     //
     // These exercise the exact branch used by both transcribe::run() and
@@ -3381,7 +3425,7 @@ mod tests {
     fn resolve_effective_model_none_auto_recommends_by_language() {
         let result =
             resolve_effective_model(None, Language::Swedish, true, WhisperModel::Base).unwrap();
-        assert_eq!(result, WhisperModel::KbWhisperBase);
+        assert_eq!(result, WhisperModel::KbWhisperMedium);
     }
 
     #[test]

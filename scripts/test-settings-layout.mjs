@@ -76,3 +76,22 @@ test("Settings shows engine host identity and Pianissimo engine controls without
   assert.match(content, /setEngineIdleUnloadMinutes/);
   assert.doesNotMatch(content, /714|Pianissimo Q8|macOS 13/);
 });
+
+test("Swedish model lineup: pickers come from the backend lineup, retired models get a one-click switch", () => {
+  // The dictation and file pickers render only what the backend lineup returns
+  // and never hardcode the retired KB-Whisper Tiny/Base/Small choices.
+  assert.match(content, /Recommended for \{languageLabel\(profile\.language\)\}/);
+  assert.match(content, /getFileModelOptions\(\s*profile\.language,/);
+  assert.match(content, /retiredSwedishModelIds = \["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small"\]/);
+  assert.doesNotMatch(content, /<option value="kb-whisper/);
+  assert.match(content, /Switch to \$\{suggested\.display_name\}/);
+  assert.match(content, /download \$\{suggested\.size_mb\} MB/);
+  // Download first, then switch: the old model keeps dictating until the new one is ready.
+  const switchBody = content.slice(content.indexOf("async function switchProfileToRecommended"));
+  assert(switchBody.indexOf("downloadPianissimoModel") < switchBody.indexOf("setProfileModel(profile.id, target.id)"));
+  assert.match(content, /Auto — \{fileAutoModel/);
+  // Onboarding downloads whatever the backend recommends (Pianissimo where supported).
+  assert.match(onboardingContent, /getEffectiveModelInfo\(language\)/);
+  assert.match(onboardingContent, /downloadPianissimoModel\(\)/);
+  assert.doesNotMatch(onboardingContent, /sv: "kb-whisper-base"/);
+});

@@ -35,6 +35,7 @@
     getBuildInfo,
     getFileModelOptions,
     getEffectiveModelInfo,
+    getAutoFileModelInfo,
     downloadModel,
     downloadPianissimoModel,
     getSupportedFormats,
@@ -97,7 +98,9 @@
   const pianissimoSizeMb = $derived(
     fileModelOptions.find((model) => model.id === "pianissimo-sv")?.size_mb ?? 0,
   );
+  // What Auto will use now (recommended if downloaded, else best downloaded) and what is recommended.
   let fileAutoModel: WhisperModel | null = $state(null);
+  let fileRecommendedModel: WhisperModel | null = $state(null);
   let fileModelError = $state("");
   let fileModelSaving = $state(false);
   type SettingsTab = "dictate" | "transcribe" | "settings";
@@ -107,6 +110,12 @@
   let downloadProgress: number = $state(0);
   let profileModels: Record<string, WhisperModel> = $state({});
   let profileModelOptions: Record<string, WhisperModel[]> = $state({});
+  // What "Recommended" resolves to per profile (Pianissimo, or KB-Whisper Medium
+  // where Pianissimo is unsupported).
+  let profileRecommended: Record<string, WhisperModel> = $state({});
+  // Swedish models the app no longer offers. A profile still on one keeps
+  // working; Settings suggests the recommended model instead of switching silently.
+  const retiredSwedishModelIds = ["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small"];
   let profileModelErrors: Record<string, string> = $state({});
   let profileModelRefresh = 0;
 
@@ -779,9 +788,18 @@
     if (!settings) return;
     const language = transcribeLanguage();
     let stale = false;
-    void Promise.all([getFileModelOptions(language), getEffectiveModelInfo(language)])
-      .then(([options, automatic]) => {
-        if (!stale) { fileModelOptions = Array.isArray(options) ? options : []; fileAutoModel = automatic; }
+    const selected = settings.file_transcription_model;
+    void Promise.all([
+      getFileModelOptions(language, selected && selected !== "auto" ? selected : undefined),
+      getAutoFileModelInfo(language),
+      getEffectiveModelInfo(language),
+    ])
+      .then(([options, automatic, recommended]) => {
+        if (!stale) {
+          fileModelOptions = Array.isArray(options) ? options : [];
+          fileAutoModel = automatic;
+          fileRecommendedModel = recommended;
+        }
       })
       .catch((error) => {
         if (!stale) fileModelError = typeof error === "string" ? error : String(error);
@@ -804,17 +822,28 @@
   }
 
   async function downloadSelectedFileModel(): Promise<void> {
-    const id = settings?.file_transcription_model;
-    if (!id || id === "auto" || downloading !== null) return;
+    const preference = settings?.file_transcription_model;
+    // "Auto" downloads the recommended model (it may currently use an older downloaded one).
+    const id = preference === "auto" ? fileRecommendedModel?.id : preference;
+    if (!id || downloading !== null) return;
     downloading = id;
-    downloadingName = fileModelOptions.find((model) => model.id === id)?.display_name ?? id;
+    downloadingName = fileModelOptions.find((model) => model.id === id)?.display_name
+      ?? (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id);
     downloadProgress = 0;
     fileModelError = "";
     try {
       if (id === "pianissimo-sv") await downloadPianissimoModel();
       else await downloadModel(id);
-      const options = await getFileModelOptions(transcribeLanguage());
+      const options = await getFileModelOptions(
+        transcribeLanguage(),
+        id !== "auto" ? id : undefined,
+      );
       fileModelOptions = Array.isArray(options) ? options : [];
+      const language = transcribeLanguage();
+      [fileAutoModel, fileRecommendedModel] = await Promise.all([
+        getAutoFileModelInfo(language),
+        getEffectiveModelInfo(language),
+      ]);
     } catch (error) {
       fileModelError = typeof error === "string" ? error : String(error);
     } finally { downloading = null; downloadProgress = 0; }
@@ -872,12 +901,19 @@
           profile.id === draftProfileId
             ? await getEffectiveModelInfo(profile.language)
             : await getProfileModelInfo(profile.id),
-          await getFileModelOptions(profile.language),
+          await getFileModelOptions(
+            profile.language,
+            settings?.profile_models?.[profile.id] && settings.profile_models[profile.id] !== "auto"
+              ? settings.profile_models[profile.id]
+              : undefined,
+          ),
+          await getEffectiveModelInfo(profile.language),
         ] as const),
       );
       if (generation === profileModelRefresh) {
         profileModels = Object.fromEntries(entries.map(([id, model]) => [id, model]));
         profileModelOptions = Object.fromEntries(entries.map(([id, , options]) => [id, options]));
+        profileRecommended = Object.fromEntries(entries.map(([id, , , recommended]) => [id, recommended]));
       }
     } catch (e: any) {
       if (generation === profileModelRefresh) {
@@ -1496,6 +1532,44 @@
     }
   }
 
+  /** The recommended model to suggest for a Swedish profile still on a retired model. */
+  function retiredModelSuggestion(profile: HotkeyProfile): WhisperModel | null {
+    const current = profileModels[profile.id];
+    const recommended = profileRecommended[profile.id];
+    if (profile.language !== "sv" || !current || !recommended) return null;
+    if (!retiredSwedishModelIds.includes(current.id) || recommended.id === current.id) return null;
+    return recommended;
+  }
+
+  async function switchProfileToRecommended(profile: HotkeyProfile) {
+    const target = retiredModelSuggestion(profile);
+    if (!target || downloading !== null || dictationModelSaving) return;
+    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
+    dictationModelSaving = true;
+    try {
+      // Download first: the old model keeps dictating until the new one is ready.
+      if (!target.downloaded) {
+        downloading = target.id;
+        downloadingName = target.display_name;
+        downloadProgress = 0;
+        if (target.id === "pianissimo-sv") await downloadPianissimoModel();
+        else await downloadModel(target.id);
+      }
+      await setProfileModel(profile.id, target.id);
+      settings = await getSettings();
+      await refreshProfileModels(settings.hotkey_profiles);
+    } catch (e: any) {
+      profileModelErrors = {
+        ...profileModelErrors,
+        [profile.id]: typeof e === "string" ? e : e?.message || `Could not switch to ${target.display_name}.`,
+      };
+    } finally {
+      downloading = null;
+      downloadProgress = 0;
+      dictationModelSaving = false;
+    }
+  }
+
   async function changeProfileModel(profile: HotkeyProfile, event: Event) {
     if (!settings || dictationModelSaving) return;
     const select = event.target as HTMLSelectElement;
@@ -1928,6 +2002,21 @@
                     </button>
                   {/if}
                 </div>
+                {#if retiredModelSuggestion(profile)}
+                  {@const suggested = retiredModelSuggestion(profile)!}
+                  <div class="profile-engine">
+                    <span>{suggested.display_name} is faster and more accurate for Swedish.</span>
+                    <button
+                      class="link-btn profile-engine-action"
+                      onclick={() => switchProfileToRecommended(profile)}
+                      disabled={downloading !== null || dictationModelSaving}
+                    >
+                      {downloading === suggested.id
+                        ? `Downloading ${Math.round(downloadProgress)}%`
+                        : `Switch to ${suggested.display_name}${suggested.downloaded || suggested.size_mb <= 0 ? "" : ` (download ${suggested.size_mb} MB)`}`}
+                    </button>
+                  </div>
+                {/if}
                 {#if profileModelErrors[profile.id]}
                   <div class="hotkey-error">{profileModelErrors[profile.id]}</div>
                 {/if}
@@ -2031,7 +2120,7 @@
             <select id="file-model" value={settings.file_transcription_model}
               onchange={(event) => void onFileModelChange(event)}
               disabled={transcribing || fileModelSaving || downloading !== null}>
-              <option value="auto">Auto — automatic Whisper model ({fileAutoModel?.display_name ?? "loading…"})</option>
+              <option value="auto">Auto — {fileAutoModel?.display_name ?? "loading…"}{fileAutoModel && fileRecommendedModel && fileAutoModel.id !== fileRecommendedModel.id ? " (downloaded)" : " (recommended)"}</option>
               {#if settings.file_transcription_model !== "auto" && !fileModelOptions.some((model) => model.id === settings?.file_transcription_model)}
                 <option value={settings.file_transcription_model}>Current choice is incompatible with {languageLabel(transcribeLanguage())}</option>
               {/if}
@@ -2042,11 +2131,15 @@
             <div class="hotkey-hint">Effective model: {settings.file_transcription_model === "auto"
               ? fileAutoModel?.display_name ?? "loading…"
               : fileModelOptions.find((model) => model.id === settings?.file_transcription_model)?.display_name ?? "incompatible with this language"}.
+              {#if settings.file_transcription_model === "auto" && fileAutoModel && fileRecommendedModel && fileAutoModel.id !== fileRecommendedModel.id}
+                {fileRecommendedModel.display_name} is recommended{fileRecommendedModel.size_mb > 0 ? ` (${fileRecommendedModel.size_mb} MB download)` : ""}; Auto keeps using the model you already have.
+              {/if}
               This choice affects files only; dictation shortcuts keep their own model.</div>
-            {#if settings.file_transcription_model !== "auto" && fileModelOptions.some((model) => model.id === settings?.file_transcription_model && !model.downloaded)}
+            {#if (settings.file_transcription_model !== "auto" && fileModelOptions.some((model) => model.id === settings?.file_transcription_model && !model.downloaded))
+              || (settings.file_transcription_model === "auto" && fileRecommendedModel && !fileRecommendedModel.downloaded)}
               <button class="secondary" onclick={() => void downloadSelectedFileModel()}
                 disabled={downloading !== null || transcribing}>
-                {downloading === settings.file_transcription_model ? `Downloading ${downloadingName}… ${downloadProgress}%` : "Download selected model"}
+                {downloading !== null ? `Downloading ${downloadingName}… ${downloadProgress}%` : settings.file_transcription_model === "auto" && fileRecommendedModel ? `Download ${fileRecommendedModel.display_name}` : "Download selected model"}
               </button>
             {/if}
             {#if settings.file_transcription_model === "pianissimo-sv"}

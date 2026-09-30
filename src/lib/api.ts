@@ -128,8 +128,13 @@ export async function setFileTranscriptionModel(modelId: string): Promise<void> 
   return invoke("set_file_transcription_model", { modelId });
 }
 
-export async function getFileModelOptions(language: Language): Promise<WhisperModel[]> {
-  return invoke("get_file_model_options", { language });
+/**
+ * Models the app offers for `language` (Swedish: Pianissimo + KB-Whisper Large,
+ * or Medium + Large where Pianissimo is unsupported). `include` keeps an
+ * already-selected model that the app no longer offers listed.
+ */
+export async function getFileModelOptions(language: Language, include?: string): Promise<WhisperModel[]> {
+  return invoke("get_file_model_options", { language, include: include ?? null });
 }
 
 export async function downloadPianissimoModel(): Promise<void> {
@@ -230,6 +235,11 @@ export async function getModelInfo(): Promise<WhisperModel[]> {
 
 export async function getEffectiveModelInfo(language: Language): Promise<WhisperModel> {
   return invoke("get_effective_model_info", { language });
+}
+
+/** The model an Auto file-transcription preference resolves to right now. */
+export async function getAutoFileModelInfo(language: Language): Promise<WhisperModel> {
+  return invoke("get_auto_file_model_info", { language });
 }
 
 export async function getLoadedModel(): Promise<LoadedModelInfo> {
