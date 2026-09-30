@@ -1,6 +1,7 @@
 pub(crate) mod benchmark_config;
 mod benchmark_quality;
 pub mod config;
+pub mod engine;
 pub mod benchmark_dictation;
 pub mod glossary;
 pub mod latency;
@@ -67,6 +68,20 @@ pub const LONG_VERSION: &str = concat!(
     env!("SAGASCRIPT_CLI_BUILD_DATE"),
     ")"
 );
+
+/// Short source revision of this build (`--version`, tray menu, engine host handshake).
+pub const GIT_HASH: &str = env!("SAGASCRIPT_CLI_GIT_HASH");
+
+/// Announce this build's identity to the Pianissimo engine host.
+pub fn install_engine_identity() {
+    sagascript_core::transcription::pianissimo_backend::set_client_identity(
+        sagascript_core::transcription::engine_host::ClientIdentity {
+            name: "sagascript".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            git_sha: GIT_HASH.into(),
+        },
+    );
+}
 
 // Root help text is feature-aware: a batch-only build (`--no-default-features`)
 // has no `record` subcommand, so the workflow/examples must not advertise it.
@@ -310,6 +325,19 @@ EXAMPLES:
     )]
     Record(record::RecordArgs),
 
+    /// Inspect and exercise the Pianissimo engine host
+    #[command(
+        long_about = "\
+Inspect and exercise the persistent engine host that runs Pianissimo (Swedish, \
+Core ML on the Apple Neural Engine). Requires macOS 14 or later on Apple Silicon.
+
+  status   host path and build identity, protocol version, model state
+  doctor   run host -> load -> transcribe end to end (non-zero exit on failure)
+  warm     load the model and hold it warm (benchmarks, smoke tests)",
+        after_long_help = "EXAMPLES:\n  sagascript engine status --json\n  sagascript engine doctor --verify-model\n  sagascript engine warm --seconds 30"
+    )]
+    Engine(engine::EngineArgs),
+
     /// List available whisper models
     #[command(
         long_about = "\
@@ -399,6 +427,13 @@ This is a recovery path when the menu-bar status item is unavailable. On macOS, 
         after_long_help = "EXAMPLES:\n  sagascript open"
     )]
     Open,
+
+    /// Check, install, and restart through the installed signed macOS app
+    #[cfg(target_os = "macos")]
+    #[command(
+        long_about = "Request a signed in-app update through the installed Sagascript desktop app. The desktop updater checks the stable release manifest, verifies the signed bundle, waits for active work and unsaved results to be resolved, then installs and restarts. This command starts the app-mediated flow; it does not download or install a bundle in the CLI process."
+    )]
+    Update,
 
     /// Reset first-launch onboarding (re-run setup wizard on next launch)
     #[command(
@@ -531,6 +566,7 @@ pub fn try_parse() -> Option<Cli> {
 
 /// Run the CLI subcommand. Blocks until complete, then exits.
 pub fn run(cli: Cli) {
+    install_engine_identity();
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
     let result = match cli.command.unwrap() {
@@ -546,6 +582,8 @@ pub fn run(cli: Cli) {
         Command::DownloadModel(args) => rt.block_on(models::download(args)),
         Command::DeleteModel(args) => models::delete(args),
         Command::Open => open::run(),
+        #[cfg(target_os = "macos")]
+        Command::Update => open::run_update(),
         Command::ResetOnboarding => {
             sagascript_core::settings::store::update(|settings| {
                 settings.has_completed_onboarding = false;
@@ -556,6 +594,7 @@ pub fn run(cli: Cli) {
                 })
         }
         Command::Config(args) => config::run(args),
+        Command::Engine(args) => engine::run(args),
         Command::Glossary(args) => glossary::run(args),
         Command::Formats => {
             formats();
@@ -567,6 +606,9 @@ pub fn run(cli: Cli) {
         }
         Command::Manpages { dir } => generate_manpages(dir),
     };
+
+    // Stop the engine host (if this command started one) before exiting.
+    sagascript_core::transcription::pianissimo_backend::shutdown_shared_client();
 
     if let Err(e) = result {
         eprintln!("Error: {e}");
@@ -1255,10 +1297,24 @@ mod tests {
                 } => {
                     assert_eq!(heard, PathBuf::from("heard.txt"));
                     assert_eq!(corrected, PathBuf::from("corrected.txt"));
-                    assert_eq!(profile, "swedish");
+                    assert_eq!(profile.as_deref(), Some("swedish"));
                     assert!(json);
                     assert!(!apply);
                 }
+                _ => panic!("expected glossary suggest"),
+            },
+            _ => panic!("expected Glossary"),
+        }
+    }
+
+    #[test]
+    fn parse_glossary_suggest_without_profile_uses_default_at_execution() {
+        let cli = Cli::try_parse_from([
+            "sagascript", "glossary", "suggest", "heard.txt", "--corrected", "corrected.txt",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Glossary(args) => match args.action {
+                glossary::GlossaryAction::Suggest { profile, .. } => assert!(profile.is_none()),
                 _ => panic!("expected glossary suggest"),
             },
             _ => panic!("expected Glossary"),
@@ -1291,6 +1347,13 @@ mod tests {
     fn parse_open_gui() {
         let cli = Cli::try_parse_from(["sagascript", "open"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Open)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_update_command() {
+        let cli = Cli::try_parse_from(["sagascript", "update"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Update)));
     }
 
     #[test]
@@ -1326,15 +1389,16 @@ mod tests {
     fn parse_config_profile_create() {
         let cli = Cli::try_parse_from([
             "sagascript", "config", "profiles", "create", "swedish",
-            "--name", "Swedish", "--hotkey", "Option+Space", "--language", "sv",
+            "--name", "Swedish", "--hotkey", "Option+Space", "--language", "sv", "--model", "pianissimo-sv",
         ]).unwrap();
         match cli.command.unwrap() {
             Command::Config(args) => match args.action {
-                config::ConfigAction::Profiles { action: config::ProfileAction::Create { id, name, hotkey, language, .. } } => {
+                config::ConfigAction::Profiles { action: config::ProfileAction::Create { id, name, hotkey, language, model, .. } } => {
                     assert_eq!(id, "swedish");
                     assert_eq!(name, "Swedish");
                     assert_eq!(hotkey.as_deref(), Some("Option+Space"));
                     assert_eq!(language, "sv");
+                    assert_eq!(model.as_deref(), Some("pianissimo-sv"));
                 }
                 _ => panic!("expected profile create"),
             },

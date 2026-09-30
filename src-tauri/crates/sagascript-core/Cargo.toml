@@ -5,6 +5,14 @@ edition.workspace = true
 license.workspace = true
 description = "Core transcription engine for Sagascript: audio decode/capture, Whisper backend, settings, diarization"
 
+# Test double for the engine-host protocol; only used by tests/engine_host.rs
+# (cargo builds it for `cargo test`; nothing depends on it at runtime).
+[[bin]]
+name = "sagascript-fake-engine-host"
+path = "tests/support/fake_engine_host.rs"
+test = false
+doc = false
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -21,6 +29,9 @@ num_cpus = "1"
 symphonia = { version = "0.5", features = ["aac", "alac", "flac", "mp3", "pcm", "vorbis", "isomp4", "mkv", "ogg"] }
 rubato = "0.14"
 regex = "1"
+sagascript-engine-protocol = { path = "../sagascript-engine-protocol" }
+tempfile = "3"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 # Live audio capture (optional): a pure batch-transcribe build
 # (`--no-default-features` on sagascript-cli) needs no cpal — and on Linux, no ALSA.
@@ -47,6 +58,9 @@ whisper-rs = { version = "0.15", features = ["tracing_backend"] }
 default = []
 record = ["dep:cpal"]
 diarization = ["dep:ort", "dep:rustfft", "dep:kodama", "dep:ndarray"]
+# Honor SAGASCRIPT_ENGINE_HOST / SAGASCRIPT_PIANISSIMO_MODEL_DIR in a release build.
+# Off by default: signed builds must not trust the environment for the sidecar or model.
+dev-overrides = []
 
 [lints]
 workspace = true

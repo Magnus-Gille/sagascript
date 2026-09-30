@@ -66,7 +66,7 @@ mod tests {
     fn defaults_use_language_recommendations_and_default_decoder_settings() {
         let cases = [
             (Language::English, WhisperModel::BaseEn),
-            (Language::Swedish, WhisperModel::KbWhisperBase),
+            (Language::Swedish, WhisperModel::KbWhisperMedium),
             (Language::Norwegian, WhisperModel::NbWhisperBase),
             (Language::Finnish, WhisperModel::Base),
         ];

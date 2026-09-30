@@ -23,12 +23,13 @@ set only in shell startup files. Use the standard `$HOME/.config` location, or
 configure the variable for GUI processes as well, to keep GUI and CLI paths
 identical.
 
-The JSON file contains application settings and dictation profiles. The plain
-text glossary files contain one dictionary entry per line. `glossary.txt` is
-the legacy global hint source; `glossaries/<profile-id>.txt` is used for
-deterministic aliases only when that known profile with an explicit language is
-selected. Global aliases remain stored, visible, and editable, but are
-hint-only. No aliases are assigned automatically after language detection.
+The JSON file contains application settings and dictation profiles. Each
+profile owns its language, model (`auto`, a compatible Whisper ID, or Swedish
+`pianissimo-sv`), shortcuts and dictionary. The plain-text files under
+`glossaries/` contain one entry per line. On upgrade, the old `glossary.txt`
+hint source is copied into the profiles while the original file is retained
+for rollback; it no longer participates in dictation. Auto-detect profiles
+use their dictionary as hints only, without deterministic alias replacement.
 
 Use the CLI to discover the effective paths rather than duplicating the
 resolution rules in scripts:
@@ -39,12 +40,11 @@ sagascript glossary path
 sagascript glossary path --profile swedish
 ```
 
-Use the global file for decoder hints, or pass `--profile ID` to manage a
-profile-scoped dictionary whose explicit aliases can correct that profile's
-transcript. A non-empty one-run `--hint`/`--prompt` replaces the saved global
-hint text and is itself hint-only; empty or whitespace-only input keeps the
-saved global hints. Entries are not reassigned between scopes, deleted, or
-automatically assigned a profile/language.
+Without `--profile ID`, CLI commands use the default profile (or the first
+existing profile when no `default` ID exists). Pass `--profile ID` for another
+profile's language, model and dictionary. A non-empty one-run `--hint`/`--prompt`
+adds decoder context for that run without changing the saved profile dictionary.
+Existing profile dictionaries and legacy source files are preserved on upgrade.
 
 The GUI and CLI watch and update the same files. Atomic writes preserve
 user-managed symlinks, so the files can be checked into a dotfiles repository.

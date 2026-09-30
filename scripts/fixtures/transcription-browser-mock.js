@@ -7,6 +7,12 @@ const pending = new Map();
 const meetings = new Map();
 const calls = [];
 let active = 0;
+const profileModels = { swedish: "auto", english: "base.en" };
+let pianissimoDownloaded = false;
+let pianissimoSizeMb = 0;
+const engineSettings = { engine_prewarm: "on_key_down", engine_idle_unload_minutes: 10 };
+let holdPianissimoDownload = false;
+let releasePianissimoDownload = null;
 let maximum = 0;
 let sequence = 0;
 function transcript(path) {
@@ -72,6 +78,18 @@ function reprocessingResult(task) {
 }
 window.qa = {
   calls,
+  prepareUpdate: (nonce) => emit("update-preparing", nonce),
+  abortUpdate: () => emit("update-aborted", "Synthetic install failure"),
+  dictationResult: (text) => emit("transcription-result", text),
+  holdNextPianissimoDownload: () => { holdPianissimoDownload = true; },
+  releasePianissimo: () => { releasePianissimoDownload?.(); },
+  setPianissimoSize: (mb) => { pianissimoSizeMb = mb; },
+  // Simulate an upgraded install whose Swedish profile still uses a retired model.
+  pinSwedishProfile: (id) => { profileModels.swedish = id; },
+  removePianissimo: () => {
+    pianissimoDownloaded = false;
+    emit("model-ready", {});
+  },
   progress: (runId, phase, percent) => emit("plain-transcription-progress", { runId, phase, percent }),
   drop: (paths) => emit(TauriEvent.DRAG_DROP, { paths, position: { x: 20, y: 20 } }),
   finish: (path, error = null) => {
@@ -95,17 +113,83 @@ window.qa = {
 mockIPC(async (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
+    case "load_update_recovery":
+      if (window.qaRecoveryDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaRecoveryDelayMs));
+      if (window.qaRecoveryLoadError) throw new Error("Synthetic recovery read failure");
+      return window.qaRecovery ?? null;
+    case "save_update_recovery": window.qaRecovery = args.payload; return null;
+    case "clear_update_recovery": window.qaRecovery = null; return null;
+    case "complete_update_preparation": return null;
     case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
-    case "get_settings": return { language: "en", whisper_model: "base.en", file_transcription_model: "auto", hotkey_mode: "toggle",
+    case "get_last_transcription":
+      if (window.qaLastNativeDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaLastNativeDelayMs));
+      return window.qaLastNativeDictation ?? null;
+    case "get_update_result_pending": return window.qaNativePending ?? false;
+    case "set_update_result_pending":
+      if (args.resultId === "live-dictation") window.qaNativePending = args.pending;
+      return null;
+    case "acknowledge_update_result":
+      if (window.qaNativePending && window.qaLastNativeDictation === args.expectedText) {
+        window.qaNativePending = false;
+        return true;
+      }
+      return false;
+    case "get_settings": return { language: "sv", whisper_model: "kb-whisper-medium", file_transcription_model: "auto", pianissimo_dictation: false, hotkey_mode: "toggle",
       show_overlay: true, auto_paste: false, auto_select_model: true, hotkey: "Control+Shift+Space",
-      hotkey_profiles: [], initial_prompt: "", profile_glossaries: {}, beam_size: 0,
-      temperature_fallback: true, vad_enabled: false, has_completed_onboarding: true };
+      hotkey_profiles: [
+        { id: "swedish", name: "Swedish", language: "sv", shortcut: "Control+Shift+S" },
+        { id: "english", name: "English", language: "en", shortcut: "Control+Shift+E" },
+      ], profile_models: { ...profileModels }, profile_glossaries: {}, profile_glossary_migrated: true, initial_prompt: "", beam_size: 0,
+      temperature_fallback: true, vad_enabled: false, ...engineSettings, has_completed_onboarding: true };
     case "get_model_info": return [{ id: "base.en", display_name: "Base English", description: "Fixture",
       size_mb: 0, downloaded: true, active: true }];
-    case "get_file_model_options": return [{ id: "base.en", display_name: "Base English", description: "Fixture",
-      size_mb: 0, downloaded: true, active: false }];
-    case "get_effective_model_info": return { id: "base.en", display_name: "Base English", description: "Fixture",
-      size_mb: 0, downloaded: true, active: true };
+    // Mirrors the backend lineup where Pianissimo is supported: Pianissimo and
+    // KB-Whisper Large only. `include` keeps a selected retired model listed.
+    case "get_file_model_options": {
+      if (args.language === "en") {
+        return [{ id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: false }];
+      }
+      const lineup = [
+        { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture",
+          size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: false },
+        { id: "kb-whisper-large", display_name: "KB-Whisper Large", description: "Most accurate, slower",
+          size_mb: 1031, downloaded: true, active: false },
+      ];
+      if (args.include === "kb-whisper-base") {
+        lineup.push({ id: "kb-whisper-base", display_name: "KB-Whisper Base", description: "Fixture",
+          size_mb: 60, downloaded: true, active: false });
+      }
+      return lineup;
+    }
+    case "set_profile_model": profileModels[args.profileId] = args.modelId; return null;
+    case "get_profile_model_info": return profileModels[args.profileId] === "pianissimo-sv"
+      ? { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true }
+      : args.profileId === "english"
+        ? { id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: true }
+      : profileModels[args.profileId] === "kb-whisper-base"
+        ? { id: "kb-whisper-base", display_name: "KB-Whisper Base", description: "Fixture", size_mb: 60, downloaded: true, active: true }
+      : profileModels[args.profileId] === "kb-whisper-large"
+        ? { id: "kb-whisper-large", display_name: "KB-Whisper Large", description: "Fixture", size_mb: 1031, downloaded: true, active: true }
+      // "auto" resolves to the recommendation: Pianissimo where supported.
+      : { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true };
+    case "download_pianissimo_model": {
+      pianissimoDownloaded = true;
+      if (holdPianissimoDownload) {
+        holdPianissimoDownload = false;
+        emit("model-ready", {});
+        await new Promise(resolve => { releasePianissimoDownload = resolve; });
+        releasePianissimoDownload = null;
+      }
+      return null;
+    }
+    case "get_auto_file_model_info":
+    case "get_effective_model_info": return args.language === "sv"
+      ? { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true }
+      : { id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: true };
+    case "engine_status": return { installed: pianissimoDownloaded, supported: true, host_path: "/fixture/sagascript-engine-host",
+      host_version: "1.3.2", host_git_sha: "abcdef0123456789", warm: false };
+    case "set_engine_prewarm": engineSettings.engine_prewarm = args.mode; return null;
+    case "set_engine_idle_unload_minutes": engineSettings.engine_idle_unload_minutes = args.minutes; return null;
     case "get_platform": return "macos";
     case "check_accessibility_permission": return true;
     case "get_supported_formats": return ["wav", "mp3", "m4a"];

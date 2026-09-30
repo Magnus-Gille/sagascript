@@ -1,5 +1,11 @@
 # Personal dictionary scope (#150)
 
+Historical decision: the 2026-09-27 owner decision for #239/#260 supersedes
+the global-hints tier described below. Existing global hints are copied into
+profile dictionaries once (and the old file retained for rollback); no global
+dictionary participates in new dictation. Auto-detect profiles keep hints but
+cannot authorize deterministic alias replacement.
+
 Decision, 2026-09-06: reuse explicit-language profile dictionaries. Do not add
 a competing language-section grammar or infer language metadata for old aliases.
 

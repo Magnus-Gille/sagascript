@@ -31,6 +31,8 @@ test("Settings presents build identity above the ordered navigation tabs", () =>
 });
 
 test("recording shortcuts use clear mode names and independent helpers", () => {
+  assert.match(content, />\+ Add profile<\/button>/);
+  assert.doesNotMatch(content, />\+ Add language<\/button>/);
   assert.match(content, /label: "Hold to record"/);
   assert.match(content, /label: "Press to start\/stop"/);
   assert.match(content, /Hold the shortcut while speaking\. Release to stop\./);
@@ -41,6 +43,17 @@ test("recording shortcuts use clear mode names and independent helpers", () => {
   assert.doesNotMatch(content, />Toggle</);
 });
 
+test("Dictate offers a model per profile instead of a global dictation model picker", () => {
+  const dictateStart = content.indexOf('{#if activeTab === "dictate"}');
+  const dictateEnd = content.indexOf('{#if activeTab === "settings"}', dictateStart);
+  assert.ok(dictateStart >= 0 && dictateEnd > dictateStart, "Dictate section is present");
+  const dictateSource = content.slice(dictateStart, dictateEnd);
+  assert.match(dictateSource, /Speech model for \{profile\.name\}/);
+  assert.match(dictateSource, /profileModelOptions\[profile\.id\]/);
+  assert.match(content, /getProfileModelInfo/);
+  assert.doesNotMatch(dictateSource, /Pianissimo is experimental and applies to every Swedish dictation shortcut/);
+});
+
 test("onboarding explains both recording modes", () => {
   assert.match(onboardingContent, /Configure separate shortcuts for these recording modes in Dictate\./);
   assert.match(onboardingContent, /Hold to record/);
@@ -48,4 +61,37 @@ test("onboarding explains both recording modes", () => {
   assert.match(onboardingContent, /Hold the shortcut while speaking\. Release to stop\./);
   assert.match(onboardingContent, /Press the shortcut to start recording\. Press it again to stop\./);
   assert.doesNotMatch(onboardingContent, /Hold to record, release to transcribe/);
+});
+
+test("Settings shows engine host identity and Pianissimo engine controls without outdated strings", () => {
+  const header = content.slice(content.indexOf('<header class="window-header">'), content.indexOf("</header>"));
+  assert.match(header, /engineHostIdentity/);
+  assert.match(content, /getEngineStatus/);
+  for (const text of ["Prepare Pianissimo when", "When I press the dictation key", "When Sagascript starts",
+    "Only when needed", "Unload after idle", "Requires macOS 14 or later on Apple Silicon"]) {
+    assert(content.includes(text), `Settings contains "${text}"`);
+  }
+  assert.match(content, /engineIdleChoices = \[5, 10, 30, 60, 0\]/);
+  assert.match(content, /setEnginePrewarm/);
+  assert.match(content, /setEngineIdleUnloadMinutes/);
+  assert.doesNotMatch(content, /714|Pianissimo Q8|macOS 13/);
+});
+
+test("Swedish model lineup: pickers come from the backend lineup, retired models get a one-click switch", () => {
+  // The dictation and file pickers render only what the backend lineup returns
+  // and never hardcode the retired KB-Whisper Tiny/Base/Small choices.
+  assert.match(content, /Recommended for \{languageLabel\(profile\.language\)\}/);
+  assert.match(content, /getFileModelOptions\(\s*profile\.language,/);
+  assert.match(content, /retiredSwedishModelIds = \["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small"\]/);
+  assert.doesNotMatch(content, /<option value="kb-whisper/);
+  assert.match(content, /Switch to \$\{suggested\.display_name\}/);
+  assert.match(content, /download \$\{suggested\.size_mb\} MB/);
+  // Download first, then switch: the old model keeps dictating until the new one is ready.
+  const switchBody = content.slice(content.indexOf("async function switchProfileToRecommended"));
+  assert(switchBody.indexOf("downloadPianissimoModel") < switchBody.indexOf("setProfileModel(profile.id, target.id)"));
+  assert.match(content, /Auto — \{fileAutoModel/);
+  // Onboarding downloads whatever the backend recommends (Pianissimo where supported).
+  assert.match(onboardingContent, /getEffectiveModelInfo\(language\)/);
+  assert.match(onboardingContent, /downloadPianissimoModel\(\)/);
+  assert.doesNotMatch(onboardingContent, /sv: "kb-whisper-base"/);
 });

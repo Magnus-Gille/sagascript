@@ -67,10 +67,26 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
 3. Merge the release commit to `main`, then create and push exactly `vVERSION`.
 4. The Release workflow gates the macOS build on tests, checks version/tag
    consistency, imports the Apple certificate into an ephemeral keychain, and
-   lets Tauri sign, notarize, and staple the Apple Silicon macOS build.
+   lets Tauri sign, notarize, and staple the Apple Silicon macOS build. Before
+   `tauri build`, it builds the Swift Core ML engine host
+   (`scripts/stage-engine-host.sh`), verifies it reports the release SHA, and
+   signs it with the hardened runtime (`codesign --force --options runtime
+   --timestamp`, no extra entitlements: Core ML/ANE model loading works under the
+   hardened runtime without JIT or unsigned-memory exceptions; the installed-CLI
+   `engine doctor` smoke below is the check that this stays true). The host is
+   bundled at `Contents/Resources/EngineHost/sagascript-engine-host` via
+   `scripts/tauri-engine-host-bundle.json`, so the app's notarization covers it.
 5. The workflow independently verifies the Developer ID authority, Team ID,
    hardened-runtime flag, audio-input entitlement, notarization tickets,
    Gatekeeper acceptance, and bundle metadata before creating a draft release.
+   It also checks that the bundled engine host is arm64, signed by the
+   production team with the hardened runtime (`flags=0x10000(runtime)`), and that
+   `sagascript-engine-host --version` prints the exact release SHA.
+   `scripts/smoke-pianissimo-installed.sh` then runs `engine status`, downloads
+   the Pianissimo model, runs `engine doctor` and transcribes a sample through the
+   installed CLI path. This needs a real model URL and SHA-256 in
+   `sagascript-core/src/transcription/pianissimo_model.rs`; the smoke fails
+   (never skips) while the manifest still holds placeholders.
 6. Download the draft artifacts and perform the clean-machine checklist below.
    Publish the draft only after it passes.
 
@@ -97,8 +113,10 @@ link from silently continuing to execute a stale binary after an upgrade.
   existing installation.
 - Test the signed artifact on Apple Silicon. Do not claim Intel support for v1;
   the diarization runtime does not provide the required Intel macOS binary.
+- On macOS 14+ Apple Silicon, download the Pianissimo model and run
+  `sagascript engine doctor` plus one Swedish file transcription.
 - Confirm the macOS draft contains `Sagascript.dmg`, `Sagascript.app.tar.gz`,
-  and `SHA256SUMS`; the unsigned Windows beta remains a separate prerelease.
+  `Sagascript.app.tar.gz.sig`, `latest.json`, and `SHA256SUMS` (no model file); the unsigned Windows beta remains a separate prerelease.
   Verify every downloaded artifact against its published checksum before
   testing.
 - Review `THIRD_PARTY_NOTICES.md`. Run `npm run licenses:generate` and inspect

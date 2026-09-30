@@ -9,10 +9,10 @@ target/
 node_modules/
 dist/
 src-tauri/build-meta.env
-build/pianissimo-runtime/
-build/pianissimo-native-runtime/
-build/pianissimo-sv-q8-melfix.gguf
+build/engine-host/
 src-tauri/resources/__pycache__/
+src-tauri/engine-host/coreml/Sources/EngineHostCore/BuildInfo.swift
+src-tauri/engine-host/coreml/.build/
 
 # Claude Code local state
 .claude/settings.local.json

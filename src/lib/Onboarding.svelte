@@ -13,6 +13,8 @@
     getSettings,
     setLanguage,
     downloadModel,
+    downloadPianissimoModel,
+    getEffectiveModelInfo,
     microphoneStatus,
     requestMicrophoneAccess,
     openMicrophoneSettings,
@@ -67,18 +69,34 @@
 
   const engineSize: Record<OnboardingLanguage, string> = {
     en: "142 MB",
-    sv: "60 MB",
+    sv: "about 600 MB",
     no: "55 MB",
     fi: "142 MB",
   };
 
-  // Recommended model ID per language (must match Rust serde rename)
+  // Fallback model ID per language (must match Rust serde rename). The backend
+  // decides the real recommendation (Swedish is Pianissimo where supported,
+  // otherwise KB-Whisper Medium), see getEffectiveModelInfo below.
   const recommendedModelId: Record<OnboardingLanguage, string> = {
     en: "base.en",
-    sv: "kb-whisper-base",
+    sv: "kb-whisper-medium",
     no: "nb-whisper-base",
     fi: "base",
   };
+  let recommendedSizeMb: number | null = $state(null);
+
+  async function downloadRecommendedModel(language: OnboardingLanguage): Promise<void> {
+    let id = recommendedModelId[language];
+    try {
+      const recommended = await getEffectiveModelInfo(language);
+      id = recommended.id;
+      recommendedSizeMb = recommended.size_mb > 0 ? recommended.size_mb : null;
+    } catch {
+      // Fall back to the static recommendation; the download reports real errors.
+    }
+    if (id === "pianissimo-sv") await downloadPianissimoModel();
+    else await downloadModel(id);
+  }
 
   function getSteps(): Step[] {
     if (platform === "macos") {
@@ -133,7 +151,7 @@
 
     try {
       await awaitDownloadCompletion(
-        downloadModel(recommendedModelId[selectedLanguage]),
+        downloadRecommendedModel(selectedLanguage),
         markDownloadComplete,
       );
       // The command result is authoritative. `model-ready` remains useful for
@@ -429,8 +447,8 @@
         </div>
         <h1>Set up Sagascript</h1>
         <p class="description">
-          Choose your first dictation language. Speech stays on this device, and
-          you can add more language profiles later.
+          Choose your first profile's language. Its recommended local model is
+          selected automatically; you can add more profiles later.
         </p>
         <div class="language-options">
           <button
@@ -504,7 +522,7 @@
         </div>
         <h1>Setting up speech engine</h1>
         <p class="description">
-          Preparing the local speech engine ({engineSize[selectedLanguage]}).
+          Preparing the local speech engine ({recommendedSizeMb !== null ? `${recommendedSizeMb} MB` : engineSize[selectedLanguage]}).
           Your recordings are processed on this device.
         </p>
 

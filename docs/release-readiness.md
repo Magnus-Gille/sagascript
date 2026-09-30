@@ -7,15 +7,14 @@ choose a language, and dictate.
 ## Product decisions
 
 - Keep local transcription as the default and make every remote behavior opt-in.
-- Show one recommended speech model per explicit language. Download it when a
-  profile first needs it. Keep manual model selection in **Advanced**.
-- Make dictation profiles the primary language control. Each profile has a name,
-  language, and global shortcut; users may add more than two profiles.
+- Each dictation profile owns its language, model (recommended Whisper by
+  default, optional Swedish Pianissimo), shortcut(s), and dictionary. Show
+  its effective engine and download state in Dictate.
 - Keep **Dictate**, **Transcribe**, and **Settings** as the visible app surfaces.
 - Remove **Teach** from the release UI. Keep the reviewed glossary and CLI
   capabilities intact so the feature can return later without a data migration.
-- Keep ordinary settings short. Manual model choice, decoder strategy,
-  temperature fallback, and VAD belong in a collapsed **Advanced** section.
+- Keep ordinary settings short. Profile model choice is visible; decoder
+  strategy, temperature fallback, and VAD remain in **Advanced**.
 - Keep the menu-bar menu task-oriented: current state, profiles, transcribe a
   file, updates, settings, and quit.
 - Use compact native macOS text in the menu bar: **S** while idle, **●** while
@@ -27,7 +26,13 @@ choose a language, and dictate.
   mark, and future platform assets from one vector master; do not maintain a
   separate parchment/document icon family.
 
-## Current implementation checkpoint — 2026-09-07
+The owner made #239 and #260 blockers for the next stable release on
+2026-09-27. Existing global language/model/glossary settings must migrate to a
+working default profile without losing data; CLI commands without `--profile`
+use that profile. Do not release solely on the earlier signed integrated QA
+result until these migrations and their live acceptance have passed.
+
+## Historical implementation checkpoint — 2026-09-07
 
 The latest published stable release remains [Sagascript v1.1.3](https://github.com/Magnus-Gille/sagascript/releases/tag/v1.1.3)
 at exact Git revision
@@ -91,7 +96,8 @@ Acceptance:
 
 ### 2. Make profiles first-class
 
-- Keep name, language, and shortcut editable in the Dictate view.
+- Keep name, language, compatible model, dictionary, and shortcut(s) editable
+  per profile in Dictate. The creation button says **Add profile**.
 - Add a **Profiles** menu in the macOS menu-bar menu, including each profile's
   language and shortcut.
 - Make the selected profile unambiguous and keep shortcut-triggered profile
@@ -103,7 +109,8 @@ Acceptance:
   without restarting the app.
 - Invalid or conflicting shortcuts fail closed and explain how to recover.
 - Equivalent profile management remains available through
-  `sagascript config profiles`.
+  `sagascript config profiles`, including model choice and automatic migration
+  of existing global preferences into the default profile.
 - Idle, recording, loading/transcribing, and hotkey-error states render the
   native markers S, ●, …, and ! respectively.
 
@@ -128,18 +135,34 @@ Acceptance on a clean Apple Silicon Mac running macOS 13 or later:
 
 ### 4. Make updates obvious
 
-- Keep update checks explicit and privacy-preserving.
-- Show checking, up-to-date, available, and error states in the menu.
-- When a release is available, provide a clear action that opens the exact
-  stable GitHub release page. Do not claim an in-app update was installed.
+- Run a lightweight signed-manifest check at startup and expose availability in
+  the tray; the tray also has an explicit recheck action. Neither check downloads
+  an artifact. Downloading starts only after the user chooses **Install and
+  Restart** (or runs `sagascript update`).
+- Verify the update payload with the Tauri updater signature before installing.
+  Embed the updater public key at build time as `SAGASCRIPT_UPDATER_PUBKEY`; keep
+  the private signing key and password in GitHub Actions secrets. Never ship an
+  updater-capable release without a matching signed `.app.tar.gz`, `.sig`, and
+  `latest.json` entry for `darwin-aarch64`.
+- Show checking, up-to-date, available, download progress, waiting, and error
+  states in the menu. Wait for active dictation and file/meeting transcription
+  to finish before replacing the app. Preserve completed in-memory results in a
+  local recoverable draft before automatic restart.
+- macOS is the first supported in-app update target. Sagascript 1.3.2 predates
+  the updater, so users upgrading from that version need one manual install;
+  later updater-capable versions can update in-app.
 
 Acceptance:
 
 - Version comparison covers newer, equal, older, malformed, draft, and
-  prerelease responses.
-- The menu always returns from the temporary checking state.
-- The available-version action points at a stable release and the user can
-  verify the installed version afterward with `sagascript --version`.
+  prerelease responses. A missing public key or invalid signature must fail
+  closed without installing an unsigned artifact.
+- The menu always leaves temporary checking/downloading states on success or
+  failure. An update action waits for active work, preserves recoverable drafts,
+  installs the signed bundle, and restarts without accepting new work in the
+  install/restart window.
+- `sagascript update` initiates the same app-mediated signed update action. The
+  user can verify the installed version afterward with `sagascript --version`.
 
 ### 5. Publish a minimal product page
 
@@ -187,7 +210,8 @@ cargo build -p sagascript-cli --no-default-features
 
 - Teach/training UI.
 - Cloud transcription or accounts.
-- Automatic background update installation.
+- Automatic update checks or downloads in the background.
+- Windows in-app updates.
 - Intel macOS binaries and public Windows installers.
 - Additional model tuning in the normal settings surface.
 

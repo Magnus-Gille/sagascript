@@ -18,7 +18,11 @@ held for Q8. Both corrected files contain 701 tensors, including the new
 filterbank. The native runtime reports no errors or warnings for them.
 
 This is a local diagnostic result, not a new Sagascript release or default.
-The corrected GGUF files remain outside Git and have not been published.
+At the time of this 2026-09-25 evaluation, neither corrected GGUF was
+published. The corrected Q8 was later published as an optional asset of the
+[Sagascript v1.3.2 GitHub release](https://github.com/Magnus-Gille/sagascript/releases/tag/v1.3.2),
+not committed to Git or uploaded to Hugging Face. The FP16 comparison remains
+unpublished.
 
 ## Frozen inputs
 

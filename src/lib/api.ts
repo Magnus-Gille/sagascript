@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { UpdateRecoveryPayload } from "./update-recovery";
 import type {
   CorrectionFile,
   MeetingAudioAttachment,
@@ -29,21 +30,27 @@ export interface WhisperModel {
   active: boolean;
 }
 
+export type EnginePrewarm = "off" | "on_app_start" | "on_key_down";
+
 export interface Settings {
   language: Language;
   whisper_model: string;
   file_transcription_model: string;
+  pianissimo_dictation: boolean;
   hotkey_mode: HotkeyMode;
   show_overlay: boolean;
   auto_paste: boolean;
   auto_select_model: boolean;
   hotkey: string;
   hotkey_profiles: HotkeyProfile[];
+  profile_models: Record<string, string>;
   initial_prompt: string;
   profile_glossaries: Record<string, string>;
   beam_size: number;
   temperature_fallback: boolean;
   vad_enabled: boolean;
+  engine_prewarm: EnginePrewarm;
+  engine_idle_unload_minutes: number;
   has_completed_onboarding: boolean;
 }
 
@@ -121,8 +128,13 @@ export async function setFileTranscriptionModel(modelId: string): Promise<void> 
   return invoke("set_file_transcription_model", { modelId });
 }
 
-export async function getFileModelOptions(language: Language): Promise<WhisperModel[]> {
-  return invoke("get_file_model_options", { language });
+/**
+ * Models the app offers for `language` (Swedish: Pianissimo + KB-Whisper Large,
+ * or Medium + Large where Pianissimo is unsupported). `include` keeps an
+ * already-selected model that the app no longer offers listed.
+ */
+export async function getFileModelOptions(language: Language, include?: string): Promise<WhisperModel[]> {
+  return invoke("get_file_model_options", { language, include: include ?? null });
 }
 
 export async function downloadPianissimoModel(): Promise<void> {
@@ -143,6 +155,14 @@ export async function setHotkey(shortcut: string): Promise<void> {
 
 export async function setHotkeyProfiles(profiles: HotkeyProfile[]): Promise<void> {
   return invoke("set_hotkey_profiles", { profiles });
+}
+
+export async function setProfileModel(profileId: string, modelId: string): Promise<void> {
+  return invoke("set_profile_model", { profileId, modelId });
+}
+
+export async function getProfileModelInfo(profileId: string): Promise<WhisperModel> {
+  return invoke("get_profile_model_info", { profileId });
 }
 
 export async function getActiveHotkeyProfile(): Promise<HotkeyProfile | null> {
@@ -184,6 +204,27 @@ export async function setTemperatureFallback(enabled: boolean): Promise<void> {
   return invoke("set_temperature_fallback", { enabled });
 }
 
+export async function setEnginePrewarm(mode: EnginePrewarm): Promise<void> {
+  return invoke("set_engine_prewarm", { mode });
+}
+
+export async function setEngineIdleUnloadMinutes(minutes: number): Promise<void> {
+  return invoke("set_engine_idle_unload_minutes", { minutes });
+}
+
+export interface EngineStatus {
+  installed: boolean;
+  supported: boolean;
+  host_path: string | null;
+  host_version: string | null;
+  host_git_sha: string | null;
+  warm: boolean;
+}
+
+export async function getEngineStatus(): Promise<EngineStatus> {
+  return invoke("engine_status");
+}
+
 export async function setVadEnabled(enabled: boolean): Promise<void> {
   return invoke("set_vad_enabled", { enabled });
 }
@@ -194,6 +235,11 @@ export async function getModelInfo(): Promise<WhisperModel[]> {
 
 export async function getEffectiveModelInfo(language: Language): Promise<WhisperModel> {
   return invoke("get_effective_model_info", { language });
+}
+
+/** The model an Auto file-transcription preference resolves to right now. */
+export async function getAutoFileModelInfo(language: Language): Promise<WhisperModel> {
+  return invoke("get_auto_file_model_info", { language });
 }
 
 export async function getLoadedModel(): Promise<LoadedModelInfo> {
@@ -246,6 +292,34 @@ export async function saveTranscriptionText(
 
 export async function copyTranscriptionText(text: string): Promise<void> {
   return invoke("copy_transcription_text", { text });
+}
+
+export async function setUpdateResultPending(resultId: string, pending: boolean): Promise<void> {
+  return invoke("set_update_result_pending", { resultId, pending });
+}
+
+export async function getUpdateResultPending(resultId: string): Promise<boolean> {
+  return invoke("get_update_result_pending", { resultId });
+}
+
+export async function acknowledgeUpdateResult(expectedText: string): Promise<boolean> {
+  return invoke("acknowledge_update_result", { expectedText });
+}
+
+export async function saveUpdateRecovery(payload: UpdateRecoveryPayload): Promise<void> {
+  return invoke("save_update_recovery", { payload });
+}
+
+export async function loadUpdateRecovery(): Promise<UpdateRecoveryPayload | null> {
+  return invoke("load_update_recovery");
+}
+
+export async function clearUpdateRecovery(): Promise<void> {
+  return invoke("clear_update_recovery");
+}
+
+export async function completeUpdatePreparation(nonce: string, error: string | null): Promise<void> {
+  return invoke("complete_update_preparation", { nonce, error });
 }
 
 export async function beginMeetingFile(
@@ -411,4 +485,12 @@ export async function getPlatform(): Promise<string> {
 
 export async function setOnboardingCompleted(): Promise<void> {
   return invoke("set_onboarding_completed");
+}
+
+export async function setPianissimoDictation(enabled: boolean): Promise<void> {
+  return invoke("set_pianissimo_dictation", { enabled });
+}
+
+export async function getDictationModelInfo(language: Language): Promise<WhisperModel> {
+  return invoke("get_dictation_model_info", { language });
 }

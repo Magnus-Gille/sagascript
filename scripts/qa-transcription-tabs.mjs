@@ -41,6 +41,95 @@ async function writeFailureDiagnostics(error) {
 try {
   await page.goto(url);
   await page.getByRole("button", { name: "Open Files...", exact: true }).waitFor();
+  // A Swedish profile owns its model independently of file selection.
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  const profileModelChoice = page.getByRole("combobox", { name: "Model for Swedish" });
+  const englishModelChoice = page.getByRole("combobox", { name: "Model for English" });
+  await englishModelChoice.waitFor();
+  assert.equal(await englishModelChoice.inputValue(), "base.en");
+  // Swedish lineup: Recommended (= Pianissimo), Pianissimo, KB-Whisper Large. The
+  // retired KB-Whisper Tiny/Base/Small are hidden.
+  assert.deepEqual(await profileModelChoice.locator("option").allTextContents(),
+    ["Recommended for Swedish", "Pianissimo", "KB-Whisper Large"]);
+  assert.equal(await profileModelChoice.inputValue(), "auto");
+  await page.getByText("Pianissimo required", { exact: true }).waitFor();
+  // Expand the list so the shot shows the choices a native dropdown would.
+  const swedishSelect = page.locator('select[aria-label="Model for Swedish"]');
+  await swedishSelect.evaluate(select => { select.size = 3; });
+  const lineupShot = process.env.QA_LINEUP_SHOT;
+  if (lineupShot) await page.locator(".profile-model-field").first().screenshot({ path: lineupShot });
+  await swedishSelect.evaluate(select => { select.removeAttribute("size"); });
+  await profileModelChoice.selectOption("pianissimo-sv");
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv"));
+  await page.getByRole("button", { name: "Download speech engine" }).click();
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "download_pianissimo_model"));
+  await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
+  assert.equal(await englishModelChoice.inputValue(), "base.en", "Swedish model changes cannot rewrite another profile");
+  await page.getByRole("button", { name: "Transcribe", exact: true }).click();
+  assert.equal(await page.locator("#file-model").inputValue(), "auto");
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  assert.equal(await profileModelChoice.inputValue(), "pianissimo-sv");
+  // Repair a selected model whose cached artifact was removed outside the UI.
+  await page.evaluate(() => window.qa.removePianissimo());
+  await page.getByText("Pianissimo required", { exact: true }).waitFor();
+  await page.evaluate(() => window.qa.holdNextPianissimoDownload());
+  await page.getByRole("button", { name: "Download speech engine" }).click();
+  await page.waitForFunction(() => window.qa.calls.filter(call => call.cmd === "download_pianissimo_model").length === 2);
+  assert.equal(await page.locator('.test-record-btn').isDisabled(), true,
+    'model-ready must not re-enable recording before the download command settles');
+  await page.evaluate(() => window.qa.releasePianissimo());
+  await profileModelChoice.waitFor({ state: 'visible' });
+  await page.waitForFunction(() => !document.querySelector('.test-record-btn').disabled);
+  await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
+  await page.screenshot({ path: outputPath("sagascript-pianissimo-dictation.png"), fullPage: true });
+  // Engine host identity sits next to the build identity.
+  await page.getByText("Engine 1.3.2 (abcdef0)").waitFor();
+  // The size comes from the backend model list, never a hardcoded string.
+  await page.evaluate(() => window.qa.setPianissimoSize(321));
+  await page.evaluate(() => window.qa.removePianissimo());
+  await page.getByText("Pianissimo required · 321 MB", { exact: true }).waitFor();
+  await page.evaluate(() => { window.qa.setPianissimoSize(0); window.qa.removePianissimo(); });
+  await page.getByText("Pianissimo required", { exact: true }).waitFor();
+  assert.equal(await page.getByText(/714|Q8|macOS 13/).count(), 0, "No outdated Pianissimo strings");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  assert.equal(await page.locator("#dictionary-scope").inputValue(), "swedish");
+  assert.equal(await page.getByText("Global hints", { exact: true }).count(), 0);
+  await page.screenshot({ path: outputPath("sagascript-profile-dictionary.png"), fullPage: true });
+  // Pianissimo engine controls (Advanced): prewarm mode and idle unload.
+  await page.locator("details.advanced-section > summary").click();
+  const prewarm = page.getByLabel("Prepare Pianissimo when");
+  assert.equal(await prewarm.inputValue(), "on_key_down");
+  assert.deepEqual(await prewarm.locator("option").allTextContents(),
+    ["When I press the dictation key", "When Sagascript starts", "Only when needed"]);
+  await prewarm.selectOption("off");
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_engine_prewarm" && call.args.mode === "off"));
+  const idle = page.getByLabel("Unload after idle");
+  assert.equal(await idle.inputValue(), "10");
+  assert.deepEqual(await idle.locator("option").allTextContents(),
+    ["5 minutes", "10 minutes", "30 minutes", "60 minutes", "Never"]);
+  await idle.selectOption("0");
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_engine_idle_unload_minutes" && call.args.minutes === 0));
+  await page.getByText("first word faster", { exact: false }).waitFor();
+  await page.screenshot({ path: outputPath("sagascript-pianissimo-engine-settings.png"), fullPage: true });
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await profileModelChoice.selectOption("kb-whisper-large");
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.modelId === "kb-whisper-large"));
+  // An upgraded profile still on a retired model keeps working, stays selectable
+  // and gets a one-click switch that downloads the recommendation first.
+  await page.evaluate(() => { window.qa.setPianissimoSize(608); window.qa.removePianissimo(); window.qa.pinSwedishProfile("kb-whisper-base"); });
+  // Any profile-model change refreshes every profile's engine state.
+  await englishModelChoice.selectOption("base.en");
+  const switchButton = page.getByRole("button", { name: "Switch to Pianissimo (download 608 MB)", exact: true });
+  await switchButton.waitFor();
+  assert.equal(await profileModelChoice.inputValue(), "kb-whisper-base");
+  assert.deepEqual(await profileModelChoice.locator("option").allTextContents(),
+    ["Recommended for Swedish", "Pianissimo", "KB-Whisper Large", "KB-Whisper Base"]);
+  await page.getByText("KB-Whisper Base · Ready", { exact: true }).waitFor();
+  await switchButton.click();
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_profile_model" && call.args.profileId === "swedish" && call.args.modelId === "pianissimo-sv"));
+  await page.getByText("Pianissimo · Ready", { exact: true }).waitFor();
+  assert.equal(await switchButton.count(), 0, "No suggestion once on the recommended model");
+  await page.getByRole("button", { name: "Transcribe", exact: true }).click();
   const optionsBox = await page.locator('.transcribe-options').boundingBox();
   const dropBox = await page.locator('.drop-zone').boundingBox();
   assert.ok(optionsBox.y + optionsBox.height + 7 <= dropBox.y, 'settings must stay above the drop zone with spacing');
@@ -86,7 +175,9 @@ try {
   await finish("/fixtures/picked.wav");
   await waitStatus("picked.wav", "completed");
   await assertSummary({ completed: 4, failed: 1, cancelled: 0, queued: 0, running: 0, "needs retry": 0 });
-  // Diarized jobs wait for terminal snapshots, and a temporary poll error holds the queue.
+  // Regression: after retrying a failed poll, the terminal review is echoed
+  // through Settings as a recovery entry. That live update must not be
+  // rehydrated over the in-flight result or strand this queue item as running.
   await page.getByRole("checkbox", { name: "Speaker diarization" }).check();
   await drop(["/fixtures/meeting-one.wav", "/fixtures/meeting-two.wav", "/fixtures/meeting-three.wav"]);
   await waitStatus("meeting-one.wav", "running");

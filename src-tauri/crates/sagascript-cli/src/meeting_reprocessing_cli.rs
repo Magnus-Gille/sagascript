@@ -12,7 +12,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use sagascript_core::error::DictationError;
 use sagascript_core::meeting_reprocess_plan::{ReprocessingMode, ReprocessingPlan};
 use sagascript_core::meeting_review::MeetingReview;
-use sagascript_core::settings::{Language, Settings, WhisperModel};
+use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 use serde_json::json;
 
@@ -217,28 +217,28 @@ fn publish_result(path: &Path, result: ReprocessingResult) -> Result<(), Dictati
 
 fn resolve_runtime(args: &RuntimeArgs) -> Result<RuntimeInputs, DictationError> {
     let stored = sagascript_core::settings::store::load();
-    let profile = args
-        .profile
-        .as_deref()
-        .map(|profile_id| crate::transcribe::resolve_profile(&stored, profile_id))
-        .transpose()?;
-    let language = match (&profile, &args.language) {
-        (Some(profile), _) => profile.language,
-        (None, Some(language)) => crate::transcribe::parse_language(language)?,
-        (None, None) => stored.language,
+    let profile = match args.profile.as_deref() {
+        Some(id) => crate::transcribe::resolve_profile(&stored, id)?,
+        None => {
+            let profiles = stored.resolved_hotkey_profiles();
+            profiles.iter().find(|candidate| candidate.id == "default")
+                .unwrap_or(&profiles[0]).clone()
+        }
     };
-    let model = crate::transcribe::resolve_effective_model(
-        args.model.as_deref(),
-        language,
-        stored.auto_select_model,
-        stored.whisper_model,
-    )?;
-    let glossary = crate::transcribe::effective_glossary(
-        &stored,
-        args.profile.as_deref(),
-        args.prompt.as_deref(),
-        args.prompt_file.as_deref(),
-    )?;
+    let language = args.language.as_deref().map(crate::transcribe::parse_language)
+        .transpose()?.unwrap_or(profile.language);
+    let model = match crate::transcribe::resolve_file_model_for_run(args.model.as_deref(), language, &stored, true)? {
+        FileModel::Whisper(model) => model,
+        FileModel::PianissimoOriginal => return Err(DictationError::SettingsError(
+            "Meeting reprocessing requires a Whisper model; select one with --model".into()
+        )),
+    };
+    let glossary = if language == profile.language {
+        crate::transcribe::effective_glossary(&stored, Some(&profile.id), args.prompt.as_deref(), args.prompt_file.as_deref())?
+    } else {
+        let hint = crate::transcribe::resolve_one_run_prompt(args.prompt.as_deref(), args.prompt_file.as_deref())?;
+        Glossary::parse(hint.as_deref().unwrap_or(""))
+    };
     Ok(RuntimeInputs {
         stored,
         language,

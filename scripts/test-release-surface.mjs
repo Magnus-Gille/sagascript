@@ -82,7 +82,7 @@ test("release navigation exposes only Dictate, Transcribe, and Settings", () => 
   assert.doesNotMatch(settingsSource, /activeTab\s*===\s*["']teach["']/);
 });
 
-test("manual model and decoder controls stay behind Advanced", () => {
+test("dictation model choice is visible while decoder controls stay behind Advanced", () => {
   const advancedStart = settingsSource.indexOf('<details class="advanced-section">');
   const advancedEnd = settingsSource.indexOf("</details>", advancedStart);
   assert.ok(advancedStart >= 0, "Advanced disclosure is missing");
@@ -90,10 +90,14 @@ test("manual model and decoder controls stay behind Advanced", () => {
 
   const advancedSource = settingsSource.slice(advancedStart, advancedEnd);
   assert.match(advancedSource, /<summary>Advanced<\/summary>/);
-  assert.match(advancedSource, /Manual model choice/);
+  assert.doesNotMatch(advancedSource, /Manual model choice/);
   assert.match(advancedSource, /Decoding mode/);
   assert.match(advancedSource, /Temperature fallback/);
   assert.match(advancedSource, /Voice activity detection/);
+
+  const dictateSource = settingsSource.slice(0, advancedStart);
+  assert.match(dictateSource, /Speech model for \{profile\.name\}/);
+  assert.match(dictateSource, /profileModelOptions\[profile\.id\]/);
 });
 
 test("ordinary settings keep the useful controls outside Advanced", () => {
@@ -121,7 +125,7 @@ test("cross-platform onboarding copy never identifies every device as a Mac", ()
     .replace(/\s+/g, " ");
 
   assert.doesNotMatch(visibleCopy, /\bmac(?:os)?\b/i);
-  assert.match(visibleCopy, /Speech stays on this device/);
+  assert.match(visibleCopy, /recommended local model is selected automatically/);
   assert.match(visibleCopy, /recordings are processed on this device/);
   assert.match(
     onboardingSource,
@@ -141,9 +145,9 @@ test("dictation profiles expose missing speech engines without opening Advanced"
   const advancedStart = settingsSource.indexOf('<details class="advanced-section">');
   const ordinarySource = settingsSource.slice(0, advancedStart);
 
-  assert.match(ordinarySource, /getEffectiveModelInfo/);
+  assert.match(ordinarySource, /getProfileModelInfo/);
   assert.match(ordinarySource, /Download speech engine/);
-  assert.match(ordinarySource, /Speech engine ready/);
+  assert.match(ordinarySource, /profileModels\[profile\.id\]\.display_name/);
   assert.match(ordinarySource, /class="link-btn profile-engine-action"/);
   assert.match(
     settingsSource,
@@ -255,8 +259,10 @@ test("second GUI launches are routed to the running instance", () => {
 test("profile and update menu states remain explicit after interaction", () => {
   assert.match(mainSource, /select_profile_menu\(app, &profile\)/);
   assert.match(mainSource, /if selected \{ "✓ " \} else \{ "" \}/);
-  assert.match(mainSource, /open_update_release\(&version\)[\s\S]*available_version = None;/);
-  assert.match(mainSource, /items\.check\.set_text\("Check Again…"\)/);
+  assert.match(mainSource, /if updates::updater_public_key\(\)\.is_some\(\) \{\s*check_for_updates_and_install\(app\.clone\(\)\)/);
+  assert.match(mainSource, /state\.available_version = None;/);
+  assert.match(mainSource, /items\.check\.set_text\(action_text\)/);
+  assert.match(mainSource, /"Check Again…"/);
 });
 
 test("mobile site keeps navigation and readable terminal text", () => {

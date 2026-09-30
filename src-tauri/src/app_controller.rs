@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -9,7 +10,7 @@ use crate::hotkey::HotkeyService;
 use crate::logging::LoggingService;
 use crate::logging::log_events;
 use crate::paste::PasteService;
-use sagascript_core::settings::{canonical_hotkey, HotkeyMode, HotkeyProfile, Settings};
+use sagascript_core::settings::{canonical_hotkey, FileModel, HotkeyMode, HotkeyProfile, Settings};
 
 /// Result of handling a hotkey-down event
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +89,8 @@ pub struct AppController {
     session_data: Option<serde_json::Value>,
     release_started: Option<Instant>,
     meeting_job: Option<String>,
+    update_activity: Arc<crate::update_activity::UpdateActivity>,
+    active_work_lease: Option<crate::update_activity::WorkLease>,
 }
 
 impl AppController {
@@ -124,7 +127,36 @@ impl AppController {
             session_data: None,
             release_started: None,
             meeting_job: None,
+            update_activity: Arc::new(crate::update_activity::UpdateActivity::default()),
+            active_work_lease: None,
         }
+    }
+
+    pub fn set_update_activity(
+        &mut self,
+        update_activity: Arc<crate::update_activity::UpdateActivity>,
+    ) {
+        self.update_activity = update_activity;
+    }
+
+    pub fn set_update_result_pending(&self, result_id: &str, pending: bool) -> Result<(), String> {
+        self.update_activity.set_result_pending(result_id, pending)
+    }
+
+    pub fn is_update_result_pending(&self, result_id: &str) -> bool {
+        self.update_activity.is_result_pending(result_id)
+    }
+
+    /// Acknowledge exactly the result the UI delivered. Hold the controller
+    /// lock across text comparison and activity update so a newer result cannot
+    /// arrive between them.
+    pub fn acknowledge_update_result(&self, expected_text: &str) -> Result<bool, String> {
+        if self.last_transcription() != Some(expected_text)
+            || !self.is_update_result_pending("live-dictation") {
+            return Ok(false);
+        }
+        self.set_update_result_pending("live-dictation", false)?;
+        Ok(true)
     }
 
     pub fn state(&self) -> AppState {
@@ -137,8 +169,13 @@ impl AppController {
         if self.state != AppState::Idle || self.meeting_job.is_some() {
             return false;
         }
+        let work_lease = match self.update_activity.begin_work() {
+            Ok(lease) => lease,
+            Err(_) => return false,
+        };
         self.meeting_job = Some(id.to_owned());
         self.state = AppState::Transcribing;
+        self.active_work_lease = Some(work_lease);
         true
     }
 
@@ -148,6 +185,7 @@ impl AppController {
         }
         self.meeting_job = None;
         self.state = AppState::Idle;
+        self.active_work_lease = None;
         true
     }
 
@@ -179,7 +217,7 @@ impl AppController {
         self.active_hotkey_profile
             .as_ref()
             .map(|profile| profile.language)
-            .unwrap_or(self.settings.language)
+            .unwrap_or_else(|| self.settings.default_profile().language)
     }
 
     pub fn active_hotkey_profile(&self) -> Option<&HotkeyProfile> {
@@ -428,6 +466,18 @@ impl AppController {
             return Ok(false);
         }
 
+        let session_model = match self.settings.dictation_model_for_profile(&profile.id)
+            .map_err(DictationError::SettingsError)? {
+            FileModel::Whisper(model) => serde_json::to_value(model)
+                .map_err(|error| DictationError::SettingsError(error.to_string()))?,
+            FileModel::PianissimoOriginal => serde_json::Value::String("pianissimo-sv".into()),
+        };
+
+        let work_lease = self
+            .update_activity
+            .begin_work()
+            .map_err(DictationError::TranscriptionFailed)?;
+
         let next_generation = self.recording_generation.checked_add(1).ok_or_else(|| {
             DictationError::TranscriptionFailed("Recording generation exhausted; restart Sagascript.".into())
         })?;
@@ -444,7 +494,7 @@ impl AppController {
             "version": env!("CARGO_PKG_VERSION"),
             "git_hash": env!("GIT_HASH"),
             "language": profile.language,
-            "model": self.settings.effective_model_for(profile.language),
+            "model": session_model,
             "audio_ms": null,
             "phases_ms": {},
             "auto_paste": self.settings.auto_paste,
@@ -470,6 +520,7 @@ impl AppController {
         self.toggle_key_down = false;
         self.training_recording = false;
         self.state = AppState::Recording;
+        self.active_work_lease = Some(work_lease);
         self.recording_start = Some(Instant::now());
         self.last_error = None;
 
@@ -571,8 +622,14 @@ impl AppController {
         self.end_session("success");
         self.last_error = None;
         self.last_transcription = Some(text.to_string());
+        if !text.trim().is_empty() {
+            if let Err(error) = self.update_activity.set_result_pending("live-dictation", true) {
+                warn!("Could not track the pending live transcription result: {error}");
+            }
+        }
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
+        self.active_work_lease = None;
         self.active_hotkey_profile = None;
         self.active_hotkey_shortcut = None;
         self.toggle_stop_requested = false;
@@ -587,6 +644,7 @@ impl AppController {
         self.end_session("no_speech");
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
+        self.active_work_lease = None;
         self.active_hotkey_profile = None;
         self.active_hotkey_shortcut = None;
         self.toggle_stop_requested = false;
@@ -615,6 +673,7 @@ impl AppController {
         self.end_session("error");
         self.last_error = Some(error.to_string());
         self.state = AppState::Idle;
+        self.active_work_lease = None;
         self.active_hotkey_profile = None;
         self.active_hotkey_shortcut = None;
         self.toggle_stop_requested = false;
@@ -662,6 +721,7 @@ impl AppController {
         self.end_session("cancelled");
         self.audio.clear_last_captured();
         self.state = AppState::Idle;
+        self.active_work_lease = None;
         self.active_hotkey_profile = None;
         self.active_hotkey_mode = None;
         self.active_hotkey_shortcut = None;
@@ -986,6 +1046,12 @@ mod tests {
         let result = ctrl.finish_transcription(Ok("Hello again".to_string()));
 
         assert_eq!(result, Ok("Hello again".to_string()));
+        assert_eq!(ctrl.last_transcription(), Some("Hello again"));
+        assert!(ctrl.is_update_result_pending("live-dictation"));
+        assert!(!ctrl.acknowledge_update_result("Older text").unwrap());
+        assert!(ctrl.is_update_result_pending("live-dictation"));
+        assert!(ctrl.acknowledge_update_result("Hello again").unwrap());
+        assert!(!ctrl.is_update_result_pending("live-dictation"));
         assert_eq!(ctrl.last_transcription(), Some("Hello again"));
         assert_eq!(ctrl.state(), AppState::Idle);
     }
@@ -1411,6 +1477,17 @@ mod tests {
             Ok(true)
         ));
         assert_eq!(ctrl.state(), AppState::Recording);
+        ctrl.cancel_recording();
+    }
+
+    #[test]
+    fn recording_session_uses_selected_profiles_model_not_global_model() {
+        let mut ctrl = default_controller();
+        let profile = HotkeyProfile::legacy_default("Super+S".into(), sagascript_core::settings::Language::Swedish);
+        ctrl.settings_mut().hotkey_profiles = vec![profile.clone()];
+        ctrl.settings_mut().profile_models.insert("default".into(), sagascript_core::settings::FileModelPreference::PianissimoOriginal);
+        assert!(ctrl.start_recording_for_profile_with_capture(profile, |_| Ok(())).unwrap());
+        assert_eq!(ctrl.session_data.as_ref().unwrap()["model"], "pianissimo-sv");
         ctrl.cancel_recording();
     }
 

@@ -1,0 +1,32 @@
+Klang Pianissimo (Sagascript CoreML conversion)
+
+Model: Klang Pianissimo by Klang AI AB
+Source: https://huggingface.co/KlangAI/pianissimo-sv
+Revision: 8f1f6d8f8bd7482a5ea1d2bfaf6ef5be61597138
+pianissimo-sv.nemo SHA-256: ca340b827dc9e18d2019341fa7b6dc163f00284d84066ce2cbfffcaa129920cd
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+
+The model weights are converted, not retrained. Please preserve Klang AI AB's
+attribution and the CC BY 4.0 license when redistributing the model.
+
+Conversion basis
+----------------
+This exporter adapts Fluid Inference mobius
+(https://github.com/FluidInference/mobius, commit
+864ef8050f2f281d0761de26e3a03108f9f1ce73), licensed under the Apache License,
+Version 2.0.
+https://www.apache.org/licenses/LICENSE-2.0
+
+The Mobius-derived changes are FluidAudio v3 component names and I/O, fixed
+15/30 s contracts, the exact dense fixed-shape +/-256-frame local-attention
+adapter, encoder-only int8 per-channel linear quantization, manifest generation,
+and validation tooling. Decoder and JointDecisionv3 remain fp16.
+
+Required third-party notices
+----------------------------
+Fluid Inference mobius: Apache License 2.0, copyright and notices retained at
+https://github.com/FluidInference/mobius@864ef8050f2f281d0761de26e3a03108f9f1ce73.
+Klang Pianissimo: CC BY 4.0, attribution above.
+NVIDIA Parakeet TDT v3 architecture/base: CC BY 4.0 as stated by the upstream
+model card; the present checkpoint is Klang AI AB's fine-tune.

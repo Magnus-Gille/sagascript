@@ -21,14 +21,43 @@ update.
 - **CLI + GUI** -- full CLI for scripting and automation, menu bar app for everyday use
 - **File transcription** -- transcribe audio and video files (MP3, WAV, M4A, FLAC, MP4, MKV, OGG, and more)
 - **Configurable** -- choose your model, language, hotkey, and output behavior
-- **macOS v1** -- official releases are signed and notarized for macOS 13+ on Apple Silicon; Intel Macs are not supported by the v1 binary release
+- **macOS v1** -- official releases are signed and notarized for macOS 13+ on Apple Silicon (Pianissimo requires macOS 14+); Intel Macs are not supported by the v1 binary release
 - **Windows beta** -- an unsigned Windows 11 preview for x64 and ARM64 is available from the [GitHub prerelease](https://github.com/Magnus-Gille/sagascript/releases/tag/windows-beta-20260905)
+
+## Pianissimo (Swedish, Core ML)
+
+Pianissimo runs on the Apple Neural Engine through a Core ML engine host bundled
+in the app (`Sagascript.app/Contents/Resources/EngineHost/sagascript-engine-host`).
+It requires **macOS 14 or later on Apple Silicon**. In **Dictate**, select
+**Pianissimo** for a Swedish profile, then download its Core ML model if
+prompted. Each profile owns its language, shortcut, dictionary, and model;
+another Swedish profile can keep Whisper. The file-transcription choice stays
+independent. No Python installation is needed.
+
+CLI equivalents:
+
+```bash
+sagascript download-model pianissimo-sv
+sagascript record --language sv --model pianissimo-sv
+sagascript config profiles update default --language sv --model pianissimo-sv
+# Restore the Swedish recommended Whisper model for this profile:
+sagascript config profiles update default --model auto
+# Inspect or check the engine host end to end:
+sagascript engine status --json
+sagascript engine doctor
+```
+
+The engine host starts on demand, stays loaded while you dictate, and unloads
+after an idle period (configurable in Settings). It supports dictionary
+replacements after transcription, but not Whisper decoder hints. Explicit
+`--hint`/`--hint-file` options are rejected with this model. File **Auto** uses
+the language's recommended Whisper model; select Pianissimo explicitly for files.
 
 ## Building from source
 
 ### Prerequisites
 
-- **macOS**: macOS 13.0+ on Apple Silicon (Intel Macs are not supported by the v1 binary release)
+- **macOS**: macOS 13.0+ on Apple Silicon (Pianissimo needs 14.0+; Intel Macs are not supported by the v1 binary release)
 - **Windows beta**: Windows 11 on x64 or ARM64; unsigned preview, not an official stable release
 - **Linux** (experimental): X11 session; GTK/WebKit dev libraries + `xdotool` — see [Linux notes](docs/linux-notes.md)
 - Rust 1.75+ (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
@@ -83,12 +112,12 @@ sagascript config set language sv
 sagascript config get hotkey
 sagascript config path
 
-# Manage the external personal dictionary (global entries are hint-only)
+# Manage the default profile's external personal dictionary
 sagascript glossary path
 sagascript glossary add OpenRouter
 
 # Use one shortcut for English and another for Swedish
-sagascript config profiles create swedish --name Swedish --hotkey 'Option+Space' --language sv
+sagascript config profiles create swedish --name Swedish --hotkey 'Option+Space' --language sv --model kb-whisper-base
 sagascript config profiles list
 # Enable deterministic aliases only in the explicit-language profile
 sagascript glossary add OpenRouter --alias 'open router' --profile swedish

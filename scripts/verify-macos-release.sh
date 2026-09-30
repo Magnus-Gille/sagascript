@@ -13,17 +13,19 @@ if [[ ${1:-} == "--check-entitlements-plist" ]]; then
   exit
 fi
 
-if [[ $# -ne 3 ]]; then
-  echo "Usage: $0 /path/to/Sagascript.app /path/to/Sagascript.dmg VERSION" >&2
+if [[ $# -ne 4 ]]; then
+  echo "Usage: $0 /path/to/Sagascript.app /path/to/Sagascript.dmg VERSION FULL_GIT_SHA" >&2
   exit 2
 fi
 
 app=$1
 dmg=$2
 version=$3
+expected_sha=$4
 expected_identifier=ai.gille.sagascript
 expected_team_id=7C6WF6GFZ4
 
+[[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Expected a full 40-character release SHA, got: $expected_sha" >&2; exit 2; }
 [[ -d "$app" ]] || { echo "Missing app bundle: $app" >&2; exit 1; }
 [[ -f "$dmg" ]] || { echo "Missing disk image: $dmg" >&2; exit 1; }
 
@@ -47,19 +49,35 @@ actual_architectures=$(lipo -archs "$binary")
 }
 
 codesign --verify --deep --strict --verbose=2 "$app"
-runtime="$app/Contents/Resources/PianissimoRuntime"
-[[ -x "$runtime/bin/nemo-speech" ]] || {
-  echo "Bundled Pianissimo native executable is missing" >&2
+
+# The Pianissimo engine host lives inside the app, so the app's notarization
+# ticket covers it; it must still be individually signed with the hardened
+# runtime, the production team, and carry the exact release revision.
+host="$app/Contents/Resources/EngineHost/sagascript-engine-host"
+[[ -x "$host" ]] || {
+  echo "Bundled engine host is missing or not executable: $host" >&2
   exit 1
 }
-[[ ! -e "$runtime/python/bin/python3.12" ]] || {
-  echo "Unexpected Python runtime remains in app bundle" >&2
+host_architectures=$(lipo -archs "$host")
+[[ "$host_architectures" == "arm64" ]] || {
+  echo "Unexpected engine host architectures: $host_architectures (wanted arm64)" >&2
   exit 1
 }
-for native in "$runtime/bin/nemo-speech" "$runtime"/lib/*.dylib; do
-  [[ -e "$native" ]] || { echo "Missing Pianissimo native component: $native" >&2; exit 1; }
-  codesign --verify --strict "$native"
-done
+codesign --verify --strict --verbose=2 "$host"
+host_signature=$(codesign -d --verbose=4 "$host" 2>&1)
+grep -Eq '^CodeDirectory .*flags=0x10000\(runtime\)' <<<"$host_signature" || {
+  echo "Engine host is not signed with the hardened runtime (flags=0x10000(runtime))" >&2
+  exit 1
+}
+grep -q "^TeamIdentifier=${expected_team_id}$" <<<"$host_signature" || {
+  echo "Engine host is not signed by team ${expected_team_id}" >&2
+  exit 1
+}
+grep -q '^Authority=Developer ID Application:' <<<"$host_signature" || {
+  echo "Engine host is not signed with Developer ID Application" >&2
+  exit 1
+}
+"$(dirname "$0")/check-engine-host-identity.sh" "$host" "$expected_sha"
 signature=$(codesign -dvvv "$app" 2>&1)
 grep -q '^Authority=Developer ID Application:' <<<"$signature" || {
   echo "App is not signed with Developer ID Application" >&2

@@ -71,3 +71,14 @@ test("warm/skipped phases work, retry resets, and malformed or older events cann
   assert.deepEqual(stageRows(startStages()).map(r => r.status), ["active", "pending", "pending"]);
   assert.equal(stageRows(startStages())[0].percent, 0);
 });
+
+test("incremental engine progress advances the Transcribe meter monotonically without jumping", () => {
+  let state = updateStages(startStages(), "preparing");
+  const seen = [];
+  for (const pct of [3, 9.7, 9, 24, 24.4, 58, 91, 100]) {
+    state = updateStages(state, "transcribing", pct);
+    seen.push(stageRows(state)[2].percent);
+  }
+  assert.deepEqual(seen, [3, 9, 9, 24, 24, 58, 91, 100]);
+  assert.notEqual(state.status, "completed", "a native 100% never completes the run");
+});

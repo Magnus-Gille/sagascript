@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { drainUpdateWork } from "./update-preparation";
   import MeetingReprocessing from "./MeetingReprocessing.svelte";
   import {
     planMeetingReprocessing, beginMeetingReprocessing, previewMeetingProposal,
@@ -7,13 +8,14 @@
   import type {
     ReprocessingMode, SelectedReprocessingPlan, ProposalState, ReprocessingResult,
   } from "./meeting-reprocessing-types";
-  import { onDestroy, tick } from "svelte";
+  import { onDestroy, tick, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import TranscriptionStages from "./TranscriptionStages.svelte";
   import { initialStages, startStages, acceptRunProgress, finishStages } from "./transcribe-stages";
   import { canCancelPlainTranscription, transcribeSaveDefaults, isMissingTranscribeFileError } from "./transcribe-ui-state";
   import {
     transcribeFile, cancelFileTranscription, copyTranscriptionText, saveTranscriptionText,
+    setUpdateResultPending,
     beginMeetingFile, getMeetingJob, cancelMeetingJob,
     createMeetingReview, applyMeetingCorrections, undoMeetingReview,
     resetMeetingReview, openMeetingReview, saveMeetingReview,
@@ -21,28 +23,42 @@
     type MeetingJobStatus, type MeetingJobSnapshot,
   } from "./api";
   import MeetingReview from "./MeetingReview.svelte";
+  import type { MeetingReviewDraftSnapshot } from "./MeetingReview.svelte";
   import type {
     CorrectionOperation,
+    MeetingDraftState,
     MeetingAudioAttachment,
     MeetingExportFormat,
     MeetingReview as MeetingReviewDocument,
     MeetingReviewState,
     MeetingTranscript,
   } from "./meeting-types";
+  import type { UpdateRecoveryFile, UpdateRecoveryMeeting } from "./update-recovery";
   import { pollMeetingJob as pollMeetingJobClient } from "./meeting-job-client";
   import type { FileJob, FileJobStatus } from "./transcription-queue";
-  let { job, otherBusy, active, openReview = false, onComplete, onBusyChange, onMissingFile, onAttentionChange }: {
+  let {
+    job, otherBusy, active, openReview = false, initialRecoveryFile = null, initialRecoveryMeeting = null,
+    onComplete, onBusyChange, onMissingFile, onAttentionChange,
+    onFileRecoveryChange = () => undefined, onMeetingRecoveryChange = () => undefined,
+  }: {
     job: FileJob;
     otherBusy: boolean;
     active: boolean;
     openReview?: boolean;
+    initialRecoveryFile?: UpdateRecoveryFile | null;
+    initialRecoveryMeeting?: UpdateRecoveryMeeting | null;
     onComplete: (id: string, status: FileJobStatus) => void;
     onBusyChange: (id: string, busy: boolean) => void;
     onMissingFile: (path: string) => void;
     onAttentionChange: (id: string, needsRetry: boolean) => void;
+    onFileRecoveryChange?: (entry: UpdateRecoveryFile | null) => void;
+    onMeetingRecoveryChange?: (entry: UpdateRecoveryMeeting | null) => void;
   } = $props();
   let started = $state(false);
   let starting = $state(false);
+  let hydratedFileRecoveryJobId = $state<string | null>(null);
+  let hydratedMeetingRecoveryJobId = $state<string | null>(null);
+  let meetingRecoveryHydrationClosed = false;
 
   $effect(() => {
     if (job.status === "running" && !started) {
@@ -92,6 +108,7 @@
   let meetingReview: MeetingReviewDocument | null = $state(null);
   let meetingTranscript: MeetingTranscript | null = $state(null);
   let meetingJobId: string | null = $state(null);
+  let meetingResultId: string | null = $state(null);
   let meetingJobStatus: MeetingJobStatus | null = $state(null);
   let meetingPhase: string = $state("");
   let meetingError: string = $state("");
@@ -107,6 +124,88 @@
   let meetingReprocessingBusy = $state(false);
   let meetingActionQueue: Promise<void> = Promise.resolve();
   let meetingReviewInit: Promise<void> | null = $state(null);
+  let meetingRecoveryDraft = $state<MeetingReviewDraftSnapshot | null>(null);
+
+  // Native work can finish before its IPC result or terminal meeting poll
+  // reaches this component. Drain those deliveries and pending edits before
+  // Settings snapshots the recovery entries emitted by our effects.
+  export async function prepareUpdateRecovery(): Promise<void> {
+    await drainUpdateWork({
+      busy: () => starting || transcribing || meetingPollActive
+        || meetingReviewInit !== null || meetingReprocessingBusy,
+      settle: async () => {
+        await meetingActionQueue;
+        await meetingReviewInit;
+        await tick();
+      },
+      failure: () => meetingPollingFailed
+        ? "Retry the meeting status check before installing the update."
+        : meetingJobStatus === "completed" && meetingReviewInit === null
+          && (meetingError || !meetingReview || !meetingTranscript
+            || (meetingReprocessingResult !== null && meetingProposal === null))
+          ? "Finish or retry the meeting review before installing the update."
+          : null,
+    });
+  }
+
+  const emptyMeetingDraft = (): MeetingDraftState => ({
+    labels: {}, mergeTargets: {}, texts: {}, speakers: {},
+  });
+
+  // Recovery entries belong to a queued job. Hydrate them only when the job ID
+  // matches, and mark the component as started so a recovered result cannot be
+  // accidentally submitted to the transcription backend again.
+  $effect(() => {
+    const recovery = initialRecoveryFile;
+    if (!recovery || recovery.job_id !== job.id || hydratedFileRecoveryJobId === job.id) return;
+    hydratedFileRecoveryJobId = job.id;
+    started = true;
+    transcriptionResult = recovery.text;
+    plainStages = finishStages(startStages(), "completed");
+  });
+
+  $effect(() => {
+    const recovery = initialRecoveryMeeting;
+    if (meetingRecoveryHydrationClosed || !recovery || recovery.job_id !== job.id
+      || hydratedMeetingRecoveryJobId === job.id) return;
+    hydratedMeetingRecoveryJobId = job.id;
+    started = true;
+    const generation = ++meetingPollGeneration;
+    meetingRecoveryDraft = {
+      source_sha256: recovery.review.review.original.source_sha256,
+      review_revision: recovery.review.review.revision,
+      drafts: {
+        labels: { ...recovery.editor_draft.labels },
+        mergeTargets: { ...recovery.editor_draft.mergeTargets },
+        texts: { ...recovery.editor_draft.texts },
+        speakers: { ...recovery.editor_draft.speakers },
+      },
+    };
+    acceptMeetingReview(recovery.review, generation, true);
+    meetingResultId = recovery.job_id;
+    meetingJobStatus = "completed";
+    meetingReprocessingPlan = null;
+    meetingProposal = recovery.proposal;
+    meetingReprocessingResult = null;
+  });
+
+  $effect(() => {
+    if (transcriptionResult.trim()) {
+      untrack(() => onFileRecoveryChange({ job_id: job.id, path: job.path, text: transcriptionResult }));
+    }
+  });
+
+  $effect(() => {
+    if (!meetingReview || !meetingTranscript) return;
+    const entry: UpdateRecoveryMeeting = {
+      job_id: job.id,
+      path: job.path,
+      review: { review: meetingReview, transcript: meetingTranscript },
+      editor_draft: meetingRecoveryDraft?.drafts ?? emptyMeetingDraft(),
+      proposal: meetingProposal,
+    };
+    untrack(() => onMeetingRecoveryChange(entry));
+  });
 
   onDestroy(() => {
     meetingPollGeneration += 1;
@@ -128,6 +227,12 @@
 
   function waitForMeetingActions(): Promise<void> {
     return meetingActionQueue;
+  }
+
+  async function setMeetingResultPending(pending: boolean): Promise<void> {
+    if (meetingResultId) {
+      await setUpdateResultPending(`meeting:${meetingResultId}`, pending);
+    }
   }
 
   function enqueueMeetingAction(action: (review: MeetingReviewDocument, revision: number) => Promise<boolean | void>): Promise<boolean> {
@@ -232,6 +337,20 @@
   ): Promise<void> {
     if (transcribing) return;
     if (meetingReview && !window.confirm("Start a new meeting review and replace the current review if it completes?")) return;
+    // `initialRecoveryMeeting` is also updated by the live recovery callback
+    // after this job completes. Do not mistake that in-session echo for a
+    // startup restore: hydrating it would invalidate this poll generation and
+    // could leave `meetingReviewInit` set forever.
+    meetingRecoveryHydrationClosed = true;
+    if (meetingResultId) {
+      try {
+        await setMeetingResultPending(false);
+      } catch (error) {
+        meetingError = meetingFailureText(error, "Could not preserve the current meeting result.");
+        return;
+      }
+    }
+    meetingResultId = null;
     const generation = ++meetingPollGeneration;
     // Keep the previous review and its unsaved drafts mounted until a NEW
     // document succeeds. Pending edits finish before the import starts below;
@@ -252,6 +371,7 @@
       if (generation !== meetingPollGeneration) return;
       if (!jobId) throw new Error("Meeting import did not return a job ID.");
       meetingJobId = jobId;
+      meetingResultId = jobId;
       meetingJobStatus = "running";
       void pollMeetingJob(jobId, generation);
     } catch (error) {
@@ -281,7 +401,7 @@
     transcriptionProgress = 0;
     transcribeError = "";
     transcriptionResult = "";
-    plainRunId = crypto.randomUUID();
+    plainRunId = job.id;
     plainRequestStarted = false;
     cancellingPlain = false;
     plainStages = startStages();
@@ -347,6 +467,8 @@
     if (transcribing || !transcriptionResult) return;
     try {
       await copyTranscriptionText(transcriptionResult);
+      await setUpdateResultPending(job.id, false);
+      onFileRecoveryChange(null);
       resultActionMessage = "Copied to clipboard.";
     } catch (error) { resultActionMessage = meetingFailureText(error, "Could not copy."); }
   }
@@ -356,6 +478,10 @@
     const { fileName, directory } = transcribeSaveDefaults(job.path);
     try {
       const saved = await saveTranscriptionText(transcriptionResult, fileName, directory);
+      if (saved) {
+        await setUpdateResultPending(job.id, false);
+        onFileRecoveryChange(null);
+      }
       resultActionMessage = saved ? "Saved." : "Save cancelled — nothing was written.";
     } catch (error) { resultActionMessage = meetingFailureText(error, "Could not save."); }
   }
@@ -397,7 +523,12 @@
   }
 
   async function exportMeetingReview(format: MeetingExportFormat): Promise<boolean> {
-    return enqueueMeetingAction((review) => saveMeetingReview(review, format));
+    const saved = await enqueueMeetingAction((review) => saveMeetingReview(review, format));
+    if (saved) {
+      await setMeetingResultPending(false);
+      onMeetingRecoveryChange(null);
+    }
+    return saved;
   }
 
   async function applyMeetingReviewOperations(operations: CorrectionOperation[]): Promise<void> {
@@ -429,7 +560,12 @@
   }
 
   async function saveCurrentMeetingReview(): Promise<boolean> {
-    return enqueueMeetingAction((review) => saveMeetingReview(review, "json"));
+    const saved = await enqueueMeetingAction((review) => saveMeetingReview(review, "json"));
+    if (saved) {
+      await setMeetingResultPending(false);
+      onMeetingRecoveryChange(null);
+    }
+    return saved;
   }
 
   async function attachCurrentMeetingAudio(): Promise<MeetingAudioAttachment | null> {
@@ -453,6 +589,21 @@
 
   function onMeetingReviewDraftDirtyChange(dirty: boolean): void {
     meetingReviewDraftDirty = dirty;
+    if (dirty) void setMeetingResultPending(true);
+  }
+
+  function onMeetingReviewDraftSnapshotChange(snapshot: MeetingReviewDraftSnapshot): void {
+    meetingRecoveryDraft = snapshot;
+    if (!meetingReview || !meetingTranscript) return;
+    const review = meetingReview;
+    const transcript = meetingTranscript;
+    untrack(() => onMeetingRecoveryChange({
+      job_id: job.id,
+      path: job.path,
+      review: { review, transcript },
+      editor_draft: snapshot.drafts,
+      proposal: meetingProposal,
+    }));
   }
 
   async function detachCurrentMeetingAudio(token: string): Promise<void> {
@@ -469,6 +620,8 @@
       const state = await openMeetingReview();
       if (generation !== meetingPollGeneration || !state) return;
       acceptMeetingReview(state, generation, true);
+      if (meetingResultId) await setMeetingResultPending(false);
+      meetingResultId = null;
     } catch (error) {
       if (generation === meetingPollGeneration) meetingError = meetingFailureText(error, "Could not open the meeting review.");
     }
@@ -509,6 +662,7 @@
         job.prompt, job.profileId);
       if (!id) throw new Error("Reprocessing did not return a job ID.");
       meetingJobId = id;
+      meetingResultId = id;
       void pollMeetingJob(id, generation);
     } catch (error) {
       transcribing = false;
@@ -549,7 +703,9 @@
 
   async function saveCurrentMeetingProposal(): Promise<boolean> {
     const proposal = meetingProposal?.proposal ?? meetingReprocessingResult?.proposal;
-    return proposal ? saveMeetingProposal(proposal) : false;
+    const saved = proposal ? await saveMeetingProposal(proposal) : false;
+    if (saved) await setMeetingResultPending(false);
+    return saved;
   }
 
   async function retryCurrentMeetingProposalPreview(): Promise<void> {
@@ -674,6 +830,8 @@
               onAttachAudio={attachCurrentMeetingAudio}
               onDetachAudio={detachCurrentMeetingAudio}
               onDraftDirtyChange={onMeetingReviewDraftDirtyChange}
+              initialDraftSnapshot={meetingRecoveryDraft}
+              onDraftSnapshotChange={onMeetingReviewDraftSnapshotChange}
               resetDraftKey={meetingReviewResetKey}
             />
         {/if}

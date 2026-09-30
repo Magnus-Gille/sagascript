@@ -4,7 +4,7 @@
 
 ### System requirements
 
-- macOS 13.0 (Ventura) or later
+- macOS 13.0 (Ventura) or later (Swedish Pianissimo requires macOS 14 Sonoma or later)
 - Apple Silicon (M1+) is required for the v1 binary release. Intel Macs are not
   supported by the v1 installer.
 - ~200 MB disk space (plus Whisper model files)

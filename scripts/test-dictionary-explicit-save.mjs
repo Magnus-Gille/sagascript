@@ -97,9 +97,9 @@ function createHarness({ failure = null } = {}) {
   ].map(functionSource).join("\n");
   const harness = `
     let settings = {
-      initial_prompt: "global saved",
-      profile_glossaries: { english: "english saved", swedish: "swedish saved" },
+      profile_glossaries: { default: "global saved", english: "english saved", swedish: "swedish saved" },
       hotkey_profiles: [
+        { id: "default", name: "Default", language: "sv" },
         { id: "english", name: "English", language: "en" },
         { id: "swedish", name: "Swedish", language: "sv" },
       ],
@@ -107,12 +107,12 @@ function createHarness({ failure = null } = {}) {
     let settingsError = "";
     let languageSaving = false;
     let activeTab = "settings";
-    let glossaryScopeId = "";
-    let glossaryDraft = settings.initial_prompt;
+    let glossaryScopeId = "default";
+    let glossaryDraft = settings.profile_glossaries.default;
     let glossaryDraftInitialized = true;
     let glossaryScopeGeneration = 0;
     let glossaryDraftGeneration = 0;
-    let lastStoredGlossarySources = { "": settings.initial_prompt };
+    let lastStoredGlossarySources = { default: settings.profile_glossaries.default };
     let glossaryEditBaseline = null;
     let glossarySaving = false;
     let glossarySaveInFlight = null;
@@ -126,18 +126,17 @@ function createHarness({ failure = null } = {}) {
     const failure = ${JSON.stringify(failure)};
 
     function explicitProfiles(source = settings) {
-      return source?.hotkey_profiles.filter((profile) => profile.language !== "auto") ?? [];
+      return source?.hotkey_profiles ?? [];
     }
     function profileForId(profileId, source = settings) {
       if (!profileId) return null;
       return explicitProfiles(source).find((profile) => profile.id === profileId) ?? null;
     }
     function glossarySourceForScope(scopeId, source = settings) {
-      if (!source || scopeId === "") return source?.initial_prompt ?? "";
-      return source.profile_glossaries[scopeId] ?? "";
+      return source?.profile_glossaries[scopeId] ?? "";
     }
     function isValidGlossaryScope(scopeId, source = settings) {
-      return scopeId === "" || profileForId(scopeId, source) !== null;
+      return profileForId(scopeId, source) !== null;
     }
     function rememberGlossaryRecovery(scopeId, draft, conflicted = false) {
       recoveredGlossaryDrafts.push({ scopeId, draft, conflicted });
@@ -156,11 +155,6 @@ function createHarness({ failure = null } = {}) {
       return settings;
     }
     async function refreshProfileModels() {}
-    async function setInitialPrompt(value, expectedSource) {
-      calls.push({ command: "setInitialPrompt", scopeId: "", value, expectedSource });
-      if (failure) throw new Error(failure);
-      settings = { ...settings, initial_prompt: value };
-    }
     async function setProfileGlossary(scopeId, value, expectedSource) {
       calls.push({ command: "setProfileGlossary", scopeId, value, expectedSource });
       if (failure) throw new Error(failure);
@@ -273,7 +267,7 @@ test("the first dictionary edit establishes a reactive dirty baseline", () => {
   input(exercise, "global draft");
   const state = exercise.snapshot();
   assert.deepEqual(JSON.parse(JSON.stringify(state.glossaryEditBaseline)), {
-    scopeId: "",
+    scopeId: "default",
     source: "global saved",
     generation: 1,
   });
@@ -286,8 +280,8 @@ test("Save persists the active scope with its edit baseline as expected_source",
   input(exercise, "global draft");
   assert.equal(await exercise.saveGlossary(), true);
   assert.deepEqual(JSON.parse(JSON.stringify(exercise.snapshot().calls)), [{
-    command: "setInitialPrompt",
-    scopeId: "",
+    command: "setProfileGlossary",
+    scopeId: "default",
     value: "global draft",
     expectedSource: "global saved",
   }]);
@@ -336,18 +330,18 @@ test("dirty scope navigation offers Save, Discard, and Stay", async () => {
   exercise.onGlossaryScopeChange({ target: { value: "english" }, currentTarget: { value: "english" } });
   assert.equal(exercise.snapshot().pendingGlossaryNavigation.kind, "scope");
   assert.equal(exercise.snapshot().pendingGlossaryNavigation.scopeId, "english");
-  assert.equal(exercise.snapshot().glossaryScopeId, "");
+  assert.equal(exercise.snapshot().glossaryScopeId, "default");
 
   exercise.stayOnGlossaryDraft();
   assert.equal(exercise.snapshot().pendingGlossaryNavigation, null);
-  assert.equal(exercise.snapshot().glossaryScopeId, "");
+  assert.equal(exercise.snapshot().glossaryScopeId, "default");
 
   exercise.onGlossaryScopeChange({ target: { value: "english" }, currentTarget: { value: "english" } });
   exercise.discardAndFinishGlossaryNavigation();
   assert.equal(exercise.snapshot().glossaryScopeId, "english");
   assert.equal(exercise.snapshot().glossaryDraft, "english saved");
 
-  exercise.commitGlossaryScopeChange("");
+  exercise.commitGlossaryScopeChange("default");
   input(exercise, "global draft 2");
   exercise.onGlossaryScopeChange({ target: { value: "english" }, currentTarget: { value: "english" } });
   await exercise.saveAndFinishGlossaryNavigation();
@@ -408,8 +402,8 @@ test("dictionary Save proceeds without a meeting review confirmation", async () 
   assert.equal(state.glossaryDraft, "global draft");
   assert.equal(state.glossaryEditBaseline, null);
   assert.deepEqual(JSON.parse(JSON.stringify(state.calls)), [{
-    command: "setInitialPrompt",
-    scopeId: "",
+    command: "setProfileGlossary",
+    scopeId: "default",
     value: "global draft",
     expectedSource: "global saved",
   }]);
@@ -429,7 +423,7 @@ for (const failure of ["write failed", "Dictionary changed elsewhere: current so
     assert.equal(blocked.pendingGlossaryNavigation.kind, "tab");
     assert.equal(blocked.pendingGlossaryNavigation.tab, "dictate");
     if (failure.startsWith("Dictionary")) {
-      assert.equal(blocked.glossaryConflictScopeId, "");
+      assert.equal(blocked.glossaryConflictScopeId, "default");
       assert.match(blocked.settingsError, /^Dictionary changed elsewhere:/);
     }
   });

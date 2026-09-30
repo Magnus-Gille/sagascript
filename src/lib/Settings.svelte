@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { drainUpdateWork } from "./update-preparation";
   import FileTranscription from "./FileTranscription.svelte";
   import {
     createFileJobs, nextQueuedFile, updateFileJob, fileJobName,
@@ -7,24 +8,34 @@
   import { onMount, tick } from "svelte";
   import { rememberTranscription, type RecentTranscription } from "./recent-transcriptions";
   import {
+    createUpdateRecoveryPayload,
+    parseUpdateRecoveryPayload,
+    serializeUpdateRecoveryPayload,
+    type UpdateRecoveryFile,
+    type UpdateRecoveryMeeting,
+  } from "./update-recovery";
+  import {
     getSettings,
     getLastError,
     getLastTranscription,
     setLanguage,
     setHotkeyProfiles,
+    setProfileModel,
     setAutoPaste,
-    setInitialPrompt,
     setProfileGlossary,
     setShowOverlay,
-    setWhisperModel,
     setFileTranscriptionModel,
+    getProfileModelInfo,
     setBeamSize,
     setTemperatureFallback,
     setVadEnabled,
+    setEnginePrewarm,
+    setEngineIdleUnloadMinutes,
+    getEngineStatus,
     getBuildInfo,
-    getModelInfo,
     getFileModelOptions,
     getEffectiveModelInfo,
+    getAutoFileModelInfo,
     downloadModel,
     downloadPianissimoModel,
     getSupportedFormats,
@@ -34,9 +45,20 @@
     retryHotkeyRegistration,
     startRecording,
     stopAndTranscribe,
+    copyTranscriptionText,
+    saveTranscriptionText,
+    setUpdateResultPending,
+    getUpdateResultPending,
+    acknowledgeUpdateResult,
+    saveUpdateRecovery,
+    loadUpdateRecovery,
+    clearUpdateRecovery,
+    completeUpdatePreparation,
     hotkeyStatus,
     type Settings,
     type BuildInfo,
+    type EnginePrewarm,
+    type EngineStatus,
     type Language,
     type WhisperModel,
     type HotkeyStatus,
@@ -65,9 +87,20 @@
 
   let settings: Settings | null = $state(null);
   let buildInfo: BuildInfo | null = $state(null);
-  let models: WhisperModel[] = $state([]);
+  let engineStatus = $state<EngineStatus | null>(null);
+  const engineIdleChoices = [5, 10, 30, 60, 0];
+  const engineHostIdentity = $derived(
+    engineStatus?.host_version
+      ? `Engine ${engineStatus.host_version}${engineStatus.host_git_sha ? ` (${engineStatus.host_git_sha.slice(0, 7)})` : ""}`
+      : "",
+  );
   let fileModelOptions: WhisperModel[] = $state([]);
+  const pianissimoSizeMb = $derived(
+    fileModelOptions.find((model) => model.id === "pianissimo-sv")?.size_mb ?? 0,
+  );
+  // What Auto will use now (recommended if downloaded, else best downloaded) and what is recommended.
   let fileAutoModel: WhisperModel | null = $state(null);
+  let fileRecommendedModel: WhisperModel | null = $state(null);
   let fileModelError = $state("");
   let fileModelSaving = $state(false);
   type SettingsTab = "dictate" | "transcribe" | "settings";
@@ -76,6 +109,13 @@
   let downloadingName: string = $state("");
   let downloadProgress: number = $state(0);
   let profileModels: Record<string, WhisperModel> = $state({});
+  let profileModelOptions: Record<string, WhisperModel[]> = $state({});
+  // What "Recommended" resolves to per profile (Pianissimo, or KB-Whisper Medium
+  // where Pianissimo is unsupported).
+  let profileRecommended: Record<string, WhisperModel> = $state({});
+  // Swedish models the app no longer offers. A profile still on one keeps
+  // working; Settings suggests the recommended model instead of switching silently.
+  const retiredSwedishModelIds = ["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small"];
   let profileModelErrors: Record<string, string> = $state({});
   let profileModelRefresh = 0;
 
@@ -106,8 +146,6 @@
   }
 
   // Model selection state
-  let selecting: boolean = $state(false);
-  let modelError: string = $state("");
 
   let accessibilityGranted: boolean = $state(true); // assume true; checked on mount for macOS
   let accessibilityChecking: boolean = $state(false);
@@ -153,6 +191,325 @@
   let testOwnsRecording: boolean = $state(false);
   let testResult: string = $state("");
   let testError: string = $state("");
+  let testResultActionMessage: string = $state("");
+  let testResultRecoveryPending: boolean = $state(false);
+  let testResultEdited: boolean = $state(false);
+  let updatePreparing: boolean = $state(false);
+  let liveDictationRevision = 0;
+  let observedNativeDictation: string | null = null;
+  let fileComponents: Record<string, { prepareUpdateRecovery(): Promise<void> } | undefined> = $state({});
+
+  let fileRecoveryEntries = $state<UpdateRecoveryFile[]>([]);
+  let meetingRecoveryEntries = $state<UpdateRecoveryMeeting[]>([]);
+  let recoveredFileIds = $state<string[]>([]);
+  let recoveredMeetingIds = $state<string[]>([]);
+  let recoveredDictationText: string | null = $state(null);
+  let recoveredDictationActive = $state(false);
+  let recoveredDraftsNotice = $state(false);
+  let recoveryReadError: string = $state("");
+  let recoveryWriteQueue: Promise<void> = Promise.resolve();
+  let recoveryRestore: Promise<void> = Promise.resolve();
+
+  function persistRemainingRecoveredDrafts(): void {
+    const fileIds = new Set(recoveredFileIds);
+    const meetingIds = new Set(recoveredMeetingIds);
+    const remaining = createUpdateRecoveryPayload({
+      dictation: recoveredDictationActive && testResult.trim() ? { text: testResult } : null,
+      files: fileRecoveryEntries.filter((entry) => fileIds.has(entry.job_id)),
+      meetings: meetingRecoveryEntries.filter((entry) => meetingIds.has(entry.job_id)),
+    });
+    recoveryWriteQueue = recoveryWriteQueue.catch(() => undefined).then(async () => {
+      if (!remaining.dictation && remaining.files.length === 0 && remaining.meetings.length === 0) {
+        await clearUpdateRecovery();
+      } else {
+        serializeUpdateRecoveryPayload(remaining);
+        await saveUpdateRecovery(remaining);
+      }
+    });
+    void recoveryWriteQueue.catch((error) => {
+      settingsError = `Could not update recovered drafts: ${recoveryErrorText(error)}`;
+    });
+  }
+
+  function refreshRecoveredDraftsNotice(): void {
+    if (!recoveredDictationActive && recoveredFileIds.length === 0 && recoveredMeetingIds.length === 0) {
+      recoveredDraftsNotice = false;
+    }
+  }
+
+  function updateFileRecovery(entry: UpdateRecoveryFile): void {
+    const existing = fileRecoveryEntries.some((current) => current.job_id === entry.job_id);
+    fileRecoveryEntries = existing
+      ? fileRecoveryEntries.map((current) => current.job_id === entry.job_id ? entry : current)
+      : [...fileRecoveryEntries, entry];
+  }
+
+  function clearFileRecovery(jobId: string): void {
+    fileRecoveryEntries = fileRecoveryEntries.filter((entry) => entry.job_id !== jobId);
+    if (recoveredFileIds.includes(jobId)) {
+      recoveredFileIds = recoveredFileIds.filter((id) => id !== jobId);
+      refreshRecoveredDraftsNotice();
+      persistRemainingRecoveredDrafts();
+    }
+  }
+
+  function onFileRecoveryChange(entry: UpdateRecoveryFile | null, jobId?: string): void {
+    if (entry === null) {
+      if (jobId) clearFileRecovery(jobId);
+      return;
+    }
+    updateFileRecovery(entry);
+  }
+
+  function updateMeetingRecovery(entry: UpdateRecoveryMeeting | null): void {
+    if (entry === null) return;
+    const existing = meetingRecoveryEntries.some((current) => current.job_id === entry.job_id);
+    meetingRecoveryEntries = existing
+      ? meetingRecoveryEntries.map((current) => current.job_id === entry.job_id ? entry : current)
+      : [...meetingRecoveryEntries, entry];
+  }
+
+  function clearMeetingRecovery(jobId: string): void {
+    meetingRecoveryEntries = meetingRecoveryEntries.filter((entry) => entry.job_id !== jobId);
+    if (recoveredMeetingIds.includes(jobId)) {
+      recoveredMeetingIds = recoveredMeetingIds.filter((id) => id !== jobId);
+      refreshRecoveredDraftsNotice();
+      persistRemainingRecoveredDrafts();
+    }
+  }
+
+  function onMeetingRecoveryChange(entry: UpdateRecoveryMeeting | null, jobId?: string): void {
+    if (entry === null) {
+      if (jobId) clearMeetingRecovery(jobId);
+      return;
+    }
+    updateMeetingRecovery(entry);
+  }
+
+  function recoveryErrorText(error: unknown): string {
+    return typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
+  }
+
+  async function restoreUpdateRecovery(): Promise<void> {
+    const dictationRevision = liveDictationRevision;
+    const existingFileIds = new Set(fileJobs.map((job) => job.id));
+    const existingMeetingIds = new Set(savedReviewIds);
+    try {
+      const persisted = parseUpdateRecoveryPayload(await loadUpdateRecovery());
+      recoveryReadError = "";
+      if (!persisted) return;
+
+      const recoveredDictation = persisted.dictation?.text.trim() ? persisted.dictation : null;
+      if (recoveredDictation && !testResult.trim() && liveDictationRevision === dictationRevision) {
+        testResult = recoveredDictation.text;
+        testResultRecoveryPending = true;
+        testResultEdited = false;
+        recoveredDictationText = recoveredDictation.text;
+        recoveredDictationActive = true;
+      }
+
+      const filesToRestore = persisted.files.filter((entry) => !existingFileIds.has(entry.job_id));
+      if (filesToRestore.length) {
+        fileRecoveryEntries = [...fileRecoveryEntries, ...filesToRestore];
+        recoveredFileIds = [...recoveredFileIds, ...filesToRestore.map((entry) => entry.job_id)];
+        fileJobs = [
+          ...fileJobs,
+          ...filesToRestore.map((entry) => ({
+            id: entry.job_id,
+            path: entry.path,
+            diarize: false,
+            prompt: null,
+            profileId: null,
+            status: "completed" as const,
+          })),
+        ];
+      }
+
+      const meetingsToRestore = persisted.meetings.filter((entry) => !existingMeetingIds.has(entry.job_id));
+      if (meetingsToRestore.length) {
+        meetingRecoveryEntries = [...meetingRecoveryEntries, ...meetingsToRestore];
+        recoveredMeetingIds = [...recoveredMeetingIds, ...meetingsToRestore.map((entry) => entry.job_id)];
+        fileJobs = [
+          ...fileJobs,
+          ...meetingsToRestore.map((entry) => ({
+            id: entry.job_id,
+            path: entry.path,
+            diarize: false,
+            prompt: null,
+            profileId: null,
+            status: "completed" as const,
+          })),
+        ];
+        savedReviewIds = [...savedReviewIds, ...meetingsToRestore.map((entry) => entry.job_id)];
+      }
+
+      if (selectedFileId === null) {
+        selectedFileId = filesToRestore[0]?.job_id ?? meetingsToRestore[0]?.job_id ?? null;
+      }
+
+      if (recoveredDictation || filesToRestore.length || meetingsToRestore.length) {
+        recoveredDraftsNotice = true;
+      }
+    } catch (error) {
+      console.warn("Could not restore update recovery drafts", error);
+      recoveryReadError = `Update blocked: unreadable recovery drafts were retained. ${recoveryErrorText(error)}. Back up or repair update-recovery.json in Sagascript's Application Support directory before retrying.`;
+      throw error;
+    }
+  }
+
+  async function discardRecoveredDrafts(): Promise<void> {
+    try {
+      await recoveryWriteQueue.catch(() => undefined);
+      await clearUpdateRecovery();
+    } catch (error) {
+      settingsError = `Could not discard recovered drafts: ${recoveryErrorText(error)}`;
+      return;
+    }
+
+    const recoveredFileIdSet = new Set(recoveredFileIds);
+    const recoveredMeetingIdSet = new Set(recoveredMeetingIds);
+    fileJobs = fileJobs.filter((job) => !recoveredFileIdSet.has(job.id) && !recoveredMeetingIdSet.has(job.id));
+    savedReviewIds = savedReviewIds.filter((id) => !recoveredMeetingIdSet.has(id));
+    fileRecoveryEntries = fileRecoveryEntries.filter((entry) => !recoveredFileIdSet.has(entry.job_id));
+    meetingRecoveryEntries = meetingRecoveryEntries.filter((entry) => !recoveredMeetingIdSet.has(entry.job_id));
+    if (recoveredDictationActive && testResult === recoveredDictationText) {
+      testResult = "";
+      testResultRecoveryPending = false;
+      testResultEdited = false;
+    }
+    recoveredFileIds = [];
+    recoveredMeetingIds = [];
+    recoveredDictationText = null;
+    recoveredDictationActive = false;
+    recoveredDraftsNotice = false;
+    selectedFileId = fileJobs[0]?.id ?? null;
+  }
+
+  async function prepareForUpdate(nonce: string): Promise<void> {
+    try {
+      await recoveryRestore;
+      await tick();
+      await Promise.all(fileJobs.map(async (job) => {
+        const component = fileComponents[job.id];
+        if (!component) throw new Error("A transcription result is still opening. Retry the update.");
+        await component.prepareUpdateRecovery();
+      }));
+      // The updater holds the native exclusive lease here. Its last result is
+      // stable, but the result event/command response may still be in transit.
+      const lastNativeDictation = await getLastTranscription();
+      const nativeResultPending = await getUpdateResultPending("live-dictation");
+      const editedNativeResult = testResultEdited && !recoveredDictationActive
+        && observedNativeDictation === lastNativeDictation;
+      if (nativeResultPending && lastNativeDictation?.trim() && testResult.trim()
+        && testResult !== lastNativeDictation && !editedNativeResult) {
+        throw new Error("A different unsaved dictation is already open. Copy or save both results before retrying the update.");
+      }
+      await drainUpdateWork({
+        busy: () => testTranscribing || Boolean(nativeResultPending && lastNativeDictation?.trim()
+          && observedNativeDictation !== lastNativeDictation),
+        settle: tick,
+      });
+      await tick();
+      await recoveryWriteQueue.catch(() => undefined);
+      const payload = createUpdateRecoveryPayload({
+        dictation: testResultRecoveryPending && (nativeResultPending || recoveredDictationActive || testResultEdited)
+          && testResult.trim() ? { text: testResult } : null,
+        files: fileRecoveryEntries,
+        meetings: meetingRecoveryEntries,
+      });
+      // A result event can arrive before recovery is hydrated (or replace an
+      // older recovered draft). Never overwrite a distinct persisted result.
+      const previous = parseUpdateRecoveryPayload(await loadUpdateRecovery());
+      const editedRecoveredDraft = recoveredDictationActive
+        && previous?.dictation?.text === recoveredDictationText;
+      if (previous?.dictation?.text.trim() && previous.dictation.text !== payload.dictation?.text
+        && !editedRecoveredDraft) {
+        throw new Error("A different unsaved dictation is already in update recovery. Copy or save both results before retrying the update.");
+      }
+      // Validate the exact serialized size before handing the payload to Rust.
+      serializeUpdateRecoveryPayload(payload);
+      await saveUpdateRecovery(payload);
+      await completeUpdatePreparation(nonce, null);
+    } catch (error) {
+      const message = recoveryErrorText(error);
+      updatePreparing = false;
+      try {
+        await completeUpdatePreparation(nonce, message);
+      } catch (ackError) {
+        console.warn("Could not acknowledge failed update preparation", ackError);
+      }
+    }
+  }
+
+  async function copyTestResult(): Promise<void> {
+    if (!testResult.trim()) return;
+    try {
+      const text = testResult;
+      await copyTranscriptionText(text);
+      const nextResultShown = await markTestResultDelivered(text);
+      testResultActionMessage = nextResultShown
+        ? "Copied result. Another unsaved dictation is now shown."
+        : "Copied to clipboard.";
+    } catch (error) {
+      testResultActionMessage = typeof error === "string" ? error : String(error);
+    }
+  }
+
+  async function saveTestResult(): Promise<void> {
+    if (!testResult.trim()) return;
+    try {
+      const text = testResult;
+      const saved = await saveTranscriptionText(text, "dictation.txt", null);
+      if (saved) {
+        const nextResultShown = await markTestResultDelivered(text);
+        testResultActionMessage = nextResultShown
+          ? "Saved result. Another unsaved dictation is now shown."
+          : "Saved.";
+      }
+      if (!saved) testResultActionMessage = "Save cancelled — nothing was written.";
+    } catch (error) {
+      testResultActionMessage = typeof error === "string" ? error : String(error);
+    }
+  }
+
+  async function markTestResultDelivered(text: string): Promise<boolean> {
+    const nativePending = await getUpdateResultPending("live-dictation");
+    const nativeText = nativePending ? await getLastTranscription() : null;
+    const matchesNative = nativePending && (nativeText === text
+      || (testResultEdited && !recoveredDictationActive && observedNativeDictation === nativeText));
+    const deliveredNative = matchesNative && nativeText !== null
+      ? await acknowledgeUpdateResult(nativeText) : false;
+    if (!recoveredDictationActive) await clearDeliveredRecoveryDraft(text);
+    if (testResult !== text) return false; // a newer result arrived during Copy/Save
+    const wasRecovered = recoveredDictationActive;
+    testResultRecoveryPending = false;
+    testResultEdited = false;
+    recoveredDictationActive = false;
+    refreshRecoveredDraftsNotice();
+    if (wasRecovered) persistRemainingRecoveredDrafts();
+    const currentNative = nativePending && !deliveredNative && await getUpdateResultPending("live-dictation")
+      ? await getLastTranscription() : null;
+    if (currentNative?.trim()) {
+      // The copied recovered draft was not the latest native dictation. Show
+      // that still-unsaved result next, keeping its update guard intact.
+      testResult = currentNative;
+      testResultRecoveryPending = true;
+      observedNativeDictation = currentNative;
+      return true;
+    }
+    return false;
+  }
+
+  async function clearDeliveredRecoveryDraft(text: string): Promise<void> {
+    recoveryWriteQueue = recoveryWriteQueue.catch(() => undefined).then(async () => {
+      const previous = parseUpdateRecoveryPayload(await loadUpdateRecovery());
+      if (previous?.dictation?.text !== text) return;
+      const remaining = { ...previous, dictation: null };
+      if (remaining.files.length || remaining.meetings.length) await saveUpdateRecovery(remaining);
+      else await clearUpdateRecovery();
+    });
+    await recoveryWriteQueue;
+  }
 
   onMount(() => {
     let disposed = false;
@@ -166,12 +523,18 @@
     }).then(remember);
     const resultListener = listen<string>("transcription-result", (event) => {
       revision++;
+      liveDictationRevision++;
+      testResultRecoveryPending = true;
+      testResultEdited = false;
+      recoveredDictationActive = false;
+      observedNativeDictation = event.payload;
       testResult = event.payload;
       testError = "";
     }).then(remember);
     const stateListener = listen<string>("state-changed", (event) => {
       if (event.payload === "recording") {
         revision++;
+        liveDictationRevision++;
         testError = "";
       }
     }).then(remember);
@@ -179,10 +542,21 @@
     // Recover the persisted-in-memory result without racing newer events.
     Promise.all([errorListener, resultListener, stateListener]).then(async () => {
       const initialRevision = revision;
+      await recoveryRestore.catch(() => undefined);
       const [error, text] = await Promise.all([getLastError(), getLastTranscription()]);
       if (!disposed && revision === initialRevision) {
+        // Native delivery has settled even if a different recovered draft is
+        // already visible in the editor. Otherwise updater preparation waits
+        // forever for an event that preceded listener registration.
+        observedNativeDictation = text;
         testError = error ?? "";
-        testResult = text ?? "";
+        if (text && !testResult.trim()) {
+          observedNativeDictation = text;
+          liveDictationRevision++;
+          testResultRecoveryPending = true;
+          recoveredDictationActive = false;
+          testResult = text;
+        }
       }
     }).catch((error) => {
       console.warn("Could not restore the last dictation result", error);
@@ -220,6 +594,7 @@
     || Object.values(fileBusy).some(Boolean));
 
   $effect(() => {
+    if (updatePreparing) return;
     const next = nextQueuedFile(fileJobs, Object.values(fileBusy).some(Boolean));
     if (next) {
       fileJobs = updateFileJob(fileJobs, next.id, "running");
@@ -227,6 +602,7 @@
   });
 
   function handleFilesTranscription(paths: string[], openReview = false): void {
+    if (updatePreparing) return;
     const jobs = createFileJobs(paths, {
       diarize: transcribeDiarize,
       prompt: transcribePrompt.trim() || null,
@@ -297,12 +673,8 @@
     document.getElementById(`file-tab-${selectedFileId}`)?.focus();
   }
 
-  // The global dictionary is retained as a decoder hint source. Explicit
-  // language profiles are the only selectable sources for deterministic
-  // glossary replacements.
-  // Empty string is the UI-only global sentinel; profile IDs may legally be
-  // "global", so that name cannot identify the global scope.
-  let glossaryScopeId: string = $state("");
+  // Every editable dictionary belongs to a named dictation profile.
+  let glossaryScopeId: string = $state("default");
   let glossaryDraft: string = $state("");
   let glossaryDraftInitialized = false;
   let glossaryScopeGeneration = $state(0);
@@ -354,7 +726,7 @@
   });
 
   function explicitProfiles(source: Settings | null = settings): HotkeyProfile[] {
-    return source?.hotkey_profiles.filter((profile) => profile.language !== "auto") ?? [];
+    return source?.hotkey_profiles ?? [];
   }
 
   function profileForId(profileId: string | null, source: Settings | null = settings): HotkeyProfile | null {
@@ -363,16 +735,14 @@
   }
 
   function glossarySourceForScope(scopeId: string, source: Settings | null = settings): string {
-    if (!source || scopeId === "") return source?.initial_prompt ?? "";
-    return source.profile_glossaries[scopeId] ?? "";
+    return source?.profile_glossaries[scopeId] ?? "";
   }
 
   function isValidGlossaryScope(scopeId: string, source: Settings | null = settings): boolean {
-    return scopeId === "" || profileForId(scopeId, source) !== null;
+    return profileForId(scopeId, source) !== null;
   }
 
   function glossaryScopeLabel(scopeId: string, source: Settings | null = settings): string {
-    if (scopeId === "") return "Global hints";
     return profileForId(scopeId, source)?.name ?? scopeId;
   }
 
@@ -404,20 +774,32 @@
   }
 
   function selectedTranscribeProfile(): HotkeyProfile | null {
-    return profileForId(transcribeProfileId);
+    return profileForId(transcribeProfileId)
+      ?? settings?.hotkey_profiles.find((profile) => profile.id === "default")
+      ?? settings?.hotkey_profiles[0]
+      ?? null;
   }
 
   function transcribeLanguage(): Language {
-    return selectedTranscribeProfile()?.language ?? settings?.language ?? "auto";
+    return selectedTranscribeProfile()?.language ?? "auto";
   }
 
   $effect(() => {
     if (!settings) return;
     const language = transcribeLanguage();
     let stale = false;
-    void Promise.all([getFileModelOptions(language), getEffectiveModelInfo(language)])
-      .then(([options, automatic]) => {
-        if (!stale) { fileModelOptions = Array.isArray(options) ? options : []; fileAutoModel = automatic; }
+    const selected = settings.file_transcription_model;
+    void Promise.all([
+      getFileModelOptions(language, selected && selected !== "auto" ? selected : undefined),
+      getAutoFileModelInfo(language),
+      getEffectiveModelInfo(language),
+    ])
+      .then(([options, automatic, recommended]) => {
+        if (!stale) {
+          fileModelOptions = Array.isArray(options) ? options : [];
+          fileAutoModel = automatic;
+          fileRecommendedModel = recommended;
+        }
       })
       .catch((error) => {
         if (!stale) fileModelError = typeof error === "string" ? error : String(error);
@@ -440,17 +822,28 @@
   }
 
   async function downloadSelectedFileModel(): Promise<void> {
-    const id = settings?.file_transcription_model;
-    if (!id || id === "auto" || downloading !== null) return;
+    const preference = settings?.file_transcription_model;
+    // "Auto" downloads the recommended model (it may currently use an older downloaded one).
+    const id = preference === "auto" ? fileRecommendedModel?.id : preference;
+    if (!id || downloading !== null) return;
     downloading = id;
-    downloadingName = fileModelOptions.find((model) => model.id === id)?.display_name ?? id;
+    downloadingName = fileModelOptions.find((model) => model.id === id)?.display_name
+      ?? (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id);
     downloadProgress = 0;
     fileModelError = "";
     try {
       if (id === "pianissimo-sv") await downloadPianissimoModel();
       else await downloadModel(id);
-      const options = await getFileModelOptions(transcribeLanguage());
+      const options = await getFileModelOptions(
+        transcribeLanguage(),
+        id !== "auto" ? id : undefined,
+      );
       fileModelOptions = Array.isArray(options) ? options : [];
+      const language = transcribeLanguage();
+      [fileAutoModel, fileRecommendedModel] = await Promise.all([
+        getAutoFileModelInfo(language),
+        getEffectiveModelInfo(language),
+      ]);
     } catch (error) {
       fileModelError = typeof error === "string" ? error : String(error);
     } finally { downloading = null; downloadProgress = 0; }
@@ -473,8 +866,7 @@
     }
     lastStoredGlossarySources[currentScope] = currentStored;
     if (!isValidGlossaryScope(currentScope, currentSettings)) {
-      const removedProfileHasDraft = currentScope !== ""
-        && (
+       const removedProfileHasDraft = (
           glossaryEditBaseline?.scopeId === currentScope
           || (glossaryDraftInitialized && glossaryDraft !== (previousStored ?? currentStored))
         );
@@ -485,17 +877,20 @@
           glossaryConflictScopeId === currentScope && settingsError.startsWith(dictionaryConflictPrefix),
         );
       }
-      glossaryScopeGeneration += 1;
-      glossaryScopeId = "";
-      glossaryDraft = currentSettings.initial_prompt;
+       glossaryScopeGeneration += 1;
+       glossaryScopeId = currentSettings.hotkey_profiles[0]?.id ?? "default";
+       glossaryDraft = glossarySourceForScope(glossaryScopeId, currentSettings);
       glossaryDraftGeneration += 1;
       glossaryEditBaseline = null;
       glossaryConflictScopeId = null;
     }
-    if (currentTranscribeProfile && !profileForId(currentTranscribeProfile, currentSettings)) {
-      transcribeProfileId = null;
+    if (!currentTranscribeProfile || !profileForId(currentTranscribeProfile, currentSettings)) {
+      transcribeProfileId = currentSettings.hotkey_profiles.find((profile) => profile.id === "default")?.id
+        ?? currentSettings.hotkey_profiles[0]?.id ?? null;
     }
   });
+
+  let dictationModelSaving = $state(false);
 
   async function refreshProfileModels(profiles: HotkeyProfile[]) {
     const generation = ++profileModelRefresh;
@@ -503,11 +898,22 @@
       const entries = await Promise.all(
         profiles.map(async (profile) => [
           profile.id,
+          profile.id === draftProfileId
+            ? await getEffectiveModelInfo(profile.language)
+            : await getProfileModelInfo(profile.id),
+          await getFileModelOptions(
+            profile.language,
+            settings?.profile_models?.[profile.id] && settings.profile_models[profile.id] !== "auto"
+              ? settings.profile_models[profile.id]
+              : undefined,
+          ),
           await getEffectiveModelInfo(profile.language),
         ] as const),
       );
       if (generation === profileModelRefresh) {
-        profileModels = Object.fromEntries(entries);
+        profileModels = Object.fromEntries(entries.map(([id, model]) => [id, model]));
+        profileModelOptions = Object.fromEntries(entries.map(([id, , options]) => [id, options]));
+        profileRecommended = Object.fromEntries(entries.map(([id, , , recommended]) => [id, recommended]));
       }
     } catch (e: any) {
       if (generation === profileModelRefresh) {
@@ -517,6 +923,32 @@
   }
 
   onMount(() => {
+    let disposed = false;
+    let recoveryStop: (() => void) | null = null;
+    let recoveryAbortStop: (() => void) | null = null;
+    const recoveryListener = listen<unknown>("update-preparing", (event) => {
+      const payload = event.payload;
+      const nonce = typeof payload === "string"
+        ? payload
+        : payload && typeof payload === "object" && "nonce" in payload && typeof payload.nonce === "string"
+          ? payload.nonce
+          : null;
+      if (nonce && !disposed) {
+        updatePreparing = true;
+        void prepareForUpdate(nonce);
+      }
+    });
+    recoveryListener.then((stop) => {
+      if (disposed) stop();
+      else recoveryStop = stop;
+    }).catch((error) => console.warn("Could not listen for update preparation", error));
+    listen("update-aborted", () => { updatePreparing = false; }).then((stop) => {
+      if (disposed) stop();
+      else recoveryAbortStop = stop;
+    }).catch((error) => console.warn("Could not listen for update abort", error));
+    recoveryRestore = restoreUpdateRecovery();
+    void recoveryRestore.catch(() => undefined);
+
     // Register listeners + drag-drop FIRST — they don't depend on the data
     // fetched below, so a rejected invoke in the fetch sequence must never
     // prevent them from wiring up (e.g. a stuck-at-0% download).
@@ -525,9 +957,9 @@
     });
 
     listen("model-ready", async () => {
-      downloading = null;
-      downloadProgress = 0;
-      models = await getModelInfo();
+      // The event can arrive before the download command settles. Its caller
+      // owns the busy flag through its finally block so a second operation
+      // cannot start during the remaining selection or refresh work.
       if (settings) await refreshProfileModels(settings.hotkey_profiles);
     });
 
@@ -548,7 +980,6 @@
       const nextState = event.payload;
       if (nextState === "settings_reloaded") {
         settings = await getSettings();
-        models = await getModelInfo();
         await refreshProfileModels(settings.hotkey_profiles);
         return;
       }
@@ -577,7 +1008,7 @@
       } else if (event.payload.type === "drop") {
         dragOver = false;
         const paths = event.payload.paths;
-        if (paths.length > 0) {
+        if (paths.length > 0 && !updatePreparing) {
           requestTabChange("transcribe", () => handleFilesTranscription(paths));
         }
       } else {
@@ -596,6 +1027,10 @@
         // settings bootstrap so it remains visible when another query fails.
         console.warn("Failed to load build information", error);
       }
+      getEngineStatus().then((status) => { engineStatus = status; }).catch((error) => {
+        // Diagnostic and optional: Pianissimo controls stay hidden without it.
+        console.warn("Failed to load engine status", error);
+      });
       try {
         settings = await getSettings();
         await refreshProfileModels(settings.hotkey_profiles);
@@ -603,7 +1038,6 @@
         if (platform === "macos") {
           accessibilityGranted = await checkAccessibilityPermission();
         }
-        models = await getModelInfo();
         supportedFormats = await getSupportedFormats();
         const status = await hotkeyStatus();
         hotkeyStatusOk = status.ok;
@@ -627,6 +1061,11 @@
         initError = typeof e === "string" ? e : e?.message || "Failed to load settings.";
       }
     })();
+    return () => {
+      disposed = true;
+      recoveryStop?.();
+      recoveryAbortStop?.();
+    };
   });
 
   /**
@@ -677,7 +1116,6 @@
         if (source.trim()) blockedLanguageChange = { language: value, source };
         else settingsError = "The blocking dictionary was cleared elsewhere. Select the language again to retry.";
       }
-      if (ok) models = await getModelInfo();
     } catch (error: any) {
       settingsError += `${settingsError ? " " : ""}Could not refresh language settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
     } finally {
@@ -715,7 +1153,6 @@
     } finally {
       try {
         settings = await getSettings();
-        models = await getModelInfo();
         await refreshProfileModels(settings.hotkey_profiles);
       } catch (error: any) {
         settingsError += `${settingsError ? " " : ""}Could not refresh settings; reopen Settings to confirm the saved language: ${typeof error === "string" ? error : error?.message || "Unknown error"}`;
@@ -852,9 +1289,7 @@
       glossarySaving = true;
       settingsError = "";
       try {
-        const saved = await applySetting(() => scopeId === ""
-          ? setInitialPrompt(value, expectedSource)
-          : setProfileGlossary(scopeId, value, expectedSource), saveError, false);
+        const saved = await applySetting(() => setProfileGlossary(scopeId, value, expectedSource), saveError, false);
         const conflict = saveError.value.startsWith(dictionaryConflictPrefix);
         let requestIsCurrent = isCurrentGlossaryRequest(request);
         if (conflict) {
@@ -1059,34 +1494,20 @@
     await applySetting(() => setTemperatureFallback(next));
   }
 
+  async function onEnginePrewarmChange(e: Event) {
+    const value = (e.target as HTMLSelectElement).value as EnginePrewarm;
+    await applySetting(() => setEnginePrewarm(value));
+  }
+
+  async function onEngineIdleChange(e: Event) {
+    const value = Number((e.target as HTMLSelectElement).value);
+    await applySetting(() => setEngineIdleUnloadMinutes(value));
+  }
+
   async function onVadToggle() {
     if (!settings) return;
     const next = !settings.vad_enabled;
     await applySetting(() => setVadEnabled(next));
-  }
-
-  async function selectModel(model: WhisperModel) {
-    if (selecting) return;
-    selecting = true;
-    modelError = "";
-    try {
-      // The backend verifies Ready models and replaces only artifacts whose
-      // bytes provably fail the immutable integrity manifest.
-      downloading = model.id;
-      downloadingName = model.display_name;
-      downloadProgress = 0;
-      await downloadModel(model.id);
-      // model_ready event will refresh the list
-      await setWhisperModel(model.id);
-      settings = await getSettings();
-      models = await getModelInfo();
-    } catch (e: any) {
-      modelError = typeof e === "string" ? e : e?.message || "Model selection failed.";
-    } finally {
-      downloading = null;
-      downloadProgress = 0;
-      selecting = false;
-    }
   }
 
   async function downloadProfileModel(profile: HotkeyProfile) {
@@ -1097,9 +1518,9 @@
     downloadProgress = 0;
     profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
     try {
-      await downloadModel(model.id);
+      if (model.id === "pianissimo-sv") await downloadPianissimoModel();
+      else await downloadModel(model.id);
       await refreshProfileModels(settings?.hotkey_profiles ?? []);
-      models = await getModelInfo();
     } catch (e: any) {
       profileModelErrors = {
         ...profileModelErrors,
@@ -1111,7 +1532,64 @@
     }
   }
 
+  /** The recommended model to suggest for a Swedish profile still on a retired model. */
+  function retiredModelSuggestion(profile: HotkeyProfile): WhisperModel | null {
+    const current = profileModels[profile.id];
+    const recommended = profileRecommended[profile.id];
+    if (profile.language !== "sv" || !current || !recommended) return null;
+    if (!retiredSwedishModelIds.includes(current.id) || recommended.id === current.id) return null;
+    return recommended;
+  }
+
+  async function switchProfileToRecommended(profile: HotkeyProfile) {
+    const target = retiredModelSuggestion(profile);
+    if (!target || downloading !== null || dictationModelSaving) return;
+    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
+    dictationModelSaving = true;
+    try {
+      // Download first: the old model keeps dictating until the new one is ready.
+      if (!target.downloaded) {
+        downloading = target.id;
+        downloadingName = target.display_name;
+        downloadProgress = 0;
+        if (target.id === "pianissimo-sv") await downloadPianissimoModel();
+        else await downloadModel(target.id);
+      }
+      await setProfileModel(profile.id, target.id);
+      settings = await getSettings();
+      await refreshProfileModels(settings.hotkey_profiles);
+    } catch (e: any) {
+      profileModelErrors = {
+        ...profileModelErrors,
+        [profile.id]: typeof e === "string" ? e : e?.message || `Could not switch to ${target.display_name}.`,
+      };
+    } finally {
+      downloading = null;
+      downloadProgress = 0;
+      dictationModelSaving = false;
+    }
+  }
+
+  async function changeProfileModel(profile: HotkeyProfile, event: Event) {
+    if (!settings || dictationModelSaving) return;
+    const select = event.target as HTMLSelectElement;
+    const previous = settings.profile_models[profile.id] ?? "auto";
+    dictationModelSaving = true;
+    profileModelErrors = { ...profileModelErrors, [profile.id]: "" };
+    try {
+      await setProfileModel(profile.id, select.value);
+      settings = await getSettings();
+      await refreshProfileModels(settings.hotkey_profiles);
+    } catch (error: any) {
+      select.value = previous;
+      profileModelErrors = { ...profileModelErrors, [profile.id]: typeof error === "string" ? error : error?.message || "Could not change profile model." };
+    } finally {
+      dictationModelSaving = false;
+    }
+  }
+
   async function onTestRecord() {
+    if (updatePreparing || dictationModelSaving || downloading !== null) return;
     const action = dictateButtonAction(backendDictationState, testOwnsRecording);
     if (action === "blocked") return;
 
@@ -1124,6 +1602,8 @@
       testError = "";
       try {
         const text = await stopAndTranscribe();
+        observedNativeDictation = text;
+        testResultRecoveryPending = true;
         testResult = testResult ? testResult + " " + text : text;
       } catch (e: any) {
         testError = typeof e === "string" ? e : e.message || "Transcription failed";
@@ -1149,10 +1629,11 @@
 
   function onTranscribeProfileChange(e: Event) {
     const nextProfileId = (e.target as HTMLSelectElement).value;
-    transcribeProfileId = profileForId(nextProfileId)?.id ?? null;
+    transcribeProfileId = profileForId(nextProfileId)?.id ?? selectedTranscribeProfile()?.id ?? null;
   }
 
   async function onPickFile() {
+    if (updatePreparing) return;
     const exts = supportedFormats.length > 0 ? supportedFormats : ["wav", "mp3", "m4a", "mp4", "ogg", "flac"];
     const file = await open({
       multiple: true,
@@ -1163,7 +1644,7 @@
         },
       ],
     });
-    if (file) {
+    if (file && !updatePreparing) {
       handleFilesTranscription(file);
     }
   }
@@ -1368,7 +1849,7 @@
     <h1 class="window-title">Sagascript</h1>
     <div class="build-info" aria-label="Build information">
       {#if buildInfo}
-        Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}
+        Version {buildInfo.version} · Build {buildInfo.git_hash} · {buildInfo.build_date}{engineHostIdentity ? ` · ${engineHostIdentity}` : ""}
       {:else}
         Version information unavailable
       {/if}
@@ -1392,8 +1873,19 @@
       {#if initError}
         <div class="transcribe-error">{initError}</div>
       {/if}
+      {#if recoveryReadError}
+        <div class="transcribe-error" role="alert">{recoveryReadError}</div>
+      {/if}
       {#if settingsError}
         <div class="transcribe-error" role={pendingGlossaryNavigation ? undefined : "alert"}>{settingsError}</div>
+      {/if}
+      {#if recoveredDraftsNotice}
+        <section class="recovery-notice" role="status" aria-label="Recovered drafts">
+          <strong>Recovered drafts</strong>
+          <span>Unsaved dictation and transcription results were restored after the update.</span>
+          <button class="secondary" type="button" disabled={updatePreparing}
+            onclick={() => void discardRecoveredDrafts()}>Discard recovered drafts</button>
+        </section>
       {/if}
       <p class="queue-summary" class:queue-empty={fileJobs.length === 0} role="status" aria-label="File transcription status" aria-atomic="true">
         {#if fileJobs.length}
@@ -1418,8 +1910,8 @@
       {#if activeTab === "dictate"}
         <div class="field profile-field">
           <div class="profile-heading">
-            <span class="field-label">Dictation shortcuts</span>
-            <button class="link-btn" onclick={addProfile}>+ Add language</button>
+            <span class="field-label">Dictation profiles · shortcut, language, model</span>
+            <button class="link-btn" onclick={addProfile}>+ Add profile</button>
           </div>
           {#each settings.hotkey_profiles as profile (profile.id)}
             <div class="profile-card">
@@ -1443,6 +1935,20 @@
                   <option value="auto">Auto-detect</option>
                 </select>
               </div>
+              <label class="profile-model-field">
+                Speech model for {profile.name}
+                <select
+                  aria-label={`Model for ${profile.name}`}
+                  value={settings.profile_models[profile.id] ?? "auto"}
+                  onchange={(event) => changeProfileModel(profile, event)}
+                  disabled={profile.id === draftProfileId || dictationModelSaving || backendDictationState !== "idle"}
+                >
+                  <option value="auto">Recommended for {languageLabel(profile.language)}</option>
+                  {#each profileModelOptions[profile.id] ?? [] as option (option.id)}
+                    <option value={option.id}>{option.display_name}</option>
+                  {/each}
+                </select>
+              </label>
               <div class="shortcut-grid">
                 {#each shortcutControls as shortcutControl}
                   <div class="shortcut-control">
@@ -1481,8 +1987,8 @@
                 <div class="profile-engine" class:missing={!profileModels[profile.id].downloaded}>
                   <span>
                     {profileModels[profile.id].downloaded
-                      ? "Speech engine ready"
-                      : `Speech engine required · ${profileModels[profile.id].size_mb} MB`}
+                      ? `${profileModels[profile.id].display_name} · Ready`
+                      : `${profileModels[profile.id].display_name} required${profileModels[profile.id].size_mb > 0 ? ` · ${profileModels[profile.id].size_mb} MB` : ""}`}
                   </span>
                   {#if !profileModels[profile.id].downloaded}
                     <button
@@ -1496,6 +2002,21 @@
                     </button>
                   {/if}
                 </div>
+                {#if retiredModelSuggestion(profile)}
+                  {@const suggested = retiredModelSuggestion(profile)!}
+                  <div class="profile-engine">
+                    <span>{suggested.display_name} is faster and more accurate for Swedish.</span>
+                    <button
+                      class="link-btn profile-engine-action"
+                      onclick={() => switchProfileToRecommended(profile)}
+                      disabled={downloading !== null || dictationModelSaving}
+                    >
+                      {downloading === suggested.id
+                        ? `Downloading ${Math.round(downloadProgress)}%`
+                        : `Switch to ${suggested.display_name}${suggested.downloaded || suggested.size_mb <= 0 ? "" : ` (download ${suggested.size_mb} MB)`}`}
+                    </button>
+                  </div>
+                {/if}
                 {#if profileModelErrors[profile.id]}
                   <div class="hotkey-error">{profileModelErrors[profile.id]}</div>
                 {/if}
@@ -1539,7 +2060,7 @@
             class:recording={testRecording}
             class:transcribing={testTranscribing}
             onclick={onTestRecord}
-            disabled={dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" || downloading !== null}
+            disabled={updatePreparing || dictateButtonAction(backendDictationState, testOwnsRecording) === "blocked" || downloading !== null || dictationModelSaving}
           >
             {#if testTranscribing}
               <div class="spinner small"></div>
@@ -1560,8 +2081,17 @@
           <textarea
             class="test-result"
             bind:value={testResult}
+            oninput={() => { testResultRecoveryPending = true; testResultEdited = true; }}
+            disabled={updatePreparing}
             placeholder="Click here and use your hotkey, or press the button above"
           ></textarea>
+          {#if testResult.trim()}
+            <div class="result-actions">
+              <button class="secondary" onclick={() => void copyTestResult()} disabled={updatePreparing}>Copy result</button>
+              <button class="secondary" onclick={() => void saveTestResult()} disabled={updatePreparing}>Save result…</button>
+              {#if testResultActionMessage}<span role="status">{testResultActionMessage}</span>{/if}
+            </div>
+          {/if}
         </div>
 
       {/if}
@@ -1576,8 +2106,7 @@
         </button>
           <div class="field profile-field">
             <label for="transcribe-profile">Profile (optional)</label>
-            <select id="transcribe-profile" value={transcribeProfileId ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
-              <option value="">No profile (use selected language)</option>
+            <select id="transcribe-profile" value={selectedTranscribeProfile()?.id ?? ""} onchange={onTranscribeProfileChange} disabled={transcribing}>
               {#each explicitProfiles() as profile (profile.id)}
                 <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
               {/each}
@@ -1591,7 +2120,7 @@
             <select id="file-model" value={settings.file_transcription_model}
               onchange={(event) => void onFileModelChange(event)}
               disabled={transcribing || fileModelSaving || downloading !== null}>
-              <option value="auto">Auto — current dictation model ({fileAutoModel?.display_name ?? "loading…"})</option>
+              <option value="auto">Auto — {fileAutoModel?.display_name ?? "loading…"}{fileAutoModel && fileRecommendedModel && fileAutoModel.id !== fileRecommendedModel.id ? " (downloaded)" : " (recommended)"}</option>
               {#if settings.file_transcription_model !== "auto" && !fileModelOptions.some((model) => model.id === settings?.file_transcription_model)}
                 <option value={settings.file_transcription_model}>Current choice is incompatible with {languageLabel(transcribeLanguage())}</option>
               {/if}
@@ -1602,15 +2131,19 @@
             <div class="hotkey-hint">Effective model: {settings.file_transcription_model === "auto"
               ? fileAutoModel?.display_name ?? "loading…"
               : fileModelOptions.find((model) => model.id === settings?.file_transcription_model)?.display_name ?? "incompatible with this language"}.
+              {#if settings.file_transcription_model === "auto" && fileAutoModel && fileRecommendedModel && fileAutoModel.id !== fileRecommendedModel.id}
+                {fileRecommendedModel.display_name} is recommended{fileRecommendedModel.size_mb > 0 ? ` (${fileRecommendedModel.size_mb} MB download)` : ""}; Auto keeps using the model you already have.
+              {/if}
               This choice affects files only; dictation shortcuts keep their own model.</div>
-            {#if settings.file_transcription_model !== "auto" && fileModelOptions.some((model) => model.id === settings?.file_transcription_model && !model.downloaded)}
+            {#if (settings.file_transcription_model !== "auto" && fileModelOptions.some((model) => model.id === settings?.file_transcription_model && !model.downloaded))
+              || (settings.file_transcription_model === "auto" && fileRecommendedModel && !fileRecommendedModel.downloaded)}
               <button class="secondary" onclick={() => void downloadSelectedFileModel()}
                 disabled={downloading !== null || transcribing}>
-                {downloading === settings.file_transcription_model ? `Downloading ${downloadingName}… ${downloadProgress}%` : "Download selected model"}
+                {downloading !== null ? `Downloading ${downloadingName}… ${downloadProgress}%` : settings.file_transcription_model === "auto" && fileRecommendedModel ? `Download ${fileRecommendedModel.display_name}` : "Download selected model"}
               </button>
             {/if}
             {#if settings.file_transcription_model === "pianissimo-sv"}
-              <div class="hotkey-hint">The macOS 13+ app includes Pianissimo's local runtime. Download the corrected 714 MB Q8 model once. Peak memory was about 0.9 GB in our test.</div>
+              <div class="hotkey-hint">Requires macOS 14 or later on Apple Silicon. Runs locally on the Neural Engine{pianissimoSizeMb > 0 ? `; one-time download of about ${pianissimoSizeMb} MB` : "; downloaded once"}.</div>
             {/if}
             {#if fileModelError}<div class="transcribe-error" role="alert">{fileModelError}</div>{/if}
           </div>
@@ -1645,7 +2178,7 @@
         >
           <div class="drop-zone-icon">&#x1F4C1;</div>
           <div class="drop-zone-text">Drop audio or video files here</div>
-          <button class="primary open-file-btn" onclick={onPickFile}>Open Files...</button>
+          <button class="primary open-file-btn" onclick={onPickFile} disabled={updatePreparing}>Open Files...</button>
           {#if recentTranscriptions.length}
             <div class="rerun-controls">
               <button class="secondary rerun-highlight" onclick={retryLastTranscription}
@@ -1657,7 +2190,7 @@
               </select>
             </div>
           {/if}
-          <button class="secondary" onclick={() => handleFilesTranscription(["Saved review"], true)} disabled={transcribing}>
+          <button class="secondary" onclick={() => handleFilesTranscription(["Saved review"], true)} disabled={transcribing || updatePreparing}>
             Open saved meeting...
           </button>
         </div>
@@ -1683,13 +2216,18 @@
         {/if}
         {#each fileJobs as job (job.id)}
           <div id={`file-panel-${job.id}`} role="tabpanel" aria-labelledby={`file-tab-${job.id}`}
+            inert={updatePreparing}
             tabindex="0" hidden={selectedFileId !== job.id}>
-            <FileTranscription {job}
-              otherBusy={fileJobs.some(other => other.id !== job.id && other.status === "running")
+            <FileTranscription {job} bind:this={fileComponents[job.id]}
+              otherBusy={updatePreparing || fileJobs.some(other => other.id !== job.id && other.status === "running")
                 || Object.entries(fileBusy).some(([id, busy]) => id !== job.id && busy)}
               openReview={savedReviewIds.includes(job.id)} onComplete={completeFile} onBusyChange={updateFileBusy}
               onMissingFile={forgetMissingFile}
               onAttentionChange={updateFileAttention}
+              initialRecoveryFile={fileRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
+              initialRecoveryMeeting={meetingRecoveryEntries.find((entry) => entry.job_id === job.id) ?? null}
+              onFileRecoveryChange={(entry) => onFileRecoveryChange(entry, job.id)}
+              onMeetingRecoveryChange={(entry) => onMeetingRecoveryChange(entry, job.id)}
               active={activeTab === "transcribe" && selectedFileId === job.id} />
           </div>
         {/each}
@@ -1697,7 +2235,8 @@
 
       {#if activeTab === "settings"}
         <div class="field">
-          <label for="language">Language</label>
+          <label for="language">Default profile language</label>
+          <div class="hotkey-hint">This edits the default profile in Dictate. Other profiles keep their own language and model.</div>
           <select id="language" bind:this={languageSelectEl} value={settings.language} onchange={onLanguageChange} disabled={languageSaving || glossarySaving}>
             <option value="en">English</option>
             <option value="sv">Swedish</option>
@@ -1743,7 +2282,6 @@
             {/if}
           </div>
           <select id="dictionary-scope" value={glossaryScopeId} onchange={onGlossaryScopeChange} disabled={glossarySaving || languageSaving}>
-            <option value="">Global hints</option>
             {#each explicitProfiles() as profile (profile.id)}
               <option value={profile.id}>{profile.name} · {languageLabel(profile.language)}</option>
             {/each}
@@ -1771,15 +2309,9 @@
               disabled={!glossaryHasUnsavedChanges() || glossarySaving || languageSaving}
             >Discard changes</button>
           </div>
-          {#if glossaryScopeId === ""}
-            <div class="hotkey-hint glossary-migration">
-              Global entries are hint-only and remain stored. To enable deterministic alias replacements, copy an entry into the explicit-language profile that should use it.
-            </div>
-          {:else}
-            <div class="hotkey-hint glossary-migration">
-              This explicit-language profile supplies deterministic aliases for its language. Save changes explicitly; switching scope never moves entries to another dictionary.
-            </div>
-          {/if}
+          <div class="hotkey-hint glossary-migration">
+            This profile owns its dictionary. Save changes explicitly; switching profiles never moves entries to another dictionary.
+          </div>
           {#if glossaryConflictScopeId === glossaryScopeId && settingsError.startsWith(dictionaryConflictPrefix)}
             <div class="hotkey-hint glossary-migration">
               This dictionary changed elsewhere. Your draft is preserved; copy it if needed, then switch scopes and reselect this scope to reload the saved value. If it still shows the old text, close and reopen Settings.
@@ -1819,50 +2351,6 @@
               Change these controls only when you have a specific quality or performance need.
             </p>
 
-            <div class="model-section-label">
-              Manual model choice · {languageLabel(settings.language)}
-            </div>
-
-            <div class="model-picker">
-              {#each models as model}
-                <button
-                  class="model-card"
-                  class:active={model.active}
-                  class:downloading={downloading === model.id}
-                  onclick={() => selectModel(model)}
-                  disabled={downloading !== null || selecting}
-                >
-                  <div class="model-card-header">
-                    <span class="model-card-name">{model.display_name}</span>
-                    {#if model.active}
-                      <span class="model-badge active-badge">Active</span>
-                    {:else if model.downloaded}
-                      <span class="model-badge ready-badge">Ready</span>
-                    {:else}
-                      <span class="model-badge download-badge">Download · {model.size_mb} MB</span>
-                    {/if}
-                  </div>
-                  <div class="model-card-desc">{model.description}</div>
-                  {#if downloading === model.id}
-                    <div class="progress-bar">
-                      <div class="progress-fill" style="width: {downloadProgress}%"></div>
-                    </div>
-                  {/if}
-                </button>
-              {/each}
-            </div>
-
-            {#if modelError}
-              <div class="transcribe-error">{modelError}</div>
-            {/if}
-
-            <div class="model-hint">
-              Larger models are more accurate but take longer to transcribe.
-              {#if models.some(m => !m.downloaded && !m.active)}
-                Models are downloaded once and stored locally.
-              {/if}
-            </div>
-
             <div class="field advanced-field">
               <label for="beam-size">Decoding mode</label>
               <select id="beam-size" value={settings.beam_size} onchange={onBeamSizeChange}>
@@ -1884,6 +2372,31 @@
               ></button>
             </div>
             <div class="hotkey-hint">Re-decode hard segments; off is faster but less robust.</div>
+
+            {#if engineStatus?.supported}
+              <div class="field advanced-field">
+                <label for="engine-prewarm">Prepare Pianissimo when</label>
+                <select id="engine-prewarm" value={settings.engine_prewarm} onchange={onEnginePrewarmChange}>
+                  <option value="on_key_down">When I press the dictation key</option>
+                  <option value="on_app_start">When Sagascript starts</option>
+                  <option value="off">Only when needed</option>
+                </select>
+              </div>
+              <div class="hotkey-hint">Earlier preparation uses more memory but makes the first word faster.</div>
+
+              <div class="field advanced-field">
+                <label for="engine-idle">Unload after idle</label>
+                <select id="engine-idle" value={settings.engine_idle_unload_minutes} onchange={onEngineIdleChange}>
+                  {#each engineIdleChoices as minutes}
+                    <option value={minutes}>{minutes === 0 ? "Never" : `${minutes} minutes`}</option>
+                  {/each}
+                  {#if !engineIdleChoices.includes(settings.engine_idle_unload_minutes)}
+                    <option value={settings.engine_idle_unload_minutes}>{settings.engine_idle_unload_minutes} minutes</option>
+                  {/if}
+                </select>
+              </div>
+              <div class="hotkey-hint">Frees the Pianissimo model's memory after this much inactivity.</div>
+            {/if}
 
             <div class="field-row advanced-toggle">
               <span class="field-label">Voice activity detection</span>
@@ -2153,6 +2666,20 @@
     flex: 1 1 48%;
   }
 
+  .profile-model-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .profile-model-field select {
+    width: 100%;
+    color: var(--text);
+  }
+
   .shortcut-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2314,111 +2841,6 @@
 
   .advanced-toggle {
     margin-top: 16px;
-  }
-
-  .model-section-label {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-muted);
-    margin-bottom: 10px;
-    font-weight: 600;
-  }
-
-  .model-picker {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .model-card {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 14px 16px;
-    background: var(--bg-secondary);
-    border: 2px solid var(--border);
-    border-radius: 10px;
-    cursor: pointer;
-    text-align: left;
-    transition: border-color 0.15s, background 0.15s;
-    width: 100%;
-  }
-
-  .model-card:hover:not(:disabled) {
-    border-color: var(--text-muted);
-  }
-
-  .model-card.active {
-    border-color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 8%, var(--bg-secondary));
-  }
-
-  .model-card:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-
-  .model-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .model-card-name {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-  }
-
-  .model-card-desc {
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-
-  .model-badge {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-weight: 500;
-  }
-
-  .active-badge {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    color: var(--accent);
-  }
-
-  .ready-badge {
-    background: color-mix(in srgb, var(--success, #34c759) 15%, transparent);
-    color: var(--success, #34c759);
-  }
-
-  .download-badge {
-    background: var(--bg);
-    color: var(--text-muted);
-    border: 1px solid var(--border);
-  }
-
-  .progress-bar {
-    height: 4px;
-    background: var(--border);
-    border-radius: 2px;
-    margin-top: 6px;
-    overflow: hidden;
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--accent);
-    border-radius: 2px;
-    transition: width 0.2s;
-  }
-
-  .model-hint {
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1.5;
-    margin-top: 12px;
   }
 
   /* Download status bar (bottom of window, visible on all tabs) */
@@ -2681,6 +3103,20 @@
     font-size: 12px;
   }
 
+  .recovery-notice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    font-size: 13px;
+  }
+
+  .recovery-notice span { flex: 1; color: var(--text-muted); }
+  .recovery-notice button { flex-shrink: 0; }
+
   .queue-summary {
     font-size: 12px;
     color: var(--text-muted);
@@ -2846,5 +3282,13 @@
 
   .test-result:focus {
     border-color: var(--accent);
+  }
+
+  .result-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 12px;
   }
 </style>

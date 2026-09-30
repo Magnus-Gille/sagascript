@@ -10,6 +10,16 @@ SHA-256: `59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e`.
 Use `--expect-word country` for the repeated English dictation gate. No private
 dictation is stored in this fixture.
 
+## Swedish (Google FLEURS, CC BY 4.0)
+
+`swedish-fleurs-hongkong.wav` is utterance `4184612854874415460` from the
+`sv_se` test split of [Google FLEURS](https://huggingface.co/datasets/google/fleurs)
+(Creative Commons Attribution 4.0), 16 kHz mono PCM16, 7.6 s.
+Reference: "Hongkongön ger Hongkongs territorium dess namn och är den plats som
+många turister betraktar som huvudfokus."
+SHA-256: `82e5cefc3793e1352ae1f4cebd3848ab57e96f91799192b7d1b7d027151c5ff2`.
+The Pianissimo installed-CLI smoke expects the word `hongkong`.
+
 ## Norwegian (NPSC -- Norwegian Parliamentary Speech Corpus)
 Source: NbAiLab/NPSC (CC0 license, Norwegian National Library)
 
