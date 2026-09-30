@@ -2101,7 +2101,11 @@ fn stop_recording_and_transcribe(
         } else {
             !whisper.needs_reload(effective_model)
         };
-        info!("Transcribing with model: {model_name}");
+        info!(
+            key_up_to_transcribe_ms = elapsed_ms(key_up_at),
+            model_was_warm,
+            "Transcribing with model: {model_name}"
+        );
 
         // Show model loading status in tray
         if !model_was_warm {
@@ -2273,6 +2277,12 @@ fn stop_recording_and_transcribe(
                         .await;
                         paste_outcome = completion.outcome;
                         paste_error = completion.error;
+                        info!(
+                            paste_ms = paste_started.elapsed().as_millis() as u64,
+                            key_up_to_paste_ms = elapsed_ms(key_up_at),
+                            outcome = completion.outcome,
+                            "Dictation paste finished"
+                        );
                         if completion.call_completed {
                             key_up_to_paste_completed_ms = Some(elapsed_ms(key_up_at));
                         } else if paste_outcome == "timed_out" {

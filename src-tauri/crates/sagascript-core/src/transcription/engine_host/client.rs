@@ -11,7 +11,7 @@ use sagascript_engine_protocol::{
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::RecvTimeoutError;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
@@ -163,6 +163,10 @@ pub struct HostSnapshot {
     pub host: Option<HostInfo>,
     /// Result of the last successful `load` on the current process.
     pub last_load: Option<LoadResult>,
+    /// Host processes spawned by this client so far (a healthy session stays at 1).
+    pub spawns: u64,
+    /// `load` requests sent by this client so far.
+    pub loads: u64,
 }
 
 /// One transcribed window as returned by the host.
@@ -209,6 +213,9 @@ pub(crate) struct Inner {
     lifecycle: Mutex<()>,
     /// Pid of the host we last warned about having no interactive reservation.
     warned_no_reserve_pid: AtomicU32,
+    /// Host spawns / `load` requests, for diagnostics (see [`HostSnapshot`]).
+    spawns: AtomicU64,
+    loads: AtomicU64,
 }
 
 /// Handle to one (lazily started) engine host. Cheap to clone.
@@ -240,6 +247,8 @@ impl EngineHostClient {
             cv: Condvar::new(),
             lifecycle: Mutex::new(()),
             warned_no_reserve_pid: AtomicU32::new(0),
+            spawns: AtomicU64::new(0),
+            loads: AtomicU64::new(0),
         });
         if supervise {
             let weak = Arc::downgrade(&inner);
@@ -290,6 +299,8 @@ impl EngineHostClient {
             capabilities: st.caps.clone(),
             host: st.host_info.clone(),
             last_load: st.last_load.clone(),
+            spawns: self.inner.spawns.load(Ordering::Relaxed),
+            loads: self.inner.loads.load(Ordering::Relaxed),
         }
     }
 
@@ -633,6 +644,14 @@ impl Inner {
             Some(p) => (p.pending, p.deadline),
             None => {
                 let load = &self.cfg.load;
+                let n = self.loads.fetch_add(1, Ordering::Relaxed) + 1;
+                tracing::info!(
+                    pid = proc.pid(),
+                    load_count = n,
+                    model_dir = %load.model_dir.display(),
+                    model_id = %load.model_id,
+                    "engine host: sending load"
+                );
                 let pending = proc.send(&RequestOp::Load {
                     model_dir: load.model_dir.display().to_string(),
                     model_id: load.model_id.clone(),
@@ -832,6 +851,8 @@ impl Inner {
     fn start_and_handshake(&self) -> Result<(Arc<HostProcess>, Capabilities, HostInfo)> {
         let mut args = vec!["--protocol".to_string(), PROTOCOL_VERSION.to_string()];
         args.extend(self.cfg.extra_args.iter().cloned());
+        let n = self.spawns.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::info!(spawn_count = n, host = %self.cfg.host_path.display(), "engine host: spawning");
         let proc = HostProcess::spawn(&self.cfg.host_path, &args, &self.cfg.env)?;
         let id = &self.cfg.identity;
         let v = proc.request(
