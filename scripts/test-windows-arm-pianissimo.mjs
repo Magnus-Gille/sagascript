@@ -62,6 +62,7 @@ function workflowOutsideArm64Steps() {
   const gated = new Set([
     "Build and stage ARM64 ONNX engine host",
     "Verify ARM64 installer carries the ONNX engine host",
+    "Measure warm ONNX engine host latency (informational)",
   ]);
   let rest = workflow;
   for (const name of gated) rest = rest.replace(step(name), "");
