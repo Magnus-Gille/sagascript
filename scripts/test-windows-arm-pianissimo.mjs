@@ -67,6 +67,8 @@ function workflowOutsideArm64Steps() {
   let rest = workflow;
   for (const name of gated) rest = rest.replace(step(name), "");
   rest = rest.replace(/--config scripts\/tauri-windows-engine-host\.json/, "");
+  // The ORT host is a separate Cargo workspace: its dependency cache entry is harmless on x64.
+  rest = rest.replace("src-tauri/engine-host/ort", "");
   return rest.replace(/engine-host-conformance|sagascript-engine-host-ort\.exe"/g, "");
 }
 

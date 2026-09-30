@@ -1,0 +1,221 @@
+name: Build macOS release
+
+# Reusable (workflow_call only): build, sign, notarize, staple and smoke-test
+# the Apple Silicon release. Shared by the tag-triggered fallback path
+# (release.yml) and the main-branch prebuild (prebuild-release.yml) so there is
+# exactly one signing implementation. The `updater-signing` environment
+# (required reviewer, branch policy main / v*) is evaluated against the
+# CALLER's ref, so the signing policy is unchanged. Callers pass
+# `secrets: inherit`; nothing is exposed to pull_request workflows.
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Tag that must match the application version; empty skips the tag check."
+        type: string
+        default: ""
+      artifact_name:
+        description: "Name of the uploaded macOS artifact bundle."
+        type: string
+        default: macos-bundle
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    environment: updater-signing
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      # Shares the quality-gate shared key above (#178) so this build reuses
+      # dependencies the gate just compiled instead of rebuilding from cold.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, pinned (#180 review: release handles signing credentials)
+        with:
+          workspaces: src-tauri
+          shared-key: sagascript-release
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build and stage Core ML engine host
+        run: |
+          ./scripts/stage-engine-host.sh
+          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
+
+      - name: Verify release metadata and tag
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: npm run release:check
+
+      - name: Import Developer ID certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          : "${APPLE_CERTIFICATE:?APPLE_CERTIFICATE secret is required}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?APPLE_CERTIFICATE_PASSWORD secret is required}"
+          : "${KEYCHAIN_PASSWORD:?KEYCHAIN_PASSWORD secret is required}"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          keychain="$RUNNER_TEMP/sagascript-build.keychain-db"
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$certificate" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          security list-keychains -d user -s "$keychain"
+
+      - name: Sign Core ML engine host (hardened runtime)
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" build/engine-host/sagascript-engine-host
+          codesign --verify --strict --verbose=2 build/engine-host/sagascript-engine-host
+          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
+
+      - name: Prepare notarization credentials and build metadata
+        env:
+          APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          : "${APPLE_API_PRIVATE_KEY_BASE64:?APPLE_API_PRIVATE_KEY_BASE64 secret is required}"
+          : "${APPLE_API_KEY:?APPLE_API_KEY secret is required}"
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY_BASE64" | base64 --decode > "$api_key_path"
+          chmod 600 "$api_key_path"
+          {
+            echo "APPLE_API_KEY_PATH=$api_key_path"
+            echo "SAGASCRIPT_GIT_HASH=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+            echo "SAGASCRIPT_BUILD_DATE=$(date -u +%F)"
+          } >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize, and staple Apple Silicon app
+        env:
+          SAGASCRIPT_REQUIRE_UPDATER_PUBKEY: "1"
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          SAGASCRIPT_UPDATER_PUBKEY: ${{ vars.SAGASCRIPT_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
+          : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
+          : "${SAGASCRIPT_UPDATER_PUBKEY:?SAGASCRIPT_UPDATER_PUBKEY variable is required}"
+          : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
+          signed_config="$RUNNER_TEMP/sagascript-updater-signed.json"
+          node scripts/generate-updater-config.mjs scripts/tauri-updater-signed.json "$signed_config"
+          npx tauri build --target aarch64-apple-darwin --config scripts/tauri-engine-host-bundle.json --config "$signed_config"
+
+      - name: Notarize app and disk image
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
+          : "${APPLE_API_KEY:?APPLE_API_KEY secret is required}"
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
+          app_zip="$RUNNER_TEMP/Sagascript-notarization.zip"
+          ditto -c -k --keepParent "$app" "$app_zip"
+          xcrun notarytool submit "$app_zip" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
+          [[ -n "$dmg" ]]
+          xcrun notarytool submit "$dmg" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$dmg"
+
+      - name: Gate signed app startup
+        run: node scripts/smoke-signed-app-start.mjs src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app
+
+      - name: Verify macOS release artifact
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
+          dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
+          [[ -n "$dmg" ]]
+          ./scripts/verify-macos-release.sh "$app" "$dmg" "$version" "$GITHUB_SHA"
+          updater_bundle="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app.tar.gz"
+          updater_signature="$updater_bundle.sig"
+          tar -czf "$updater_bundle" -C "$(dirname "$app")" "$(basename "$app")"
+          rm -f "$updater_signature"
+          npx tauri signer sign "$updater_bundle"
+          [[ -s "$updater_bundle" && -s "$updater_signature" ]]
+          archive_check="$RUNNER_TEMP/sagascript-updater-archive-check"
+          mkdir -p "$archive_check"
+          tar -xzf "$updater_bundle" -C "$archive_check"
+          xcrun stapler validate "$archive_check/Sagascript.app"
+          spctl --assess --type execute --verbose=2 "$archive_check/Sagascript.app"
+          mkdir -p artifacts
+          cp "$dmg" artifacts/Sagascript.dmg
+          cp "$updater_bundle" artifacts/Sagascript.app.tar.gz
+          cp "$updater_signature" artifacts/Sagascript.app.tar.gz.sig
+          node scripts/generate-updater-manifest.mjs \
+            "$version" artifacts/Sagascript.app.tar.gz artifacts/Sagascript.app.tar.gz.sig artifacts/latest.json
+
+      - name: Gate upgrade and installed CLI transcription
+        run: |
+          version=$(node -p "require('./package.json').version")
+          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
+
+          # Seed an obsolete executable at the normal installation path, then
+          # perform the same replace operation expected when upgrading the app.
+          # The persistent /usr/local/bin link must consequently execute the
+          # newly installed app-bundle binary, never the stale placeholder.
+          sudo mkdir -p /Applications/Sagascript.app/Contents/MacOS /usr/local/bin
+          printf '#!/bin/sh\necho stale-install\n' > "$RUNNER_TEMP/stale-sagascript"
+          chmod +x "$RUNNER_TEMP/stale-sagascript"
+          sudo cp "$RUNNER_TEMP/stale-sagascript" /Applications/Sagascript.app/Contents/MacOS/sagascript
+          sudo ln -sfn /Applications/Sagascript.app/Contents/MacOS/sagascript /usr/local/bin/sagascript
+          sudo rm -rf /Applications/Sagascript.app
+          sudo ditto "$app" /Applications/Sagascript.app
+
+          ./scripts/smoke-installed-macos-cli.sh \
+            "$version" \
+            "${SAGASCRIPT_GIT_HASH}" \
+            test-audio/norwegian-short-3s.mp3
+
+      - name: Gate signed Pianissimo through /usr/local/bin/sagascript
+        run: ./scripts/smoke-pianissimo-installed.sh /usr/local/bin/sagascript test-audio/swedish-fleurs-hongkong.wav hongkong
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: |
+            artifacts/Sagascript.dmg
+            artifacts/Sagascript.app.tar.gz
+            artifacts/Sagascript.app.tar.gz.sig
+            artifacts/latest.json
+          if-no-files-found: error
+          # A later tag promotes this artifact (release.yml), so keep it well past the default.
+          retention-days: 30

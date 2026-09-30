@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
-const workflow = readFileSync(fileURLToPath(new URL('../.github/workflows/release.yml', import.meta.url)), 'utf8');
+const workflow = readFileSync(fileURLToPath(new URL('../.github/workflows/release-build-macos.yml', import.meta.url)), 'utf8');
 const steps = workflow.split(/(?=^      - name: )/m);
 
 test('signed release builds with updater config and starts app before publishing', () => {

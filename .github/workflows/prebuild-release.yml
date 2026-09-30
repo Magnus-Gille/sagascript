@@ -1,0 +1,125 @@
+name: Prebuild release
+
+# Builds the FINAL release artifacts (macOS signed, notarized, stapled; Windows
+# arm64 + x64 installers) for a commit on main whose version is not yet tagged,
+# so the later `vX.Y.Z` tag only has to promote them (release.yml). The owner's
+# `updater-signing` approval happens on this run (`main` is an allowed branch of
+# that environment; signing policy is unchanged). Nothing here publishes.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# One prebuild per commit; a newer push must never cancel a signing run that may
+# already be waiting on, or holding, the owner's approval.
+concurrency:
+  group: prebuild-release-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    outputs:
+      should_build: ${{ steps.detect.outputs.should_build }}
+      version: ${{ steps.detect.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Detect an untagged release version
+        id: detect
+        run: |
+          node scripts/check-release.mjs
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "Version $version is not a stable release; skipping prebuild." >> "$GITHUB_STEP_SUMMARY"
+          else
+            # ls-remote --exit-code: 0 = tag exists, 2 = no match, else real error.
+            status=0
+            git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1 || status=$?
+            case "$status" in
+              0)
+                echo "should_build=false" >> "$GITHUB_OUTPUT"
+                echo "v$version is already tagged; skipping prebuild." >> "$GITHUB_STEP_SUMMARY"
+                ;;
+              2)
+                echo "should_build=true" >> "$GITHUB_OUTPUT"
+                echo "v$version is untagged; prebuilding release artifacts for $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+                ;;
+              *)
+                echo "git ls-remote failed with status $status" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+  quality-gate:
+    needs: detect
+    if: needs.detect.outputs.should_build == 'true'
+    uses: ./.github/workflows/release-quality-gate.yml
+
+  build-macos:
+    needs: [detect, quality-gate]
+    uses: ./.github/workflows/release-build-macos.yml
+    secrets: inherit
+
+  build-windows:
+    needs: detect
+    if: needs.detect.outputs.should_build == 'true'
+    uses: ./.github/workflows/windows-package.yml
+
+  manifest:
+    needs: [detect, build-macos, build-windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download macOS bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-bundle
+          path: artifacts/macos-bundle
+
+      - name: Download Windows x64 candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-unsigned-candidate
+          path: artifacts/windows-x64-unsigned-candidate
+
+      - name: Download Windows arm64 candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-arm64-unsigned-candidate
+          path: artifacts/windows-arm64-unsigned-candidate
+
+      - name: Write manifest
+        env:
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          mkdir -p manifest
+          node scripts/release-prebuild-manifest.mjs create \
+            --dir artifacts \
+            --version "$VERSION" \
+            --sha "$GITHUB_SHA" \
+            --tree "$(git rev-parse 'HEAD^{tree}')" \
+            --out manifest/release-manifest.json
+          {
+            echo "### Prebuilt release $VERSION"
+            echo
+            echo "Commit \`$GITHUB_SHA\`. Tag \`v$VERSION\` on this commit promotes these artifacts."
+            echo
+            jq -r '.files[] | "- `\(.name)` \(.size) bytes `\(.sha256)`"' manifest/release-manifest.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest
+          path: manifest/release-manifest.json
+          if-no-files-found: error
+          retention-days: 30
