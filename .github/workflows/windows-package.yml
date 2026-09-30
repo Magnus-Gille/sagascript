@@ -288,7 +288,7 @@ jobs:
           if ($result.text -notmatch "(?i)storting") { throw "Expected 'storting' in transcription" }
           if (-not $result.segments) { throw "Expected at least one transcription segment" }
           Copy-Item $binary (Join-Path $env:RUNNER_TEMP "sagascript-cli.exe")
-          # build/ is git-ignored. Tauri bundles this console CLI beside the app (see scripts/tauri-windows-cli.json);
+          # build/cli/ is git-ignored. Tauri bundles this console CLI beside the app (see scripts/tauri-windows-cli.json);
           # the installer build later overwrites target\release\sagascript.exe with the GUI binary.
           New-Item -ItemType Directory -Force -Path 'build\cli' | Out-Null
           Copy-Item $binary 'build\cli\sagascript-cli.exe'
