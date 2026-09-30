@@ -35,6 +35,7 @@
     getBuildInfo,
     getFileModelOptions,
     getEffectiveModelInfo,
+    getAutoFileModelInfo,
     downloadModel,
     downloadPianissimoModel,
     getSupportedFormats,
@@ -97,7 +98,9 @@
   const pianissimoSizeMb = $derived(
     fileModelOptions.find((model) => model.id === "pianissimo-sv")?.size_mb ?? 0,
   );
+  // What Auto will use now (recommended if downloaded, else best downloaded) and what is recommended.
   let fileAutoModel: WhisperModel | null = $state(null);
+  let fileRecommendedModel: WhisperModel | null = $state(null);
   let fileModelError = $state("");
   let fileModelSaving = $state(false);
   type SettingsTab = "dictate" | "transcribe" | "settings";
@@ -788,10 +791,15 @@
     const selected = settings.file_transcription_model;
     void Promise.all([
       getFileModelOptions(language, selected && selected !== "auto" ? selected : undefined),
+      getAutoFileModelInfo(language),
       getEffectiveModelInfo(language),
     ])
-      .then(([options, automatic]) => {
-        if (!stale) { fileModelOptions = Array.isArray(options) ? options : []; fileAutoModel = automatic; }
+      .then(([options, automatic, recommended]) => {
+        if (!stale) {
+          fileModelOptions = Array.isArray(options) ? options : [];
+          fileAutoModel = automatic;
+          fileRecommendedModel = recommended;
+        }
       })
       .catch((error) => {
         if (!stale) fileModelError = typeof error === "string" ? error : String(error);
@@ -815,11 +823,12 @@
 
   async function downloadSelectedFileModel(): Promise<void> {
     const preference = settings?.file_transcription_model;
-    // "Auto" downloads whatever it currently resolves to.
-    const id = preference === "auto" ? fileAutoModel?.id : preference;
+    // "Auto" downloads the recommended model (it may currently use an older downloaded one).
+    const id = preference === "auto" ? fileRecommendedModel?.id : preference;
     if (!id || downloading !== null) return;
     downloading = id;
-    downloadingName = fileModelOptions.find((model) => model.id === id)?.display_name ?? id;
+    downloadingName = fileModelOptions.find((model) => model.id === id)?.display_name
+      ?? (fileRecommendedModel?.id === id ? fileRecommendedModel.display_name : id);
     downloadProgress = 0;
     fileModelError = "";
     try {
@@ -830,7 +839,11 @@
         id !== "auto" ? id : undefined,
       );
       fileModelOptions = Array.isArray(options) ? options : [];
-      if (fileAutoModel?.id === id) fileAutoModel = { ...fileAutoModel, downloaded: true };
+      const language = transcribeLanguage();
+      [fileAutoModel, fileRecommendedModel] = await Promise.all([
+        getAutoFileModelInfo(language),
+        getEffectiveModelInfo(language),
+      ]);
     } catch (error) {
       fileModelError = typeof error === "string" ? error : String(error);
     } finally { downloading = null; downloadProgress = 0; }
@@ -2107,7 +2120,7 @@
             <select id="file-model" value={settings.file_transcription_model}
               onchange={(event) => void onFileModelChange(event)}
               disabled={transcribing || fileModelSaving || downloading !== null}>
-              <option value="auto">Auto — recommended ({fileAutoModel?.display_name ?? "loading…"})</option>
+              <option value="auto">Auto — {fileAutoModel?.display_name ?? "loading…"}{fileAutoModel && fileRecommendedModel && fileAutoModel.id !== fileRecommendedModel.id ? " (downloaded)" : " (recommended)"}</option>
               {#if settings.file_transcription_model !== "auto" && !fileModelOptions.some((model) => model.id === settings?.file_transcription_model)}
                 <option value={settings.file_transcription_model}>Current choice is incompatible with {languageLabel(transcribeLanguage())}</option>
               {/if}
@@ -2118,12 +2131,15 @@
             <div class="hotkey-hint">Effective model: {settings.file_transcription_model === "auto"
               ? fileAutoModel?.display_name ?? "loading…"
               : fileModelOptions.find((model) => model.id === settings?.file_transcription_model)?.display_name ?? "incompatible with this language"}.
+              {#if settings.file_transcription_model === "auto" && fileAutoModel && fileRecommendedModel && fileAutoModel.id !== fileRecommendedModel.id}
+                {fileRecommendedModel.display_name} is recommended{fileRecommendedModel.size_mb > 0 ? ` (${fileRecommendedModel.size_mb} MB download)` : ""}; Auto keeps using the model you already have.
+              {/if}
               This choice affects files only; dictation shortcuts keep their own model.</div>
             {#if (settings.file_transcription_model !== "auto" && fileModelOptions.some((model) => model.id === settings?.file_transcription_model && !model.downloaded))
-              || (settings.file_transcription_model === "auto" && fileAutoModel && !fileAutoModel.downloaded)}
+              || (settings.file_transcription_model === "auto" && fileRecommendedModel && !fileRecommendedModel.downloaded)}
               <button class="secondary" onclick={() => void downloadSelectedFileModel()}
                 disabled={downloading !== null || transcribing}>
-                {downloading !== null ? `Downloading ${downloadingName}… ${downloadProgress}%` : "Download selected model"}
+                {downloading !== null ? `Downloading ${downloadingName}… ${downloadProgress}%` : settings.file_transcription_model === "auto" && fileRecommendedModel ? `Download ${fileRecommendedModel.display_name}` : "Download selected model"}
               </button>
             {/if}
             {#if settings.file_transcription_model === "pianissimo-sv"}

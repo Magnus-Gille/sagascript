@@ -1395,6 +1395,15 @@ pub async fn get_effective_model_info(
     Ok(model_info_for(FileModel::recommended_for(language, pianissimo_supported()), true))
 }
 
+/// The model an `Auto` file-transcription preference will actually use for
+/// `language`: the recommended model when downloaded, else the best already
+/// downloaded compatible model (same resolution the transcribe command uses).
+#[tauri::command]
+pub async fn get_auto_file_model_info(language: Language) -> Result<ModelInfo, String> {
+    let auto = Settings { file_transcription_model: FileModelPreference::Auto, ..Default::default() };
+    Ok(model_info_for(auto.effective_file_model_for(language)?, true))
+}
+
 #[tauri::command]
 pub async fn get_dictation_model_info(
     controller: State<'_, SharedController>,

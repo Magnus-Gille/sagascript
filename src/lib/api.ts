@@ -237,6 +237,11 @@ export async function getEffectiveModelInfo(language: Language): Promise<Whisper
   return invoke("get_effective_model_info", { language });
 }
 
+/** The model an Auto file-transcription preference resolves to right now. */
+export async function getAutoFileModelInfo(language: Language): Promise<WhisperModel> {
+  return invoke("get_auto_file_model_info", { language });
+}
+
 export async function getLoadedModel(): Promise<LoadedModelInfo> {
   return invoke("get_loaded_model");
 }

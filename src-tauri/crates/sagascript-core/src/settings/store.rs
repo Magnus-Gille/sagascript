@@ -217,16 +217,21 @@ fn migrate_legacy_identifier_settings_locked(
 pub fn load() -> Settings {
     let path = settings_path();
     let settings = load_at_with_legacy_sources(&path, legacy_settings_paths());
-    let whisper_downloaded = |model: WhisperModel| crate::transcription::model::is_model_downloaded(model);
-    let mut settings = migrate_lineup_at(
-        &path,
-        settings,
-        &LineupEnv {
-            pianissimo_supported: crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
-            pianissimo_downloaded: crate::transcription::pianissimo_model::is_downloaded(),
-            whisper_downloaded: &whisper_downloaded,
-        },
-    );
+    let mut settings = settings;
+    // Hot path: filesystem/OS probes only run while the one-time lineup
+    // migration is still pending.
+    if settings.model_lineup_version < MODEL_LINEUP_VERSION {
+        let whisper_downloaded = |model: WhisperModel| crate::transcription::model::is_model_downloaded(model);
+        settings = migrate_lineup_at(
+            &path,
+            settings,
+            &LineupEnv {
+                pianissimo_supported: crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+                pianissimo_downloaded: crate::transcription::pianissimo_model::is_downloaded(),
+                whisper_downloaded: &whisper_downloaded,
+            },
+        );
+    }
     // A settings file copied from a supported machine must not select an engine
     // this system cannot run. In memory only: the file keeps the user's choice.
     settings.demote_unsupported_pianissimo(
@@ -803,6 +808,39 @@ mod tests {
             let again = migrate_lineup_at(&path, load_at_with_legacy_sources(&path, std::iter::empty()), &env);
             assert_eq!(again.profile_models, migrated.profile_models);
             assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        });
+    }
+
+    #[test]
+    fn lineup_migration_preserves_unknown_keys_profiles_and_glossaries() {
+        with_temp_settings(|path| {
+            fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","future_key":{"a":[1,2]},"profile_glossary_migrated":true,"profile_glossaries":{"default":"Sagascript"},"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"},{"id":"english","name":"English","shortcut":"Super+E","language":"en"}],"profile_models":{"default":"kb-whisper-small","english":"auto"}}"#).unwrap();
+            let ready = |_: WhisperModel| true;
+            let env = LineupEnv { pianissimo_supported: true, pianissimo_downloaded: true, whisper_downloaded: &ready };
+            let migrated = migrate_lineup_at(&path, load_at_with_legacy_sources(&path, std::iter::empty()), &env);
+            assert_eq!(migrated.profile_models["default"], FileModelPreference::PianissimoOriginal);
+            let persisted: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(persisted["future_key"], serde_json::json!({"a":[1,2]}));
+            // Glossaries live in per-profile dictionary files, not settings.json.
+            assert_eq!(load_from(&path).profile_glossaries["default"], "Sagascript");
+            assert_eq!(persisted["hotkey_profiles"].as_array().unwrap().len(), 2);
+            assert_eq!(persisted["hotkey_profiles"][1]["shortcut"], "Super+E");
+            assert_eq!(persisted["profile_models"]["english"], "auto");
+        });
+    }
+
+    #[test]
+    fn lineup_migration_leaves_swedish_profile_without_model_entry_alone() {
+        with_temp_settings(|path| {
+            fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","profile_glossary_migrated":true,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}]}"#).unwrap();
+            let ready = |_: WhisperModel| true;
+            let env = LineupEnv { pianissimo_supported: true, pianissimo_downloaded: true, whisper_downloaded: &ready };
+            let mut loaded = load_at_with_legacy_sources(&path, std::iter::empty());
+            loaded.profile_models.remove("default");
+            loaded.model_lineup_version = 0;
+            let migrated = migrate_lineup_at(&path, loaded, &env);
+            assert!(!migrated.profile_models.contains_key("default") || migrated.profile_models["default"] == FileModelPreference::Auto);
+            assert_eq!(migrated.model_lineup_version, MODEL_LINEUP_VERSION);
         });
     }
 

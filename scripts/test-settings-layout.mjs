@@ -89,7 +89,7 @@ test("Swedish model lineup: pickers come from the backend lineup, retired models
   // Download first, then switch: the old model keeps dictating until the new one is ready.
   const switchBody = content.slice(content.indexOf("async function switchProfileToRecommended"));
   assert(switchBody.indexOf("downloadPianissimoModel") < switchBody.indexOf("setProfileModel(profile.id, target.id)"));
-  assert.match(content, /Auto — recommended/);
+  assert.match(content, /Auto — \{fileAutoModel/);
   // Onboarding downloads whatever the backend recommends (Pianissimo where supported).
   assert.match(onboardingContent, /getEffectiveModelInfo\(language\)/);
   assert.match(onboardingContent, /downloadPianissimoModel\(\)/);

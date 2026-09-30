@@ -3396,19 +3396,18 @@ mod tests {
     }
 
     #[test]
-    fn auto_file_model_is_recommended_but_whisper_only_runs_never_get_pianissimo() {
+    fn explicit_model_ids_stay_accepted_and_whisper_only_auto_avoids_pianissimo() {
+        // Auto resolution depends on what is downloaded on the host, so its
+        // fallback order is covered hermetically in sagascript-core; here only
+        // host-independent properties are asserted.
         let settings = Settings::default();
-        let supported = sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os();
-        assert_eq!(
-            resolve_file_model(None, Language::Swedish, &settings).unwrap(),
-            FileModel::recommended_for(Language::Swedish, supported)
-        );
-        assert_eq!(
+        assert!(matches!(
             resolve_file_model_for_run(None, Language::Swedish, &settings, true).unwrap(),
-            FileModel::Whisper(WhisperModel::KbWhisperMedium)
-        );
+            FileModel::Whisper(_)
+        ));
+        assert!(resolve_file_model(Some("auto"), Language::Swedish, &settings).is_err());
         // Retired models remain usable through an explicit --model.
-        for id in ["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small"] {
+        for id in ["kb-whisper-tiny", "kb-whisper-base", "kb-whisper-small", "kb-whisper-medium", "kb-whisper-large"] {
             assert!(matches!(
                 resolve_file_model_for_run(Some(id), Language::Swedish, &settings, true).unwrap(),
                 FileModel::Whisper(_)

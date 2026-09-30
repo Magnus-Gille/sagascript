@@ -564,6 +564,38 @@ impl FileModel {
     }
 }
 
+/// Real on-disk readiness of a file-transcription model.
+fn real_file_model_ready(model: FileModel) -> bool {
+    match model {
+        FileModel::Whisper(m) => crate::transcription::model::is_model_downloaded(m),
+        FileModel::PianissimoOriginal => crate::transcription::pianissimo_model::is_downloaded(),
+    }
+}
+
+/// Resolve an `Auto` file-model preference against what is downloaded.
+/// `allow_pianissimo` false yields Whisper models only.
+fn auto_file_model(
+    language: Language,
+    pianissimo_supported: bool,
+    allow_pianissimo: bool,
+    is_ready: &dyn Fn(FileModel) -> bool,
+) -> FileModel {
+    let supported = pianissimo_supported && allow_pianissimo;
+    let recommended = FileModel::recommended_for(language, supported);
+    if is_ready(recommended) {
+        return recommended;
+    }
+    let mut candidates = FileModel::app_lineup(language, supported, None);
+    let mut rest: Vec<WhisperModel> = WhisperModel::models_for_language(language).to_vec();
+    rest.sort_by_key(|m| std::cmp::Reverse(m.size_mb()));
+    candidates.extend(rest.into_iter().map(FileModel::Whisper));
+    candidates
+        .into_iter()
+        .filter(|m| allow_pianissimo || *m != FileModel::PianissimoOriginal)
+        .find(|m| is_ready(*m))
+        .unwrap_or(recommended)
+}
+
 /// Persisted preference for file transcription.
 ///
 /// `Auto` chooses the requested language's recommended Whisper model,
@@ -1136,22 +1168,39 @@ impl Settings {
     }
 
     /// Resolve the model for file transcription without changing the live
-    /// dictation model preference.
+    /// dictation model preference. An `Auto` preference prefers the
+    /// recommended model when it is downloaded, else the best downloaded
+    /// compatible model (see [`Self::effective_file_model_for_gated`]).
     pub fn effective_file_model_for(&self, language: Language) -> Result<FileModel, String> {
         self.effective_file_model_for_gated(
             language,
             crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+            &real_file_model_ready,
         )
     }
 
-    /// [`Self::effective_file_model_for`] with the Pianissimo platform gate supplied by the caller.
+    /// [`Self::effective_file_model_for`] with the Pianissimo platform gate and
+    /// the model-readiness probe supplied by the caller.
+    ///
+    /// `Auto`: the recommended model if `is_ready`; otherwise the first ready
+    /// model in the language's app lineup order, then other compatible Whisper
+    /// models from largest to smallest; if none is ready, the recommended model
+    /// (so "not downloaded" errors name the recommended download).
     pub fn effective_file_model_for_gated(
         &self,
         language: Language,
         pianissimo_supported: bool,
+        is_ready: &dyn Fn(FileModel) -> bool,
     ) -> Result<FileModel, String> {
         match self.file_transcription_model {
-            FileModelPreference::Auto => Ok(FileModel::recommended_for(language, pianissimo_supported)),
+            FileModelPreference::Auto => Ok(auto_file_model(language, pianissimo_supported, true, is_ready)),
+            _ => self.explicit_file_model_for(language),
+        }
+    }
+
+    fn explicit_file_model_for(&self, language: Language) -> Result<FileModel, String> {
+        match self.file_transcription_model {
+            FileModelPreference::Auto => unreachable!("Auto is resolved by the caller"),
             FileModelPreference::Whisper(model) if model.is_compatible_with(language) => {
                 Ok(FileModel::Whisper(model))
             }
@@ -1171,14 +1220,22 @@ impl Settings {
 
     /// Like [`Self::effective_file_model_for`], but for work that needs a
     /// Whisper model (meetings, diarization, decoder hints, beam search): an
-    /// `Auto` preference resolves to the language's recommended Whisper model
-    /// instead of Pianissimo. An explicit Pianissimo choice is returned as-is
-    /// so callers can report it clearly.
+    /// `Auto` preference never resolves to Pianissimo. An explicit Pianissimo
+    /// choice is returned as-is so callers can report it clearly.
     pub fn effective_whisper_file_model_for(&self, language: Language) -> Result<FileModel, String> {
-        if self.file_transcription_model == FileModelPreference::Auto {
-            return Ok(FileModel::Whisper(WhisperModel::recommended(language)));
+        self.effective_whisper_file_model_for_gated(language, &real_file_model_ready)
+    }
+
+    /// [`Self::effective_whisper_file_model_for`] with the readiness probe supplied by the caller.
+    pub fn effective_whisper_file_model_for_gated(
+        &self,
+        language: Language,
+        is_ready: &dyn Fn(FileModel) -> bool,
+    ) -> Result<FileModel, String> {
+        match self.file_transcription_model {
+            FileModelPreference::Auto => Ok(auto_file_model(language, false, false, is_ready)),
+            _ => self.explicit_file_model_for(language),
         }
-        self.effective_file_model_for(language)
     }
 
     pub fn resolved_hotkey_profiles(&self) -> Vec<HotkeyProfile> {
@@ -2676,7 +2733,7 @@ mod tests {
         };
 
         assert_eq!(
-            settings.effective_file_model_for_gated(Language::Swedish, false),
+            settings.effective_file_model_for_gated(Language::Swedish, false, &|_| true),
             Ok(FileModel::Whisper(WhisperModel::KbWhisperMedium))
         );
     }
@@ -3182,12 +3239,84 @@ mod tests {
             (false, FileModel::Whisper(WhisperModel::KbWhisperMedium)),
         ] {
             assert_eq!(settings.dictation_model_for_profile_gated("default", gate).unwrap(), expected);
-            assert_eq!(settings.effective_file_model_for_gated(Language::Swedish, gate).unwrap(), expected);
+            assert_eq!(settings.effective_file_model_for_gated(Language::Swedish, gate, &|_| true).unwrap(), expected);
         }
         // Whisper-only work (meetings, diarization) never gets Pianissimo from Auto.
         assert_eq!(
-            settings.effective_whisper_file_model_for(Language::Swedish).unwrap(),
+            settings.effective_whisper_file_model_for_gated(Language::Swedish, &|_| true).unwrap(),
             FileModel::Whisper(WhisperModel::KbWhisperMedium)
+        );
+    }
+
+    fn ready_set(models: &[FileModel]) -> impl Fn(FileModel) -> bool {
+        let models = models.to_vec();
+        move |m| models.contains(&m)
+    }
+
+    #[test]
+    fn auto_file_model_falls_back_to_downloaded_models() {
+        let auto = Settings { file_transcription_model: FileModelPreference::Auto, ..Default::default() };
+        let base = FileModel::Whisper(WhisperModel::KbWhisperBase);
+        let medium = FileModel::Whisper(WhisperModel::KbWhisperMedium);
+        let pian = FileModel::PianissimoOriginal;
+
+        // Only Base downloaded: upgrading user keeps working, on both platforms.
+        assert_eq!(auto.effective_file_model_for_gated(Language::Swedish, true, &ready_set(&[base])), Ok(base));
+        assert_eq!(auto.effective_file_model_for_gated(Language::Swedish, false, &ready_set(&[base])), Ok(base));
+        // Pianissimo downloaded wins.
+        assert_eq!(
+            auto.effective_file_model_for_gated(Language::Swedish, true, &ready_set(&[base, pian])),
+            Ok(pian)
+        );
+        // Unsupported Mac, Medium + Base downloaded: Medium.
+        assert_eq!(
+            auto.effective_file_model_for_gated(Language::Swedish, false, &ready_set(&[base, medium])),
+            Ok(medium)
+        );
+        // Supported, Medium + Base downloaded (no Pianissimo): lineup order gives Large, then Medium.
+        assert_eq!(
+            auto.effective_file_model_for_gated(Language::Swedish, true, &ready_set(&[base, medium])),
+            Ok(medium)
+        );
+        // Nothing downloaded: the recommended model, so the error names its download.
+        assert_eq!(auto.effective_file_model_for_gated(Language::Swedish, true, &|_| false), Ok(pian));
+        assert_eq!(auto.effective_file_model_for_gated(Language::Swedish, false, &|_| false), Ok(medium));
+    }
+
+    #[test]
+    fn auto_whisper_file_model_never_returns_pianissimo() {
+        let auto = Settings { file_transcription_model: FileModelPreference::Auto, ..Default::default() };
+        let base = FileModel::Whisper(WhisperModel::KbWhisperBase);
+        let medium = FileModel::Whisper(WhisperModel::KbWhisperMedium);
+        assert_eq!(
+            auto.effective_whisper_file_model_for_gated(Language::Swedish, &ready_set(&[FileModel::PianissimoOriginal, base])),
+            Ok(base)
+        );
+        assert_eq!(auto.effective_whisper_file_model_for_gated(Language::Swedish, &|m| m != FileModel::PianissimoOriginal && m == base), Ok(base));
+        assert_eq!(auto.effective_whisper_file_model_for_gated(Language::Swedish, &|_| false), Ok(medium));
+        assert_eq!(auto.effective_whisper_file_model_for_gated(Language::Swedish, &|_| true), Ok(medium));
+    }
+
+    #[test]
+    fn auto_file_model_english_and_explicit_preferences_unchanged() {
+        let auto = Settings { file_transcription_model: FileModelPreference::Auto, ..Default::default() };
+        let base_en = FileModel::Whisper(WhisperModel::BaseEn);
+        assert_eq!(auto.effective_file_model_for_gated(Language::English, true, &ready_set(&[base_en])), Ok(base_en));
+        assert_eq!(auto.effective_file_model_for_gated(Language::English, true, &|_| false), Ok(base_en));
+
+        let explicit = Settings {
+            file_transcription_model: FileModelPreference::Whisper(WhisperModel::KbWhisperLarge),
+            ..Default::default()
+        };
+        assert_eq!(
+            explicit.effective_file_model_for_gated(Language::Swedish, true, &|_| false),
+            Ok(FileModel::Whisper(WhisperModel::KbWhisperLarge))
+        );
+        assert!(explicit.effective_file_model_for_gated(Language::English, true, &|_| true).is_err());
+        let pian = Settings { file_transcription_model: FileModelPreference::PianissimoOriginal, ..Default::default() };
+        assert_eq!(
+            pian.effective_whisper_file_model_for_gated(Language::Swedish, &|_| false),
+            Ok(FileModel::PianissimoOriginal)
         );
     }
 

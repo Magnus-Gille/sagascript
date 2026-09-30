@@ -1451,6 +1451,7 @@ fn main() {
             commands::get_model_info,
             commands::get_file_model_options,
             commands::get_effective_model_info,
+            commands::get_auto_file_model_info,
             commands::get_dictation_model_info,
             commands::download_model,
             commands::download_pianissimo_model,

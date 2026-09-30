@@ -182,6 +182,7 @@ mockIPC(async (cmd, args = {}) => {
       }
       return null;
     }
+    case "get_auto_file_model_info":
     case "get_effective_model_info": return args.language === "sv"
       ? { id: "pianissimo-sv", display_name: "Pianissimo", description: "Fixture", size_mb: pianissimoSizeMb, downloaded: pianissimoDownloaded, active: true }
       : { id: "base.en", display_name: "Base English", description: "Fixture", size_mb: 0, downloaded: true, active: true };
