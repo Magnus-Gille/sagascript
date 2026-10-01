@@ -216,3 +216,99 @@ mod tests {
         assert!(interpret_open_result(Ok(ExitStatus::from_raw(0))).is_ok());
     }
 }
+
+/// Run `on_wake` whenever the system wakes from sleep (`NSWorkspace`
+/// `didWakeNotification`). The observer lives for the rest of the process. The
+/// callback runs on the posting thread, so it must be cheap and non-blocking.
+pub fn observe_system_wake(on_wake: impl Fn() + Send + Sync + 'static) {
+    use block2::RcBlock;
+    use objc2_app_kit::NSWorkspaceDidWakeNotification;
+    use objc2_foundation::NSNotification;
+    use std::ptr::NonNull;
+
+    let center = NSWorkspace::sharedWorkspace().notificationCenter();
+    let block = RcBlock::new(move |_notification: NonNull<NSNotification>| on_wake());
+    // SAFETY: the notification name is a valid constant, a `None` queue means
+    // the block runs on the posting thread, and the block is `Send + Sync`.
+    let token = unsafe {
+        center.addObserverForName_object_queue_usingBlock(
+            Some(NSWorkspaceDidWakeNotification),
+            None,
+            None,
+            &block,
+        )
+    };
+    // The center retains the block; the token must outlive the process.
+    std::mem::forget(token);
+}
+
+mod memory_pressure {
+    use std::ffi::c_void;
+    use std::os::raw::c_ulong;
+
+    const DISPATCH_MEMORYPRESSURE_WARN: c_ulong = 0x2;
+    const DISPATCH_MEMORYPRESSURE_CRITICAL: c_ulong = 0x4;
+
+    unsafe extern "C" {
+        static _dispatch_source_type_memorypressure: c_void;
+        fn dispatch_get_global_queue(identifier: isize, flags: usize) -> *mut c_void;
+        fn dispatch_source_create(
+            kind: *const c_void,
+            handle: usize,
+            mask: c_ulong,
+            queue: *mut c_void,
+        ) -> *mut c_void;
+        fn dispatch_set_context(object: *mut c_void, context: *mut c_void);
+        fn dispatch_source_set_event_handler_f(
+            source: *mut c_void,
+            handler: extern "C" fn(*mut c_void),
+        );
+        fn dispatch_source_get_data(source: *mut c_void) -> c_ulong;
+        fn dispatch_resume(object: *mut c_void);
+    }
+
+    static HANDLER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+    extern "C" fn on_event(source: *mut c_void) {
+        // SAFETY: `source` is the live dispatch source this handler was set on
+        // (its context points at itself) and is never released.
+        let flags = unsafe { dispatch_source_get_data(source) };
+        if flags & (DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL) != 0 {
+            if let Some(handler) = HANDLER.get() {
+                handler();
+            }
+        }
+    }
+
+    pub fn observe(handler: impl Fn() + Send + Sync + 'static) {
+        if HANDLER.set(Box::new(handler)).is_err() {
+            return;
+        }
+        // SAFETY: plain libdispatch calls. The source is created on the global
+        // default queue, never released (process lifetime), and its context is
+        // itself so the C handler can read the event data.
+        unsafe {
+            let queue = dispatch_get_global_queue(0, 0);
+            let source = dispatch_source_create(
+                std::ptr::addr_of!(_dispatch_source_type_memorypressure),
+                0,
+                DISPATCH_MEMORYPRESSURE_WARN | DISPATCH_MEMORYPRESSURE_CRITICAL,
+                queue,
+            );
+            if source.is_null() {
+                tracing::warn!("could not create the memory-pressure dispatch source");
+                return;
+            }
+            dispatch_set_context(source, source);
+            dispatch_source_set_event_handler_f(source, on_event);
+            dispatch_resume(source);
+        }
+    }
+}
+
+/// Run `on_pressure` on the system's memory-pressure warning or critical
+/// events (libdispatch memory-pressure source). Runs on a libdispatch worker
+/// thread for the rest of the process; first registration wins.
+pub fn observe_memory_pressure(on_pressure: impl Fn() + Send + Sync + 'static) {
+    memory_pressure::observe(on_pressure);
+}

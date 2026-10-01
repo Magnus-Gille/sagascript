@@ -7,7 +7,7 @@ use std::{
 use fs2::FileExt;
 
 use crate::settings::{
-    FileModelPreference, LineupEnv, Settings, WhisperModel, MODEL_LINEUP_VERSION,
+    FileModelPreference, LineupEnv, Settings, WhisperModel, ENGINE_DEFAULTS_VERSION, MODEL_LINEUP_VERSION,
 };
 
 const APP_IDENTIFIER: &str = "ai.gille.sagascript";
@@ -232,12 +232,38 @@ pub fn load() -> Settings {
             },
         );
     }
+    if settings.engine_defaults_version < ENGINE_DEFAULTS_VERSION {
+        settings = migrate_engine_defaults_at(&path, settings);
+    }
     // A settings file copied from a supported machine must not select an engine
     // this system cannot run. In memory only: the file keeps the user's choice.
     settings.demote_unsupported_pianissimo(
         crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
     );
     settings
+}
+
+/// Run the one-time engine warm-up defaults migration and persist it under the
+/// settings lock. Returns the settings to use.
+fn migrate_engine_defaults_at(path: &Path, loaded: Settings) -> Settings {
+    if loaded.engine_defaults_version >= ENGINE_DEFAULTS_VERSION {
+        return loaded;
+    }
+    if !path.exists() {
+        let mut fresh = loaded;
+        fresh.engine_defaults_version = ENGINE_DEFAULTS_VERSION;
+        return fresh;
+    }
+    with_settings_lock(path, || {
+        let mut settings = load_from(path);
+        if settings.migrate_engine_defaults() {
+            if let Err(error) = save_to(path, &settings) {
+                tracing::warn!("Failed to persist the engine defaults migration to {}: {error}", path.display());
+            }
+        }
+        Ok(settings)
+    })
+    .unwrap_or(loaded)
 }
 
 /// Run the one-time Swedish model-lineup migration against the real machine
@@ -762,7 +788,7 @@ fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{FileModelPreference, HotkeyMode, Language, WhisperModel};
+    use crate::settings::{EnginePrewarm, FileModelPreference, HotkeyMode, Language, WhisperModel};
     use std::fs;
     use std::sync::mpsc;
     use std::thread;
@@ -788,6 +814,29 @@ mod tests {
             assert_eq!(persisted["profile_models"]["default"], "pianissimo-sv");
             let reloaded = load_from(&path);
             assert_eq!(reloaded.profile_models, migrated.profile_models);
+        });
+    }
+
+    #[test]
+    fn engine_defaults_migration_persists_once_and_keeps_explicit_choices() {
+        with_temp_settings(|path| {
+            fs::write(&path, r#"{"language":"sv","engine_prewarm":"on_key_down","engine_idle_unload_minutes":10,"future_key":1}"#).unwrap();
+            let migrated = migrate_engine_defaults_at(&path, load_from(&path));
+            assert_eq!(migrated.engine_prewarm, EnginePrewarm::OnAppStart);
+            assert_eq!(migrated.engine_idle_unload_minutes, 60);
+            let persisted: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(persisted["engine_prewarm"], "on_app_start");
+            assert_eq!(persisted["engine_idle_unload_minutes"], 60);
+            assert_eq!(persisted["engine_defaults_version"], ENGINE_DEFAULTS_VERSION);
+            assert_eq!(persisted["future_key"], 1);
+            let before = fs::read_to_string(&path).unwrap();
+            migrate_engine_defaults_at(&path, load_from(&path));
+            assert_eq!(fs::read_to_string(&path).unwrap(), before);
+
+            fs::write(&path, r#"{"engine_prewarm":"off","engine_idle_unload_minutes":10}"#).unwrap();
+            let off = migrate_engine_defaults_at(&path, load_from(&path));
+            assert_eq!(off.engine_prewarm, EnginePrewarm::Off);
+            assert_eq!(off.engine_idle_unload_minutes, 60);
         });
     }
 

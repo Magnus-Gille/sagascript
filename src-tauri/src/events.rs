@@ -24,6 +24,9 @@ pub mod event {
     pub const HOTKEY_REGISTRATION_CHANGED: &str = "hotkey-registration-changed";
     /// Dictation profile selected by the shortcut that started recording.
     pub const ACTIVE_HOTKEY_PROFILE_CHANGED: &str = "active-hotkey-profile-changed";
+    /// Pianissimo engine load lifecycle for the dictation overlay. Payload:
+    /// `{ state: "loading" | "ready" | "failed", loadMs?: number, message?: string }`.
+    pub const ENGINE_LOAD_STATE: &str = "engine-load-state";
 }
 
 #[cfg(test)]
@@ -43,6 +46,7 @@ mod tests {
             TRANSCRIPTION_PHASE,
             HOTKEY_REGISTRATION_CHANGED,
             ACTIVE_HOTKEY_PROFILE_CHANGED,
+            ENGINE_LOAD_STATE,
         ];
         for name in events {
             assert!(!name.is_empty());
