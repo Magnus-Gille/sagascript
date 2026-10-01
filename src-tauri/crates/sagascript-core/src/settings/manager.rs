@@ -357,6 +357,7 @@ impl WhisperModel {
     /// The encoder name whisper.cpp *probes* next to the GGML file, whether or
     /// not an encoder exists for this model (`.bin` -> `-encoder.mlmodelc`,
     /// with a trailing "-qX_X" removed, exactly as whisper.cpp does).
+    #[cfg(target_os = "macos")]
     fn whisper_cpp_encoder_stem(&self) -> Option<&'static str> {
         let stem = self.ggml_filename().strip_suffix(".bin")?;
         // Strip a trailing "-qX_X" (e.g. "-q8_0"), exactly as whisper.cpp does.
@@ -377,11 +378,18 @@ impl WhisperModel {
     /// Directory name whisper.cpp will try (and, for fine-tunes, fail) to load
     /// as a Core ML encoder, or `None` when this model has a real encoder (a
     /// failed load is then a genuine problem worth reporting).
+    #[cfg(target_os = "macos")]
     pub fn unsupported_coreml_probe_dirname(&self) -> Option<String> {
         if self.coreml_encoder_stem().is_some() {
             return None;
         }
         Some(format!("{}-encoder.mlmodelc", self.whisper_cpp_encoder_stem()?))
+    }
+
+    /// Non-macOS: whisper.cpp is built without Core ML and never probes.
+    #[cfg(not(target_os = "macos"))]
+    pub fn unsupported_coreml_probe_dirname(&self) -> Option<String> {
+        None
     }
 
     /// HuggingFace URL of the CoreML encoder bundle (`*-encoder.mlmodelc.zip`),

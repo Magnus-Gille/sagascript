@@ -104,6 +104,7 @@ mod tests {
         model.unsupported_coreml_probe_dirname().into_iter().collect()
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn model_without_encoder_is_suppressed() {
         let expected = expected_for(WhisperModel::KbWhisperLarge);
