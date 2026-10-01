@@ -99,8 +99,11 @@ pub enum LoadEvent {
     Started,
     /// The model is loaded and ready.
     Ready { load_ms: u64 },
-    /// Start or load failed (not emitted for a cancelled wait).
+    /// Start or load failed.
     Failed(String),
+    /// The wait for a started load was cancelled. Terminal for the wait only:
+    /// the host keeps loading, but observers must stop showing a pending load.
+    Cancelled,
 }
 
 /// Callback told when a model load starts, finishes or fails, from whichever
@@ -814,7 +817,7 @@ impl Inner {
         let result = self.start_and_load_locked(cancel);
         match &result {
             Ok((_, load_ms)) => self.notify_load(LoadEvent::Ready { load_ms: *load_ms }),
-            Err(EngineHostError::Cancelled) => {}
+            Err(EngineHostError::Cancelled) => self.notify_load(LoadEvent::Cancelled),
             Err(error) => self.notify_load(LoadEvent::Failed(error.to_string())),
         }
         let (proc, _) = result?;

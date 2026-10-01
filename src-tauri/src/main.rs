@@ -771,25 +771,34 @@ fn prewarm_engine_on_key_down(ctrl: &tauri::State<'_, SharedController>) {
     warm_on(c.settings(), WarmTrigger::KeyDown, profile_id.as_deref(), warm_in_background);
 }
 
-/// Tell the overlay when the engine starts loading, is ready or failed to load.
+/// Tell the overlay when the engine starts loading, is ready, failed or was
+/// cancelled. The last event is cached in core for late-created overlays.
 fn forward_engine_load_state(app: &tauri::AppHandle) {
-    use sagascript_core::transcription::engine_host::LoadEvent;
+    use sagascript_core::transcription::pianissimo_backend as backend;
     let app = app.clone();
-    sagascript_core::transcription::pianissimo_backend::set_load_listener(move |event| {
-        let payload = match event {
-            LoadEvent::Started => serde_json::json!({ "state": "loading" }),
-            LoadEvent::Ready { load_ms } => serde_json::json!({ "state": "ready", "loadMs": load_ms }),
-            LoadEvent::Failed(message) => serde_json::json!({ "state": "failed", "message": message }),
-        };
+    backend::set_load_listener(move |event, source| {
+        let payload = backend::load_state_payload(Some(&(event, source)));
         let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
     });
+}
+
+/// Re-send the current engine load state (the overlay may have just been
+/// created or shown and missed earlier events).
+fn reemit_engine_load_state(app: &tauri::AppHandle) {
+    let payload = sagascript_core::transcription::pianissimo_backend::current_load_state_payload();
+    let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
 }
 
 /// Warm the engine for `trigger` (wake, app start) when settings call for it.
 fn prewarm_engine_for(app: &tauri::AppHandle, trigger: sagascript_core::transcription::pianissimo_backend::WarmTrigger) {
     use sagascript_core::transcription::pianissimo_backend::{warm_in_background, warm_on};
     let ctrl: tauri::State<'_, SharedController> = app.state();
-    let c = ctrl.lock().unwrap();
+    // Wake callbacks run on the main thread inside an ObjC block: never block
+    // on the controller there. Skip this warm when it is busy.
+    let Ok(c) = ctrl.try_lock() else {
+        tracing::debug!(reason = trigger.reason(), "pre-warm skipped: controller busy");
+        return;
+    };
     warm_on(c.settings(), trigger, None, warm_in_background);
 }
 
@@ -907,6 +916,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                     update_tray_status(app, "recording");
                     if show_overlay {
                         overlay::show(app);
+                        reemit_engine_load_state(app);
                         #[cfg(target_os = "macos")]
                         if let Err(error) = platform::macos::restore_dictation_target_if_stolen() {
                             warn!("Could not return focus after showing the recording overlay: {error}");
@@ -1453,6 +1463,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
+            commands::get_engine_load_state,
             commands::get_settings,
             commands::get_active_hotkey_profile,
             commands::get_last_transcription,
@@ -2624,6 +2635,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
                 &old_settings,
                 &new_settings,
             );
+            let settings_for_unload = new_settings.clone();
             {
                 let mut c = ctrl.lock().unwrap();
                 c.update_settings(new_settings);
@@ -2631,6 +2643,7 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             if warm_after_change {
                 sagascript_core::transcription::pianissimo_backend::warm_in_background("profile_change");
             }
+            sagascript_core::transcription::pianissimo_backend::unload_if_unused(&settings_for_unload);
             update_profiles_menu(&app, &profiles);
 
             // Notify frontend so UI reflects external changes

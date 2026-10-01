@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { getActiveHotkeyProfile, getState, type HotkeyProfile } from "./api";
+  import { getActiveHotkeyProfile, getEngineLoadState, getState, type HotkeyProfile } from "./api";
   import {
     LOADING_LABEL_DELAY_MS,
     initialOverlayState,
@@ -43,16 +43,22 @@
       revision++;
       dispatch({ type: "state", value: event.payload });
     }).then(remember);
-    const engineListener = listen<{ state: string }>("engine-load-state", (event) => {
+    const engineListener = listen<{ state: string; source?: string }>("engine-load-state", (event) => {
       revision++;
-      dispatch({ type: "engine", value: event.payload.state });
+      dispatch({ type: "engine", value: event.payload.state, source: event.payload.source });
     }).then(remember);
     Promise.all([profileListener, stateListener, engineListener]).then(async () => {
       const initialRevision = revision;
-      const [active, state] = await Promise.all([getActiveHotkeyProfile(), getState()]);
+      const [active, state, engineLoad] = await Promise.all([
+        getActiveHotkeyProfile(),
+        getState(),
+        getEngineLoadState(),
+      ]);
       if (!disposed && revision === initialRevision) {
         profile = active;
         dispatch({ type: "state", value: state });
+        // The overlay is created lazily, after the app-start warm began.
+        dispatch({ type: "engine", value: engineLoad.state, source: engineLoad.source });
       }
     }).catch((error) => {
       console.warn("Could not initialize dictation indicator state", error);

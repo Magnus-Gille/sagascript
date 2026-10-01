@@ -89,3 +89,45 @@ test("Swedish locale shows the Swedish loading label and ignores unknown states"
   assert.equal(run([state("bogus")], s), s);
   assert.equal(label(run([state("recording")]), "sv", "sv-SE"), "Spelar in · svenska");
 });
+
+test("a cancelled load resets the engine so later dictations do not show loading", () => {
+  let s = run([state("transcribing"), engine("loading"), elapsed]);
+  assert.equal(label(s), "Loading model…");
+  s = run([engine("unknown")], s);
+  assert.equal(s.engine, "unknown");
+  assert.equal(s.loadingVisible, false);
+  assert.equal(label(s), "Transcribing…");
+  s = run([state("idle"), state("recording"), state("transcribing")], s);
+  assert.equal(label(s), "Transcribing…");
+  assert.equal(needsLoadingTimer(s), false);
+});
+
+test("a new recording resets stale engine state", () => {
+  let s = run([state("transcribing"), engine("loading"), state("idle")]);
+  assert.equal(s.engine, "loading");
+  s = run([state("recording")], s);
+  assert.equal(s.engine, "unknown");
+  s = run([state("transcribing")], s);
+  assert.equal(label(s), "Transcribing…");
+});
+
+test("a background warm failure never escalates to the error state", () => {
+  let s = run([state("transcribing"), { ...engine("failed"), source: "warm" }]);
+  assert.equal(s.phase, "transcribing");
+  assert.equal(s.engine, "unknown");
+  s = run([state("idle")], s);
+  assert.equal(s.phase, "idle");
+  // The same failure from the request itself does escalate.
+  s = run([state("transcribing"), { ...engine("failed"), source: "request" }]);
+  assert.equal(s.phase, "error");
+});
+
+test("seeding from the cached backend state shows loading for an app-start warm", () => {
+  // The overlay is created mid-load: initial state is recording, seeded as loading.
+  let s = run([state("recording"), { ...engine("loading"), source: "warm" }]);
+  assert.equal(s.engine, "loading");
+  s = run([state("transcribing"), elapsed], s);
+  assert.equal(label(s), "Loading model…");
+  // Seeded "unknown" leaves a fresh overlay untouched.
+  assert.deepEqual(run([engine("unknown")]), initialOverlayState);
+});

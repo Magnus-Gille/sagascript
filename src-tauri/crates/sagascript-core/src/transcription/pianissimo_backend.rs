@@ -224,21 +224,86 @@ fn idle_policy(minutes: u32) -> (Option<Duration>, Option<Duration>) {
     (Some(unload), Some(unload * 2))
 }
 
-type LoadListener = Box<dyn Fn(LoadEvent) + Send + Sync>;
+/// What drove a model load: a background warm-up or a transcription request.
+/// Only request-driven failures should surface as a dictation error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadSource {
+    Warm,
+    Request,
+}
+
+impl LoadSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Warm => "warm",
+            Self::Request => "request",
+        }
+    }
+}
+
+thread_local! {
+    /// Set on the pre-warm thread so loads it drives are tagged [`LoadSource::Warm`].
+    static LOAD_SOURCE: std::cell::Cell<LoadSource> = const { std::cell::Cell::new(LoadSource::Request) };
+}
+
+type LoadListener = Box<dyn Fn(LoadEvent, LoadSource) + Send + Sync>;
 
 static LOAD_LISTENER: OnceLock<LoadListener> = OnceLock::new();
+static LAST_LOAD: Mutex<Option<(LoadEvent, LoadSource)>> = Mutex::new(None);
 
 /// Register the process-wide listener told when the shared engine starts,
-/// finishes or fails loading its model (the app forwards this to the overlay).
-/// First registration wins.
-pub fn set_load_listener(listener: impl Fn(LoadEvent) + Send + Sync + 'static) {
+/// finishes, fails or cancels loading its model (the app forwards this to the
+/// overlay). First registration wins.
+pub fn set_load_listener(listener: impl Fn(LoadEvent, LoadSource) + Send + Sync + 'static) {
     let _ = LOAD_LISTENER.set(Box::new(listener));
 }
 
-fn forward_load_event(event: LoadEvent) {
-    if let Some(listener) = LOAD_LISTENER.get() {
-        listener(event);
+/// Message the webview sees for a failed load. The detailed error (which may
+/// contain filesystem paths) stays in the logs.
+pub const GENERIC_LOAD_FAILURE: &str = "Model failed to load";
+
+/// Webview payload for a load event: `{ state, source, loadMs?, message? }`
+/// with `state` one of `loading | ready | failed | unknown`.
+pub fn load_state_payload(event: Option<&(LoadEvent, LoadSource)>) -> serde_json::Value {
+    match event {
+        None => serde_json::json!({ "state": "unknown", "source": LoadSource::Request.as_str() }),
+        Some((event, source)) => {
+            let source = source.as_str();
+            match event {
+                LoadEvent::Started => serde_json::json!({ "state": "loading", "source": source }),
+                LoadEvent::Ready { load_ms } => {
+                    serde_json::json!({ "state": "ready", "source": source, "loadMs": load_ms })
+                }
+                LoadEvent::Failed(_) => {
+                    serde_json::json!({ "state": "failed", "source": source, "message": GENERIC_LOAD_FAILURE })
+                }
+                LoadEvent::Cancelled => serde_json::json!({ "state": "unknown", "source": source }),
+            }
+        }
     }
+}
+
+/// Payload for the most recent load event (cached so a late-created overlay
+/// can seed itself). `unknown` before any load.
+pub fn current_load_state_payload() -> serde_json::Value {
+    let last = LAST_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    load_state_payload(last.as_ref())
+}
+
+fn forward_load_event(event: LoadEvent) {
+    let source = LOAD_SOURCE.with(std::cell::Cell::get);
+    if let LoadEvent::Failed(error) = &event {
+        tracing::warn!(source = source.as_str(), %error, "Pianissimo engine load failed");
+    }
+    *LAST_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((event.clone(), source));
+    if let Some(listener) = LOAD_LISTENER.get() {
+        listener(event, source);
+    }
+}
+
+#[cfg(test)]
+fn reset_last_load_for_test() {
+    *LAST_LOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
 }
 
 /// Engine-host configuration for an explicit host binary (no presence checks).
@@ -458,14 +523,52 @@ pub fn profile_change_needs_warm(old: &Settings, new: &Settings) -> bool {
         .any(|profile| new.profile_uses_pianissimo(&profile.id) && !old.profile_uses_pianissimo(&profile.id))
 }
 
+/// After a memory-pressure unload, key-down and wake warms are skipped for
+/// this long so the engine is not reloaded straight into the same pressure.
+pub const PRESSURE_WARM_COOLDOWN: Duration = Duration::from_secs(5 * 60);
+
+static LAST_PRESSURE_UNLOAD: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// True when a warm for `reason` should be skipped because of a recent
+/// memory-pressure unload. App start and profile changes are never skipped.
+fn warm_in_pressure_cooldown(reason: &str, last_unload: Option<Instant>, now: Instant) -> bool {
+    matches!(reason, "key_down" | "wake")
+        && last_unload.is_some_and(|at| now.saturating_duration_since(at) < PRESSURE_WARM_COOLDOWN)
+}
+
+fn shared_client_if_created() -> Option<EngineHostClient> {
+    shared_slot().lock().ok().and_then(|slot| slot.as_ref().map(|shared| shared.client.clone()))
+}
+
 /// Free the engine's model memory when the system reports memory pressure and
 /// no transcription is running. The next utterance reloads (and shows the
-/// loading state). Never starts anything. Returns whether it unloaded.
+/// loading state). Never starts anything. Returns whether it unloaded, and
+/// starts the [`PRESSURE_WARM_COOLDOWN`] when it did.
 pub fn unload_if_idle_for_memory_pressure() -> bool {
-    let client = shared_slot().lock().ok().and_then(|slot| slot.as_ref().map(|shared| shared.client.clone()));
-    let unloaded = client.is_some_and(|client| client.unload_if_idle());
+    let unloaded = shared_client_if_created().is_some_and(|client| client.unload_if_idle());
     if unloaded {
+        *LAST_PRESSURE_UNLOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
         tracing::info!("Pianissimo engine unloaded under memory pressure");
+    }
+    unloaded
+}
+
+/// The model is only worth keeping resident while some profile uses Pianissimo.
+/// (Pre-warm `off` is not a reason to unload: it only skips eager loading.)
+pub fn should_unload_when_unused(settings: &Settings) -> bool {
+    !settings.any_profile_uses_pianissimo()
+}
+
+/// Unload the resident model now if no profile uses Pianissimo any more and
+/// nothing is transcribing; a busy engine is left to the idle timer. Never
+/// starts anything. Returns whether it unloaded.
+pub fn unload_if_unused(settings: &Settings) -> bool {
+    if !should_unload_when_unused(settings) {
+        return false;
+    }
+    let unloaded = shared_client_if_created().is_some_and(|client| client.unload_if_idle());
+    if unloaded {
+        tracing::info!("Pianissimo engine unloaded: no profile uses it any more");
     }
     unloaded
 }
@@ -478,12 +581,18 @@ pub fn warm_in_background(reason: &'static str) {
     if !runtime_supported_on_this_os() || !pianissimo_model::is_downloaded() {
         return;
     }
+    let last_unload = *LAST_PRESSURE_UNLOAD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if warm_in_pressure_cooldown(reason, last_unload, Instant::now()) {
+        tracing::debug!(reason, "Pianissimo pre-warm skipped: recent memory-pressure unload");
+        return;
+    }
     if IN_FLIGHT.swap(true, Ordering::SeqCst) {
         return;
     }
     let spawned = std::thread::Builder::new()
         .name("pianissimo-warm".into())
         .spawn(move || {
+            LOAD_SOURCE.with(|source| source.set(LoadSource::Warm));
             let started = Instant::now();
             match shared_client().map_err(|e| e.to_string()).and_then(|client| {
                 if client.snapshot().loaded {
@@ -861,6 +970,59 @@ mod tests {
         // With pre-warm off nothing warms.
         assert!(!profile_change_needs_warm(&before, &was_off));
     }
+
+    #[test]
+    fn model_unloads_when_no_profile_uses_pianissimo_even_with_prewarm_off() {
+        for prewarm in [EnginePrewarm::Off, EnginePrewarm::OnAppStart, EnginePrewarm::OnKeyDown] {
+            assert!(should_unload_when_unused(&whisper_settings(prewarm)), "{prewarm:?}");
+            assert!(!should_unload_when_unused(&pianissimo_settings(prewarm)), "{prewarm:?}");
+        }
+        // Nothing created yet: nothing to unload, and it never starts anything.
+        assert!(!unload_if_unused(&whisper_settings(EnginePrewarm::Off)));
+    }
+
+    #[test]
+    fn pressure_cooldown_skips_only_key_down_and_wake_warms() {
+        let now = Instant::now();
+        let recent = Some(now);
+        assert!(warm_in_pressure_cooldown("key_down", recent, now + Duration::from_secs(10)));
+        assert!(warm_in_pressure_cooldown("wake", recent, now + Duration::from_secs(10)));
+        assert!(!warm_in_pressure_cooldown("app_start", recent, now));
+        assert!(!warm_in_pressure_cooldown("profile_change", recent, now));
+        assert!(!warm_in_pressure_cooldown("key_down", recent, now + PRESSURE_WARM_COOLDOWN));
+        assert!(!warm_in_pressure_cooldown("key_down", None, now));
+    }
+
+    #[test]
+    fn load_state_payload_is_cached_tagged_and_generic() {
+        let _guard = LOAD_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        reset_last_load_for_test();
+        assert_eq!(current_load_state_payload()["state"], "unknown");
+        forward_load_event(LoadEvent::Started);
+        let p = current_load_state_payload();
+        assert_eq!((p["state"].as_str(), p["source"].as_str()), (Some("loading"), Some("request")));
+        forward_load_event(LoadEvent::Failed("/Users/x/secret/path: boom".into()));
+        let p = current_load_state_payload();
+        assert_eq!(p["state"], "failed");
+        assert_eq!(p["message"], GENERIC_LOAD_FAILURE);
+        assert!(!p.to_string().contains("secret"), "{p}");
+        forward_load_event(LoadEvent::Cancelled);
+        assert_eq!(current_load_state_payload()["state"], "unknown");
+        forward_load_event(LoadEvent::Ready { load_ms: 42 });
+        assert_eq!(current_load_state_payload()["loadMs"], 42);
+        // Warm-thread loads are tagged as warm.
+        std::thread::spawn(|| {
+            LOAD_SOURCE.with(|source| source.set(LoadSource::Warm));
+            forward_load_event(LoadEvent::Failed("x".into()));
+        })
+        .join()
+        .unwrap();
+        let p = current_load_state_payload();
+        assert_eq!((p["state"].as_str(), p["source"].as_str()), (Some("failed"), Some("warm")));
+        reset_last_load_for_test();
+    }
+
+    static LOAD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn app_layout(root: &Path) -> (PathBuf, PathBuf) {
         let contents = root.join("Sagascript.app/Contents");

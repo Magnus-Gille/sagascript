@@ -14,7 +14,7 @@ export interface OverlayState {
 
 export type OverlayAction =
   | { type: "state"; value: string }
-  | { type: "engine"; value: string }
+  | { type: "engine"; value: string; source?: string }
   | { type: "loading-delay-elapsed" };
 
 /** Loads faster than this never show the "Loading model" label (no flicker). */
@@ -52,16 +52,27 @@ export function reduceOverlay(state: OverlayState, action: OverlayAction): Overl
       // The error state sticks until the next recording; the backend's
       // follow-up "idle" must not erase it before the user can read it.
       if (state.phase === "error" && phase !== "recording") return state;
-      const engine = phase === "recording" && state.engine === "failed" ? "unknown" : state.engine;
+      // A new recording starts clean: stale engine state (a failed or
+      // cancelled load) must not leak into this dictation. The backend
+      // re-sends the live load state when it shows the overlay.
+      const engine = phase === "recording" ? "unknown" : state.engine;
       return settle({ ...state, phase, engine });
     }
     case "engine": {
-      const engine: EngineLoad =
-        action.value === "loading" || action.value === "ready" || action.value === "failed"
+      let engine: EngineLoad =
+        action.value === "loading" ||
+        action.value === "ready" ||
+        action.value === "failed" ||
+        action.value === "unknown"
           ? action.value
           : state.engine;
+      // Only a failure of the load this dictation is waiting on is an error.
+      // A background warm-up failure (wake, profile change) is not.
+      const background = engine === "failed" && action.source === "warm";
+      if (background) engine = "unknown";
       if (engine === state.engine) return state;
-      const phase: OverlayPhase = engine === "failed" && isWorking(state.phase) ? "error" : state.phase;
+      const phase: OverlayPhase =
+        engine === "failed" && isWorking(state.phase) ? "error" : state.phase;
       return settle({ ...state, engine, phase });
     }
     case "loading-delay-elapsed":

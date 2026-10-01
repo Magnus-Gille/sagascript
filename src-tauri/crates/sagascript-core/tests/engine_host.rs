@@ -167,6 +167,26 @@ fn load_observer_reports_failure() {
 }
 
 #[test]
+fn load_observer_reports_a_terminal_event_when_the_wait_is_cancelled() {
+    let (observer, events) = recording_observer();
+    let f = fixture_with(&[("FAKE_LOAD_DELAY_MS", "1500")], |c| c.load_observer = Some(observer));
+    let cancel = CancelToken::new();
+    let canceller = {
+        let cancel = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            cancel.cancel();
+        })
+    };
+    let r = f.client.warm_with_cancel(&cancel);
+    canceller.join().unwrap();
+    assert!(matches!(r, Err(EngineHostError::Cancelled)), "{r:?}");
+    let seen = events.lock().unwrap();
+    assert_eq!(seen.first(), Some(&LoadEvent::Started), "{seen:?}");
+    assert_eq!(seen.last(), Some(&LoadEvent::Cancelled), "{seen:?}");
+}
+
+#[test]
 fn unload_if_idle_frees_a_loaded_model_and_the_next_use_reloads() {
     let f = fixture(&[]);
     assert!(!f.client.unload_if_idle(), "nothing loaded yet");

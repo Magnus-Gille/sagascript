@@ -422,6 +422,12 @@ pub async fn get_state(controller: State<'_, SharedController>) -> Result<AppSta
     Ok(ctrl.state())
 }
 
+/// Last Pianissimo engine load state for the overlay (`unknown` before any load).
+#[tauri::command]
+pub async fn get_engine_load_state() -> Result<serde_json::Value, String> {
+    Ok(sagascript_core::transcription::pianissimo_backend::current_load_state_payload())
+}
+
 #[tauri::command]
 pub async fn get_settings(controller: State<'_, SharedController>) -> Result<Settings, String> {
     let ctrl = controller.lock().unwrap();
@@ -634,9 +640,11 @@ pub async fn set_profile_model(
             ctrl.settings(),
             &persisted,
         );
-        ctrl.update_settings(persisted);
+        ctrl.update_settings(persisted.clone());
         warm
     };
+    // Outside the controller lock: an unload talks to the engine host.
+    sagascript_core::transcription::pianissimo_backend::unload_if_unused(&persisted);
     if warm {
         sagascript_core::transcription::pianissimo_backend::warm_in_background("profile_change");
     }
