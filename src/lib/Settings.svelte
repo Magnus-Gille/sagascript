@@ -2377,8 +2377,8 @@
               <div class="field advanced-field">
                 <label for="engine-prewarm">Prepare Pianissimo when</label>
                 <select id="engine-prewarm" value={settings.engine_prewarm} onchange={onEnginePrewarmChange}>
+                  <option value="on_app_start">When Sagascript starts (recommended)</option>
                   <option value="on_key_down">When I press the dictation key</option>
-                  <option value="on_app_start">When Sagascript starts</option>
                   <option value="off">Only when needed</option>
                 </select>
               </div>

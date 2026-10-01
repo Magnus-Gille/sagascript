@@ -3,8 +3,8 @@
 
 use sagascript_core::transcription::engine_host::client::WindowRequest;
 use sagascript_core::transcription::engine_host::{
-    CancelToken, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode, LoadSpec,
-    Priority, Timeouts,
+    CancelToken, EngineHostClient, EngineHostConfig, EngineHostError, ErrorCode, LoadEvent,
+    LoadObserver, LoadSpec, Priority, Timeouts,
 };
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -132,6 +132,50 @@ fn handshake_accepts_and_exposes_capabilities() {
         Some("fake-model")
     );
     f.client.ping().unwrap();
+}
+
+fn recording_observer() -> (LoadObserver, Arc<std::sync::Mutex<Vec<LoadEvent>>>) {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = events.clone();
+    (LoadObserver(Arc::new(move |event| sink.lock().unwrap().push(event))), events)
+}
+
+#[test]
+fn load_observer_reports_started_then_ready_once_and_nothing_when_warm() {
+    let (observer, events) = recording_observer();
+    let f = fixture_with(&[], |c| c.load_observer = Some(observer));
+    f.client.warm().unwrap();
+    {
+        let seen = events.lock().unwrap();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert_eq!(seen[0], LoadEvent::Started);
+        assert!(matches!(seen[1], LoadEvent::Ready { .. }), "{seen:?}");
+    }
+    // Already loaded: the fast path reports no new load.
+    f.client.warm().unwrap();
+    assert_eq!(events.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn load_observer_reports_failure() {
+    let (observer, events) = recording_observer();
+    let f = fixture_with(&[("FAKE_PROTOCOL", "2")], |c| c.load_observer = Some(observer));
+    assert!(f.client.warm().is_err());
+    let seen = events.lock().unwrap();
+    assert_eq!(seen[0], LoadEvent::Started);
+    assert!(matches!(seen.last(), Some(LoadEvent::Failed(_))), "{seen:?}");
+}
+
+#[test]
+fn unload_if_idle_frees_a_loaded_model_and_the_next_use_reloads() {
+    let f = fixture(&[]);
+    assert!(!f.client.unload_if_idle(), "nothing loaded yet");
+    f.client.warm().unwrap();
+    assert!(f.client.unload_if_idle());
+    assert!(!f.client.snapshot().loaded);
+    assert!(!f.client.unload_if_idle(), "already unloaded");
+    f.client.warm().unwrap();
+    assert!(f.client.snapshot().loaded);
 }
 
 #[test]

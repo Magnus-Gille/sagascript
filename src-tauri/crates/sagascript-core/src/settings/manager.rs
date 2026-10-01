@@ -687,10 +687,11 @@ impl HotkeyMode {
 pub enum EnginePrewarm {
     /// Load lazily when the first transcription needs the model.
     Off,
-    /// Load in the background when the app starts (Pianissimo active only).
+    /// Load in the background when the app starts, after system wake and when
+    /// a profile switches to Pianissimo (Pianissimo active only). Default.
+    #[default]
     OnAppStart,
     /// Load in the background when the push-to-talk key goes down.
-    #[default]
     OnKeyDown,
 }
 
@@ -715,7 +716,14 @@ impl EnginePrewarm {
 }
 
 /// Default minutes of inactivity before the engine host unloads its model.
-pub const DEFAULT_ENGINE_IDLE_UNLOAD_MINUTES: u32 = 10;
+pub const DEFAULT_ENGINE_IDLE_UNLOAD_MINUTES: u32 = 60;
+
+/// Defaults that shipped before [`ENGINE_DEFAULTS_VERSION`] 1, used to tell
+/// users still on the old defaults from users who chose something else.
+pub const LEGACY_ENGINE_IDLE_UNLOAD_MINUTES: u32 = 10;
+
+/// Current version of the engine warm-up defaults migration.
+pub const ENGINE_DEFAULTS_VERSION: u32 = 1;
 
 /// One global shortcut and the transcription language selected when it fires.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -809,6 +817,11 @@ pub struct Settings {
     /// at the current version.
     #[serde(default)]
     pub model_lineup_version: u32,
+    /// Version of the engine warm-up defaults migration that has run on this
+    /// file (see [`Settings::migrate_engine_defaults`]). A missing key means 0.
+    /// New installs start at the current version.
+    #[serde(default)]
+    pub engine_defaults_version: u32,
 }
 
 /// Current version of the Swedish model-lineup migration.
@@ -848,11 +861,33 @@ impl Default for Settings {
             vad_enabled: false,
             has_completed_onboarding: false,
             model_lineup_version: MODEL_LINEUP_VERSION,
+            engine_defaults_version: ENGINE_DEFAULTS_VERSION,
         }
     }
 }
 
 impl Settings {
+    /// One-time move of the engine warm-up settings to the cold-start defaults
+    /// (load at app start, unload after 60 idle minutes), recorded by
+    /// `engine_defaults_version`. Only values still equal to the previous
+    /// defaults move: an explicit `off`, `on_app_start` or any other idle
+    /// timeout is kept. (A user who explicitly picked the old default values
+    /// is indistinguishable from one who never touched them and moves too.)
+    /// Returns true when it ran (the caller must persist).
+    pub fn migrate_engine_defaults(&mut self) -> bool {
+        if self.engine_defaults_version >= ENGINE_DEFAULTS_VERSION {
+            return false;
+        }
+        self.engine_defaults_version = ENGINE_DEFAULTS_VERSION;
+        if self.engine_prewarm == EnginePrewarm::OnKeyDown {
+            self.engine_prewarm = EnginePrewarm::OnAppStart;
+        }
+        if self.engine_idle_unload_minutes == LEGACY_ENGINE_IDLE_UNLOAD_MINUTES {
+            self.engine_idle_unload_minutes = DEFAULT_ENGINE_IDLE_UNLOAD_MINUTES;
+        }
+        true
+    }
+
     /// One-time move of Swedish dictation off the retired KB-Whisper
     /// Tiny/Base/Small choices, recorded by `model_lineup_version` so a second
     /// run is a no-op. Returns true when it ran (the caller must persist).
@@ -1001,6 +1036,16 @@ impl Settings {
             // recommendation as a harmless placeholder.
             FileModel::PianissimoOriginal => Ok((WhisperModel::recommended(Language::Swedish), true)),
         }
+    }
+
+    /// True when `profile_id`'s live dictation model is Pianissimo.
+    pub fn profile_uses_pianissimo(&self, profile_id: &str) -> bool {
+        self.live_model_for_profile(profile_id).is_ok_and(|(_, pianissimo)| pianissimo)
+    }
+
+    /// True when any dictation profile's live model is Pianissimo.
+    pub fn any_profile_uses_pianissimo(&self) -> bool {
+        self.resolved_hotkey_profiles().iter().any(|profile| self.profile_uses_pianissimo(&profile.id))
     }
 
     pub fn set_profile_model(&mut self, profile_id: &str, preference: FileModelPreference) -> Result<(), String> {
@@ -3097,13 +3142,62 @@ mod tests {
     }
 
     #[test]
+    fn engine_defaults_migration_moves_only_users_still_on_the_old_defaults() {
+        let old = |prewarm, minutes| Settings {
+            engine_prewarm: prewarm,
+            engine_idle_unload_minutes: minutes,
+            engine_defaults_version: 0,
+            ..Default::default()
+        };
+        let mut untouched = old(EnginePrewarm::OnKeyDown, 10);
+        assert!(untouched.migrate_engine_defaults());
+        assert_eq!(untouched.engine_prewarm, EnginePrewarm::OnAppStart);
+        assert_eq!(untouched.engine_idle_unload_minutes, 60);
+        assert_eq!(untouched.engine_defaults_version, ENGINE_DEFAULTS_VERSION);
+
+        let mut chose_off = old(EnginePrewarm::Off, 10);
+        assert!(chose_off.migrate_engine_defaults());
+        assert_eq!(chose_off.engine_prewarm, EnginePrewarm::Off);
+        assert_eq!(chose_off.engine_idle_unload_minutes, 60);
+
+        let mut chose_timeout = old(EnginePrewarm::OnAppStart, 3);
+        chose_timeout.migrate_engine_defaults();
+        assert_eq!(chose_timeout.engine_prewarm, EnginePrewarm::OnAppStart);
+        assert_eq!(chose_timeout.engine_idle_unload_minutes, 3);
+
+        let mut never_unload = old(EnginePrewarm::OnKeyDown, 0);
+        never_unload.migrate_engine_defaults();
+        assert_eq!(never_unload.engine_idle_unload_minutes, 0);
+    }
+
+    #[test]
+    fn engine_defaults_migration_runs_once() {
+        let mut settings = Settings {
+            engine_prewarm: EnginePrewarm::OnKeyDown,
+            engine_idle_unload_minutes: 10,
+            engine_defaults_version: 0,
+            ..Default::default()
+        };
+        assert!(settings.migrate_engine_defaults());
+        // The user later picks the old values again on purpose: kept.
+        settings.engine_prewarm = EnginePrewarm::OnKeyDown;
+        settings.engine_idle_unload_minutes = 10;
+        assert!(!settings.migrate_engine_defaults());
+        assert_eq!(settings.engine_prewarm, EnginePrewarm::OnKeyDown);
+        assert_eq!(settings.engine_idle_unload_minutes, 10);
+        assert_eq!(Settings::default().engine_defaults_version, ENGINE_DEFAULTS_VERSION);
+        let legacy: Settings = serde_json::from_str(r#"{"engine_prewarm":"on_key_down"}"#).unwrap();
+        assert_eq!(legacy.engine_defaults_version, 0);
+    }
+
+    #[test]
     fn engine_settings_default_roundtrip_and_tolerate_missing_keys() {
         let defaults = Settings::default();
-        assert_eq!(defaults.engine_prewarm, EnginePrewarm::OnKeyDown);
-        assert_eq!(defaults.engine_idle_unload_minutes, 10);
+        assert_eq!(defaults.engine_prewarm, EnginePrewarm::OnAppStart);
+        assert_eq!(defaults.engine_idle_unload_minutes, 60);
         let legacy: Settings = serde_json::from_str(r#"{"language":"sv"}"#).unwrap();
-        assert_eq!(legacy.engine_prewarm, EnginePrewarm::OnKeyDown);
-        assert_eq!(legacy.engine_idle_unload_minutes, 10);
+        assert_eq!(legacy.engine_prewarm, EnginePrewarm::OnAppStart);
+        assert_eq!(legacy.engine_idle_unload_minutes, 60);
         let json = serde_json::to_value(Settings {
             engine_prewarm: EnginePrewarm::OnAppStart,
             engine_idle_unload_minutes: 3,

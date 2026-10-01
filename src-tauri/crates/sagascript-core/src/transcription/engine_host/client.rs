@@ -92,6 +92,28 @@ impl std::fmt::Debug for TestHook {
     }
 }
 
+/// Model-load lifecycle reported to a [`LoadObserver`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadEvent {
+    /// The host is being started and/or the model is being loaded.
+    Started,
+    /// The model is loaded and ready.
+    Ready { load_ms: u64 },
+    /// Start or load failed (not emitted for a cancelled wait).
+    Failed(String),
+}
+
+/// Callback told when a model load starts, finishes or fails, from whichever
+/// thread drives the load (pre-warm or the first transcription).
+#[derive(Clone)]
+pub struct LoadObserver(pub Arc<dyn Fn(LoadEvent) + Send + Sync>);
+
+impl std::fmt::Debug for LoadObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LoadObserver")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EngineHostConfig {
     pub host_path: PathBuf,
@@ -120,6 +142,8 @@ pub struct EngineHostConfig {
     /// See [`TestHook`].
     #[doc(hidden)]
     pub test_hook: Option<TestHook>,
+    /// Told when a model load starts, finishes or fails (see [`LoadObserver`]).
+    pub load_observer: Option<LoadObserver>,
 }
 
 impl EngineHostConfig {
@@ -146,6 +170,7 @@ impl EngineHostConfig {
             busy_retry_delay: Duration::from_millis(50),
             temp_dir: None,
             test_hook: None,
+            load_observer: None,
         }
     }
 }
@@ -340,6 +365,33 @@ impl EngineHostClient {
     pub fn unload(&self) -> Result<()> {
         let _g = self.inner.lifecycle.lock().unwrap();
         self.inner.unload_locked()
+    }
+
+    /// Free model memory now if the model is loaded and nothing is using it
+    /// (memory-pressure response). Returns whether an unload was performed;
+    /// a busy or mid-lifecycle client is left alone. The next request reloads.
+    pub fn unload_if_idle(&self) -> bool {
+        let inner = &self.inner;
+        {
+            let st = inner.state.lock().unwrap();
+            if st.active > 0 || !st.loaded {
+                return false;
+            }
+        }
+        let Ok(_g) = inner.lifecycle.try_lock() else {
+            return false;
+        };
+        {
+            let mut st = inner.state.lock().unwrap();
+            if st.active > 0 || !st.loaded {
+                return false;
+            }
+            st.loaded = false;
+        }
+        if let Err(e) = inner.unload_locked() {
+            tracing::warn!(error = %e, "memory-pressure unload failed");
+        }
+        true
     }
 
     /// Graceful shutdown (`shutdown` op, then kill after the grace period).
@@ -758,6 +810,30 @@ impl Inner {
         if cancel.is_some_and(CancelToken::is_cancelled) {
             return Err(EngineHostError::Cancelled);
         }
+        self.notify_load(LoadEvent::Started);
+        let result = self.start_and_load_locked(cancel);
+        match &result {
+            Ok((_, load_ms)) => self.notify_load(LoadEvent::Ready { load_ms: *load_ms }),
+            Err(EngineHostError::Cancelled) => {}
+            Err(error) => self.notify_load(LoadEvent::Failed(error.to_string())),
+        }
+        let (proc, _) = result?;
+        let mut st = self.state.lock().unwrap();
+        st.last_activity = Instant::now();
+        let caps = st.caps.clone().expect("caps set with proc");
+        Ok((proc, caps))
+    }
+
+    fn notify_load(&self, event: LoadEvent) {
+        if let Some(observer) = &self.cfg.load_observer {
+            (observer.0)(event);
+        }
+    }
+
+    /// Start the host if needed and load the model if not yet loaded. Returns
+    /// the load time in ms (0 when nothing had to load). Lifecycle lock held.
+    fn start_and_load_locked(&self, cancel: Option<&CancelToken>) -> Result<(Arc<HostProcess>, u64)> {
+        let started = Instant::now();
         let (proc, _) = self.ensure_started_locked()?;
         let loaded = self.state.lock().unwrap().loaded;
         if !loaded {
@@ -769,10 +845,7 @@ impl Inner {
             st.loaded = true;
             st.last_load = Some(r);
         }
-        let mut st = self.state.lock().unwrap();
-        st.last_activity = Instant::now();
-        let caps = st.caps.clone().expect("caps set with proc");
-        Ok((proc, caps))
+        Ok((proc, u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)))
     }
 
     fn record_crash(st: &mut State) {

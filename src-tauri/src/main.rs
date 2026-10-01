@@ -760,33 +760,57 @@ fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
     settings
 }
 
-/// True when any dictation profile's live model is Pianissimo.
-fn any_profile_uses_pianissimo(settings: &sagascript_core::settings::Settings) -> bool {
-    settings
-        .resolved_hotkey_profiles()
-        .iter()
-        .any(|profile| settings.live_model_for_profile(&profile.id).is_ok_and(|(_, pianissimo)| pianissimo))
+/// Key-down pre-warm: start loading the Pianissimo model while the user is
+/// still speaking (also after an idle unload under `on_app_start`). Never
+/// blocks the hotkey path: the work runs on its own thread and this only reads
+/// settings.
+fn prewarm_engine_on_key_down(ctrl: &tauri::State<'_, SharedController>) {
+    use sagascript_core::transcription::pianissimo_backend::{warm_in_background, warm_on, WarmTrigger};
+    let c = ctrl.lock().unwrap();
+    let profile_id = c.active_hotkey_profile().map(|profile| profile.id.clone());
+    warm_on(c.settings(), WarmTrigger::KeyDown, profile_id.as_deref(), warm_in_background);
 }
 
-/// `engine_prewarm = on_key_down`: start loading the Pianissimo model while the
-/// user is still speaking. Never blocks the hotkey path: the work runs on its
-/// own thread and this only reads settings.
-fn prewarm_engine_on_key_down(ctrl: &tauri::State<'_, SharedController>) {
-    let wanted = {
-        let c = ctrl.lock().unwrap();
-        let profile_id = c
-            .active_hotkey_profile()
-            .map(|profile| profile.id.clone())
-            .unwrap_or_else(|| c.settings().default_profile().id);
-        c.settings().engine_prewarm == sagascript_core::settings::EnginePrewarm::OnKeyDown
-            && c.settings()
-                .live_model_for_profile(&profile_id)
-                .is_ok_and(|(_, pianissimo)| pianissimo)
-    };
-    if wanted {
-        sagascript_core::transcription::pianissimo_backend::warm_in_background("key_down");
-    }
+/// Tell the overlay when the engine starts loading, is ready or failed to load.
+fn forward_engine_load_state(app: &tauri::AppHandle) {
+    use sagascript_core::transcription::engine_host::LoadEvent;
+    let app = app.clone();
+    sagascript_core::transcription::pianissimo_backend::set_load_listener(move |event| {
+        let payload = match event {
+            LoadEvent::Started => serde_json::json!({ "state": "loading" }),
+            LoadEvent::Ready { load_ms } => serde_json::json!({ "state": "ready", "loadMs": load_ms }),
+            LoadEvent::Failed(message) => serde_json::json!({ "state": "failed", "message": message }),
+        };
+        let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
+    });
 }
+
+/// Warm the engine for `trigger` (wake, app start) when settings call for it.
+fn prewarm_engine_for(app: &tauri::AppHandle, trigger: sagascript_core::transcription::pianissimo_backend::WarmTrigger) {
+    use sagascript_core::transcription::pianissimo_backend::{warm_in_background, warm_on};
+    let ctrl: tauri::State<'_, SharedController> = app.state();
+    let c = ctrl.lock().unwrap();
+    warm_on(c.settings(), trigger, None, warm_in_background);
+}
+
+/// Hide the overlay after its error state has been readable, unless a new
+/// dictation started in the meantime.
+fn hide_overlay_after_error(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(OVERLAY_ERROR_VISIBLE).await;
+        let idle = {
+            let ctrl: tauri::State<'_, SharedController> = app.state();
+            let idle = matches!(ctrl.lock().unwrap().state(), app_controller::AppState::Idle);
+            idle
+        };
+        if idle {
+            dispatch_to_main(&app, overlay::hide);
+        }
+    });
+}
+
+/// How long the overlay keeps its error state visible after a failed dictation.
+const OVERLAY_ERROR_VISIBLE: Duration = Duration::from_millis(2500);
 
 fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::BareHotkeyState) {
     let ctrl: tauri::State<'_, SharedController> = app.state();
@@ -1334,12 +1358,18 @@ fn main() {
                 {
                     // `engine_prewarm = on_app_start`: load the Pianissimo engine in
                     // the background when a dictation profile uses it.
-                    let ctrl: tauri::State<'_, SharedController> = app.state();
-                    let c = ctrl.lock().unwrap();
-                    if c.settings().engine_prewarm == sagascript_core::settings::EnginePrewarm::OnAppStart
-                        && any_profile_uses_pianissimo(c.settings())
+                    let handle = app.handle().clone();
+                    forward_engine_load_state(&handle);
+                    prewarm_engine_for(&handle, sagascript_core::transcription::pianissimo_backend::WarmTrigger::AppStart);
+                    #[cfg(target_os = "macos")]
                     {
-                        sagascript_core::transcription::pianissimo_backend::warm_in_background("app_start");
+                        platform::macos::observe_memory_pressure(|| {
+                            sagascript_core::transcription::pianissimo_backend::unload_if_idle_for_memory_pressure();
+                        });
+                        let wake_app = handle.clone();
+                        platform::macos::observe_system_wake(move || {
+                            prewarm_engine_for(&wake_app, sagascript_core::transcription::pianissimo_backend::WarmTrigger::Wake);
+                        });
                     }
                 }
                 std::thread::spawn(move || {
@@ -2373,11 +2403,11 @@ fn stop_recording_and_transcribe(
                 c.on_transcription_error(&e.to_string());
                 drop(c);
                 let _ = app_handle.emit(events::event::ERROR, e.to_string());
+                // Let the overlay show its error state briefly before hiding.
+                let _ = app_handle.emit(events::event::STATE_CHANGED, "error");
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                dispatch_to_main(&app_handle, |app| {
-                    overlay::hide(app);
-                    update_tray_status(app, "idle");
-                });
+                dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
+                hide_overlay_after_error(app_handle.clone());
                 info!("Error flow complete, app should remain running");
             }
         }
@@ -2590,9 +2620,16 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 
             // Update controller with all new settings
             let profiles = new_settings.resolved_hotkey_profiles();
+            let warm_after_change = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
+                &old_settings,
+                &new_settings,
+            );
             {
                 let mut c = ctrl.lock().unwrap();
                 c.update_settings(new_settings);
+            }
+            if warm_after_change {
+                sagascript_core::transcription::pianissimo_backend::warm_in_background("profile_change");
             }
             update_profiles_menu(&app, &profiles);
 

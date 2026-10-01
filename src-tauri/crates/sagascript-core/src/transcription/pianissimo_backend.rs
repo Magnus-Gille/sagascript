@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 use crate::error::DictationError;
-use crate::settings::Settings;
+use crate::settings::{EnginePrewarm, Settings};
 use crate::transcription::engine_host::{
-    CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, LoadSpec,
+    CancelToken, ClientIdentity, EngineHostClient, EngineHostConfig, EngineHostError, LoadEvent, LoadObserver, LoadSpec,
     Transcription, WindowTiming,
 };
 use crate::transcription::dev_overrides::env_override;
@@ -224,6 +224,23 @@ fn idle_policy(minutes: u32) -> (Option<Duration>, Option<Duration>) {
     (Some(unload), Some(unload * 2))
 }
 
+type LoadListener = Box<dyn Fn(LoadEvent) + Send + Sync>;
+
+static LOAD_LISTENER: OnceLock<LoadListener> = OnceLock::new();
+
+/// Register the process-wide listener told when the shared engine starts,
+/// finishes or fails loading its model (the app forwards this to the overlay).
+/// First registration wins.
+pub fn set_load_listener(listener: impl Fn(LoadEvent) + Send + Sync + 'static) {
+    let _ = LOAD_LISTENER.set(Box::new(listener));
+}
+
+fn forward_load_event(event: LoadEvent) {
+    if let Some(listener) = LOAD_LISTENER.get() {
+        listener(event);
+    }
+}
+
 /// Engine-host configuration for an explicit host binary (no presence checks).
 pub fn config_for_host(host: PathBuf, settings: &Settings) -> EngineHostConfig {
     let mut config = EngineHostConfig::new(
@@ -235,6 +252,7 @@ pub fn config_for_host(host: PathBuf, settings: &Settings) -> EngineHostConfig {
         },
     );
     config.identity = client_identity();
+    config.load_observer = Some(LoadObserver(std::sync::Arc::new(forward_load_event)));
     let (unload, shutdown) = idle_policy(settings.engine_idle_unload_minutes);
     config.idle_unload = unload;
     config.idle_shutdown = shutdown;
@@ -366,6 +384,90 @@ pub fn engine_is_warm() -> bool {
         .ok()
         .and_then(|slot| slot.as_ref().map(|shared| shared.client.snapshot().loaded))
         .unwrap_or(false)
+}
+
+/// An event that may warrant loading the engine ahead of the next utterance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarmTrigger {
+    /// The app just started.
+    AppStart,
+    /// The push-to-talk key went down (the active profile is passed in).
+    KeyDown,
+    /// The system woke from sleep (the model may have been evicted).
+    Wake,
+    /// A profile's settings changed (see [`profile_change_needs_warm`]).
+    ProfileChange,
+}
+
+impl WarmTrigger {
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::AppStart => "app_start",
+            Self::KeyDown => "key_down",
+            Self::Wake => "wake",
+            Self::ProfileChange => "profile_change",
+        }
+    }
+}
+
+/// Whether `trigger` should load the engine under `settings`. `active_profile`
+/// is only consulted for [`WarmTrigger::KeyDown`].
+///
+/// App start, wake and profile changes follow `engine_prewarm = on_app_start`
+/// and need some profile on Pianissimo. Key-down warms in both `on_app_start`
+/// and `on_key_down` (an additional trigger after an idle unload) when the
+/// active profile uses Pianissimo. `off` never warms.
+pub fn warm_wanted(settings: &Settings, trigger: WarmTrigger, active_profile: Option<&str>) -> bool {
+    match (settings.engine_prewarm, trigger) {
+        (EnginePrewarm::Off, _) => false,
+        (_, WarmTrigger::KeyDown) => {
+            let id = active_profile.map(str::to_owned).unwrap_or_else(|| settings.default_profile().id);
+            settings.profile_uses_pianissimo(&id)
+        }
+        (EnginePrewarm::OnKeyDown, _) => false,
+        (EnginePrewarm::OnAppStart, _) => settings.any_profile_uses_pianissimo(),
+    }
+}
+
+/// Call `warm(reason)` when [`warm_wanted`]. The hook is injected so tests need
+/// no engine; production passes [`warm_in_background`].
+pub fn warm_on(
+    settings: &Settings,
+    trigger: WarmTrigger,
+    active_profile: Option<&str>,
+    warm: impl FnOnce(&'static str),
+) -> bool {
+    let wanted = warm_wanted(settings, trigger, active_profile);
+    if wanted {
+        warm(trigger.reason());
+    }
+    wanted
+}
+
+/// True when a settings change newly puts a profile on Pianissimo (or newly
+/// enables `on_app_start` while one is), so the engine should load now.
+pub fn profile_change_needs_warm(old: &Settings, new: &Settings) -> bool {
+    if !warm_wanted(new, WarmTrigger::ProfileChange, None) {
+        return false;
+    }
+    if !warm_wanted(old, WarmTrigger::ProfileChange, None) {
+        return true;
+    }
+    new.resolved_hotkey_profiles()
+        .iter()
+        .any(|profile| new.profile_uses_pianissimo(&profile.id) && !old.profile_uses_pianissimo(&profile.id))
+}
+
+/// Free the engine's model memory when the system reports memory pressure and
+/// no transcription is running. The next utterance reloads (and shows the
+/// loading state). Never starts anything. Returns whether it unloaded.
+pub fn unload_if_idle_for_memory_pressure() -> bool {
+    let client = shared_slot().lock().ok().and_then(|slot| slot.as_ref().map(|shared| shared.client.clone()));
+    let unloaded = client.is_some_and(|client| client.unload_if_idle());
+    if unloaded {
+        tracing::info!("Pianissimo engine unloaded under memory pressure");
+    }
+    unloaded
 }
 
 /// Load the model in the background so the next utterance starts warm. Returns
@@ -677,6 +779,87 @@ mod tests {
             idle_policy(10),
             (Some(Duration::from_secs(600)), Some(Duration::from_secs(1200)))
         );
+    }
+
+    fn pianissimo_settings(prewarm: EnginePrewarm) -> Settings {
+        let mut settings = Settings::default();
+        settings.language = crate::settings::Language::Swedish;
+        settings.engine_prewarm = prewarm;
+        settings
+            .set_profile_model_gated("default", crate::settings::FileModelPreference::PianissimoOriginal, true)
+            .unwrap();
+        settings
+    }
+
+    fn whisper_settings(prewarm: EnginePrewarm) -> Settings {
+        let mut settings = Settings::default();
+        settings.language = crate::settings::Language::Swedish;
+        settings.engine_prewarm = prewarm;
+        settings
+            .set_profile_model_gated(
+                "default",
+                crate::settings::FileModelPreference::Whisper(crate::settings::WhisperModel::KbWhisperMedium),
+                true,
+            )
+            .unwrap();
+        settings
+    }
+
+    #[test]
+    fn warm_triggers_follow_prewarm_mode_and_pianissimo_use() {
+        let on_start = pianissimo_settings(EnginePrewarm::OnAppStart);
+        assert!(on_start.any_profile_uses_pianissimo());
+        for trigger in [WarmTrigger::AppStart, WarmTrigger::Wake, WarmTrigger::ProfileChange, WarmTrigger::KeyDown] {
+            assert!(warm_wanted(&on_start, trigger, None), "{trigger:?}");
+        }
+        let on_key = pianissimo_settings(EnginePrewarm::OnKeyDown);
+        assert!(warm_wanted(&on_key, WarmTrigger::KeyDown, None));
+        for trigger in [WarmTrigger::AppStart, WarmTrigger::Wake, WarmTrigger::ProfileChange] {
+            assert!(!warm_wanted(&on_key, trigger, None), "{trigger:?}");
+        }
+        let off = pianissimo_settings(EnginePrewarm::Off);
+        for trigger in [WarmTrigger::AppStart, WarmTrigger::Wake, WarmTrigger::ProfileChange, WarmTrigger::KeyDown] {
+            assert!(!warm_wanted(&off, trigger, None), "{trigger:?}");
+        }
+    }
+
+    #[test]
+    fn warm_triggers_do_nothing_without_a_pianissimo_profile() {
+        let settings = whisper_settings(EnginePrewarm::OnAppStart);
+        assert!(!settings.any_profile_uses_pianissimo());
+        for trigger in [WarmTrigger::AppStart, WarmTrigger::Wake, WarmTrigger::ProfileChange, WarmTrigger::KeyDown] {
+            assert!(!warm_wanted(&settings, trigger, None), "{trigger:?}");
+        }
+    }
+
+    #[test]
+    fn wake_and_key_down_call_the_injected_warm_hook_with_their_reason() {
+        let settings = pianissimo_settings(EnginePrewarm::OnAppStart);
+        assert!(settings.any_profile_uses_pianissimo());
+        let calls = std::cell::RefCell::new(Vec::new());
+        assert!(warm_on(&settings, WarmTrigger::Wake, None, |r| calls.borrow_mut().push(r)));
+        assert!(warm_on(&settings, WarmTrigger::KeyDown, Some("default"), |r| calls.borrow_mut().push(r)));
+        assert_eq!(*calls.borrow(), vec!["wake", "key_down"]);
+        let off = pianissimo_settings(EnginePrewarm::Off);
+        assert!(!warm_on(&off, WarmTrigger::Wake, None, |_| panic!("must not warm when off")));
+    }
+
+    #[test]
+    fn switching_a_profile_to_pianissimo_warms_but_other_changes_do_not() {
+        let before = whisper_settings(EnginePrewarm::OnAppStart);
+        let after = pianissimo_settings(EnginePrewarm::OnAppStart);
+        assert!(after.any_profile_uses_pianissimo() && !before.any_profile_uses_pianissimo());
+        assert!(profile_change_needs_warm(&before, &after));
+        // Already on Pianissimo: an unrelated edit does not re-warm.
+        assert!(!profile_change_needs_warm(&after, &after.clone()));
+        // Switching away does not warm.
+        assert!(!profile_change_needs_warm(&after, &before));
+        // Turning pre-warm on while a profile is on Pianissimo warms once.
+        let mut was_off = after.clone();
+        was_off.engine_prewarm = EnginePrewarm::Off;
+        assert!(profile_change_needs_warm(&was_off, &after));
+        // With pre-warm off nothing warms.
+        assert!(!profile_change_needs_warm(&before, &was_off));
     }
 
     fn app_layout(root: &Path) -> (PathBuf, PathBuf) {

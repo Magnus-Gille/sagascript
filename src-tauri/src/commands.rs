@@ -628,7 +628,18 @@ pub async fn set_profile_model(
     let persisted = sagascript_core::settings::store::try_update(|settings| {
         settings.set_profile_model(&profile_id, preference)
     })?;
-    controller.lock().unwrap().update_settings(persisted);
+    let warm = {
+        let mut ctrl = controller.lock().unwrap();
+        let warm = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
+            ctrl.settings(),
+            &persisted,
+        );
+        ctrl.update_settings(persisted);
+        warm
+    };
+    if warm {
+        sagascript_core::transcription::pianissimo_backend::warm_in_background("profile_change");
+    }
     Ok(())
 }
 
