@@ -61,6 +61,39 @@ test("manifest creation rejects non-final versions and malformed identities", ()
   assert.throws(() => createManifest({ dir, version: "1.2.3", sha: "abc", tree: TREE }));
 });
 
+test("manifest covers the arm64 portable zip and the 5-line checksum file", () => {
+  const dir = mkdtempSync(join(tmpdir(), "prebuild-zip-"));
+  const sub = join(dir, "windows-arm64-unsigned-candidate");
+  mkdirSync(sub);
+  const names = [
+    "Sagascript-Windows-arm64-CLI.exe",
+    "Sagascript-Windows-arm64-Portable.exe",
+    "Sagascript-Windows-arm64-Portable.zip",
+    "Sagascript-Windows-arm64-Setup.exe",
+    "Sagascript-Windows-arm64.msi",
+    "SHA256SUMS-Windows-arm64",
+  ];
+  for (const name of names) writeFileSync(join(sub, name), name);
+  const manifest = createManifest({ dir, version: "1.2.3", sha: SHA, tree: TREE });
+  assert.ok(manifest.files.some((f) => f.name.endsWith("-Portable.zip")));
+  assert.deepEqual(verifyManifest({ dir, manifest, version: "1.2.3", sha: SHA, tree: TREE }), []);
+  const w = workflows.release;
+  assert.match(w, /files\+=\("Sagascript-Windows-\$arch-Portable\.zip"\)\s*\n\s+expected=5/);
+  assert.match(w, /expected=4/);
+  const v = read("scripts/verify-release-draft.sh");
+  assert.match(v, /names\+=\("Sagascript-Windows-\$arch-Portable\.zip"\)/);
+});
+
+test("windows-package keeps the console CLI, installed-CLI and portable zip steps unconditional by event", () => {
+  const w = workflows["windows-package"];
+  assert.match(w, /workflow_call:/);
+  assert.match(w, /build\\cli\\sagascript-cli\.exe/);
+  assert.match(w, /Verify silent per-user install runs the installed ARM64 CLI/);
+  assert.match(w, /Build and verify ARM64 portable zip/);
+  assert.match(w, /Verify installers carry the console CLI/);
+  assert.doesNotMatch(w, /if:[^\n]*github\.event_name/);
+});
+
 test("prebuild runs on main pushes only, never on pull requests, and never cancels", () => {
   const w = workflows["prebuild-release"];
   assert.match(w, /on:\s*\n\s+push:\s*\n\s+branches: \[main\]/);

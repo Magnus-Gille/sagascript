@@ -141,7 +141,16 @@ only as a prerelease after the Windows acceptance you require, and verify the
 release page and checksums before linking it from the product website. The
 candidate workflow itself stays non-publishing.
 
-The macOS build also simulates replacing an obsolete
+Windows CLI: the NSIS and MSI installers ship the console CLI as
+`sagascript-cli.exe` beside `sagascript.exe` (and `engine-host\` on ARM64), so
+Pianissimo works from the installed CLI by full path; the installers do not edit
+`PATH`. The ARM64 candidate also has `Sagascript-Windows-arm64-Portable.zip`
+(app, CLI, `engine-host\`) and its checksum in `SHA256SUMS-Windows-arm64`. The
+promote step includes the zip in the draft `vVERSION` (arm64 set: 5 files incl.
+the zip, 5-line checksum file; x64 set: 4 files). The release notes must say that the single-file
+`-CLI.exe` and `-Portable.exe` remain Whisper-only (no `engine-host\`).
+
+The macOS build job also simulates replacing an obsolete
 `/Applications/Sagascript.app`, then runs a real Norwegian file transcription
 through `/usr/local/bin/sagascript`. This protects the supported app-bundle CLI
 link from silently continuing to execute a stale binary after an upgrade.

@@ -1728,12 +1728,12 @@ fn transcribe_file(
         eprintln!("Encoding audio...");
         emit_progress(progress_json, file_started, "encoding", None);
     };
-    let mut segments = if duration > 10.0 {
+    let segments = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap());
         let pb_cb = pb.clone();
         let segments =
-            backend.transcribe_sync_with_options_segments(&audio, language, &opts, move |pct| {
+            backend.transcribe_sync_with_gap_recovery(&audio, language, &opts, move |pct| {
                 crate::set_transcription_progress(&pb_cb, pct);
                 if pct > 1 { emit_progress(progress_json, file_started, "transcribing", Some(pct.clamp(0, 100) as u8)); }
             }, Some(&on_encode_start))?;
@@ -1741,11 +1741,12 @@ fn transcribe_file(
         segments
     } else {
         eprintln!("Transcribing...");
-        backend.transcribe_sync_with_options_segments(&audio, language, &opts, move |pct| {
+        backend.transcribe_sync_with_gap_recovery(&audio, language, &opts, move |pct| {
             if pct > 1 { emit_progress(progress_json, file_started, "transcribing", Some(pct.clamp(0, 100) as u8)); }
         }, Some(&on_encode_start))?
     };
     emit_progress(args.progress_json, file_started, "finalizing", None);
+    let mut segments = segments;
     let mut corrections = apply_glossary_corrections(&mut segments, glossary);
     if args.correct_hints {
         corrections.extend(apply_hint_corrections(&mut segments, correction_vocabulary));
@@ -3495,6 +3496,22 @@ mod tests {
             FileModel::Whisper(WhisperModel::BaseEn));
         assert!(resolve_file_model(Some("pianissimo-sv"), Language::English, &settings).is_err());
         assert!(resolve_file_model(Some("auto"), Language::Swedish, &settings).is_err());
+    }
+
+    #[test]
+    fn language_detection_never_downloads_an_encoder() {
+        // Local mode makes no network requests after setup: detection may use
+        // a Core ML encoder only if `download-model` already installed it.
+        let production = include_str!("transcribe.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let start = production.find("fn detect_file_language(").unwrap();
+        let end = production[start..].find("fn neutral_language_detection_model(").unwrap();
+        let body = &production[start..start + end];
+        for forbidden in ["backfill", "download_model", "ensure_coreml_encoder", "block_on"] {
+            assert!(!body.contains(forbidden), "detection path must not call {forbidden}");
+        }
     }
 
     #[test]

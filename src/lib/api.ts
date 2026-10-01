@@ -100,6 +100,17 @@ export interface MeetingJobSnapshot {
   reprocessing?: import("./meeting-reprocessing-types").ReprocessingResult | null;
 }
 
+export interface EngineLoadState {
+  state: string;
+  source?: string;
+  loadMs?: number;
+  message?: string;
+}
+
+export async function getEngineLoadState(): Promise<EngineLoadState> {
+  return invoke("get_engine_load_state");
+}
+
 export async function getState(): Promise<AppState> {
   return invoke("get_state");
 }

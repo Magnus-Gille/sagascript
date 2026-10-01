@@ -22,7 +22,7 @@ const [
   await Promise.all([
     source("src/lib/api.ts"),
     source("src/lib/Settings.svelte"),
-    source("src/lib/Overlay.svelte"),
+    source("src/lib/overlay-state.ts"),
     source("src/lib/Onboarding.svelte"),
     source("src-tauri/crates/sagascript-cli/src/transcribe.rs"),
     source("src-tauri/crates/sagascript-cli/src/models.rs"),

@@ -173,9 +173,14 @@ check_pianissimo_smoke() {
 
 check_windows() { # ARCH DIR SUMS_FILE_DIR
   local arch=$1 dir=$2
-  check_sums "$dir" "SHA256SUMS-Windows-$arch" \
-    "Sagascript-Windows-$arch-CLI.exe" "Sagascript-Windows-$arch-Portable.exe" \
-    "Sagascript-Windows-$arch-Setup.exe" "Sagascript-Windows-$arch.msi"
+  local names=("Sagascript-Windows-$arch-CLI.exe" "Sagascript-Windows-$arch-Portable.exe"
+    "Sagascript-Windows-$arch-Setup.exe" "Sagascript-Windows-$arch.msi")
+  # The ARM64 set also carries the portable zip (#269): 5 files; x64 has 4.
+  [[ $arch == arm64 ]] && names+=("Sagascript-Windows-$arch-Portable.zip")
+  check_sums "$dir" "SHA256SUMS-Windows-$arch" "${names[@]}"
+  local count
+  count=$(grep -c . "$dir/SHA256SUMS-Windows-$arch")
+  [[ $count == ${#names[@]} ]] || { echo "SHA256SUMS-Windows-$arch lists $count files, expected ${#names[@]}"; return 1; }
 }
 check_windows_evidence() { # ARCH JSON
   python3 - "$2" "$version" "$short" <<'PY'

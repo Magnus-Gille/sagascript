@@ -1,12 +1,34 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { getActiveHotkeyProfile, getState, type HotkeyProfile } from "./api";
+  import { getActiveHotkeyProfile, getEngineLoadState, getState, type HotkeyProfile } from "./api";
+  import {
+    LOADING_LABEL_DELAY_MS,
+    initialOverlayState,
+    isWorking,
+    needsLoadingTimer,
+    overlayLabel,
+    reduceOverlay,
+    type OverlayAction,
+  } from "./overlay-state";
 
-  let profile: HotkeyProfile | null = $state(null);
-  let phase = $state("recording");
-  const working = $derived(phase === "transcribing" || phase === "loading_model");
-  const label = $derived.by(() => working ? "Transcribing…" : profile ? `Recording · ${languageLabel(profile.language)}` : "Recording…");
+  let profile = $state<HotkeyProfile | null>(null);
+  let overlay = $state(initialOverlayState);
+  const working = $derived(isWorking(overlay.phase));
+  const failed = $derived(overlay.phase === "error");
+  const label = $derived(overlayLabel(overlay, profile?.language ?? null, navigator.language));
+
+  function dispatch(action: OverlayAction) {
+    overlay = reduceOverlay(overlay, action);
+  }
+
+  // Show "Loading model" only after the load has kept the user waiting for a
+  // moment, so a warm engine never flashes the label.
+  $effect(() => {
+    if (!needsLoadingTimer(overlay)) return;
+    const timer = setTimeout(() => dispatch({ type: "loading-delay-elapsed" }), LOADING_LABEL_DELAY_MS);
+    return () => clearTimeout(timer);
+  });
 
   onMount(() => {
     let disposed = false;
@@ -18,28 +40,35 @@
       profile = event.payload;
     }).then(remember);
     const stateListener = listen<string>("state-changed", (event) => {
-      if (["recording", "transcribing", "loading_model", "idle"].includes(event.payload)) {
-        revision++;
-        phase = event.payload;
-      }
+      revision++;
+      dispatch({ type: "state", value: event.payload });
     }).then(remember);
-    Promise.all([profileListener, stateListener]).then(async () => {
+    const engineListener = listen<{ state: string; source?: string }>("engine-load-state", (event) => {
+      revision++;
+      dispatch({ type: "engine", value: event.payload.state, source: event.payload.source });
+    }).then(remember);
+    Promise.all([profileListener, stateListener, engineListener]).then(async () => {
       const initialRevision = revision;
-      const [active, state] = await Promise.all([getActiveHotkeyProfile(), getState()]);
-      if (!disposed && revision === initialRevision) { profile = active; phase = state; }
+      const [active, state, engineLoad] = await Promise.all([
+        getActiveHotkeyProfile(),
+        getState(),
+        getEngineLoadState(),
+      ]);
+      if (!disposed && revision === initialRevision) {
+        profile = active;
+        dispatch({ type: "state", value: state });
+        // The overlay is created lazily, after the app-start warm began.
+        dispatch({ type: "engine", value: engineLoad.state, source: engineLoad.source });
+      }
     }).catch((error) => {
       console.warn("Could not initialize dictation indicator state", error);
     });
     return () => { disposed = true; stops.forEach((stop) => stop()); };
   });
-
-  function languageLabel(language: HotkeyProfile["language"]): string {
-    return ({ en: "English", sv: "Swedish", no: "Norwegian", fi: "Finnish", auto: "Auto" })[language];
-  }
 </script>
 
 <div class="pill" role="status" aria-live="polite" aria-busy={working}>
-  <span class:working class="dot" aria-hidden="true"></span>
+  <span class:working class:failed class="dot" aria-hidden="true"></span>
   <span class="label">{label}</span>
 </div>
 
@@ -75,6 +104,11 @@
     border: 2px solid rgba(255, 255, 255, 0.3);
     border-top-color: #9cc7ff;
     animation: spin 0.8s linear infinite;
+  }
+
+  .dot.failed {
+    background: #ff9f0a;
+    animation: none;
   }
 
   @keyframes spin { to { transform: rotate(360deg); } }

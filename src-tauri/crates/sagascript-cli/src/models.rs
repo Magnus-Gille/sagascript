@@ -1,4 +1,5 @@
 use clap::Args;
+use unicode_width::UnicodeWidthStr;
 
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{Language, WhisperModel};
@@ -32,18 +33,87 @@ fn list_note(model: WhisperModel, language: Language) -> &'static str {
     }
 }
 
-fn whisper_row(model: WhisperModel, language: Language, downloaded: &str) -> String {
-    format!(
-        "{:<20} {:<10} {:>5} MB  {:<12} {:<12} {}",
-        model_id_string(model),
-        model.display_name(),
-        model.size_mb(),
-        downloaded,
-        language.display_name(),
-        list_note(model, language),
-    )
-    .trim_end()
-    .to_string()
+/// One `list-models` table row, kept as cells so column widths can be derived
+/// from the data instead of hard-coded.
+struct ModelRow {
+    id: String,
+    name: String,
+    size: String,
+    downloaded: &'static str,
+    language: String,
+    note: &'static str,
+}
+
+fn whisper_row(model: WhisperModel, language: Language, downloaded: bool) -> ModelRow {
+    ModelRow {
+        id: model_id_string(model).to_string(),
+        name: model.display_name().to_string(),
+        size: format!("{} MB", model.size_mb()),
+        downloaded: yes_no(downloaded),
+        language: language.display_name().to_string(),
+        note: list_note(model, language),
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+fn pad_right(cell: &str, width: usize) -> String {
+    let fill = width.saturating_sub(UnicodeWidthStr::width(cell));
+    format!("{cell}{}", " ".repeat(fill))
+}
+
+fn pad_left(cell: &str, width: usize) -> String {
+    let fill = width.saturating_sub(UnicodeWidthStr::width(cell));
+    format!("{}{cell}", " ".repeat(fill))
+}
+
+/// Render rows as aligned lines (header and separator first). Widths come from
+/// the widest cell per column, measured in terminal display columns so wide or
+/// combining characters do not skew the table. Trailing whitespace is trimmed.
+fn format_table(rows: &[ModelRow]) -> Vec<String> {
+    const HEADERS: [&str; 5] = ["MODEL ID", "NAME", "SIZE", "DOWNLOADED", "LANGUAGE"];
+    let width = |header: &str, cells: &dyn Fn(&ModelRow) -> &str| {
+        rows.iter()
+            .map(|r| UnicodeWidthStr::width(cells(r)))
+            .chain([UnicodeWidthStr::width(header)])
+            .max()
+            .unwrap_or(0)
+    };
+    let w_id = width(HEADERS[0], &|r| &r.id);
+    let w_name = width(HEADERS[1], &|r| &r.name);
+    let w_size = width(HEADERS[2], &|r| &r.size);
+    let w_dl = width(HEADERS[3], &|r| r.downloaded);
+    let w_lang = width(HEADERS[4], &|r| &r.language);
+
+    let line = |id: &str, name: &str, size: &str, dl: &str, lang: &str, note: &str| {
+        format!(
+            "{}  {}  {}  {}  {}  {}",
+            pad_right(id, w_id),
+            pad_right(name, w_name),
+            pad_left(size, w_size),
+            pad_right(dl, w_dl),
+            pad_right(lang, w_lang),
+            note
+        )
+        .trim_end()
+        .to_string()
+    };
+
+    let mut lines = vec![
+        line(HEADERS[0], HEADERS[1], HEADERS[2], HEADERS[3], HEADERS[4], ""),
+        "-".repeat(w_id + w_name + w_size + w_dl + w_lang + 8),
+    ];
+    lines.extend(
+        rows.iter()
+            .map(|r| line(&r.id, &r.name, &r.size, r.downloaded, &r.language, r.note)),
+    );
+    lines
 }
 
 pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
@@ -59,62 +129,46 @@ pub fn list(args: ListModelsArgs) -> Result<(), DictationError> {
         ]
     };
 
-    // Header
-    println!(
-        "{:<20} {:<10} {:<8} {:<12} {:<12}",
-        "MODEL ID", "NAME", "SIZE", "DOWNLOADED", "LANGUAGE"
-    );
-    println!("{}", "-".repeat(62));
-
+    let mut rows = Vec::new();
     for lang in &languages {
-        let models = WhisperModel::models_for_language(*lang);
-        for &m in models {
-            let downloaded = if model::is_model_downloaded(m) {
-                "yes"
-            } else {
-                "no"
-            };
-
-            println!("{}", whisper_row(m, *lang, downloaded));
+        for &m in WhisperModel::models_for_language(*lang) {
+            rows.push(whisper_row(m, *lang, model::is_model_downloaded(m)));
         }
-        if *lang == Language::Swedish && sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
-            println!(
-                "{:<20} {:<10} {:>5} MB  {:<12} {:<12}",
-                "pianissimo-sv",
-                "Pianissimo",
-                (pianissimo_model::installed_size_bytes() / 1_048_576) as u32,
-                if pianissimo_model::is_downloaded() { "yes" } else { "no" },
-                lang.display_name(),
-            );
+        if *lang == Language::Swedish
+            && sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os()
+        {
+            rows.push(ModelRow {
+                id: "pianissimo-sv".into(),
+                name: "Pianissimo".into(),
+                size: format!("{} MB", pianissimo_model::installed_size_bytes() / 1_048_576),
+                downloaded: yes_no(pianissimo_model::is_downloaded()),
+                language: lang.display_name().to_string(),
+                note: "",
+            });
         }
     }
 
-    // Diarization models section (only when no language filter, or always show)
+    // Diarization models (only when no language filter) share the table so
+    // their columns line up with the Whisper rows above.
     #[cfg(feature = "diarization")]
     if args.language.is_none() {
         use sagascript_core::diarization::model as diar_model;
         use sagascript_core::diarization::model::DiarizationModel;
 
-        println!();
-        println!("Diarization models (speaker identification):");
-        println!("{}", "-".repeat(62));
-
         for &m in DiarizationModel::ALL {
-            let downloaded = if diar_model::is_model_downloaded(m) {
-                "yes"
-            } else {
-                "no"
-            };
-
-            println!(
-                "{:<20} {:<10} {:>5} MB  {:<12} {:<12}",
-                m.model_id(),
-                m.display_name(),
-                m.size_mb(),
-                downloaded,
-                "—",
-            );
+            rows.push(ModelRow {
+                id: m.model_id().to_string(),
+                name: m.display_name().to_string(),
+                size: format!("{} MB", m.size_mb()),
+                downloaded: yes_no(diar_model::is_model_downloaded(m)),
+                language: "—".into(),
+                note: "",
+            });
         }
+    }
+
+    for line in format_table(&rows) {
+        println!("{line}");
     }
 
     Ok(())
@@ -420,20 +474,72 @@ mod lineup_tests {
             (WhisperModel::KbWhisperBase, "kb-whisper-base"),
             (WhisperModel::KbWhisperSmall, "kb-whisper-small"),
         ] {
-            let row = whisper_row(model, Language::Swedish, "no");
+            let row = format_table(&[whisper_row(model, Language::Swedish, false)]).remove(2);
             assert!(row.starts_with(id), "{row}");
             assert!(row.ends_with(HIDDEN_IN_APP_NOTE), "{row}");
         }
         for model in [WhisperModel::KbWhisperMedium, WhisperModel::KbWhisperLarge] {
-            let row = whisper_row(model, Language::Swedish, "no");
+            let row = format_table(&[whisper_row(model, Language::Swedish, false)]).remove(2);
             assert!(!row.contains("hidden"), "{row}");
             assert!(!row.ends_with(' '), "{row:?}");
         }
         // Other languages are unchanged.
-        assert!(!whisper_row(WhisperModel::Tiny, Language::Auto, "no").contains("hidden"));
+        assert!(!format_table(&[whisper_row(WhisperModel::Tiny, Language::Auto, false)])[2].contains("hidden"));
         // Every Swedish model is still listed and parseable.
         for model in WhisperModel::models_for_language(Language::Swedish) {
             assert_eq!(parse_model(model_id_string(*model)).unwrap(), *model);
         }
+    }
+}
+
+#[cfg(test)]
+mod table_tests {
+    use super::*;
+
+    fn row(id: &str, name: &str, size: &str, language: &str) -> ModelRow {
+        ModelRow {
+            id: id.into(),
+            name: name.into(),
+            size: size.into(),
+            downloaded: "no",
+            language: language.into(),
+            note: "",
+        }
+    }
+
+    #[test]
+    fn columns_align_for_long_and_wide_names() {
+        let rows = vec![
+            row("tiny", "Tiny", "75 MB", "English"),
+            row("kb-whisper-large", "KB-Whisper", "1031 MB", "Swedish"),
+            row("pianissimo-sv", "Pianissimo", "900 MB", "Swedish"),
+            // Double-width CJK occupies two terminal columns per character.
+            row("wide", "日本語", "1 MB", "—"),
+        ];
+        let lines = format_table(&rows);
+        assert_eq!(lines.len(), rows.len() + 2);
+        // Every cell after the name starts at the same display column: the
+        // size column is right-aligned, so each line's SIZE cell ends at the
+        // same display column.
+        let size_end = |line: &str| {
+            let idx = line.find("MB").map(|i| i + 2).or_else(|| line.find("SIZE").map(|i| i + 4)).unwrap();
+            UnicodeWidthStr::width(&line[..idx])
+        };
+        let ends: Vec<_> = [&lines[0], &lines[2], &lines[3], &lines[4], &lines[5]]
+            .iter()
+            .map(|l| size_end(l))
+            .collect();
+        assert!(ends.windows(2).all(|w| w[0] == w[1]), "{ends:?}\n{}", lines.join("\n"));
+        // Separator is dashes only; no trailing whitespace anywhere.
+        assert!(lines.iter().all(|l| l == l.trim_end()));
+        assert!(lines[1].chars().all(|c| c == '-'));
+    }
+
+    #[test]
+    fn widths_follow_the_data_not_fixed_numbers() {
+        let lines = format_table(&[row("a-very-long-model-identifier-over-20", "N", "1 MB", "English")]);
+        let id = "a-very-long-model-identifier-over-20";
+        assert!(lines[0].starts_with(&format!("{:<w$}  NAME", "MODEL ID", w = id.len())), "{}", lines[0]);
+        assert!(lines[2].starts_with("a-very-long-model-identifier-over-20  N"), "{}", lines[2]);
     }
 }

@@ -100,7 +100,7 @@ try {
   const prewarm = page.getByLabel("Prepare Pianissimo when");
   assert.equal(await prewarm.inputValue(), "on_key_down");
   assert.deepEqual(await prewarm.locator("option").allTextContents(),
-    ["When I press the dictation key", "When Sagascript starts", "Only when needed"]);
+    ["When Sagascript starts (recommended)", "When I press the dictation key", "Only when needed"]);
   await prewarm.selectOption("off");
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "set_engine_prewarm" && call.args.mode === "off"));
   const idle = page.getByLabel("Unload after idle");

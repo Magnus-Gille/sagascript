@@ -83,8 +83,13 @@ if ($Cli) {
     $known = @()
     foreach ($root in @($env:LOCALAPPDATA, $env:ProgramFiles)) {
         if ($root) {
-            $known += (Join-Path $root 'Sagascript\sagascript.exe')
-            $known += (Join-Path $root 'Programs\Sagascript\sagascript.exe')
+            # The installer ships the console CLI as sagascript-cli.exe; sagascript.exe is the GUI app
+            # (older 1.4.x installs have only that, with a hand-copied CLI).
+            foreach ($dir in @((Join-Path $root 'Sagascript'), (Join-Path $root 'Programs\Sagascript'))) {
+                $preferred = @('sagascript-cli.exe', 'sagascript.exe') | ForEach-Object { Join-Path $dir $_ } |
+                    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+                if ($preferred) { $known += $preferred }
+            }
         }
     }
     $found = @($known | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) -and (Test-HasHost $_) } | Select-Object -Unique)
@@ -95,7 +100,8 @@ if ($Cli) {
         $script:CliPath = $found[0]
         Add-Line "CLI chosen from a known install location with a sibling engine-host."
     } else {
-        $onPath = @(Get-Command sagascript -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source } | Select-Object -Unique)
+        $onPath = @(Get-Command sagascript-cli -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source } | Select-Object -Unique)
+        if ($onPath.Count -eq 0) { $onPath = @(Get-Command sagascript -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source } | Select-Object -Unique) }
         $withHost = @($onPath | Where-Object { Test-HasHost $_ })
         if ($withHost.Count -gt 1) {
             Stop-Test ("Several sagascript.exe on PATH have an engine host: " + ($withHost -join '; ') + ". Pass -Cli <path>.")
@@ -109,7 +115,7 @@ if ($Cli) {
         }
     }
 }
-if (-not $script:CliPath) { Stop-Test "Could not find sagascript.exe. Install the arm64 build, or pass -Cli <path to sagascript.exe>." }
+if (-not $script:CliPath) { Stop-Test "Could not find sagascript-cli.exe. Install the arm64 build, or pass -Cli <path to sagascript-cli.exe>." }
 Add-Line "CLI: $script:CliPath"
 $summary.cli = $script:CliPath
 $hostExe = Join-Path (Split-Path $script:CliPath -Parent) 'engine-host\sagascript-engine-host-ort.exe'

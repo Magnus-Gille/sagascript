@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "../build/cli/sagascript-cli.exe": "sagascript-cli.exe"
+    }
+  }
+}

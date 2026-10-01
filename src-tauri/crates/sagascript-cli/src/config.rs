@@ -69,7 +69,7 @@ Valid values per key:
   temperature_fallback true, false
   vad_enabled          true, false
   engine_prewarm       off, on_app_start, on_key_down (when the Pianissimo engine loads its model)
-  engine_idle_unload_minutes  Integer >= 0 (default 10; engine host exits after twice this; 0 = never unload)",
+  engine_idle_unload_minutes  Integer >= 0 (default 60; engine host exits after twice this; 0 = never unload)",
         after_long_help = "\
 EXAMPLES:
   sagascript config set language sv
@@ -1037,6 +1037,7 @@ mod tests {
             "profile_models",
             "profile_glossary_migrated",
             "model_lineup_version",
+            "engine_defaults_version",
         ];
 
         let settings = Settings::default();
@@ -1412,8 +1413,8 @@ mod tests {
     #[test]
     fn engine_settings_can_be_set_reset_and_reject_bad_values() {
         let mut settings = Settings::default();
-        assert_eq!(get_setting_value(&settings, "engine_prewarm"), "on_key_down");
-        assert_eq!(get_setting_value(&settings, "engine_idle_unload_minutes"), "10");
+        assert_eq!(get_setting_value(&settings, "engine_prewarm"), "on_app_start");
+        assert_eq!(get_setting_value(&settings, "engine_idle_unload_minutes"), "60");
 
         apply_setting_value(&mut settings, "engine_prewarm", "on_app_start").unwrap();
         apply_setting_value(&mut settings, "engine_idle_unload_minutes", "3").unwrap();
@@ -1428,8 +1429,8 @@ mod tests {
         let defaults = Settings::default();
         reset_setting_value(&mut settings, "engine_prewarm", &defaults).unwrap();
         reset_setting_value(&mut settings, "engine_idle_unload_minutes", &defaults).unwrap();
-        assert_eq!(get_setting_value(&settings, "engine_prewarm"), "on_key_down");
-        assert_eq!(get_setting_value(&settings, "engine_idle_unload_minutes"), "10");
+        assert_eq!(get_setting_value(&settings, "engine_prewarm"), "on_app_start");
+        assert_eq!(get_setting_value(&settings, "engine_idle_unload_minutes"), "60");
     }
 
     #[test]

@@ -167,3 +167,20 @@ directory. The old file remains available for rollback. Any embedded global or
 profile dictionaries are written to their new text files and removed from the
 JSON copy. Existing Accessibility authorization remains valid because the app's
 signed bundle identity does not change.
+
+## Engine warm-up (Pianissimo)
+
+Decision (#277): the Pianissimo engine now loads in the background by default so
+the first dictation does not wait on a cold model.
+
+- `engine_prewarm` defaults to `on_app_start` (it was `on_key_down`): the model
+  loads at app start, after system wake and when a profile switches to
+  Pianissimo. Key-down still warms after an idle unload. `off` loads lazily.
+- `engine_idle_unload_minutes` defaults to 60 (was 10).
+- Migration (`engine_defaults_version` 1): settings still on the old defaults
+  move to the new ones once; an explicit non-default choice is kept.
+- The model is unloaded when memory pressure is reported (idle engine only;
+  key-down and wake warms are then skipped for 5 minutes) and when no profile
+  uses Pianissimo any more. A busy engine is left to the idle timer.
+- The overlay shows "Loading model..." only for loads that keep the user
+  waiting; background warm-up failures are logged, not shown as dictation errors.

@@ -760,33 +760,66 @@ fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
     settings
 }
 
-/// True when any dictation profile's live model is Pianissimo.
-fn any_profile_uses_pianissimo(settings: &sagascript_core::settings::Settings) -> bool {
-    settings
-        .resolved_hotkey_profiles()
-        .iter()
-        .any(|profile| settings.live_model_for_profile(&profile.id).is_ok_and(|(_, pianissimo)| pianissimo))
+/// Key-down pre-warm: start loading the Pianissimo model while the user is
+/// still speaking (also after an idle unload under `on_app_start`). Never
+/// blocks the hotkey path: the work runs on its own thread and this only reads
+/// settings.
+fn prewarm_engine_on_key_down(ctrl: &tauri::State<'_, SharedController>) {
+    use sagascript_core::transcription::pianissimo_backend::{warm_in_background, warm_on, WarmTrigger};
+    let c = ctrl.lock().unwrap();
+    let profile_id = c.active_hotkey_profile().map(|profile| profile.id.clone());
+    warm_on(c.settings(), WarmTrigger::KeyDown, profile_id.as_deref(), warm_in_background);
 }
 
-/// `engine_prewarm = on_key_down`: start loading the Pianissimo model while the
-/// user is still speaking. Never blocks the hotkey path: the work runs on its
-/// own thread and this only reads settings.
-fn prewarm_engine_on_key_down(ctrl: &tauri::State<'_, SharedController>) {
-    let wanted = {
-        let c = ctrl.lock().unwrap();
-        let profile_id = c
-            .active_hotkey_profile()
-            .map(|profile| profile.id.clone())
-            .unwrap_or_else(|| c.settings().default_profile().id);
-        c.settings().engine_prewarm == sagascript_core::settings::EnginePrewarm::OnKeyDown
-            && c.settings()
-                .live_model_for_profile(&profile_id)
-                .is_ok_and(|(_, pianissimo)| pianissimo)
-    };
-    if wanted {
-        sagascript_core::transcription::pianissimo_backend::warm_in_background("key_down");
-    }
+/// Tell the overlay when the engine starts loading, is ready, failed or was
+/// cancelled. The last event is cached in core for late-created overlays.
+fn forward_engine_load_state(app: &tauri::AppHandle) {
+    use sagascript_core::transcription::pianissimo_backend as backend;
+    let app = app.clone();
+    backend::set_load_listener(move |event, source| {
+        let payload = backend::load_state_payload(Some(&(event, source)));
+        let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
+    });
 }
+
+/// Re-send the current engine load state (the overlay may have just been
+/// created or shown and missed earlier events).
+fn reemit_engine_load_state(app: &tauri::AppHandle) {
+    let payload = sagascript_core::transcription::pianissimo_backend::current_load_state_payload();
+    let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
+}
+
+/// Warm the engine for `trigger` (wake, app start) when settings call for it.
+fn prewarm_engine_for(app: &tauri::AppHandle, trigger: sagascript_core::transcription::pianissimo_backend::WarmTrigger) {
+    use sagascript_core::transcription::pianissimo_backend::{warm_in_background, warm_on};
+    let ctrl: tauri::State<'_, SharedController> = app.state();
+    // Wake callbacks run on the main thread inside an ObjC block: never block
+    // on the controller there. Skip this warm when it is busy.
+    let Ok(c) = ctrl.try_lock() else {
+        tracing::debug!(reason = trigger.reason(), "pre-warm skipped: controller busy");
+        return;
+    };
+    warm_on(c.settings(), trigger, None, warm_in_background);
+}
+
+/// Hide the overlay after its error state has been readable, unless a new
+/// dictation started in the meantime.
+fn hide_overlay_after_error(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(OVERLAY_ERROR_VISIBLE).await;
+        let idle = {
+            let ctrl: tauri::State<'_, SharedController> = app.state();
+            let idle = matches!(ctrl.lock().unwrap().state(), app_controller::AppState::Idle);
+            idle
+        };
+        if idle {
+            dispatch_to_main(&app, overlay::hide);
+        }
+    });
+}
+
+/// How long the overlay keeps its error state visible after a failed dictation.
+const OVERLAY_ERROR_VISIBLE: Duration = Duration::from_millis(2500);
 
 fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::BareHotkeyState) {
     let ctrl: tauri::State<'_, SharedController> = app.state();
@@ -883,6 +916,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                     update_tray_status(app, "recording");
                     if show_overlay {
                         overlay::show(app);
+                        reemit_engine_load_state(app);
                         #[cfg(target_os = "macos")]
                         if let Err(error) = platform::macos::restore_dictation_target_if_stolen() {
                             warn!("Could not return focus after showing the recording overlay: {error}");
@@ -903,13 +937,17 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
 }
 fn main() {
     let startup_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    let gui_launch_mode = gui_launch_mode(startup_args);
+    let gui_launch_mode = gui_launch_mode(startup_args.iter().cloned());
 
     // CLI mode: if a subcommand is given, run CLI and exit. The desktop
     // binary is a full CLI (CLI-first design) — the GUI only launches on a
     // bare invocation. The private GUI-open marker is consumed here rather
     // than passed to clap so `sagascript open` can explicitly reveal Settings.
     if gui_launch_mode == GuiLaunchMode::Standard {
+        #[cfg(windows)]
+        if cli_args_request_console_output(&startup_args) {
+            attach_parent_console();
+        }
         if let Some(parsed) = sagascript_cli::try_parse() {
             // CLI mode uses warn-level logging to keep stdout clean
             let configured_filter = std::env::var("RUST_LOG").ok();
@@ -1334,12 +1372,18 @@ fn main() {
                 {
                     // `engine_prewarm = on_app_start`: load the Pianissimo engine in
                     // the background when a dictation profile uses it.
-                    let ctrl: tauri::State<'_, SharedController> = app.state();
-                    let c = ctrl.lock().unwrap();
-                    if c.settings().engine_prewarm == sagascript_core::settings::EnginePrewarm::OnAppStart
-                        && any_profile_uses_pianissimo(c.settings())
+                    let handle = app.handle().clone();
+                    forward_engine_load_state(&handle);
+                    prewarm_engine_for(&handle, sagascript_core::transcription::pianissimo_backend::WarmTrigger::AppStart);
+                    #[cfg(target_os = "macos")]
                     {
-                        sagascript_core::transcription::pianissimo_backend::warm_in_background("app_start");
+                        platform::macos::observe_memory_pressure(|| {
+                            sagascript_core::transcription::pianissimo_backend::unload_if_idle_for_memory_pressure();
+                        });
+                        let wake_app = handle.clone();
+                        platform::macos::observe_system_wake(move || {
+                            prewarm_engine_for(&wake_app, sagascript_core::transcription::pianissimo_backend::WarmTrigger::Wake);
+                        });
                     }
                 }
                 std::thread::spawn(move || {
@@ -1423,6 +1467,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
+            commands::get_engine_load_state,
             commands::get_settings,
             commands::get_active_hotkey_profile,
             commands::get_last_transcription,
@@ -1743,6 +1788,51 @@ enum GuiLaunchMode {
 /// updates. Only the explicit private install marker may contact the manifest.
 fn should_install_update_at_launch(mode: GuiLaunchMode) -> bool {
     mode == GuiLaunchMode::InstallUpdate
+}
+
+/// True when argv asks clap for informational output (`--version`/`-V`,
+/// `--help`/`-h`, or the `help` subcommand) that must reach a terminal.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn cli_args_request_console_output(args: &[std::ffi::OsString]) -> bool {
+    args.iter().skip(1).any(|argument| {
+        argument == std::ffi::OsStr::new("--version")
+            || argument == std::ffi::OsStr::new("-V")
+            || argument == std::ffi::OsStr::new("--help")
+            || argument == std::ffi::OsStr::new("-h")
+    }) || args.get(1).is_some_and(|argument| argument == std::ffi::OsStr::new("help"))
+}
+
+/// The release GUI uses the Windows GUI subsystem, so it starts without a
+/// console and its stdout/stderr handles are invalid. When launched from a
+/// terminal, attach to the parent's console and point any invalid standard
+/// handle at it. Redirected (valid) handles are left alone. Does nothing, and
+/// opens no window, when there is no parent console (Start menu launch).
+#[cfg(windows)]
+fn attach_parent_console() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+
+    // SAFETY: plain Win32 console calls; no pointers are passed except a
+    // handle owned by a `File` that is intentionally leaked below.
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        for std_handle in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            let current = GetStdHandle(std_handle);
+            if !current.is_null() && current != INVALID_HANDLE_VALUE {
+                continue;
+            }
+            if let Ok(console) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
+                SetStdHandle(std_handle, console.as_raw_handle() as _);
+                std::mem::forget(console);
+            }
+        }
+    }
 }
 
 fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLaunchMode {
@@ -2373,11 +2463,11 @@ fn stop_recording_and_transcribe(
                 c.on_transcription_error(&e.to_string());
                 drop(c);
                 let _ = app_handle.emit(events::event::ERROR, e.to_string());
+                // Let the overlay show its error state briefly before hiding.
+                let _ = app_handle.emit(events::event::STATE_CHANGED, "error");
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                dispatch_to_main(&app_handle, |app| {
-                    overlay::hide(app);
-                    update_tray_status(app, "idle");
-                });
+                dispatch_to_main(&app_handle, |app| update_tray_status(app, "idle"));
+                hide_overlay_after_error(app_handle.clone());
                 info!("Error flow complete, app should remain running");
             }
         }
@@ -2590,10 +2680,19 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 
             // Update controller with all new settings
             let profiles = new_settings.resolved_hotkey_profiles();
+            let warm_after_change = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
+                &old_settings,
+                &new_settings,
+            );
+            let settings_for_unload = new_settings.clone();
             {
                 let mut c = ctrl.lock().unwrap();
                 c.update_settings(new_settings);
             }
+            if warm_after_change {
+                sagascript_core::transcription::pianissimo_backend::warm_in_background("profile_change");
+            }
+            sagascript_core::transcription::pianissimo_backend::unload_if_unused(&settings_for_unload);
             update_profiles_menu(&app, &profiles);
 
             // Notify frontend so UI reflects external changes
@@ -2812,6 +2911,27 @@ mod tests {
             initial_window_request(false, GuiLaunchMode::Background),
             InitialWindowRequest::Onboarding
         );
+    }
+
+    #[test]
+    fn version_and_help_flags_request_console_output() {
+        use std::ffi::OsString;
+        let wants = |args: &[&str]| {
+            cli_args_request_console_output(&args.iter().map(OsString::from).collect::<Vec<_>>())
+        };
+
+        assert!(wants(&["sagascript", "--version"]));
+        assert!(wants(&["sagascript", "-V"]));
+        assert!(wants(&["sagascript", "--help"]));
+        assert!(wants(&["sagascript", "-h"]));
+        assert!(wants(&["sagascript", "help"]));
+        assert!(wants(&["sagascript", "transcribe", "--help"]));
+        // Bare launch, GUI markers and ordinary subcommands never attach.
+        assert!(!wants(&["sagascript"]));
+        assert!(!wants(&["sagascript", sagascript_cli::open::GUI_BACKGROUND_ARG]));
+        assert!(!wants(&["sagascript", "transcribe", "file.wav"]));
+        // argv[0] alone is never an argument.
+        assert!(!wants(&["--version"]));
     }
 
     #[test]

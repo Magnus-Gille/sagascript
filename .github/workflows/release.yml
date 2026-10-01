@@ -97,12 +97,23 @@ jobs:
             src="prebuilt/windows-$arch-unsigned-candidate"
             dest=stage/beta
             [[ "$arch" == arm64 ]] && dest=stage/release
-            for name in "Sagascript-Windows-$arch-CLI.exe" "Sagascript-Windows-$arch-Portable.exe" \
-                        "Sagascript-Windows-$arch-Setup.exe" "Sagascript-Windows-$arch.msi" \
-                        "SHA256SUMS-Windows-$arch"; do
+            # arm64 also ships the portable zip (#269): 5 hashed files; x64 has 4.
+            files=("Sagascript-Windows-$arch-CLI.exe" "Sagascript-Windows-$arch-Portable.exe" \
+                   "Sagascript-Windows-$arch-Setup.exe" "Sagascript-Windows-$arch.msi")
+            expected=4
+            if [[ "$arch" == arm64 ]]; then
+              files+=("Sagascript-Windows-$arch-Portable.zip")
+              expected=5
+            fi
+            for name in "${files[@]}" "SHA256SUMS-Windows-$arch"; do
               cp "$src/$name" "$dest/$name"
             done
             (cd "$dest" && sha256sum --check --strict "SHA256SUMS-Windows-$arch")
+            lines=$(wc -l < "$dest/SHA256SUMS-Windows-$arch" | tr -d ' ')
+            if [[ "$lines" != "$expected" ]]; then
+              echo "SHA256SUMS-Windows-$arch has $lines entries, expected $expected" >&2
+              exit 1
+            fi
           done
           ls -lh stage/release stage/beta
 
