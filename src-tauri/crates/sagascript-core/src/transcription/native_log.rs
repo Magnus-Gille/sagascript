@@ -133,4 +133,21 @@ mod tests {
         ));
         assert!(!is_expected_coreml_miss("ggml_metal_init: error", &expected));
     }
+
+    #[test]
+    fn pins_exact_whisper_cpp_message_text() {
+        // whisper.cpp (whisper_init_state) wording; if an upgrade changes it,
+        // suppression silently stops and this test must be revisited.
+        assert_eq!(CORE_ML_LOAD_FAILURE, "failed to load Core ML model from '");
+        let expected: HashSet<String> =
+            ["kb-whisper-large-encoder.mlmodelc".to_string()].into_iter().collect();
+        assert!(is_expected_coreml_miss(
+            "whisper_init_state: failed to load Core ML model from '/m/kb-whisper-large-encoder.mlmodelc'\n",
+            &expected
+        ));
+        assert!(!is_expected_coreml_miss(
+            "whisper_init_state: failed to load Core ML model /m/kb-whisper-large-encoder.mlmodelc",
+            &expected
+        ));
+    }
 }
