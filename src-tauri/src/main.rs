@@ -903,7 +903,7 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
 }
 fn main() {
     let startup_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    let gui_launch_mode = gui_launch_mode(startup_args);
+    let gui_launch_mode = gui_launch_mode(startup_args.iter().cloned());
 
     // CLI mode: if a subcommand is given, run CLI and exit. The desktop
     // binary is a full CLI (CLI-first design) — the GUI only launches on a
