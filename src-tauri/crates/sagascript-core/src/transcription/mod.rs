@@ -8,6 +8,7 @@ pub mod glossary;
 pub mod glossary_suggestions;
 pub mod live_dictation;
 pub mod model;
+mod native_log;
 pub mod pianissimo_backend;
 pub mod pianissimo_model;
 mod postprocess;

@@ -48,8 +48,19 @@ The artifact names are architecture-qualified:
 `Sagascript-Windows-<architecture>-CLI.exe`,
 `Sagascript-Windows-<architecture>-Setup.exe`, and
 `Sagascript-Windows-<architecture>.msi`, where `<architecture>` is `x64` or
-`arm64`. The matching `SHA256SUMS-Windows-<architecture>` file covers exactly
-those four files.
+`arm64`. The ARM64 artifact also has `Sagascript-Windows-arm64-Portable.zip`
+(`sagascript.exe`, `sagascript-cli.exe`, `engine-host\`). The matching
+`SHA256SUMS-Windows-<architecture>` file covers those files.
+
+Both installers bundle the console CLI as `sagascript-cli.exe` in the install
+directory (a Tauri resource, `scripts/tauri-windows-cli.json`), beside
+`engine-host\` on ARM64. The installers do not edit `PATH`: Tauri's NSIS hooks
+give no safe way to edit a per-user PATH value (no length-safe or
+uninstall-symmetric helper), and MSI would need a custom action. Call the CLI by
+full path. On ARM64 the workflow silently installs the NSIS package per-user,
+runs the installed `sagascript-cli.exe` (`--version`, `engine status --json`,
+`engine doctor`, a Swedish Pianissimo transcription), uninstalls, and extracts
+the MSI and the portable zip to check the layout.
 
 `scripts/verify-windows-release.ps1` validates the executable surface,
 signature state, and deterministic checksums. `Internal` signature policy
@@ -183,13 +194,12 @@ not replace that run.
 
 ### CLI, updates, and upgrade
 
-- `Sagascript-Windows-<architecture>-CLI.exe --version` reports the candidate version and
+- `sagascript-cli.exe --version` (installed) or `Sagascript-Windows-<architecture>-CLI.exe --version` reports the candidate version and
   source revision.
 - `--help`, `list-models`, `config`, file transcription, microphone recording,
   JSON output, and PowerShell completions work from the candidate CLI binary.
-- Decide and document how the CLI is installed and whether it is added to
-  `PATH`; do not
-  imply a bare `sagascript` command works until this is verified.
+- The CLI is installed as `sagascript-cli.exe` in the install directory and is
+  not added to `PATH`; do not imply a bare `sagascript-cli` command works.
 - Check for Updates reports checking/current/available/error and opens the exact
   stable release page without claiming it installed anything.
 - An upgrade candidate preserves settings, profiles, glossary, and downloaded
