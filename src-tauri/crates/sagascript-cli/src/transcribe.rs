@@ -1728,7 +1728,7 @@ fn transcribe_file(
         eprintln!("Encoding audio...");
         emit_progress(progress_json, file_started, "encoding", None);
     };
-    let mut segments = if duration > 10.0 {
+    let segments = if duration > 10.0 {
         let pb = ProgressBar::new(100);
         pb.set_style(ProgressStyle::with_template("  Transcribing [{bar:40}] {pos}%").unwrap());
         let pb_cb = pb.clone();
@@ -1745,6 +1745,27 @@ fn transcribe_file(
             if pct > 1 { emit_progress(progress_json, file_started, "transcribing", Some(pct.clamp(0, 100) as u8)); }
         }, Some(&on_encode_start))?
     };
+    // Whisper can skip the rest of a 30 s window after an early stop (#273).
+    // Re-decode any uncovered span that contains speech once, in isolation.
+    let mut redecode_opts = opts.clone();
+    redecode_opts.parallel_chunks = 1;
+    let mut segments = sagascript_core::transcription::gap_redecode::redecode_uncovered_speech(
+        &audio,
+        segments,
+        |slice| {
+            eprintln!(
+                "Re-decoding a {:.1}s span that Whisper skipped...",
+                slice.len() as f64 / 16_000.0
+            );
+            backend.transcribe_sync_with_options_segments(
+                slice,
+                language,
+                &redecode_opts,
+                |_| {},
+                None,
+            )
+        },
+    );
     emit_progress(args.progress_json, file_started, "finalizing", None);
     let mut corrections = apply_glossary_corrections(&mut segments, glossary);
     if args.correct_hints {
