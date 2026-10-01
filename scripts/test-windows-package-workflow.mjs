@@ -93,7 +93,8 @@ test("Windows candidate workflow stays non-publishing and explicitly unsigned", 
     rustCache,
     /uses: Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/,
   );
-  assert.match(rustCache, /workspaces:\s+src-tauri/);
+  assert.match(rustCache, /workspaces:\s*\|\s*\n\s+src-tauri\s*\n\s+src-tauri\/engine-host\/ort/);
+  assert.doesNotMatch(rustCache, /cache-targets:\s*\$\{\{ matrix\.architecture != 'arm64' \}\}/, "arm64 targets are cacheable now that LLVM has a fixed path");
   assert.match(
     rustCache,
     /shared-key:\s+windows-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ steps\.windows-image\.outputs\.image_os \}\}-\$\{\{ steps\.windows-image\.outputs\.image_version \}\}-\$\{\{ hashFiles\('\.github\/workflows\/windows-package\.yml', 'scripts\/cmake\/windows-x64-portable\.cmake', 'scripts\/cmake\/windows-arm64-native\.cmake', 'scripts\/verify-windows-x64-cpu-policy\.ps1'\) \}\}/,
@@ -155,7 +156,9 @@ test("Windows ARM64 pins and validates the LLVM toolchain before native configur
   assert.match(pin, /if \(\$actualHash -ne \$expectedHash\)/);
   assert.match(pin, /-ArgumentList @\('\/S', "\/D=\$installRoot"\)/);
   assert.match(pin, /if \(\$process\.ExitCode -ne 0\)/);
-  assert.match(pin, /\[guid\]::NewGuid\(\)/);
+  assert.doesNotMatch(pin, /NewGuid/, "a per-run LLVM path makes arm64 CMake targets uncacheable");
+  assert.match(pin, /C:\\sagascript-tools\\llvm-20\.1\.8/);
+  assert.match(workflow, /path: C:\\sagascript-tools\\llvm-20\.1\.8\s+key: windows-arm64-llvm-20\.1\.8-7c4ac97eb2ae/);
 
   assert.match(pin, /clang-cl\.exe/);
   assert.match(pin, /libclang\.dll/);

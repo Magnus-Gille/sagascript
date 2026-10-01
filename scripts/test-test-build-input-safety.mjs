@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 
 const workflow = await readFile(new URL("../.github/workflows/test-build.yml", import.meta.url), "utf8");
-const releaseWorkflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+const releaseWorkflow = await readFile(new URL("../.github/workflows/release-build-macos.yml", import.meta.url), "utf8");
 const buildScript = await readFile(new URL("../src-tauri/build.rs", import.meta.url), "utf8");
 const steps = workflow.split(/(?=^      - name: )/m);
 

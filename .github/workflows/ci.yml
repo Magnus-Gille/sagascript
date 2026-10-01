@@ -498,7 +498,7 @@ jobs:
           shared-key: sagascript-ci-checks
 
       - name: Test Windows build identity gates
-        run: node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs
+        run: node --test scripts/test-ci-build-identity.mjs scripts/test-windows-release-identity.mjs scripts/test-windows-package-workflow.mjs scripts/test-release-promotion.mjs
 
       - name: Install npm dependencies
         run: npm ci

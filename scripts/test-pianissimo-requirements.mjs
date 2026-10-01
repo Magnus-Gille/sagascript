@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const read = (path) => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8");
 const exists = (path) => existsSync(fileURLToPath(new URL(`../${path}`, import.meta.url)));
 
-const macWorkflows = [".github/workflows/test-build.yml", ".github/workflows/release.yml"];
+const macWorkflows = [".github/workflows/test-build.yml", ".github/workflows/release-build-macos.yml"];
 const staleNeedles = [
   "nemo-speech",
   "PianissimoRuntime",
@@ -82,7 +82,7 @@ test("Pianissimo smoke covers status, download, doctor and transcribe", () => {
     assert(content.includes(step), `smoke script runs ${step}`);
   }
   assert.match(content, /EXPECT_WORD/, "smoke script can assert an expected word");
-  for (const path of [".github/workflows/test-build.yml", ".github/workflows/release.yml"]) {
+  for (const path of [".github/workflows/test-build.yml", ".github/workflows/release-build-macos.yml"]) {
     assert.match(read(path), /smoke-pianissimo-installed\.sh[^\n]*test-audio\/swedish-fleurs-hongkong\.wav hongkong/,
       `${path} smokes Pianissimo on the Swedish FLEURS sample and expects "hongkong"`);
   }

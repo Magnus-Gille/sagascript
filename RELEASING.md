@@ -3,8 +3,9 @@
 Sagascript's stable v1 binary release is macOS-only. Windows has a separate
 clearly labelled unsigned beta distributed from a GitHub prerelease; it must not
 be described as signed, stable, or fully accepted. The automated Windows
-candidate workflow remains non-publishing, and the macOS `v*` release workflow
-must not be used for the Windows beta.
+candidate workflow remains non-publishing. The `v*` release workflow only ever
+creates *drafts* (the Windows x64 prebuild goes to a draft prerelease
+`windows-beta-VERSION`); publishing remains an explicit owner action.
 
 Production macOS releases must be signed with a **Developer ID Application**
 certificate, use hardened runtime, and be notarized and stapled. The release
@@ -64,44 +65,100 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
 2. Run `npm run release:check`, `npm run licenses:check`, `npm run check`,
    `cargo test --workspace`, and
    `cargo clippy --workspace --all-targets -- -D warnings`.
-3. Merge the release commit to `main`, then create and push exactly `vVERSION`.
-4. The Release workflow gates the macOS build on tests, checks version/tag
-   consistency, imports the Apple certificate into an ephemeral keychain, and
-   lets Tauri sign, notarize, and staple the Apple Silicon macOS build. Before
-   `tauri build`, it builds the Swift Core ML engine host
-   (`scripts/stage-engine-host.sh`), verifies it reports the release SHA, and
-   signs it with the hardened runtime (`codesign --force --options runtime
-   --timestamp`, no extra entitlements: Core ML/ANE model loading works under the
-   hardened runtime without JIT or unsigned-memory exceptions; the installed-CLI
-   `engine doctor` smoke below is the check that this stays true). The host is
-   bundled at `Contents/Resources/EngineHost/sagascript-engine-host` via
-   `scripts/tauri-engine-host-bundle.json`, so the app's notarization covers it.
-5. The workflow independently verifies the Developer ID authority, Team ID,
-   hardened-runtime flag, audio-input entitlement, notarization tickets,
-   Gatekeeper acceptance, and bundle metadata before creating a draft release.
-   It also checks that the bundled engine host is arm64, signed by the
-   production team with the hardened runtime (`flags=0x10000(runtime)`), and that
-   `sagascript-engine-host --version` prints the exact release SHA.
-   `scripts/smoke-pianissimo-installed.sh` then runs `engine status`, downloads
-   the Pianissimo model, runs `engine doctor` and transcribes a sample through the
-   installed CLI path. This needs a real model URL and SHA-256 in
-   `sagascript-core/src/transcription/pianissimo_model.rs`; the smoke fails
-   (never skips) while the manifest still holds placeholders.
-6. Download the draft artifacts and perform the clean-machine checklist below.
-   Publish the draft only after it passes.
+3. Merge the release commit to `main`. Do **not** tag yet.
+4. **Prebuild (owner touchpoint 1: signing approval).** The push to `main` starts
+   `prebuild-release.yml`. Only a push that *changes* the version in
+   `package.json` or `src-tauri/tauri.conf.json` (compared with the push's
+   previous commit) and whose `vVERSION` tag does not exist yet builds, so the
+   release PR (the version bump) triggers the prebuild and ordinary pushes never
+   reach the signing approval. If more commits land after the bump, the tag
+   would sit on a commit with no prebuild: either run the workflow manually on
+   `main` (`gh workflow run prebuild-release.yml --ref main`; refused on any
+   other ref) to prebuild the current main SHA while it is untagged, or accept
+   that the tag uses the full fallback build (step 6). The prebuild runs the release quality gate, builds the Windows arm64 and x64 packages
+   (`windows-package.yml`, reused via `workflow_call`), and builds, signs,
+   notarizes and staples the macOS app (`release-build-macos.yml`, the single
+   signing implementation, behind the `updater-signing` environment). Approve
+   that environment deployment on the prebuild run. The run ends by uploading
+   `release-manifest.json` (`{version, sha, tree_sha, files:[{name,sha256,size}]}`)
+   next to the artifacts (30-day retention). Nothing is published.
+5. **Tag (owner touchpoint 2: publish).** Create and push exactly `vVERSION` on
+   the prebuilt commit. `release.yml` then:
+   - looks for a successful `prebuild-release.yml` run on `main` (push or manual
+     dispatch) for the tag's exact commit SHA whose artifacts are all present and
+     not expired (otherwise it falls back, logging why in the step summary);
+   - if found, downloads its artifacts, verifies every hash and size against the
+     manifest and that the manifest `version`, `sha` and `tree_sha` match the
+     tagged commit (any mismatch fails the run; nothing is rebuilt);
+   - creates the draft release `vVERSION` (macOS assets, Windows arm64 assets,
+     `SHA256SUMS`, `SHA256SUMS-Windows-arm64`) and the draft prerelease
+     `windows-beta-VERSION` (Windows x64 assets, `SHA256SUMS-Windows-x64`);
+   - re-downloads both drafts as stored by GitHub and runs
+     `scripts/verify-release-draft.sh` on a macOS runner (see below), posting the
+     checklist to the job summary.
+   Target: tag to verified draft in about 10 minutes. Review the checklist, add
+   release notes, and publish the drafts.
+6. **Fallback (no prebuild for the tagged commit).** If no successful prebuild run
+   exists for the commit (for example the tag is on a different commit, or the
+   prebuild run expired), `release.yml` runs the original path: quality gate,
+   `release-build-macos.yml` (signing approval happens on the tag run), then a
+   macOS-only draft. Windows packages are then built with `windows-package.yml`
+   and attached by hand, and the draft is verified locally with
+   `scripts/verify-release-draft.sh vVERSION`. A prebuild whose hashes fail
+   verification is an error, not a reason to fall back: re-run the prebuild.
 
-Windows beta publication is a separate owner action: attach only the exact
-artifacts from the accepted candidate run to the prerelease tag above, mark it
-as a prerelease, and verify the release page and checksums before linking it
-from the product website. Do not change the candidate workflow into an
-automatic publisher.
+### What the signed build verifies
+
+`release-build-macos.yml` checks version/tag consistency, imports the Apple
+certificate into an ephemeral keychain, and lets Tauri sign, notarize, and staple
+the Apple Silicon macOS build. Before `tauri build`, it builds the Swift Core ML
+engine host (`scripts/stage-engine-host.sh`), verifies it reports the release SHA,
+and signs it with the hardened runtime (`codesign --force --options runtime
+--timestamp`, no extra entitlements: Core ML/ANE model loading works under the
+hardened runtime without JIT or unsigned-memory exceptions; the installed-CLI
+`engine doctor` smoke is the check that this stays true). The host is bundled at
+`Contents/Resources/EngineHost/sagascript-engine-host` via
+`scripts/tauri-engine-host-bundle.json`, so the app's notarization covers it.
+
+It independently verifies the Developer ID authority, Team ID, hardened-runtime
+flag, audio-input entitlement, notarization tickets, Gatekeeper acceptance, and
+bundle metadata. It also checks that the bundled engine host is arm64, signed by
+the production team with the hardened runtime (`flags=0x10000(runtime)`), and that
+`sagascript-engine-host --version` prints the exact release SHA.
+`scripts/smoke-pianissimo-installed.sh` then runs `engine status`, downloads the
+Pianissimo model, runs `engine doctor` and transcribes a sample through the
+installed CLI path. The smoke fails (never skips) while the model manifest in
+`sagascript-core/src/transcription/pianissimo_model.rs` holds placeholders.
+
+### Automated draft verification
+
+`scripts/verify-release-draft.sh` needs macOS and `gh`. `verify-release-draft.sh
+vVERSION` downloads the release (and `windows-beta-VERSION` when present) and checks:
+`SHA256SUMS` and the Windows `SHA256SUMS-Windows-*` files; `latest.json` version,
+URL and signature; `codesign --verify --deep --strict`, hardened runtime and Team ID
+`7C6WF6GFZ4`; `spctl` reports Notarized Developer ID; `stapler validate` on app and
+DMG; `verify-macos-release.sh`; app/CLI/engine-host `--version` equal version plus
+the release SHA and not dirty; the updater archive; and the Pianissimo smoke (engine
+doctor plus a Swedish transcription that must contain `hongkong`). `--skip-smoke`
+omits the model download. In CI the script also checks the Windows acceptance JSON
+from the prebuild artifacts. `--require-windows` (used by the promote path) turns a
+missing Windows SHA256 file, `windows-beta-VERSION` release, or (in CI only,
+`GITHUB_ACTIONS=true`) acceptance JSON from a skip into a failure. It exits non-zero
+on any failure.
+
+Windows beta publication is a separate owner action: the promote step drafts the
+`windows-beta-VERSION` prerelease from the exact prebuilt x64 artifacts; publish it
+only as a prerelease after the Windows acceptance you require, and verify the
+release page and checksums before linking it from the product website. The
+candidate workflow itself stays non-publishing.
 
 Windows CLI: the NSIS and MSI installers ship the console CLI as
 `sagascript-cli.exe` beside `sagascript.exe` (and `engine-host\` on ARM64), so
 Pianissimo works from the installed CLI by full path; the installers do not edit
 `PATH`. The ARM64 candidate also has `Sagascript-Windows-arm64-Portable.zip`
-(app, CLI, `engine-host\`) and its checksum in `SHA256SUMS-Windows-arm64`. Attach
-the zip to the prerelease. The release notes must say that the single-file
+(app, CLI, `engine-host\`) and its checksum in `SHA256SUMS-Windows-arm64`. The
+promote step includes the zip in the draft `vVERSION` (arm64 set: 5 files incl.
+the zip, 5-line checksum file; x64 set: 4 files). The release notes must say that the single-file
 `-CLI.exe` and `-Portable.exe` remain Whisper-only (no `engine-host\`).
 
 The macOS build job also simulates replacing an obsolete

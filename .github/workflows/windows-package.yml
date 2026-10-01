@@ -2,6 +2,8 @@ name: Windows Package Candidate
 
 on:
   workflow_dispatch:
+  # Reused by prebuild-release.yml (#266) to build the final release packages.
+  workflow_call:
   pull_request:
     branches: [main]
     paths:
@@ -68,16 +70,27 @@ jobs:
             throw "Expected native ${{ matrix.architecture }} runner, got $runnerArchitecture"
           }
 
-      - name: Install pinned LLVM for ARM64 bindgen
+      # LLVM lives at a FIXED path and is cached (#266). The previous per-run
+      # GUID install path leaked into CMake target state, which is why arm64
+      # `target/` could not be cached and every run recompiled whisper.cpp and
+      # all dependencies from scratch. A stable path makes target caching safe.
+      - name: Cache pinned LLVM for ARM64 bindgen
+        id: llvm-cache
         if: matrix.architecture == 'arm64'
+        uses: actions/cache@v5
+        with:
+          path: C:\sagascript-tools\llvm-20.1.8
+          key: windows-arm64-llvm-20.1.8-7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e
+
+      - name: Install pinned LLVM for ARM64 bindgen
+        if: matrix.architecture == 'arm64' && steps.llvm-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           # Upstream rust-bindgen#3264: LLVM 22 is incompatible with bindgen 0.71.
           $llvmUrl = 'https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-woa64.exe'
           $expectedHash = '7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e'
           $installerPath = Join-Path $env:RUNNER_TEMP 'LLVM-20.1.8-woa64.exe'
-          $installRoot = Join-Path $env:RUNNER_TEMP ('sagascript-llvm-20.1.8-' + [guid]::NewGuid().ToString('N'))
-          $llvmBin = Join-Path $installRoot 'bin'
+          $installRoot = 'C:\sagascript-tools\llvm-20.1.8'
 
           Invoke-WebRequest -Uri $llvmUrl -OutFile $installerPath
           $actualHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -85,6 +98,7 @@ jobs:
             throw "LLVM installer SHA256 mismatch: expected $expectedHash, got $actualHash"
           }
 
+          if (Test-Path -LiteralPath $installRoot) { Remove-Item -LiteralPath $installRoot -Recurse -Force }
           New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
           # NSIS requires /D to be the final, unquoted argument.
           $process = Start-Process -FilePath $installerPath -ArgumentList @('/S', "/D=$installRoot") -Wait -PassThru
@@ -92,6 +106,11 @@ jobs:
             throw "LLVM installer failed with exit code $($process.ExitCode)"
           }
 
+      - name: Activate pinned LLVM for ARM64 bindgen
+        if: matrix.architecture == 'arm64'
+        shell: pwsh
+        run: |
+          $llvmBin = 'C:\sagascript-tools\llvm-20.1.8\bin'
           $clangPath = Join-Path $llvmBin 'clang-cl.exe'
           $libclangPath = Join-Path $llvmBin 'libclang.dll'
           if (-not (Test-Path -LiteralPath $clangPath -PathType Leaf)) {
@@ -178,9 +197,12 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
-          # arm64 CMake targets contain a per-run GUID LLVM path, so caching them can stale lld-link/llvm-mt.
-          cache-targets: ${{ matrix.architecture != 'arm64' }}
+          # The ORT engine host is a separate Cargo workspace with its own target dir.
+          workspaces: |
+            src-tauri
+            src-tauri/engine-host/ort
+          # LLVM now installs at a fixed path (see the LLVM cache step), so arm64 CMake
+          # targets no longer embed a per-run path and are safe to cache (#266).
           shared-key: windows-package-${{ matrix.architecture }}-${{ steps.windows-image.outputs.image_os }}-${{ steps.windows-image.outputs.image_version }}-${{ hashFiles('.github/workflows/windows-package.yml', 'scripts/cmake/windows-x64-portable.cmake', 'scripts/cmake/windows-arm64-native.cmake', 'scripts/verify-windows-x64-cpu-policy.ps1') }}
 
       - name: Install Node.js
@@ -226,7 +248,7 @@ jobs:
       - name: Test and lint Rust workspace
         working-directory: src-tauri
         run: |
-          cargo check --workspace
+          # `cargo check --workspace` is omitted: clippy --all-targets below is a strict superset.
           cargo test --workspace
           cargo clippy --workspace --all-targets -- -D warnings
           cargo build -p sagascript-cli --no-default-features
@@ -588,4 +610,5 @@ jobs:
           name: windows-${{ matrix.architecture }}-unsigned-candidate
           path: artifacts/
           if-no-files-found: error
-          retention-days: 14
+          # Release prebuilds are promoted by a later tag, so keep them longer than PR candidates.
+          retention-days: ${{ github.event_name == 'pull_request' && 14 || 30 }}

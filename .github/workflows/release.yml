@@ -1,5 +1,10 @@
 name: Release
 
+# Tag path. Preferred: promote the artifacts that prebuild-release.yml already
+# built, signed, notarized and verified on main for this exact commit (no
+# rebuild, no repeated quality gate), then verify the resulting draft.
+# Fallback (no successful prebuild for the tagged commit): the original full
+# gate + build + publish path, unchanged in behaviour.
 on:
   push:
     tags: ["v*"]
@@ -8,342 +13,220 @@ permissions:
   contents: read
 
 jobs:
-  quality-gate:
-    runs-on: macos-14
+  locate-prebuild:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      found: ${{ steps.locate.outputs.found }}
+      run_id: ${{ steps.locate.outputs.run_id }}
+    steps:
+      # Only an unmodified push-to-main prebuild for exactly this commit
+      # qualifies; the tree and hashes are verified again before publishing.
+      - name: Find successful prebuild for the tagged commit
+        id: locate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG_SHA: ${{ github.sha }}
+        run: |
+          # A "successful" prebuild run can also be an all-skipped one (version already
+          # tagged), so require that the manifest job actually ran and succeeded.
+          run_id=
+          reason=
+          for event in push workflow_dispatch; do
+            for candidate in $(gh run list -R "$REPO" --workflow prebuild-release.yml --branch main \
+                --event "$event" --commit "$TAG_SHA" --status success --limit 10 \
+                --json databaseId --jq '.[].databaseId'); do
+              built=$(gh run view "$candidate" -R "$REPO" --json jobs \
+                --jq '[.jobs[] | select(.name == "manifest" and .conclusion == "success")] | length')
+              [[ "$built" == 1 ]] || continue
+              # Artifacts expire (30 days); an expired or incomplete prebuild
+              # must fall back to the full build instead of failing the promote.
+              artifacts=$(gh api "repos/$REPO/actions/runs/$candidate/artifacts" --paginate \
+                --jq '.artifacts[] | [.name, .expired] | @tsv')
+              missing=
+              for need in macos-bundle windows-x64-unsigned-candidate windows-arm64-unsigned-candidate release-manifest; do
+                if ! grep -Fxq "$(printf '%s\tfalse' "$need")" <<<"$artifacts"; then missing="$missing $need"; fi
+              done
+              if [[ -z "$missing" ]]; then run_id=$candidate; break 2; fi
+              reason="$reason run $candidate lacks unexpired artifacts:$missing;"
+            done
+          done
+          if [[ -n "$run_id" ]]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            echo "Promoting prebuild run $run_id for $TAG_SHA" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No usable prebuild for $TAG_SHA; using the full fallback build.${reason:+ Reason:$reason}" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
+  # Sole writer on the promote path: downloads the prebuilt artifacts, verifies
+  # them against the prebuild manifest, and creates the draft releases. It also
+  # re-downloads the drafts as stored by GitHub so the read-only verification
+  # job can check exactly what the owner will publish.
+  promote-release:
+    needs: locate-prebuild
+    if: needs.locate-prebuild.outputs.found == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Verify release metadata and tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/check-release.mjs
+
+      - name: Download prebuilt artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PREBUILD_RUN_ID: ${{ needs.locate-prebuild.outputs.run_id }}
+        run: gh run download "$PREBUILD_RUN_ID" -R "$REPO" -D prebuilt
+
+      - name: Verify artifacts against the prebuild manifest
+        run: |
+          version=$(node -p "require('./package.json').version")
+          node scripts/release-prebuild-manifest.mjs verify \
+            --dir prebuilt \
+            --manifest prebuilt/release-manifest/release-manifest.json \
+            --version "$version" \
+            --sha "$GITHUB_SHA" \
+            --tree "$(git rev-parse 'HEAD^{tree}')"
+
+      - name: Stage release assets
+        run: |
+          mac=prebuilt/macos-bundle
+          mkdir -p stage/release stage/beta
+          cp "$mac/Sagascript.dmg" "$mac/Sagascript.app.tar.gz" "$mac/Sagascript.app.tar.gz.sig" "$mac/latest.json" stage/release/
+          (cd stage/release && sha256sum Sagascript.dmg Sagascript.app.tar.gz Sagascript.app.tar.gz.sig latest.json > SHA256SUMS)
+          for arch in arm64 x64; do
+            src="prebuilt/windows-$arch-unsigned-candidate"
+            dest=stage/beta
+            [[ "$arch" == arm64 ]] && dest=stage/release
+            # arm64 also ships the portable zip (#269): 5 hashed files; x64 has 4.
+            files=("Sagascript-Windows-$arch-CLI.exe" "Sagascript-Windows-$arch-Portable.exe" \
+                   "Sagascript-Windows-$arch-Setup.exe" "Sagascript-Windows-$arch.msi")
+            expected=4
+            if [[ "$arch" == arm64 ]]; then
+              files+=("Sagascript-Windows-$arch-Portable.zip")
+              expected=5
+            fi
+            for name in "${files[@]}" "SHA256SUMS-Windows-$arch"; do
+              cp "$src/$name" "$dest/$name"
+            done
+            (cd "$dest" && sha256sum --check --strict "SHA256SUMS-Windows-$arch")
+            lines=$(wc -l < "$dest/SHA256SUMS-Windows-$arch" | tr -d ' ')
+            if [[ "$lines" != "$expected" ]]; then
+              echo "SHA256SUMS-Windows-$arch has $lines entries, expected $expected" >&2
+              exit 1
+            fi
+          done
+          ls -lh stage/release stage/beta
+
+      - name: Create draft releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#v}
+          beta_tag="windows-beta-$version"
+          for t in "$TAG" "$beta_tag"; do
+            if gh release view "$t" -R "$REPO" >/dev/null 2>&1; then
+              echo "A release for $t already exists; refusing to overwrite it" >&2
+              exit 1
+            fi
+          done
+          gh release create "$TAG" -R "$REPO" --draft --verify-tag --generate-notes \
+            --title "$TAG" stage/release/*
+          gh release create "$beta_tag" -R "$REPO" --draft --prerelease --target "$GITHUB_SHA" \
+            --title "Sagascript $version - Windows x64 beta" \
+            --notes "Unsigned Windows x64 beta built from $GITHUB_SHA. GUI acceptance on x64 hardware has not been performed." \
+            stage/beta/*
+
+      - name: Collect the drafts as stored by GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#v}
+          gh release download "$TAG" -R "$REPO" -D draft-assets/release
+          gh release download "windows-beta-$version" -R "$REPO" -D draft-assets/windows-beta
+          for arch in arm64 x64; do
+            mkdir -p "draft-assets/evidence/windows-$arch"
+            cp "prebuilt/windows-$arch-unsigned-candidate/windows-acceptance-ps51.json" "draft-assets/evidence/windows-$arch/"
+          done
+
+      - name: Upload drafts for verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-assets
+          path: draft-assets
+          if-no-files-found: error
+          retention-days: 7
+
+  verify-draft:
+    needs: promote-release
+    runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Download drafts
+        uses: actions/download-artifact@v4
         with:
-          components: clippy
+          name: draft-assets
+          path: draft-assets
 
-      - name: Install Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 20
-          cache: npm
-
-      # Same rust-cache scheme as CI (#178): per-crate fingerprints shared
-      # across branches instead of a `Cargo.lock`-keyed multi-GB target dump.
-      # `build-macos` below uses the same shared key so the release Tauri
-      # build reuses dependencies this gate job just compiled.
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, pinned (#180 review: release handles signing credentials)
-        with:
-          workspaces: src-tauri
-          shared-key: sagascript-release
-
-      # The inference gates re-download `nb-whisper-tiny`, `tiny` and the
-      # diarization models every run (#178). Dedicated release primary key:
-      # sharing CI's exact key would exact-hit on the smaller CI model set and
-      # then skip saving the release additions, so they would never persist.
-      # The CI key stays as fallback (same hash → PR-warmed `nb-whisper-tiny`
-      # carries over). Note: caches are tag-scoped, so each new tag downloads
-      # the release-only models once; same-tag reruns are warm.
-      - name: Cache downloaded models
+      - name: Cache Pianissimo model
         uses: actions/cache@v5
         with:
           path: ~/Library/Application Support/Sagascript/Models
-          key: macos-models-release-${{ hashFiles('src-tauri/crates/sagascript-core/src/settings/manager.rs', 'src-tauri/crates/sagascript-core/src/transcription/model.rs', 'src-tauri/crates/sagascript-core/src/diarization/model.rs') }}
-          restore-keys: |
-            macos-models-release-
-            macos-models-
+          key: macos-models-verify-${{ hashFiles('src-tauri/crates/sagascript-core/src/transcription/pianissimo_model.rs') }}
 
-      # The diarization fixture is re-downloaded from Hugging Face every run
-      # (#178). RUNNER_TEMP is per-run, so the cache lives in a stable path
-      # and is copied into place; actions/cache persists it post-job.
-      - name: Cache diarization fixture
-        uses: actions/cache@v5
-        with:
-          path: ~/sagascript-fixture-cache
-          key: diarization-fixture-dj_2022_feu-6b63943
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Verify release metadata and tag
+      - name: Verify draft release
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: npm run release:check
-
-      - name: Test deterministic release helpers
+          REPO: ${{ github.repository }}
         run: |
-          ./scripts/test-verify-audio-entitlement.sh
-          node scripts/test-generate-updater-manifest.mjs
-          en_sort=$(LC_ALL=en_US.UTF-8 node scripts/generate-third-party-notices.mjs --test-sort)
-          sv_sort=$(LC_ALL=sv_SE.UTF-8 node scripts/generate-third-party-notices.mjs --test-sort)
-          [[ "$en_sort" == "$sv_sort" ]]
-          node scripts/generate-third-party-notices.mjs --test-npm-installation
+          version=$(node -p "require('./package.json').version")
+          ./scripts/verify-release-draft.sh --assets-dir draft-assets \
+            --version "$version" --sha "$GITHUB_SHA" --repo "$REPO" --require-windows
 
-      - name: Verify third-party notices
-        run: npm run licenses:check
-
-      - name: Test frontend release surface
-        run: npm run test:frontend
-
-      - name: Build fresh frontend
-        run: npm run build
-
-      - name: Check Svelte and TypeScript
-        run: npm run check
-
-      - name: Test Rust workspace
-        working-directory: src-tauri
-        run: cargo test --workspace
-
-      - name: Lint Rust workspace
-        working-directory: src-tauri
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      # Same explicit triple as `build-macos` below (#178): the shared
-      # rust-cache key covers one target dir, so building the gate binary
-      # here lets the release Tauri build reuse these compiled dependencies
-      # instead of compiling them cold. macos-14 runners are aarch64, so no
-      # extra rustup target is needed.
-      - name: Build release CLI for inference smoke tests
-        working-directory: src-tauri
-        run: cargo build --release --target aarch64-apple-darwin -p sagascript-cli
-
-      - name: Gate real transcription
-        run: |
-          binary=src-tauri/target/aarch64-apple-darwin/release/sagascript
-          stdout="$RUNNER_TEMP/transcription-smoke.json"
-          stderr="$RUNNER_TEMP/transcription-smoke.stderr"
-          "$binary" download-model nb-whisper-tiny
-          "$binary" transcribe \
-            --language no \
-            --model nb-whisper-tiny \
-            --beam 0 \
-            --json \
-            test-audio/norwegian-short-3s.mp3 > "$stdout" 2> "$stderr"
-          python3 scripts/verify-json-cli-streams.py "$stdout" "$stderr"
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert "storting" in d["text"].lower(); assert d["language"] == "no"; assert d["segments"]' "$stdout"
-
-      - name: Gate real two-speaker diarization
-        run: |
-          binary=src-tauri/target/aarch64-apple-darwin/release/sagascript
-          fixture="$RUNNER_TEMP/dj_2022_feu.m4a"
-          result="$RUNNER_TEMP/diarization-smoke.json"
-          "$binary" download-model tiny
-          "$binary" download-model diarization
-          fixture_cache="$HOME/sagascript-fixture-cache/dj_2022_feu.m4a"
-          mkdir -p "$HOME/sagascript-fixture-cache"
-          if [[ -f "$fixture_cache" ]]; then
-            cp "$fixture_cache" "$fixture"
-          else
-            curl --fail --location --retry 3 \
-              'https://huggingface.co/datasets/medkit/simsamu/resolve/6b639431f658d636c30dbf342074d723bf303e0f/dj_2022_feu/dj_2022_feu.m4a' \
-              --output "$fixture"
-            cp "$fixture" "$fixture_cache"
-          fi
-          "$binary" transcribe \
-            --language auto \
-            --model tiny \
-            --diarize \
-            --diarize-threshold 0.75 \
-            --json \
-            "$fixture" > "$result"
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); s=d["segments"]; assert len({x["speaker"] for x in s}) == 2; assert len(s) >= 2; assert all(0 <= x["start"] <= x["end"] <= d["duration_seconds"] + 0.1 for x in s)' "$result"
+  quality-gate:
+    needs: locate-prebuild
+    if: needs.locate-prebuild.outputs.found != 'true'
+    uses: ./.github/workflows/release-quality-gate.yml
+    with:
+      release_tag: ${{ github.ref_name }}
 
   build-macos:
     needs: quality-gate
-    runs-on: macos-14
-    environment: updater-signing
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - name: Install Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 20
-          cache: npm
-
-      # Shares the quality-gate shared key above (#178) so this build reuses
-      # dependencies the gate just compiled instead of rebuilding from cold.
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, pinned (#180 review: release handles signing credentials)
-        with:
-          workspaces: src-tauri
-          shared-key: sagascript-release
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Build and stage Core ML engine host
-        run: |
-          ./scripts/stage-engine-host.sh
-          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
-
-      - name: Verify release metadata and tag
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: npm run release:check
-
-      - name: Import Developer ID certificate
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          : "${APPLE_CERTIFICATE:?APPLE_CERTIFICATE secret is required}"
-          : "${APPLE_CERTIFICATE_PASSWORD:?APPLE_CERTIFICATE_PASSWORD secret is required}"
-          : "${KEYCHAIN_PASSWORD:?KEYCHAIN_PASSWORD secret is required}"
-          certificate="$RUNNER_TEMP/developer-id.p12"
-          keychain="$RUNNER_TEMP/sagascript-build.keychain-db"
-          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security import "$certificate" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -t cert -f pkcs12 -k "$keychain"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
-          security list-keychains -d user -s "$keychain"
-
-      - name: Sign Core ML engine host (hardened runtime)
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
-          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" build/engine-host/sagascript-engine-host
-          codesign --verify --strict --verbose=2 build/engine-host/sagascript-engine-host
-          ./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"
-
-      - name: Prepare notarization credentials and build metadata
-        env:
-          APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-        run: |
-          : "${APPLE_API_PRIVATE_KEY_BASE64:?APPLE_API_PRIVATE_KEY_BASE64 secret is required}"
-          : "${APPLE_API_KEY:?APPLE_API_KEY secret is required}"
-          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
-          printf '%s' "$APPLE_API_PRIVATE_KEY_BASE64" | base64 --decode > "$api_key_path"
-          chmod 600 "$api_key_path"
-          echo "APPLE_API_KEY_PATH=$api_key_path" >> "$GITHUB_ENV"
-          echo "SAGASCRIPT_GIT_HASH=$(printf '%s' "$GITHUB_SHA" | cut -c1-7)" >> "$GITHUB_ENV"
-          echo "SAGASCRIPT_BUILD_DATE=$(date -u +%F)" >> "$GITHUB_ENV"
-
-      - name: Build, sign, notarize, and staple Apple Silicon app
-        env:
-          SAGASCRIPT_REQUIRE_UPDATER_PUBKEY: "1"
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          SAGASCRIPT_UPDATER_PUBKEY: ${{ vars.SAGASCRIPT_UPDATER_PUBKEY }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          : "${APPLE_SIGNING_IDENTITY:?APPLE_SIGNING_IDENTITY secret is required}"
-          : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
-          : "${SAGASCRIPT_UPDATER_PUBKEY:?SAGASCRIPT_UPDATER_PUBKEY variable is required}"
-          : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY secret is required}"
-          signed_config="$RUNNER_TEMP/sagascript-updater-signed.json"
-          node scripts/generate-updater-config.mjs scripts/tauri-updater-signed.json "$signed_config"
-          npx tauri build --target aarch64-apple-darwin --config scripts/tauri-engine-host-bundle.json --config "$signed_config"
-
-      - name: Notarize app and disk image
-        env:
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-        run: |
-          : "${APPLE_API_ISSUER:?APPLE_API_ISSUER secret is required}"
-          : "${APPLE_API_KEY:?APPLE_API_KEY secret is required}"
-          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
-          app_zip="$RUNNER_TEMP/Sagascript-notarization.zip"
-          ditto -c -k --keepParent "$app" "$app_zip"
-          xcrun notarytool submit "$app_zip" \
-            --key "$APPLE_API_KEY_PATH" \
-            --key-id "$APPLE_API_KEY" \
-            --issuer "$APPLE_API_ISSUER" \
-            --wait
-          xcrun stapler staple "$app"
-          xcrun stapler validate "$app"
-          dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
-          [[ -n "$dmg" ]]
-          xcrun notarytool submit "$dmg" \
-            --key "$APPLE_API_KEY_PATH" \
-            --key-id "$APPLE_API_KEY" \
-            --issuer "$APPLE_API_ISSUER" \
-            --wait
-          xcrun stapler staple "$dmg"
-
-      - name: Gate signed app startup
-        run: node scripts/smoke-signed-app-start.mjs src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app
-
-      - name: Verify macOS release artifact
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          version=$(node -p "require('./package.json').version")
-          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
-          dmg=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -print -quit)
-          [[ -n "$dmg" ]]
-          ./scripts/verify-macos-release.sh "$app" "$dmg" "$version" "$GITHUB_SHA"
-          updater_bundle="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app.tar.gz"
-          updater_signature="$updater_bundle.sig"
-          tar -czf "$updater_bundle" -C "$(dirname "$app")" "$(basename "$app")"
-          rm -f "$updater_signature"
-          npx tauri signer sign "$updater_bundle"
-          [[ -s "$updater_bundle" && -s "$updater_signature" ]]
-          archive_check="$RUNNER_TEMP/sagascript-updater-archive-check"
-          mkdir -p "$archive_check"
-          tar -xzf "$updater_bundle" -C "$archive_check"
-          xcrun stapler validate "$archive_check/Sagascript.app"
-          spctl --assess --type execute --verbose=2 "$archive_check/Sagascript.app"
-          mkdir -p artifacts
-          cp "$dmg" artifacts/Sagascript.dmg
-          cp "$updater_bundle" artifacts/Sagascript.app.tar.gz
-          cp "$updater_signature" artifacts/Sagascript.app.tar.gz.sig
-          node scripts/generate-updater-manifest.mjs \
-            "$version" artifacts/Sagascript.app.tar.gz artifacts/Sagascript.app.tar.gz.sig artifacts/latest.json
-
-      - name: Gate upgrade and installed CLI transcription
-        run: |
-          version=$(node -p "require('./package.json').version")
-          app="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Sagascript.app"
-
-          # Seed an obsolete executable at the normal installation path, then
-          # perform the same replace operation expected when upgrading the app.
-          # The persistent /usr/local/bin link must consequently execute the
-          # newly installed app-bundle binary, never the stale placeholder.
-          sudo mkdir -p /Applications/Sagascript.app/Contents/MacOS /usr/local/bin
-          printf '#!/bin/sh\necho stale-install\n' > "$RUNNER_TEMP/stale-sagascript"
-          chmod +x "$RUNNER_TEMP/stale-sagascript"
-          sudo cp "$RUNNER_TEMP/stale-sagascript" /Applications/Sagascript.app/Contents/MacOS/sagascript
-          sudo ln -sfn /Applications/Sagascript.app/Contents/MacOS/sagascript /usr/local/bin/sagascript
-          sudo rm -rf /Applications/Sagascript.app
-          sudo ditto "$app" /Applications/Sagascript.app
-
-          ./scripts/smoke-installed-macos-cli.sh \
-            "$version" \
-            "${SAGASCRIPT_GIT_HASH}" \
-            test-audio/norwegian-short-3s.mp3
-
-      - name: Gate signed Pianissimo through /usr/local/bin/sagascript
-        run: ./scripts/smoke-pianissimo-installed.sh /usr/local/bin/sagascript test-audio/swedish-fleurs-hongkong.wav hongkong
-
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-bundle
-          path: |
-            artifacts/Sagascript.dmg
-            artifacts/Sagascript.app.tar.gz
-            artifacts/Sagascript.app.tar.gz.sig
-            artifacts/latest.json
-          if-no-files-found: error
+    uses: ./.github/workflows/release-build-macos.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
   publish-release:
-    needs: build-macos
+    needs: [build-macos]
     runs-on: ubuntu-latest
     # Sole writer: publishes the draft release. All other jobs run read-only.
     permissions:
@@ -368,7 +251,7 @@ jobs:
           ls -lh artifacts/Sagascript* artifacts/SHA256SUMS
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2, pinned (release writer)
         with:
           draft: true
           generate_release_notes: true
