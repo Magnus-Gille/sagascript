@@ -79,15 +79,35 @@ What we measured, how, and on which build. Full details and raw data:
 | Pianissimo, Klang AI's official MLX 8-bit build on the GPU (outside Sagascript; transcription time only, model load excluded) | 106 s | 6.53% |
 | KB-Whisper Large via whisper.cpp (Sagascript 1.4) | about 12 min (estimated from a 15 min run: 174 s, 5.99% WER) | – |
 
-Accuracy does not drop with length on this set: WER is 6.6% when the 759 FLEURS
-test clips are transcribed one by one, and 7.0%, 6.6%, 6.1% and 7.1% on the 5,
-15, 30 and 60 min files.
+### Questions about these results
 
-**Names.** WER hides names, so we also count how many proper names come out
-right. A name is any capitalised word in the reference that does not start a
-sentence (Swedish capitalises little else); it counts as correct only if the
-same spelling appears in the transcript, ignoring case. No personal dictionary,
-decoder hints or replacements were used in any run.
+#### Does accuracy drop on long recordings?
+
+Not on this test set. WER is 6.6% when the 759 FLEURS test clips are
+transcribed one by one, and 7.0%, 6.6%, 6.1% and 7.1% on the 5, 15, 30 and
+60 min files. Sagascript cuts long audio into overlapping 15 s windows and stitches
+the text back together, so the model never has to handle an hour at once. Klang
+AI describes an extra fine-tune for long recordings in its training write-up. See the next question for what this set does and does not cover.
+
+#### Is the test data a continuous hour of speech?
+
+No. It is **one 60-minute file** made of **307 separate read sentences** (about
+11 s each) by many different speakers, taken from Wikipedia-style text and joined
+with 0.5 s of silence. It shows that a full hour goes through without dropped or
+invented passages (6,262 words out against 6,293 in the reference; the longest
+run of dropped words is 2). It is **not** a continuous conversation: there is no
+long monologue, no interruptions, no overlapping speakers and no background
+noise, so real meetings will score worse. We have run real long recordings (a
+20-minute radio programme) but have no exact reference text for them yet. A natural
+next step is full Swedish parliament debates, which have official records.
+
+#### Are names transcribed correctly?
+
+Less often than ordinary words, and WER hides this because names are a small
+share of the words. We count a name as any capitalised word in the reference that
+does not start a sentence (Swedish capitalises little else), and as correct only
+if the same spelling appears in the transcript, ignoring case. No personal
+dictionary, decoder hints or replacements were used.
 
 | Model and runtime | 15 min file (76 names) | 60 min file (272 names) |
 | --- | ---: | ---: |
@@ -95,18 +115,53 @@ decoder hints or replacements were used in any run.
 | Pianissimo, Klang AI's MLX 8-bit build | 74% (56) | 69% (187) |
 | KB-Whisper Large via whisper.cpp (Sagascript 1.4.1) | 78% (59) | not run |
 
-Names are clearly harder than ordinary words (about 93% of all words are right).
-The engines differ by only one to three names on the 15 min file, which is within
-noise for a sample this small. Typical misses are foreign or rare names (Hsien
-Loong, Oravec, Fernández) and Swedish compounds written differently
-(Falklandspundet). This test does not measure how much a personal dictionary
-helps: Pianissimo keeps the dictionary's whole-word replacements but, unlike
-Whisper, cannot take decoder hints. Measuring that needs a set of names that is
-not in the training data, with and without the dictionary.
+About 93% of all words are right, but only about 70% of names. The engines differ
+by one to three names on the 15 min file, which is within noise for a sample this
+small. Typical misses are foreign or rare names (Hsien Loong, Oravec, Fernández)
+and Swedish compounds written differently (Falklandspundet). With Pianissimo,
+your personal dictionary still applies its whole-word replacements after
+transcription, but Pianissimo cannot take Whisper-style decoder hints. We have
+not yet measured what the dictionary adds; that needs a set of names outside the
+training data, tested with and without the dictionary. Counting script:
+[`docs/benchmarks/data/names-20260930/names.py`](docs/benchmarks/data/names-20260930/names.py).
 
-**Limits:** FLEURS is clean read speech with pauses between sentences. Spontaneous
+#### How do these numbers compare with Klang AI's published ones?
+
+They measure different things. Klang AI reports 6.5% WER on FLEURS Swedish with
+each clip transcribed separately; transcribed the same way, our Core ML build
+scores 6.56% (759 clips). Our long-form numbers come from the joined files above.
+Klang's speed figure (about 2,500× real time) is a server GPU (NVIDIA A100)
+running 128 clips at once; ours is one file at a time on a laptop, start to text,
+which is what dictation and file transcription actually do. See Klang AI's
+[How we trained Pianissimo](https://research.klang.ai/papers/how-we-trained-pianissimo/).
+
+#### Is the speed real, or the result of unusual settings?
+
+The speed comes from running the model on the Mac's Neural Engine instead of the
+GPU or CPU. The weights are Klang AI's. All engines ran the same files on the same
+machine, our time includes starting the program and loading the model (the MLX
+time does not), and the whole transcript is checked against the reference. The
+one trade-off is the fixed 15 s window: the model was trained to look about 20 s
+in each direction, so short windows give it less context and cost about one extra
+wrong word in 280 compared with Klang's MLX build. Longer 30 s windows that keep
+most of the speed (about 1.35× the time) and beat the MLX build's accuracy are
+being prepared for a later release ([#268](https://github.com/Magnus-Gille/sagascript/issues/268)).
+
+#### How fast is it on Windows?
+
+On a Snapdragon X Elite laptop (Windows 11 on ARM, plugged in), Pianissimo runs on
+the CPU through ONNX Runtime with Klang AI's official ONNX files: a 19.5-minute
+Swedish radio programme took 82 s (Sagascript 1.4.1), and dictated text arrived
+0.35–0.46 s after releasing the key (pre-release build with the same engine). On battery at low charge, Windows slowed
+dictation to 6–8 s. These are single runs on one machine, without a reference text
+for WER.
+
+#### Limits of all numbers above
+
+FLEURS is clean read speech with pauses between sentences. Spontaneous
 conversation, meetings, overlapping speakers and background noise are harder and
-are not covered by these numbers. Other hardware was not measured.
+are not covered. Mac numbers are from one base MacBook Air M4; other hardware was
+not measured.
 
 ## Building from source
 
