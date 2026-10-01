@@ -53,7 +53,39 @@ The engine host starts on demand, stays loaded while you dictate, and unloads
 after an idle period (configurable in Settings). It supports dictionary
 replacements after transcription, but not Whisper decoder hints. Explicit
 `--hint`/`--hint-file` options are rejected with this model. File **Auto** uses
-the language's recommended Whisper model; select Pianissimo explicitly for files.
+the language's recommended model (Pianissimo for Swedish where supported) when it
+is downloaded, otherwise the best compatible model you already have.
+
+### Test results (Swedish, Mac)
+
+What we measured, how, and on which build. Full details and raw data:
+[benchmark report](docs/benchmarks/pianissimo-coreml-2026-09.md).
+
+| | |
+| --- | --- |
+| **Build** | Sagascript **1.4.0** (`af1f5af`), the published, signed release; 1.4.1 has the same Mac engine |
+| **Model** | Klang AI Pianissimo, our Core ML conversion [`magnusgille/pianissimo-sv-coreml`](https://huggingface.co/magnusgille/pianissimo-sv-coreml) r1 (`6e33b64e`): 15 s windows, 2 s overlap |
+| **Test audio** | [FLEURS](https://huggingface.co/datasets/google/fleurs) Swedish test split (`sv_se`, CC BY 4.0): the first reading of each distinct sentence, **307 read sentences by many speakers**, joined with 0.5 s of silence into **one 60 min 11 s file** (6,293 reference words). It is one long file, **not a continuous conversation** |
+| **Command** | `sagascript transcribe --model pianissimo-sv --language sv fleurs-sv-distinct-60min.wav` |
+| **Timing** | Wall time of the whole command, process start to text (model already downloaded and compiled), 2 runs |
+| **Accuracy** | Word error rate (WER) against the FLEURS reference text: lowercase, punctuation removed, whitespace collapsed, no number normalization (the same normalization Klang AI uses) |
+| **Hardware** | MacBook Air 13" M4 (base, 10-core CPU, 16-core Neural Engine, 32 GB), fanless, on AC power, macOS 27.0 |
+| **Date** | 2026-09-30 |
+
+| Engine (same 60 min file) | Time | WER |
+| --- | ---: | ---: |
+| **Sagascript 1.4.0, Pianissimo on the Neural Engine** | **11.2–11.8 s** | **7.06%** |
+| Sagascript 1.3.2, Pianissimo on the CPU | 174 s | 6.67% |
+| Klang AI's MLX 8-bit build (GPU), transcription time only | 106 s | 6.53% |
+| KB-Whisper Large (Sagascript, CPU/GPU) | about 12 min (estimated from a 15 min run: 174 s, 5.99% WER) | – |
+
+Accuracy does not drop with length on this set: WER is 6.6% when the 759 FLEURS
+test clips are transcribed one by one, and 7.0%, 6.6%, 6.1% and 7.1% on the 5,
+15, 30 and 60 min files.
+
+**Limits:** FLEURS is clean read speech with pauses between sentences. Spontaneous
+conversation, meetings, overlapping speakers and background noise are harder and
+are not covered by these numbers. Other hardware was not measured.
 
 ## Building from source
 

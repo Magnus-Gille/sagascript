@@ -2,6 +2,17 @@
 
 Measured 2026-09-29. All numbers are computed from the raw result files listed under Reproduction; times are medians over 2 reps unless noted.
 
+## 0. Re-check on the published release (2026-09-30)
+
+The 60-minute measurement was repeated on the signed, published **Sagascript 1.4.0** (`af1f5af`, downloaded from the GitHub release) on the same MacBook Air M4, on AC power, thermal pressure level 0, 2 runs each, same file (`fleurs-sv-distinct-60min.wav`: 307 distinct FLEURS sv_se test sentences read by many speakers, joined with 0.5 s silences, 3,611 s, 6,293 reference words; one long file, not a continuous conversation).
+
+| Engine | Time (2 runs) | WER |
+| --- | --- | ---: |
+| Sagascript 1.4.0 CLI, whole command start to text | 11.79 s, 11.23 s | 7.06% (both runs) |
+| Klang MLX 8-bit reference, transcription only (load excluded) | 105.9 s, 160.1 s (second run under thermal pressure level 2) | 6.53% (both runs) |
+
+The 1.4.0 transcript had 6,262 words against 6,293 in the reference (341 substitutions, 67 deletions, 36 insertions); the longest run of dropped words was 2 and of inserted words 3, and there were no repeated 6-grams. The earlier numbers below are from the pre-release CLI in a thermally gated batch: WER matches (7.05% vs 7.06%), and the time was somewhat lower (9.9 s vs 11.2–11.8 s); the re-check is the figure we quote publicly.
+
 ## 1. Summary
 
 - Swedish file transcription is 11x to 18x faster than Sagascript 1.3.2, end to end (one CLI invocation, start to text): a 60-minute recording takes 9.9 s instead of 174 s (366x real time, against 21x).
