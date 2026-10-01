@@ -10,6 +10,7 @@ node_modules/
 dist/
 src-tauri/build-meta.env
 build/engine-host/
+build/cli/
 src-tauri/resources/__pycache__/
 src-tauri/engine-host/coreml/Sources/EngineHostCore/BuildInfo.swift
 src-tauri/engine-host/coreml/.build/

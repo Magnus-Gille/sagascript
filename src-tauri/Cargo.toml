@@ -77,6 +77,8 @@ enigo = { version = "0.6", features = ["serde"] }
 # Already used by arboard; direct access keeps generation + write under one
 # native clipboard guard rather than racing across portable API calls.
 clipboard-win = "=5.4.1"
+# Console attach so `--version`/`--help` print from the GUI-subsystem exe.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 # Linux GUI build: auto-paste shells out to `xdotool` (no enigo — its X11
 # backend leaves the Control modifier unmapped). `notify` gets its default
