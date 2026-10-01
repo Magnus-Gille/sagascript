@@ -1,13 +1,17 @@
 name: Prebuild release
 
 # Builds the FINAL release artifacts (macOS signed, notarized, stapled; Windows
-# arm64 + x64 installers) for a commit on main whose version is not yet tagged,
+# arm64 + x64 installers) for a push to main that changes the release version to
+# one that is not yet tagged (or a manual dispatch on main),
 # so the later `vX.Y.Z` tag only has to promote them (release.yml). The owner's
 # `updater-signing` approval happens on this run (`main` is an allowed branch of
 # that environment; signing policy is unchanged). Nothing here publishes.
 on:
   push:
     branches: [main]
+  # Force a prebuild of the current main SHA (e.g. commits landed after the
+  # version bump). Refused unless the run is on refs/heads/main.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -28,34 +32,76 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Detect an untagged release version
+      - name: Require main for manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ "$REF" != "refs/heads/main" ]]; then
+            echo "workflow_dispatch is only allowed on refs/heads/main (got $REF)" >&2
+            exit 1
+          fi
+
+      - name: Detect a version change to an untagged release version
         id: detect
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
         run: |
           node scripts/check-release.mjs
           version=$(node -p "require('./package.json').version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+
+          skip() {
             echo "should_build=false" >> "$GITHUB_OUTPUT"
-            echo "Version $version is not a stable release; skipping prebuild." >> "$GITHUB_STEP_SUMMARY"
-          else
-            # ls-remote --exit-code: 0 = tag exists, 2 = no match, else real error.
-            status=0
-            git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1 || status=$?
-            case "$status" in
-              0)
-                echo "should_build=false" >> "$GITHUB_OUTPUT"
-                echo "v$version is already tagged; skipping prebuild." >> "$GITHUB_STEP_SUMMARY"
-                ;;
-              2)
-                echo "should_build=true" >> "$GITHUB_OUTPUT"
-                echo "v$version is untagged; prebuilding release artifacts for $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
-                ;;
-              *)
-                echo "git ls-remote failed with status $status" >&2
-                exit 1
-                ;;
-            esac
+            echo "$1" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            skip "Version $version is not a stable release; skipping prebuild."
           fi
+
+          # Only a push that CHANGES the release version builds and signs; an
+          # ordinary push to main must never reach the signing approval.
+          # A manual dispatch (main only, checked above) forces a prebuild.
+          if [[ "$EVENT" == push ]]; then
+            if [[ ! "$BEFORE" =~ ^[0-9a-f]{40}$ || "$BEFORE" =~ ^0+$ ]]; then
+              skip "No usable previous commit ($BEFORE); cannot tell whether the version changed. Dispatch this workflow on main to force a prebuild."
+            fi
+            if ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "$BEFORE" || true
+            fi
+            if ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              skip "Previous commit $BEFORE is unavailable (history rewritten?); not building. Dispatch this workflow on main to force a prebuild."
+            fi
+            changed=false
+            for file in package.json src-tauri/tauri.conf.json; do
+              now=$(jq -r .version "$file")
+              old=$(git show "$BEFORE:$file" 2>/dev/null | jq -r .version 2>/dev/null || true)
+              if [[ "$now" != "$old" ]]; then changed=true; fi
+            done
+            if [[ "$changed" != true ]]; then
+              skip "This push did not change the release version ($version); skipping prebuild."
+            fi
+          fi
+
+          # ls-remote --exit-code: 0 = tag exists, 2 = no match, else real error.
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1 || status=$?
+          case "$status" in
+            0)
+              skip "v$version is already tagged; skipping prebuild."
+              ;;
+            2)
+              echo "should_build=true" >> "$GITHUB_OUTPUT"
+              echo "v$version is untagged; prebuilding release artifacts for $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "git ls-remote failed with status $status" >&2
+              exit 1
+              ;;
+          esac
 
   quality-gate:
     needs: detect
@@ -65,7 +111,16 @@ jobs:
   build-macos:
     needs: [detect, quality-gate]
     uses: ./.github/workflows/release-build-macos.yml
-    secrets: inherit
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
   build-windows:
     needs: detect

@@ -67,8 +67,15 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
    `cargo clippy --workspace --all-targets -- -D warnings`.
 3. Merge the release commit to `main`. Do **not** tag yet.
 4. **Prebuild (owner touchpoint 1: signing approval).** The push to `main` starts
-   `prebuild-release.yml`. When `package.json`'s version has no `vVERSION` tag yet,
-   it runs the release quality gate, builds the Windows arm64 and x64 packages
+   `prebuild-release.yml`. Only a push that *changes* the version in
+   `package.json` or `src-tauri/tauri.conf.json` (compared with the push's
+   previous commit) and whose `vVERSION` tag does not exist yet builds, so the
+   release PR (the version bump) triggers the prebuild and ordinary pushes never
+   reach the signing approval. If more commits land after the bump, the tag
+   would sit on a commit with no prebuild: either run the workflow manually on
+   `main` (`gh workflow run prebuild-release.yml --ref main`; refused on any
+   other ref) to prebuild the current main SHA while it is untagged, or accept
+   that the tag uses the full fallback build (step 6). The prebuild runs the release quality gate, builds the Windows arm64 and x64 packages
    (`windows-package.yml`, reused via `workflow_call`), and builds, signs,
    notarizes and staples the macOS app (`release-build-macos.yml`, the single
    signing implementation, behind the `updater-signing` environment). Approve
@@ -77,8 +84,9 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
    next to the artifacts (30-day retention). Nothing is published.
 5. **Tag (owner touchpoint 2: publish).** Create and push exactly `vVERSION` on
    the prebuilt commit. `release.yml` then:
-   - looks for a successful push-to-`main` `prebuild-release.yml` run for the tag's
-     exact commit SHA;
+   - looks for a successful `prebuild-release.yml` run on `main` (push or manual
+     dispatch) for the tag's exact commit SHA whose artifacts are all present and
+     not expired (otherwise it falls back, logging why in the step summary);
    - if found, downloads its artifacts, verifies every hash and size against the
      manifest and that the manifest `version`, `sha` and `tree_sha` match the
      tagged commit (any mismatch fails the run; nothing is rebuilt);
@@ -133,7 +141,10 @@ DMG; `verify-macos-release.sh`; app/CLI/engine-host `--version` equal version pl
 the release SHA and not dirty; the updater archive; and the Pianissimo smoke (engine
 doctor plus a Swedish transcription that must contain `hongkong`). `--skip-smoke`
 omits the model download. In CI the script also checks the Windows acceptance JSON
-from the prebuild artifacts. It exits non-zero on any failure.
+from the prebuild artifacts. `--require-windows` (used by the promote path) turns a
+missing Windows SHA256 file, `windows-beta-VERSION` release, or (in CI only,
+`GITHUB_ACTIONS=true`) acceptance JSON from a skip into a failure. It exits non-zero
+on any failure.
 
 Windows beta publication is a separate owner action: the promote step drafts the
 `windows-beta-VERSION` prerelease from the exact prebuilt x64 artifacts; publish it

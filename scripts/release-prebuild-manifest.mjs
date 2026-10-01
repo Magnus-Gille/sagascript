@@ -5,7 +5,7 @@
 //           the directory holds exactly the listed files with matching hashes.
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -24,6 +24,20 @@ export function listFiles(dir, exclude = []) {
   };
   walk(root);
   return found.sort();
+}
+
+// Manifest entries come from a downloaded artifact, so treat them as untrusted:
+// only names that stay inside --dir are accepted. Names are relative,
+// "/"-separated paths from listFiles; reject absolute paths, backslashes,
+// empty/"."/".." segments.
+export function unsafeEntryName(name) {
+  if (typeof name !== "string" || name === "") return "empty or non-string name";
+  if (name.startsWith("/") || /^[A-Za-z]:/.test(name) || isAbsolute(name)) return "absolute path";
+  if (name.includes("\\") || name.includes("\0")) return "backslash or NUL in name";
+  if (name.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
+    return "empty, '.' or '..' path segment";
+  }
+  return null;
 }
 
 function describe(dir, name) {
@@ -52,6 +66,11 @@ export function verifyManifest({ dir, manifest, version, sha, tree, exclude = []
   if (!Array.isArray(manifest.files) || !manifest.files.length) problems.push("manifest lists no files");
   const listed = new Set();
   for (const entry of manifest.files ?? []) {
+    const unsafe = unsafeEntryName(entry.name);
+    if (unsafe) {
+      problems.push(`${JSON.stringify(entry.name)}: unsafe manifest entry name (${unsafe})`);
+      continue;
+    }
     listed.add(entry.name);
     let actual;
     try {

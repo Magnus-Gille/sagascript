@@ -34,12 +34,25 @@ jobs:
           # A "successful" prebuild run can also be an all-skipped one (version already
           # tagged), so require that the manifest job actually ran and succeeded.
           run_id=
-          for candidate in $(gh run list -R "$REPO" --workflow prebuild-release.yml --branch main \
-              --event push --commit "$TAG_SHA" --status success --limit 10 \
-              --json databaseId --jq '.[].databaseId'); do
-            built=$(gh run view "$candidate" -R "$REPO" --json jobs \
-              --jq '[.jobs[] | select(.name == "manifest" and .conclusion == "success")] | length')
-            if [[ "$built" == 1 ]]; then run_id=$candidate; break; fi
+          reason=
+          for event in push workflow_dispatch; do
+            for candidate in $(gh run list -R "$REPO" --workflow prebuild-release.yml --branch main \
+                --event "$event" --commit "$TAG_SHA" --status success --limit 10 \
+                --json databaseId --jq '.[].databaseId'); do
+              built=$(gh run view "$candidate" -R "$REPO" --json jobs \
+                --jq '[.jobs[] | select(.name == "manifest" and .conclusion == "success")] | length')
+              [[ "$built" == 1 ]] || continue
+              # Artifacts expire (30 days); an expired or incomplete prebuild
+              # must fall back to the full build instead of failing the promote.
+              artifacts=$(gh api "repos/$REPO/actions/runs/$candidate/artifacts" --paginate \
+                --jq '.artifacts[] | [.name, .expired] | @tsv')
+              missing=
+              for need in macos-bundle windows-x64-unsigned-candidate windows-arm64-unsigned-candidate release-manifest; do
+                if ! grep -Fxq "$(printf '%s\tfalse' "$need")" <<<"$artifacts"; then missing="$missing $need"; fi
+              done
+              if [[ -z "$missing" ]]; then run_id=$candidate; break 2; fi
+              reason="$reason run $candidate lacks unexpired artifacts:$missing;"
+            done
           done
           if [[ -n "$run_id" ]]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
@@ -47,7 +60,7 @@ jobs:
             echo "Promoting prebuild run $run_id for $TAG_SHA" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "No successful prebuild for $TAG_SHA; using the full fallback build." >> "$GITHUB_STEP_SUMMARY"
+            echo "No usable prebuild for $TAG_SHA; using the full fallback build.${reason:+ Reason:$reason}" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   # Sole writer on the promote path: downloads the prebuilt artifacts, verifies
@@ -64,6 +77,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Verify release metadata and tag
         env:
@@ -185,7 +200,7 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           ./scripts/verify-release-draft.sh --assets-dir draft-assets \
-            --version "$version" --sha "$GITHUB_SHA" --repo "$REPO"
+            --version "$version" --sha "$GITHUB_SHA" --repo "$REPO" --require-windows
 
   quality-gate:
     needs: locate-prebuild
@@ -199,7 +214,16 @@ jobs:
     uses: ./.github/workflows/release-build-macos.yml
     with:
       release_tag: ${{ github.ref_name }}
-    secrets: inherit
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
   publish-release:
     needs: [build-macos]

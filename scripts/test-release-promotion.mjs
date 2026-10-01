@@ -102,8 +102,80 @@ test("prebuild runs on main pushes only, never on pull requests, and never cance
   assert.match(w, /permissions:\s*\n\s+contents: read/);
   assert.match(w, /git ls-remote --exit-code --tags origin/);
   assert.match(w, /uses: \.\/\.github\/workflows\/windows-package\.yml/);
-  assert.match(w, /uses: \.\/\.github\/workflows\/release-build-macos\.yml\s*\n\s+secrets: inherit/);
   assert.match(w, /release-prebuild-manifest\.mjs create/);
+});
+
+test("prebuild builds only when the push changes the version, or on a main-only dispatch", () => {
+  const w = workflows["prebuild-release"];
+  assert.match(w, /\n  workflow_dispatch:/);
+  assert.match(w, /if \[\[ "\$REF" != "refs\/heads\/main" \]\]/);
+  assert.match(w, /BEFORE: \$\{\{ github\.event\.before \}\}/);
+  assert.match(w, /\^0\+\$/);
+  assert.match(w, /git fetch --no-tags --depth=1 origin "\$BEFORE"/);
+  assert.match(w, /for file in package\.json src-tauri\/tauri\.conf\.json/);
+  assert.match(w, /git show "\$BEFORE:\$file"/);
+  assert.match(w, /did not change the release version/);
+  assert.match(w, /group: prebuild-release-\$\{\{ github\.sha \}\}/);
+  assert.match(w, /cancel-in-progress: false/);
+});
+
+test("no workflow uses secrets: inherit; the signing callee declares exactly the secrets it reads", () => {
+  for (const [name, text] of Object.entries(workflows)) {
+    assert.doesNotMatch(text, /^\s*secrets:\s*inherit/m, `${name} must pass secrets explicitly`);
+  }
+  const callee = workflows["release-build-macos"];
+  const used = [...new Set([...callee.matchAll(/\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}/g)].map((m) => m[1]))].sort();
+  assert.ok(used.length >= 9);
+  const header = callee.slice(callee.indexOf("workflow_call:"), callee.indexOf("\npermissions:"));
+  const declared = [...header.matchAll(/^ {6}([A-Z0-9_]+):\s*\n\s+required: true/gm)].map((m) => m[1]).sort();
+  assert.deepEqual(declared, used);
+  for (const name of ["prebuild-release", "release"]) {
+    const text = workflows[name];
+    const block = text.slice(text.indexOf("release-build-macos.yml"));
+    const passed = [...block.matchAll(/^ {6}([A-Z0-9_]+): \$\{\{ secrets\.\1 \}\}/gm)].map((m) => m[1]).sort();
+    assert.deepEqual(passed, used, `${name} passes exactly the callee's secrets`);
+  }
+});
+
+test("rust-toolchain is pinned by full SHA with an explicit toolchain in the release workflows", () => {
+  for (const name of ["release-build-macos", "release-quality-gate"]) {
+    assert.match(workflows[name], /uses: dtolnay\/rust-toolchain@[0-9a-f]{40} # .*\n\s+with:\n\s+toolchain: stable/, name);
+    assert.doesNotMatch(workflows[name], /rust-toolchain@stable/);
+  }
+});
+
+test("promote-release checkout does not persist credentials", () => {
+  const w = workflows.release;
+  const promote = w.slice(w.indexOf("  promote-release:"), w.indexOf("  verify-draft:"));
+  assert.match(promote, /actions\/checkout@v6\s*\n\s+with:\n\s+persist-credentials: false/);
+});
+
+test("locate-prebuild requires unexpired artifacts and logs why it falls back", () => {
+  const w = workflows.release;
+  assert.match(w, /actions\/runs\/\$candidate\/artifacts/);
+  assert.match(w, /\.expired/);
+  for (const name of ["macos-bundle", "windows-x64-unsigned-candidate", "windows-arm64-unsigned-candidate", "release-manifest"]) {
+    assert.ok(w.includes(name), `locate-prebuild requires ${name}`);
+  }
+  assert.match(w, /lacks unexpired artifacts/);
+  assert.match(w, /for event in push workflow_dispatch/);
+});
+
+test("verify-draft requires the Windows assets on the promote path", () => {
+  assert.match(workflows.release, /verify-release-draft\.sh --assets-dir draft-assets[\s\S]*--require-windows/);
+  const v = read("scripts/verify-release-draft.sh");
+  assert.match(v, /--require-windows\) require_windows=1/);
+  assert.match(v, /missing_windows "Windows \$arch: no SHA256SUMS/);
+  assert.match(v, /GITHUB_ACTIONS:-\} == true/);
+  assert.match(v, /missing_windows "windows-beta-\$version release is missing"/);
+});
+
+test("manifest verification rejects absolute, traversing and separator-abusing entry names", () => {
+  const { expect } = fixture();
+  for (const name of ["/etc/passwd", "../x", "macos-bundle/../../x", "a\\b", "./a", "a//b", "C:/x", ""]) {
+    const manifest = { ...expect.manifest, files: [...expect.manifest.files, { name, sha256: "0".repeat(64), size: 1 }] };
+    assert.match(verifyManifest({ ...expect, manifest }).join("\n"), /unsafe manifest entry name/, JSON.stringify(name));
+  }
 });
 
 test("signing lives in exactly one reusable workflow behind the updater-signing environment", () => {
@@ -111,19 +183,21 @@ test("signing lives in exactly one reusable workflow behind the updater-signing 
   assert.match(signing, /workflow_call:/);
   assert.match(signing, /environment: updater-signing/);
   for (const name of ["release", "prebuild-release", "windows-package", "release-quality-gate"]) {
-    assert.doesNotMatch(workflows[name], /APPLE_CERTIFICATE|secrets\.TAURI_SIGNING|environment: updater-signing/, `${name} must not hold signing material`);
+    // Callers may only forward secrets as `secrets:` inputs to the signing workflow; never consume them.
+    const consumed = workflows[name].replace(/^ {6}([A-Z0-9_]+): \$\{\{ secrets\.\1 \}\}\n/gm, "");
+    assert.doesNotMatch(consumed, /APPLE_CERTIFICATE|secrets\.TAURI_SIGNING|environment: updater-signing/, `${name} must not hold signing material`);
   }
 });
 
 test("tag path promotes a verified prebuild and keeps the full build as fallback", () => {
   const w = workflows.release;
   assert.match(w, /--workflow prebuild-release\.yml --branch main/);
-  assert.match(w, /--event push --commit "\$TAG_SHA" --status success/);
+  assert.match(w, /--event "\$event" --commit "\$TAG_SHA" --status success/);
   assert.match(w, /gh run download "\$PREBUILD_RUN_ID"/);
   assert.match(w, /release-prebuild-manifest\.mjs verify[\s\S]*--sha "\$GITHUB_SHA"[\s\S]*HEAD\^\{tree\}/);
   assert.match(w, /promote-release:[\s\S]*if: needs\.locate-prebuild\.outputs\.found == 'true'/);
   assert.match(w, /quality-gate:[\s\S]*if: needs\.locate-prebuild\.outputs\.found != 'true'[\s\S]*release-quality-gate\.yml/);
-  assert.match(w, /build-macos:[\s\S]*release-build-macos\.yml[\s\S]*secrets: inherit/);
+  assert.match(w, /build-macos:[\s\S]*release-build-macos\.yml[\s\S]*secrets:\s*\n\s+APPLE_CERTIFICATE:/);
   assert.match(w, /publish-release:\s*\n\s+needs: \[build-macos\]/);
   assert.match(w, /--prerelease --target "\$GITHUB_SHA"/);
   assert.match(w, /verify-release-draft\.sh --assets-dir draft-assets/);
@@ -137,7 +211,8 @@ test("tag path promotes a verified prebuild and keeps the full build as fallback
 test("new workflows pin third-party actions and avoid expression interpolation in run blocks", () => {
   for (const [name, text] of Object.entries(workflows)) {
     for (const [, action, ref] of text.matchAll(/^\s*(?:- )?uses: ([^\s@./][^\s@]*)@(\S+)/gm)) {
-      if (action.startsWith("actions/") || action.startsWith("dtolnay/")) continue;
+      if (action.startsWith("actions/")) continue;
+      if (name === "windows-package" && action.startsWith("dtolnay/")) continue; // repo-wide @stable, out of scope here
       assert.match(ref, /^[0-9a-f]{40}$/, `${name}: ${action} must be pinned by commit SHA`);
     }
     const lines = text.split("\n");

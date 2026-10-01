@@ -2,12 +2,16 @@
 # Automated release verification (#266). Runs the checks that used to be done by
 # hand against a draft (or published) Sagascript release and prints a checklist.
 #
-#   verify-release-draft.sh TAG [--repo OWNER/REPO] [--skip-smoke]
+#   verify-release-draft.sh TAG [--repo OWNER/REPO] [--skip-smoke] [--require-windows]
 #       Downloads TAG (and windows-beta-VERSION, when present) with `gh`.
-#   verify-release-draft.sh --assets-dir DIR --version V --sha FULL_SHA [--repo OWNER/REPO] [--skip-smoke]
+#   verify-release-draft.sh --assets-dir DIR --version V --sha FULL_SHA [--repo OWNER/REPO] [--skip-smoke] [--require-windows]
 #       Verifies already-downloaded assets: DIR/release (macOS + Windows arm64),
 #       DIR/windows-beta (Windows x64), optional DIR/evidence/windows-ARCH/
 #       windows-acceptance-ps51.json.
+#
+# --require-windows: a missing Windows SHA256 file, windows-beta release or (when
+# GITHUB_ACTIONS=true) acceptance JSON FAILS instead of being skipped. Acceptance
+# JSON only exists in the prebuild artifacts, so outside CI it stays a SKIP.
 #
 # Needs macOS (codesign, spctl, stapler, hdiutil) and python3. Writes a Markdown
 # summary to $GITHUB_STEP_SUMMARY when set. Exit status is non-zero if any check fails.
@@ -16,6 +20,7 @@ set -uo pipefail
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 repo=Magnus-Gille/sagascript
 skip_smoke=0
+require_windows=0
 assets_dir=
 version=
 sha=
@@ -28,7 +33,8 @@ while [[ $# -gt 0 ]]; do
     --version) version=${2:?}; shift 2 ;;
     --sha) sha=${2:?}; shift 2 ;;
     --skip-smoke) skip_smoke=1; shift ;;
-    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    --require-windows) require_windows=1; shift ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     -*) echo "Unknown option: $1" >&2; exit 2 ;;
     *) [[ -z $tag ]] || { echo "Unexpected argument: $1" >&2; exit 2; }; tag=$1; shift ;;
   esac
@@ -79,6 +85,15 @@ run_check() {
   fi
 }
 skip_check() { results+=("SKIP|$1"); echo "SKIP  $1"; }
+# With --require-windows a missing Windows input is a failure, not a skip.
+missing_windows() {
+  if [[ $require_windows == 1 ]]; then
+    results+=("FAIL|$1 (required by --require-windows)"); failed=1
+    echo "FAIL  $1 (required by --require-windows)"
+  else
+    skip_check "$1"
+  fi
+}
 
 # --- checks -----------------------------------------------------------------
 
@@ -222,19 +237,26 @@ else
   echo "FAIL  Mount DMG and copy app"; sed 's/^/      /' "$work/mount.log"
 fi
 
+if [[ $require_windows == 1 && ! -d $beta ]]; then
+  missing_windows "windows-beta-$version release is missing"
+fi
 for arch in arm64 x64; do
   dir=$rel
   [[ $arch == x64 ]] && dir=$beta
   if [[ -f "$dir/SHA256SUMS-Windows-$arch" ]]; then
     run_check "Windows $arch: SHA256 file matches artifacts" check_windows "$arch" "$dir"
   else
-    skip_check "Windows $arch: no SHA256SUMS-Windows-$arch in the draft"
+    missing_windows "Windows $arch: no SHA256SUMS-Windows-$arch in the draft"
   fi
   evidence=$assets_dir/evidence/windows-$arch/windows-acceptance-ps51.json
   if [[ -f $evidence ]]; then
     run_check "Windows $arch: acceptance JSON reports $version @ ${short}" check_windows_evidence "$arch" "$evidence"
   else
-    skip_check "Windows $arch: acceptance JSON (only available from the prebuild artifacts)"
+    if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+      missing_windows "Windows $arch: acceptance JSON missing from the prebuild artifacts"
+    else
+      skip_check "Windows $arch: acceptance JSON (only available from the prebuild artifacts, i.e. in CI)"
+    fi
   fi
 done
 
