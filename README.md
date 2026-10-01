@@ -91,7 +91,7 @@ decoder hints or replacements were used in any run.
 
 | Model and runtime | 15 min file (76 names) | 60 min file (272 names) |
 | --- | ---: | ---: |
-| Pianissimo, our Core ML conversion r1 (Sagascript 1.4.1) | 75% (57) | 67% (182) |
+| Pianissimo, our Core ML conversion r1 (Sagascript 1.4.1 for 15 min, 1.4.0 for 60 min; same Mac engine) | 75% (57) | 67% (182) |
 | Pianissimo, Klang AI's MLX 8-bit build | 74% (56) | 69% (187) |
 | KB-Whisper Large via whisper.cpp (Sagascript 1.4.1) | 78% (59) | not run |
 
