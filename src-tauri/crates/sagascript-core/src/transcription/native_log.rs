@@ -97,7 +97,6 @@ mod tests {
     use super::*;
     use crate::settings::WhisperModel;
 
-    const KB_MSG: &str = "whisper_init_state: failed to load Core ML model from '/Users/x/Library/Application Support/Sagascript/Models/kb-whisper-large-encoder.mlmodelc'";
     const BASE_MSG: &str = "whisper_init_state: failed to load Core ML model from '/m/ggml-base-encoder.mlmodelc'";
 
     fn expected_for(model: WhisperModel) -> HashSet<String> {
@@ -107,6 +106,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn model_without_encoder_is_suppressed() {
+        const KB_MSG: &str = "whisper_init_state: failed to load Core ML model from '/Users/x/Library/Application Support/Sagascript/Models/kb-whisper-large-encoder.mlmodelc'";
         let expected = expected_for(WhisperModel::KbWhisperLarge);
         assert_eq!(
             WhisperModel::KbWhisperLarge.unsupported_coreml_probe_dirname().as_deref(),
