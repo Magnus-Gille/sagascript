@@ -2226,6 +2226,7 @@ fn detect_file_language(
         );
         return Ok(None);
     };
+    ensure_detection_encoder(detection_model, backfill_encoder_blocking);
     eprintln!(
         "Checking language with neutral model: {}...",
         detection_model.display_name()
@@ -2250,6 +2251,7 @@ fn detect_file_language(
     else {
         return Ok(Some(initial));
     };
+    ensure_detection_encoder(accurate_model, backfill_encoder_blocking);
     eprintln!(
         "Language check was uncertain ({} p={:.3}); verifying with {}...",
         initial.language,
@@ -2259,6 +2261,28 @@ fn detect_file_language(
     let accurate_backend = WhisperBackend::new();
     accurate_backend.load_model(accurate_model)?;
     accurate_backend.detect_language(audio)
+}
+
+/// Make sure the language-check model has its Core ML encoder (Neural Engine)
+/// next to it, like models fetched through `download_model`. Best effort: the
+/// check still works, only slower, when the encoder cannot be fetched. No-op
+/// off macOS and for models without an encoder.
+fn ensure_detection_encoder(
+    detection_model: WhisperModel,
+    backfill: impl FnOnce(WhisperModel) -> Result<(), DictationError>,
+) {
+    if let Err(e) = backfill(detection_model) {
+        eprintln!(
+            "Warning: Core ML encoder not installed for {}: {e}",
+            detection_model.display_name()
+        );
+    }
+}
+
+fn backfill_encoder_blocking(model: WhisperModel) -> Result<(), DictationError> {
+    tokio::runtime::Runtime::new()
+        .map_err(|e| DictationError::ModelDownloadFailed(format!("tokio runtime: {e}")))?
+        .block_on(model::backfill_coreml_encoder(model))
 }
 
 fn neutral_language_detection_model(
@@ -3495,6 +3519,20 @@ mod tests {
             FileModel::Whisper(WhisperModel::BaseEn));
         assert!(resolve_file_model(Some("pianissimo-sv"), Language::English, &settings).is_err());
         assert!(resolve_file_model(Some("auto"), Language::Swedish, &settings).is_err());
+    }
+
+    #[test]
+    fn ensuring_neutral_model_requests_its_encoder() {
+        let requested = std::cell::RefCell::new(Vec::new());
+        ensure_detection_encoder(WhisperModel::Base, |m| {
+            requested.borrow_mut().push(m);
+            Ok(())
+        });
+        assert_eq!(*requested.borrow(), vec![WhisperModel::Base]);
+        // A failed backfill is non-fatal.
+        ensure_detection_encoder(WhisperModel::Base, |_| {
+            Err(DictationError::ModelDownloadFailed("offline".into()))
+        });
     }
 
     #[test]
