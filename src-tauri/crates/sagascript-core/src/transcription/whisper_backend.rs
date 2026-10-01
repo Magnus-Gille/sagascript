@@ -750,7 +750,7 @@ impl WhisperBackend {
         // C-string conversion preserves emitted errors as valid UTF-8. Application
         // warnings remain visible. whisper-rs guards installation with `Once`, so
         // concurrent backend construction remains safe.
-        whisper_rs::install_logging_hooks();
+        super::native_log::install();
 
         Self {
             context: Mutex::new(None),
@@ -929,6 +929,11 @@ impl WhisperBackend {
         // versions released before download integrity was enforced.
         crate::download::verify_file(&model_path, whisper_model.download_integrity())?;
         model::quarantine_unverified_coreml_encoder(whisper_model)?;
+        // Fine-tunes have no Core ML encoder by design; whisper.cpp still
+        // probes for one and logs an ERROR. Mark exactly that probe as expected.
+        if let Some(dirname) = whisper_model.unsupported_coreml_probe_dirname() {
+            super::native_log::expect_missing_coreml_encoder(&dirname);
+        }
 
         info!(
             "Loading whisper model: {} ({profile:?}) from {}",
