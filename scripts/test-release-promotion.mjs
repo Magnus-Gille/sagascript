@@ -6,7 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { createManifest, verifyManifest } from "./release-prebuild-manifest.mjs";
 
-const read = (path) => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8");
+const read = (path) => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8").replace(/\r\n/g, "\n");
 const workflows = Object.fromEntries(
   ["release", "prebuild-release", "release-build-macos", "release-quality-gate", "windows-package"].map((name) => [
     name,
