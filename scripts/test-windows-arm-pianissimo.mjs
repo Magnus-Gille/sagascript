@@ -5,6 +5,7 @@ import test from "node:test";
 const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 const workflow = (await read("../.github/workflows/windows-package.yml")).replace(/\r\n?/g, "\n");
 const bundle = JSON.parse(await read("./tauri-windows-engine-host.json"));
+const cliBundle = JSON.parse(await read("./tauri-windows-cli.json"));
 const script = await read("./windows-arm-pianissimo-test.ps1");
 const verifier = await read("./verify-windows-engine-host.ps1");
 const docs = await read("../docs/windows-arm-pianissimo-testing.md");
@@ -57,12 +58,35 @@ test("bundle config maps host and DLLs into engine-host/ only", () => {
   assert.doesNotMatch(workflowOutsideArm64Steps(), /engine-host/);
 });
 
+test("installers bundle the console CLI beside engine-host, and the portable zip is arm64-only", () => {
+  assert.deepEqual(cliBundle.bundle.resources, { "../build/cli/sagascript-cli.exe": "sagascript-cli.exe" });
+  const installer = step("Build unsigned internal installers");
+  assert.match(installer, /--config scripts\/tauri-windows-cli\.json/);
+  assert.match(step("Gate real Windows transcription"), /build\\cli\\sagascript-cli\.exe/);
+  const generic = step("Verify installers carry the console CLI");
+  assert.match(generic, /msiexec\.exe/);
+  assert.match(generic, /sagascript-cli\.exe/);
+  assert.match(generic, /--version/);
+  const install = step("Verify silent per-user install runs the installed ARM64 CLI");
+  assert.match(install, /if: matrix\.architecture == 'arm64'/);
+  for (const needle of ["'/S'", "--version", "engine status --json", "engine doctor", "engine -ne 'onnx'",
+    "transcribe --model pianissimo-sv --language sv", "uninstall.exe", "Uninstall removed sagascript-cli.exe"])
+    assert.ok(install.includes(needle), `install step missing ${needle}`);
+  const zip = step("Build and verify ARM64 portable zip");
+  assert.match(zip, /if: matrix\.architecture == 'arm64'/);
+  assert.match(zip, /Sagascript-Windows-\$architecture-Portable\.zip/);
+  assert.match(zip, /engine status --json/);
+  assert.ok(workflow.indexOf("name: Build and verify ARM64 portable zip") < workflow.indexOf("name: Prepare and verify candidate artifacts"));
+});
+
 function workflowOutsideArm64Steps() {
   // The x64 job must not reference the host or DLL outside arm64-gated steps.
   const gated = new Set([
     "Build and stage ARM64 ONNX engine host",
     "Verify ARM64 installer carries the ONNX engine host",
     "Measure warm ONNX engine host latency (informational)",
+    "Verify silent per-user install runs the installed ARM64 CLI",
+    "Build and verify ARM64 portable zip",
   ]);
   let rest = workflow;
   for (const name of gated) rest = rest.replace(step(name), "");
@@ -90,6 +114,7 @@ test("owner test script covers every listed step", () => {
 test("owner test script prefers -Cli, then known installs with a sibling host, then PATH", () => {
   const explicit = script.indexOf("if ($Cli)");
   const known = script.indexOf("$known +=");
+  assert.ok(script.includes("sagascript-cli.exe"), "script must prefer the installed sagascript-cli.exe");
   const onPath = script.indexOf("Get-Command sagascript");
   assert.ok(explicit >= 0 && known > explicit && onPath > known, "selection order must be -Cli, known installs, PATH");
   assert.ok(script.includes("engine-host\\sagascript-engine-host-ort.exe"));
