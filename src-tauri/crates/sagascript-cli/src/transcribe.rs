@@ -3498,6 +3498,22 @@ mod tests {
     }
 
     #[test]
+    fn language_detection_never_downloads_an_encoder() {
+        // Local mode makes no network requests after setup: detection may use
+        // a Core ML encoder only if `download-model` already installed it.
+        let production = include_str!("transcribe.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        let start = production.find("fn detect_file_language(").unwrap();
+        let end = production[start..].find("fn neutral_language_detection_model(").unwrap();
+        let body = &production[start..start + end];
+        for forbidden in ["backfill", "download_model", "ensure_coreml_encoder", "block_on"] {
+            assert!(!body.contains(forbidden), "detection path must not call {forbidden}");
+        }
+    }
+
+    #[test]
     fn neutral_language_detector_prefers_downloaded_base() {
         let selected = neutral_language_detection_model(|model| {
             matches!(model, WhisperModel::Base | WhisperModel::Tiny)

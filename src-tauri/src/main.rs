@@ -937,13 +937,17 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
 }
 fn main() {
     let startup_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    let gui_launch_mode = gui_launch_mode(startup_args);
+    let gui_launch_mode = gui_launch_mode(startup_args.iter().cloned());
 
     // CLI mode: if a subcommand is given, run CLI and exit. The desktop
     // binary is a full CLI (CLI-first design) — the GUI only launches on a
     // bare invocation. The private GUI-open marker is consumed here rather
     // than passed to clap so `sagascript open` can explicitly reveal Settings.
     if gui_launch_mode == GuiLaunchMode::Standard {
+        #[cfg(windows)]
+        if cli_args_request_console_output(&startup_args) {
+            attach_parent_console();
+        }
         if let Some(parsed) = sagascript_cli::try_parse() {
             // CLI mode uses warn-level logging to keep stdout clean
             let configured_filter = std::env::var("RUST_LOG").ok();
@@ -1784,6 +1788,51 @@ enum GuiLaunchMode {
 /// updates. Only the explicit private install marker may contact the manifest.
 fn should_install_update_at_launch(mode: GuiLaunchMode) -> bool {
     mode == GuiLaunchMode::InstallUpdate
+}
+
+/// True when argv asks clap for informational output (`--version`/`-V`,
+/// `--help`/`-h`, or the `help` subcommand) that must reach a terminal.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn cli_args_request_console_output(args: &[std::ffi::OsString]) -> bool {
+    args.iter().skip(1).any(|argument| {
+        argument == std::ffi::OsStr::new("--version")
+            || argument == std::ffi::OsStr::new("-V")
+            || argument == std::ffi::OsStr::new("--help")
+            || argument == std::ffi::OsStr::new("-h")
+    }) || args.get(1).is_some_and(|argument| argument == std::ffi::OsStr::new("help"))
+}
+
+/// The release GUI uses the Windows GUI subsystem, so it starts without a
+/// console and its stdout/stderr handles are invalid. When launched from a
+/// terminal, attach to the parent's console and point any invalid standard
+/// handle at it. Redirected (valid) handles are left alone. Does nothing, and
+/// opens no window, when there is no parent console (Start menu launch).
+#[cfg(windows)]
+fn attach_parent_console() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE,
+        STD_OUTPUT_HANDLE,
+    };
+
+    // SAFETY: plain Win32 console calls; no pointers are passed except a
+    // handle owned by a `File` that is intentionally leaked below.
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        for std_handle in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            let current = GetStdHandle(std_handle);
+            if !current.is_null() && current != INVALID_HANDLE_VALUE {
+                continue;
+            }
+            if let Ok(console) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
+                SetStdHandle(std_handle, console.as_raw_handle() as _);
+                std::mem::forget(console);
+            }
+        }
+    }
 }
 
 fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLaunchMode {
@@ -2862,6 +2911,27 @@ mod tests {
             initial_window_request(false, GuiLaunchMode::Background),
             InitialWindowRequest::Onboarding
         );
+    }
+
+    #[test]
+    fn version_and_help_flags_request_console_output() {
+        use std::ffi::OsString;
+        let wants = |args: &[&str]| {
+            cli_args_request_console_output(&args.iter().map(OsString::from).collect::<Vec<_>>())
+        };
+
+        assert!(wants(&["sagascript", "--version"]));
+        assert!(wants(&["sagascript", "-V"]));
+        assert!(wants(&["sagascript", "--help"]));
+        assert!(wants(&["sagascript", "-h"]));
+        assert!(wants(&["sagascript", "help"]));
+        assert!(wants(&["sagascript", "transcribe", "--help"]));
+        // Bare launch, GUI markers and ordinary subcommands never attach.
+        assert!(!wants(&["sagascript"]));
+        assert!(!wants(&["sagascript", sagascript_cli::open::GUI_BACKGROUND_ARG]));
+        assert!(!wants(&["sagascript", "transcribe", "file.wav"]));
+        // argv[0] alone is never an argument.
+        assert!(!wants(&["--version"]));
     }
 
     #[test]

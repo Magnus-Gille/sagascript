@@ -750,7 +750,7 @@ impl WhisperBackend {
         // C-string conversion preserves emitted errors as valid UTF-8. Application
         // warnings remain visible. whisper-rs guards installation with `Once`, so
         // concurrent backend construction remains safe.
-        whisper_rs::install_logging_hooks();
+        super::native_log::install();
 
         Self {
             context: Mutex::new(None),
@@ -929,6 +929,11 @@ impl WhisperBackend {
         // versions released before download integrity was enforced.
         crate::download::verify_file(&model_path, whisper_model.download_integrity())?;
         model::quarantine_unverified_coreml_encoder(whisper_model)?;
+        // Fine-tunes have no Core ML encoder by design; whisper.cpp still
+        // probes for one and logs an ERROR. Mark exactly that probe as expected.
+        if let Some(dirname) = whisper_model.unsupported_coreml_probe_dirname() {
+            super::native_log::expect_missing_coreml_encoder(&dirname);
+        }
 
         info!(
             "Loading whisper model: {} ({profile:?}) from {}",
@@ -1482,6 +1487,19 @@ impl WhisperBackend {
                 .ok_or(DictationError::ModelNotLoaded)?
                 .token_eot()
         };
+
+        // Leave 0% (#237) once compute resources are held, i.e. right after
+        // `on_encode_start` fires (or on the first real callback), so the
+        // phase never goes "transcribing 1%" -> "encoding" and state-lock
+        // waiting is not counted as transcribing.
+        let (on_progress, begin_progress) = started_progress_callback(on_progress);
+        let encode_start_then_begin = || {
+            if let Some(on_encode_start) = on_encode_start {
+                on_encode_start();
+            }
+            begin_progress();
+        };
+        let on_encode_start: Option<&dyn Fn()> = Some(&encode_start_then_begin);
 
         let chunks = plan_chunks(
             audio,
@@ -2230,6 +2248,52 @@ fn clamped_progress_callback(
     move |percentage| on_progress(percentage.clamp(0, 100))
 }
 
+/// Wrap a progress callback so the sequence is: one initial `1` (work has
+/// started), then strictly increasing real percentages up to 100. Values at or
+/// below the last reported one (including whisper's initial 0) are dropped.
+///
+/// Returns the wrapped callback and a `begin` hook. The initial `1` is emitted
+/// lazily by whichever comes first: `begin()` (called when encoding starts) or
+/// the first real callback; it is never emitted twice.
+fn started_progress_callback<F>(
+    on_progress: F,
+) -> (impl FnMut(i32) + Send + 'static, impl Fn() + Send + Sync + 'static)
+where
+    F: FnMut(i32) + Send + 'static,
+{
+    struct State<F> {
+        on_progress: F,
+        last: i32,
+        started: bool,
+    }
+    impl<F: FnMut(i32)> State<F> {
+        fn begin(&mut self) {
+            if !self.started {
+                self.started = true;
+                self.last = 1;
+                (self.on_progress)(1);
+            }
+        }
+    }
+    let state = Arc::new(Mutex::new(State {
+        on_progress,
+        last: 0,
+        started: false,
+    }));
+    let begin_state = Arc::clone(&state);
+    let begin = move || begin_state.lock().unwrap().begin();
+    let callback = move |percentage: i32| {
+        let mut state = state.lock().unwrap();
+        state.begin();
+        let percentage = percentage.clamp(0, 100);
+        if percentage > state.last {
+            state.last = percentage;
+            (state.on_progress)(percentage);
+        }
+    };
+    (callback, begin)
+}
+
 struct ParallelProgress {
     percentages: Vec<i32>,
     weights: Vec<usize>,
@@ -2718,8 +2782,51 @@ mod word_grouping_tests {
 
 #[cfg(test)]
 mod progress_callback_tests {
-    use super::{clamped_progress_callback, parallel_progress_callback, ParallelProgress};
+    use super::{
+        clamped_progress_callback, parallel_progress_callback, started_progress_callback,
+        ParallelProgress,
+    };
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn file_progress_leaves_zero_at_encode_start_is_monotonic_and_ends_at_100() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&received);
+        let (mut callback, begin) = started_progress_callback(move |percentage| {
+            captured.lock().unwrap().push(percentage);
+        });
+        // Nothing is emitted before the encode-start hook (lock wait, prep).
+        assert!(received.lock().unwrap().is_empty());
+
+        // Mirrors the real hook order: encode-start event, then begin().
+        let order = Arc::clone(&received);
+        let encode_start = || order.lock().unwrap().push(-1);
+        encode_start();
+        begin();
+        assert_eq!(*received.lock().unwrap(), [-1, 1]);
+        begin(); // idempotent
+
+        for percentage in [0, 0, 30, 20, 30, 70, 100, 101] {
+            callback(percentage);
+        }
+
+        let seen = received.lock().unwrap().clone();
+        assert_eq!(seen, [-1, 1, 30, 70, 100]);
+        assert!(seen[1..].windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(*seen.last().unwrap(), 100);
+    }
+
+    #[test]
+    fn first_real_callback_emits_the_initial_one_when_no_encode_hook_ran() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&received);
+        let (mut callback, _begin) = started_progress_callback(move |percentage| {
+            captured.lock().unwrap().push(percentage);
+        });
+        callback(0);
+        callback(40);
+        assert_eq!(*received.lock().unwrap(), [1, 40]);
+    }
 
     #[test]
     fn final_window_progress_is_clamped_to_audio_percentage_range() {
