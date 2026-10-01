@@ -1458,6 +1458,73 @@ impl WhisperBackend {
         ))
     }
 
+    /// Plain-file transcription with recovery of speech Whisper's windowing
+    /// skipped (#273): runs [`Self::transcribe_sync_with_options_segments`],
+    /// then re-decodes dense-speech uncovered spans once, within a bounded
+    /// budget (see [`super::gap_redecode`]). Shared by the CLI and the app's
+    /// plain file transcription; diarization and meeting paths do not use it.
+    pub fn transcribe_sync_with_gap_recovery(
+        &self,
+        audio: &[f32],
+        language: Language,
+        opts: &TranscribeOptions,
+        on_progress: impl FnMut(i32) + Send + 'static,
+        on_encode_start: Option<&dyn Fn()>,
+    ) -> Result<Vec<TranscriptSegment>, DictationError> {
+        let segments = self.transcribe_sync_with_options_segments(
+            audio,
+            language,
+            opts,
+            on_progress,
+            on_encode_start,
+        )?;
+        let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
+        let limits = super::gap_redecode::RedecodeLimits::for_audio(
+            audio.len() as f64 / 16_000.0,
+            model.no_speech_threshold(),
+        );
+        let mut redecode_opts = opts.clone();
+        redecode_opts.parallel_chunks = 1;
+        Ok(super::gap_redecode::redecode_uncovered_speech(
+            audio,
+            segments,
+            &limits,
+            |slice| {
+                self.transcribe_sync_with_options_segments(
+                    slice,
+                    language,
+                    &redecode_opts,
+                    |_| {},
+                    None,
+                )
+            },
+        ))
+    }
+
+    /// Text form of [`Self::transcribe_sync_with_gap_recovery`], with the
+    /// same display normalization as [`Self::transcribe_sync_with_options`].
+    pub fn transcribe_sync_with_gap_recovery_text(
+        &self,
+        audio: &[f32],
+        language: Language,
+        opts: &TranscribeOptions,
+        on_progress: impl FnMut(i32) + Send + 'static,
+        on_encode_start: Option<&dyn Fn()>,
+    ) -> Result<String, DictationError> {
+        let segments = self.transcribe_sync_with_gap_recovery(
+            audio,
+            language,
+            opts,
+            on_progress,
+            on_encode_start,
+        )?;
+        let transcript = assemble_transcript(&segments);
+        Ok(super::normalize_nonspeech_markers(
+            transcript.trim(),
+            language,
+        ))
+    }
+
     /// Like [`Self::transcribe_sync_with_options`] but returns the individual
     /// whisper segments with timing and confidence metadata
     /// ([`TranscriptSegment`]) instead of one joined string. Blocking — call
