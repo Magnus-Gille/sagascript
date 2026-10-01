@@ -81,6 +81,15 @@ impl LoggingService {
         }
     }
 
+    /// Unit tests (including `AppController::new()`, which builds a real
+    /// `LoggingService`) must never write into the user's real app log, so
+    /// under `cfg(test)` the directory is a per-process temp directory.
+    #[cfg(test)]
+    fn log_directory() -> PathBuf {
+        std::env::temp_dir().join(format!("sagascript-test-logs-{}", std::process::id()))
+    }
+
+    #[cfg(not(test))]
     fn log_directory() -> PathBuf {
         #[cfg(target_os = "macos")]
         {
@@ -226,6 +235,19 @@ impl LoggingService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_log_path_is_inside_temp_dir_not_real_app_log() {
+        let svc = LoggingService::new();
+        let temp = std::env::temp_dir();
+        assert!(
+            svc.log_path.starts_with(&temp),
+            "{} not under {}",
+            svc.log_path.display(),
+            temp.display()
+        );
+        assert!(!svc.log_path.to_string_lossy().contains("Library/Logs/Sagascript"));
+    }
 
     #[test]
     fn app_session_id_format() {

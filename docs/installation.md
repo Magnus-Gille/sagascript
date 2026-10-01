@@ -100,6 +100,16 @@ The prerelease also contains matching MSI, portable desktop, and CLI files.
 The CLI is separate from the desktop executable and will not be automatically
 added to `PATH` by this beta.
 
+The NSIS installer and MSI also install the console CLI as `sagascript-cli.exe` in
+the install directory, next to `sagascript.exe` (and, on ARM64, next to `engine-host\`,
+so Pianissimo works). The installers do not add the directory to `PATH`; call the CLI by
+full path, for example `& "$env:LOCALAPPDATA\Sagascript\sagascript-cli.exe" engine doctor`
+(adjust for the directory you chose; MSI defaults differ). On ARM64,
+`Sagascript-Windows-arm64-Portable.zip` holds `sagascript.exe`, `sagascript-cli.exe` and
+`engine-host\` for use without installing; extract it and run `.\sagascript-cli.exe`. The
+standalone `-CLI.exe` and `-Portable.exe` files are single files without `engine-host\`
+(Whisper models only).
+
 ## Building from source
 
 ### Prerequisites
