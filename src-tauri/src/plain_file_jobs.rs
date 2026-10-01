@@ -188,7 +188,7 @@ pub async fn transcribe(
                 };
                 let progress_app = app.clone();
                 let id = run.id.clone();
-                backend.transcribe_sync_with_options(&audio, context.language, &options, move |pct| {
+                backend.transcribe_sync_with_gap_recovery_text(&audio, context.language, &options, move |pct| {
                     let _ = progress_app.emit(crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS, Progress {
                         run_id: &id, phase: "transcribing", percent: Some(pct.clamp(0, 100) as u8),
                     });
