@@ -83,7 +83,7 @@ What we measured, how, and on which build. Full details and raw data:
 
 #### Does accuracy drop on long recordings?
 
-Not on this test set. WER is 6.6% when the 759 FLEURS test clips are
+No, neither on FLEURS nor on a real 73-minute parliament debate (see *How does it do on a real, continuous one-hour recording?*). On FLEURS, WER is 6.6% when the 759 FLEURS test clips are
 transcribed one by one, and 7.0%, 6.6%, 6.1% and 7.1% on the 5, 15, 30 and
 60 min files. Sagascript cuts long audio into overlapping 15 s windows and stitches
 the text back together, so the model never has to handle an hour at once. Klang
@@ -97,9 +97,45 @@ with 0.5 s of silence. It shows that a full hour goes through without dropped or
 invented passages (6,262 words out against 6,293 in the reference; the longest
 run of dropped words is 2). It is **not** a continuous conversation: there is no
 long monologue, no interruptions, no overlapping speakers and no background
-noise, so real meetings will score worse. We have run real long recordings (a
-20-minute radio programme) but have no exact reference text for them yet. A natural
-next step is full Swedish parliament debates, which have official records.
+noise, so real meetings will score worse. For a real continuous recording, see the parliament debate below.
+
+#### How does it do on a real, continuous one-hour recording?
+
+We ran a real Riksdag (Swedish parliament) debate: *Skyldighet att betala för
+tandvård – nya regler för vissa utlänningar* (SoU40, 12 Aug 2026, protocol
+HD09156, speeches 172–192). It is **73 minutes of continuous speech** with 21
+speeches, 7 speakers and back-and-forth replies, from Riksdagen's open data
+([audio](https://mhdownload.riksdagen.se/VOD1/HD/2442608120057218521_aud.mp3),
+SHA-256 `2cba7817151c53038413bfd8eb502374720685b6d2f0deb3a0c0ab93b0c5ace6`). The
+reference is the **official protocol** (8,553 words). The protocol is edited: the
+Speaker's "thank you, the floor goes to …" and words like *och*, *så*, *ju* and
+repetitions are left out, although they are in the audio. Every engine that writes
+them down is charged for them, so the total WER is inflated. The fairer column
+counts only substituted and dropped words.
+
+| Model and runtime (Sagascript 1.4.1 on a MacBook Air M4, 2026-10-01) | Time | WER, total | Substituted + dropped only | Names right |
+| --- | ---: | ---: | ---: | ---: |
+| **Pianissimo, our Core ML conversion r1, Neural Engine** | **14.6 s** | 23.4% | 10.9% | 93% |
+| Pianissimo, 30 s-window candidate (not released; engine host only) | 21.6 s | 24.6% | 11.5% | 92% |
+| KB-Whisper Large via whisper.cpp | about 25 min | 19.7% | 11.7% | 98.5% |
+| Pianissimo, Klang AI's MLX 8-bit build (outside Sagascript) | 152 s | 24.7% | 10.6% | 92.5% |
+
+**No decline over the hour.** WER by 10-minute block for Pianissimo r1: 26.8,
+33.7, 23.4, 28.3, 19.3, 16.6, 17.2 and 20.7% (minutes 0–73). The other engines
+follow the same pattern, worst around minutes 10–20 and best around 50–70. That
+tracks the speakers and the content, not how far into the file the model is. The
+longest run of dropped words was 8 for Pianissimo and 22 for KB-Whisper, which
+skipped five short passages
+([#273](https://github.com/Magnus-Gille/sagascript/issues/273)).
+
+KB-Whisper's lower total WER comes mostly from leaving out fillers, as the
+protocol does. On substituted plus dropped words the four engines are within one
+point of each other (10.6–11.7%). KB-Whisper is clearly better on names here
+(98.5% against about 93%). The 30 s-window candidate, which was better on FLEURS,
+was not better on this debate.
+
+Caveats: one debate, one run per engine, an edited reference, and the machine was
+partly loaded during the KB-Whisper and MLX runs, so those two times are rough.
 
 #### Are names transcribed correctly?
 
@@ -158,9 +194,9 @@ for WER.
 
 #### Limits of all numbers above
 
-FLEURS is clean read speech with pauses between sentences. Spontaneous
-conversation, meetings, overlapping speakers and background noise are harder and
-are not covered. Mac numbers are from one base MacBook Air M4; other hardware was
+FLEURS is clean read speech with pauses between sentences. One real
+parliament debate is covered above; meetings with overlapping speakers and
+background noise are harder and are not covered. Mac numbers are from one base MacBook Air M4; other hardware was
 not measured.
 
 ## Building from source
