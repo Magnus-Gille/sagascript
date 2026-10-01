@@ -2834,7 +2834,7 @@ pub async fn transcribe_file(
             let on_encode_start = move || {
                 let _ = encode_app.emit(crate::events::event::TRANSCRIPTION_PHASE, "encoding");
             };
-            backend.transcribe_sync_with_options(&audio, language, &opts, move |pct| {
+            backend.transcribe_sync_with_gap_recovery_text(&audio, language, &opts, move |pct| {
                 let _ = app_progress.emit(crate::events::event::TRANSCRIPTION_PROGRESS, pct);
             }, Some(&on_encode_start))
         })

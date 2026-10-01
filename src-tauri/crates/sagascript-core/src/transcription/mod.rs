@@ -3,6 +3,7 @@ pub mod chunk_merge;
 pub mod dev_overrides;
 pub mod diagnostics;
 pub mod engine_host;
+pub mod gap_redecode;
 pub mod glossary;
 pub mod glossary_suggestions;
 pub mod live_dictation;
