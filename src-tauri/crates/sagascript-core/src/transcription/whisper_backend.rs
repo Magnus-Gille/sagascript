@@ -1483,6 +1483,10 @@ impl WhisperBackend {
                 .token_eot()
         };
 
+        // Inference has genuinely begun: leave 0% now (#237) instead of
+        // staying silent through state prep and the mel/encoder phase.
+        let on_progress = started_progress_callback(on_progress);
+
         let chunks = plan_chunks(
             audio,
             opts.parallel_chunks.clamp(1, MAX_PARALLEL_CHUNKS),
@@ -2230,6 +2234,24 @@ fn clamped_progress_callback(
     move |percentage| on_progress(percentage.clamp(0, 100))
 }
 
+/// Wrap a progress callback so the sequence is: one initial `1` (work has
+/// started), then strictly increasing real percentages up to 100. Values at or
+/// below the last reported one (including whisper's initial 0) are dropped.
+fn started_progress_callback<F>(mut on_progress: F) -> impl FnMut(i32) + Send + 'static
+where
+    F: FnMut(i32) + Send + 'static,
+{
+    let mut last = 1;
+    on_progress(1);
+    move |percentage| {
+        let percentage = percentage.clamp(0, 100);
+        if percentage > last {
+            last = percentage;
+            on_progress(percentage);
+        }
+    }
+}
+
 struct ParallelProgress {
     percentages: Vec<i32>,
     weights: Vec<usize>,
@@ -2718,8 +2740,31 @@ mod word_grouping_tests {
 
 #[cfg(test)]
 mod progress_callback_tests {
-    use super::{clamped_progress_callback, parallel_progress_callback, ParallelProgress};
+    use super::{
+        clamped_progress_callback, parallel_progress_callback, started_progress_callback,
+        ParallelProgress,
+    };
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn file_progress_leaves_zero_immediately_is_monotonic_and_ends_at_100() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&received);
+        let mut callback = started_progress_callback(move |percentage| {
+            captured.lock().unwrap().push(percentage);
+        });
+        // Before any window reports, the first event has already fired.
+        assert_eq!(*received.lock().unwrap(), [1]);
+
+        for percentage in [0, 0, 30, 20, 30, 70, 100, 101] {
+            callback(percentage);
+        }
+
+        let seen = received.lock().unwrap().clone();
+        assert_eq!(seen, [1, 30, 70, 100]);
+        assert!(seen.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(*seen.last().unwrap(), 100);
+    }
 
     #[test]
     fn final_window_progress_is_clamped_to_audio_percentage_range() {
