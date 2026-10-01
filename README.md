@@ -63,8 +63,8 @@ What we measured, how, and on which build. Full details and raw data:
 
 | | |
 | --- | --- |
-| **Build** | Sagascript **1.4.0** (`af1f5af`), the published, signed release; 1.4.1 has the same Mac engine |
-| **Model** | Klang AI Pianissimo, our Core ML conversion [`magnusgille/pianissimo-sv-coreml`](https://huggingface.co/magnusgille/pianissimo-sv-coreml) r1 (`6e33b64e`): 15 s windows, 2 s overlap |
+| **Model under test** | Klang AI's Pianissimo weights, **our own Core ML conversion** [`magnusgille/pianissimo-sv-coreml`](https://huggingface.co/magnusgille/pianissimo-sv-coreml) r1 (`6e33b64e`): int8 encoder weights, fp16 compute, fixed 15 s windows with 2 s overlap. This is not an official Klang AI build |
+| **Runtime** | Sagascript's Swift Core ML engine host on the Apple Neural Engine, in Sagascript **1.4.0** (`af1f5af`, the published, signed release; 1.4.1 has the same Mac engine) |
 | **Test audio** | [FLEURS](https://huggingface.co/datasets/google/fleurs) Swedish test split (`sv_se`, CC BY 4.0): the first reading of each distinct sentence, **307 read sentences by many speakers**, joined with 0.5 s of silence into **one 60 min 11 s file** (6,293 reference words). It is one long file, **not a continuous conversation** |
 | **Command** | `sagascript transcribe --model pianissimo-sv --language sv fleurs-sv-distinct-60min.wav` |
 | **Timing** | Wall time of the whole command, process start to text (model already downloaded and compiled), 2 runs |
@@ -72,16 +72,37 @@ What we measured, how, and on which build. Full details and raw data:
 | **Hardware** | MacBook Air 13" M4 (base, 10-core CPU, 16-core Neural Engine, 32 GB), fanless, on AC power, macOS 27.0 |
 | **Date** | 2026-09-30 |
 
-| Engine (same 60 min file) | Time | WER |
+| Model and runtime (same 60 min file) | Time | WER |
 | --- | ---: | ---: |
-| **Sagascript 1.4.0, Pianissimo on the Neural Engine** | **11.2–11.8 s** | **7.06%** |
-| Sagascript 1.3.2, Pianissimo on the CPU | 174 s | 6.67% |
-| Klang AI's MLX 8-bit build (GPU), transcription time only | 106 s | 6.53% |
-| KB-Whisper Large (Sagascript, CPU/GPU) | about 12 min (estimated from a 15 min run: 174 s, 5.99% WER) | – |
+| **Pianissimo, our Core ML conversion r1, Neural Engine** (Sagascript 1.4.0) | **11.2–11.8 s** | **7.06%** |
+| Pianissimo, 8-bit GGUF on the CPU via NeMo-Speech.cpp (Sagascript 1.3.2) | 174 s | 6.67% |
+| Pianissimo, Klang AI's official MLX 8-bit build on the GPU (outside Sagascript; transcription time only, model load excluded) | 106 s | 6.53% |
+| KB-Whisper Large via whisper.cpp (Sagascript 1.4) | about 12 min (estimated from a 15 min run: 174 s, 5.99% WER) | – |
 
 Accuracy does not drop with length on this set: WER is 6.6% when the 759 FLEURS
 test clips are transcribed one by one, and 7.0%, 6.6%, 6.1% and 7.1% on the 5,
 15, 30 and 60 min files.
+
+**Names.** WER hides names, so we also count how many proper names come out
+right. A name is any capitalised word in the reference that does not start a
+sentence (Swedish capitalises little else); it counts as correct only if the
+same spelling appears in the transcript, ignoring case. No personal dictionary,
+decoder hints or replacements were used in any run.
+
+| Model and runtime | 15 min file (76 names) | 60 min file (272 names) |
+| --- | ---: | ---: |
+| Pianissimo, our Core ML conversion r1 (Sagascript 1.4.1) | 75% (57) | 67% (182) |
+| Pianissimo, Klang AI's MLX 8-bit build | 74% (56) | 69% (187) |
+| KB-Whisper Large via whisper.cpp (Sagascript 1.4.1) | 78% (59) | not run |
+
+Names are clearly harder than ordinary words (about 93% of all words are right).
+The engines differ by only one to three names on the 15 min file, which is within
+noise for a sample this small. Typical misses are foreign or rare names (Hsien
+Loong, Oravec, Fernández) and Swedish compounds written differently
+(Falklandspundet). This test does not measure how much a personal dictionary
+helps: Pianissimo keeps the dictionary's whole-word replacements but, unlike
+Whisper, cannot take decoder hints. Measuring that needs a set of names that is
+not in the training data, with and without the dictionary.
 
 **Limits:** FLEURS is clean read speech with pauses between sentences. Spontaneous
 conversation, meetings, overlapping speakers and background noise are harder and
