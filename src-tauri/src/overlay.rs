@@ -29,6 +29,7 @@ pub fn show(app: &tauri::AppHandle) {
     #[cfg(not(target_os = "linux"))]
     {
         if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {
+            reposition(app, &window);
             present_existing_overlay(&window);
             info!("Overlay shown (existing window)");
             crate::focus_diag::log(
@@ -61,15 +62,7 @@ pub fn hide(app: &tauri::AppHandle) {
 
 #[cfg(not(target_os = "linux"))]
 fn create_overlay(app: &tauri::AppHandle, present: bool) -> Result<(), Box<dyn std::error::Error>> {
-    // Calculate horizontal center position
-    let (x, _screen_width) = if let Some(monitor) = app.primary_monitor()? {
-        let size = monitor.size();
-        let scale = monitor.scale_factor();
-        let logical_width = size.width as f64 / scale;
-        ((logical_width / 2.0 - 110.0), logical_width)
-    } else {
-        (500.0, 1200.0)
-    };
+    let (x, y) = overlay_position(app);
 
     let window = tauri::WebviewWindowBuilder::new(
         app,
@@ -77,8 +70,8 @@ fn create_overlay(app: &tauri::AppHandle, present: bool) -> Result<(), Box<dyn s
         tauri::WebviewUrl::App("index.html?overlay=true".into()),
     )
     .title("")
-    .inner_size(220.0, 60.0)
-    .position(x, 80.0)
+    .inner_size(OVERLAY_WIDTH, 60.0)
+    .position(x, y)
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
@@ -100,6 +93,52 @@ fn create_overlay(app: &tauri::AppHandle, present: bool) -> Result<(), Box<dyn s
     }
 
     Ok(())
+}
+
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+const OVERLAY_WIDTH: f64 = 220.0;
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+const OVERLAY_TOP: f64 = 80.0;
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+const FALLBACK_SCREEN_WIDTH: f64 = 1200.0;
+
+/// Horizontal origin (logical points) that centres the overlay on a screen.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn overlay_x_for_screen_width(logical_screen_width: f64) -> f64 {
+    logical_screen_width / 2.0 - OVERLAY_WIDTH / 2.0
+}
+
+/// Current target position, computed from the primary monitor at call time.
+#[cfg(not(target_os = "linux"))]
+fn overlay_position(app: &tauri::AppHandle) -> (f64, f64) {
+    let width = match app.primary_monitor() {
+        Ok(Some(monitor)) => monitor.size().width as f64 / monitor.scale_factor(),
+        _ => FALLBACK_SCREEN_WIDTH,
+    };
+    (overlay_x_for_screen_width(width), OVERLAY_TOP)
+}
+
+/// Move the (possibly pre-created) overlay to the current screen before it is shown.
+#[cfg(not(target_os = "linux"))]
+fn reposition(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let (x, y) = overlay_position(app);
+    let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+}
+
+/// Whether a settings change should pre-create the overlay now.
+pub fn should_precreate_on_toggle(enabled: bool, exists: bool) -> bool {
+    enabled && !exists
+}
+
+/// Settings toggle hook: build the hidden overlay on the main thread when enabled.
+pub fn on_show_overlay_changed(app: &tauri::AppHandle, enabled: bool) {
+    let exists = app.get_webview_window(OVERLAY_LABEL).is_some();
+    if should_precreate_on_toggle(enabled, exists) {
+        let handle = app.clone();
+        if let Err(e) = app.run_on_main_thread(move || precreate_hidden(&handle)) {
+            tracing::warn!("Could not schedule overlay pre-creation: {e}");
+        }
+    }
 }
 
 /// Whether the overlay window should be built (hidden) during app startup.
@@ -190,6 +229,19 @@ fn macos_show_without_focus(window: &tauri::WebviewWindow) {
 #[cfg(test)]
 mod tests {
     use super::should_precreate_at_startup;
+
+    #[test]
+    fn centres_overlay_on_screen_width() {
+        assert_eq!(super::overlay_x_for_screen_width(1440.0), 610.0);
+        assert_eq!(super::overlay_x_for_screen_width(1200.0), 490.0);
+    }
+
+    #[test]
+    fn precreate_on_toggle_only_when_enabled_and_missing() {
+        assert!(super::should_precreate_on_toggle(true, false));
+        assert!(!super::should_precreate_on_toggle(true, true));
+        assert!(!super::should_precreate_on_toggle(false, false));
+    }
 
     #[test]
     fn precreates_only_when_enabled_and_supported() {
