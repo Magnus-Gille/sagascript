@@ -1515,6 +1515,7 @@ mod auto_paste_tests {
 
 #[tauri::command]
 pub async fn set_show_overlay(
+    app: tauri::AppHandle,
     controller: State<'_, SharedController>,
     enabled: bool,
 ) -> Result<(), String> {
@@ -1523,6 +1524,8 @@ pub async fn set_show_overlay(
     })?;
     let mut ctrl = controller.lock().unwrap();
     ctrl.settings_mut().show_overlay = persisted.show_overlay;
+    drop(ctrl);
+    crate::overlay::on_show_overlay_changed(&app, persisted.show_overlay);
     info!("Show overlay: {enabled}");
     Ok(())
 }
