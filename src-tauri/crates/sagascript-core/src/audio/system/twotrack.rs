@@ -158,8 +158,8 @@ pub fn read_two_track_wav(path: &Path) -> io::Result<Vec<Vec<f32>>> {
     }
     let mut tracks = vec![Vec::new(); channels as usize];
     for frame in data.chunks_exact(2 * channels as usize) {
-        for (c, s) in frame.chunks_exact(2).enumerate() {
-            tracks[c].push(i16::from_le_bytes([s[0], s[1]]) as f32 / i16::MAX as f32);
+        for (c, s) in frame.as_chunks::<2>().0.iter().enumerate() {
+            tracks[c].push(i16::from_le_bytes(*s) as f32 / i16::MAX as f32);
         }
     }
     Ok(tracks)

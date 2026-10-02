@@ -109,14 +109,18 @@ pub fn decode_pcm_packet(bytes: &[u8], layout: PcmLayout, silent: bool, samples:
     }
     match layout {
         PcmLayout::F32 => bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .take(samples)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .map(|b| f32::from_le_bytes(*b))
             .collect(),
         PcmLayout::I16 => bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .take(samples)
-            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+            .map(|b| i16::from_le_bytes(*b) as f32 / 32768.0)
             .collect(),
     }
 }

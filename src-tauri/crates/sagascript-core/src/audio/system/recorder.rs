@@ -180,8 +180,10 @@ fn read_spool(spool: &NamedTempFile) -> Result<Vec<f32>, String> {
     let mut bytes = Vec::new();
     f.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
     Ok(bytes
-        .chunks_exact(2)
-        .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / i16::MAX as f32)
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| i16::from_le_bytes(*b) as f32 / i16::MAX as f32)
         .collect())
 }
 
