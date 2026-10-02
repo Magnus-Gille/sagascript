@@ -32,9 +32,14 @@ On Windows on ARM (Snapdragon) it runs on the CPU through an ONNX Runtime host
 bundled in `engine-host\` beside the app. It requires **macOS 14+ on Apple Silicon
 or Windows on ARM (Snapdragon)**. In **Dictate**, select
 **Pianissimo** for a Swedish profile, then download its model if
-prompted. Each profile owns its language, shortcut, dictionary, and model;
-another Swedish profile can keep Whisper. The file-transcription choice stays
-independent. No Python installation is needed.
+prompted. Each profile owns its language, shortcut(s), dictionary, and model;
+another Swedish profile can keep Whisper. **Auto** means the recommended model
+for the profile's language. Pianissimo is Swedish-only. If you change a
+profile's language to one its model does not support (for example Swedish with
+Pianissimo to English), that profile's model is reset to Auto and Sagascript
+tells you which model it now uses (in Settings and on the CLI); other profiles
+are never changed, and a compatible explicit model is kept. File transcription
+has its own separate model choice. No Python installation is needed.
 
 CLI equivalents:
 

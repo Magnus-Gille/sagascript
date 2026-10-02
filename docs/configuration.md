@@ -31,6 +31,21 @@ hint source is copied into the profiles while the original file is retained
 for rollback; it no longer participates in dictation. Auto-detect profiles
 use their dictionary as hints only, without deterministic alias replacement.
 
+**Model rule.** The model belongs to the profile, not to a global setting.
+`auto` (the default) resolves to the recommended model for the profile's
+language; Pianissimo (`pianissimo-sv`) is Swedish-only. When a profile's
+language changes (in Settings, `config profiles update ID --language ...`,
+`config set language ...`) and its explicit model does not support the new
+language, that profile's model is reset to `auto` instead of the change being
+rejected. Settings shows a notice and the CLI prints one to stderr, for example
+`Model for profile 'Svenska' changed to Recommended (Whisper Base (EN)) because
+Pianissimo only supports Swedish.` Other profiles are never changed, and an
+explicit model that still supports the new language is kept. File transcription
+keeps its own separate model choice (`file_transcription_model`).
+
+Decision record: 2026-10-02 (#260) - the model is per profile; a language change
+resets only that profile's incompatible model to Auto and says so (GUI and CLI).
+
 Use the CLI to discover the effective paths rather than duplicating the
 resolution rules in scripts:
 

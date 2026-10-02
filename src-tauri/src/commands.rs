@@ -497,7 +497,7 @@ pub async fn set_language(
     app: tauri::AppHandle,
     controller: State<'_, SharedController>,
     language: Language,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     set_language_for_controller(&controller, &app, language)
 }
 
@@ -505,24 +505,26 @@ fn set_language_for_controller(
     controller: &State<'_, SharedController>,
     app: &tauri::AppHandle,
     language: Language,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
+    let mut notices = Vec::new();
     let persisted = sagascript_core::settings::store::try_update(|settings| {
-        apply_language_selection(settings, language)
+        notices = apply_language_selection(settings, language)?;
+        Ok(())
     })?;
     let mut ctrl = controller.lock().unwrap();
     ctrl.update_settings(persisted.clone());
     drop(ctrl);
     crate::update_profiles_menu(app, &persisted.resolved_hotkey_profiles());
     info!("Language set to {:?}", language);
-    Ok(())
+    Ok(notices)
 }
 
 // Keep profile/dictionary validation ahead of all preset mutations.
-fn apply_language_selection(settings: &mut Settings, language: Language) -> Result<(), String> {
-    settings.set_default_profile_language(language)?;
+fn apply_language_selection(settings: &mut Settings, language: Language) -> Result<Vec<String>, String> {
+    let notices = sagascript_core::settings::ModelResetNotice::messages(&settings.set_default_profile_language(language)?);
     settings.whisper_model = WhisperModel::recommended(language);
     settings.auto_select_model = true;
-    Ok(())
+    Ok(notices)
 }
 
 #[cfg(test)]
@@ -675,7 +677,7 @@ pub async fn set_hotkey_mode(
     health: State<'_, HotkeyHealth>,
     mode: HotkeyMode,
 ) -> Result<(), String> {
-    apply_hotkey_change(app, controller, health, HotkeyChange::Mode(mode))
+    apply_hotkey_change(app, controller, health, HotkeyChange::Mode(mode)).map(|_| ())
 }
 
 #[tauri::command]
@@ -696,7 +698,7 @@ pub async fn set_hotkey(
         .position(|profile| profile.id == "default")
         .unwrap_or(0);
     profiles[profile_index].set_primary_shortcut(shortcut);
-    set_hotkey_profiles(app, controller, health, profiles).await
+    set_hotkey_profiles(app, controller, health, profiles).await.map(|_| ())
 }
 
 #[tauri::command]
@@ -705,7 +707,7 @@ pub async fn set_hotkey_profiles(
     controller: State<'_, SharedController>,
     health: State<'_, HotkeyHealth>,
     profiles: Vec<HotkeyProfile>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     apply_hotkey_change(app, controller, health, HotkeyChange::Profiles(profiles))
 }
 
@@ -731,12 +733,12 @@ fn apply_hotkey_change(
     controller: State<'_, SharedController>,
     health: State<'_, HotkeyHealth>,
     update: HotkeyChange,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     use tauri::Emitter;
     let _transition = health.transition_guard();
     let _recording_lease = acquire_hotkey_configuration(&controller)?;
     let old_settings = controller.lock().unwrap().settings().clone();
-    let candidate = update.prepare(&sagascript_core::settings::store::load())?;
+    let (candidate, notices) = update.prepare_with_notices(&sagascript_core::settings::store::load())?;
     let new_shortcuts = candidate.resolved_shortcuts();
     let new_primary = candidate.hotkey.clone();
     let old_shortcut = old_settings.hotkey.clone();
@@ -768,7 +770,7 @@ fn apply_hotkey_change(
             );
         }
         crate::update_profiles_menu(&app, &persisted.resolved_hotkey_profiles());
-        return Ok(());
+        return Ok(notices);
     }
 
     if let OperationalHotkey::Registered(old_shortcuts) = &old_operational {
@@ -911,7 +913,7 @@ fn apply_hotkey_change(
         "Hotkey profiles changed: {} registered",
         new_shortcuts.len()
     );
-    Ok(())
+    Ok(notices)
 }
 
 /// Retry the shortcuts currently persisted on disk.
@@ -948,7 +950,7 @@ pub async fn retry_hotkey_registration(
         }
     }
     let profiles = sagascript_core::settings::store::load().resolved_hotkey_profiles();
-    set_hotkey_profiles(app, controller, health, profiles).await
+    set_hotkey_profiles(app, controller, health, profiles).await.map(|_| ())
 }
 
 /// Current hotkey registration health — whether the last registration
