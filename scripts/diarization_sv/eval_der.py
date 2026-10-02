@@ -70,7 +70,7 @@ def der(ref, hyp, collar=0.25):
     pur = {hl[j]: float(ov[:, j].max() / max(H[j].sum(), 1)) for j in range(len(hl)) if H[j].sum() > 0}
     # Hypothesis clusters with no reference partner: how much of their speech lies outside every
     # reference speech (chair announcements, pauses)? ~1.0 means a genuine non-reference voice such as the chair.
-    matched = set(int(b) for b in hi)
+    matched = set(int(b) for a, b in zip(ri, hi) if ov[a, b] > 0)  # a zero-overlap assignment is not a match
     extra = []
     for j in range(len(hl)):
         tot = float(Hfull[j].sum() * FR)

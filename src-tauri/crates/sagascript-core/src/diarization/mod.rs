@@ -252,7 +252,9 @@ pub fn cluster(
                 .expect("DiarizationAnalysis was validated with exact embeddings");
             (*index, embedding)
         })
-        // Zero / non-finite embeddings are unusable: leave them to the track fallback.
+        // Zero or degenerate (near-zero norm) vectors are unusable: leave them to the track fallback.
+        // (Persisted non-finite components are rejected by `validate()` above; live inference
+        // sanitises them in `l2_normalize`.)
         .filter(|(_, e)| clustering::is_usable_embedding(e))
         .collect::<Vec<_>>();
 
@@ -545,14 +547,20 @@ mod tests {
             v[d] = 1.0;
             v
         };
-        // Two real speakers (20 s each) on ONE track, plus a 1 s glitch close to speaker 0 (absorbed)
-        // and a 1 s segment far from both (a distinct, if tiny, speaker: not forced into either).
+        // Two real speakers (20 s each) on ONE track, plus a 1 s glitch at cosine distance 0.5 from
+        // speaker 0 (above the 0.36 clustering threshold, so only absorption can join it) and a 1 s
+        // segment far from both (a distinct, if tiny, speaker: not forced into either).
         let mut near0 = unit(0);
-        near0[2] = 0.3;
+        near0[0] = 0.5;
+        near0[2] = 0.866;
         let analysis = DiarizationAnalysis {
             raw_segments: vec![(0.0, 20.0, 0), (21.0, 41.0, 0), (42.0, 43.0, 0), (44.0, 45.0, 0)],
             embeddings: vec![(0, unit(0)), (1, unit(1)), (2, near0), (3, unit(5))],
         };
+        // Without absorption (distance limit 0) the glitch stays its own speaker.
+        let no_absorb = DiarizeConfig { absorb_max_distance: 0.0, ..DiarizeConfig::default() };
+        let raw = cluster(&analysis, &no_absorb).unwrap();
+        assert_ne!(raw[2].speaker, raw[0].speaker);
         let segments = cluster(&analysis, &DiarizeConfig::default()).unwrap();
         assert_ne!(segments[0].speaker, segments[1].speaker);
         assert_eq!(segments[2].speaker, segments[0].speaker);

@@ -57,8 +57,8 @@ Rebuild: `scripts/diarization_sv/build_refs.py` (the five debates), `build_refs_
 - **Chair.** The chair is not in the reference, so a hypothesis chair cluster costs nothing and
   "found" is truth or truth + 1. That is not accepted automatically: `eval_der.py` reports, for each
   unmatched hypothesis cluster, how much of its speech lies outside every reference speech. At the
-  default, the extra clusters on the Swedish set have 56-100 % of their speech outside reference
-  speech, except SoU38 (45 %) and the second, 11 s extra cluster of IP_hb10618 (28 %); part of
+  default, the extra clusters on the Swedish set have 57-100 % of their speech outside reference
+  speech, except SoU38 (45 %) and the second, 11 s extra cluster of IP_hb10618 (29 %); part of
   those clusters is scored speech of real speakers, so truth + 1 is mostly, not always, the chair. The criterion cannot
   see a chair split in two (IP_hb10618 shows two extra clusters: 4 found for 2).
 
@@ -129,7 +129,7 @@ committed sweep results.
 | SoU38 | 0.26-0.46 | 0.36 | 1.2 % |
 | SoU39 | 0.22-0.46 | 0.34 | 0.9 % |
 | SoU40 | 0.26-0.46 | 0.36 | 1.1 % |
-| UU24 | 0.26-0.46 | 0.36 | 0.9 % |
+| UU24 | 0.24-0.46 | 0.36 | 0.9 % |
 | FS_20260604 | 0.26-0.46 | 0.36 | 5.5 % |
 | FS_20260611 | 0.26-0.46 | 0.36 | 3.8 % |
 | IP_hb10618 | 0.26-0.46 | 0.36 | 1.3 % |
@@ -146,7 +146,7 @@ Mean held-out confusion 1.47 %.
 
 | Threshold | mean confusion (selection set) |
 | ---: | ---: |
-| 0.10 | 14.88 % |
+| 0.10 | 14.89 % |
 | 0.12 | 10.20 % |
 | 0.14 | 6.55 % |
 | 0.16 | 4.62 % |
@@ -191,6 +191,9 @@ the plateau edge for Swedish. The French and Norwegian clips did not influence t
 nearest cluster that reaches 8 s, **only if** their centroid cosine distance is at most
 `ABSORB_MAX_DISTANCE` (0.75); otherwise it stays a distinct speaker, and short clusters are never
 collapsed into one speaker unconditionally (unit tests cover clearly separated short speakers).
+A rejected small cluster is reconsidered after every merge (a merge moves the target centroid).
+Re-running the sweep after adding that changed no Swedish per-recording confusion at 0.36 or 0.48
+(the secondary set did change: mean confusion at 0.36 14.2 % -> 13.0 %).
 Variants swept: `legacy` = no distance limit, `d50`/`d60`/`d90` = other limits, `ms4`/`ms12`/`ms20` =
 other minimum seconds; each cell is mean confusion / DER and the number of recordings with truth
 or truth + 1 speakers found.
@@ -199,14 +202,14 @@ or truth + 1 speakers found.
 
 | Variant | Swedish (14) conf / DER, count ok | Telephone-band (6) | French/Norwegian (8, non-gating) |
 | --- | --- | --- | --- |
-| d50 | 1.5 / 11.1 %, 13/14 | 7.2 / 18.0 %, 4/6 | 15.3 / 21.2 %, 7/8 |
-| d60 | 1.5 / 11.0 %, 13/14 | 7.1 / 18.0 %, 4/6 | 14.1 / 19.6 %, 7/8 |
-| d90 | 1.5 / 11.0 %, 13/14 | 7.1 / 17.9 %, 4/6 | 14.5 / 19.6 %, 6/8 |
+| d50 | 1.5 / 11.1 %, 13/14 | 7.2 / 18.0 %, 4/6 | 13.8 / 19.8 %, 7/8 |
+| d60 | 1.5 / 11.0 %, 13/14 | 7.1 / 18.0 %, 4/6 | 14.4 / 19.8 %, 7/8 |
+| d90 | 1.5 / 11.0 %, 13/14 | 7.1 / 17.9 %, 4/6 | 15.0 / 20.0 %, 6/8 |
 | legacy | 1.5 / 11.0 %, 13/14 | 7.1 / 17.9 %, 4/6 | 15.0 / 20.1 %, 6/8 |
-| ms12 | 1.4 / 11.0 %, 14/14 | 7.0 / 17.8 %, 5/6 | 9.5 / 14.6 %, 7/8 |
-| ms20 | 1.4 / 11.0 %, 14/14 | 7.0 / 17.8 %, 5/6 | 6.4 / 11.7 %, 7/8 |
-| ms4 | 1.5 / 11.0 %, 13/14 | 7.2 / 18.0 %, 2/6 | 23.9 / 29.7 %, 3/8 |
-| shipped | 1.5 / 11.0 %, 13/14 | 7.1 / 17.9 %, 4/6 | 14.2 / 19.3 %, 6/8 |
+| ms12 | 1.4 / 11.0 %, 14/14 | 7.0 / 17.8 %, 5/6 | 10.4 / 15.6 %, 7/8 |
+| ms20 | 1.4 / 11.0 %, 14/14 | 7.0 / 17.8 %, 5/6 | 6.3 / 11.6 %, 7/8 |
+| ms4 | 1.5 / 11.0 %, 13/14 | 7.2 / 18.0 %, 2/6 | 23.7 / 29.5 %, 3/8 |
+| shipped | 1.5 / 11.0 %, 13/14 | 7.1 / 17.9 %, 4/6 | 13.0 / 18.1 %, 6/8 |
 
 On the Swedish set none of them changes confusion by more than 0.1 pp (1.4-1.5 %). 12 and 20 s find
 the right speaker count on 14/14 instead of 13/14 and are better on the secondary set, but the gain
@@ -225,16 +228,16 @@ speakers overlap for about 2 s). Manifest and licences: `manifest-other.json`.
 | Recording | main code, 0.75 | new code, 0.48 | new code, 0.36 (default) |
 | --- | --- | --- | --- |
 | dj_2022_avc_16_ans | 2/2, 1.2 / 8.6 % | 2/2, 1.9 / 8.0 % | 3/2, 7.3 / 13.3 % |
-| dj_2022_douleur_abdo | 2/2, 0.0 / 10.9 % | 3/2, 8.3 / 19.0 % | 3/2, 13.3 / 22.3 % |
-| dj_2022_feu | 2/2, 0.0 / 4.0 % | 2/2, 10.9 / 10.9 % | 1/2, 39.3 / 39.4 % |
-| dj_2022_grand_mere_battue | 2/2, 0.2 / 7.8 % | 2/2, 0.8 / 7.9 % | 3/2, 15.4 / 22.5 % |
-| dj_2022_intox_med | 2/2, 0.3 / 4.1 % | 4/2, 9.0 / 11.5 % | 3/2, 6.8 / 9.3 % |
-| dj_2022_mere_fievre | 2/2, 0.1 / 4.5 % | 2/2, 0.7 / 5.1 % | 2/2, 0.7 / 5.1 % |
-| dj_2023_coups | 2/2, 0.2 / 6.1 % | 2/2, 1.4 / 6.6 % | 5/2, 30.8 / 36.0 % |
+| dj_2022_douleur_abdo | 2/2, 0.0 / 10.9 % | 3/2, 7.8 / 18.6 % | 3/2, 13.3 / 22.3 % |
+| dj_2022_feu | 2/2, 0.0 / 4.0 % | 2/2, 10.9 / 10.9 % | 1/2, 41.0 / 41.0 % |
+| dj_2022_grand_mere_battue | 2/2, 0.2 / 7.8 % | 2/2, 0.8 / 7.9 % | 3/2, 4.5 / 11.6 % |
+| dj_2022_intox_med | 2/2, 0.3 / 4.1 % | 4/2, 9.2 / 11.7 % | 3/2, 6.8 / 9.3 % |
+| dj_2022_mere_fievre | 2/2, 0.1 / 4.5 % | 2/2, 0.5 / 4.8 % | 2/2, 0.5 / 4.8 % |
+| dj_2023_coups | 2/2, 0.2 / 6.1 % | 2/2, 0.7 / 6.5 % | 5/2, 30.7 / 35.9 % |
 | nb_samtale_nb12 | 2/2, 0.0 / 7.0 % | 2/2, 0.0 / 7.0 % | 2/2, 0.0 / 7.0 % |
 
-The Swedish-selected default **0.36 over-splits and merges these clips** (mean confusion 14.2 %,
-versus 4.1 % at 0.48 and 0.3 % for the old code at 0.75): `dj_2022_feu` finds one speaker for two
+The Swedish-selected default **0.36 over-splits and merges these clips** (mean confusion 13.0 %,
+versus 4.0 % at 0.48 and 0.3 % for the old code at 0.75): `dj_2022_feu` finds one speaker for two
 and `dj_2023_coups` five for two. Simulated French dispatch calls are not Swedish call audio and
 the embedding model is the same, so this is a warning, not a measurement of Swedish phone behaviour.
 
@@ -248,8 +251,15 @@ the embedding model is the same, so this is a warning, not a measurement of Swed
   cache identity), but recluster re-runs clustering with the new algorithm. Stored reviews from the
   track-capped algorithm map differently; the migration flow requires conflict review rather than
   auto-applying speaker renames or merges.
-- Zero or non-finite embeddings are unusable and fall back to their pyannote track instead of
-  forming speakers (unit-tested).
+- Embedding robustness: zero or degenerate (near-zero norm) vectors fall back to their pyannote
+  track instead of forming speakers (unit-tested). Persisted analyses with non-finite components
+  are rejected by validation; live inference sanitises non-finite components.
+- All 14 Swedish recordings share one recording environment (the chamber) and some share
+  speakers (`IP_hb10760` and `IP_hc10606` have the same two speakers), so leave-one-recording-out
+  does not show generalisation to unseen rooms or speakers. SoU40 supplies about 75 % of the mean
+  improvement from 0.48 to 0.36, and the two question-time recordings supply about 45 % of the
+  remaining confusion at 0.36. On the secondary set only 2 of 8 clips get exactly the reference
+  speaker count.
 
 ## Diagnosis
 
@@ -269,7 +279,7 @@ the embedding model is the same, so this is a warning, not a measurement of Swed
 
 - `diarization/mod.rs`: each embedded segment keeps its own embedding cluster
   (`assign_speaker_labels`); tracks are only a fallback label for segments too short to embed or
-  whose embedding is unusable.
+  whose embedding is degenerate (zero norm).
 - `diarization/clustering.rs`: `absorb_small_clusters` (see above), aggregates computed once.
 - Default threshold 0.75 -> 0.36 (`DEFAULT_THRESHOLD` in core; the `transcribe --diarize-threshold`,
   `meeting reprocess` CLI and reprocessing UI literals are pinned by tests). Clustering stays

@@ -154,6 +154,8 @@ pub fn absorb_small_clusters(
             kept_distinct.insert(small);
             continue;
         };
+        // A merge moves the target's centroid: earlier rejections are no longer valid.
+        kept_distinct.clear();
         let moved = clusters.remove(&small).expect("small cluster exists");
         let t = clusters.get_mut(&target).expect("target cluster exists");
         t.seconds += moved.seconds;
@@ -479,6 +481,38 @@ mod tests {
         let mut labels = vec![0, 1, 1, 1];
         absorb_small_clusters(&input, &mut labels, &[30.0, 3.0, 3.0, 3.0], 8.0, 2.0);
         assert_eq!(labels, vec![0, 1, 1, 1]);
+    }
+
+    #[test]
+    fn rejected_cluster_is_reconsidered_after_a_merge_moves_a_centroid() {
+        // A=(1,0,0) 1 s, B=(0,1,0) 8 s, C=(0.6,0.6,sqrt(.28)) 2 s. A rejects B (distance 1.0);
+        // C merges into B (0.4); B's new centroid is ~0.665 from A, inside the 0.75 limit, so A
+        // must then be absorbed too.
+        let mut a = [0.0f32; EMBEDDING_DIM]; a[0] = 1.0;
+        let mut b = [0.0f32; EMBEDDING_DIM]; b[1] = 1.0;
+        let mut c = [0.0f32; EMBEDDING_DIM]; c[0] = 0.6; c[1] = 0.6; c[2] = 0.28f32.sqrt();
+        let input = vec![(0, a), (1, b), (2, c)];
+        assert_eq!(absorb(&input, &[0, 1, 2], &[1.0, 8.0, 2.0], 0.75), vec![1, 1, 1]);
+        // Repeatable.
+        assert_eq!(absorb(&input, &[0, 1, 2], &[1.0, 8.0, 2.0], 0.75), vec![1, 1, 1]);
+    }
+
+    #[test]
+    fn centroid_change_after_a_merge_alters_a_later_target() {
+        // Large clusters L0 (e0) and L1 (e1), small S1 (e0+e1 mix, 2 s) and S2 (1 s) nearer L0
+        // than L1 at first; after S1 joins L1 nothing else changes for S2 as L0 stays its target.
+        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1)), (2, mix(1, 1.0, 0, 0.3)), (3, mix(0, 1.0, 1, 0.4))];
+        assert_eq!(absorb(&input, &[0, 1, 2, 3], &[30.0, 30.0, 2.0, 1.0], 0.75), vec![0, 1, 1, 0]);
+    }
+
+    #[test]
+    fn merge_destination_that_is_itself_small_is_absorbed_later() {
+        // Everything below 8 s: smallest merges toward the nearest, and the destination is then
+        // absorbed in turn into the cluster that ends up largest.
+        let input = vec![(0, mix(0, 1.0, 1, 0.1)), (1, mix(0, 1.0, 2, 0.1)), (2, mix(0, 1.0, 3, 0.1)), (3, mix(0, 1.0, 4, 0.1))];
+        let out = absorb(&input, &[0, 1, 2, 3], &[1.0, 2.0, 3.0, 2.5], 0.75);
+        assert!(out.iter().all(|l| *l == out[0]), "chain collapses to one cluster: {out:?}");
+        assert_eq!(out, absorb(&input, &[0, 1, 2, 3], &[1.0, 2.0, 3.0, 2.5], 0.75));
     }
 
     #[test]
