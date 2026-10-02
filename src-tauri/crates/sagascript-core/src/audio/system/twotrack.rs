@@ -50,6 +50,20 @@ pub fn mix_tracks(a: &[f32], b: &[f32]) -> Vec<f32> {
         .collect()
 }
 
+/// Largest data payload a RIFF/WAV header can describe.
+const MAX_WAV_DATA_BYTES: u64 = u32::MAX as u64 - 36;
+
+/// Fail (before anything is written) if `frames` of `channels` 16-bit audio do
+/// not fit in a WAV file.
+pub fn check_wav_capacity(frames: u64, channels: u16) -> io::Result<()> {
+    let too_big = || io::Error::other("recording exceeds the 4 GiB WAV limit");
+    let bytes = frames.checked_mul(channels as u64).and_then(|v| v.checked_mul(2)).ok_or_else(too_big)?;
+    if bytes > MAX_WAV_DATA_BYTES {
+        return Err(too_big());
+    }
+    Ok(())
+}
+
 /// Incremental WAV writer; the header is patched in `finish`.
 pub struct TwoTrackWriter {
     out: BufWriter<File>,
@@ -81,6 +95,8 @@ impl TwoTrackWriter {
     /// Append interleaved samples (`channels` per frame).
     pub fn write_interleaved(&mut self, samples: &[f32]) -> io::Result<()> {
         debug_assert_eq!(samples.len() % self.channels as usize, 0);
+        // Reject before writing so an oversized recording never hits the disk.
+        check_wav_capacity(self.frames + (samples.len() / self.channels as usize) as u64, self.channels)?;
         for s in samples {
             self.out.write_all(&to_i16(*s).to_le_bytes())?;
         }
@@ -94,10 +110,8 @@ impl TwoTrackWriter {
 
     pub fn finish(mut self) -> io::Result<PathBuf> {
         self.out.flush()?;
+        check_wav_capacity(self.frames, self.channels)?;
         let data_bytes = self.frames * self.channels as u64 * 2;
-        if data_bytes > u32::MAX as u64 - 36 {
-            return Err(io::Error::other("recording exceeds the 4 GiB WAV limit"));
-        }
         let mut file = self.out.into_inner().map_err(|e| e.into_error())?;
         file.seek(SeekFrom::Start(0))?;
         write_header(&mut file, self.channels, data_bytes as u32)?;
@@ -124,6 +138,7 @@ fn write_header(w: &mut impl Write, channels: u16, data_bytes: u32) -> io::Resul
 
 /// Write a complete two-track file from in-memory tracks.
 pub fn write_two_track_wav(path: &Path, mic: &[f32], system: &[f32]) -> io::Result<()> {
+    check_wav_capacity(mic.len().max(system.len()) as u64, 2)?;
     let mut w = TwoTrackWriter::create(path, 2)?;
     w.write_interleaved(&interleave_padded(mic, system))?;
     w.finish().map(|_| ())
@@ -246,5 +261,15 @@ mod tests {
         let mono = crate::audio::decoder::decode_audio_file(&path).unwrap();
         assert!((mono.len() as i64 - 16_000).abs() < 200, "len {}", mono.len());
         assert!((mono[8000] - 0.5).abs() < 0.02);
+    }
+
+    #[test]
+    fn wav_capacity_is_checked_before_writing() {
+        assert!(check_wav_capacity(1_000, 2).is_ok());
+        // 2 channels * 2 bytes per frame: just over / under the limit.
+        let max_frames = MAX_WAV_DATA_BYTES / 4;
+        assert!(check_wav_capacity(max_frames, 2).is_ok());
+        assert!(check_wav_capacity(max_frames + 1, 2).is_err());
+        assert!(check_wav_capacity(u64::MAX, 2).is_err()); // overflow, not wraparound
     }
 }

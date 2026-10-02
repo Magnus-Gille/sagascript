@@ -72,8 +72,10 @@ pub struct SystemTrack {
 }
 
 pub struct SystemRecorder {
-    capture: SystemAudioCapture,
-    worker: JoinHandle<Result<SystemTrack, String>>,
+    /// `None` once stopped. If a recorder is dropped without `stop` (an early
+    /// return elsewhere), `Drop` stops the capture and joins the spool worker so
+    /// the spool file is deleted before the caller can exit the process.
+    inner: Option<(SystemAudioCapture, JoinHandle<Result<SystemTrack, String>>)>,
     started: Instant,
 }
 
@@ -99,19 +101,32 @@ impl SystemRecorder {
             .name("sagascript-system-spool".into())
             .spawn(move || spool_worker(rx, native, started, &dir))
             .map_err(|e| DictationError::AudioCaptureError(format!("Spawning spool thread: {e}")))?;
-        Ok(Self { capture, worker, started })
+        Ok(Self { inner: Some((capture, worker)), started })
     }
 
     pub fn started_at(&self) -> Instant {
         self.started
     }
 
-    pub fn stop(self) -> Result<SystemTrack, DictationError> {
-        self.capture.stop(); // drops the sink, which ends the worker
-        self.worker
+    pub fn stop(mut self) -> Result<SystemTrack, DictationError> {
+        let (capture, worker) = self
+            .inner
+            .take()
+            .ok_or_else(|| DictationError::AudioCaptureError("System recorder already stopped".into()))?;
+        capture.stop()?; // drops the sink, which ends the worker; surfaces a backend capture error
+        worker
             .join()
             .map_err(|_| DictationError::AudioCaptureError("System-audio spool thread panicked".into()))?
             .map_err(|e| DictationError::AudioCaptureError(format!("System audio: {e}")))
+    }
+}
+
+impl Drop for SystemRecorder {
+    fn drop(&mut self) {
+        if let Some((capture, worker)) = self.inner.take() {
+            let _ = capture.stop();
+            let _ = worker.join();
+        }
     }
 }
 
@@ -138,6 +153,7 @@ pub(crate) fn spool_worker(
     let mut converter = StreamingConverter::new(native.sample_rate, native.channels)?;
     let mut delivered: u64 = 0;
     let mut peak = 0f32;
+    let mut first_chunk = true;
 
     let mut emit = |samples: &[f32], out: &mut BufWriter<File>, delivered: &mut u64| -> Result<(), String> {
         peak = samples.iter().fold(peak, |m, s| m.max(s.abs()));
@@ -149,6 +165,22 @@ pub(crate) fn spool_worker(
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(chunk) => {
+                if first_chunk {
+                    first_chunk = false;
+                    // Everything before this chunk (OS permission prompt, slow
+                    // activation) was silence: place it BEFORE the first audio so
+                    // the audio lands where it actually happened. The chunk just
+                    // arrived, so it covers the last `chunk_ms` of elapsed time.
+                    let chunk_ms = chunk.len() as u64 / native.channels.max(1) as u64 * 1000 / native.sample_rate.max(1) as u64;
+                    let lead = silence_to_insert(
+                        (started.elapsed().as_millis() as u64).saturating_sub(chunk_ms),
+                        delivered,
+                        GAP_TOLERANCE_MS,
+                    );
+                    if lead > 0 {
+                        emit(&vec![0.0; lead as usize], &mut out, &mut delivered)?;
+                    }
+                }
                 let mono = converter.push(&chunk)?;
                 emit(&mono, &mut out, &mut delivered)?;
             }
@@ -208,17 +240,18 @@ mod tests {
     }
 
     #[test]
-    fn gap_is_filled_after_the_audio_not_before() {
+    fn startup_gap_is_placed_before_the_first_audio() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = mpsc::channel();
-        // Capture "started" 2 s ago but only 0.5 s of audio ever arrived.
+        // Capture was requested 2 s ago (permission prompt / slow activation);
+        // the first audio only arrives now and is 0.5 s long.
         let started = Instant::now() - Duration::from_secs(2);
         tx.send(vec![0.5f32; 8_000]).unwrap(); // 0.5 s mono at 16 kHz
         drop(tx);
         let t = spool_worker(rx, NativeFormat { sample_rate: 16_000, channels: 1 }, started, dir.path()).unwrap();
         assert!((t.samples.len() as i64 - 32_000).abs() < 1_600, "len {}", t.samples.len());
-        assert!(t.samples[1_000] > 0.4, "audio must come first");
-        assert!(t.samples[t.samples.len() - 1_000].abs() < 1e-3, "silence must trail the audio");
+        assert!(t.samples[1_000].abs() < 1e-3, "startup silence must lead");
+        assert!(t.samples[t.samples.len() - 1_000] > 0.4, "audio must be at the end, where it happened");
     }
 
     #[test]

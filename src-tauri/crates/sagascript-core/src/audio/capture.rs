@@ -13,7 +13,7 @@ use crate::error::DictationError;
 /// Maximum recording length: 15 minutes. Capped in device-rate samples while
 /// recording (the buffer holds raw mono at the device rate), then resampled to
 /// 16 kHz on stop.
-const MAX_BUFFER_SECONDS: usize = 60 * 15;
+pub const MAX_BUFFER_SECONDS: usize = 60 * 15;
 const STREAM_NOT_READY: u64 = u64::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

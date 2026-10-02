@@ -34,6 +34,8 @@ const PROP_DEVICE_UID: u32 = fourcc(b"uid ");
 const PROP_PROCESS_PID: u32 = fourcc(b"ppid");
 const PROP_PROCESS_BUNDLE_ID: u32 = fourcc(b"pbid");
 const PROP_TAP_FORMAT: u32 = fourcc(b"tfmt");
+const PROP_STREAM_CONFIGURATION: u32 = fourcc(b"slay"); // kAudioDevicePropertyStreamConfiguration
+const SCOPE_INPUT: u32 = fourcc(b"inpt");
 const FLAG_NON_INTERLEAVED: u32 = 1 << 5; // kAudioFormatFlagIsNonInterleaved
 
 #[repr(C)]
@@ -334,6 +336,56 @@ fn list_processes() -> Result<Vec<ProcInfo>, OSStatus> {
         .collect())
 }
 
+/// Total input channels a device exposes (0 for an output-only device).
+fn input_channel_count(dev: AudioObjectID) -> Result<u32, OSStatus> {
+    let addr = PropertyAddress { selector: PROP_STREAM_CONFIGURATION, scope: SCOPE_INPUT, element: ELEMENT_MAIN };
+    let mut size = 0u32;
+    // SAFETY: standard size-then-data property read.
+    let st = unsafe { AudioObjectGetPropertyDataSize(dev, &addr, 0, ptr::null(), &mut size) };
+    if st != 0 {
+        return Err(st);
+    }
+    // u64 backing store keeps the AudioBufferList (8-byte aligned) properly aligned.
+    let mut raw = vec![0u64; (size as usize).div_ceil(8).max(1)];
+    let st = unsafe { AudioObjectGetPropertyData(dev, &addr, 0, ptr::null(), &mut size, raw.as_mut_ptr().cast()) };
+    if st != 0 {
+        return Err(st);
+    }
+    if (size as usize) < std::mem::size_of::<u32>() {
+        return Ok(0);
+    }
+    // SAFETY: the buffer holds an AudioBufferList written by Core Audio; the
+    // buffer array length is bounded by `size`.
+    let list = unsafe { &*(raw.as_ptr() as *const AudioBufferList) };
+    let max = (size as usize).saturating_sub(8) / std::mem::size_of::<AudioBuffer>();
+    let n = (list.number_buffers as usize).min(max);
+    let bufs = unsafe { std::slice::from_raw_parts(list.buffers.as_ptr(), n) };
+    Ok(bufs.iter().map(|b| b.number_channels).sum())
+}
+
+/// Pick the tap's audio out of an IOProc input list, or `None` when the list
+/// does not have exactly the tap's shape. The aggregate also contains the
+/// physical output device; `start` refuses devices with input streams, and this
+/// check is the second line of defence so microphone input can never reach the
+/// "system" track. `buffers` is `(channels_in_buffer, samples)` per buffer.
+pub(super) fn select_tap_audio(buffers: &[(u32, &[f32])], tap_channels: u32, non_interleaved: bool) -> Option<Vec<f32>> {
+    if tap_channels == 0 {
+        return None;
+    }
+    if non_interleaved && tap_channels > 1 {
+        if buffers.len() != tap_channels as usize || buffers.iter().any(|(c, _)| *c != 1) {
+            return None;
+        }
+        let planes: Vec<&[f32]> = buffers.iter().map(|(_, d)| *d).collect();
+        Some(planar_to_interleaved(&planes))
+    } else {
+        match buffers {
+            [(c, d)] if *c == tap_channels => Some(d.to_vec()),
+            _ => None,
+        }
+    }
+}
+
 /// Planar (one buffer per channel) to interleaved.
 pub(super) fn planar_to_interleaved(planes: &[&[f32]]) -> Vec<f32> {
     let n = planes.iter().map(|p| p.len()).min().unwrap_or(0);
@@ -349,6 +401,7 @@ pub(super) fn planar_to_interleaved(planes: &[&[f32]]) -> Vec<f32> {
 struct IoContext {
     sink: ChunkSink,
     non_interleaved: bool,
+    tap_channels: u32,
 }
 
 extern "C" fn io_proc(
@@ -370,18 +423,18 @@ extern "C" fn io_proc(
     let count = list.number_buffers as usize;
     // SAFETY: the buffer array holds `count` entries.
     let bufs = unsafe { std::slice::from_raw_parts(list.buffers.as_ptr(), count) };
-    let view = |b: &AudioBuffer| -> &[f32] {
+    let view = |b: &AudioBuffer| -> (u32, &[f32]) {
         if b.data.is_null() {
-            &[]
+            (b.number_channels, &[])
         } else {
-            unsafe { std::slice::from_raw_parts(b.data.cast::<f32>(), b.data_byte_size as usize / 4) }
+            // SAFETY: Core Audio guarantees `data_byte_size` valid bytes of float samples.
+            (b.number_channels, unsafe { std::slice::from_raw_parts(b.data.cast::<f32>(), b.data_byte_size as usize / 4) })
         }
     };
-    if ctx.non_interleaved && count > 1 {
-        let planes: Vec<&[f32]> = bufs.iter().map(view).collect();
-        (ctx.sink)(&planar_to_interleaved(&planes));
-    } else if let Some(b) = bufs.first() {
-        (ctx.sink)(view(b));
+    let views: Vec<(u32, &[f32])> = bufs.iter().map(view).collect();
+    // Anything that is not exactly the tap's shape is dropped (silence is gap-filled).
+    if let Some(chunk) = select_tap_audio(&views, ctx.tap_channels, ctx.non_interleaved) {
+        (ctx.sink)(&chunk);
     }
     0
 }
@@ -473,6 +526,27 @@ impl Capture {
             return Err(DictationError::AudioCaptureError("No default output device found".into()));
         };
 
+        // The aggregate contains the physical output device. If that device has
+        // input streams (USB interface, headset microphone), they would appear in
+        // the aggregate's input list next to the tap; refuse rather than risk
+        // microphone audio in the "system" track.
+        let output_dev = get_data::<AudioObjectID>(SYSTEM_OBJECT, PROP_DEFAULT_SYSTEM_OUTPUT).unwrap_or(0);
+        match input_channel_count(output_dev) {
+            Ok(0) => {}
+            Ok(n) => {
+                cleanup_tap(tap);
+                return Err(DictationError::AudioCaptureError(format!(
+                    "The default output device also has {n} input channel(s) (a duplex device such as a USB \
+                     audio interface or headset). To keep microphone input out of the system-audio track, \
+                     choose an output-only device (e.g. the built-in speakers) in System Settings > Sound."
+                )));
+            }
+            Err(s) => {
+                cleanup_tap(tap);
+                return Err(capture_err("Inspecting the default output device failed", s));
+            }
+        }
+
         let agg_uid = NSUUID::new().UUIDString();
         let tap_uid_str = tap_uuid.UUIDString();
         let aggregate_desc = {
@@ -487,7 +561,10 @@ impl Capture {
                 ("master", any(NSString::from_str(&output_uid))),
                 ("subdevices", any(subs)),
                 ("taps", any(taps)),
-                ("tapautostart", any(NSNumber::new_bool(true))),
+                // No "tapautostart": it makes AudioDeviceStart block until a tapped
+                // process first plays audio (AudioHardware.h, kAudioAggregateDeviceTapAutoStartKey),
+                // which would hang startup, --duration and Ctrl+C while nothing plays.
+                // Idle time is silence-filled by the recorder instead.
             ])
         };
         let mut aggregate: AudioObjectID = 0;
@@ -501,6 +578,7 @@ impl Capture {
         let ctx = Box::into_raw(Box::new(IoContext {
             sink,
             non_interleaved: format.format_flags & FLAG_NON_INTERLEAVED != 0,
+            tap_channels: format.channels_per_frame,
         }));
         let mut proc_id: *mut c_void = ptr::null_mut();
         let status = unsafe { AudioDeviceCreateIOProcID(aggregate, io_proc, ctx.cast(), &mut proc_id) };
@@ -519,8 +597,9 @@ impl Capture {
         Ok((Capture { tap, aggregate, proc_id, ctx, destroy_tap, stopped: false }, native))
     }
 
-    pub(super) fn stop(mut self) {
+    pub(super) fn stop(mut self) -> Result<(), DictationError> {
         self.teardown();
+        Ok(())
     }
 
     fn teardown(&mut self) {
@@ -548,6 +627,23 @@ impl Drop for Capture {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tap_audio_selection_rejects_foreign_buffers() {
+        let l = [1.0f32, 2.0];
+        let r = [3.0f32, 4.0];
+        let mic = [9.0f32, 9.0];
+        // planar stereo tap
+        assert_eq!(select_tap_audio(&[(1, &l), (1, &r)], 2, true).unwrap(), vec![1.0, 3.0, 2.0, 4.0]);
+        // extra physical-input buffer (duplex device): rejected
+        assert!(select_tap_audio(&[(1, &mic), (1, &l), (1, &r)], 2, true).is_none());
+        // interleaved stereo tap
+        assert_eq!(select_tap_audio(&[(2, &[1.0, 3.0, 2.0, 4.0])], 2, false).unwrap(), vec![1.0, 3.0, 2.0, 4.0]);
+        assert!(select_tap_audio(&[(1, &mic), (2, &[1.0, 3.0])], 2, false).is_none());
+        // wrong channel layout
+        assert!(select_tap_audio(&[(1, &mic)], 2, false).is_none());
+        assert!(select_tap_audio(&[], 2, true).is_none());
+    }
+
     use super::*;
 
     fn procs() -> Vec<ProcInfo> {
@@ -600,7 +696,7 @@ mod tests {
         let g = got.clone();
         let (cap, fmt) = Capture::start(&CaptureTarget::All, Box::new(move |c| *g.lock().unwrap() += c.len())).unwrap();
         std::thread::sleep(std::time::Duration::from_secs(1));
-        cap.stop();
+        cap.stop().unwrap();
         assert!(fmt.sample_rate > 0);
         assert!(*got.lock().unwrap() > 0);
     }

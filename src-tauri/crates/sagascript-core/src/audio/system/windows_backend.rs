@@ -4,7 +4,7 @@
 //! Loopback needs no permission. The capture thread owns all COM objects.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -168,13 +168,25 @@ unsafe fn activate_process_client(pid: u32) -> Result<IAudioClient, DictationErr
         .map_err(|e| err("Process loopback client cast", e))
 }
 
+/// Owns an event HANDLE (`HANDLE` is `Copy` and does not close itself).
+struct OwnedEvent(HANDLE);
+
+impl Drop for OwnedEvent {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateEventW and is closed exactly once.
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
 struct Opened {
     client: IAudioClient,
     capture: IAudioCaptureClient,
     layout: PcmLayout,
     format: NativeFormat,
     /// Event signalled per buffer (process loopback is event-driven).
-    event: Option<HANDLE>,
+    event: Option<OwnedEvent>,
 }
 
 /// Candidate process-tree roots to try, in order. `--app Teams.exe` matches many
@@ -254,18 +266,9 @@ unsafe fn open_process_loopback(pid: u32) -> Result<Opened, DictationError> {
             None,
         )
         .map_err(|e| err(&format!("Initializing process loopback for pid {pid}"), e))?;
-    let event = CreateEventW(None, false, false, PCWSTR::null()).map_err(|e| err("CreateEvent", e))?;
-    if let Err(e) = client.SetEventHandle(event) {
-        let _ = CloseHandle(event);
-        return Err(err("SetEventHandle", e));
-    }
-    let capture: IAudioCaptureClient = match client.GetService() {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = CloseHandle(event);
-            return Err(err("IAudioCaptureClient", e));
-        }
-    };
+    let event = OwnedEvent(CreateEventW(None, false, false, PCWSTR::null()).map_err(|e| err("CreateEvent", e))?);
+    client.SetEventHandle(event.0).map_err(|e| err("SetEventHandle", e))?;
+    let capture: IAudioCaptureClient = client.GetService().map_err(|e| err("IAudioCaptureClient", e))?;
     Ok(Opened {
         client,
         capture,
@@ -278,12 +281,40 @@ unsafe fn open_process_loopback(pid: u32) -> Result<Opened, DictationError> {
 pub(super) struct Capture {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// First capture error seen by the capture thread; reported by `stop`.
+    failure: Arc<Mutex<Option<String>>>,
+}
+
+/// Drain every queued packet into `sink`. An error is returned (not swallowed);
+/// an empty queue is `Ok(())`.
+unsafe fn drain(o: &Opened, sink: &mut ChunkSink, bytes_per_sample: usize) -> Result<(), DictationError> {
+    loop {
+        let n = o.capture.GetNextPacketSize().map_err(|e| err("GetNextPacketSize", e))?;
+        if n == 0 {
+            return Ok(());
+        }
+        let (mut data, mut frames, mut flags) = (std::ptr::null_mut(), 0u32, 0u32);
+        o.capture
+            .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
+            .map_err(|e| err("GetBuffer", e))?;
+        let samples = frames as usize * o.format.channels as usize;
+        let silent = flags & BUFFERFLAGS_SILENT != 0;
+        let bytes = if data.is_null() || silent {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(data, samples * bytes_per_sample)
+        };
+        sink(&decode_pcm_packet(bytes, o.layout, silent || data.is_null(), samples));
+        o.capture.ReleaseBuffer(frames).map_err(|e| err("ReleaseBuffer", e))?;
+    }
 }
 
 impl Capture {
     pub(super) fn start(target: &CaptureTarget, mut sink: ChunkSink) -> Result<(Self, NativeFormat), DictationError> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
+        let failure = Arc::new(Mutex::new(None::<String>));
+        let failure_thread = failure.clone();
         let target = target.clone();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<NativeFormat, DictationError>>();
         let thread = thread::Builder::new()
@@ -304,36 +335,22 @@ impl Capture {
                             let _ = ready_tx.send(Ok(o.format));
                             let bytes_per_sample = if o.layout == PcmLayout::F32 { 4 } else { 2 };
                             while !stop_thread.load(Ordering::Relaxed) {
-                                match o.event {
+                                match &o.event {
                                     // Event-driven (process loopback): wake per buffer, 100 ms cap so stop is prompt.
                                     Some(ev) => {
-                                        WaitForSingleObject(ev, 100);
+                                        WaitForSingleObject(ev.0, 100);
                                     }
                                     None => thread::sleep(Duration::from_millis(10)),
                                 }
-                                while let Ok(n) = o.capture.GetNextPacketSize() {
-                                    if n == 0 {
-                                        break;
-                                    }
-                                    let (mut data, mut frames, mut flags) = (std::ptr::null_mut(), 0u32, 0u32);
-                                    if o.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None).is_err() {
-                                        break;
-                                    }
-                                    let samples = frames as usize * o.format.channels as usize;
-                                    let silent = flags & BUFFERFLAGS_SILENT != 0;
-                                    let bytes = if data.is_null() || silent {
-                                        &[][..]
-                                    } else {
-                                        std::slice::from_raw_parts(data, samples * bytes_per_sample)
-                                    };
-                                    sink(&decode_pcm_packet(bytes, o.layout, silent || data.is_null(), samples));
-                                    let _ = o.capture.ReleaseBuffer(frames);
+                                if let Err(e) = drain(&o, &mut sink, bytes_per_sample) {
+                                    // Keep the first error, stop capturing, report it from `stop`.
+                                    tracing::error!("System-audio capture failed: {e}");
+                                    *failure_thread.lock().unwrap() = Some(e.to_string());
+                                    break;
                                 }
                             }
                             let _ = o.client.Stop();
-                            if let Some(ev) = o.event {
-                                let _ = CloseHandle(ev);
-                            }
+                            // `o` (and its event guard) drops here, before CoUninitialize.
                         }
                     }
                     CoUninitialize();
@@ -341,7 +358,7 @@ impl Capture {
             })
             .map_err(|e| err("Spawning capture thread", e))?;
         match ready_rx.recv_timeout(Duration::from_secs(10)) {
-            Ok(Ok(format)) => Ok((Capture { stop, thread: Some(thread) }, format)),
+            Ok(Ok(format)) => Ok((Capture { stop, thread: Some(thread), failure }, format)),
             Ok(Err(e)) => {
                 let _ = thread.join();
                 Err(e)
@@ -353,8 +370,12 @@ impl Capture {
         }
     }
 
-    pub(super) fn stop(mut self) {
+    pub(super) fn stop(mut self) -> Result<(), DictationError> {
         self.shutdown();
+        match self.failure.lock().unwrap().take() {
+            Some(msg) => Err(DictationError::AudioCaptureError(msg)),
+            None => Ok(()),
+        }
     }
 
     fn shutdown(&mut self) {

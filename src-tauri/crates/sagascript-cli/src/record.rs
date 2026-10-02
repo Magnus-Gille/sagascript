@@ -96,12 +96,31 @@ pub fn resolve_source(source: &str, app: Option<&str>) -> Result<(AudioSource, C
     Ok((source, target))
 }
 
+/// The microphone service keeps at most this many seconds in memory and then
+/// silently stops appending. `--source both` must not let that truncate the mic
+/// channel while the system track keeps growing, so it is limited to this length.
+fn max_record_secs(source: AudioSource) -> Option<f64> {
+    (source == AudioSource::Both).then_some(sagascript_core::audio::capture::MAX_BUFFER_SECONDS as f64)
+}
+
+fn validate_duration(source: AudioSource, duration: Option<f64>) -> Result<(), DictationError> {
+    match (max_record_secs(source), duration) {
+        (Some(max), Some(d)) if d > max => Err(DictationError::SettingsError(format!(
+            "--source both is limited to {} minutes (the microphone buffer is in memory); \
+             use --source system for longer recordings, or record in parts",
+            (max / 60.0) as u32
+        ))),
+        _ => Ok(()),
+    }
+}
+
 const SYSTEM_AUDIO_BANNER: &str = "\
 == RECORDING SYSTEM AUDIO ==  Everything the computer plays is being captured and stored locally.\n\
    Recording other people may require their consent. Press Ctrl+C to stop.";
 
 pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let (source, target) = resolve_source(&args.source, args.app.as_deref())?;
+    validate_duration(source, args.duration)?;
     let stored = sagascript_core::settings::store::load();
     let profile = match args.profile.as_deref() {
         Some(profile_id) => resolve_profile(&stored, profile_id)?,
@@ -219,17 +238,25 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
                 break;
             }
         }
+        if let Some(max) = max_record_secs(source) {
+            if start.elapsed().as_secs_f64() >= max {
+                eprintln!("Stopping: --source both is limited to {} minutes.", (max / 60.0) as u32);
+                break;
+            }
+        }
     }
 
     let mic_first_callback_ms = capture.metrics().first_callback_ms.unwrap_or(0);
-    let mic_audio = if source.needs_mic() { Some(capture.stop_capture()?) } else { None };
-    let system_track: Option<(SystemTrack, u64)> = match system {
-        Some((recorder, started)) => {
-            let offset_ms = started.duration_since(mic_requested).as_millis() as u64;
-            Some((recorder.stop()?, offset_ms))
-        }
-        None => None,
-    };
+    // Stop and join BOTH paths before propagating either error, so a microphone
+    // failure cannot leave the system recorder (and its spool file) behind.
+    let mic_result = if source.needs_mic() { Some(capture.stop_capture()) } else { None };
+    let system_result = system.map(|(recorder, started)| {
+        let offset_ms = started.duration_since(mic_requested).as_millis() as u64;
+        (recorder.stop(), offset_ms)
+    });
+    let mic_audio = mic_result.transpose()?;
+    let system_track: Option<(SystemTrack, u64)> =
+        system_result.map(|(track, offset_ms)| track.map(|t| (t, offset_ms))).transpose()?;
     if let Some((track, _)) = &system_track {
         if track.silent {
             eprintln!("Warning: the system-audio track is silent. Nothing was playing, or permission was denied (run `sagascript doctor`).");
@@ -239,9 +266,10 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let duration = audio.len() as f64 / TARGET_SAMPLE_RATE as f64;
     if let Some((mic, system)) = &two_track {
         eprintln!(
-            "Track lengths: mic {:.1}s, system {:.1}s",
+            "Track lengths: mic {:.1}s, system {:.1}s (drift {} ms)",
             mic.len() as f64 / TARGET_SAMPLE_RATE as f64,
-            system.len() as f64 / TARGET_SAMPLE_RATE as f64
+            system.len() as f64 / TARGET_SAMPLE_RATE as f64,
+            sagascript_core::audio::system::convert::drift_ms(mic.len(), system.len())
         );
     }
     eprintln!(
@@ -264,6 +292,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
             // Same 0600 writer as the two-track path: meeting audio must not be
             // created with the default umask.
             let write = || -> std::io::Result<()> {
+                sagascript_core::audio::system::twotrack::check_wav_capacity(audio.len() as u64, 1)?;
                 let mut w = sagascript_core::audio::system::twotrack::TwoTrackWriter::create(
                     std::path::Path::new(output_path),
                     1,
@@ -646,6 +675,16 @@ mod tests {
         let mut output = Vec::new();
         assert!(write_plain_record_output(&mut output, "hello").unwrap());
         assert_eq!(output, b"hello\n");
+    }
+
+    #[test]
+    fn both_is_limited_to_the_microphone_buffer_length() {
+        use sagascript_core::audio::system::AudioSource;
+        assert!(super::validate_duration(AudioSource::Both, Some(900.0)).is_ok());
+        assert!(super::validate_duration(AudioSource::Both, Some(901.0)).is_err());
+        assert!(super::validate_duration(AudioSource::Both, None).is_ok());
+        assert!(super::validate_duration(AudioSource::System, Some(7200.0)).is_ok());
+        assert_eq!(super::max_record_secs(AudioSource::System), None);
     }
 
     #[test]

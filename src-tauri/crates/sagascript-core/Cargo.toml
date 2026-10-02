@@ -54,7 +54,7 @@ whisper-rs = { version = "0.15", features = ["coreml", "metal", "tracing_backend
 [target.'cfg(target_os = "windows")'.dependencies]
 # System-audio capture (WASAPI loopback), only with the `record` feature.
 windows-core = { version = "0.61", optional = true }
-windows = { version = "0.61", optional = true, features = ["Win32_Foundation", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com_StructuredStorage"] }
+windows = { version = "0.61", optional = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com_StructuredStorage"] }
 whisper-rs = { version = "0.15", features = ["tracing_backend"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

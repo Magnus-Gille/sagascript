@@ -16,6 +16,10 @@ pub struct StreamingConverter {
     channels: usize,
     resampler: Option<SincFixedIn<f32>>,
     pending: Vec<f32>,
+    ratio: f64,
+    /// Mono input frames received and output frames emitted.
+    total_in: u64,
+    total_out: u64,
 }
 
 impl StreamingConverter {
@@ -23,6 +27,7 @@ impl StreamingConverter {
         if sample_rate == 0 || channels == 0 {
             return Err("sample rate and channel count must be > 0".into());
         }
+        let ratio = TARGET_SAMPLE_RATE as f64 / sample_rate as f64;
         let resampler = if sample_rate == TARGET_SAMPLE_RATE {
             None
         } else {
@@ -33,45 +38,66 @@ impl StreamingConverter {
                 oversampling_factor: 256,
                 window: WindowFunction::BlackmanHarris2,
             };
-            let ratio = TARGET_SAMPLE_RATE as f64 / sample_rate as f64;
             Some(
                 SincFixedIn::<f32>::new(ratio, 2.0, params, CHUNK, 1)
                     .map_err(|e| format!("Failed to create resampler: {e}"))?,
             )
         };
-        Ok(Self { channels: channels as usize, resampler, pending: Vec::new() })
+                Ok(Self { channels: channels as usize, resampler, pending: Vec::new(), ratio, total_in: 0, total_out: 0 })
+    }
+
+    /// rubato's sinc resampler is centred: output frame n already corresponds to
+    /// input n/ratio (verified by `terminal_impulse_survives_flush_in_place`), so
+    /// there is no leading delay to discard. The cost is on the tail: the last
+    /// `sinc_len / 2` input frames only produce output once more input arrives,
+    /// which `finish` supplies as zero padding.
+    fn account(&mut self, block: Vec<f32>) -> Vec<f32> {
+        self.total_out += block.len() as u64;
+        block
     }
 
     /// Push interleaved frames; returns newly available 16 kHz mono samples.
     pub fn push(&mut self, interleaved: &[f32]) -> Result<Vec<f32>, String> {
         let mono = mix_to_mono(interleaved, self.channels);
-        let Some(resampler) = self.resampler.as_mut() else {
+        if self.resampler.is_none() {
             return Ok(mono);
-        };
+        }
+        self.total_in += mono.len() as u64;
         self.pending.extend_from_slice(&mono);
         let mut out = Vec::new();
         while self.pending.len() >= CHUNK {
             let block: Vec<f32> = self.pending.drain(..CHUNK).collect();
-            let r = resampler.process(&[block], None).map_err(|e| format!("Resample failed: {e}"))?;
-            out.extend_from_slice(&r[0]);
+            let r = self.resampler.as_mut().unwrap().process(&[block], None).map_err(|e| format!("Resample failed: {e}"))?;
+            let r = self.account(r.into_iter().next().unwrap_or_default());
+            out.extend_from_slice(&r);
         }
         Ok(out)
     }
 
-    /// Flush remaining input (zero-padded to a full block, output trimmed).
+    /// Flush the tail: feed zero padding through the resampler until every real
+    /// input frame has produced its output (the centred filter's look-ahead), then
+    /// trim to exactly `round(total_in * ratio)` frames.
     pub fn finish(&mut self) -> Result<Vec<f32>, String> {
-        let Some(resampler) = self.resampler.as_mut() else {
-            return Ok(Vec::new());
-        };
-        if self.pending.is_empty() {
+        if self.resampler.is_none() || self.total_in == 0 {
             return Ok(Vec::new());
         }
-        let real = self.pending.len();
-        let mut block = std::mem::take(&mut self.pending);
-        block.resize(CHUNK, 0.0);
-        let r = resampler.process(&[block], None).map_err(|e| format!("Resample failed: {e}"))?;
-        let keep = ((real as f64 / CHUNK as f64) * r[0].len() as f64).round() as usize;
-        Ok(r[0][..keep.min(r[0].len())].to_vec())
+        let expected = (self.total_in as f64 * self.ratio).round() as u64;
+        let mut out = Vec::new();
+        // Bounded: each block yields ~CHUNK*ratio frames and the delay is a few hundred.
+        for _ in 0..64 {
+            if self.total_out >= expected {
+                break;
+            }
+            let mut block = std::mem::take(&mut self.pending);
+            block.resize(CHUNK, 0.0);
+            let r = self.resampler.as_mut().unwrap().process(&[block], None).map_err(|e| format!("Resample failed: {e}"))?;
+            let r = self.account(r.into_iter().next().unwrap_or_default());
+            out.extend_from_slice(&r);
+        }
+        let emitted_before = self.total_out - out.len() as u64;
+        let keep = expected.saturating_sub(emitted_before) as usize;
+        out.truncate(keep);
+        Ok(out)
     }
 }
 
@@ -162,6 +188,39 @@ mod tests {
         assert!((out.len() as i64 - expected).abs() < 600, "len {}", out.len());
         let peak = out[4000..out.len() - 4000].iter().fold(0f32, |m, s| m.max(s.abs()));
         assert!((0.4..0.6).contains(&peak), "peak {peak}");
+    }
+
+    /// Total output length equals round(input * ratio) at every alignment,
+    /// including exact multiples of the 1024-frame block.
+    #[test]
+    fn output_length_is_exact_at_block_boundaries() {
+        for frames in [1024usize, 2048, 3000, 1, 4800] {
+            let mut c = StreamingConverter::new(48_000, 1).unwrap();
+            let mut out = c.push(&vec![0.25; frames]).unwrap();
+            out.extend(c.finish().unwrap());
+            assert_eq!(out.len(), (frames as f64 / 3.0).round() as usize, "frames {frames}");
+        }
+    }
+
+    /// An impulse at the very end of the input must survive the flush, at the
+    /// right place, also when the input ends exactly
+    /// on a block boundary.
+    #[test]
+    fn terminal_impulse_survives_flush_in_place() {
+        for frames in [2048usize, 3000] {
+            let mut input = vec![0.0f32; frames];
+            *input.last_mut().unwrap() = 1.0;
+            let mut c = StreamingConverter::new(48_000, 1).unwrap();
+            let mut out = c.push(&input).unwrap();
+            out.extend(c.finish().unwrap());
+            let (idx, peak) = out
+                .iter()
+                .enumerate()
+                .fold((0, 0f32), |m, (i, s)| if s.abs() > m.1 { (i, s.abs()) } else { m });
+            let expected_idx = (frames - 1) / 3;
+            assert!(peak > 0.2, "frames {frames}: impulse lost, peak {peak}");
+            assert!((idx as i64 - expected_idx as i64).abs() <= 2, "frames {frames}: impulse at {idx}, expected ~{expected_idx}");
+        }
     }
 
     #[test]

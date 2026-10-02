@@ -259,9 +259,16 @@ impl SystemAudioCapture {
         self.format
     }
 
-    pub fn stop(self) {
+    /// Stop capturing. Returns the first backend capture error, if any occurred.
+    pub fn stop(self) -> Result<(), DictationError> {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        self.inner.stop();
+        {
+            self.inner.stop()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Ok(())
+        }
     }
 }
 

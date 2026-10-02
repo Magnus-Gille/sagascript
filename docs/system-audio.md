@@ -37,10 +37,20 @@ diarization is phase 2 (`read_two_track_wav` already exists for it).
 - The tap is read through a **private aggregate device**
   (`AudioHardwareCreateAggregateDevice`) whose dictionary lists the tap
   (`taps`, with `drift` compensation) and the default output device as clock
-  source (`master` / `subdevices`), with `private` and `tapautostart`. An
+  source (`master` / `subdevices`), with `private`. `tapautostart` is deliberately
+  not set: it makes `AudioDeviceStart` block until a tapped process first plays
+  audio (AudioHardware.h), which would hang startup, `--duration` and Ctrl+C
+  while nothing plays; idle time is silence-filled instead. An
   `AudioDeviceCreateIOProcID` callback receives float32 buffers; the format comes
   from `kAudioTapPropertyFormat` ('tfmt'). Non-interleaved buffer lists are
-  interleaved in the callback.
+  interleaved in the callback. The aggregate also contains the physical output
+  device, so its input streams (if any) would appear next to the tap's. Capture
+  therefore **refuses to start when the default output device has input channels**
+  (USB audio interface, headset microphone) with an explanatory error, and the
+  callback forwards a buffer list only if it has exactly the tap's shape. This keeps
+  microphone input out of the `system` track. Supporting duplex output devices
+  needs a tap-only aggregate, which the headers do not document and which has
+  not been tried (tracked in #303).
 - The 14.2+ symbols are resolved with `dlsym`, so the binary still launches on
   older systems; the capability probe checks the OS version, the
   `CATapDescription` class and the symbol.
@@ -135,8 +145,8 @@ backend, not planned.)
 - Mic and system run on independent clocks. Phase 1 does not resample for drift;
   on the tap path `drift` compensation is enabled in the aggregate device. The
   worst expected skew over 30 minutes (50 ppm) is about 90 ms, below what
-  speaker separation needs, and the length difference is reported (`drift_ms`)
-  for the owner test. If measured drift is larger, phase 2 adds periodic
+  speaker separation needs, and the length difference is printed as `drift`
+  on the `Track lengths` line for the owner test. If measured drift is larger, phase 2 adds periodic
   re-timing against the system clock.
 
 ### Echo and duplication
@@ -192,6 +202,14 @@ Decided for phase 1 of epic [#299](https://github.com/Magnus-Gille/sagascript/is
   start never calls it and is never gated on it.
 
 ## Known limitations (tracked for phase 1.5)
+
+`--source both` is limited to 15 minutes: the microphone service buffers in
+memory and stops appending at that length, so longer `both` recordings are
+rejected up front (`--duration`) or stopped at 15 minutes with a message. Use
+`--source system` for longer recordings. Spooling the microphone like the system
+track lifts this and is tracked in #303. Timeline placement uses wall-clock
+time, not per-chunk capture timestamps; only the startup gap is placed before
+the first audio.
 
 Realtime-safety of the Core Audio callback (it allocates and uses an unbounded
 channel), clock drift between microphone and system tracks (gaps are filled with
