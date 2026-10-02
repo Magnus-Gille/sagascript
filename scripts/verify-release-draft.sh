@@ -204,7 +204,8 @@ path, version, short = sys.argv[1:]
 d = json.load(open(path))
 assert d["expected_version"] == version, d["expected_version"]
 rv = d["reported_version"]
-assert rv.startswith(f"sagascript {version} (git {short}, "), rv
+# Windows reports the full 40-character SHA, macOS the short one: accept either.
+assert rv.startswith(f"sagascript {version} (git {short}"), rv
 assert "dirty" not in rv, rv
 assert d["automated_cli_acceptance"] == "pass"
 print("acceptance OK:", rv)
