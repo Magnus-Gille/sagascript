@@ -5,7 +5,7 @@
 
 [package]
 name = "sagascript-engine-host-ort"
-version = "1.4.2"
+version = "1.4.3"
 edition = "2021"
 license = "MIT"
 description = "ONNX Runtime (CPU) engine host for Pianissimo, protocol v1 (see docs/engine-host-protocol.md)"
