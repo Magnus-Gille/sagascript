@@ -1380,6 +1380,15 @@ fn main() {
                 }
             }
 
+            // Build the hidden overlay now, while Sagascript is still frontmost,
+            // so the first dictation never creates a window (#291).
+            if overlay::should_precreate_at_startup(
+                sagascript_core::settings::store::load().show_overlay,
+                !cfg!(target_os = "linux"),
+            ) {
+                overlay::precreate_hidden(app.handle());
+            }
+
             {
                 let windows: Vec<serde_json::Value> = app
                     .webview_windows()
