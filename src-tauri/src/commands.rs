@@ -521,7 +521,7 @@ fn set_language_for_controller(
 
 // Keep profile/dictionary validation ahead of all preset mutations.
 fn apply_language_selection(settings: &mut Settings, language: Language) -> Result<Vec<String>, String> {
-    let notices = settings.set_default_profile_language(language)?;
+    let notices = sagascript_core::settings::ModelResetNotice::messages(&settings.set_default_profile_language(language)?);
     settings.whisper_model = WhisperModel::recommended(language);
     settings.auto_select_model = true;
     Ok(notices)

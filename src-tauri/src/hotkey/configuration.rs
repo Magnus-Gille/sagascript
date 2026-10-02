@@ -17,7 +17,9 @@ impl HotkeyChange {
     pub fn prepare_with_notices(&self, settings: &Settings) -> Result<(Settings, Vec<String>), String> {
         let mut candidate = settings.clone();
         let notices = match self {
-            Self::Profiles(profiles) => candidate.replace_hotkey_profiles(profiles.clone())?,
+            Self::Profiles(profiles) => {
+                sagascript_core::settings::ModelResetNotice::messages(&candidate.replace_hotkey_profiles(profiles.clone())?)
+            }
             Self::Mode(mode) => {
                 candidate.replace_hotkey_mode(*mode)?;
                 Vec::new()

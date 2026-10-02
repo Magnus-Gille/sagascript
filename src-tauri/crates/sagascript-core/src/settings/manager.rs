@@ -891,6 +891,22 @@ impl Default for Settings {
     }
 }
 
+/// A profile's model was reset to Auto because a language change made it
+/// incompatible. Structured so callers can filter by profile id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelResetNotice {
+    pub profile_id: String,
+    pub profile_name: String,
+    pub message: String,
+}
+
+impl ModelResetNotice {
+    /// User-facing strings, for wire formats that carry plain messages.
+    pub fn messages(notices: &[ModelResetNotice]) -> Vec<String> {
+        notices.iter().map(|notice| notice.message.clone()).collect()
+    }
+}
+
 impl Settings {
     /// One-time move of the engine warm-up settings to the cold-start defaults
     /// (load at app start, unload after 60 idle minutes), recorded by
@@ -1141,7 +1157,7 @@ impl Settings {
 
     /// Change the default profile's language. A model the new language cannot
     /// use is reset to Auto; the returned notices describe every such reset.
-    pub fn set_default_profile_language(&mut self, language: Language) -> Result<Vec<String>, String> {
+    pub fn set_default_profile_language(&mut self, language: Language) -> Result<Vec<ModelResetNotice>, String> {
         let mut candidate = self.clone();
         let mut profiles = candidate.resolved_hotkey_profiles();
         let index = profiles.iter().position(|profile| profile.id == "default").unwrap_or(0);
@@ -1154,7 +1170,7 @@ impl Settings {
     /// Reset (to Auto) the model of every profile whose language differs from
     /// `previous` and whose explicit model cannot serve the new language.
     /// Other profiles are never touched. Returns one notice per reset.
-    fn reset_models_incompatible_after_language_change(&mut self, previous: &[HotkeyProfile]) -> Vec<String> {
+    fn reset_models_incompatible_after_language_change(&mut self, previous: &[HotkeyProfile]) -> Vec<ModelResetNotice> {
         let supported = crate::transcription::pianissimo_backend::runtime_supported_on_this_os();
         let mut notices = Vec::new();
         for profile in self.resolved_hotkey_profiles() {
@@ -1176,10 +1192,14 @@ impl Settings {
                 FileModel::PianissimoOriginal => "Pianissimo",
             };
             self.profile_models.insert(profile.id.clone(), FileModelPreference::Auto);
-            notices.push(format!(
-                "Model for profile '{}' changed to Recommended ({recommended}) because {reason}.",
-                profile.name
-            ));
+            notices.push(ModelResetNotice {
+                profile_id: profile.id.clone(),
+                profile_name: profile.name.clone(),
+                message: format!(
+                    "Model for profile '{}' changed to Recommended ({recommended}) because {reason}.",
+                    profile.name
+                ),
+            });
         }
         notices
     }
@@ -1447,7 +1467,7 @@ impl Settings {
     /// Replace the profile list. When a profile's language changes and its explicit
     /// model no longer fits, that profile's model is reset to Auto and a notice
     /// is returned instead of an error.
-    pub fn replace_hotkey_profiles(&mut self, profiles: Vec<HotkeyProfile>) -> Result<Vec<String>, String> {
+    pub fn replace_hotkey_profiles(&mut self, profiles: Vec<HotkeyProfile>) -> Result<Vec<ModelResetNotice>, String> {
         let mut profiles = profiles;
         for profile in &mut profiles {
             if let Some(shortcut) = profile
@@ -2533,10 +2553,12 @@ mod tests {
         let notices = settings
             .replace_hotkey_profiles(vec![english, profile("other", "Super+O", Language::Swedish)])
             .unwrap();
-        assert_eq!(notices, vec![
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].profile_id, "default");
+        assert_eq!(
+            notices[0].message,
             "Model for profile 'Svenska' changed to Recommended (Whisper Base (EN)) because Pianissimo only supports Swedish."
-                .to_string()
-        ]);
+        );
         assert_eq!(settings.default_profile().language, Language::English);
         assert_eq!(settings.profile_models["default"], FileModelPreference::Auto);
         assert_eq!(settings.dictation_model_for_profile("default").unwrap(), FileModel::Whisper(WhisperModel::BaseEn));
@@ -2553,8 +2575,8 @@ mod tests {
         settings.set_profile_model("default", FileModelPreference::Whisper(WhisperModel::KbWhisperBase)).unwrap();
         let notices = settings.set_default_profile_language(Language::English).unwrap();
         assert_eq!(notices.len(), 1);
-        assert!(notices[0].contains("KB-Whisper Base does not support English"), "{}", notices[0]);
-        assert!(notices[0].contains("Recommended (Whisper Base (EN))"), "{}", notices[0]);
+        assert!(notices[0].message.contains("KB-Whisper Base does not support English"), "{}", notices[0].message);
+        assert!(notices[0].message.contains("Recommended (Whisper Base (EN))"), "{}", notices[0].message);
         assert_eq!(settings.profile_models["default"], FileModelPreference::Auto);
     }
 
