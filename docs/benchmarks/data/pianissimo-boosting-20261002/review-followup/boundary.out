@@ -1,6 +1,6 @@
-hit cutA b-w0: 27/30 | b-w3: 28/30 | b-w5: 29/30 | b-w5-sf0: 29/30
-hit cutB b-w0: 29/30 | b-w3: 28/30 | b-w5: 29/30 | b-w5-sf0: 28/30
-hit mid b-w0: 30/30 | b-w3: 30/30 | b-w5: 30/30 | b-w5-sf0: 30/30
-miss cutA b-w0: 5/30 | b-w3: 11/30 | b-w5: 16/30 | b-w5-sf0: 7/30
-miss cutB b-w0: 6/30 | b-w3: 9/30 | b-w5: 11/30 | b-w5-sf0: 9/30
-miss mid b-w0: 4/30 | b-w3: 11/30 | b-w5: 14/30 | b-w5-sf0: 7/30
+hit cutA b-w0: 27/30 | b-w3: 28/30 | b-w5: 29/30 | b-w5-sf25: 29/30
+hit cutB b-w0: 29/30 | b-w3: 28/30 | b-w5: 28/30 | b-w5-sf25: 29/30
+hit mid b-w0: 30/30 | b-w3: 30/30 | b-w5: 30/30 | b-w5-sf25: 30/30
+miss cutA b-w0: 5/30 | b-w3: 7/30 | b-w5: 7/30 | b-w5-sf25: 9/30
+miss cutB b-w0: 6/30 | b-w3: 8/30 | b-w5: 9/30 | b-w5-sf25: 9/30
+miss mid b-w0: 4/30 | b-w3: 8/30 | b-w5: 8/30 | b-w5-sf25: 10/30

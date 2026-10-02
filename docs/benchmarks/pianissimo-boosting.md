@@ -12,7 +12,7 @@ control, audio files only. Scripts and term lists: `docs/benchmarks/data/pianiss
   boosting-tree idea, no code ported). Dictionary terms are tokenized with the model's SentencePiece pieces
   (fewest-pieces and longest-match segmentations, plus a capitalised variant) into a prefix trie. In the
   greedy TDT loop every candidate token that continues a live partial match gets `+weight` on its logit, a
-  token that starts a term gets `+weight x 0.25`; the argmax is taken over the adjusted logits. Several
+  token that starts a term gets `+weight x start factor` (0.25 in the first pass, **0 now**); the argmax is taken over the adjusted logits. Several
   partial matches are tracked at once; a match is dropped when the emitted token does not continue it or after
   8 frames (0.64 s) without a token (partial matches never carry across a window, see "Window boundaries").
   Greedy decoding cannot retroactively undo a committed prefix, so the
@@ -36,7 +36,7 @@ reference words (68 / 226 terms, an oracle dictionary); Riksdag debate (73 min, 
 Swedish surnames, full names and company names that do not occur in the reference; `false ins` counts
 occurrences of those terms in the output that the reference does not contain. Weight 0 is today's output.
 
-## Results (start factor 0.25, the shipped default of the prototype)
+## Results of the first pass (SUPERSEDED: oracle dictionary, start factor 0.25, measured before the scoring fix below)
 
 | Audio | Weight | Name recall | WER | | Unrelated dictionary: name recall | WER | false ins |
 |---|---|---|---|---|---|---|---|
@@ -80,98 +80,86 @@ is in "Review follow-up, e" below.
   target) were not measured because that needs new recorded audio; Windows on ARM (ONNX) is unit-tested and
   shares the algorithm but was not measured; one repeat per accuracy cell (decoding is deterministic).
 
-## Review follow-up (2026-10-02, second pass)
+## Review follow-up (2026-10-02/03): all numbers below describe the current head
 
-Independent review of the first pass (`docs/benchmarks/data/pianissimo-boosting-20261002/review-followup/`
-holds the scripts, `report3.out`, `boundary.out`, `latency.out`; dictionaries are regenerated from
-`mk.py` seeds). Same Core ML host, ANE, audio files only. Changes under test: top-64 candidates and scalar
-lengths in both hosts, blank-override gating (a start-of-term bonus may override blank only when its raw logit
-is within 4.0 of blank) and a 1-frame skip cap for a boosted token that replaced blank, trie cache. Start
-factor 0.25 unless a row says `sf0` (start factor 0: only continuations of a prefix the model itself emitted
-are boosted). Dictionaries use Swedish surnames and place names that do not occur in any reference
-(481 after filtering, public names only). WER is the README normalisation; "changed" is the number of words
-that differ from the same audio without a dictionary.
+Two review rounds. Round 2 found that both hosts skipped the model's own winner when applying bonuses (a
+dictionary token that was already winning got no bonus and could be displaced by a weaker dictionary start);
+every candidate is now scored by the same rules, and the default start factor is now **0** (only
+continuations of a prefix the model itself emitted are boosted; start-of-term bonus = weight x start factor,
+configurable with `SAGASCRIPT_BOOST_START_FACTOR`). All tables in this section were re-measured at that
+head (Core ML host, ANE, audio files only). Rows marked "sf 0.25" use the old default start factor with the
+scoring fix, to show what the factor costs; `data/.../review-followup/report3-pre-scoringfix.out` holds the
+round-1 numbers (scoring bug present, sf 0.25), which are superseded. Scripts and outputs:
+`docs/benchmarks/data/pianissimo-boosting-20261002/review-followup/` (dictionaries are regenerated from
+`mk.py` seeds). Dictionaries use Swedish surnames and place names that occur in no reference (481 after
+filtering, public names only). "Changed" = words that differ from the same audio without a dictionary.
+Other mechanics: top-64 candidates, blank-override gate (raw margin 4.0) and 1-frame skip cap, trie cache.
 
-### Ablation: unrelated dictionary (fix 2)
+### Ablation: unrelated 47-term dictionary, weight 5 (WER, words changed)
 
-The 47-term unrelated dictionary of the first pass, weight 5. "old" = blank-override gating off (margin 1000)
-and blank duration kept (cap 4), i.e. the first-pass behaviour.
+| Audio (baseline WER) | New default (sf 0) | sf 0.25 | sf 0.25, no blank gate, cap 4 |
+|---|---|---|---|
+| FLEURS 15 (6.62) | 6.68, 3 changed | 6.99, 15 | 6.99, 15 |
+| FLEURS 60 (7.06) | 7.07, 3 | 7.23, 43 | 7.23, 43 |
+| Riksdag (23.40) | 23.40, 2 | 23.37, 23 | 23.37, 23 |
 
-| Audio (baseline WER) | old | new default (margin 4, cap 1) | margin 0.5 | sf0 |
-|---|---|---|---|---|
-| FLEURS 15 (6.62) | 6.99, 12 changed | 6.99 | 7.06 | 6.68 |
-| FLEURS 60 (7.06) | 7.23, 48 changed | 7.23, 48 changed | 7.25, 46 | 7.07, 4 |
-| Riksdag (23.40) | 23.37, 24 changed | 23.37, 24 changed | 23.36, 21 | 23.40, 2 |
-
-**The gate and the duration cap do not remove the cost.** Output is identical with and without them at
-margin 4 (a 1.25 start bonus can only flip calls that are already within 1.25 logits, so a margin of 4 never
-binds) and a tighter margin of 0.5 or 0 does not help (7.06 on FLEURS 15 at margin 0). A 1-frame cap versus
-4 is also identical: boosted overrides of blank do not happen on frames where the duration head asks for a
-long skip. What produces the +0.2 to +0.4 is the start-of-term bonus itself: a handful of low-confidence words
-are pulled toward a dictionary prefix ("örter" to "öster", "sjönas" to "tusenskjönas") and a few neighbouring
-words change (digits versus words). With start factor 0 the same dictionary changes 4 of 6293 words.
-The unit test `a_boosted_token_that_overrides_blank_does_not_inherit_the_blanks_long_skip` and the shared
-vectors `blank_margin_*` cover the mechanism; they do not fix the accuracy cost.
+The blank-override gate and the duration cap change nothing (columns 3 and 4 are identical); what removes the
++0.2 to +0.4 WER rise of the first pass is the start factor 0. (A start bonus of weight x 0.25 = 1.25 can
+only flip calls within 1.25 logits, so a margin of 4 never binds.)
 
 ### (a) Realistic dictionary: about 5% names in the audio, 95% distractors
 
-FLEURS 60 min (6293 words, 272 name tokens): per dictionary, P names that occur in the audio plus distractors,
+FLEURS 60 min (6293 words, 272 name tokens): per dictionary P names that occur in the audio plus distractors,
 N = 100 (P = 5) or 400 (P = 20); 5 dictionaries (seeds) per size, totals over the 5 runs (same audio, so the
-baseline is counted 5 times). Riksdag (8553 words, 201 name tokens): the 20 speaker terms plus 380 distractors,
-5 seeds. "Target tokens" = occurrences in the reference of the dictionary's present names. "Other names" =
-all name tokens in the reference, so it includes collateral change on names not in the dictionary.
-"Distractor insertions" = occurrences of distractor tokens in the output beyond the reference.
+baseline is counted 5 times). Riksdag (8553 words, 201 name tokens): the 20 speaker terms plus 380
+distractors, 5 seeds. "Target tokens" = occurrences in the reference of the dictionary's present names;
+"all name tokens" includes collateral change on names not in the dictionary; "distractor insertions" =
+distractor tokens in the output beyond the reference.
 
-| Audio, N | Weight | Target tokens hit (base to boosted) | All name tokens hit (base to boosted, of) | Distractor insertions (base to boosted) | Mean WER delta | Changed words (5 runs) |
-|---|---|---|---|---|---|---|
-| FLEURS 60, 100 | 3 | 18/25 to 17/25 | 910 to 911 of 1360 | 0 to 0 | +0.10 | 185 |
-| FLEURS 60, 100 | 5 | 18/25 to 18/25 | 910 to 914 | 0 to 3 | +0.12 | 325 |
-| FLEURS 60, 100 | 5 sf0 | 18/25 to 20/25 | 910 to 902 | 0 to 1 | +0.03 | 46 |
-| FLEURS 60, 400 | 3 | 81/127 to 92/127 | 910 to 925 | 5 to 9 | +0.07 | 269 |
-| FLEURS 60, 400 | 5 | 81/127 to 90/127 | 910 to 915 | 5 to 21 | +0.18 | 463 |
-| FLEURS 60, 400 | 5 sf0 | 81/127 to 91/127 | 910 to 907 | 5 to 12 | +0.02 | 154 |
-| Riksdag, 400 | 3 | 150/190 to 190/190 | 935 to 975 of 1005 | 12 to 6 | -0.04 | 222 |
-| Riksdag, 400 | 5 | 150/190 to 185/190 | 935 to 970 | 12 to 3 | +0.04 | 410 |
-| Riksdag, 400 | 5 sf0 | 150/190 to 185/190 | 935 to 970 | 12 to 3 | -0.08 | 144 |
+| Audio, N | Weight | Start factor | Target tokens hit | All name tokens hit | Distractor insertions (base) | Mean WER delta | Changed (5 runs) |
+|---|---|---|---|---|---|---|---|
+| FLEURS 60, 100 | 3 | 0 | 18/25 to 18/25 | 910 to 910 of 1360 | 0 (0) | +0.01 | 14 |
+| FLEURS 60, 100 | 5 | 0 | 18/25 to 20/25 | 910 to 907 | 1 (0) | +0.02 | 38 |
+| FLEURS 60, 100 | 5 | 0.25 | 18/25 to 20/25 | 910 to 911 | 1 (0) | +0.12 | 264 |
+| FLEURS 60, 400 | 3 | 0 | 81/127 to 89/127 | 910 to 916 | 5 (5) | -0.02 | 58 |
+| FLEURS 60, 400 | 5 | 0 | 81/127 to 92/127 | 910 to 915 | 9 (5) | -0.04 | 113 |
+| FLEURS 60, 400 | 3 | 0.25 | 81/127 to 89/127 | 910 to 905 | 8 (5) | +0.13 | 198 |
+| FLEURS 60, 400 | 5 | 0.25 | 81/127 to 92/127 | 910 to 908 | 9 (5) | +0.12 | 324 |
+| Riksdag, 400 | 3 | 0 | 150/190 to 190/190 | 935 to 975 of 1005 | 6 (12) | -0.08 | 70 |
+| Riksdag, 400 | 5 | 0 | 150/190 to 190/190 | 935 to 975 | 3 (12) | -0.09 | 114 |
+| Riksdag, 400 | 3 | 0.25 | 150/190 to 190/190 | 935 to 975 | 6 (12) | -0.03 | 167 |
+| Riksdag, 400 | 5 | 0.25 | 150/190 to 190/190 | 935 to 975 | 6 (12) | +0.03 | 336 |
 
-With the 5%-present dictionaries the target-name gain is real but smaller than the oracle numbers:
-+9 to +11 of 127 target tokens at N = 400 (about +7 to +9 points), nothing measurable at N = 100 (25 target
-tokens in total, 5 runs, differences of 1 to 2 tokens). The start bonus adds distractor insertions and
-0.1 to 0.2 WER points; start factor 0 keeps the target gain and almost all of the stability, but loses
-a few names that the baseline got right (collateral -3 of 1360 at N = 400). Riksdag speaker names are close
-to ceiling (150 to 190 of 190 at weight 3).
+With a realistic dictionary at the new default the target gain is +8 to +11 of 127 FLEURS target tokens at
+N = 400 (about +6 to +9 points) and the WER does not rise (-0.04 to +0.02); at N = 100 the denominator is
+only 25 tokens in total (0 to +2 hits). Start factor 0.25 gives the same target gain with about 2.5 to 4 times more
+changed words and +0.12 WER. Riksdag speaker names reach 190/190.
 
 ### (c) Large dictionary, audio without those names
 
-No-names corpus: 79 distinct FLEURS sentences (909 s, 1647 words, 0 name tokens, no digits). Dictionary of
-500 terms (470 distractors plus 30 FLEURS names that are absent from this audio). FLEURS 60 and Riksdag with
-a 481-term distractor-only dictionary. "False ins" = dictionary-term occurrences beyond the reference;
-"changed" = words that differ from the no-dictionary output (of the ref words).
+No-names corpus: 79 distinct FLEURS sentences (909 s, 1647 words, 0 name tokens, no digits), 500-term
+dictionary (470 distractors plus 30 FLEURS names that are absent from this audio). FLEURS 60 and Riksdag with
+a 481-term distractor-only dictionary. "False ins" = dictionary-term occurrences beyond the reference.
 
-| Audio | Weight | WER (baseline) | False ins (baseline) | Changed words |
-|---|---|---|---|---|
-| No-names, 1647 words | 1 | 5.16 (4.98) | 0 (0) | 3 |
-| | 2 | 5.34 | 0 | 7 |
-| | 3 | 5.53 | 0 | 12 |
-| | 5 | 5.83 | 0 | 17 |
-| | 3 sf0 / 5 sf0 | 5.04 / 5.16 | 0 / 0 | 2 / 4 |
-| FLEURS 60, 6293 words | 1 | 7.10 (7.06) | 1 (1) | 8 |
-| | 2 | 7.09 | 1 | 27 |
-| | 3 | 7.17 | 2 | 50 |
-| | 5 | 7.26 | 5 | 85 |
-| | 3 sf0 / 5 sf0 | 7.12 / 7.12 | 1 / 3 | 11 / 24 |
-| Riksdag, 8553 words | 1 | 23.42 (23.40) | 4 (4) | 12 |
-| | 2 | 23.42 | 4 | 23 |
-| | 3 | 23.44 | 4 | 32 |
-| | 5 | 23.51 | 4 | 70 |
-| | 3 sf0 / 5 sf0 | 23.41 / 23.41 | 4 / 4 | 2 / 8 |
+| Audio | Weight | WER (baseline) | False ins (baseline) | Changed, sf 0 | Changed / WER, sf 0.25 |
+|---|---|---|---|---|---|
+| No-names, 1647 words | 1 | 4.98 (4.98) | 0 (0) | 0 | |
+| | 2 | 4.98 | 0 | 1 | |
+| | 3 | 5.04 | 0 | 2 | 11 / 5.53 |
+| | 5 | 5.16 | 0 | 4 | 16 / 5.83 |
+| FLEURS 60, 6293 words | 1 | 7.06 (7.06) | 1 (1) | 0 | |
+| | 2 | 7.07 | 1 | 3 | |
+| | 3 | 7.07 | 1 | 6 | 36 / 7.26 |
+| | 5 | 7.07 | 2 | 17 | 61 / 7.26 |
+| Riksdag, 8553 words | 1 | 23.40 (23.40) | 4 (4) | 0 | |
+| | 2 | 23.41 | 4 | 1 | |
+| | 3 | 23.41 | 4 | 2 | 28 / 23.45 |
+| | 5 | 23.41 | 4 | 8 | 61 / 23.55 |
 
-False insertions of dictionary terms stay at or near zero, but the dictionary still changes words: 12 of
-1647 (0.7%) at weight 3 and 17 (1.0%) at weight 5 on the no-names audio, WER +0.55 and +0.85 points there.
-The changed words are rare or out-of-vocabulary words pulled toward a prefix of a dictionary term, not
-inserted terms, so a term-insertion count alone understates the cost (the first pass reported only that
-count). With start factor 0 the damage drops to 2-4 words (+0.06 / +0.18). The four baseline false
-insertions on Riksdag are common words that are also surnames.
+At the new default a 500-term dictionary changes 0 to 4 of 1647 words (at most 0.24%) on audio without its
+names and no dictionary term is inserted (the 4 Riksdag baseline hits are common words that are also
+surnames); at weight 5 on FLEURS 60 two names recalled by the baseline are lost (180 vs 182 of 272). The old
+start factor changed 11 to 16 words there (0.7 to 1.0%, WER +0.55 / +0.85).
 
 ### (d) Names across window cuts
 
@@ -180,70 +168,58 @@ design; a name that straddles a cut is decoded whole in the neighbouring window 
 any name) and the existing token-overlap merge chooses between the two. 60 names (30 that the full-length
 baseline recognised, 30 that it missed) cut out of the FLEURS 60 audio in three positions: the name starts
 0.3 s before the end of window 1 ("cutA"), starts 0.3 s before the start of window 2 ("cutB"), or sits mid
-window ("mid"). All 60 names plus 100 distractors in the dictionary (oracle for these names).
+window. All 60 names plus 100 distractors in the dictionary (oracle for these names).
 
-| Names | Position | No dictionary | Weight 3 | Weight 5 | Weight 5 sf0 |
+| Names | Position | No dictionary | Weight 3 | Weight 5 | Weight 5, sf 0.25 |
 |---|---|---|---|---|---|
 | recognised in full context | cutA | 27/30 | 28/30 | 29/30 | 29/30 |
-| | cutB | 29/30 | 28/30 | 29/30 | 28/30 |
+| | cutB | 29/30 | 28/30 | 28/30 | 29/30 |
 | | mid | 30/30 | 30/30 | 30/30 | 30/30 |
-| missed in full context | cutA | 5/30 | 11/30 | 16/30 | 7/30 |
-| | cutB | 6/30 | 9/30 | 11/30 | 9/30 |
-| | mid | 4/30 | 11/30 | 14/30 | 7/30 |
+| missed in full context | cutA | 5/30 | 7/30 | 7/30 | 9/30 |
+| | cutB | 6/30 | 8/30 | 9/30 | 9/30 |
+| | mid | 4/30 | 8/30 | 8/30 | 10/30 |
 
-The gain at a cut matches the gain mid-window (no boundary penalty is visible; counts are small, +-3). The
-overlap merge did not need changes. Limitation: only the Core ML windowing (2 s overlap) was tested; the
-ONNX host uses a 6 s overlap and the same merge.
+The gain at a cut matches the gain mid-window (+2 to +3 at cuts, +4 mid, counts small, +-3); at sf 0 it is
+smaller than the old +11/+10 because start-of-term boosting is off. The overlap merge needed no change. Only
+the Core ML windowing was tested; the ONNX host uses a 6 s overlap and the same merge. The Swift
+end-of-audio flush now updates the bias state; only the shared state-machine vectors cover it (the decoder
+itself needs a Core ML model), the Rust decode loop has a scripted prefix-then-continuation test.
 
 ### (e) Dictation-length latency
 
-74 distinct FLEURS clips of 2-8 s (median 6.9 s), one warm host per run, weight 5, five alternating repeats
-of off / 100 terms / 500 terms; the first clip of each run is excluded from the statistics. Numbers are
-whole-CLI per-file milliseconds (WAV decode and resample, IPC, encoder, decoder, merge) and the host's own
-decode time.
+74 distinct FLEURS clips of 2-8 s (median 6.9 s), one warm host per run, weight 5, sf 0, five repeats of
+off / 100 terms / 500 terms in that order (the off run goes first each round, so a small order effect is
+possible); first clip of each run excluded. Whole-CLI per-file milliseconds.
 
 | | off | 100 terms | 500 terms |
 |---|---|---|---|
-| CLI per clip p50 / p95 (ms) | 67.2 / 79.2 | 66.0 / 77.4 | 65.9 / 77.3 |
-| Added vs off (paired, per-clip median of 5 repeats), p50 / p95 | | -1.5 / +1.4 | -1.5 / +1.2 |
-| Host decode_ms p50 / p95 | 22 / 28 | 18 / 25 | 19 / 24 |
-| First-use trie build (5 fresh hosts) | | 9.0-10.0 ms | 19.2-20.6 ms |
+| CLI per clip p50 / p95 (ms) | 71.6 / 77.0 | 65.0 / 76.0 | 64.7 / 74.7 |
+| Added vs off (paired, median of 5 repeats) p50 / p95 | | -2.7 / +3.3 | -2.8 / +3.1 |
+| Host decode_ms p50 / p95 | 21 / 27 | 18 / 23.4 | 18 / 23 |
+| First-use trie build (5 fresh hosts) | | 9.0-9.5 ms | 18.8-19.7 ms |
 
-Run-to-run noise on the same configuration is +-4.5 ms at p95 (off versus off), so the per-request added
-latency is not measurable (-1.5 ms p50, +1.4 ms p95). The trie is built once per loaded model and term list
-(9-10 ms for 100 terms, 19-21 ms for 500) and served from the cache for every later window and dictation, so
-the 500-term first dictation pays about 20 ms once. The ONNX host (CPU, per-frame top-64 selection over about
-8k logits) was not timed.
+Noise on the same configuration is +-9.7 ms (off vs off, abs p95), so no per-request cost is measurable. The
+trie is built once per loaded model and term list and served from the cache afterwards. The ONNX host (CPU,
+per-frame top-64 selection over about 8k logits) was not timed.
 
 ## Recommendation
 
-Still viable as an opt-in per-profile setting (Pianissimo only; never default-on), now with the cost
-side measured: a realistic dictionary (5% of the terms occur in the audio, 95% do not) gains about +7 to +9
-points of target-name recall and +4 to +16 distractor insertions per 5 x 6293 words, and every dictionary
-changes 0.4% to 0.8% of the words at weight 3 (up to 1.4% at weight 5) of audio that has none of its names
-(WER +0.04 to +0.55 at weight 3, up to +0.85 at weight 5). The
-oracle-dictionary numbers above overstate real use. Concretely:
-
-- Default weight **3**, not 5; keep the dictionary under about 200 terms in the UI (the 400-term runs are the
-  stress case); automatically off with an empty dictionary.
-- Start factor: 0.25 recovers the most names on an oracle dictionary, **0** (continuations only) gives nearly
-  the same gain with a realistic dictionary and 3 to 9 times fewer changed words. Prefer 0 as the shipped
-  default until unseen-name audio says otherwise; the env override `SAGASCRIPT_BOOST_START_FACTOR` and
-  the vectors make the choice a one-line change.
-- Blank-override gate and duration cap stay (cheap, tested, no downside measured) but are not an accuracy lever.
-- Add a visible "biasing not applied" state: hosts report `boost_active`; the CLI warns when a host ignores
-  the dictionary, the app must do the same.
-
-Acceptance mapping for #298:
+Viable as an opt-in per-profile setting (Pianissimo only; never default-on) at **weight 3-5 with start
+factor 0 (now the default)**. With a realistic dictionary (5% of terms in the audio) it recovers +8 to +11 of
+127 target name tokens (FLEURS) and all Riksdag speaker names with no WER cost, and on audio without those
+names it changes at most 4 of 1647 words. Keep the dictionary under about 200 terms in the UI (400 is the
+stress case), turn it off automatically when empty, and surface "biasing not applied" (hosts report
+`boost_active` / `boost_reason`; the CLI warns). Start factor 0.25 recovers no extra names in these sets and
+costs 2.5 to 4 times the changed words, so it is not recommended. Blank gate and duration cap are cheap and
+tested but not an accuracy lever.
 
 | Criterion | Status |
 |---|---|
-| +15 pp on unseen names with WER within +0.3 on FLEURS long-form | Not met on realistic dictionaries: +7 to +9 pp on present names, WER +0.02 to +0.18 (sf0 / sf 0.25, w5); unseen-name audio still to be recorded |
-| No dictionary: identical output | By construction (no top-k backing / no trie); covered by tests and by `hello`/result fields being omitted |
+| +15 pp on unseen names with WER within +0.3 on FLEURS long-form | Not shown: +6 to +9 pp on present names with realistic dictionaries, WER -0.04 to +0.02; unseen-name audio still to be recorded |
+| No dictionary: identical output | By construction; covered by tests and omitted protocol fields |
 | Core ML and ONNX hosts, CLI parity | Shared vectors pass in both hosts; ONNX not measured end to end |
 | Latency budget (<= 200 terms, ~100 ms) | Met on Core ML: no measurable per-request cost, 9-20 ms one-off trie build; ONNX pending |
 
-Still open: held-out unseen and mispronounced names; ONNX host measured end to end on Windows on ARM; alias
-entries versus boosting for homophone spellings; settings toggle and meeting-view wiring (phase 2);
-confidence intervals (all cells are single deterministic runs on one corpus; the 5-seed rows vary only the
-dictionary).
+Still open: unseen and mispronounced names; ONNX host end to end (Windows on ARM); alias entries versus
+boosting for homophone spellings; settings toggle and meeting-view wiring (phase 2); confidence intervals
+(single deterministic runs on one corpus; the 5-seed rows vary only the dictionary).

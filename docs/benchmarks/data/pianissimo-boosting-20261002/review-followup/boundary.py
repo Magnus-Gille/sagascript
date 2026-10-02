@@ -6,7 +6,7 @@ def load(l):
     j=json.load(open(f'runs2/{l}.json'))
     return {os.path.basename(i['source']):i['result']['text'] for i in j}
 res={}
-for lab in ['b-w0','b-w3','b-w5','b-w5-sf0']:
+for lab in ['b-w0','b-w3','b-w5','b-w5-sf25']:
     h=load(lab); c=collections.Counter()
     for m in man:
         key=(m['kind'],m['variant']); toks=norm(h[os.path.basename(m['path'])]).split()

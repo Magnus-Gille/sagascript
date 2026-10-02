@@ -1,15 +1,15 @@
 clips 74 dur median 6.93
-total off p50/p95 67.2 79.2
-  N100 abs p50/p95 66.0 77.4 | added p50 -1.5 p95 1.4 max 2.2
-  N500 abs p50/p95 65.9 77.3 | added p50 -1.5 p95 1.2 max 2.5
-rt off p50/p95 56.0 64.0
-  N100 abs p50/p95 53.0 59.4 | added p50 -3.0 p95 -1.0 max 0
-  N500 abs p50/p95 53.0 59.4 | added p50 -3.0 p95 -1.0 max 0
-dec off p50/p95 22.0 28.0
-  N100 abs p50/p95 18.0 25.0 | added p50 -3.0 p95 -2.0 max -2
-  N500 abs p50/p95 19.0 24.0 | added p50 -3.0 p95 -2.0 max -1
-noise off-vs-off total diff p50/p95/abs95 -2.0 4.5 11.8
-N100 cold trie build us [9344, 9543, 10034, 9194, 9030] later windows with a build: 0
-N500 cold trie build us [19804, 19588, 19660, 19211, 20622] later windows with a build: 0
-changed clips N100 10 / 74
-changed clips N500 16 / 74
+total off p50/p95 71.6 77.0
+  N100 abs p50/p95 65.0 76.0 | added p50 -2.7 p95 3.3 max 5.3
+  N500 abs p50/p95 64.7 74.7 | added p50 -2.8 p95 3.1 max 4.4
+rt off p50/p95 55.0 61.4
+  N100 abs p50/p95 52.0 58.0 | added p50 -3.0 p95 -0.6 max 2
+  N500 abs p50/p95 52.0 58.0 | added p50 -3.0 p95 -0.6 max 0
+dec off p50/p95 21.0 27.0
+  N100 abs p50/p95 18.0 23.4 | added p50 -3.0 p95 -2.0 max -2
+  N500 abs p50/p95 18.0 23.0 | added p50 -3.0 p95 -2.0 max -2
+noise off-vs-off total diff p50/p95/abs95 -1.0 8.8 9.7
+N100 cold trie build us [9252, 9540, 9018, 9079, 9083] later windows with a build: 0
+N500 cold trie build us [18798, 19411, 19325, 19693, 18980] later windows with a build: 0
+changed clips N100 0 / 74
+changed clips N500 4 / 74
