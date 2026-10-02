@@ -17,10 +17,30 @@ const MAX_FILES: u32 = 5;
 static GLOBAL_SINK: OnceLock<(String, PathBuf)> = OnceLock::new();
 static GLOBAL_DICTATION: Mutex<Option<String>> = Mutex::new(None);
 
+/// Whether an entry at `level` should be written. `debug`/`trace` entries are
+/// dropped unless `RUST_LOG` (read once) mentions `debug` or `trace`.
+fn level_enabled(level: &str) -> bool {
+    static VERBOSE: OnceLock<bool> = OnceLock::new();
+    let verbose = *VERBOSE.get_or_init(|| {
+        std::env::var("RUST_LOG")
+            .map(|v| verbose_filter(&v))
+            .unwrap_or(false)
+    });
+    verbose || !matches!(level, "debug" | "trace")
+}
+
+fn verbose_filter(filter: &str) -> bool {
+    let f = filter.to_ascii_lowercase();
+    f.contains("debug") || f.contains("trace")
+}
+
 /// Append one entry to the shared app log without touching the controller.
 /// Opens the file per call (events are rare) so rotation by the main service
 /// is always respected. A missing sink (not yet constructed) drops the entry.
 pub fn log_global(level: &'static str, category: &'static str, event: &str, data: serde_json::Value) {
+    if !level_enabled(level) {
+        return;
+    }
     let Some((app_session, path)) = GLOBAL_SINK.get() else {
         return;
     };
@@ -171,6 +191,9 @@ impl LoggingService {
         event: &str,
         data: serde_json::Value,
     ) {
+        if !level_enabled(level) {
+            return;
+        }
         let entry = LogEntry {
             ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             level,

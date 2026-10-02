@@ -74,6 +74,7 @@
   } from "./dictation-ui-state";
   import {
     canUseBareHotkey,
+    brightnessKeyHotkeyWarning,
     formatHotkeyDisplay as formatShortcutDisplay,
     supportedBareFunctionKeyRange,
     tauriKeyName,
@@ -1209,6 +1210,20 @@
     return false;
   }
 
+  // Non-blocking hint when a configured shortcut is bare F14/F15 on macOS.
+  let brightnessKeyWarning = $derived.by(() => {
+    if (!settings) return null;
+    const shortcuts = [
+      settings.hotkey,
+      ...allProfileShortcutValues(settings.hotkey_profiles, settings.hotkey_mode),
+    ];
+    for (const shortcut of shortcuts) {
+      const warning = brightnessKeyHotkeyWarning(shortcut, platform);
+      if (warning) return warning;
+    }
+    return null;
+  });
+
   function configuredShortcutsUseBareHotkey(): boolean {
     // Only bare F13–F24 registrations depend on the macOS Accessibility
     // grant, so only those benefit from an automatic retry on Settings
@@ -2029,6 +2044,9 @@
             <div class="hotkey-error">
               ⚠ Not registered{hotkeyStatusError ? `: ${hotkeyStatusError}` : ""}{#if platform === "macos"} — check Accessibility permission or whether another app uses this shortcut.{:else} — this shortcut may already be in use by another app. Try a different combination.{/if}
             </div>
+          {/if}
+          {#if brightnessKeyWarning}
+            <div class="hotkey-error" role="status">⚠ {brightnessKeyWarning}</div>
           {/if}
           <div class="hotkey-hint">
             Each shortcut above is independent and either or both may be configured. Use a modifier ({modifierNames().meta}, {modifierNames().ctrl}, {modifierNames().alt}, Shift) + key{#if supportedBareFunctionKeyRange(platform)}, or {supportedBareFunctionKeyRange(platform)} by itself{/if}.{#if platform === "macos"}{" "}Bare F13–F24 requires Accessibility permission: macOS sends keyboard events to Sagascript, which immediately ignores everything except bare F13–F24 and never stores or sends them.{/if}

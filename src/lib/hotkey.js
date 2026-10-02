@@ -77,6 +77,20 @@ export function supportedBareFunctionKeyRange(platform) {
 }
 
 /**
+ * macOS maps bare F14/F15 to the screen-brightness keys, so they usually never
+ * reach the app. Returns a hint for such a shortcut, otherwise null.
+ *
+ * @param {string} shortcut
+ * @param {string | null | undefined} platform
+ * @returns {string | null}
+ */
+export function brightnessKeyHotkeyWarning(shortcut, platform) {
+  if (platform !== "macos") return null;
+  if (!/^F1[45]$/i.test(shortcut.trim())) return null;
+  return "F14 and F15 control screen brightness on Macs and usually don't reach Sagascript. F13 and F16–F19 work.";
+}
+
+/**
  * Human-readable label for keys whose Tauri name is not what is printed on
  * the keycap. On Apple ISO keyboards the section key is labelled `§`.
  *

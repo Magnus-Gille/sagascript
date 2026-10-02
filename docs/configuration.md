@@ -119,6 +119,13 @@ when comparing a Bluetooth headset microphone with the Mac microphone.
 The new performance events contain timings, sample counts, sample rate, and
 decoder settings, but no audio, transcript text, or device names.
 
+Focus and paste-target diagnostics (hotkey, overlay, activation steps, allowed
+paste checks, startup events) are logged at debug level. They appear in
+`~/Library/Logs/Sagascript/sagascript.log` only when `RUST_LOG` contains
+`debug`, for example `RUST_LOG=debug`. Any `RUST_LOG` value containing `debug`
+(or `trace`) enables all debug entries in the app log. Paste rejections, focus
+restore attempts, copy fallbacks, and withdrawn launch activations stay at info.
+
 - `capture_stopped` reports `captureRequestToStreamPlayReturnMs` and
   `captureRequestToFirstAudioCallbackMs`. These start at the capture request,
   not the shortcut event; they separate stream setup from first-buffer delivery.
