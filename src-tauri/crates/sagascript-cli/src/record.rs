@@ -273,6 +273,13 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     // Stop and join BOTH paths before propagating either error, so a microphone
     // failure cannot leave the system recorder (and its spool file) behind.
     let mic_result = if source.needs_mic() { Some(capture.stop_capture()) } else { None };
+    if source.needs_mic() && capture.was_truncated() {
+        // Reported whatever the stop reason (duration, limit or Ctrl+C).
+        eprintln!(
+            "Warning: the microphone buffer limit ({} minutes) was reached and later microphone audio was discarded.",
+            sagascript_core::audio::capture::MAX_BUFFER_SECONDS / 60
+        );
+    }
     let system_result = system.map(|(recorder, started)| {
         let offset_ms = started.duration_since(mic_requested).as_millis() as u64;
         (recorder.stop(), offset_ms)

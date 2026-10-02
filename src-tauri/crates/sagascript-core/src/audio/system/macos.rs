@@ -6,6 +6,8 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject};
@@ -342,39 +344,44 @@ fn list_processes() -> Result<Vec<ProcInfo>, OSStatus> {
 
 /// Sum the channels of the buffers in raw `AudioBufferList` bytes (as returned
 /// for kAudioDevicePropertyStreamConfiguration). Reads fields from the byte slice
-/// only, so a zero-buffer reply (8 bytes, smaller than the Rust struct) and
-/// truncated replies are handled without forming any out-of-bounds reference.
-fn parse_input_channels(bytes: &[u8]) -> u32 {
+/// only, so a zero-buffer reply (smaller than the Rust struct) is handled without
+/// forming any out-of-bounds reference. A reply without a complete header, or cut
+/// off before its declared buffers, is an error: it must never be mistaken for an
+/// output-only device.
+fn parse_input_channels(bytes: &[u8]) -> Result<u32, String> {
     let first = std::mem::offset_of!(AudioBufferList, buffers);
     let stride = std::mem::size_of::<AudioBuffer>();
-    let Some(count) = bytes.get(..4).map(|b| u32::from_ne_bytes(b.try_into().unwrap())) else {
-        return 0;
-    };
+    let count = bytes
+        .get(..4)
+        .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+        .ok_or_else(|| format!("stream configuration reply too short ({} bytes)", bytes.len()))?;
     let mut total = 0u32;
     for i in 0..count as usize {
         let at = first + i * stride;
-        let Some(ch) = bytes.get(at..at + 4) else { break }; // truncated: ignore the rest
+        let ch = bytes.get(at..at + 4).ok_or_else(|| {
+            format!("stream configuration truncated: {count} buffers declared, reply is {} bytes", bytes.len())
+        })?;
         total = total.saturating_add(u32::from_ne_bytes(ch.try_into().unwrap()));
     }
-    total
+    Ok(total)
 }
 
 /// Total input channels a device exposes (0 for an output-only device).
-fn input_channel_count(dev: AudioObjectID) -> Result<u32, OSStatus> {
+fn input_channel_count(dev: AudioObjectID) -> Result<u32, String> {
     let addr = PropertyAddress { selector: PROP_STREAM_CONFIGURATION, scope: SCOPE_INPUT, element: ELEMENT_MAIN };
     let mut size = 0u32;
     // SAFETY: standard size-then-data property read.
     let st = unsafe { AudioObjectGetPropertyDataSize(dev, &addr, 0, ptr::null(), &mut size) };
     if st != 0 {
-        return Err(st);
+        return Err(format!("OSStatus {st}"));
     }
     let mut raw = vec![0u8; size as usize];
     let st = unsafe { AudioObjectGetPropertyData(dev, &addr, 0, ptr::null(), &mut size, raw.as_mut_ptr().cast()) };
     if st != 0 {
-        return Err(st);
+        return Err(format!("OSStatus {st}"));
     }
     raw.truncate(size as usize);
-    Ok(parse_input_channels(&raw))
+    parse_input_channels(&raw)
 }
 
 /// Pick the tap's audio out of an IOProc input list, or `None` when the list
@@ -419,7 +426,12 @@ input could end up in the system-audio track. Select an output-only device in Sy
 (the built-in speakers, or wired headphones on the headphone jack), then try again.";
 
 struct IoContext {
-    sink: ChunkSink,
+    /// Set first thing in teardown; the IOProc checks it before touching anything.
+    closed: AtomicBool,
+    /// Taken (dropped) at teardown so the spool worker sees the channel close.
+    /// The context is leaked, not freed, when Core Audio cannot confirm that the
+    /// IOProc is unregistered, so a late callback only ever sees `closed`.
+    sink: Mutex<Option<ChunkSink>>,
     non_interleaved: bool,
     tap_channels: u32,
 }
@@ -436,9 +448,13 @@ extern "C" fn io_proc(
     if input.is_null() || client.is_null() {
         return 0;
     }
-    // SAFETY: client is the IoContext leaked in `start` and alive until after
-    // AudioDeviceStop; Core Audio calls the IOProc from one thread at a time.
-    let ctx = unsafe { &mut *(client as *mut IoContext) };
+    // SAFETY: client is the IoContext created in `start`. It is freed only after
+    // AudioDeviceStop and AudioDeviceDestroyIOProcID both reported success;
+    // otherwise it is leaked on purpose, so this reference stays valid.
+    let ctx = unsafe { &*(client as *const IoContext) };
+    if ctx.closed.load(Ordering::Acquire) {
+        return 0;
+    }
     let list = unsafe { &*input };
     let count = list.number_buffers as usize;
     // SAFETY: the buffer array holds `count` entries.
@@ -454,7 +470,9 @@ extern "C" fn io_proc(
     let views: Vec<(u32, &[f32])> = bufs.iter().map(view).collect();
     // Anything that is not exactly the tap's shape is dropped (silence is gap-filled).
     if let Some(chunk) = select_tap_audio(&views, ctx.tap_channels, ctx.non_interleaved) {
-        (ctx.sink)(&chunk);
+        if let Some(sink) = ctx.sink.lock().unwrap().as_mut() {
+            sink(&chunk);
+        }
     }
     0
 }
@@ -469,7 +487,8 @@ pub(super) struct Capture {
 }
 
 // SAFETY: the raw pointers are only used from start/stop on the owning thread
-// and by Core Audio's IO thread, which stop() joins via AudioDeviceStop.
+// and by Core Audio's IO thread, which only touches the shared, synchronised
+// IoContext (atomic `closed` flag and a Mutex).
 unsafe impl Send for Capture {}
 
 impl Capture {
@@ -559,9 +578,12 @@ impl Capture {
                 cleanup_tap(tap);
                 return Err(DictationError::AudioCaptureError(DUPLEX_OUTPUT_MESSAGE.into()));
             }
-            Err(s) => {
+            Err(e) => {
+                // Unknown input configuration is never treated as output-only.
                 cleanup_tap(tap);
-                return Err(capture_err("Inspecting the default output device failed", s));
+                return Err(DictationError::AudioCaptureError(format!(
+                    "Could not determine whether the output device has microphone inputs ({e}); refusing to capture."
+                )));
             }
         }
 
@@ -594,7 +616,8 @@ impl Capture {
         }
 
         let ctx = Box::into_raw(Box::new(IoContext {
-            sink,
+            closed: AtomicBool::new(false),
+            sink: Mutex::new(Some(sink)),
             non_interleaved: format.format_flags & FLAG_NON_INTERLEAVED != 0,
             tap_channels: format.channels_per_frame,
         }));
@@ -603,11 +626,12 @@ impl Capture {
         let started = if status == 0 { unsafe { AudioDeviceStart(aggregate, proc_id) } } else { status };
         if started != 0 {
             unsafe {
-                if status == 0 {
-                    AudioDeviceDestroyIOProcID(aggregate, proc_id);
-                }
+                (*ctx).closed.store(true, Ordering::Release);
+                let unregistered = status != 0 || AudioDeviceDestroyIOProcID(aggregate, proc_id) == 0;
                 AudioHardwareDestroyAggregateDevice(aggregate);
-                drop(Box::from_raw(ctx));
+                if unregistered {
+                    drop(Box::from_raw(ctx));
+                } // else: leak deliberately; the inert context stays valid for a late callback
             }
             cleanup_tap(tap);
             return Err(capture_err("Starting the tap failed", started));
@@ -616,30 +640,49 @@ impl Capture {
     }
 
     pub(super) fn stop(mut self) -> Result<(), DictationError> {
-        self.teardown();
-        Ok(())
+        match self.teardown() {
+            Some((what, status)) => Err(capture_err(what, status)),
+            None => Ok(()),
+        }
     }
 
-    fn teardown(&mut self) {
+    /// Run every cleanup step; returns the first failing step and its status.
+    fn teardown(&mut self) -> Option<(&'static str, OSStatus)> {
         if self.stopped {
-            return;
+            return None;
         }
         self.stopped = true;
-        // SAFETY: reverse order of creation; AudioDeviceStop returns only after
-        // the IOProc has finished, so freeing the context afterwards is sound.
+        let mut first: Option<(&'static str, OSStatus)> = None;
+        let mut note = |what: &'static str, st: OSStatus| {
+            if st != 0 && first.is_none() {
+                first = Some((what, st));
+            }
+        };
+        // SAFETY: reverse order of creation. The SDK headers do not promise that
+        // AudioDeviceStop waits for a running IOProc, so the context is made
+        // inert first and is freed only if Stop and DestroyIOProcID both succeed.
         unsafe {
-            AudioDeviceStop(self.aggregate, self.proc_id);
-            AudioDeviceDestroyIOProcID(self.aggregate, self.proc_id);
-            AudioHardwareDestroyAggregateDevice(self.aggregate);
-            (self.destroy_tap)(self.tap);
-            drop(Box::from_raw(self.ctx));
+            (*self.ctx).closed.store(true, Ordering::Release);
+            let stop = AudioDeviceStop(self.aggregate, self.proc_id);
+            note("Stopping the tap failed", stop);
+            let unregister = AudioDeviceDestroyIOProcID(self.aggregate, self.proc_id);
+            note("Unregistering the IOProc failed", unregister);
+            note("Destroying the aggregate device failed", AudioHardwareDestroyAggregateDevice(self.aggregate));
+            note("Destroying the tap failed", (self.destroy_tap)(self.tap));
+            // Drop the sink (and with it the channel sender) so the spool worker
+            // can finish and delete its file even if the context must be leaked.
+            drop((*self.ctx).sink.lock().unwrap().take());
+            if stop == 0 && unregister == 0 {
+                drop(Box::from_raw(self.ctx));
+            } // else: leak the small inert context; a late callback only sees `closed`
         }
+        first
     }
 }
 
 impl Drop for Capture {
     fn drop(&mut self) {
-        self.teardown();
+        let _ = self.teardown();
     }
 }
 
@@ -657,17 +700,18 @@ mod tests {
 
     #[test]
     fn input_channel_parsing_handles_empty_short_and_truncated_lists() {
-        assert_eq!(parse_input_channels(&[]), 0);
-        assert_eq!(parse_input_channels(&[1, 0]), 0);
-        assert_eq!(parse_input_channels(&buffer_list_bytes(&[], 0)), 0); // output-only: 8 bytes
-        assert_eq!(parse_input_channels(&buffer_list_bytes(&[2], 1)), 2);
-        assert_eq!(parse_input_channels(&buffer_list_bytes(&[1, 2], 2)), 3);
-        // declares 3 buffers but only 1 is present: count what is there
-        assert_eq!(parse_input_channels(&buffer_list_bytes(&[2], 3)), 2);
-        // a buffer cut off mid-header contributes nothing
+        assert!(parse_input_channels(&[]).is_err());
+        assert!(parse_input_channels(&[1, 0]).is_err()); // header cut off
+        assert_eq!(parse_input_channels(&0u32.to_ne_bytes()), Ok(0)); // complete zero-buffer reply
+        assert_eq!(parse_input_channels(&buffer_list_bytes(&[], 0)), Ok(0)); // output-only
+        assert_eq!(parse_input_channels(&buffer_list_bytes(&[2], 1)), Ok(2));
+        assert_eq!(parse_input_channels(&buffer_list_bytes(&[1, 2], 2)), Ok(3));
+        // declares 3 buffers but only 1 is present: error, not "2 channels"
+        assert!(parse_input_channels(&buffer_list_bytes(&[2], 3)).is_err());
+        // a buffer cut off mid-header
         let mut cut = buffer_list_bytes(&[2], 1);
         cut.truncate(10);
-        assert_eq!(parse_input_channels(&cut), 0);
+        assert!(parse_input_channels(&cut).is_err());
     }
 
     #[test]

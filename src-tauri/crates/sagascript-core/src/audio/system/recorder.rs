@@ -271,17 +271,43 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = mpsc::channel();
         tx.send(vec![0.5f32; 1_600]).unwrap();
-        drop(tx);
         let path = dir.path().to_path_buf();
         let worker = thread::spawn(move || {
             spool_worker(rx, NativeFormat { sample_rate: 16_000, channels: 1 }, Instant::now(), &path)
         });
-        // The backend reported a capture failure at stop.
-        let result = finish(Err(DictationError::AudioCaptureError("device lost".into())), worker);
-        let msg = result.unwrap_err().to_string();
+        // Deterministic precondition: the worker is alive (the sender is still
+        // open) and its spool file exists on disk.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while fs::read_dir(dir.path()).unwrap().count() == 0 {
+            assert!(Instant::now() < deadline, "spool never appeared");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!worker.is_finished(), "worker must still be running before finish()");
+        drop(tx); // what the backend's stop does: closes the sink so the worker can end
+        let msg = finish(Err(DictationError::AudioCaptureError("device lost".into())), worker)
+            .unwrap_err()
+            .to_string();
         assert!(msg.contains("device lost"), "{msg}");
-        // The worker was joined before returning, so its spool is already deleted.
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0, "spool must be deleted");
+    }
+
+    #[test]
+    fn worker_error_and_panic_are_reported() {
+        let ok = || Ok(());
+        let w = thread::spawn(|| Err::<SystemTrack, String>("disk full".into()));
+        let msg = finish(ok(), w).unwrap_err().to_string();
+        assert!(msg.contains("disk full"), "{msg}");
+
+        let w = thread::spawn(|| -> Result<SystemTrack, String> { panic!("boom") });
+        let msg = finish(ok(), w).unwrap_err().to_string();
+        assert!(msg.contains("panicked"), "{msg}");
+
+        // The capture error is the first error and wins over a worker panic.
+        let w = thread::spawn(|| -> Result<SystemTrack, String> { panic!("boom") });
+        let msg = finish(Err(DictationError::AudioCaptureError("device lost".into())), w)
+            .unwrap_err()
+            .to_string();
+        assert!(msg.contains("device lost"), "{msg}");
     }
 
     #[test]
