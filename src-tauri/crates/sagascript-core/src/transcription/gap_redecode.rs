@@ -176,6 +176,21 @@ pub fn redecode_uncovered_speech<F>(
     audio: &[f32],
     segments: Vec<TranscriptSegment>,
     limits: &RedecodeLimits,
+    decode: F,
+) -> Vec<TranscriptSegment>
+where
+    F: FnMut(&[f32]) -> Result<Vec<TranscriptSegment>, DictationError>,
+{
+    redecode_uncovered_speech_cancellable(audio, segments, limits, &|| false, decode)
+}
+
+/// [`redecode_uncovered_speech`] that stops before each slice once `cancelled`
+/// returns true (the caller then discards the partial result).
+pub fn redecode_uncovered_speech_cancellable<F>(
+    audio: &[f32],
+    segments: Vec<TranscriptSegment>,
+    limits: &RedecodeLimits,
+    cancelled: &dyn Fn() -> bool,
     mut decode: F,
 ) -> Vec<TranscriptSegment>
 where
@@ -199,6 +214,9 @@ where
 
     let mut additions = Vec::new();
     for span in selected {
+        if cancelled() {
+            break;
+        }
         let from = ((span.start * SAMPLE_RATE_HZ) as usize).min(audio.len());
         let to = ((span.end * SAMPLE_RATE_HZ).ceil() as usize).min(audio.len());
         if to <= from {
@@ -294,6 +312,27 @@ mod tests {
         assert_eq!(merged[1].start, 10.0);
         assert_eq!(merged[2].end, 50.0);
         assert!(analyze_coverage(&samples, &merged).warnings.is_empty());
+    }
+
+    #[test]
+    fn cancel_between_slices_skips_the_remaining_slices() {
+        // Two separate dense-speech gaps: 10-30s and 40-60s.
+        let samples = audio(70, &[(0, 10), (10, 30), (40, 60), (60, 70)]);
+        let initial = vec![seg(0.0, 10.0, "a"), seg(30.0, 40.0, "b"), seg(60.0, 70.0, "c")];
+        let cancel = std::cell::Cell::new(false);
+        let mut calls = 0;
+        let _ = redecode_uncovered_speech_cancellable(
+            &samples,
+            initial,
+            &limits(samples.len()),
+            &|| cancel.get(),
+            |_| {
+                calls += 1;
+                cancel.set(true); // Ctrl-C lands after the first slice
+                Ok(vec![])
+            },
+        );
+        assert_eq!(calls, 1, "the second slice must not run after cancel");
     }
 
     #[test]

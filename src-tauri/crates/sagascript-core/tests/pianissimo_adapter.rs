@@ -127,11 +127,11 @@ fn cancelling_a_file_job_sends_the_protocol_cancel_and_the_next_job_works() {
         lines.lines().any(|line| line.starts_with("cancel ")),
         "the host must receive a protocol cancel, got:\n{lines}"
     );
-    // The engine is free for the next job: same host, no respawn.
+    // The engine is free for the next job: same backend and client, no respawn.
     assert!(backend.client().snapshot().running, "host must survive a cancel");
-    let quick = client(&[("FAKE_WINDOW_S", "30")], tmp.path());
-    let next = PianissimoBackend::with_client(quick).transcribe(&ramp(5), |_| {});
+    let next = backend.transcribe(&ramp(5), |_| {});
     assert!(next.is_ok(), "{next:?}");
+    assert_eq!(spawn_count(&log), 1, "the same host must serve the next job");
 }
 
 #[test]

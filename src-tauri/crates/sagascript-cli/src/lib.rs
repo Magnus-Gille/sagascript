@@ -234,7 +234,8 @@ With more than one input, --json emits an array and --jsonl emits one compact \
 results, but the command exits non-zero after the batch; --fail-fast stops early.
 
 Ctrl-C (or SIGTERM) cancels the run cleanly: decoding stops promptly, the engine \
-host is shut down, the command prints \"Cancelled\" and exits with status 130. \
+host is shut down, the command prints \"Cancelled\" and exits with status 130 \
+(143 for SIGTERM); --progress-json emits a final \"cancelled\" phase. \
 A batch is cancelled as a whole and the interrupted file's partial result is \
 discarded. A second Ctrl-C force-quits.
 
@@ -621,7 +622,7 @@ pub fn run(cli: Cli) {
     // error the aborted work produced; report it as a cancellation, not a failure.
     if cancel::is_cancelled() {
         eprintln!("Cancelled");
-        std::process::exit(cancel::EXIT_CANCELLED);
+        std::process::exit(cancel::exit_code());
     }
 
     if let Err(e) = result {

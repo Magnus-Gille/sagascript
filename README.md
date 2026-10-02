@@ -305,7 +305,8 @@ existing object shape.
 Press Ctrl-C (or send SIGTERM) to cancel a running `transcribe`. Whisper
 decoding (including parallel chunks and the gap re-decode pass) and Pianissimo
 requests stop within about a second, the engine host is shut down, and the
-command prints `Cancelled` and exits with status 130. Cancelling a batch stops
+command prints `Cancelled` and exits with status 130 (143 for SIGTERM). With
+`--progress-json` a final `phase: "cancelled"` progress event is emitted. Cancelling a batch stops
 all remaining files and discards the interrupted file's partial result; results
 already printed stay printed, and no transcript is written for the cancelled
 file. A second Ctrl-C force-quits immediately. The next run starts normally.

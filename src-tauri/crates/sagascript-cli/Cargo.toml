@@ -33,6 +33,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # transcription (#234); always on, including the lean batch build.
 ctrlc = { version = "3", features = ["termination"] }
 
+[target.'cfg(unix)'.dependencies]
+# Distinguishes SIGINT (exit 130) from SIGTERM (exit 143) for cancelled transcription.
+signal-hook = "0.3"
+
 [features]
 # `diarization` is default-on for discoverability (#81): a default build must
 # show `--diarize` in --help, or users never learn it exists (#75). It adds

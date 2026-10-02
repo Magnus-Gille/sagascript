@@ -713,6 +713,16 @@ fn validate_meeting_input_scope(
 
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     crate::cancel::install();
+    let progress_json = args.progress_json;
+    let started = Instant::now();
+    let result = run_inner(args);
+    if crate::cancel::is_cancelled() {
+        emit_progress(progress_json, started, "cancelled", None);
+    }
+    result
+}
+
+fn run_inner(args: TranscribeArgs) -> Result<(), DictationError> {
     let stored = sagascript_core::settings::store::load();
     let profile = match args.profile.as_deref() {
         Some(id) => resolve_profile(&stored, id)?,
@@ -813,7 +823,7 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     let backend = std::sync::Arc::new(WhisperBackend::new());
     let _abort_whisper = {
         let backend = backend.clone();
-        crate::cancel::register(move || backend.request_abort())
+        crate::cancel::register(move || backend.request_cancel())
     };
     let mut model_loaded = false;
 
@@ -1758,11 +1768,6 @@ fn transcribe_file(
     emit_progress(args.progress_json, file_started, "preparing", None);
     let progress_json = args.progress_json;
     let on_encode_start = || {
-        // Taking the warm-state lock clears older abort requests, so a Ctrl-C
-        // that landed before this point is re-asserted here.
-        if crate::cancel::is_cancelled() {
-            backend.request_abort();
-        }
         eprintln!("Encoding audio...");
         emit_progress(progress_json, file_started, "encoding", None);
     };
