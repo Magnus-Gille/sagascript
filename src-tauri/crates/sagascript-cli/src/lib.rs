@@ -12,6 +12,7 @@ pub mod meeting_proposal;
 pub mod meeting_reprocessing;
 #[cfg(feature = "diarization")]
 pub mod meeting_reprocessing_cli;
+pub mod doctor;
 pub mod models;
 pub mod open;
 // Live recording is optional (`record` feature, on by default) so a pure
@@ -242,6 +243,14 @@ discarded. A second Ctrl-C force-quits.
 By default, uses the language and model from your persisted settings \
 (see 'sagascript config list'). Override with --language and --model.
 
+--source system captures what the computer plays (e.g. the other side of an \
+online meeting) and --source both records the microphone and system audio as \
+two tracks; with --output, `both` writes a stereo WAV (left = microphone, \
+right = system audio). --app limits system capture to one application. \
+System audio needs macOS 14.4+ (System Audio Recording permission) or Windows; \
+run `sagascript doctor` to check. Only record calls you may record: other \
+participants may need to consent.
+
 NOTE: --language auto uses a generic multilingual model which is less \
 accurate than the dedicated language models. Finnish uses the generic \
 multilingual Base model by default; optional Finnish-optimized Tiny is \
@@ -301,7 +310,8 @@ EXAMPLES:
     #[cfg(feature = "record")]
     #[command(
         long_about = "\
-Record audio from the default microphone and transcribe it.
+Record audio from the default microphone (default), the computer's system \
+audio, or both, and transcribe it.
 
 Recording continues until you press Ctrl+C, or until --duration seconds \
 have elapsed. The captured audio is then transcribed using the selected model.
@@ -328,9 +338,22 @@ EXAMPLES:
   sagascript record --clipboard
 
   # Record with JSON output
-  sagascript record --duration 5 --json"
+  sagascript record --duration 5 --json
+
+  # Record an online meeting: microphone + system audio as two tracks
+  sagascript record --source both --output meeting.wav
+
+  # Capture only one app's audio
+  sagascript record --source system --app us.zoom.xos --output zoom.wav"
     )]
     Record(record::RecordArgs),
+
+    /// Check system-audio support and permission state (read-only; never records or prompts)
+    #[command(
+        long_about = "Report whether system-audio capture (`record --source system|both`) is supported on this machine and what permission state it is in. Read-only: never records audio, never plays sound and never triggers an operating-system permission prompt. Where the OS offers no non-prompting query the permission is reported as unknown.",
+        after_long_help = "EXAMPLES:\n  sagascript doctor\n  sagascript doctor --json"
+    )]
+    Doctor(doctor::DoctorArgs),
 
     /// Inspect and exercise the Pianissimo engine host
     #[command(
@@ -584,6 +607,7 @@ pub fn run(cli: Cli) {
             run_inference_command("transcribe", move || transcribe::run(args)),
         Command::LatencyReport(args) => latency::run(args),
         Command::Meeting(args) => meeting::run(args),
+        Command::Doctor(args) => doctor::run(args),
         #[cfg(feature = "record")]
         Command::Record(args) => run_inference_command("record", move || record::run(args)),
         Command::ListModels(args) => models::list(args),
@@ -1209,6 +1233,40 @@ mod tests {
                 assert!(args.prompt_file.is_none());
             }
             _ => panic!("expected Record"),
+        }
+    }
+
+    #[cfg(feature = "record")]
+    #[test]
+    fn parse_record_source_and_app() {
+        let cli = Cli::try_parse_from(["sagascript", "record"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Record(args) => {
+                assert_eq!(args.source, "mic");
+                assert!(args.app.is_none());
+            }
+            _ => panic!("expected Record"),
+        }
+        let cli = Cli::try_parse_from([
+            "sagascript", "record", "--source", "both", "--app", "us.zoom.xos", "--output", "m.wav",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Command::Record(args) => {
+                assert_eq!(args.source, "both");
+                assert_eq!(args.app.as_deref(), Some("us.zoom.xos"));
+            }
+            _ => panic!("expected Record"),
+        }
+        assert!(Cli::try_parse_from(["sagascript", "record", "--source", "speakers"]).is_err());
+    }
+
+    #[test]
+    fn parse_doctor() {
+        let cli = Cli::try_parse_from(["sagascript", "doctor", "--json"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Doctor(args) => assert!(args.json),
+            _ => panic!("expected Doctor"),
         }
     }
 

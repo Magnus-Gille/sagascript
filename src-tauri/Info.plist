@@ -4,5 +4,7 @@
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Sagascript needs microphone access to record your voice for local speech-to-text transcription. Audio never leaves your device.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Sagascript records system audio only when you choose it (for example to transcribe an online meeting). Audio stays on your device and is never uploaded.</string>
 </dict>
 </plist>
