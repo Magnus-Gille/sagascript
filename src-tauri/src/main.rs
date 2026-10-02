@@ -17,6 +17,7 @@ mod logging;
 mod app_controller;
 mod commands;
 mod events;
+mod focus_diag;
 mod hotkey;
 mod meeting_jobs;
 mod meeting_media;
@@ -353,6 +354,10 @@ fn check_for_updates_and_install(app: tauri::AppHandle) {
 }
 
 fn check_for_updates_with_intent(app: tauri::AppHandle, install_when_available: bool) {
+    focus_diag::log(
+        "update_check_requested",
+        serde_json::json!({ "installWhenAvailable": install_when_available }),
+    );
     #[cfg(not(target_os = "macos"))]
     let _ = install_when_available;
 
@@ -778,6 +783,7 @@ fn forward_engine_load_state(app: &tauri::AppHandle) {
     let app = app.clone();
     backend::set_load_listener(move |event, source| {
         let payload = backend::load_state_payload(Some(&(event, source)));
+        focus_diag::log("engine_load_state_event", serde_json::json!({ "origin": "load_listener" }));
         let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
     });
 }
@@ -786,6 +792,7 @@ fn forward_engine_load_state(app: &tauri::AppHandle) {
 /// created or shown and missed earlier events).
 fn reemit_engine_load_state(app: &tauri::AppHandle) {
     let payload = sagascript_core::transcription::pianissimo_backend::current_load_state_payload();
+    focus_diag::log("engine_load_state_event", serde_json::json!({ "origin": "reemit_after_overlay" }));
     let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
 }
 
@@ -829,6 +836,10 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
             info!("Hotkey pressed: {shortcut}");
             #[cfg(target_os = "macos")]
             let pressed_target = platform::macos::frontmost_pid();
+            #[cfg(target_os = "macos")]
+            let pressed_target_opt = pressed_target;
+            #[cfg(not(target_os = "macos"))]
+            let pressed_target_opt: Option<i32> = None;
             let health: tauri::State<'_, hotkey::HotkeyHealth> = app.state();
             let safe_fallback = {
                 let c = ctrl.lock().unwrap();
@@ -903,6 +914,10 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                 HotkeyDownResult::StartedRecording => {
                     #[cfg(target_os = "macos")]
                     platform::macos::remember_dictation_target(pressed_target);
+                    focus_diag::log(
+                        "hotkey_down",
+                        serde_json::json!({ "pressedTargetPid": pressed_target_opt }),
+                    );
                     prewarm_engine_on_key_down(&ctrl);
                     let show_overlay = {
                         let c = ctrl.lock().unwrap();
@@ -918,8 +933,22 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
                         overlay::show(app);
                         reemit_engine_load_state(app);
                         #[cfg(target_os = "macos")]
-                        if let Err(error) = platform::macos::restore_dictation_target_if_stolen() {
-                            warn!("Could not return focus after showing the recording overlay: {error}");
+                        {
+                            let restore = platform::macos::restore_dictation_target_if_stolen();
+                            let (restored, restore_error) = match &restore {
+                                Ok(restored) => (Some(*restored), None),
+                                Err(error) => (None, Some(error.clone())),
+                            };
+                            focus_diag::log(
+                                "focus_restore_after_overlay",
+                                serde_json::json!({
+                                    "restored": restored,
+                                    "restoreFailed": restore_error.is_some(),
+                                }),
+                            );
+                            if let Err(error) = restore {
+                                warn!("Could not return focus after showing the recording overlay: {error}");
+                            }
                         }
                     }
                 }
@@ -1011,7 +1040,7 @@ fn main() {
                     .unwrap_or(true);
                 if should_reveal {
                     info!("Second-instance launch requested Settings");
-                    open_settings_window(app, None);
+                    open_settings_window(app, None, "second_instance_launch");
                 } else {
                     info!("Ignoring second-instance launch while dictation is active");
                 }
@@ -1084,10 +1113,14 @@ fn main() {
             app.manage(profile_menu);
             app.manage(update_menu);
 
+            focus_diag::init(app.handle());
+
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
             {
+                focus_diag::log("startup_activation_policy_before", serde_json::json!({}));
                 platform::macos::set_activation_policy_accessory();
+                focus_diag::log("startup_activation_policy_set_accessory", serde_json::json!({}));
                 if let Err(error) = hotkey::install_bare_function_key_monitor(app.handle()) {
                     error!("Failed to install F13-F24 event monitor: {error}");
                 }
@@ -1263,13 +1296,13 @@ fn main() {
                         app.exit(0);
                     }
                     "settings" => {
-                        open_settings_window(app, None);
+                        open_settings_window(app, None, "tray_menu_settings");
                     }
                     "transcribe_file" => {
-                        open_settings_window(app, Some("transcribe"));
+                        open_settings_window(app, Some("transcribe"), "tray_menu_transcribe_file");
                     }
                     "manage_profiles" => {
-                        open_settings_window(app, Some("dictate"));
+                        open_settings_window(app, Some("dictate"), "tray_menu_manage_profiles");
                     }
                     "check_for_updates" => {
                         let (available_version, installing) = {
@@ -1338,13 +1371,28 @@ fn main() {
                     }
                     InitialWindowRequest::Settings => {
                         info!("Foreground GUI launch requested");
-                        open_settings_window(app.handle(), None);
+                        open_settings_window(app.handle(), None, "startup_foreground_launch");
                     }
                     InitialWindowRequest::Onboarding => {
                         info!("First launch detected, opening onboarding");
-                        open_settings_window(app.handle(), Some("onboarding"));
+                        open_settings_window(app.handle(), Some("onboarding"), "startup_onboarding");
                     }
                 }
+            }
+
+            {
+                let windows: Vec<serde_json::Value> = app
+                    .webview_windows()
+                    .into_iter()
+                    .map(|(label, window)| {
+                        serde_json::json!({
+                            "label": label,
+                            "visible": window.is_visible().ok(),
+                            "focused": window.is_focused().ok(),
+                        })
+                    })
+                    .collect();
+                focus_diag::log("startup_windows", serde_json::json!({ "windows": windows }));
             }
 
             if should_install_update_at_launch(gui_launch_mode) {
@@ -1580,7 +1628,7 @@ fn main() {
                     };
                     if should_reveal_for_reopen(state) {
                         info!("Application reopen requested");
-                        open_settings_window(_app_handle, None);
+                        open_settings_window(_app_handle, None, "app_reopen_event");
                     } else {
                         info!("Ignoring application reopen while dictation is {state:?}");
                     }
@@ -1911,11 +1959,13 @@ trait MainWindowVisibility {
 
 impl MainWindowVisibility for tauri::WebviewWindow {
     fn activate_app(&self) {
+        focus_diag::activation("main_window_reveal", "activate_app_queued");
         #[cfg(target_os = "macos")]
-        if let Err(error) = self
-            .app_handle()
-            .run_on_main_thread(platform::macos::activate_app)
-        {
+        if let Err(error) = self.app_handle().run_on_main_thread(|| {
+            focus_diag::activation("main_window_reveal", "activate_ignoring_other_apps_before");
+            platform::macos::activate_app();
+            focus_diag::activation("main_window_reveal", "activate_ignoring_other_apps_after");
+        }) {
             warn!("Failed to schedule foreground application activation: {error}");
         }
     }
@@ -1925,14 +1975,17 @@ impl MainWindowVisibility for tauri::WebviewWindow {
     }
 
     fn unminimize(&self) -> Result<(), String> {
+        focus_diag::activation("main_window_reveal", "unminimize");
         tauri::WebviewWindow::unminimize(self).map_err(|error| error.to_string())
     }
 
     fn show(&self) -> Result<(), String> {
+        focus_diag::activation("main_window_reveal", "show");
         tauri::WebviewWindow::show(self).map_err(|error| error.to_string())
     }
 
     fn set_focus(&self) -> Result<(), String> {
+        focus_diag::activation("main_window_reveal", "set_focus");
         tauri::WebviewWindow::set_focus(self).map_err(|error| error.to_string())
     }
 }
@@ -1959,8 +2012,16 @@ fn reveal_existing_main_window(window: &impl MainWindowVisibility) -> Result<(),
 
 /// Open or focus the main window, optionally navigating to a specific tab.
 /// Errors are surfaced in the application log instead of being silently lost.
-fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>) {
+fn open_settings_window(app: &tauri::AppHandle, tab: Option<&str>, site: &'static str) {
     info!("Opening main window (tab: {:?})", tab);
+    focus_diag::log(
+        "settings_window_open_requested",
+        serde_json::json!({
+            "site": site,
+            "tab": tab,
+            "windowExists": app.get_webview_window("settings").is_some(),
+        }),
+    );
 
     if let Err(error) = try_open_settings_window(app, tab) {
         error!("Failed to open main window: {error}");
@@ -2056,6 +2117,7 @@ fn stop_recording_and_transcribe(
     ctrl: &tauri::State<'_, SharedController>,
 ) {
     let key_up_at = Instant::now();
+    focus_diag::log("key_up_stop_requested", serde_json::json!({}));
 
     // Compute how long we still need to hold to satisfy the minimum recording
     // duration — but do NOT block the global-shortcut (UI) thread waiting for it
@@ -2107,7 +2169,13 @@ fn stop_recording_and_transcribe(
                 let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
                 return;
             }
-            StopRecordingOutcome::Stopped(audio) => audio,
+            StopRecordingOutcome::Stopped(audio) => {
+                focus_diag::log(
+                    "capture_stopped",
+                    serde_json::json!({ "keyUpToCaptureStoppedMs": elapsed_ms(key_up_at) }),
+                );
+                audio
+            }
         };
         let key_up_to_capture_stopped_ms = elapsed_ms(key_up_at);
 
@@ -2283,6 +2351,10 @@ fn stop_recording_and_transcribe(
         match result {
             Ok(text) => {
                 info!("Transcription complete: {} chars", text.len());
+                focus_diag::log(
+                    "transcription_result_ready",
+                    serde_json::json!({ "keyUpToResultMs": elapsed_ms(key_up_at) }),
+                );
 
                 if text.trim().is_empty() {
                     let mut c = ctrl.lock().unwrap();
@@ -2332,7 +2404,20 @@ fn stop_recording_and_transcribe(
                         #[cfg(target_os = "macos")]
                         let paste_result = crate::paste::PasteService::new()
                             .paste_checked(&text_for_paste, || {
-                                platform::macos::dictation_paste_target_is_valid()
+                                let check = platform::macos::dictation_paste_guard_check();
+                                focus_diag::log(
+                                    "paste_guard_check",
+                                    serde_json::json!({
+                                        "decision": if check.valid { "allow" } else { "reject" },
+                                        "reason": check.reason,
+                                        "targetPid": check.target_pid,
+                                        "currentFrontmostPid": check.current_pid,
+                                        "ownPid": check.own_pid,
+                                        "frontmostIsSagascript": check.current_pid == Some(check.own_pid),
+                                        "frontmostMatchesTarget": check.current_pid == Some(check.target_pid),
+                                    }),
+                                );
+                                check.valid
                             })
                             .map_err(|error| error.to_string());
                         #[cfg(not(target_os = "macos"))]
@@ -2410,6 +2495,10 @@ fn stop_recording_and_transcribe(
                     }
                     c.on_transcription_error(&message);
                     drop(c);
+                    focus_diag::log(
+                        "result_emitted_to_ui",
+                        serde_json::json!({ "outcome": "paste_error", "pasteOutcome": paste_outcome }),
+                    );
                     let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
                     let _ = app_handle.emit(events::event::ERROR, message);
                     let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
@@ -2418,7 +2507,7 @@ fn stop_recording_and_transcribe(
                         overlay::hide(app);
                         update_tray_status(app, "idle");
                         if open_copy_fallback {
-                            open_settings_window(app, Some("dictate"));
+                            open_settings_window(app, Some("dictate"), "paste_failed_copy_fallback");
                         }
                     });
                     return;

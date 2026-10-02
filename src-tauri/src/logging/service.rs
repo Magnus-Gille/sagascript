@@ -1,7 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use chrono::Utc;
 use serde::Serialize;
@@ -10,6 +10,36 @@ use uuid::Uuid;
 
 const MAX_FILE_SIZE: u64 = 5_000_000; // 5MB
 const MAX_FILES: u32 = 5;
+
+/// Process-wide handle so window/focus code with no access to the
+/// `AppController` (which sits behind a mutex) can log into the same file
+/// with the same app and dictation session ids.
+static GLOBAL_SINK: OnceLock<(String, PathBuf)> = OnceLock::new();
+static GLOBAL_DICTATION: Mutex<Option<String>> = Mutex::new(None);
+
+/// Append one entry to the shared app log without touching the controller.
+/// Opens the file per call (events are rare) so rotation by the main service
+/// is always respected. A missing sink (not yet constructed) drops the entry.
+pub fn log_global(level: &'static str, category: &'static str, event: &str, data: serde_json::Value) {
+    let Some((app_session, path)) = GLOBAL_SINK.get() else {
+        return;
+    };
+    let entry = LogEntry {
+        ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        level,
+        app_session: app_session.clone(),
+        dictation_session: GLOBAL_DICTATION.lock().ok().and_then(|g| g.clone()),
+        category,
+        event: event.to_string(),
+        data,
+    };
+    let Ok(json) = serde_json::to_string(&entry) else {
+        return;
+    };
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{json}");
+    }
+}
 
 /// Structured JSONL logging service matching the Swift app's format
 pub struct LoggingService {
@@ -73,6 +103,8 @@ impl LoggingService {
             let _ = fs::set_permissions(&log_path, fs::Permissions::from_mode(0o600));
         }
 
+        let _ = GLOBAL_SINK.set((app_session_id.clone(), log_path.clone()));
+
         Self {
             app_session_id,
             dictation_session_id: Mutex::new(None),
@@ -117,12 +149,18 @@ impl LoggingService {
     pub fn start_dictation_session(&self) -> String {
         let id = format!("dict-{}", &Uuid::new_v4().to_string()[..8]);
         *self.dictation_session_id.lock().unwrap() = Some(id.clone());
+        if let Ok(mut global) = GLOBAL_DICTATION.lock() {
+            *global = Some(id.clone());
+        }
         id
     }
 
     /// End the current dictation session
     pub fn end_dictation_session(&self) {
         *self.dictation_session_id.lock().unwrap() = None;
+        if let Ok(mut global) = GLOBAL_DICTATION.lock() {
+            *global = None;
+        }
     }
 
     /// Log an entry to the JSONL file

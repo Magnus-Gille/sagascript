@@ -227,7 +227,7 @@ test("only background startup stays headless after onboarding", () => {
 test("deliberate macOS reopen requests reveal Settings", () => {
   assert.match(
     mainSource,
-    /tauri::RunEvent::Reopen \{ \.\. \} => \{[\s\S]*?open_settings_window\(_app_handle, None\);[\s\S]*?\}/,
+    /tauri::RunEvent::Reopen \{ \.\. \} => \{[\s\S]*?open_settings_window\(_app_handle, None, "app_reopen_event"\);[\s\S]*?\}/,
   );
 });
 
