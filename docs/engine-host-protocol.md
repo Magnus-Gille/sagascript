@@ -46,7 +46,8 @@ Result:
  "host":{"name":"sagascript-engine-host","version":"1.4.0","git_sha":"<40 hex>","engine":"coreml","engine_version":"<os/framework info>"},
  "capabilities":{"sample_rate":16000,"max_window_s":30.0,"preferred_window_s":30.0,"preferred_overlap_s":6.0,
                  "max_in_flight":4,"token_timestamps":true,"languages":["sv"],
-                 "compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0"}}
+                 "compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0",
+                 "context_biasing":true}}
 ```
 The client rejects a host whose `protocol` differs or whose `git_sha` is missing, and logs a
 warning when the host build differs from its own (build-identity invariant).
@@ -77,13 +78,35 @@ Request:
   dir, deleted by the client). The host reads `num_samples` starting at `offset_samples`.
 - `num_samples ≤ max_window_s × sample_rate`, else `bad_request`. Shorter windows are padded
   internally; tokens beyond the real audio are dropped.
-- Optional context biasing (both hosts): `"boost_terms":["Gille","Magnus Gille"]` (at most 500 terms of
-  at most 64 characters, else `bad_request`) and `"boost_weight":5.0` (logit bonus, `0..=20`). Terms are
-  tokenized with the model's SentencePiece pieces into a prefix trie; tokens that continue a live partial
-  match get the full bonus and tokens that start a term get `weight x 0.25` (`SAGASCRIPT_BOOST_START_FACTOR`
-  overrides it for measurements). Absent, empty or zero weight: decoding is bit-for-bit unchanged. The Core ML
-  host biases within the joint's top-64 token logits; the ONNX host over all token logits. Results are still
-  the raw pieces, so replacements remain a client-side post-step. See `docs/benchmarks/pianissimo-boosting.md`.
+- Optional context biasing: `"boost_terms":["Gille","Magnus Gille"]` (at most 500 terms of at most 64
+  Unicode scalars, else `bad_request`) and `"boost_weight":5.0` (logit bonus, `0..=20`). A request without a
+  dictionary is byte-identical to a pre-biasing request (the fields are omitted, never sent as empty), and a
+  host that has never heard of the fields ignores them, so old and new clients and hosts interoperate.
+  - Terms are tokenized with the model's SentencePiece pieces (fewest-pieces and longest-match segmentations,
+    plus a capitalised first letter) into a prefix trie, at most 16 token sequences per term and 50 000
+    nodes in total. Tries are cached per loaded model by term list, so only the first window with a
+    dictionary pays the build (`timings.boost_us`).
+  - Candidates are the 64 highest token logits (both hosts; the Core ML joint exports exactly its top-64, the
+    ONNX host selects them from all logits; ties go to the lower id). A candidate that continues a live
+    partial match gets `+weight`; one that starts a term gets `+weight x 0.25`, and may override a blank
+    only when its raw logit is within 4.0 of the blank logit. The model's own choice stands unless a
+    candidate's adjusted score is strictly higher (ties to the lower id). When a boosted token replaces a
+    blank, the skip is capped at 1 frame because the duration head described the blank, not the token.
+    `SAGASCRIPT_BOOST_START_FACTOR`, `SAGASCRIPT_BOOST_BLANK_MARGIN` and
+    `SAGASCRIPT_BOOST_OVERRIDE_DURATION_CAP` override these for measurements.
+  - Partial matches are per window: they reset at every window start and after 8 frames without a token.
+    A name that straddles a window cut is decoded whole in the neighbouring window thanks to the overlap
+    (2 s on Core ML, 6 s on ONNX, longer than any name); see `docs/benchmarks/pianissimo-boosting.md`.
+  - The Core ML host reports `confidence` of a boosted token as its probability under the raw (unboosted)
+    top-64 softmax, which is the model's own probability up to the tail mass; the ONNX host reports no
+    confidence at all. Nothing else in the result depends on the bonus.
+  - Discovery: `hello.capabilities.context_biasing: true`. A result for a window that carried a dictionary
+    includes `"boost_active": true|false` (and `timings.boost_us`); `false` means the host could not apply it,
+    for example a Core ML joint without top-K outputs. A host without the capability bit, or a result
+    without `boost_active`, means the dictionary was ignored; the client counts such windows and the CLI
+    prints a warning instead of claiming biasing was active.
+  - Results are still the raw pieces, so replacements remain a client-side post-step. Both hosts load the
+    shared vectors `src-tauri/engine-host/test-vectors/context-biasing.json` in their unit tests.
 - `priority` is `interactive` (dictation) or `batch` (file chunks). When more requests are queued
   than `max_in_flight`, interactive ones run first. A host that is not loaded answers `not_loaded`;
   the client then reloads and resends the window once.

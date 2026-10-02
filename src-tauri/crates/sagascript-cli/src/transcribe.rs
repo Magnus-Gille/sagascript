@@ -995,15 +995,21 @@ fn pianissimo_file_json(
             "total_seconds": perf.total_seconds,
             "engine": perf.engine,
             "engine_warm": perf.engine_warm,
-            "windows": perf.windows.iter().map(|w| serde_json::json!({
-                "index": w.index,
-                "audio_seconds": (w.end_sample - w.start_sample) as f64 / 16_000.0,
-                "tokens": w.tokens,
-                "preprocess_ms": w.preprocess_ms,
-                "encode_ms": w.encode_ms,
-                "decode_ms": w.decode_ms,
-                "round_trip_ms": w.round_trip_ms,
-            })).collect::<Vec<_>>(),
+            "windows": perf.windows.iter().map(|w| {
+                let mut window = serde_json::json!({
+                    "index": w.index,
+                    "audio_seconds": (w.end_sample - w.start_sample) as f64 / 16_000.0,
+                    "tokens": w.tokens,
+                    "preprocess_ms": w.preprocess_ms,
+                    "encode_ms": w.encode_ms,
+                    "decode_ms": w.decode_ms,
+                    "round_trip_ms": w.round_trip_ms,
+                });
+                if w.boost_us > 0 {
+                    window["boost_us"] = serde_json::json!(w.boost_us);
+                }
+                window
+            }).collect::<Vec<_>>(),
         },
     })
 }
@@ -3799,6 +3805,7 @@ mod diarize_threshold_tests {
                         preprocess_ms: 4,
                         encode_ms: 500,
                         decode_ms: 70,
+                        boost_us: 0,
                         round_trip_ms: 580,
                     }],
                 },
