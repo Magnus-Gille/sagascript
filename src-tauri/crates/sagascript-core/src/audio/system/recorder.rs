@@ -113,12 +113,24 @@ impl SystemRecorder {
             .inner
             .take()
             .ok_or_else(|| DictationError::AudioCaptureError("System recorder already stopped".into()))?;
-        capture.stop()?; // drops the sink, which ends the worker; surfaces a backend capture error
-        worker
-            .join()
-            .map_err(|_| DictationError::AudioCaptureError("System-audio spool thread panicked".into()))?
-            .map_err(|e| DictationError::AudioCaptureError(format!("System audio: {e}")))
+        // Stopping drops the sink, which ends the worker; a backend capture error
+        // is kept, not propagated yet, so the worker is always joined (and its
+        // spool file deleted) first.
+        finish(capture.stop(), worker)
     }
+}
+
+/// Join the spool worker unconditionally, then report the first error:
+/// the capture error wins over the worker result.
+fn finish(
+    capture_result: Result<(), DictationError>,
+    worker: JoinHandle<Result<SystemTrack, String>>,
+) -> Result<SystemTrack, DictationError> {
+    let joined = worker
+        .join()
+        .map_err(|_| DictationError::AudioCaptureError("System-audio spool thread panicked".into()));
+    capture_result?;
+    joined?.map_err(|e| DictationError::AudioCaptureError(format!("System audio: {e}")))
 }
 
 impl Drop for SystemRecorder {
@@ -252,6 +264,24 @@ mod tests {
         assert!((t.samples.len() as i64 - 32_000).abs() < 1_600, "len {}", t.samples.len());
         assert!(t.samples[1_000].abs() < 1e-3, "startup silence must lead");
         assert!(t.samples[t.samples.len() - 1_000] > 0.4, "audio must be at the end, where it happened");
+    }
+
+    #[test]
+    fn capture_error_still_joins_the_worker_and_removes_the_spool() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        tx.send(vec![0.5f32; 1_600]).unwrap();
+        drop(tx);
+        let path = dir.path().to_path_buf();
+        let worker = thread::spawn(move || {
+            spool_worker(rx, NativeFormat { sample_rate: 16_000, channels: 1 }, Instant::now(), &path)
+        });
+        // The backend reported a capture failure at stop.
+        let result = finish(Err(DictationError::AudioCaptureError("device lost".into())), worker);
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("device lost"), "{msg}");
+        // The worker was joined before returning, so its spool is already deleted.
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0, "spool must be deleted");
     }
 
     #[test]

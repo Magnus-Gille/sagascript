@@ -224,6 +224,30 @@ mod tests {
     }
 
     #[test]
+    fn terminal_impulse_and_length_at_44k1_and_short_input() {
+        // 44.1 kHz (non-integer ratio), fed in odd partitions.
+        for frames in [4410usize, 5000, 100, 20] {
+            let mut input = vec![0.0f32; frames];
+            *input.last_mut().unwrap() = 1.0;
+            let mut c = StreamingConverter::new(44_100, 1).unwrap();
+            let mut out = Vec::new();
+            for part in input.chunks(333) {
+                out.extend(c.push(part).unwrap());
+            }
+            out.extend(c.finish().unwrap());
+            let expected_len = (frames as f64 * 16_000.0 / 44_100.0).round() as usize;
+            assert_eq!(out.len(), expected_len, "frames {frames}");
+            let (idx, peak) = out
+                .iter()
+                .enumerate()
+                .fold((0, 0f32), |m, (i, s)| if s.abs() > m.1 { (i, s.abs()) } else { m });
+            assert!(peak > 0.1, "frames {frames}: impulse lost");
+            let want = ((frames - 1) as f64 * 16_000.0 / 44_100.0) as i64;
+            assert!((idx as i64 - want).abs() <= 2, "frames {frames}: at {idx}, want ~{want}");
+        }
+    }
+
+    #[test]
     fn rejects_zero_rate() {
         assert!(StreamingConverter::new(0, 2).is_err());
         assert!(StreamingConverter::new(48_000, 0).is_err());

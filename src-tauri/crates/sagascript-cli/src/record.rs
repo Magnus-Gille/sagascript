@@ -103,6 +103,27 @@ fn max_record_secs(source: AudioSource) -> Option<f64> {
     (source == AudioSource::Both).then_some(sagascript_core::audio::capture::MAX_BUFFER_SECONDS as f64)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum StopReason {
+    Duration,
+    MicCapacity,
+}
+
+/// When to stop. The requested duration counts from the start of the wait loop;
+/// the microphone-capacity limit counts from when the microphone was requested
+/// (its buffer fills from then, including slow system-recorder start-up).
+fn stop_reason(
+    duration: Option<f64>,
+    since_loop_start: f64,
+    mic_cap: Option<f64>,
+    since_mic_requested: f64,
+) -> Option<StopReason> {
+    if mic_cap.is_some_and(|max| since_mic_requested >= max) {
+        return Some(StopReason::MicCapacity);
+    }
+    duration.filter(|d| since_loop_start >= *d).map(|_| StopReason::Duration)
+}
+
 fn validate_duration(source: AudioSource, duration: Option<f64>) -> Result<(), DictationError> {
     match (max_record_secs(source), duration) {
         (Some(max), Some(d)) if d > max => Err(DictationError::SettingsError(format!(
@@ -233,16 +254,18 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         if !running.load(Ordering::Relaxed) {
             break;
         }
-        if let Some(secs) = args.duration {
-            if start.elapsed().as_secs_f64() >= secs {
+        match stop_reason(
+            args.duration,
+            start.elapsed().as_secs_f64(),
+            max_record_secs(source),
+            mic_requested.elapsed().as_secs_f64(),
+        ) {
+            Some(StopReason::Duration) => break,
+            Some(StopReason::MicCapacity) => {
+                eprintln!("Stopping: --source both is limited to {} minutes.", (max_record_secs(source).unwrap_or(0.0) / 60.0) as u32);
                 break;
             }
-        }
-        if let Some(max) = max_record_secs(source) {
-            if start.elapsed().as_secs_f64() >= max {
-                eprintln!("Stopping: --source both is limited to {} minutes.", (max / 60.0) as u32);
-                break;
-            }
+            None => {}
         }
     }
 
@@ -675,6 +698,17 @@ mod tests {
         let mut output = Vec::new();
         assert!(write_plain_record_output(&mut output, "hello").unwrap());
         assert_eq!(output, b"hello\n");
+    }
+
+    #[test]
+    fn mic_capacity_deadline_counts_from_mic_start() {
+        use super::{stop_reason, StopReason};
+        // Slow system start: loop has run 800 s, but the mic has been filling 901 s.
+        assert_eq!(stop_reason(Some(900.0), 800.0, Some(900.0), 901.0), Some(StopReason::MicCapacity));
+        assert_eq!(stop_reason(Some(100.0), 100.0, Some(900.0), 105.0), Some(StopReason::Duration));
+        assert_eq!(stop_reason(Some(100.0), 99.0, Some(900.0), 104.0), None);
+        assert_eq!(stop_reason(None, 5000.0, None, 5000.0), None); // system-only: no cap
+        assert_eq!(stop_reason(None, 10.0, Some(900.0), 900.0), Some(StopReason::MicCapacity));
     }
 
     #[test]

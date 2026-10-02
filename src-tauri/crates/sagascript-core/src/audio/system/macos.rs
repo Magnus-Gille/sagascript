@@ -28,7 +28,11 @@ const fn fourcc(s: &[u8; 4]) -> u32 {
 const SYSTEM_OBJECT: AudioObjectID = 1; // kAudioObjectSystemObject
 const SCOPE_GLOBAL: u32 = fourcc(b"glob");
 const ELEMENT_MAIN: u32 = 0;
-const PROP_DEFAULT_SYSTEM_OUTPUT: u32 = fourcc(b"sOut");
+// kAudioHardwarePropertyDefaultOutputDevice ('dOut'): where normal media/app audio
+// plays. NOT 'sOut' (DefaultSystemOutputDevice), which is only the alert/system-sound
+// device (AudioHardware.h:476-478, 610-611). Taps capture app output, so the
+// aggregate's clock/sub-device must be the device that audio is actually rendered to.
+const PROP_DEFAULT_OUTPUT: u32 = fourcc(b"dOut");
 const PROP_PROCESS_LIST: u32 = fourcc(b"prs#");
 const PROP_DEVICE_UID: u32 = fourcc(b"uid ");
 const PROP_PROCESS_PID: u32 = fourcc(b"ppid");
@@ -336,6 +340,25 @@ fn list_processes() -> Result<Vec<ProcInfo>, OSStatus> {
         .collect())
 }
 
+/// Sum the channels of the buffers in raw `AudioBufferList` bytes (as returned
+/// for kAudioDevicePropertyStreamConfiguration). Reads fields from the byte slice
+/// only, so a zero-buffer reply (8 bytes, smaller than the Rust struct) and
+/// truncated replies are handled without forming any out-of-bounds reference.
+fn parse_input_channels(bytes: &[u8]) -> u32 {
+    let first = std::mem::offset_of!(AudioBufferList, buffers);
+    let stride = std::mem::size_of::<AudioBuffer>();
+    let Some(count) = bytes.get(..4).map(|b| u32::from_ne_bytes(b.try_into().unwrap())) else {
+        return 0;
+    };
+    let mut total = 0u32;
+    for i in 0..count as usize {
+        let at = first + i * stride;
+        let Some(ch) = bytes.get(at..at + 4) else { break }; // truncated: ignore the rest
+        total = total.saturating_add(u32::from_ne_bytes(ch.try_into().unwrap()));
+    }
+    total
+}
+
 /// Total input channels a device exposes (0 for an output-only device).
 fn input_channel_count(dev: AudioObjectID) -> Result<u32, OSStatus> {
     let addr = PropertyAddress { selector: PROP_STREAM_CONFIGURATION, scope: SCOPE_INPUT, element: ELEMENT_MAIN };
@@ -345,22 +368,13 @@ fn input_channel_count(dev: AudioObjectID) -> Result<u32, OSStatus> {
     if st != 0 {
         return Err(st);
     }
-    // u64 backing store keeps the AudioBufferList (8-byte aligned) properly aligned.
-    let mut raw = vec![0u64; (size as usize).div_ceil(8).max(1)];
+    let mut raw = vec![0u8; size as usize];
     let st = unsafe { AudioObjectGetPropertyData(dev, &addr, 0, ptr::null(), &mut size, raw.as_mut_ptr().cast()) };
     if st != 0 {
         return Err(st);
     }
-    if (size as usize) < std::mem::size_of::<u32>() {
-        return Ok(0);
-    }
-    // SAFETY: the buffer holds an AudioBufferList written by Core Audio; the
-    // buffer array length is bounded by `size`.
-    let list = unsafe { &*(raw.as_ptr() as *const AudioBufferList) };
-    let max = (size as usize).saturating_sub(8) / std::mem::size_of::<AudioBuffer>();
-    let n = (list.number_buffers as usize).min(max);
-    let bufs = unsafe { std::slice::from_raw_parts(list.buffers.as_ptr(), n) };
-    Ok(bufs.iter().map(|b| b.number_channels).sum())
+    raw.truncate(size as usize);
+    Ok(parse_input_channels(&raw))
 }
 
 /// Pick the tap's audio out of an IOProc input list, or `None` when the list
@@ -397,6 +411,12 @@ pub(super) fn planar_to_interleaved(planes: &[&[f32]]) -> Vec<f32> {
     }
     out
 }
+
+/// Shown when the selected output device also has microphone inputs.
+const DUPLEX_OUTPUT_MESSAGE: &str = "System-audio capture is not supported while the output device also has a \
+microphone input (USB headsets and audio interfaces, Bluetooth headsets that expose a microphone), because that \
+input could end up in the system-audio track. Select an output-only device in System Settings > Sound > Output \
+(the built-in speakers, or wired headphones on the headphone jack), then try again.";
 
 struct IoContext {
     sink: ChunkSink,
@@ -518,28 +538,26 @@ impl Capture {
         };
         let native = NativeFormat { sample_rate: format.sample_rate as u32, channels: format.channels_per_frame.max(1) as u16 };
 
-        let output_uid = get_data::<AudioObjectID>(SYSTEM_OBJECT, PROP_DEFAULT_SYSTEM_OUTPUT)
-            .ok()
-            .and_then(|dev| get_string(dev, PROP_DEVICE_UID));
-        let Some(output_uid) = output_uid else {
+        // Resolve the output device ONCE; its UID (aggregate clock/sub-device) and
+        // its input configuration (duplex check) both come from this same ID.
+        let Ok(output_dev) = get_data::<AudioObjectID>(SYSTEM_OBJECT, PROP_DEFAULT_OUTPUT) else {
+            cleanup_tap(tap);
+            return Err(DictationError::AudioCaptureError("No default output device found".into()));
+        };
+        let Some(output_uid) = get_string(output_dev, PROP_DEVICE_UID) else {
             cleanup_tap(tap);
             return Err(DictationError::AudioCaptureError("No default output device found".into()));
         };
 
         // The aggregate contains the physical output device. If that device has
-        // input streams (USB interface, headset microphone), they would appear in
-        // the aggregate's input list next to the tap; refuse rather than risk
-        // microphone audio in the "system" track.
-        let output_dev = get_data::<AudioObjectID>(SYSTEM_OBJECT, PROP_DEFAULT_SYSTEM_OUTPUT).unwrap_or(0);
+        // input streams (USB headset/interface, Bluetooth headset with a
+        // microphone), they would appear in the aggregate's input list next to the
+        // tap; refuse rather than risk microphone audio in the "system" track.
         match input_channel_count(output_dev) {
             Ok(0) => {}
-            Ok(n) => {
+            Ok(_) => {
                 cleanup_tap(tap);
-                return Err(DictationError::AudioCaptureError(format!(
-                    "The default output device also has {n} input channel(s) (a duplex device such as a USB \
-                     audio interface or headset). To keep microphone input out of the system-audio track, \
-                     choose an output-only device (e.g. the built-in speakers) in System Settings > Sound."
-                )));
+                return Err(DictationError::AudioCaptureError(DUPLEX_OUTPUT_MESSAGE.into()));
             }
             Err(s) => {
                 cleanup_tap(tap);
@@ -627,6 +645,31 @@ impl Drop for Capture {
 
 #[cfg(test)]
 mod tests {
+    fn buffer_list_bytes(channels: &[u32], declared: u32) -> Vec<u8> {
+        let mut v = declared.to_ne_bytes().to_vec();
+        v.extend_from_slice(&[0; 4]); // padding before the 8-aligned buffer array
+        for c in channels {
+            v.extend_from_slice(&c.to_ne_bytes());
+            v.extend_from_slice(&[0; 12]); // data_byte_size + data pointer
+        }
+        v
+    }
+
+    #[test]
+    fn input_channel_parsing_handles_empty_short_and_truncated_lists() {
+        assert_eq!(parse_input_channels(&[]), 0);
+        assert_eq!(parse_input_channels(&[1, 0]), 0);
+        assert_eq!(parse_input_channels(&buffer_list_bytes(&[], 0)), 0); // output-only: 8 bytes
+        assert_eq!(parse_input_channels(&buffer_list_bytes(&[2], 1)), 2);
+        assert_eq!(parse_input_channels(&buffer_list_bytes(&[1, 2], 2)), 3);
+        // declares 3 buffers but only 1 is present: count what is there
+        assert_eq!(parse_input_channels(&buffer_list_bytes(&[2], 3)), 2);
+        // a buffer cut off mid-header contributes nothing
+        let mut cut = buffer_list_bytes(&[2], 1);
+        cut.truncate(10);
+        assert_eq!(parse_input_channels(&cut), 0);
+    }
+
     #[test]
     fn tap_audio_selection_rejects_foreign_buffers() {
         let l = [1.0f32, 2.0];

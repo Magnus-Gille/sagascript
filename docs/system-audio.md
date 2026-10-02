@@ -45,12 +45,17 @@ diarization is phase 2 (`read_two_track_wav` already exists for it).
   from `kAudioTapPropertyFormat` ('tfmt'). Non-interleaved buffer lists are
   interleaved in the callback. The aggregate also contains the physical output
   device, so its input streams (if any) would appear next to the tap's. Capture
-  therefore **refuses to start when the default output device has input channels**
-  (USB audio interface, headset microphone) with an explanatory error, and the
-  callback forwards a buffer list only if it has exactly the tap's shape. This keeps
-  microphone input out of the `system` track. Supporting duplex output devices
-  needs a tap-only aggregate, which the headers do not document and which has
-  not been tried (tracked in #303).
+  therefore **refuses to start when the default output device
+  (`kAudioHardwarePropertyDefaultOutputDevice`, 'dOut', where media plays; not the
+  alert-only 'sOut' device) has input channels**, and the callback forwards a
+  buffer list only if it has exactly the tap's shape. Refused setups: USB headsets
+  and audio interfaces, and Bluetooth headsets that expose a microphone. Working
+  setups: built-in speakers and wired headphones on the headphone jack. The device
+  is resolved once, so the UID, the clock and the duplex check refer to the same
+  device. The refusal is broader than the risk; a documented alternative is
+  per-IOProc stream usage (AudioHardware.h, `AudioHardwareIOProcStreamUsage`),
+  disabling the physical input streams so only the tap's buffers are delivered. It
+  needs hardware validation and is the first item of #303.
 - The 14.2+ symbols are resolved with `dlsym`, so the binary still launches on
   older systems; the capability probe checks the OS version, the
   `CATapDescription` class and the symbol.
@@ -203,9 +208,13 @@ Decided for phase 1 of epic [#299](https://github.com/Magnus-Gille/sagascript/is
 
 ## Known limitations (tracked for phase 1.5)
 
+macOS refuses output devices that have microphone inputs (USB headsets and
+interfaces, Bluetooth headsets with a microphone); see the macOS section.
+
 `--source both` is limited to 15 minutes: the microphone service buffers in
 memory and stops appending at that length, so longer `both` recordings are
-rejected up front (`--duration`) or stopped at 15 minutes with a message. Use
+rejected up front (`--duration`) or stopped at 15 minutes (counted from when the
+microphone was requested) with a message. Use
 `--source system` for longer recordings. Spooling the microphone like the system
 track lifts this and is tracked in #303. Timeline placement uses wall-clock
 time, not per-chunk capture timestamps; only the startup gap is placed before

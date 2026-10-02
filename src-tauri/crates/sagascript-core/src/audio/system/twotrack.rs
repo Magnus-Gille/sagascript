@@ -272,4 +272,16 @@ mod tests {
         assert!(check_wav_capacity(max_frames + 1, 2).is_err());
         assert!(check_wav_capacity(u64::MAX, 2).is_err()); // overflow, not wraparound
     }
+
+    #[test]
+    fn writer_rejects_an_oversized_append_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.wav");
+        let mut w = TwoTrackWriter::create(&path, 2).unwrap();
+        w.frames = MAX_WAV_DATA_BYTES / 4; // exactly full
+        assert!(w.write_interleaved(&[0.1, 0.1]).is_err());
+        assert_eq!(w.frames(), MAX_WAV_DATA_BYTES / 4, "rejected append must not count");
+        drop(w); // BufWriter flushes only the header
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 44, "no sample data may be written");
+    }
 }
