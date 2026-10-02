@@ -726,6 +726,16 @@ impl PianissimoBackend {
         warm_client(&self.client, &CancelToken::new())
     }
 
+    /// [`Self::warm_up`] that returns promptly when `cancelled` is set. Stops the
+    /// wait only: the host keeps loading, so the next job reuses the model.
+    pub fn warm_up_with_cancel(&self, cancelled: &AtomicBool) -> Result<WarmInfo, DictationError> {
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(cancelled_error());
+        }
+        let token = CancelToken::new();
+        with_cancel_bridge(cancelled, &token, || warm_client(&self.client, &token))
+    }
+
     pub fn transcribe(
         &self,
         samples: &[f32],
