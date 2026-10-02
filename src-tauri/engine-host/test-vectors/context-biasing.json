@@ -1,0 +1,858 @@
+{
+ "comment": "Shared by the Core ML (Swift) and ONNX (Rust) engine hosts. Logits are sparse (id->value); all other ids default to default_logit. Candidates are the top_k highest logits, ties to the lower id. Lengths and segmentation use Unicode scalars. A step with 'emit' first advances the partial matches (token emitted at the given frame), then chooses at 'frame'. expected null = the model's own choice stands.",
+ "vocab": [
+  "▁Mag",
+  "nus",
+  "▁M",
+  "ag",
+  "▁hej",
+  "▁Gil",
+  "le",
+  "▁G",
+  "ille",
+  "▁é",
+  "é",
+  "▁f11",
+  "▁f12",
+  "▁f13",
+  "▁f14",
+  "▁f15",
+  "▁f16",
+  "▁f17",
+  "▁f18",
+  "▁f19",
+  "▁f20",
+  "▁f21",
+  "▁f22",
+  "▁f23",
+  "▁f24",
+  "▁f25",
+  "▁f26",
+  "▁f27",
+  "▁f28",
+  "▁f29",
+  "▁f30",
+  "▁f31",
+  "▁f32",
+  "▁f33",
+  "▁f34",
+  "▁f35",
+  "▁f36",
+  "▁f37",
+  "▁f38",
+  "▁f39",
+  "▁f40",
+  "▁f41",
+  "▁f42",
+  "▁f43",
+  "▁f44",
+  "▁f45",
+  "▁f46",
+  "▁f47",
+  "▁f48",
+  "▁f49",
+  "▁f50",
+  "▁f51",
+  "▁f52",
+  "▁f53",
+  "▁f54",
+  "▁f55",
+  "▁f56",
+  "▁f57",
+  "▁f58",
+  "▁f59",
+  "▁f60",
+  "▁f61",
+  "▁f62",
+  "▁f63",
+  "▁f64",
+  "▁f65",
+  "▁f66",
+  "▁f67",
+  "▁f68",
+  "▁f69",
+  "▁f70",
+  "▁f71",
+  "▁f72",
+  "▁f73",
+  "▁f74",
+  "▁f75",
+  "▁f76",
+  "▁f77",
+  "▁f78",
+  "▁f79",
+  "<blk>"
+ ],
+ "blank_id": 80,
+ "top_k": 64,
+ "default_logit": -10.0,
+ "trie_cases": [
+  {
+   "name": "single_word_capitalized",
+   "terms": [
+    "magnus"
+   ],
+   "phrases": [
+    [
+     0,
+     1
+    ]
+   ]
+  },
+  {
+   "name": "multi_word_and_untokenizable",
+   "terms": [
+    "Magnus Gille",
+    "Qzx"
+   ],
+   "phrases": [
+    [
+     0,
+     1,
+     5,
+     6
+    ],
+    [
+     0,
+     1,
+     7,
+     8
+    ]
+   ]
+  },
+  {
+   "name": "alternative_segmentations",
+   "terms": [
+    "Gille"
+   ],
+   "phrases": [
+    [
+     5,
+     6
+    ],
+    [
+     7,
+     8
+    ]
+   ]
+  },
+  {
+   "name": "shared_prefix",
+   "terms": [
+    "Magnus",
+    "Mag Gille"
+   ],
+   "phrases": [
+    [
+     0,
+     1
+    ],
+    [
+     0,
+     5,
+     6
+    ],
+    [
+     0,
+     7,
+     8
+    ]
+   ]
+  },
+  {
+   "name": "trim_and_dedupe_by_trie",
+   "terms": [
+    " Magnus ",
+    "Magnus"
+   ],
+   "phrases": [
+    [
+     0,
+     1
+    ]
+   ]
+  },
+  {
+   "name": "length_counts_unicode_scalars",
+   "terms": [
+    "ééééééééééééééééééééééééééééééééé",
+    "Magnus"
+   ],
+   "phrases": [
+    [
+     0,
+     1
+    ]
+   ]
+  },
+  {
+   "name": "empty",
+   "terms": [],
+   "phrases": []
+  },
+  {
+   "name": "cross_product_is_capped_at_16_sequences_per_term",
+   "terms": [
+    "Gille Gille Gille Gille Gille"
+   ],
+   "phrases": [
+    [
+     7,
+     8,
+     5,
+     6,
+     5,
+     6,
+     5,
+     6,
+     5,
+     6
+    ],
+    [
+     7,
+     8,
+     5,
+     6,
+     5,
+     6,
+     5,
+     6,
+     7,
+     8
+    ],
+    [
+     7,
+     8,
+     5,
+     6,
+     5,
+     6,
+     7,
+     8,
+     5,
+     6
+    ],
+    [
+     7,
+     8,
+     5,
+     6,
+     5,
+     6,
+     7,
+     8,
+     7,
+     8
+    ],
+    [
+     7,
+     8,
+     5,
+     6,
+     7,
+     8,
+     5,
+     6,
+     5,
+     6
+    ],
+    [
+     7,
+     8,
+     5,
+     6,
+     7,
+     8,
+     5,
+     6,
+     7,
+     8
+    ],
+    [
+     7,
+     8,
+     5,
+     6,
+     7,
+     8,
+     7,
+     8,
+     5,
+     6
+    ],
+    [
+     7,
+     8,
+     5,
+     6,
+     7,
+     8,
+     7,
+     8,
+     7,
+     8
+    ],
+    [
+     7,
+     8,
+     7,
+     8,
+     5,
+     6,
+     5,
+     6,
+     5,
+     6
+    ],
+    [
+     7,
+     8,
+     7,
+     8,
+     5,
+     6,
+     5,
+     6,
+     7,
+     8
+    ],
+    [
+     7,
+     8,
+     7,
+     8,
+     5,
+     6,
+     7,
+     8,
+     5,
+     6
+    ],
+    [
+     7,
+     8,
+     7,
+     8,
+     5,
+     6,
+     7,
+     8,
+     7,
+     8
+    ],
+    [
+     7,
+     8,
+     7,
+     8,
+     7,
+     8,
+     5,
+     6,
+     5,
+     6
+    ],
+    [
+     7,
+     8,
+     7,
+     8,
+     7,
+     8,
+     5,
+     6,
+     7,
+     8
+    ],
+    [
+     7,
+     8,
+     7,
+     8,
+     7,
+     8,
+     7,
+     8,
+     5,
+     6
+    ],
+    [
+     7,
+     8,
+     7,
+     8,
+     7,
+     8,
+     7,
+     8,
+     7,
+     8
+    ]
+   ]
+  }
+ ],
+ "choose_cases": [
+  {
+   "name": "empty_dictionary_never_changes_the_choice",
+   "terms": [],
+   "params": {
+    "weight": 5.0,
+    "start_factor": 1.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "4": 1.0,
+      "0": 0.9
+     },
+     "expected": null
+    }
+   ]
+  },
+  {
+   "name": "bonus_flips_a_close_call",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 2.0,
+    "start_factor": 1.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "80": 3.0,
+      "0": 1.5
+     },
+     "expected": {
+      "id": 0,
+      "overrode_blank": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "bonus_does_not_flip_a_clear_call",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 2.0,
+    "start_factor": 1.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "80": 8.0,
+      "0": 3.0
+     },
+     "expected": null
+    }
+   ]
+  },
+  {
+   "name": "continuation_only_after_prefix",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 2.0,
+    "start_factor": 0.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "80": 1.0,
+      "1": 0.0
+     },
+     "expected": null
+    },
+    {
+     "frame": 1,
+     "logits": {
+      "80": 1.0,
+      "1": 0.0
+     },
+     "expected": {
+      "id": 1,
+      "overrode_blank": true
+     },
+     "emit": {
+      "token": 0,
+      "frame": 0
+     }
+    }
+   ]
+  },
+  {
+   "name": "abandoned_match_is_dropped",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 2.0,
+    "start_factor": 0.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "80": 1.0,
+      "4": 0.0
+     },
+     "expected": null,
+     "emit": {
+      "token": 0,
+      "frame": 0
+     }
+    },
+    {
+     "frame": 2,
+     "logits": {
+      "80": 1.0,
+      "1": 0.0
+     },
+     "expected": null,
+     "emit": {
+      "token": 4,
+      "frame": 1
+     }
+    }
+   ]
+  },
+  {
+   "name": "silence_gap_resets_matches",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 2.0,
+    "start_factor": 0.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 30,
+     "logits": {
+      "80": 1.0,
+      "1": 0.0
+     },
+     "expected": null,
+     "emit": {
+      "token": 0,
+      "frame": 0
+     }
+    }
+   ]
+  },
+  {
+   "name": "multiple_partial_matches",
+   "terms": [
+    "Magnus",
+    "Mag Gille"
+   ],
+   "params": {
+    "weight": 2.0,
+    "start_factor": 0.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 1,
+     "logits": {
+      "80": 1.0,
+      "1": 0.0
+     },
+     "expected": {
+      "id": 1,
+      "overrode_blank": true
+     },
+     "emit": {
+      "token": 0,
+      "frame": 0
+     }
+    },
+    {
+     "frame": 1,
+     "logits": {
+      "80": 1.0,
+      "5": 0.0
+     },
+     "expected": {
+      "id": 5,
+      "overrode_blank": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "blank_margin_blocks_start_bonus",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 5.0,
+    "start_factor": 1.0,
+    "blank_margin": 2.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "80": 6.0,
+      "0": 1.0
+     },
+     "expected": null
+    }
+   ]
+  },
+  {
+   "name": "blank_margin_allows_close_start_bonus",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 5.0,
+    "start_factor": 1.0,
+    "blank_margin": 2.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "80": 6.0,
+      "0": 4.5
+     },
+     "expected": {
+      "id": 0,
+      "overrode_blank": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "blank_margin_does_not_gate_continuations",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 5.0,
+    "start_factor": 0.25,
+    "blank_margin": 2.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 1,
+     "logits": {
+      "80": 3.0,
+      "1": 0.0
+     },
+     "expected": {
+      "id": 1,
+      "overrode_blank": true
+     },
+     "emit": {
+      "token": 0,
+      "frame": 0
+     }
+    }
+   ]
+  },
+  {
+   "name": "non_blank_original_is_not_gated",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 3.0,
+    "start_factor": 1.0,
+    "blank_margin": 0.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "4": 2.0,
+      "0": 0.0
+     },
+     "expected": {
+      "id": 0,
+      "overrode_blank": false
+     }
+    }
+   ]
+  },
+  {
+   "name": "tie_breaks_to_lower_id",
+   "terms": [
+    "Magnus",
+    "hej"
+   ],
+   "params": {
+    "weight": 4.0,
+    "start_factor": 1.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "80": 5.0,
+      "0": 1.0,
+      "4": 1.0
+     },
+     "expected": {
+      "id": 0,
+      "overrode_blank": true
+     }
+    }
+   ]
+  },
+  {
+   "name": "outside_top_k_cannot_win",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 20.0,
+    "start_factor": 1.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "7": -5.0,
+      "8": -5.0,
+      "9": -5.0,
+      "10": -5.0,
+      "11": -5.0,
+      "12": -5.0,
+      "13": -5.0,
+      "14": -5.0,
+      "15": -5.0,
+      "16": -5.0,
+      "17": -5.0,
+      "18": -5.0,
+      "19": -5.0,
+      "20": -5.0,
+      "21": -5.0,
+      "22": -5.0,
+      "23": -5.0,
+      "24": -5.0,
+      "25": -5.0,
+      "26": -5.0,
+      "27": -5.0,
+      "28": -5.0,
+      "29": -5.0,
+      "30": -5.0,
+      "31": -5.0,
+      "32": -5.0,
+      "33": -5.0,
+      "34": -5.0,
+      "35": -5.0,
+      "36": -5.0,
+      "37": -5.0,
+      "38": -5.0,
+      "39": -5.0,
+      "40": -5.0,
+      "41": -5.0,
+      "42": -5.0,
+      "43": -5.0,
+      "44": -5.0,
+      "45": -5.0,
+      "46": -5.0,
+      "47": -5.0,
+      "48": -5.0,
+      "49": -5.0,
+      "50": -5.0,
+      "51": -5.0,
+      "52": -5.0,
+      "53": -5.0,
+      "54": -5.0,
+      "55": -5.0,
+      "56": -5.0,
+      "57": -5.0,
+      "58": -5.0,
+      "59": -5.0,
+      "60": -5.0,
+      "61": -5.0,
+      "62": -5.0,
+      "63": -5.0,
+      "64": -5.0,
+      "65": -5.0,
+      "66": -5.0,
+      "67": -5.0,
+      "68": -5.0,
+      "69": -5.0,
+      "70": -5.0,
+      "71": -5.0,
+      "72": -5.0,
+      "73": -5.0,
+      "74": -5.0,
+      "75": -5.0,
+      "76": -5.0,
+      "80": -10.0
+     },
+     "expected": null
+    }
+   ]
+  },
+  {
+   "name": "inside_top_k_can_win",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 20.0,
+    "start_factor": 1.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "7": -5.0,
+      "8": -5.0,
+      "9": -5.0,
+      "10": -5.0,
+      "11": -5.0,
+      "12": -5.0,
+      "13": -5.0,
+      "14": -5.0,
+      "15": -5.0,
+      "16": -5.0,
+      "80": -10.0
+     },
+     "expected": {
+      "id": 0,
+      "overrode_blank": false
+     }
+    }
+   ]
+  }
+ ]
+}

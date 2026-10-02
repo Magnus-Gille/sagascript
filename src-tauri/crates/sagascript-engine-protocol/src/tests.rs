@@ -240,3 +240,23 @@ fn transcribe_window_boost_fields_are_optional_and_omitted_when_off() {
     );
     assert!(!line.contains("boost"));
 }
+
+#[test]
+fn context_biasing_capability_and_result_fields_are_backwards_compatible() {
+    // An older host: no `context_biasing` capability, no `boost_active`, no `boost_us`.
+    let caps: Capabilities = serde_json::from_str(
+        r#"{"sample_rate":16000,"max_window_s":30,"preferred_window_s":30,"preferred_overlap_s":6,"max_in_flight":1}"#,
+    )
+    .unwrap();
+    assert!(!caps.context_biasing);
+    let old: TranscribeWindowResult = serde_json::from_str(r#"{"tokens":[],"audio_s":1.0,"timings":{"decode_ms":3}}"#).unwrap();
+    assert_eq!(old.boost_active, None);
+    assert_eq!(old.timings.boost_us, 0);
+    // New host: reported when a dictionary was sent, omitted otherwise.
+    let new: TranscribeWindowResult =
+        serde_json::from_str(r#"{"tokens":[],"audio_s":1.0,"timings":{"boost_us":120.0},"boost_active":false}"#).unwrap();
+    assert_eq!(new.boost_active, Some(false));
+    assert_eq!(new.timings.boost_us, 120);
+    let line = serde_json::to_string(&old).unwrap();
+    assert!(!line.contains("boost"));
+}

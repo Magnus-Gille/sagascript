@@ -277,6 +277,10 @@ pub struct Capabilities {
     pub compute_units: Vec<String>,
     #[serde(default)]
     pub min_macos: Option<String>,
+    /// The host honours `boost_terms` / `boost_weight` on `transcribe_window`. Absent (an older
+    /// host) means it ignores them and decodes unboosted.
+    #[serde(default)]
+    pub context_biasing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -342,6 +346,13 @@ pub struct WindowTimings {
     pub encode_ms: u64,
     #[serde(default, deserialize_with = "lenient_u64")]
     pub decode_ms: u64,
+    /// Microseconds spent building the context-biasing trie (0 on a cache hit or when unused).
+    #[serde(default, deserialize_with = "lenient_u64", skip_serializing_if = "is_zero_u64")]
+    pub boost_us: u64,
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -351,6 +362,10 @@ pub struct TranscribeWindowResult {
     pub audio_s: f64,
     #[serde(default)]
     pub timings: WindowTimings,
+    /// Present only when the request carried a dictionary: whether biasing was in effect. `false`
+    /// means the host could not apply it (for example a model without top-K outputs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boost_active: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

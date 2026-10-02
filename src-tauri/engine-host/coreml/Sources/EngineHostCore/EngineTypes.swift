@@ -44,6 +44,7 @@ public struct HostCapabilities: Sendable {
             "languages": ["sv"],
             "compute_units": ["ane", "gpu", "cpu", "all"],
             "min_macos": "14.0",
+            "context_biasing": true,
         ]
     }
 }
@@ -122,9 +123,13 @@ public struct WindowResult: Sendable {
     public let preprocessMilliseconds: Double
     public let encodeMilliseconds: Double
     public let decodeMilliseconds: Double
+    /// nil when no dictionary was sent; otherwise whether biasing was in effect for this window.
+    public var boostActive: Bool? = nil
+    /// Trie build time in microseconds (0 when cached or not requested).
+    public var boostMicroseconds: Int = 0
 
     public func jsonObject() -> [String: Any] {
-        [
+        var object: [String: Any] = [
             "tokens": tokens.map { $0.jsonObject() },
             "audio_s": audioSeconds,
             "timings": [
@@ -133,6 +138,13 @@ public struct WindowResult: Sendable {
                 "decode_ms": Int(decodeMilliseconds.rounded()),
             ],
         ]
+        if let boostActive {
+            object["boost_active"] = boostActive
+            var timings = object["timings"] as? [String: Any] ?? [:]
+            timings["boost_us"] = boostMicroseconds
+            object["timings"] = timings
+        }
+        return object
     }
 }
 

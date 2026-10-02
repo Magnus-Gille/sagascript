@@ -1053,7 +1053,17 @@ fn run_pianissimo_batch(
         }
         match sagascript_core::transcription::engine_host::BoostSpec::new(terms, weight) {
             Some(spec) => {
-                eprintln!("Context biasing: {} terms, weight {}", spec.terms.len(), spec.weight);
+                eprintln!("Context biasing requested: {} terms, weight {}", spec.terms.len(), spec.weight);
+                if spec.truncated > 0 {
+                    eprintln!(
+                        "Warning: only the first {} distinct terms are used; {} more were ignored.",
+                        spec.terms.len(),
+                        spec.truncated
+                    );
+                }
+                if spec.too_long > 0 {
+                    eprintln!("Warning: {} term(s) longer than 64 characters were ignored.", spec.too_long);
+                }
                 backend.set_boost(Some(spec));
             }
             None => eprintln!("Context biasing requested but no terms/weight; decoding unchanged."),
@@ -1143,6 +1153,18 @@ fn run_pianissimo_batch(
             Ok(())
         },
     )?;
+    if args.glossary_boost.is_some() {
+        let report = backend.client().boost_report();
+        match report.warning() {
+            Some(warning) => eprintln!("Warning: {warning}"),
+            None if report.windows > 0 => eprintln!(
+                "Context biasing active on {} window(s); trie build {:.1} ms.",
+                report.windows,
+                report.trie_build_us as f64 / 1000.0
+            ),
+            None => {}
+        }
+    }
     if args.json {
         if files.len() == 1 && failures == 0 {
             let BatchItem::Ok { result, .. } = &items[0] else { unreachable!() };

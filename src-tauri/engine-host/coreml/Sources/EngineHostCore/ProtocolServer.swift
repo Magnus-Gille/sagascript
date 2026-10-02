@@ -323,7 +323,7 @@ public final class EngineHostServer {
         if let terms = request["boost_terms"] as? [Any], !terms.isEmpty {
             let weightValue = (request["boost_weight"] as? NSNumber)?.floatValue ?? 0
             guard terms.count <= BoostConfig.maxTerms, weightValue.isFinite, weightValue >= 0, weightValue <= 20,
-                  terms.allSatisfy({ ($0 as? String).map { $0.count <= BoostConfig.maxTermLength } ?? false }) else {
+                  terms.allSatisfy({ ($0 as? String).map { $0.unicodeScalars.count <= BoostConfig.maxTermLength } ?? false }) else {
                 sendFailure(id: id, error: EngineHostError(code: "bad_request", message: "boost_terms must be at most 500 strings of at most 64 characters and boost_weight within 0...20"))
                 return
             }

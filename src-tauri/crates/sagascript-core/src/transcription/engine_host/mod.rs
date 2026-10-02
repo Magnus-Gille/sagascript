@@ -19,7 +19,7 @@ pub mod pipeline;
 pub mod process;
 
 pub use client::{
-    BoostSpec, ClientIdentity, EngineHostClient, EngineHostConfig, HostSnapshot, LoadEvent, LoadObserver, LoadSpec, TestHook, Timeouts,
+    BoostReport, BoostSpec, ClientIdentity, EngineHostClient, EngineHostConfig, HostSnapshot, LoadEvent, LoadObserver, LoadSpec, TestHook, Timeouts,
     WindowOutput,
 };
 pub use pipeline::{CancelToken, JobOptions, Transcription, WindowTiming};
