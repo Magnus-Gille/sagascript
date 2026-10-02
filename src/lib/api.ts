@@ -127,7 +127,8 @@ export async function getSettings(): Promise<Settings> {
   return invoke("get_settings");
 }
 
-export async function setLanguage(language: Language): Promise<void> {
+/** Resolves with notices about profile models reset to Auto by the change. */
+export async function setLanguage(language: Language): Promise<string[]> {
   return invoke("set_language", { language });
 }
 
@@ -164,7 +165,8 @@ export async function setHotkey(shortcut: string): Promise<void> {
   return invoke("set_hotkey", { shortcut });
 }
 
-export async function setHotkeyProfiles(profiles: HotkeyProfile[]): Promise<void> {
+/** Resolves with notices about profile models reset to Auto by a language change. */
+export async function setHotkeyProfiles(profiles: HotkeyProfile[]): Promise<string[]> {
   return invoke("set_hotkey_profiles", { profiles });
 }
 

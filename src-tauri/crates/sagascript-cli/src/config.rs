@@ -117,6 +117,17 @@ path` for the separate personal dictionary.")]
     Path,
 
     /// Manage per-shortcut dictation profiles with language and model
+    #[command(long_about = "\
+Manage dictation profiles. Each profile owns its language, shortcut(s), \
+dictionary and model. The model is `auto` (the recommended model for the \
+profile's language, the default), a Whisper model compatible with that \
+language, or `pianissimo-sv` (Swedish only). File transcription has its own \
+separate model choice (`config set file_transcription_model`).
+
+If a profile's language changes to one its model does not support, that \
+profile's model is reset to `auto` and a notice naming the new recommended \
+model is printed to stderr; the command still succeeds and other profiles \
+are never changed. A compatible explicit model is kept.")]
     Profiles {
         #[command(subcommand)]
         action: ProfileAction,
@@ -272,7 +283,7 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
                 push_to_talk_shortcut,
                 toggle_shortcut,
             });
-            persist_profiles(profiles, model.map(|choice| (id.as_str(), choice)))?;
+            print_notices(&persist_profiles(profiles, model.map(|choice| (id.as_str(), choice)))?);
             eprintln!("Created profile {id}");
             for warning in hotkey_warnings.into_iter().flatten().collect::<std::collections::HashSet<_>>() {
                 eprintln!("Warning: {warning}");
@@ -340,7 +351,7 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
             if let Some(language) = language {
                 profile.language = language;
             }
-            persist_profiles(profiles, model.map(|choice| (id.as_str(), choice)))?;
+            print_notices(&persist_profiles(profiles, model.map(|choice| (id.as_str(), choice)))?);
             eprintln!("Updated profile {id}");
             for warning in hotkey_warnings.into_iter().flatten().collect::<std::collections::HashSet<_>>() {
                 eprintln!("Warning: {warning}");
@@ -373,13 +384,14 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
     }
 }
 
-fn persist_profiles(profiles: Vec<HotkeyProfile>, model: Option<(&str, FileModelPreference)>) -> Result<(), DictationError> {
+/// Persist the profile list. Returns notices for profiles whose model was reset
+/// to Auto because a language change made it incompatible; an explicit `model`
+/// is applied afterwards and must fit the new language.
+fn persist_profiles(profiles: Vec<HotkeyProfile>, model: Option<(&str, FileModelPreference)>) -> Result<Vec<String>, DictationError> {
     Settings::validate_hotkey_profiles(&profiles).map_err(DictationError::SettingsError)?;
+    let mut notices = Vec::new();
     settings::store::try_update(|settings| {
-        if let Some((id, preference)) = model {
-            settings.profile_models.insert(id.to_string(), preference);
-        }
-        settings.replace_hotkey_profiles(profiles)?;
+        notices = settings.replace_hotkey_profiles(profiles.clone())?;
         if let Some((id, preference)) = model {
             settings.set_profile_model(id, preference)?;
         }
@@ -389,7 +401,13 @@ fn persist_profiles(profiles: Vec<HotkeyProfile>, model: Option<(&str, FileModel
         Ok(())
     })
     .map_err(DictationError::SettingsError)?;
-    Ok(())
+    Ok(notices)
+}
+
+fn print_notices(notices: &[String]) {
+    for notice in notices {
+        eprintln!("Notice: {notice}");
+    }
 }
 
 fn cmd_list() -> Result<(), DictationError> {
@@ -487,8 +505,9 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
             .validate_shortcut_configuration()
             .map_err(DictationError::SettingsError)?;
     }
+    let mut notices = Vec::new();
     let settings = settings::store::try_update(|settings| {
-        apply_setting_value(settings, key, value).map_err(|error| error.to_string())?;
+        notices = apply_setting_value_with_notices(settings, key, value).map_err(|error| error.to_string())?;
         if matches!(key, "hotkey" | "hotkey_mode") {
             settings.validate_shortcut_configuration()?;
         }
@@ -497,6 +516,7 @@ fn cmd_set(key: &str, value: &str) -> Result<(), DictationError> {
     .map_err(DictationError::SettingsError)?;
 
     eprintln!("Set {key} = {}", get_setting_value(&settings, key));
+    print_notices(&notices);
     if let Some(warning) = setting_warning(key, &settings) {
         eprintln!("Warning: {warning}");
     }
@@ -536,12 +556,30 @@ fn apply_setting_value(
     key: &str,
     value: &str,
 ) -> Result<(), DictationError> {
+    apply_setting_value_with_notices(settings, key, value).map(|_| ())
+}
+
+/// Apply one `config set`; returns notices for profile models reset to Auto
+/// because the new language does not support them.
+fn apply_setting_value_with_notices(
+    settings: &mut Settings,
+    key: &str,
+    value: &str,
+) -> Result<Vec<String>, DictationError> {
+    if key == "language" {
+        return settings
+            .set_default_profile_language(parse_enum_value::<Language>(value, "language")?)
+            .map_err(DictationError::SettingsError);
+    }
+    apply_other_setting_value(settings, key, value).map(|()| Vec::new())
+}
+
+fn apply_other_setting_value(
+    settings: &mut Settings,
+    key: &str,
+    value: &str,
+) -> Result<(), DictationError> {
     match key {
-        "language" => {
-            settings
-                .set_default_profile_language(parse_enum_value::<Language>(value, "language")?)
-                .map_err(DictationError::SettingsError)?;
-        }
         "whisper_model" => {
             let model = parse_enum_value::<WhisperModel>(value, "whisper_model")?;
             settings.set_profile_model(&settings.default_profile().id, FileModelPreference::Whisper(model))
@@ -660,10 +698,17 @@ fn cmd_reset(key: Option<&str>) -> Result<(), DictationError> {
             eprintln!("Reset hotkey to {}", settings::store::load().hotkey);
             return Ok(());
         }
-        let settings =
-            settings::store::try_update(|settings| reset_setting_value(settings, key, &defaults))
-                .map_err(DictationError::SettingsError)?;
+        let mut notices = Vec::new();
+        let settings = settings::store::try_update(|settings| {
+            if key == "language" {
+                notices = settings.set_default_profile_language(defaults.language)?;
+                return Ok(());
+            }
+            reset_setting_value(settings, key, &defaults)
+        })
+        .map_err(DictationError::SettingsError)?;
         eprintln!("Reset {key} to {}", get_setting_value(&settings, key));
+        print_notices(&notices);
     } else {
         settings::store::try_update(|current| {
             reset_all_settings(current)?;
@@ -681,7 +726,7 @@ fn reset_setting_value(
     defaults: &Settings,
 ) -> Result<(), String> {
     match key {
-        "language" => settings.set_default_profile_language(defaults.language),
+        "language" => settings.set_default_profile_language(defaults.language).map(|_| ()),
         "whisper_model" => {
             settings.whisper_model = defaults.whisper_model;
             settings.set_profile_model(&settings.default_profile().id, FileModelPreference::Auto)?;
@@ -1067,6 +1112,43 @@ mod tests {
     fn parse_enum_value_invalid_language() {
         let result = parse_enum_value::<Language>("de", "language");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn cli_language_change_resets_incompatible_model_with_notice_and_keeps_others() {
+        let profile = |id: &str, shortcut: &str, language| HotkeyProfile {
+            id: id.to_string(),
+            name: id.to_string(),
+            shortcut: shortcut.to_string(),
+            language,
+            push_to_talk_shortcut: None,
+            toggle_shortcut: None,
+        };
+        let mut settings = Settings {
+            hotkey_profiles: vec![
+                profile("default", "Super+S", Language::Swedish),
+                profile("other", "Super+O", Language::Swedish),
+            ],
+            ..Default::default()
+        };
+        settings.set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true).unwrap();
+        settings.set_profile_model_gated("other", FileModelPreference::PianissimoOriginal, true).unwrap();
+
+        // `config profiles update default --language en` path.
+        let mut profiles = settings.resolved_hotkey_profiles();
+        profiles[0].language = Language::English;
+        let notices = settings.replace_hotkey_profiles(profiles).unwrap();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("Pianissimo only supports Swedish"), "{}", notices[0]);
+        assert!(notices[0].contains("Recommended (Whisper Base (EN))"), "{}", notices[0]);
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Auto);
+        assert_eq!(settings.profile_models["other"], FileModelPreference::PianissimoOriginal);
+
+        // `config set language` path: compatible explicit model is kept silently.
+        settings.set_profile_model("default", FileModelPreference::Whisper(WhisperModel::Base)).unwrap();
+        let notices = apply_setting_value_with_notices(&mut settings, "language", "no").unwrap();
+        assert!(notices.is_empty());
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Whisper(WhisperModel::Base));
     }
 
     #[test]

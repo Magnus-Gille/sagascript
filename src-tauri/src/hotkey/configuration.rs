@@ -9,13 +9,22 @@ pub enum HotkeyChange {
 
 impl HotkeyChange {
     pub fn prepare(&self, settings: &Settings) -> Result<Settings, String> {
+        self.prepare_with_notices(settings).map(|(candidate, _)| candidate)
+    }
+
+    /// Like [`Self::prepare`], also returning notices about profile models
+    /// that were reset to Auto because a language change made them incompatible.
+    pub fn prepare_with_notices(&self, settings: &Settings) -> Result<(Settings, Vec<String>), String> {
         let mut candidate = settings.clone();
-        match self {
+        let notices = match self {
             Self::Profiles(profiles) => candidate.replace_hotkey_profiles(profiles.clone())?,
-            Self::Mode(mode) => candidate.replace_hotkey_mode(*mode)?,
-        }
+            Self::Mode(mode) => {
+                candidate.replace_hotkey_mode(*mode)?;
+                Vec::new()
+            }
+        };
         candidate.validate_shortcut_configuration()?;
-        Ok(candidate)
+        Ok((candidate, notices))
     }
 
     pub fn apply_registered(

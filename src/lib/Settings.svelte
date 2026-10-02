@@ -124,6 +124,8 @@
   // Initial data-fetch + settings-mutation error states
   let initError: string = $state("");
   let settingsError: string = $state("");
+  // Non-blocking notices: a profile's model was reset to Auto by a language change.
+  let profileModelNotices: string[] = $state([]);
   let blockedLanguageChange: { language: Language; source: string } | null = $state(null);
   let languageSaving = $state(false);
   let languageSelectEl: HTMLSelectElement | undefined = $state();
@@ -1076,13 +1078,14 @@
    * the rejected value snaps back). Never re-throws.
    */
   async function applySetting(
-    mutate: () => Promise<void>,
+    mutate: () => Promise<void | string[]>,
     errorSink?: { value: string },
     reportError = true,
   ): Promise<boolean> {
     if (reportError) settingsError = "";
     try {
-      await mutate();
+      const notices = await mutate();
+      profileModelNotices = Array.isArray(notices) ? notices : [];
       settings = await getSettings();
       await refreshProfileModels(settings.hotkey_profiles);
       return true;
@@ -1142,7 +1145,8 @@
       if (defaultDraft !== null) rememberGlossaryRecovery("default", defaultDraft);
       settings = { ...settings, profile_glossaries: { ...settings.profile_glossaries, default: "" } };
       if (glossaryScopeId === "default") discardGlossaryChanges();
-      await setLanguage(request.language);
+      const notices = await setLanguage(request.language);
+      profileModelNotices = Array.isArray(notices) ? notices : [];
     } catch (error: any) {
       const message = typeof error === "string" ? error : error?.message || "Unknown error";
       if (cleared) rememberGlossaryRecovery("default", request.source);
@@ -1913,6 +1917,13 @@
             <span class="field-label">Dictation profiles · shortcut, language, model</span>
             <button class="link-btn" onclick={addProfile}>+ Add profile</button>
           </div>
+          {#if profileModelNotices.length}
+            <div class="profile-model-notice" role="status">
+              <span>{profileModelNotices.join(" ")}</span>
+              <button class="link-btn" type="button" aria-label="Dismiss notice"
+                onclick={() => (profileModelNotices = [])}>Dismiss</button>
+            </div>
+          {/if}
           {#each settings.hotkey_profiles as profile (profile.id)}
             <div class="profile-card">
               <div class="profile-row">
@@ -3113,6 +3124,19 @@
     border-radius: var(--radius);
     font-size: 13px;
   }
+
+  .profile-model-notice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius);
+    font-size: 12px;
+  }
+
+  .profile-model-notice span { flex: 1; color: var(--text-muted); }
 
   .recovery-notice span { flex: 1; color: var(--text-muted); }
   .recovery-notice button { flex-shrink: 0; }

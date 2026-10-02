@@ -1139,24 +1139,49 @@ impl Settings {
         changed
     }
 
-    pub fn set_default_profile_language(&mut self, language: Language) -> Result<(), String> {
+    /// Change the default profile's language. A model the new language cannot
+    /// use is reset to Auto; the returned notices describe every such reset.
+    pub fn set_default_profile_language(&mut self, language: Language) -> Result<Vec<String>, String> {
         let mut candidate = self.clone();
         let mut profiles = candidate.resolved_hotkey_profiles();
         let index = profiles.iter().position(|profile| profile.id == "default").unwrap_or(0);
-        let id = profiles[index].id.clone();
         profiles[index].language = language;
-        let compatible = match candidate.profile_models.get(&id) {
-            Some(FileModelPreference::Auto) => true,
-            Some(FileModelPreference::Whisper(model)) => model.is_compatible_with(language),
-            Some(FileModelPreference::PianissimoOriginal) => language == Language::Swedish,
-            None => false,
-        };
-        if !compatible {
-            candidate.profile_models.insert(id, FileModelPreference::Auto);
-        }
-        candidate.replace_hotkey_profiles(profiles)?;
+        let notices = candidate.replace_hotkey_profiles(profiles)?;
         *self = candidate;
-        Ok(())
+        Ok(notices)
+    }
+
+    /// Reset (to Auto) the model of every profile whose language differs from
+    /// `previous` and whose explicit model cannot serve the new language.
+    /// Other profiles are never touched. Returns one notice per reset.
+    fn reset_models_incompatible_after_language_change(&mut self, previous: &[HotkeyProfile]) -> Vec<String> {
+        let supported = crate::transcription::pianissimo_backend::runtime_supported_on_this_os();
+        let mut notices = Vec::new();
+        for profile in self.resolved_hotkey_profiles() {
+            let changed = previous.iter().any(|old| old.id == profile.id && old.language != profile.language);
+            if !changed {
+                continue;
+            }
+            let reason = match self.profile_models.get(&profile.id) {
+                Some(FileModelPreference::Whisper(model)) if !model.is_compatible_with(profile.language) => {
+                    format!("{} does not support {}", model.display_name(), profile.language.display_name())
+                }
+                Some(FileModelPreference::PianissimoOriginal) if profile.language != Language::Swedish => {
+                    "Pianissimo only supports Swedish".to_string()
+                }
+                _ => continue,
+            };
+            let recommended = match FileModel::recommended_for(profile.language, supported) {
+                FileModel::Whisper(model) => model.display_name(),
+                FileModel::PianissimoOriginal => "Pianissimo",
+            };
+            self.profile_models.insert(profile.id.clone(), FileModelPreference::Auto);
+            notices.push(format!(
+                "Model for profile '{}' changed to Recommended ({recommended}) because {reason}.",
+                profile.name
+            ));
+        }
+        notices
     }
 
     /// Resolve the selected profile's dictionary. Unmigrated in-memory legacy
@@ -1419,7 +1444,10 @@ impl Settings {
         Ok(())
     }
 
-    pub fn replace_hotkey_profiles(&mut self, profiles: Vec<HotkeyProfile>) -> Result<(), String> {
+    /// Replace the profile list. When a profile's language changes and its explicit
+    /// model no longer fits, that profile's model is reset to Auto and a notice
+    /// is returned instead of an error.
+    pub fn replace_hotkey_profiles(&mut self, profiles: Vec<HotkeyProfile>) -> Result<Vec<String>, String> {
         let mut profiles = profiles;
         for profile in &mut profiles {
             if let Some(shortcut) = profile
@@ -1473,6 +1501,7 @@ impl Settings {
         for profile in &candidate.hotkey_profiles {
             candidate.profile_models.entry(profile.id.clone()).or_insert(FileModelPreference::Auto);
         }
+        let notices = candidate.reset_models_incompatible_after_language_change(&current_profiles);
         for profile in &candidate.hotkey_profiles {
             candidate.dictation_model_for_profile(&profile.id)?;
         }
@@ -1481,7 +1510,7 @@ impl Settings {
         self.language = candidate.language;
         self.hotkey_profiles = candidate.hotkey_profiles;
         self.profile_models = candidate.profile_models;
-        Ok(())
+        Ok(notices)
     }
 
     pub fn hotkey_profile_for_shortcut(&self, shortcut: &str) -> Option<HotkeyProfile> {
@@ -2489,24 +2518,58 @@ mod tests {
     }
 
     #[test]
-    fn incompatible_language_change_preserves_explicit_model_until_caller_selects_new_one() {
+    fn incompatible_language_change_resets_only_that_profile_to_auto_with_notice() {
+        let mut swedish = profile("default", "Super+S", Language::Swedish);
+        swedish.name = "Svenska".into();
+        let mut settings = Settings {
+            language: Language::Swedish,
+            hotkey_profiles: vec![swedish.clone(), profile("other", "Super+O", Language::Swedish)],
+            ..Default::default()
+        };
+        settings.set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true).unwrap();
+        settings.set_profile_model_gated("other", FileModelPreference::PianissimoOriginal, true).unwrap();
+        let mut english = swedish;
+        english.language = Language::English;
+        let notices = settings
+            .replace_hotkey_profiles(vec![english, profile("other", "Super+O", Language::Swedish)])
+            .unwrap();
+        assert_eq!(notices, vec![
+            "Model for profile 'Svenska' changed to Recommended (Whisper Base (EN)) because Pianissimo only supports Swedish."
+                .to_string()
+        ]);
+        assert_eq!(settings.default_profile().language, Language::English);
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Auto);
+        assert_eq!(settings.dictation_model_for_profile("default").unwrap(), FileModel::Whisper(WhisperModel::BaseEn));
+        assert_eq!(settings.profile_models["other"], FileModelPreference::PianissimoOriginal);
+    }
+
+    #[test]
+    fn incompatible_whisper_model_is_reset_with_notice_naming_both_models() {
         let mut settings = Settings {
             language: Language::Swedish,
             hotkey_profiles: vec![profile("default", "Super+S", Language::Swedish)],
             ..Default::default()
         };
-        settings.set_profile_model_gated("default", FileModelPreference::PianissimoOriginal, true).unwrap();
-        let error = settings.replace_hotkey_profiles(vec![profile("default", "Super+S", Language::English)])
-            .unwrap_err();
-        assert!(error.contains("Pianissimo"));
-        assert_eq!(settings.default_profile().language, Language::Swedish);
-        assert_eq!(settings.profile_models["default"], FileModelPreference::PianissimoOriginal);
-
-        // The explicit default-language command chooses the new language's
-        // recommendation without mutating another profile or its dictionary.
-        settings.set_default_profile_language(Language::English).unwrap();
+        settings.set_profile_model("default", FileModelPreference::Whisper(WhisperModel::KbWhisperBase)).unwrap();
+        let notices = settings.set_default_profile_language(Language::English).unwrap();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("KB-Whisper Base does not support English"), "{}", notices[0]);
+        assert!(notices[0].contains("Recommended (Whisper Base (EN))"), "{}", notices[0]);
         assert_eq!(settings.profile_models["default"], FileModelPreference::Auto);
-        assert_eq!(settings.dictation_model_for_profile("default").unwrap(), FileModel::Whisper(WhisperModel::BaseEn));
+    }
+
+    #[test]
+    fn compatible_language_change_keeps_explicit_model_without_notice() {
+        let mut settings = Settings {
+            hotkey_profiles: vec![profile("default", "Super+E", Language::English)],
+            ..Default::default()
+        };
+        settings.set_profile_model("default", FileModelPreference::Whisper(WhisperModel::Base)).unwrap();
+        let mut norwegian = profile("default", "Super+E", Language::Norwegian);
+        norwegian.name = "default".into();
+        let notices = settings.replace_hotkey_profiles(vec![norwegian]).unwrap();
+        assert!(notices.is_empty());
+        assert_eq!(settings.profile_models["default"], FileModelPreference::Whisper(WhisperModel::Base));
     }
 
     #[test]
