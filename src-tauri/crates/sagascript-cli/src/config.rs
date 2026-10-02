@@ -254,9 +254,9 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
                     )
                 })?;
             let hotkey_warnings = [
-                bare_extended_hotkey_warning(&shortcut),
-                push_to_talk_shortcut.as_deref().and_then(bare_extended_hotkey_warning),
-                toggle_shortcut.as_deref().and_then(bare_extended_hotkey_warning),
+                shortcut_warning(&shortcut),
+                push_to_talk_shortcut.as_deref().and_then(shortcut_warning),
+                toggle_shortcut.as_deref().and_then(shortcut_warning),
             ];
             let mut profiles = settings::store::load().resolved_hotkey_profiles();
             if profiles.iter().any(|profile| profile.id == id) {
@@ -304,9 +304,9 @@ fn cmd_profiles(action: ProfileAction) -> Result<(), DictationError> {
                 ));
             }
             let hotkey_warnings = [
-                hotkey.as_deref().and_then(bare_extended_hotkey_warning),
-                push_to_talk_shortcut.as_deref().and_then(bare_extended_hotkey_warning),
-                toggle_shortcut.as_deref().and_then(bare_extended_hotkey_warning),
+                hotkey.as_deref().and_then(shortcut_warning),
+                push_to_talk_shortcut.as_deref().and_then(shortcut_warning),
+                toggle_shortcut.as_deref().and_then(shortcut_warning),
             ];
             let language = language
                 .as_deref()
@@ -510,10 +510,26 @@ fn setting_warning(key: &str, settings: &Settings) -> Option<&'static str> {
              until it is granted, the GUI will keep or reset auto-paste to false",
         )
     } else if key == "hotkey" {
-        bare_extended_hotkey_warning(&settings.hotkey)
+        shortcut_warning(&settings.hotkey)
     } else {
         None
     }
+}
+
+/// Warning for a shortcut: the brightness-key hint takes precedence because a
+/// key that never reaches the app makes the Accessibility note moot.
+fn shortcut_warning(shortcut: &str) -> Option<&'static str> {
+    brightness_key_hotkey_warning(shortcut).or_else(|| bare_extended_hotkey_warning(shortcut))
+}
+
+/// macOS maps bare F14/F15 to the screen-brightness keys, so they usually never
+/// reach the app. Mirrors the hint in src/lib/hotkey.js.
+fn brightness_key_hotkey_warning(shortcut: &str) -> Option<&'static str> {
+    let is_brightness_key = matches!(shortcut.trim().to_ascii_uppercase().as_str(), "F14" | "F15");
+    (cfg!(target_os = "macos") && is_brightness_key).then_some(
+        "F14 and F15 control screen brightness on Macs and usually don't reach Sagascript. \
+         F13 and F16-F19 work",
+    )
 }
 
 fn bare_extended_hotkey_warning(shortcut: &str) -> Option<&'static str> {
@@ -1467,5 +1483,18 @@ mod tests {
 
         assert!(bare_extended_hotkey_warning("Shift+F24").is_none());
         assert!(bare_extended_hotkey_warning("F013").is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn brightness_key_hotkey_warns_only_for_bare_f14_and_f15() {
+        assert!(brightness_key_hotkey_warning("F14").unwrap().contains("brightness"));
+        assert!(brightness_key_hotkey_warning(" f15 ").is_some());
+        assert!(brightness_key_hotkey_warning("F13").is_none());
+        assert!(brightness_key_hotkey_warning("F16").is_none());
+        assert!(brightness_key_hotkey_warning("Shift+F14").is_none());
+        assert!(brightness_key_hotkey_warning("F140").is_none());
+        assert!(shortcut_warning("F14").unwrap().contains("brightness"));
+        assert!(shortcut_warning("F13").unwrap().contains("Accessibility"));
     }
 }

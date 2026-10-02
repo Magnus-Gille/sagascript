@@ -132,7 +132,7 @@ const BASELINE_GATES = {
     test: [
       ["Cargo check", "cargo check"],
       ["Cargo test", "cargo test"],
-      ["Cargo clippy", "cargo clippy -- -D warnings"],
+      ["Cargo clippy", "cargo clippy --all-targets -- -D warnings"],
       ["Cargo test (sagascript-core, no features)", "cargo test -p sagascript-core"],
       ["Cargo test (sagascript-cli)", "cargo test -p sagascript-cli"],
       ["Cargo clippy (sagascript-core, no features)", "cargo clippy -p sagascript-core --all-targets -- -D warnings"],
@@ -156,7 +156,7 @@ const BASELINE_GATES = {
     test: [
       ["Cargo check", "cargo check"],
       ["Cargo test", "cargo test"],
-      ["Cargo clippy", "cargo clippy -- -D warnings"],
+      ["Cargo clippy", "cargo clippy --all-targets -- -D warnings"],
       ["Cargo test (sagascript-core, no features)", "cargo test -p sagascript-core"],
       ["Cargo test (sagascript-cli)", "cargo test -p sagascript-cli"],
       ["Cargo clippy (sagascript-core, no features)", "cargo clippy -p sagascript-core --all-targets -- -D warnings"],
