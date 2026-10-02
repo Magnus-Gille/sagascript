@@ -86,6 +86,63 @@ pub fn cluster_speakers(
         .collect()
 }
 
+/// Absorb clusters with less than `min_seconds` of total speech into the nearest
+/// larger cluster (cosine similarity of L2-normalised centroids).
+///
+/// Segment-level clustering at a threshold that separates real speakers also
+/// produces small spurious clusters from short or noisy utterances (phone audio,
+/// laughter, backchannels). A real participant speaks for more than a few
+/// seconds in total, so those clusters are merged instead of being reported as
+/// extra speakers. `labels[i]` and `durations[i]` belong to `embeddings[i]`.
+/// The largest cluster is never absorbed, so at least one speaker remains.
+pub fn absorb_small_clusters(
+    embeddings: &[(usize, [f32; EMBEDDING_DIM])],
+    labels: &mut [usize],
+    durations: &[f64],
+    min_seconds: f64,
+) {
+    debug_assert_eq!(embeddings.len(), labels.len());
+    debug_assert_eq!(embeddings.len(), durations.len());
+    loop {
+        let mut total: std::collections::BTreeMap<usize, f64> = std::collections::BTreeMap::new();
+        for (&label, &d) in labels.iter().zip(durations) {
+            *total.entry(label).or_default() += d.max(0.0);
+        }
+        if total.len() < 2 {
+            return;
+        }
+        // Smallest cluster below the minimum; ties resolved by lowest label.
+        let Some((&small, _)) = total
+            .iter()
+            .filter(|(_, &t)| t < min_seconds)
+            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        else {
+            return;
+        };
+        let centroid = |label: usize| {
+            let mut c = [0.0f32; EMBEDDING_DIM];
+            for ((_, e), _) in embeddings.iter().zip(labels.iter()).filter(|(_, &l)| l == label) {
+                for (acc, v) in c.iter_mut().zip(e.iter()) {
+                    *acc += *v;
+                }
+            }
+            c
+        };
+        let small_centroid = centroid(small);
+        let target = total
+            .keys()
+            .copied()
+            .filter(|&l| l != small)
+            .map(|l| (l, cosine_similarity(&small_centroid, &centroid(l))))
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(l, _)| l);
+        let Some(target) = target else { return };
+        for label in labels.iter_mut().filter(|l| **l == small) {
+            *label = target;
+        }
+    }
+}
+
 /// Cut a dendrogram at `threshold`, returning a cluster label per observation.
 ///
 /// Uses Union-Find over observations only (indices 0..n). For each step where
@@ -296,5 +353,49 @@ mod tests {
         let input = vec![(0, nan_emb), (1, unit_embedding(1)), (2, unit_embedding(2))];
         let result = cluster_speakers(&input, 0.8);
         assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn small_cluster_is_absorbed_into_nearest_larger_cluster() {
+        let a = unit_embedding(0);
+        let b = unit_embedding(1);
+        let mut near_a = [0.0f32; EMBEDDING_DIM];
+        near_a[0] = 0.8;
+        near_a[2] = 0.6;
+        let input = vec![(0, a), (1, b), (2, near_a)];
+        let mut labels = vec![0, 1, 2];
+        absorb_small_clusters(&input, &mut labels, &[30.0, 30.0, 2.0], 8.0);
+        assert_eq!(labels, vec![0, 1, 0], "2 s cluster joins the closer large cluster");
+    }
+
+    #[test]
+    fn clusters_at_or_above_minimum_are_kept() {
+        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1))];
+        let mut labels = vec![0, 1];
+        absorb_small_clusters(&input, &mut labels, &[8.0, 20.0], 8.0);
+        assert_eq!(labels, vec![0, 1]);
+    }
+
+    #[test]
+    fn largest_cluster_survives_when_everything_is_small() {
+        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1)), (2, unit_embedding(2))];
+        let mut labels = vec![0, 1, 2];
+        absorb_small_clusters(&input, &mut labels, &[1.0, 3.0, 2.0], 8.0);
+        let unique: std::collections::HashSet<_> = labels.iter().collect();
+        assert_eq!(unique.len(), 1, "short audio collapses to a single speaker: {labels:?}");
+    }
+
+    #[test]
+    fn absorption_sums_durations_per_cluster_not_per_segment() {
+        // Three 3 s segments of one speaker = 9 s >= 8 s: a real speaker.
+        let input = vec![
+            (0, unit_embedding(0)),
+            (1, unit_embedding(1)),
+            (2, unit_embedding(1)),
+            (3, unit_embedding(1)),
+        ];
+        let mut labels = vec![0, 1, 1, 1];
+        absorb_small_clusters(&input, &mut labels, &[30.0, 3.0, 3.0, 3.0], 8.0);
+        assert_eq!(labels, vec![0, 1, 1, 1]);
     }
 }

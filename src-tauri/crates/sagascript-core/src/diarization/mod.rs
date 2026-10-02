@@ -19,13 +19,17 @@ const ORT_INTRA_THREADS: usize = 4;
 /// Configuration for the diarization pipeline.
 pub struct DiarizeConfig {
     /// Cosine distance threshold for agglomerative clustering (0.0–2.0).
-    /// Lower = stricter (more speakers). Default 0.75.
+    /// Lower = stricter (more speakers). Default 0.45 (see docs/benchmarks/diarization-sv.md).
     pub threshold: f32,
     /// Minimum segment duration in seconds to keep. Default 0.3s.
     pub min_segment: f64,
     /// Merge same-speaker segments closer than this gap (seconds). Default 0.5s.
     pub min_gap: f64,
 }
+
+/// A speaker must be heard for at least this many seconds in total; smaller
+/// embedding clusters are absorbed into the nearest larger one.
+pub const MIN_SPEAKER_SECONDS: f64 = 8.0;
 
 /// Threshold-independent output of segmentation and speaker embedding.
 ///
@@ -75,12 +79,12 @@ pub struct DiarizationTimings {
 impl Default for DiarizeConfig {
     fn default() -> Self {
         Self {
-            // Tuned against the two ground-truthed test files (dj_2022_feu FR,
-            // nb_samtale_nb12 NO) with permutation-aligned window stitching:
-            // both are DER-optimal across 0.70–0.80; 0.85 sits on a cliff where
-            // nb_samtale's two speakers merge into one cluster. 0.75 is the
-            // midpoint of the common plateau.
-            threshold: 0.75,
+            // Segment-level average linkage (no per-track cap, see
+            // `assign_speaker_labels`). Swept on five Swedish Riksdag debates plus the
+            // two short clips: long debates are on a plateau at 0.35-0.45 (0.5 sits near
+            // a cliff, 0.55+ merges speakers); 0.45 plus the small-cluster absorption
+            // keeps the short 2-speaker clips at 2-3 speakers.
+            threshold: 0.45,
             min_segment: 0.3,
             min_gap: 0.5,
         }
@@ -229,14 +233,28 @@ pub fn cluster(
         })
         .collect::<Vec<_>>();
 
-    // Cluster embeddings → global speaker IDs
-    // speaker_map[i] = (segment_index, global_id) — segment_index keys into raw_segments
+    // Cluster embeddings → global speaker IDs. Every embedded segment keeps its own
+    // embedding cluster; the pyannote tracks only label segments that could not be
+    // embedded (too short).
     let clustered = if embeddings.is_empty() {
         Vec::new()
     } else {
-        clustering::cluster_speakers(&embeddings, config.threshold)
+        let mut clustered = clustering::cluster_speakers(&embeddings, config.threshold);
+        let durations: Vec<f64> = embeddings
+            .iter()
+            .map(|(index, _)| {
+                let (start, end, _) = raw_segments[*index];
+                (end - start).max(0.0)
+            })
+            .collect();
+        let mut labels: Vec<usize> = clustered.iter().map(|(_, label)| *label).collect();
+        clustering::absorb_small_clusters(&embeddings, &mut labels, &durations, MIN_SPEAKER_SECONDS);
+        for (entry, label) in clustered.iter_mut().zip(labels) {
+            entry.1 = label;
+        }
+        clustered
     };
-    let speaker_map = stabilize_clusters_by_track(raw_segments, &clustered);
+    let speaker_map = assign_speaker_labels(raw_segments, &clustered);
     let n_global = speaker_map
         .iter()
         .map(|(_, g)| g)
@@ -268,19 +286,20 @@ pub fn cluster(
     Ok(segments)
 }
 
-/// Reconcile embedding clusters with the globally aligned pyannote tracks.
+/// Turn embedding clusters into contiguous output speaker labels.
 ///
-/// Since window permutation alignment was introduced, the third field of each
-/// raw segment is a stable track ID rather than a window-local speaker slot.
-/// Short utterances (especially children or noisy speech) produce volatile
-/// WeSpeaker embeddings and can otherwise split one stable track into many
-/// output speakers. For each track, use the embedding cluster covering the
-/// greatest amount of speech, while still allowing embedding clustering to
-/// merge two tracks that represent the same physical speaker.
-fn stabilize_clusters_by_track(
+/// Each embedded segment keeps its own cluster. Earlier versions forced every
+/// pyannote track (a window-stitched speaker slot, at most three per 10 s window)
+/// into a single cluster; on a debate where speakers take turns, stitching reuses
+/// the same few slots for different people, so that cap merged speakers no matter
+/// how low the threshold was (issue #284). Tracks are now only a fallback for
+/// segments too short to embed: they take the duration-weighted majority cluster
+/// of their track, or a distinct fallback key when the track has no embedding.
+fn assign_speaker_labels(
     raw_segments: &[(f64, f64, usize)],
     clustered: &[(usize, usize)],
 ) -> Vec<(usize, usize)> {
+    let cluster_of_segment: HashMap<usize, usize> = clustered.iter().copied().collect();
     let mut duration_by_track_cluster: HashMap<usize, HashMap<usize, f64>> = HashMap::new();
     for &(segment_index, cluster) in clustered {
         let Some(&(start, end, track)) = raw_segments.get(segment_index) else {
@@ -293,7 +312,7 @@ fn stabilize_clusters_by_track(
             .or_default() += (end - start).max(0.0);
     }
 
-    let mut canonical_cluster_by_track = HashMap::new();
+    let mut fallback_cluster_by_track = HashMap::new();
     for (track, durations) in duration_by_track_cluster {
         let canonical = durations
             .into_iter()
@@ -306,11 +325,11 @@ fn stabilize_clusters_by_track(
             })
             .map(|(cluster, _)| cluster)
             .unwrap_or(0);
-        canonical_cluster_by_track.insert(track, canonical);
+        fallback_cluster_by_track.insert(track, canonical);
     }
 
-    // Remap canonical cluster IDs to contiguous output labels in segment order.
-    // Tracks without an embedding get a distinct deterministic fallback key.
+    // Remap cluster IDs to contiguous output labels in segment order. Tracks
+    // without any embedding get a distinct deterministic fallback key.
     let fallback_base = clustered
         .iter()
         .map(|(_, cluster)| cluster)
@@ -322,8 +341,9 @@ fn stabilize_clusters_by_track(
         .iter()
         .enumerate()
         .map(|(segment_index, &(_, _, track))| {
-            let key = canonical_cluster_by_track
-                .get(&track)
+            let key = cluster_of_segment
+                .get(&segment_index)
+                .or_else(|| fallback_cluster_by_track.get(&track))
                 .copied()
                 .unwrap_or(fallback_base + track);
             let output_label = *output_label_by_key.entry(key).or_insert_with(|| {
@@ -436,41 +456,54 @@ mod tests {
     }
 
     #[test]
-    fn stable_track_is_not_split_by_noisy_short_utterance_embeddings() {
-        let raw = vec![
-            (0.0, 10.0, 0),
-            (10.0, 10.5, 1),
-            (11.0, 12.0, 1),
-            (13.0, 13.4, 1),
-        ];
-        // Track 1 was over-clustered into three labels. Its longest segment's
-        // label is canonical; all three utterances must remain one speaker.
-        let clustered = vec![(0, 0), (1, 2), (2, 3), (3, 4)];
-        let stable = stabilize_clusters_by_track(&raw, &clustered);
-        assert_eq!(stable, vec![(0, 0), (1, 1), (2, 1), (3, 1)]);
+    fn embedded_segments_of_one_track_can_belong_to_different_speakers() {
+        // Regression for #284: window stitching reuses a track for different people.
+        let raw = vec![(0.0, 10.0, 1), (11.0, 20.0, 1), (21.0, 30.0, 1)];
+        let clustered = vec![(0, 4), (1, 9), (2, 4)];
+        let labels = assign_speaker_labels(&raw, &clustered);
+        assert_eq!(labels, vec![(0, 0), (1, 1), (2, 0)]);
+    }
+
+    #[test]
+    fn unembedded_segment_follows_majority_cluster_of_its_track() {
+        let raw = vec![(0.0, 10.0, 0), (10.0, 10.1, 1), (11.0, 20.0, 1), (21.0, 21.1, 1)];
+        // Segments 1 and 3 are too short to embed; segment 2 is the only embedded one of track 1.
+        let clustered = vec![(0, 3), (2, 8)];
+        let labels = assign_speaker_labels(&raw, &clustered);
+        assert_eq!(labels, vec![(0, 0), (1, 1), (2, 1), (3, 1)]);
     }
 
     #[test]
     fn embedding_cluster_can_merge_two_aligned_tracks() {
         let raw = vec![(0.0, 2.0, 0), (3.0, 5.0, 1), (6.0, 8.0, 0)];
         let clustered = vec![(0, 7), (1, 7), (2, 7)];
-        let stable = stabilize_clusters_by_track(&raw, &clustered);
-        assert_eq!(stable, vec![(0, 0), (1, 0), (2, 0)]);
-    }
-
-    #[test]
-    fn track_canonical_cluster_is_weighted_by_speech_duration() {
-        let raw = vec![(0.0, 0.2, 1), (1.0, 5.0, 1), (6.0, 6.2, 1)];
-        let clustered = vec![(0, 2), (1, 5), (2, 2)];
-        let stable = stabilize_clusters_by_track(&raw, &clustered);
+        let stable = assign_speaker_labels(&raw, &clustered);
         assert_eq!(stable, vec![(0, 0), (1, 0), (2, 0)]);
     }
 
     #[test]
     fn tracks_remain_distinct_when_all_embeddings_are_missing() {
         let raw = vec![(0.0, 0.01, 2), (0.02, 0.03, 1), (0.04, 0.05, 2)];
-        let stable = stabilize_clusters_by_track(&raw, &[]);
+        let stable = assign_speaker_labels(&raw, &[]);
         assert_eq!(stable, vec![(0, 0), (1, 1), (2, 0)]);
+    }
+
+    #[test]
+    fn cluster_separates_speakers_sharing_one_track_and_absorbs_tiny_clusters() {
+        use crate::diarization::embedding::EMBEDDING_DIM;
+        let unit = |d: usize| {
+            let mut v = vec![0.0f32; EMBEDDING_DIM];
+            v[d] = 1.0;
+            v
+        };
+        // Two real speakers (20 s each) on ONE track, plus a 1 s glitch.
+        let analysis = DiarizationAnalysis {
+            raw_segments: vec![(0.0, 20.0, 0), (21.0, 41.0, 0), (42.0, 43.0, 0)],
+            embeddings: vec![(0, unit(0)), (1, unit(1)), (2, unit(2))],
+        };
+        let segments = cluster(&analysis, &DiarizeConfig::default()).unwrap();
+        assert_ne!(segments[0].speaker, segments[1].speaker);
+        assert!(segments[2].speaker == segments[0].speaker || segments[2].speaker == segments[1].speaker);
     }
 
     #[test]

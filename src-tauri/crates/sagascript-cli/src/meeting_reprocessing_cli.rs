@@ -48,7 +48,7 @@ pub struct PlanArgs {
     #[arg(long, value_enum, default_value_t = ReprocessingModeArg::Recluster)]
     pub mode: ReprocessingModeArg,
     /// Agglomerative clustering threshold, in the inclusive range 0.0..=2.0.
-    #[arg(long, value_parser = parse_threshold, default_value = "0.75")]
+    #[arg(long, value_parser = parse_threshold, default_value = "0.45")]
     pub threshold: f32,
     /// Existing cache for selective modes.
     #[arg(long)]
