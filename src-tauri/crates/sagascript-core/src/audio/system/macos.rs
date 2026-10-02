@@ -429,8 +429,8 @@ struct IoContext {
     /// Set first thing in teardown; the IOProc checks it before touching anything.
     closed: AtomicBool,
     /// Taken (dropped) at teardown so the spool worker sees the channel close.
-    /// The context is leaked, not freed, when Core Audio cannot confirm that the
-    /// IOProc is unregistered, so a late callback only ever sees `closed`.
+    /// Once the device has started, the context is leaked rather than freed, so
+    /// a late or in-flight callback never touches freed memory.
     sink: Mutex<Option<ChunkSink>>,
     non_interleaved: bool,
     tap_channels: u32,
@@ -448,9 +448,9 @@ extern "C" fn io_proc(
     if input.is_null() || client.is_null() {
         return 0;
     }
-    // SAFETY: client is the IoContext created in `start`. It is freed only after
-    // AudioDeviceStop and AudioDeviceDestroyIOProcID both reported success;
-    // otherwise it is leaked on purpose, so this reference stays valid.
+    // SAFETY: client is the IoContext created in `start`. After a successful
+    // start it is never freed (teardown leaks it on purpose), and it is freed on
+    // a failed start only when the IOProc never ran, so this reference stays valid.
     let ctx = unsafe { &*(client as *const IoContext) };
     if ctx.closed.load(Ordering::Acquire) {
         return 0;
@@ -470,8 +470,11 @@ extern "C" fn io_proc(
     let views: Vec<(u32, &[f32])> = bufs.iter().map(view).collect();
     // Anything that is not exactly the tap's shape is dropped (silence is gap-filled).
     if let Some(chunk) = select_tap_audio(&views, ctx.tap_channels, ctx.non_interleaved) {
-        if let Some(sink) = ctx.sink.lock().unwrap().as_mut() {
-            sink(&chunk);
+        // Never unwrap on the Core Audio thread: a panic here would abort the process.
+        if let Ok(mut guard) = ctx.sink.lock() {
+            if let Some(sink) = guard.as_mut() {
+                sink(&chunk);
+            }
         }
     }
     0
@@ -660,21 +663,22 @@ impl Capture {
         };
         // SAFETY: reverse order of creation. The SDK headers do not promise that
         // AudioDeviceStop waits for a running IOProc, so the context is made
-        // inert first and is freed only if Stop and DestroyIOProcID both succeed.
+        // inert first and is never freed (see below).
         unsafe {
             (*self.ctx).closed.store(true, Ordering::Release);
-            let stop = AudioDeviceStop(self.aggregate, self.proc_id);
-            note("Stopping the tap failed", stop);
-            let unregister = AudioDeviceDestroyIOProcID(self.aggregate, self.proc_id);
-            note("Unregistering the IOProc failed", unregister);
+            note("Stopping the tap failed", AudioDeviceStop(self.aggregate, self.proc_id));
+            note("Unregistering the IOProc failed", AudioDeviceDestroyIOProcID(self.aggregate, self.proc_id));
             note("Destroying the aggregate device failed", AudioHardwareDestroyAggregateDevice(self.aggregate));
             note("Destroying the tap failed", (self.destroy_tap)(self.tap));
             // Drop the sink (and with it the channel sender) so the spool worker
-            // can finish and delete its file even if the context must be leaked.
-            drop((*self.ctx).sink.lock().unwrap().take());
-            if stop == 0 && unregister == 0 {
-                drop(Box::from_raw(self.ctx));
-            } // else: leak the small inert context; a late callback only sees `closed`
+            // can finish and delete its file. A callback that is still running
+            // holds the mutex, so this waits for it; later callbacks find `None`.
+            drop((*self.ctx).sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take());
+            // The context itself is never freed after a start: a callback that
+            // passed the `closed` check just before it was set may still be about
+            // to lock the mutex, and success from Stop/DestroyIOProcID does not
+            // prove it has returned. What remains is a few bytes (flag, empty
+            // mutex), leaked once per recording.
         }
         first
     }
