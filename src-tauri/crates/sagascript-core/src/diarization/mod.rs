@@ -29,16 +29,22 @@ pub struct DiarizeConfig {
     /// clusters are absorbed into the nearest cluster that reaches it. Default
     /// [`MIN_SPEAKER_SECONDS`].
     pub min_speaker_seconds: f64,
+    /// A small cluster is only absorbed into a cluster whose centroid cosine distance is at most
+    /// this; otherwise it stays a distinct speaker. Default [`ABSORB_MAX_DISTANCE`].
+    pub absorb_max_distance: f32,
 }
 
 /// Default agglomerative clustering threshold (cosine distance). The single source of truth
 /// for the CLI, reprocessing and UI defaults; the clap/Svelte literals must match (tests pin
 /// the CLI ones). Chosen with the evaluation in docs/benchmarks/diarization-sv.md.
-pub const DEFAULT_THRESHOLD: f32 = 0.48;
+pub const DEFAULT_THRESHOLD: f32 = 0.36;
 
 /// A speaker must be heard for at least this many seconds in total; smaller
 /// embedding clusters are absorbed into the nearest cluster that reaches it.
 pub const MIN_SPEAKER_SECONDS: f64 = 8.0;
+
+/// Maximum centroid cosine distance for absorbing a small cluster (see [`DiarizeConfig`]).
+pub const ABSORB_MAX_DISTANCE: f32 = 0.75;
 
 /// Threshold-independent output of segmentation and speaker embedding.
 ///
@@ -93,14 +99,15 @@ impl Default for DiarizeConfig {
     fn default() -> Self {
         Self {
             // Segment-level average linkage (no per-track cap, see `assign_speaker_labels`).
-            // Swept on 5 Swedish Riksdag debates and 8 out-of-domain two-speaker clips
-            // (docs/benchmarks/diarization-sv.md). Debates are flat up to 0.46 and lose
-            // speakers from 0.52; the telephone/short clips over-split below 0.46. 0.48 is
-            // the pooled leave-one-out choice with the widest margin on both sides.
+            // Chosen on Swedish recordings only (14 Riksdag recordings, leave-one-recording-out;
+            // docs/benchmarks/diarization-sv.md): mean confusion is flat for 0.26-0.46 and 0.36 is
+            // the midpoint, 0.10 from both edges. Telephone-band, French and Norwegian audio did not
+            // influence the choice.
             threshold: DEFAULT_THRESHOLD,
             min_segment: 0.3,
             min_gap: 0.5,
             min_speaker_seconds: MIN_SPEAKER_SECONDS,
+            absorb_max_distance: ABSORB_MAX_DISTANCE,
         }
     }
 }
@@ -245,6 +252,8 @@ pub fn cluster(
                 .expect("DiarizationAnalysis was validated with exact embeddings");
             (*index, embedding)
         })
+        // Zero / non-finite embeddings are unusable: leave them to the track fallback.
+        .filter(|(_, e)| clustering::is_usable_embedding(e))
         .collect::<Vec<_>>();
 
     // Cluster embeddings → global speaker IDs. Every embedded segment keeps its own
@@ -262,7 +271,10 @@ pub fn cluster(
             })
             .collect();
         let mut labels: Vec<usize> = clustered.iter().map(|(_, label)| *label).collect();
-        clustering::absorb_small_clusters(&embeddings, &mut labels, &durations, config.min_speaker_seconds);
+        clustering::absorb_small_clusters(&embeddings, &mut labels, &durations,
+            config.min_speaker_seconds,
+            config.absorb_max_distance,
+        );
         for (entry, label) in clustered.iter_mut().zip(labels) {
             entry.1 = label;
         }
@@ -470,6 +482,29 @@ mod tests {
     }
 
     #[test]
+    fn zero_embeddings_fall_back_to_their_track_instead_of_becoming_speakers() {
+        let dim = embedding::EMBEDDING_DIM;
+        let mut real = vec![0.0f32; dim];
+        real[0] = 1.0;
+        let analysis = DiarizationAnalysis {
+            raw_segments: vec![(0.0, 20.0, 0), (21.0, 30.0, 0), (31.0, 40.0, 1), (41.0, 50.0, 1)],
+            embeddings: vec![
+                (0, real.clone()),
+                (1, real),
+                (2, vec![0.0; dim]),
+                (3, vec![0.0; dim]),
+            ],
+        };
+        let segments = cluster(&analysis, &DiarizeConfig::default()).unwrap();
+        let speakers: std::collections::BTreeSet<_> = segments.iter().map(|s| s.speaker.clone()).collect();
+        // One embedded speaker; the two zero-embedding segments share their track's fallback label
+        // (not one speaker per zero vector).
+        assert_eq!(speakers.len(), 2, "{segments:?}");
+        assert_eq!(segments[2].speaker, segments[3].speaker);
+        assert_ne!(segments[0].speaker, segments[2].speaker);
+    }
+
+    #[test]
     fn embedded_segments_of_one_track_can_belong_to_different_speakers() {
         // Regression for #284: window stitching reuses a track for different people.
         let raw = vec![(0.0, 10.0, 1), (11.0, 20.0, 1), (21.0, 30.0, 1)];
@@ -510,14 +545,18 @@ mod tests {
             v[d] = 1.0;
             v
         };
-        // Two real speakers (20 s each) on ONE track, plus a 1 s glitch.
+        // Two real speakers (20 s each) on ONE track, plus a 1 s glitch close to speaker 0 (absorbed)
+        // and a 1 s segment far from both (a distinct, if tiny, speaker: not forced into either).
+        let mut near0 = unit(0);
+        near0[2] = 0.3;
         let analysis = DiarizationAnalysis {
-            raw_segments: vec![(0.0, 20.0, 0), (21.0, 41.0, 0), (42.0, 43.0, 0)],
-            embeddings: vec![(0, unit(0)), (1, unit(1)), (2, unit(2))],
+            raw_segments: vec![(0.0, 20.0, 0), (21.0, 41.0, 0), (42.0, 43.0, 0), (44.0, 45.0, 0)],
+            embeddings: vec![(0, unit(0)), (1, unit(1)), (2, near0), (3, unit(5))],
         };
         let segments = cluster(&analysis, &DiarizeConfig::default()).unwrap();
         assert_ne!(segments[0].speaker, segments[1].speaker);
-        assert!(segments[2].speaker == segments[0].speaker || segments[2].speaker == segments[1].speaker);
+        assert_eq!(segments[2].speaker, segments[0].speaker);
+        assert!(segments[3].speaker != segments[0].speaker && segments[3].speaker != segments[1].speaker);
     }
 
     #[test]

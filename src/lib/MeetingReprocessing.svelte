@@ -53,7 +53,7 @@
   }: Props = $props();
 
   let mode = $state<ReprocessingMode>("recluster");
-  let threshold = $state(0.48);
+  let threshold = $state(0.36);
   let saveCache = $state(false);
   let pendingAction = $state<string | null>(null);
   let error = $state("");

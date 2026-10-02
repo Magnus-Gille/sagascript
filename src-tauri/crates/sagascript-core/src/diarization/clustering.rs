@@ -86,64 +86,88 @@ pub fn cluster_speakers(
         .collect()
 }
 
-/// Absorb clusters with less than `min_seconds` of total speech into the nearest
-/// cluster that has at least `min_seconds` (cosine similarity of centroids; the
-/// similarity normalises, so unnormalised centroid sums are fine).
+/// A usable embedding is finite and non-degenerate. Zero (or non-finite) vectors carry no
+/// speaker information; cosine similarity maps them to 0, which would make every one a separate
+/// speaker. Callers route such segments through the track fallback instead.
+pub fn is_usable_embedding(e: &[f32; EMBEDDING_DIM]) -> bool {
+    e.iter().all(|x| x.is_finite()) && e.iter().map(|x| x * x).sum::<f32>().sqrt() > 1e-6
+}
+
+/// Absorb clusters with less than `min_seconds` of total speech into a similar cluster.
 ///
-/// Segment-level clustering at a threshold that separates real speakers also
-/// produces small spurious clusters from short or noisy utterances (phone audio,
-/// laughter, backchannels). A real participant speaks for more than a few
-/// seconds in total, so those clusters are merged instead of being reported as
-/// extra speakers. `labels[i]` and `durations[i]` belong to `embeddings[i]`.
-/// Only clusters that reach `min_seconds` are merge targets. If no cluster does (very
-/// short audio) the smallest cluster merges into the nearest remaining one until a single
-/// speaker is left; the largest cluster is never absorbed, so at least one speaker remains.
+/// Segment-level clustering at a threshold that separates real speakers also produces small
+/// spurious clusters from short or noisy utterances (phone audio, laughter, backchannels). A
+/// small cluster is merged into the nearest cluster by centroid cosine distance, but only when
+/// that distance is at most `max_distance`; otherwise it stays a distinct speaker (a participant
+/// who really only speaks for a few seconds is not relabelled as someone else). Targets are the
+/// clusters that reach `min_seconds`; if none does (short audio) any other cluster is a target,
+/// subject to the same distance limit, so clearly different short speakers are never collapsed.
+/// `labels[i]` and `durations[i]` belong to `embeddings[i]`. Smallest cluster first, ties
+/// resolved by lowest label (also for equally similar targets). Aggregates are computed once and
+/// updated per merge; labels are rewritten once.
 pub fn absorb_small_clusters(
     embeddings: &[(usize, [f32; EMBEDDING_DIM])],
     labels: &mut [usize],
     durations: &[f64],
     min_seconds: f64,
+    max_distance: f32,
 ) {
     debug_assert_eq!(embeddings.len(), labels.len());
     debug_assert_eq!(embeddings.len(), durations.len());
+    struct Agg {
+        seconds: f64,
+        sum: [f32; EMBEDDING_DIM],
+    }
+    let mut clusters: std::collections::BTreeMap<usize, Agg> = std::collections::BTreeMap::new();
+    for (((_, e), &label), &d) in embeddings.iter().zip(labels.iter()).zip(durations) {
+        let agg = clusters.entry(label).or_insert(Agg { seconds: 0.0, sum: [0.0; EMBEDDING_DIM] });
+        agg.seconds += d.max(0.0);
+        for (acc, v) in agg.sum.iter_mut().zip(e.iter()) {
+            *acc += *v;
+        }
+    }
+    let mut merged_into: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    let mut kept_distinct: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     loop {
-        let mut total: std::collections::BTreeMap<usize, f64> = std::collections::BTreeMap::new();
-        for (&label, &d) in labels.iter().zip(durations) {
-            *total.entry(label).or_default() += d.max(0.0);
+        if clusters.len() < 2 {
+            break;
         }
-        if total.len() < 2 {
-            return;
-        }
-        // Smallest cluster below the minimum; ties resolved by lowest label.
-        let Some((&small, _)) = total
+        // Smallest cluster below the minimum that has not been found to have no acceptable target.
+        let Some(small) = clusters
             .iter()
-            .filter(|(_, &t)| t < min_seconds)
-            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .filter(|(l, a)| a.seconds < min_seconds && !kept_distinct.contains(*l))
+            .min_by(|a, b| a.1.seconds.partial_cmp(&b.1.seconds).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(&l, _)| l)
         else {
-            return;
+            break;
         };
-        let centroid = |label: usize| {
-            let mut c = [0.0f32; EMBEDDING_DIM];
-            for ((_, e), _) in embeddings.iter().zip(labels.iter()).filter(|(_, &l)| l == label) {
-                for (acc, v) in c.iter_mut().zip(e.iter()) {
-                    *acc += *v;
-                }
-            }
-            c
-        };
-        let small_centroid = centroid(small);
-        let any_large = total.values().any(|&t| t >= min_seconds);
-        let target = total
+        let any_large = clusters.values().any(|a| a.seconds >= min_seconds);
+        let target = clusters
             .iter()
             .rev() // max_by keeps the last maximum: reversed, ties resolve to the lowest label
-            .filter(|(&l, &t)| l != small && (!any_large || t >= min_seconds))
-            .map(|(&l, _)| l)
-            .map(|l| (l, cosine_similarity(&small_centroid, &centroid(l))))
+            .filter(|(&l, a)| l != small && (!any_large || a.seconds >= min_seconds))
+            .map(|(&l, a)| (l, cosine_similarity(&clusters[&small].sum, &a.sum)))
             .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .filter(|(_, sim)| 1.0 - sim <= max_distance)
             .map(|(l, _)| l);
-        let Some(target) = target else { return };
-        for label in labels.iter_mut().filter(|l| **l == small) {
-            *label = target;
+        let Some(target) = target else {
+            kept_distinct.insert(small);
+            continue;
+        };
+        let moved = clusters.remove(&small).expect("small cluster exists");
+        let t = clusters.get_mut(&target).expect("target cluster exists");
+        t.seconds += moved.seconds;
+        for (acc, v) in t.sum.iter_mut().zip(moved.sum.iter()) {
+            *acc += *v;
+        }
+        for v in merged_into.values_mut().filter(|v| **v == small) {
+            *v = target;
+        }
+        merged_into.insert(small, target);
+    }
+    for label in labels.iter_mut() {
+        if let Some(&t) = merged_into.get(label) {
+            *label = t;
         }
     }
 }
@@ -361,100 +385,108 @@ mod tests {
         assert_eq!(result.len(), 3);
     }
 
+    fn absorb(input: &[(usize, [f32; EMBEDDING_DIM])], labels: &[usize], dur: &[f64], max: f32) -> Vec<usize> {
+        let mut l = labels.to_vec();
+        absorb_small_clusters(input, &mut l, dur, 8.0, max);
+        l
+    }
+
+    fn mix(a: usize, wa: f32, b: usize, wb: f32) -> [f32; EMBEDDING_DIM] {
+        let mut v = [0.0f32; EMBEDDING_DIM];
+        v[a] = wa;
+        v[b] = wb;
+        v
+    }
+
     #[test]
     fn small_cluster_is_absorbed_into_nearest_larger_cluster() {
-        let a = unit_embedding(0);
-        let b = unit_embedding(1);
-        let mut near_a = [0.0f32; EMBEDDING_DIM];
-        near_a[0] = 0.8;
-        near_a[2] = 0.6;
-        let input = vec![(0, a), (1, b), (2, near_a)];
-        let mut labels = vec![0, 1, 2];
-        absorb_small_clusters(&input, &mut labels, &[30.0, 30.0, 2.0], 8.0);
-        assert_eq!(labels, vec![0, 1, 0], "2 s cluster joins the closer large cluster");
+        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1)), (2, mix(0, 0.8, 2, 0.6))];
+        // distance to cluster 0 is 0.2, to cluster 1 is 1.0
+        assert_eq!(absorb(&input, &[0, 1, 2], &[30.0, 30.0, 2.0], 0.75), vec![0, 1, 0]);
+    }
+
+    #[test]
+    fn clearly_different_short_speaker_stays_distinct() {
+        // A 7 s speaker orthogonal (distance 1.0) to every large cluster is a real participant.
+        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1)), (2, unit_embedding(2))];
+        assert_eq!(absorb(&input, &[0, 1, 2], &[60.0, 60.0, 7.0], 0.75), vec![0, 1, 2]);
+        // With the old unconditional behaviour (no distance limit) it would be merged.
+        assert_ne!(absorb(&input, &[0, 1, 2], &[60.0, 60.0, 7.0], 2.0), vec![0, 1, 2]);
     }
 
     #[test]
     fn clusters_at_or_above_minimum_are_kept() {
         let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1))];
-        let mut labels = vec![0, 1];
-        absorb_small_clusters(&input, &mut labels, &[8.0, 20.0], 8.0);
-        assert_eq!(labels, vec![0, 1]);
+        assert_eq!(absorb(&input, &[0, 1], &[8.0, 20.0], 2.0), vec![0, 1]);
+    }
+
+    #[test]
+    fn all_short_but_different_speakers_are_not_collapsed() {
+        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1)), (2, unit_embedding(2))];
+        assert_eq!(absorb(&input, &[0, 1, 2], &[1.0, 3.0, 2.0], 0.75), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn all_short_and_similar_speakers_merge_into_the_largest() {
+        // Similar short clusters merge smallest-first; the largest one survives with the label.
+        let input = vec![(0, mix(0, 1.0, 1, 0.1)), (1, mix(0, 1.0, 2, 0.1)), (2, mix(0, 1.0, 3, 0.1))];
+        assert_eq!(absorb(&input, &[0, 1, 2], &[1.0, 3.0, 2.0], 0.75), vec![1, 1, 1]);
     }
 
     #[test]
     fn small_cluster_never_merges_into_another_small_cluster() {
-        // Cluster 1 (2 s) is closest to cluster 2 (3 s, also small) but must join the large cluster 0.
-        let mut near = [0.0f32; EMBEDDING_DIM];
-        near[1] = 1.0;
-        near[2] = 0.1;
-        let input = vec![(0, unit_embedding(0)), (1, near), (2, unit_embedding(1)), (3, unit_embedding(1))];
-        let mut labels = vec![0, 1, 2, 3];
-        absorb_small_clusters(&input, &mut labels, &[40.0, 2.0, 3.0, 1.0], 8.0);
-        let unique: std::collections::HashSet<_> = labels.iter().collect();
-        assert_eq!(unique.len(), 1, "all small clusters end up in the large one: {labels:?}");
-        assert!(labels.iter().all(|&l| l == 0));
+        // Cluster 1 (2 s) is closest to cluster 2 (3 s, small) but must join large cluster 0,
+        // which is the only target; cluster 3 (1 s) likewise.
+        let input = vec![(0, mix(0, 1.0, 1, 0.5)), (1, mix(1, 1.0, 2, 0.1)), (2, unit_embedding(1)), (3, unit_embedding(1))];
+        assert_eq!(absorb(&input, &[0, 1, 2, 3], &[40.0, 2.0, 3.0, 1.0], 1.0), vec![0, 0, 0, 0]);
     }
 
     #[test]
     fn single_speaker_input_is_unchanged() {
         let input = vec![(0, unit_embedding(0)), (1, unit_embedding(0)), (2, unit_embedding(0))];
-        let mut labels = vec![0, 0, 0];
-        absorb_small_clusters(&input, &mut labels, &[1.0, 1.0, 1.0], 8.0);
-        assert_eq!(labels, vec![0, 0, 0]);
-        let clustered = cluster_speakers(&input, 0.48);
+        assert_eq!(absorb(&input, &[0, 0, 0], &[1.0, 1.0, 1.0], 0.75), vec![0, 0, 0]);
+        let clustered = cluster_speakers(&input, 0.36);
         assert!(clustered.iter().all(|(_, l)| *l == clustered[0].1));
     }
 
     #[test]
     fn equal_sized_ties_resolve_deterministically_to_lowest_label() {
-        // Two equally small clusters, equidistant to two equally large ones.
-        let mut mid = [0.0f32; EMBEDDING_DIM];
-        mid[0] = 1.0;
-        mid[1] = 1.0;
-        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1)), (2, mid)];
-        let run = || {
-            let mut labels = vec![0, 1, 2];
-            absorb_small_clusters(&input, &mut labels, &[30.0, 30.0, 2.0], 8.0);
-            labels
-        };
-        let first = run();
+        // The small cluster is equidistant to two equally large ones.
+        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1)), (2, mix(0, 1.0, 1, 1.0))];
+        let first = absorb(&input, &[0, 1, 2], &[30.0, 30.0, 2.0], 0.75);
         assert_eq!(first, vec![0, 1, 0], "tie goes to the lowest label");
-        assert_eq!(first, run());
+        assert_eq!(first, absorb(&input, &[0, 1, 2], &[30.0, 30.0, 2.0], 0.75));
     }
 
     #[test]
     fn duplicate_embeddings_in_different_clusters_do_not_panic() {
         let e = unit_embedding(3);
-        let input = vec![(0, e), (1, e), (2, unit_embedding(5))];
-        let mut labels = vec![0, 1, 2];
-        absorb_small_clusters(&input, &mut labels, &[1.0, 1.0, 20.0], 8.0);
-        assert!(labels.iter().all(|l| *l == 2), "small duplicates join the large cluster: {labels:?}");
-        // Equal embeddings always cluster together at any positive threshold.
-        let clustered = cluster_speakers(&[(0, e), (1, e), (2, e)], 0.01);
+        let input = vec![(0, e), (1, e), (2, e)];
+        assert_eq!(absorb(&input, &[0, 1, 2], &[1.0, 1.0, 20.0], 0.75), vec![2, 2, 2]);
+        let clustered = cluster_speakers(&input, 0.01);
         assert!(clustered.iter().all(|(_, l)| *l == clustered[0].1));
     }
 
     #[test]
-    fn largest_cluster_survives_when_everything_is_small() {
-        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1)), (2, unit_embedding(2))];
-        let mut labels = vec![0, 1, 2];
-        absorb_small_clusters(&input, &mut labels, &[1.0, 3.0, 2.0], 8.0);
-        let unique: std::collections::HashSet<_> = labels.iter().collect();
-        assert_eq!(unique.len(), 1, "short audio collapses to a single speaker: {labels:?}");
-    }
-
-    #[test]
     fn absorption_sums_durations_per_cluster_not_per_segment() {
-        // Three 3 s segments of one speaker = 9 s >= 8 s: a real speaker.
+        // Three 3 s segments of one speaker = 9 s >= 8 s: a real speaker even when similar.
         let input = vec![
-            (0, unit_embedding(0)),
+            (0, mix(0, 1.0, 5, 0.1)),
             (1, unit_embedding(1)),
             (2, unit_embedding(1)),
             (3, unit_embedding(1)),
         ];
         let mut labels = vec![0, 1, 1, 1];
-        absorb_small_clusters(&input, &mut labels, &[30.0, 3.0, 3.0, 3.0], 8.0);
+        absorb_small_clusters(&input, &mut labels, &[30.0, 3.0, 3.0, 3.0], 8.0, 2.0);
         assert_eq!(labels, vec![0, 1, 1, 1]);
+    }
+
+    #[test]
+    fn zero_and_non_finite_embeddings_are_unusable() {
+        assert!(!is_usable_embedding(&[0.0; EMBEDDING_DIM]));
+        let mut nan = unit_embedding(0);
+        nan[3] = f32::NAN;
+        assert!(!is_usable_embedding(&nan));
+        assert!(is_usable_embedding(&unit_embedding(0)));
     }
 }

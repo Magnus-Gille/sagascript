@@ -1,7 +1,7 @@
 //! Diarization-only evaluation helper (issue #284); no Whisper involved.
 //!
 //!   diarize_eval analyze <audio> <analysis.json>
-//!   diarize_eval cluster <analysis.json> <threshold> <segments.json> [min_speaker_seconds]
+//!   diarize_eval cluster <analysis.json> <threshold> <segments.json> [min_speaker_seconds] [absorb_max_distance]
 use sagascript_core::diarization::{self, DiarizationAnalysis, DiarizeConfig};
 
 fn main() {
@@ -18,6 +18,7 @@ fn main() {
             let analysis: DiarizationAnalysis = serde_json::from_slice(&std::fs::read(&a[2]).unwrap()).unwrap();
             let mut cfg = DiarizeConfig { threshold: a[3].parse().unwrap(), ..Default::default() };
             if let Some(m) = a.get(5) { cfg.min_speaker_seconds = m.parse().unwrap(); }
+            if let Some(m) = a.get(6) { cfg.absorb_max_distance = m.parse().unwrap(); }
             let t = std::time::Instant::now();
             let segs = diarization::cluster(&analysis, &cfg).expect("cluster");
             eprintln!("cluster {:.3}s", t.elapsed().as_secs_f64());

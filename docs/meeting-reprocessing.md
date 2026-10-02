@@ -86,7 +86,7 @@ Selective plan:
 sagascript meeting reprocess plan AUDIO \
   --previous-review REVIEW \
   --mode recluster \
-  --threshold 0.48 \
+  --threshold 0.36 \
   --cache CACHE \
   --language en \
   --output PLAN

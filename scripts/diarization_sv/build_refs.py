@@ -14,6 +14,7 @@ Speeches shorter than 5 s (chair announcements) are dropped. Crops end after a c
 import hashlib, json, re, subprocess, sys, unicodedata, urllib.request
 from pathlib import Path
 
+LICENCE = "Riksdagens oppna data: free to use and redistribute with source attribution (Kalla: Sveriges riksdag)"
 SCRATCH = Path.home() / ".cache/sagascript-bench/diar-284"
 OUT = Path(__file__).resolve().parents[2] / "docs/benchmarks/data/diarization-sv"
 # (id, committee report page slug title, crop seconds or None)
@@ -66,7 +67,7 @@ def main():
             for st, d, spk in turns:
                 f.write(f"SPEAKER {did} 1 {st:.3f} {d:.3f} <NA> <NA> {spk.replace(' ', '_')} <NA> <NA>\n")
         manifest.append({
-            "id": did, "title": title, "date": c["broadcastInformation"]["date"][:10], "page_url": u,
+            "id": did, "licence": LICENCE, "title": title, "date": c["broadcastInformation"]["date"][:10], "page_url": u,
             "audio_url": c["video"]["audioUrl"], "source_mp3_sha256": sha(mp3),
             "wav_16k_mono_sha256": sha(wav), "crop_seconds": cut, "duration_seconds": round(dur, 1),
             "speeches": len(turns), "reference_speakers": len({t[2] for t in turns}),
