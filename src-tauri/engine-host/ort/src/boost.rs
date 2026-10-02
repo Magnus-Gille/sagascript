@@ -70,10 +70,16 @@ pub struct BoostTrie {
     children: Vec<HashMap<u32, usize>>, // node 0 = root
     #[cfg_attr(not(test), allow(dead_code))]
     terminal: Vec<bool>,
+    max_nodes: usize,
 }
 
 impl BoostTrie {
     pub fn new(terms: &[String], vocab: &Vocab) -> Self {
+        Self::with_node_cap(terms, vocab, MAX_NODES)
+    }
+
+    /// [`BoostTrie::new`] with an explicit node cap (tests use a small one to reach it).
+    pub fn with_node_cap(terms: &[String], vocab: &Vocab, max_nodes: usize) -> Self {
         let blank = vocab.blank_id();
         let mut pieces: HashMap<&str, u32> = HashMap::new();
         for id in 0..vocab.len() as u32 {
@@ -83,7 +89,7 @@ impl BoostTrie {
                 }
             }
         }
-        let mut trie = Self { children: vec![HashMap::new()], terminal: vec![false] };
+        let mut trie = Self { children: vec![HashMap::new()], terminal: vec![false], max_nodes };
         for raw in terms.iter().take(MAX_BOOST_TERMS) {
             let term = raw.trim();
             if term.is_empty() || term.chars().count() > MAX_BOOST_TERM_CHARS {
@@ -118,7 +124,7 @@ impl BoostTrie {
     }
 
     fn insert(&mut self, seq: &[u32]) {
-        if self.children.len() + seq.len() > MAX_NODES {
+        if self.children.len() + seq.len() > self.max_nodes {
             return;
         }
         let mut node = 0;
@@ -178,7 +184,8 @@ impl BoostTrieCache {
 
     /// Returns the trie and the build time in microseconds (0 on a cache hit).
     pub fn get(&self, terms: &[String], vocab: &Vocab) -> (std::sync::Arc<BoostTrie>, u64) {
-        let key = terms.join("\u{1F}");
+        // Length-prefixed, so no term list can collide with another.
+        let key: String = terms.iter().map(|t| format!("{}:{t}", t.len())).collect();
         {
             let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(index) = entries.iter().position(|(k, _)| *k == key) {
@@ -217,7 +224,7 @@ pub struct BiasParams {
 
 impl BiasParams {
     pub fn new(weight: f32) -> Self {
-        Self { weight, start_factor: 0.25, blank_margin: 4.0, max_gap_frames: 8, override_duration_cap: 1 }
+        Self { weight, start_factor: 0.0, blank_margin: 4.0, max_gap_frames: 8, override_duration_cap: 1 }
     }
 
     /// Measurement overrides: `SAGASCRIPT_BOOST_START_FACTOR`, `SAGASCRIPT_BOOST_BLANK_MARGIN`,
@@ -301,22 +308,18 @@ impl<'a> BiasState<'a> {
             .iter()
             .find(|c| c.1 == self.blank)
             .map_or(f32::NEG_INFINITY, |c| c.0);
+        // Every candidate, the model's own winner included, is scored by the same rules, so a
+        // dictionary token that is already winning keeps its bonus against a weaker start.
         let mut chosen = original;
-        let mut chosen_score = original.0;
+        let mut chosen_score = f32::NEG_INFINITY;
         for &(logit, token) in &self.candidates {
-            if token == original.1 {
-                continue;
-            }
             let mut bonus = 0.0f32;
             if self.active.iter().any(|&n| self.trie.children[n].contains_key(&token)) {
                 bonus = self.params.weight;
             } else if self.trie.children[0].contains_key(&token)
-                && (!overriding_blank || logit >= blank_logit - self.params.blank_margin)
+                && (token == original.1 || !overriding_blank || logit >= blank_logit - self.params.blank_margin)
             {
                 bonus = self.params.weight * self.params.start_factor;
-            }
-            if bonus <= 0.0 {
-                continue;
             }
             let score = logit + bonus;
             if score > chosen_score || (score == chosen_score && token < chosen.1) {
@@ -422,15 +425,38 @@ mod tests {
     }
 
     #[test]
-    fn node_cap_bounds_the_trie() {
-        let mut text = String::from("▁a 0\n");
-        for i in 1..200 {
-            text.push_str(&format!("x{i} {i}\n"));
+    fn node_cap_is_reached_and_respected() {
+        let (_, vocab) = vectors();
+        let terms: Vec<String> = ["Magnus", "Mag Gille", "Gille", "hej"].iter().map(|t| t.to_string()).collect();
+        let full = BoostTrie::new(&terms, &vocab).node_count();
+        assert!(full > 6);
+        let capped = BoostTrie::with_node_cap(&terms, &vocab, 6);
+        assert!(capped.node_count() <= 6 && capped.node_count() < full);
+        assert!(!capped.is_empty());
+    }
+
+    #[test]
+    fn cache_keys_cannot_collide_across_term_lists() {
+        let (_, vocab) = vectors();
+        let cache = BoostTrieCache::default();
+        let (a, _) = cache.get(&["Magnus".to_string(), "Gille".to_string()], &vocab);
+        let (b, micros) = cache.get(&["Magnus\u{1F}Gille".to_string()], &vocab);
+        assert!(!std::sync::Arc::ptr_eq(&a, &b));
+        assert!(micros > 0 || b.is_empty());
+    }
+
+    #[test]
+    fn shared_vectors_request_validation() {
+        let (root, _) = vectors();
+        for case in root["request_cases"].as_array().unwrap() {
+            let fields = case["fields"].as_object().unwrap();
+            let verdict = sagascript_engine_protocol::validate_boost_fields(fields);
+            assert_eq!(verdict.is_ok(), case["valid"].as_bool().unwrap(), "request case {}", case["name"]);
+            if let Err(message) = verdict {
+                // Fixed texts: never an echo of the supplied value.
+                assert!(!message.contains("Magnus") && !message.contains("secret"), "{message}");
+            }
         }
-        text.push_str("<blk> 200\n");
-        let vocab = Vocab::parse(&text).unwrap();
-        let terms: Vec<String> = (1..200).map(|i| format!("ax{i}")).collect();
-        assert!(BoostTrie::new(&terms, &vocab).node_count() <= MAX_NODES);
     }
 
     #[test]

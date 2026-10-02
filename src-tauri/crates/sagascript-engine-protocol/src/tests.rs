@@ -260,3 +260,14 @@ fn context_biasing_capability_and_result_fields_are_backwards_compatible() {
     let line = serde_json::to_string(&old).unwrap();
     assert!(!line.contains("boost"));
 }
+
+#[test]
+fn malformed_boost_fields_are_rejected_without_echoing_the_dictionary() {
+    let line = r#"{"v":1,"id":4,"op":"transcribe_window","pcm_path":"/p","offset_samples":0,"num_samples":10,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":"Magnus Gille secret"}"#;
+    match decode_request(line).unwrap() {
+        ParsedRequest::BadParams { message, .. } => {
+            assert!(!message.contains("Magnus") && !message.contains("secret"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+}

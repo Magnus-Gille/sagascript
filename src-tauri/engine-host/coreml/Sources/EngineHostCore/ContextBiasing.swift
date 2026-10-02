@@ -24,14 +24,14 @@ public struct BoostConfig: Sendable {
     }
 
     /// Cache key: the trie depends on the terms only (the weight lives in `BiasParams`).
-    var cacheKey: String { terms.joined(separator: "\u{1F}") }
+    var cacheKey: String { terms.map { "\($0.utf8.count):\($0)" }.joined() }  // length-prefixed: no collisions
 }
 
 /// Bonus and gating parameters for one decode.
 public struct BiasParams: Sendable {
     public var weight: Float
     /// Start-of-term tokens get `weight * startFactor`; continuations get `weight`.
-    public var startFactor: Float = 0.25
+    public var startFactor: Float = 0
     /// A start-of-term bonus may override a blank only when the term's raw logit is within this
     /// margin of the blank logit (continuations are never gated).
     public var blankMargin: Float = 4.0
@@ -100,7 +100,10 @@ public final class BoostTrie: @unchecked Sendable {
     private var terminal: [Bool] = [false]
     public private(set) var rootChildren: [Int] = []
 
-    public init(config: BoostConfig, vocabulary: [Int: String], blankID: Int) {
+    private let maxNodes: Int
+
+    public init(config: BoostConfig, vocabulary: [Int: String], blankID: Int, maxNodes: Int = BoostConfig.maxNodes) {
+        self.maxNodes = maxNodes
         var pieces: [String: Int] = [:]
         for (id, text) in vocabulary where !text.isEmpty && !text.hasPrefix("<") && id != blankID {
             pieces[text] = id
@@ -130,7 +133,7 @@ public final class BoostTrie: @unchecked Sendable {
     }
 
     func insert(_ sequence: [Int]) {
-        guard children.count + sequence.count <= BoostConfig.maxNodes else { return }
+        guard children.count + sequence.count <= maxNodes else { return }
         var node = 0
         for token in sequence {
             if let next = children[node][token] { node = next } else {
@@ -198,19 +201,20 @@ public struct BiasState {
             if ids[index] == blankID { blankLogit = logits[index] }
         }
         let overridingBlank = ids[original] == blankID
+        // Every candidate, the model's own winner included, is scored by the same rules, so a
+        // dictionary token that is already winning keeps its bonus against a weaker start.
         var chosen = original
-        var chosenScore = logits[original]
-        for index in 0..<ids.count where index != original {
+        var chosenScore = -Float.infinity
+        for index in 0..<ids.count {
             let token = ids[index]
             var bonus: Float = 0
             if active.contains(where: { trie.child($0, token) != nil }) {
                 bonus = params.weight
             } else if trie.child(0, token) != nil {
-                if !overridingBlank || logits[index] >= blankLogit - params.blankMargin {
+                if index == original || !overridingBlank || logits[index] >= blankLogit - params.blankMargin {
                     bonus = params.weight * params.startFactor
                 }
             }
-            guard bonus > 0 else { continue }
             let score = logits[index] + bonus
             if score > chosenScore || (score == chosenScore && token < ids[chosen]) {
                 chosen = index

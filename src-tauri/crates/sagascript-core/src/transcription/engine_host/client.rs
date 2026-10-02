@@ -244,6 +244,7 @@ pub(crate) struct Inner {
     /// Context-biasing outcome counters (see [`BoostReport`]).
     boost_windows: AtomicU64,
     boost_inactive_windows: AtomicU64,
+    boost_unusable_windows: AtomicU64,
     boost_us: AtomicU64,
     /// Pid of the host we last warned about having no interactive reservation.
     warned_no_reserve_pid: AtomicU32,
@@ -283,6 +284,7 @@ impl EngineHostClient {
             boost: Mutex::new(None),
             boost_windows: AtomicU64::new(0),
             boost_inactive_windows: AtomicU64::new(0),
+            boost_unusable_windows: AtomicU64::new(0),
             boost_us: AtomicU64::new(0),
             warned_no_reserve_pid: AtomicU32::new(0),
             spawns: AtomicU64::new(0),
@@ -315,6 +317,7 @@ impl EngineHostClient {
         BoostReport {
             windows: self.inner.boost_windows.load(Ordering::Relaxed),
             inactive_windows: self.inner.boost_inactive_windows.load(Ordering::Relaxed),
+            unusable_windows: self.inner.boost_unusable_windows.load(Ordering::Relaxed),
             trie_build_us: self.inner.boost_us.load(Ordering::Relaxed),
         }
     }
@@ -514,21 +517,37 @@ pub struct WindowRequest {
 pub struct BoostReport {
     /// Windows that carried a dictionary and completed.
     pub windows: u64,
+    /// Windows the host could not apply the dictionary to (older host, or a model without top-K outputs).
     pub inactive_windows: u64,
+    /// Windows where the host reported that no dictionary term could be tokenized.
+    pub unusable_windows: u64,
     /// Total trie build time reported by the host.
     pub trie_build_us: u64,
 }
 
 impl BoostReport {
+    /// Windows where biasing was in effect (it may still have changed nothing).
+    pub fn active_windows(&self) -> u64 {
+        self.windows.saturating_sub(self.inactive_windows + self.unusable_windows)
+    }
+
     /// A user-facing warning when biasing did not (fully) take effect, else `None`.
     pub fn warning(&self) -> Option<String> {
-        (self.inactive_windows > 0).then(|| {
-            format!(
+        if self.inactive_windows > 0 {
+            Some(format!(
                 "Context biasing was NOT applied to {} of {} windows: the engine host does not support it \
                  (older host or a model without top-K joint outputs). Transcription ran without the dictionary.",
                 self.inactive_windows, self.windows
-            )
-        })
+            ))
+        } else if self.unusable_windows > 0 {
+            Some(format!(
+                "Context biasing had no effect on {} of {} windows: none of the dictionary terms could be \
+                 tokenized with the model's vocabulary.",
+                self.unusable_windows, self.windows
+            ))
+        } else {
+            None
+        }
     }
 }
 
@@ -633,7 +652,12 @@ impl WindowTicket {
                         self.inner.boost_windows.fetch_add(1, Ordering::Relaxed);
                         self.inner.boost_us.fetch_add(r.timings.boost_us, Ordering::Relaxed);
                         if r.boost_active != Some(true) {
-                            self.inner.boost_inactive_windows.fetch_add(1, Ordering::Relaxed);
+                            let counter = if r.boost_reason.as_deref() == Some("no_usable_terms") {
+                                &self.inner.boost_unusable_windows
+                            } else {
+                                &self.inner.boost_inactive_windows
+                            };
+                            counter.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     return Ok(WindowOutput {
@@ -1226,9 +1250,11 @@ mod boost_spec_tests {
     #[test]
     fn report_warns_only_when_windows_ran_without_biasing() {
         use super::BoostReport;
-        assert!(BoostReport { windows: 3, inactive_windows: 0, trie_build_us: 5 }.warning().is_none());
-        let warning = BoostReport { windows: 3, inactive_windows: 3, trie_build_us: 0 }.warning().unwrap();
+        assert!(BoostReport { windows: 3, inactive_windows: 0, unusable_windows: 0, trie_build_us: 5 }.warning().is_none());
+        let warning = BoostReport { windows: 3, inactive_windows: 3, unusable_windows: 0, trie_build_us: 0 }.warning().unwrap();
         assert!(warning.contains("NOT applied to 3 of 3"));
+        let unusable = BoostReport { windows: 2, inactive_windows: 0, unusable_windows: 2, trie_build_us: 0 };
+        assert!(unusable.warning().unwrap().contains("could be tokenized") && unusable.active_windows() == 0);
     }
 
     #[test]

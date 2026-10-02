@@ -1163,9 +1163,9 @@ fn run_pianissimo_batch(
         let report = backend.client().boost_report();
         match report.warning() {
             Some(warning) => eprintln!("Warning: {warning}"),
-            None if report.windows > 0 => eprintln!(
+            None if report.active_windows() > 0 => eprintln!(
                 "Context biasing active on {} window(s); trie build {:.1} ms.",
-                report.windows,
+                report.active_windows(),
                 report.trie_build_us as f64 / 1000.0
             ),
             None => {}

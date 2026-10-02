@@ -134,6 +134,27 @@ pub struct DecodeError(pub String);
 
 /// Decode a request line. Fails only when no usable `id` can be found
 /// (answer `protocol`, id 0).
+/// Presence, type and bounds of `boost_terms` / `boost_weight` (checked even when the other field is
+/// absent or empty), with fixed value-free error texts. Mirrored by the Core ML host.
+pub fn validate_boost_fields(obj: &serde_json::Map<String, Value>) -> Result<(), &'static str> {
+    if let Some(terms) = obj.get("boost_terms") {
+        let ok = terms.as_array().is_some_and(|a| {
+            a.len() <= MAX_BOOST_TERMS
+                && a.iter().all(|t| t.as_str().is_some_and(|t| t.chars().count() <= MAX_BOOST_TERM_CHARS))
+        });
+        if !ok {
+            return Err("boost_terms must be an array of at most 500 strings of at most 64 characters");
+        }
+    }
+    if let Some(weight) = obj.get("boost_weight") {
+        let ok = weight.as_f64().is_some_and(|w| w.is_finite() && (0.0..=f64::from(MAX_BOOST_WEIGHT)).contains(&w));
+        if !ok {
+            return Err("boost_weight must be a number within 0...20");
+        }
+    }
+    Ok(())
+}
+
 pub fn decode_request(line: &str) -> Result<ParsedRequest, DecodeError> {
     let value: Value =
         serde_json::from_str(line.trim()).map_err(|e| DecodeError(format!("invalid JSON: {e}")))?;
@@ -162,6 +183,13 @@ pub fn decode_request(line: &str) -> Result<ParsedRequest, DecodeError> {
     ];
     if !KNOWN.contains(&op_name.as_str()) {
         return Ok(ParsedRequest::UnknownOp { id, op: op_name });
+    }
+    if op_name == "transcribe_window" {
+        // Dictionary terms are personal data: reject malformed fields with fixed texts before typed
+        // deserialization, whose errors would echo the offending value.
+        if let Err(message) = validate_boost_fields(obj) {
+            return Ok(ParsedRequest::BadParams { id, message: message.into() });
+        }
     }
     match serde_json::from_value::<RequestOp>(value) {
         Ok(op) => Ok(ParsedRequest::Ok { id, op }),
@@ -366,6 +394,10 @@ pub struct TranscribeWindowResult {
     /// means the host could not apply it (for example a model without top-K outputs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boost_active: Option<bool>,
+    /// With `boost_active: false`: `no_usable_terms` (no term could be tokenized) or
+    /// `no_top_k_outputs` (the model cannot expose candidates). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boost_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

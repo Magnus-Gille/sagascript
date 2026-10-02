@@ -148,11 +148,12 @@ final class TdtDecodeSession {
     private let tokenProbPrecision: TensorPrecision
     private var bias: BiasState?
     /// Biasing was requested and the joint exposes top-K outputs, so it is in effect.
-    let boostActive: Bool
+    private(set) var boostActive: Bool
+    private(set) var boostReason: String?
     private let overrideDurationCap: Int
-    private let topKIDs: MLMultiArray?
-    private let topKLogits: MLMultiArray?
-    private let topKLogitsPrecision: TensorPrecision?
+    private var topKIDs: MLMultiArray?
+    private var topKLogits: MLMultiArray?
+    private var topKLogitsPrecision: TensorPrecision?
 
     init(decoder: MLModel, joint: MLModel, blankID: Int, encoderHidden: Int, decoderHidden: Int, decoderLayers: Int, bias: (trie: BoostTrie, params: BiasParams)? = nil) throws {
         self.decoder = decoder
@@ -197,29 +198,26 @@ final class TdtDecodeSession {
             "token_id": tokenIDBacking, "token_prob": tokenProbBacking, "duration": durationBacking,
         ]
         overrideDurationCap = bias?.params.overrideDurationCap ?? 1
-        if let bias,
-           let idsConstraint = constraint(joint, input: nil, output: "top_k_ids"), idsConstraint.dataType == .int32,
-           let logitsPrecision = try? floatPrecision(of: joint, output: "top_k_logits", model: "JointDecisionv3"),
-           let count = idsConstraint.shape.last?.intValue, count > 0 {
-            // The joint exposes top-K outputs, so biasing can run. An empty trie (no term could be
-            // tokenized) leaves the decode untouched but is still reported as active.
-            boostActive = true
+        topKIDs = nil; topKLogits = nil; topKLogitsPrecision = nil
+        self.bias = nil
+        boostActive = false
+        boostReason = nil
+        if let bias {
             if bias.trie.isEmpty {
-                topKIDs = nil; topKLogits = nil; topKLogitsPrecision = nil
-                self.bias = nil
-            } else {
+                boostReason = "no_usable_terms"  // no dictionary term could be tokenized
+            } else if let idsConstraint = constraint(joint, input: nil, output: "top_k_ids"), idsConstraint.dataType == .int32,
+                      let logitsPrecision = try? floatPrecision(of: joint, output: "top_k_logits", model: "JointDecisionv3"),
+                      let count = idsConstraint.shape.last?.intValue, count > 0 {
                 let ids = try MLMultiArray(shape: [1, 1, 1, NSNumber(value: count)], dataType: .int32)
                 let logits = try MLMultiArray(shape: [1, 1, 1, NSNumber(value: count)], dataType: logitsPrecision.dataType)
                 jointBackings["top_k_ids"] = ids
                 jointBackings["top_k_logits"] = logits
                 topKIDs = ids; topKLogits = logits; topKLogitsPrecision = logitsPrecision
                 self.bias = BiasState(trie: bias.trie, params: bias.params, blankID: blankID)
+                boostActive = true
+            } else {
+                boostReason = "no_top_k_outputs"  // older joint model without top-K outputs
             }
-        } else {
-            // No top-K outputs (older joint model): biasing cannot run; reported via `boost_active: false`.
-            topKIDs = nil; topKLogits = nil; topKLogitsPrecision = nil
-            self.bias = nil
-            boostActive = false
         }
         jointOptions.outputBackings = jointBackings
         encoderStepDestination = FloatVectorDestination(encoderStep, precision: encoderStepPrecision, axis: 1)
@@ -270,7 +268,9 @@ final class TdtDecodeSession {
         }
     }
 
-    private func runJoint(frames: EncoderFrames, frame: Int) throws -> Decision {
+    /// `biasFrame` is the time coordinate for the biasing gap logic (defaults to the encoder frame;
+    /// the end-of-audio flush revisits encoder frames out of order, so it passes its own clock).
+    private func runJoint(frames: EncoderFrames, frame: Int, biasFrame: Int? = nil) throws -> Decision {
         frames.copyFrame(frame, to: encoderStepDestination)
         _ = try joint.prediction(from: jointInput, options: jointOptions)
         var token = Int(tokenIDBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0])
@@ -284,7 +284,7 @@ final class TdtDecodeSession {
             let raw = UnsafeRawPointer(topKLogits.dataPointer)
             let ids = (0..<count).map { Int(idPointer[$0]) }
             let logits = (0..<count).map { loadFloat(raw, precision, $0) }
-            if let pick = bias!.choose(ids: ids, logits: logits, frame: frame) {
+            if let pick = bias!.choose(ids: ids, logits: logits, frame: biasFrame ?? frame) {
                 token = pick.id
                 probability = pick.probability
                 if pick.overrodeBlank {
@@ -413,7 +413,8 @@ final class TdtDecodeSession {
                     min(effectiveLength - 1, frames.count - 1),
                     min(max(0, effectiveLength - 2), frames.count - 1),
                 ]
-                let decision = try runJoint(frames: frames, frame: variations[additionalSteps % variations.count])
+                let flushFrame = min(finalTimeIndices, effectiveLength - 1)
+                let decision = try runJoint(frames: frames, frame: variations[additionalSteps % variations.count], biasFrame: flushFrame)
                 let duration = try mapDuration(decision.duration)
                 if decision.token == blankID {
                     consecutiveBlanks += 1
@@ -421,11 +422,13 @@ final class TdtDecodeSession {
                     consecutiveBlanks = 0
                     emissions.append(TdtEmission(
                         id: decision.token,
-                        frame: min(finalTimeIndices, effectiveLength - 1),
+                        frame: flushFrame,
                         duration: duration,
                         confidence: confidence(decision.probability)
                     ))
                     try runDecoder(token: decision.token)
+                    // Keep the partial matches in step with what the flush emitted.
+                    bias?.emitted(token: decision.token, frame: flushFrame)
                 }
                 finalTimeIndices = min(finalTimeIndices + max(1, duration), effectiveLength)
                 additionalSteps += 1

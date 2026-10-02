@@ -105,12 +105,39 @@ struct ContextBiasingTests {
         #expect(other.0 !== first.0)
     }
 
-    @Test func nodeCapBoundsTheTrie() {
-        var vocabulary: [Int: String] = [0: "▁a"]
-        for i in 1..<200 { vocabulary[i] = "x\(i)" }
-        let terms = (0..<200).map { "a" + String(repeating: "x\($0 % 199 + 1)", count: 1) }
-        let built = BoostTrie(config: BoostConfig(terms: terms, weight: 1), vocabulary: vocabulary, blankID: 199)
-        #expect(built.nodeCount <= BoostConfig.maxNodes)
+    @Test func nodeCapIsReachedAndRespected() throws {
+        let vectors = try Self.load()
+        let terms = ["Magnus", "Mag Gille", "Gille", "hej"]
+        let config = BoostConfig(terms: terms, weight: 1)
+        let full = BoostTrie(config: config, vocabulary: vectors.vocabulary, blankID: vectors.blankID)
+        let capped = BoostTrie(config: config, vocabulary: vectors.vocabulary, blankID: vectors.blankID, maxNodes: 6)
+        #expect(full.nodeCount > 6)
+        #expect(capped.nodeCount <= 6 && capped.nodeCount < full.nodeCount)
+        #expect(!capped.isEmpty)
+    }
+
+    @Test func cacheKeysCannotCollideAcrossTermLists() throws {
+        let vectors = try Self.load()
+        let cache = BoostTrieCache()
+        let a = cache.trie(for: BoostConfig(terms: ["Magnus", "Gille"], weight: 1), vocabulary: vectors.vocabulary, blankID: vectors.blankID)
+        let b = cache.trie(for: BoostConfig(terms: ["Magnus\u{1F}Gille"], weight: 1), vocabulary: vectors.vocabulary, blankID: vectors.blankID)
+        #expect(a.0 !== b.0)
+    }
+
+    @Test func sharedVectorsRequestValidation() throws {
+        let vectors = try Self.load()
+        for item in vectors.root["request_cases"] as! [[String: Any]] {
+            let fields = item["fields"] as! [String: Any]
+            let valid = item["valid"] as! Bool
+            let result = EngineHostServer.parseBoost(fields)
+            switch result {
+            case .success: #expect(valid, "request case \(item["name"] as! String)")
+            case let .failure(error):
+                #expect(!valid, "request case \(item["name"] as! String)")
+                #expect(error.code == "bad_request")
+                #expect(!error.message.contains("Magnus") && !error.message.contains("secret"))
+            }
+        }
     }
 
     @Test func helloAdvertisesBiasingAndResultsReportItOnlyWhenRequested() {

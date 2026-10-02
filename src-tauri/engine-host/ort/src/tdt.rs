@@ -265,6 +265,22 @@ mod tests {
     }
 
     #[test]
+    fn a_prefix_emitted_by_the_decoder_activates_its_continuation() {
+        use crate::boost::{BiasParams, BiasState, BoostTrie};
+        let vocab = crate::vocab::Vocab::parse("▁a 0\nb 1\nc 2\n<blk> 3\n").unwrap();
+        let trie = BoostTrie::new(&["ab".to_string()], &vocab);
+        let params = BiasParams::new(5.0); // start factor 0: only the continuation is boosted
+        // Frame 0: model emits "▁a" (dur 1). Frame 1: the model prefers blank, "b" is boosted.
+        let mut joint = Scripted { script: vec![(0, 1), (3, 1)], calls: 0, seen_targets: vec![], seen_frames: vec![] };
+        let tokens = decode_biased(&frames(2), &mut joint, V, BLANK, 10, &|| false, Some(BiasState::new(&trie, params, BLANK))).unwrap();
+        assert_eq!(tokens.iter().map(|t| t.id).collect::<Vec<_>>(), vec![0, 1]);
+        // Without the prefix having been emitted, "b" alone is not boosted.
+        let mut joint = Scripted { script: vec![(3, 1)], calls: 0, seen_targets: vec![], seen_frames: vec![] };
+        let tokens = decode_biased(&frames(2), &mut joint, V, BLANK, 10, &|| false, Some(BiasState::new(&trie, params, BLANK))).unwrap();
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
     fn ties_pick_the_first_maximum() {
         assert_eq!(argmax(&[1.0, 3.0, 3.0, 2.0]), 1);
     }

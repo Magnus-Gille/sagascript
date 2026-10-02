@@ -261,6 +261,7 @@ public final class CoreMLEngine: EngineBackend {
             encodeMilliseconds: encodeMilliseconds,
             decodeMilliseconds: decodeMilliseconds,
             boostActive: decoded.boostActive,
+            boostReason: decoded.boostReason,
             boostMicroseconds: decoded.boostMicroseconds
         )
     }
@@ -555,7 +556,7 @@ public final class CoreMLEngine: EngineBackend {
         realAudioSeconds: Double,
         boost: BoostConfig?,
         isCancelled: @escaping () -> Bool
-    ) throws -> (tokens: [TranscriptionToken], boostActive: Bool?, boostMicroseconds: Int) {
+    ) throws -> (tokens: [TranscriptionToken], boostActive: Bool?, boostReason: String?, boostMicroseconds: Int) {
         let actualFrameCount = min(
             sequenceLength,
             max(1, Int(ceil(realAudioSeconds / loaded.frameSeconds)))
@@ -599,7 +600,7 @@ public final class CoreMLEngine: EngineBackend {
                 confidence: emission.confidence
             )
         }
-        return (tokens, boost == nil ? nil : session.boostActive, boostMicroseconds)
+        return (tokens, boost == nil ? nil : session.boostActive, boost == nil ? nil : session.boostReason, boostMicroseconds)
     }
 
     private func checkCancelled(_ isCancelled: () -> Bool) throws {

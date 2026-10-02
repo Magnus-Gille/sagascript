@@ -135,6 +135,7 @@ impl Engine for Arc<MockEngine> {
             audio_s: request.num_samples as f64 / 16_000.0,
             timings: WindowTimings::default(),
             boost_active: None,
+            boost_reason: None,
         })
     }
     fn unload(&self) {

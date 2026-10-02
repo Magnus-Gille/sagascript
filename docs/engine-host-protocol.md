@@ -87,11 +87,13 @@ Request:
     nodes in total. Tries are cached per loaded model by term list, so only the first window with a
     dictionary pays the build (`timings.boost_us`).
   - Candidates are the 64 highest token logits (both hosts; the Core ML joint exports exactly its top-64, the
-    ONNX host selects them from all logits; ties go to the lower id). A candidate that continues a live
-    partial match gets `+weight`; one that starts a term gets `+weight x 0.25`, and may override a blank
-    only when its raw logit is within 4.0 of the blank logit. The model's own choice stands unless a
-    candidate's adjusted score is strictly higher (ties to the lower id). When a boosted token replaces a
-    blank, the skip is capped at 1 frame because the duration head described the blank, not the token.
+    ONNX host selects them from all logits; ties go to the lower id). Every candidate, the model's own
+    winner included, is scored by the same rules: a candidate that continues a live partial match gets
+    `+weight`; one that starts a term gets `+weight x start_factor` (default **0**: only continuations of a
+    prefix the model itself emitted are boosted), and may override a blank only when its raw logit is within
+    4.0 of the blank logit. The highest adjusted score wins (ties to the lower id); when that is the model's
+    own choice nothing changes. When a boosted token replaces a blank, the skip is capped at 1 frame because
+    the duration head described the blank, not the token.
     `SAGASCRIPT_BOOST_START_FACTOR`, `SAGASCRIPT_BOOST_BLANK_MARGIN` and
     `SAGASCRIPT_BOOST_OVERRIDE_DURATION_CAP` override these for measurements.
   - Partial matches are per window: they reset at every window start and after 8 frames without a token.
@@ -100,9 +102,14 @@ Request:
   - The Core ML host reports `confidence` of a boosted token as its probability under the raw (unboosted)
     top-64 softmax, which is the model's own probability up to the tail mass; the ONNX host reports no
     confidence at all. Nothing else in the result depends on the bonus.
+  - Validation: `boost_terms` (array of strings) and `boost_weight` (number in `0..=20`) are checked for
+    type and bounds whenever present, even when the other field is absent or empty (`bad_request`, with fixed
+    texts that never echo the dictionary: terms are personal data).
   - Discovery: `hello.capabilities.context_biasing: true`. A result for a window that carried a dictionary
-    includes `"boost_active": true|false` (and `timings.boost_us`); `false` means the host could not apply it,
-    for example a Core ML joint without top-K outputs. A host without the capability bit, or a result
+    includes `"boost_active": true|false` (and `timings.boost_us`); `false` comes with `boost_reason`:
+    `no_usable_terms` (no term could be tokenized with the vocabulary) or `no_top_k_outputs` (for example a
+    Core ML joint without top-K outputs). `true` with an unchanged transcript just means nothing needed
+    changing. A host without the capability bit, or a result
     without `boost_active`, means the dictionary was ignored; the client counts such windows and the CLI
     prints a warning instead of claiming biasing was active.
   - Results are still the raw pieces, so replacements remain a client-side post-step. Both hosts load the

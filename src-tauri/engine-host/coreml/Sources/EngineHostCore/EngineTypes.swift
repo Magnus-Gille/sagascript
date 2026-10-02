@@ -125,6 +125,8 @@ public struct WindowResult: Sendable {
     public let decodeMilliseconds: Double
     /// nil when no dictionary was sent; otherwise whether biasing was in effect for this window.
     public var boostActive: Bool? = nil
+    /// Why biasing was not applied (`no_usable_terms`, `no_top_k_outputs`); nil when active or not requested.
+    public var boostReason: String? = nil
     /// Trie build time in microseconds (0 when cached or not requested).
     public var boostMicroseconds: Int = 0
 
@@ -140,6 +142,7 @@ public struct WindowResult: Sendable {
         ]
         if let boostActive {
             object["boost_active"] = boostActive
+            if let boostReason { object["boost_reason"] = boostReason }
             var timings = object["timings"] as? [String: Any] ?? [:]
             timings["boost_us"] = boostMicroseconds
             object["timings"] = timings
