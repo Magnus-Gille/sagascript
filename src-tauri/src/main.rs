@@ -1113,10 +1113,11 @@ fn main() {
             app.manage(profile_menu);
             app.manage(update_menu);
 
+            focus_diag::init(app.handle());
+
             // Hide from dock on macOS (tray-only app)
             #[cfg(target_os = "macos")]
             {
-                focus_diag::init(app.handle());
                 focus_diag::log("startup_activation_policy_before", serde_json::json!({}));
                 platform::macos::set_activation_policy_accessory();
                 focus_diag::log("startup_activation_policy_set_accessory", serde_json::json!({}));
