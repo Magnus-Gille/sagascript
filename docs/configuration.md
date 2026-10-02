@@ -43,6 +43,9 @@ Pianissimo only supports Swedish.` Other profiles are never changed, and an
 explicit model that still supports the new language is kept. File transcription
 keeps its own separate model choice (`file_transcription_model`).
 
+Decision record: 2026-10-02 (#260) - the model is per profile; a language change
+resets only that profile's incompatible model to Auto and says so (GUI and CLI).
+
 Use the CLI to discover the effective paths rather than duplicating the
 resolution rules in scripts:
 
