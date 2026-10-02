@@ -60,11 +60,18 @@ pub struct TwoTrackWriter {
 
 impl TwoTrackWriter {
     pub fn create(path: &Path, channels: u16) -> io::Result<Self> {
-        let file = File::create(path)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600); // never world-readable, not even briefly
+        }
+        let file = opts.open(path)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?; // pre-existing file
         }
         let mut out = BufWriter::new(file);
         write_header(&mut out, channels, 0)?;

@@ -90,6 +90,22 @@ pub fn exe_name_matches(candidate: &str, wanted: &str) -> bool {
     base == want || base.strip_suffix(".exe") == Some(want.as_str())
 }
 
+/// Process-tree roots among `(pid, parent_pid)` pairs of same-named processes:
+/// those whose parent is not itself one of the matches, in ascending pid order.
+/// Multi-process apps (Teams, Chrome) have one root with many same-exe children;
+/// capturing the root's tree covers them all.
+pub fn tree_roots(procs: &[(u32, u32)]) -> Vec<u32> {
+    let pids: std::collections::HashSet<u32> = procs.iter().map(|(p, _)| *p).collect();
+    let mut roots: Vec<u32> = procs
+        .iter()
+        .filter(|(pid, ppid)| !pids.contains(ppid) || pid == ppid)
+        .map(|(p, _)| *p)
+        .collect();
+    roots.sort_unstable();
+    roots.dedup();
+    roots
+}
+
 /// What to capture from the system mix.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum CaptureTarget {
@@ -126,13 +142,14 @@ pub struct SystemAudioStatus {
     pub backend: &'static str,
 }
 
-/// Map the private `TCCAccessPreflight` result to a permission state.
-/// 0 = authorized, 1 = denied, 2 = not determined; anything else is unknown.
+/// Map the private `TCCAccessPreflight` result to a permission state. Only
+/// 0 (authorized) and 1 (denied) are trusted; every other value, including the
+/// "not determined" code we have not verified, is `Unknown` until the owner's
+/// live test shows the raw values (logged at debug level by `doctor`).
 pub fn map_tcc_preflight(result: i32) -> SystemAudioPermission {
     match result {
         0 => SystemAudioPermission::Granted,
         1 => SystemAudioPermission::Denied,
-        2 => SystemAudioPermission::NotDetermined,
         _ => SystemAudioPermission::Unknown,
     }
 }
@@ -157,7 +174,25 @@ pub fn unsupported_message() -> String {
     "System-audio capture is not supported on this platform (macOS 14.4+ and Windows only).".into()
 }
 
-/// Non-prompting probe. Never starts a capture.
+/// Capability probe only (OS version, API presence). Does not query the
+/// permission, so capture start never touches the private TCC preflight.
+pub fn system_audio_capability() -> SystemAudioStatus {
+    #[cfg(target_os = "macos")]
+    {
+        macos::capability()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_backend::status()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        system_audio_status()
+    }
+}
+
+/// Capability plus the best-effort, non-prompting permission query. Used by
+/// `doctor` only. Never starts a capture.
 pub fn system_audio_status() -> SystemAudioStatus {
     #[cfg(target_os = "macos")]
     {
@@ -263,6 +298,14 @@ mod tests {
     }
 
     #[test]
+    fn tree_roots_pick_parentless_matches() {
+        // 10 is the root; 11 and 12 are same-exe children; 20 is a separate instance.
+        assert_eq!(tree_roots(&[(11, 10), (10, 1), (12, 10), (20, 2)]), vec![10, 20]);
+        assert_eq!(tree_roots(&[(5, 5)]), vec![5]);
+        assert!(tree_roots(&[]).is_empty());
+    }
+
+    #[test]
     fn exe_matching() {
         assert!(exe_name_matches("Teams.exe", "teams"));
         assert!(exe_name_matches("C:\\Apps\\Zoom.exe", "zoom.exe"));
@@ -273,7 +316,7 @@ mod tests {
     fn tcc_mapping() {
         assert_eq!(map_tcc_preflight(0), SystemAudioPermission::Granted);
         assert_eq!(map_tcc_preflight(1), SystemAudioPermission::Denied);
-        assert_eq!(map_tcc_preflight(2), SystemAudioPermission::NotDetermined);
+        assert_eq!(map_tcc_preflight(2), SystemAudioPermission::Unknown);
         assert_eq!(map_tcc_preflight(-1), SystemAudioPermission::Unknown);
     }
 

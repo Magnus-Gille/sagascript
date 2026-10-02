@@ -261,9 +261,17 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
                 .map_err(|e| DictationError::FileDecodeError(format!("Failed to write WAV: {e}")))?;
             eprintln!("Two-track WAV: left = microphone, right = system audio.");
         } else {
-            let wav_bytes = sagascript_core::audio::wav::encode_wav(&audio);
-            std::fs::write(output_path, &wav_bytes)
-                .map_err(|e| DictationError::FileDecodeError(format!("Failed to write WAV: {e}")))?;
+            // Same 0600 writer as the two-track path: meeting audio must not be
+            // created with the default umask.
+            let write = || -> std::io::Result<()> {
+                let mut w = sagascript_core::audio::system::twotrack::TwoTrackWriter::create(
+                    std::path::Path::new(output_path),
+                    1,
+                )?;
+                w.write_interleaved(&audio)?;
+                w.finish().map(|_| ())
+            };
+            write().map_err(|e| DictationError::FileDecodeError(format!("Failed to write WAV: {e}")))?;
         }
         eprintln!("Saved to {output_path}");
         return Ok(());

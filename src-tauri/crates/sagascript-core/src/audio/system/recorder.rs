@@ -208,6 +208,20 @@ mod tests {
     }
 
     #[test]
+    fn gap_is_filled_after_the_audio_not_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        // Capture "started" 2 s ago but only 0.5 s of audio ever arrived.
+        let started = Instant::now() - Duration::from_secs(2);
+        tx.send(vec![0.5f32; 8_000]).unwrap(); // 0.5 s mono at 16 kHz
+        drop(tx);
+        let t = spool_worker(rx, NativeFormat { sample_rate: 16_000, channels: 1 }, started, dir.path()).unwrap();
+        assert!((t.samples.len() as i64 - 32_000).abs() < 1_600, "len {}", t.samples.len());
+        assert!(t.samples[1_000] > 0.4, "audio must come first");
+        assert!(t.samples[t.samples.len() - 1_000].abs() < 1e-3, "silence must trail the audio");
+    }
+
+    #[test]
     fn silent_input_is_flagged() {
         let dir = tempfile::tempdir().unwrap();
         let (tx, rx) = mpsc::channel();

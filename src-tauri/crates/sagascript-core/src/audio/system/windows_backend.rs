@@ -8,8 +8,8 @@ use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use windows::core::{implement, Interface, GUID};
-use windows::Win32::Foundation::CloseHandle;
+use windows::core::{implement, Interface, GUID, PCWSTR};
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Media::Audio::{
     ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
     IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
@@ -24,11 +24,12 @@ use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitiali
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
+use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::Win32::System::Variant::VT_BLOB;
 
 use super::convert::{decode_pcm_packet, PcmLayout};
 use super::{
-    exe_name_matches, AppSelector, CaptureTarget, ChunkSink, NativeFormat, SystemAudioPermission,
+    exe_name_matches, tree_roots, AppSelector, CaptureTarget, ChunkSink, NativeFormat, SystemAudioPermission,
     SystemAudioStatus,
 };
 use crate::error::DictationError;
@@ -38,7 +39,7 @@ const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
 const WAVE_FORMAT_PCM: u16 = 1;
 const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
 const AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM: u32 = 0x8000_0000;
-const AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY: u32 = 0x0800_0000;
+const AUDCLNT_STREAMFLAGS_EVENTCALLBACK: u32 = 0x0004_0000;
 const BUFFERFLAGS_SILENT: u32 = 2;
 
 pub(super) fn status() -> SystemAudioStatus {
@@ -78,26 +79,31 @@ fn layout_of(fmt: &WAVEFORMATEX) -> Result<PcmLayout, DictationError> {
     }
 }
 
-fn pids_for_exe(name: &str) -> Vec<u32> {
-    let mut pids = Vec::new();
+/// (pid, parent pid) of every running process whose executable matches `name`.
+fn processes_for_exe(name: &str) -> Vec<(u32, u32)> {
+    let mut found = Vec::new();
     // SAFETY: standard Toolhelp snapshot walk.
     unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return pids };
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return found };
         let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         let mut ok = Process32FirstW(snap, &mut entry).is_ok();
         while ok {
             let len = entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(entry.szExeFile.len());
             if exe_name_matches(&String::from_utf16_lossy(&entry.szExeFile[..len]), name) {
-                pids.push(entry.th32ProcessID);
+                found.push((entry.th32ProcessID, entry.th32ParentProcessID));
             }
             ok = Process32NextW(snap, &mut entry).is_ok();
         }
         let _ = CloseHandle(snap);
     }
-    pids
+    found
 }
 
-#[implement(IActivateAudioInterfaceCompletionHandler)]
+// ActivateAudioInterfaceAsync requires an agile completion handler (it is called
+// back on an MTA worker thread). windows-implement 0.60.2 (src/gen.rs:313) answers
+// IAgileObject (and IMarshal) queries when `Agile = true`, which is also its default;
+// IAgileObject is not nameable in the interface list, so the flag is spelled out.
+#[implement(IActivateAudioInterfaceCompletionHandler, Agile = true)]
 struct Handler {
     tx: mpsc::Sender<()>,
 }
@@ -135,12 +141,18 @@ unsafe fn activate_process_client(pid: u32) -> Result<IAudioClient, DictationErr
             },
         }),
     };
+    // windows 0.61.3 DOES implement `Drop for PROPVARIANT` and it calls
+    // `PropVariantClear` (windows-0.61.3/src/extensions/Win32/System/StructuredStorage.rs:32-36).
+    // This VT_BLOB points at the stack `params`, so clearing it would
+    // CoTaskMemFree a stack address. `pv` is therefore wrapped in ManuallyDrop and
+    // never dropped; `params` outlives the (synchronous) ActivateAudioInterfaceAsync call.
+    let pv = std::mem::ManuallyDrop::new(pv);
     let (tx, rx) = mpsc::channel();
     let handler: IActivateAudioInterfaceCompletionHandler = Handler { tx }.into();
     let op = ActivateAudioInterfaceAsync(
         VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
         &IAudioClient::IID,
-        Some(&pv),
+        Some(&*pv),
         &handler,
     )
     .map_err(|e| err("Process loopback activation failed (needs Windows 10 2004+)", e))?;
@@ -161,66 +173,105 @@ struct Opened {
     capture: IAudioCaptureClient,
     layout: PcmLayout,
     format: NativeFormat,
+    /// Event signalled per buffer (process loopback is event-driven).
+    event: Option<HANDLE>,
 }
 
+/// Candidate process-tree roots to try, in order. `--app Teams.exe` matches many
+/// processes; `INCLUDE_TARGET_PROCESS_TREE` on a root covers its children.
 unsafe fn open(target: &CaptureTarget) -> Result<Opened, DictationError> {
-    let process_pid = match target {
-        CaptureTarget::All => None,
-        CaptureTarget::App(AppSelector::Pid(pid)) => Some(*pid),
-        CaptureTarget::App(AppSelector::Exe(name)) => Some(*pids_for_exe(name).first().ok_or_else(|| {
-            DictationError::AudioCaptureError(format!("No running process matches '{name}'"))
-        })?),
+    let candidates: Vec<u32> = match target {
+        CaptureTarget::All => Vec::new(),
+        CaptureTarget::App(AppSelector::Pid(pid)) => vec![*pid],
+        CaptureTarget::App(AppSelector::Exe(name)) => {
+            let roots = tree_roots(&processes_for_exe(name));
+            if roots.is_empty() {
+                return Err(DictationError::AudioCaptureError(format!("No running process matches '{name}'")));
+            }
+            roots
+        }
         CaptureTarget::App(AppSelector::BundleId(id)) => {
             return Err(DictationError::AudioCaptureError(format!(
                 "'{id}' looks like a macOS bundle id; on Windows pass a pid or an executable name (e.g. Teams.exe)"
             )))
         }
     };
-    let (client, fmt_owned, flags) = if let Some(pid) = process_pid {
-        let client = activate_process_client(pid)?;
-        // Process loopback has no mix format; request 32-bit float stereo 48 kHz.
-        let fmt = WAVEFORMATEX {
-            wFormatTag: WAVE_FORMAT_IEEE_FLOAT,
-            nChannels: 2,
-            nSamplesPerSec: 48_000,
-            nAvgBytesPerSec: 48_000 * 8,
-            nBlockAlign: 8,
-            wBitsPerSample: 32,
-            cbSize: 0,
-        };
-        (
-            client,
-            fmt,
-            AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-        )
-    } else {
-        let enumerator: IMMDeviceEnumerator =
-            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| err("Device enumerator", e))?;
-        let device = enumerator
-            .GetDefaultAudioEndpoint(eRender, eConsole)
-            .map_err(|e| err("No default output device", e))?;
-        let client: IAudioClient = device.Activate(CLSCTX_ALL, None).map_err(|e| err("Activating audio client", e))?;
-        let mix = client.GetMixFormat().map_err(|e| err("GetMixFormat", e))?;
-        let layout = layout_of(&*mix);
-        let (channels, rate) = ((*mix).nChannels, (*mix).nSamplesPerSec);
-        // `mix` points at the full (possibly extensible) format block.
-        let init = client.Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 2_000_000, 0, mix, None);
-        windows::Win32::System::Com::CoTaskMemFree(Some(mix as *const _));
-        let layout = layout?;
-        init.map_err(|e| err("Initializing loopback", e))?;
-        let capture: IAudioCaptureClient = client.GetService().map_err(|e| err("IAudioCaptureClient", e))?;
-        return Ok(Opened { client, capture, layout, format: NativeFormat { sample_rate: rate, channels } });
-    };
-    let layout = layout_of(&fmt_owned)?;
-    client
-        .Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 2_000_000, 0, &fmt_owned, None)
-        .map_err(|e| err("Initializing process loopback", e))?;
+    if candidates.is_empty() {
+        return open_default_loopback();
+    }
+    let mut last = None;
+    for pid in candidates {
+        match open_process_loopback(pid) {
+            Ok(o) => return Ok(o),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.expect("at least one candidate"))
+}
+
+unsafe fn open_default_loopback() -> Result<Opened, DictationError> {
+    let enumerator: IMMDeviceEnumerator =
+        CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(|e| err("Device enumerator", e))?;
+    let device = enumerator
+        .GetDefaultAudioEndpoint(eRender, eConsole)
+        .map_err(|e| err("No default output device", e))?;
+    let client: IAudioClient = device.Activate(CLSCTX_ALL, None).map_err(|e| err("Activating audio client", e))?;
+    let mix = client.GetMixFormat().map_err(|e| err("GetMixFormat", e))?;
+    let layout = layout_of(&*mix);
+    let (channels, rate) = ((*mix).nChannels, (*mix).nSamplesPerSec);
+    // `mix` points at the full (possibly extensible) format block.
+    let init = client.Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 2_000_000, 0, mix, None);
+    windows::Win32::System::Com::CoTaskMemFree(Some(mix as *const _));
+    let layout = layout?;
+    init.map_err(|e| err("Initializing loopback", e))?;
     let capture: IAudioCaptureClient = client.GetService().map_err(|e| err("IAudioCaptureClient", e))?;
+    Ok(Opened { client, capture, layout, format: NativeFormat { sample_rate: rate, channels }, event: None })
+}
+
+/// Follows Microsoft's "ApplicationLoopback" sample (microsoft/windows-classic-samples,
+/// Samples/ApplicationLoopback/cpp/LoopbackCapture.cpp, recalled from memory, not
+/// re-checked offline): activate `VAD\Process_Loopback`, then Initialize with
+/// `AUDCLNT_STREAMFLAGS_LOOPBACK | EVENTCALLBACK | AUTOCONVERTPCM`, zero buffer
+/// duration and periodicity, 16-bit PCM 44.1 kHz stereo, with SetEventHandle.
+unsafe fn open_process_loopback(pid: u32) -> Result<Opened, DictationError> {
+    let client = activate_process_client(pid)?;
+    let fmt = WAVEFORMATEX {
+        wFormatTag: WAVE_FORMAT_PCM,
+        nChannels: 2,
+        nSamplesPerSec: 44_100,
+        nAvgBytesPerSec: 44_100 * 4,
+        nBlockAlign: 4,
+        wBitsPerSample: 16,
+        cbSize: 0,
+    };
+    client
+        .Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+            0,
+            0,
+            &fmt,
+            None,
+        )
+        .map_err(|e| err(&format!("Initializing process loopback for pid {pid}"), e))?;
+    let event = CreateEventW(None, false, false, PCWSTR::null()).map_err(|e| err("CreateEvent", e))?;
+    if let Err(e) = client.SetEventHandle(event) {
+        let _ = CloseHandle(event);
+        return Err(err("SetEventHandle", e));
+    }
+    let capture: IAudioCaptureClient = match client.GetService() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = CloseHandle(event);
+            return Err(err("IAudioCaptureClient", e));
+        }
+    };
     Ok(Opened {
         client,
         capture,
-        layout,
-        format: NativeFormat { sample_rate: fmt_owned.nSamplesPerSec, channels: fmt_owned.nChannels },
+        layout: PcmLayout::I16,
+        format: NativeFormat { sample_rate: fmt.nSamplesPerSec, channels: fmt.nChannels },
+        event: Some(event),
     })
 }
 
@@ -253,7 +304,13 @@ impl Capture {
                             let _ = ready_tx.send(Ok(o.format));
                             let bytes_per_sample = if o.layout == PcmLayout::F32 { 4 } else { 2 };
                             while !stop_thread.load(Ordering::Relaxed) {
-                                thread::sleep(Duration::from_millis(10));
+                                match o.event {
+                                    // Event-driven (process loopback): wake per buffer, 100 ms cap so stop is prompt.
+                                    Some(ev) => {
+                                        WaitForSingleObject(ev, 100);
+                                    }
+                                    None => thread::sleep(Duration::from_millis(10)),
+                                }
                                 while let Ok(n) = o.capture.GetNextPacketSize() {
                                     if n == 0 {
                                         break;
@@ -274,6 +331,9 @@ impl Capture {
                                 }
                             }
                             let _ = o.client.Stop();
+                            if let Some(ev) = o.event {
+                                let _ = CloseHandle(ev);
+                            }
                         }
                     }
                     CoUninitialize();

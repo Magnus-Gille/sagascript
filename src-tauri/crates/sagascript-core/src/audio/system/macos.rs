@@ -179,11 +179,14 @@ fn tcc_permission() -> SystemAudioPermission {
         }
         let f: Preflight = std::mem::transmute(sym);
         let service = NSString::from_str("kTCCServiceAudioCapture");
-        map_tcc_preflight(f(Retained::as_ptr(&service).cast(), ptr::null()))
+        let raw = f(Retained::as_ptr(&service).cast(), ptr::null());
+        tracing::debug!(raw, "TCCAccessPreflight(kTCCServiceAudioCapture) raw result");
+        map_tcc_preflight(raw)
     }
 }
 
-pub(super) fn status() -> SystemAudioStatus {
+/// Capability only: OS version and API presence. Never queries permission.
+pub(super) fn capability() -> SystemAudioStatus {
     let backend = "coreaudio-process-tap";
     let version = os_version();
     let (supported, detail) = match version {
@@ -206,21 +209,31 @@ pub(super) fn status() -> SystemAudioStatus {
             }
         }
     };
-    let permission = if supported { tcc_permission() } else { SystemAudioPermission::Unsupported };
-    let detail = match (supported, permission) {
-        (true, SystemAudioPermission::Denied) => format!(
-            "{detail} Permission denied: enable the app (or your terminal) under System Settings > Privacy & Security > \
-             Screen & System Audio Recording > System Audio Recording Only."
-        ),
-        (true, SystemAudioPermission::NotDetermined) => format!(
-            "{detail} macOS will ask for System Audio Recording permission the first time you record system audio."
-        ),
-        (true, SystemAudioPermission::Unknown) => format!(
-            "{detail} Permission state cannot be queried without prompting; the first capture will decide."
-        ),
-        _ => detail,
-    };
+    let permission = if supported { SystemAudioPermission::Unknown } else { SystemAudioPermission::Unsupported };
     SystemAudioStatus { supported, per_app_capture: supported, permission, detail, backend }
+}
+
+/// Capability plus the private TCC preflight; `doctor` only.
+pub(super) fn status() -> SystemAudioStatus {
+    let mut s = capability();
+    if !s.supported {
+        return s;
+    }
+    s.permission = tcc_permission();
+    s.detail = match s.permission {
+        SystemAudioPermission::Denied => format!(
+            "{} Permission denied: enable the app (or your terminal) under System Settings > Privacy & Security > \
+             Screen & System Audio Recording > System Audio Recording Only.",
+            s.detail
+        ),
+        SystemAudioPermission::Granted => format!("{} Permission granted.", s.detail),
+        _ => format!(
+            "{} Permission state cannot be determined without prompting; macOS asks for System Audio \
+             Recording permission on the first capture.",
+            s.detail
+        ),
+    };
+    s
 }
 
 /// An audio process as seen by Core Audio.
@@ -388,7 +401,7 @@ unsafe impl Send for Capture {}
 
 impl Capture {
     pub(super) fn start(target: &CaptureTarget, sink: ChunkSink) -> Result<(Self, NativeFormat), DictationError> {
-        let st = status();
+        let st = capability();
         if !st.supported {
             return Err(DictationError::AudioCaptureError(st.detail));
         }

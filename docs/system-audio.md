@@ -93,9 +93,18 @@ permission model before 14.4 was not verified.
   `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK` and
   `PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE` (the target and its child
   processes). Windows 10 version 2004 (build 19041) or later. This mode has no
-  mix format, so a fixed 32-bit float stereo 48 kHz format is requested with
-  auto-conversion. `--app` accepts a pid or an executable name (`Teams.exe`);
+  mix format, so a fixed 16-bit PCM stereo 44.1 kHz format is requested with
+  `AUDCLNT_STREAMFLAGS_LOOPBACK | EVENTCALLBACK | AUTOCONVERTPCM`, zero buffer
+  duration and an event handle, following Microsoft's ApplicationLoopback sample.
+  `--app` accepts a pid or an executable name (`Teams.exe`);
   bundle ids are rejected with an explanatory error.
+- **Multi-process apps (Teams, Chrome, Edge):** an executable name matches many
+  processes. Sagascript picks the process-tree roots (matches whose parent is not
+  itself a match) and tries them in ascending pid order until one opens;
+  `INCLUDE_TARGET_PROCESS_TREE` then covers the helper processes. If an app runs
+  several independent root instances, only the first root that opens is captured;
+  pass `--app <pid>` to choose a specific one. This path has not been run on real
+  Windows hardware yet.
 - Loopback delivers **no packets while nothing is playing**, which would shorten
   the track against the microphone. The recorder fills such gaps with silence
   from the wall clock (see "Timeline").
@@ -164,6 +173,31 @@ is capped at 4 GiB (about 34 hours at this rate), which the writer enforces.
   is phase 2; nothing records without it.
 - **Consent reminder:** the banner and `record --help` state that recording
   other participants may require their consent (jurisdiction-dependent).
+
+## Decisions
+
+Decided for phase 1 of epic [#299](https://github.com/Magnus-Gille/sagascript/issues/299)
+(issue #289):
+
+- **macOS 14.4+ only for system audio.** Core Audio process taps are the only
+  non-ScreenCaptureKit route with a narrow permission; macOS 13 and earlier are
+  explicitly unsupported rather than approximated.
+- **Two-track WAV for `--source both`:** left = microphone, right = system audio,
+  16 kHz 16-bit, so later diarization can separate "me" from "others" without
+  signal processing. Transcription uses a mono mix.
+- **Best-effort private TCC preflight:** `TCCAccessPreflight` (dlopen/dlsym,
+  fail-soft) is used by `sagascript doctor` only, because no public API reads
+  the audio-capture permission without prompting. Only 0 (granted) and 1
+  (denied) are interpreted; every other value is reported as unknown. Capture
+  start never calls it and is never gated on it.
+
+## Known limitations (tracked for phase 1.5)
+
+Realtime-safety of the Core Audio callback (it allocates and uses an unbounded
+channel), clock drift between microphone and system tracks (gaps are filled with
+silence only), default-output or device changes during a recording, spool cleanup
+after SIGKILL (stale spools are removed after 24 h on the next start), and the
+Windows start-timeout thread join are not handled in phase 1.
 
 ## Live testing (owner-run only)
 
