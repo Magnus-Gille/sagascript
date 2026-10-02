@@ -2957,6 +2957,7 @@ pub async fn check_accessibility_permission() -> Result<bool, String> {
 pub async fn request_accessibility_permission() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        crate::focus_diag::activation("command_request_accessibility_permission", "opens_system_settings");
         crate::platform::macos::request_accessibility_permission()?;
     }
     Ok(())
@@ -2966,6 +2967,7 @@ pub async fn request_accessibility_permission() -> Result<(), String> {
 pub async fn open_accessibility_settings() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        crate::focus_diag::activation("command_open_accessibility_settings", "opens_system_settings");
         crate::platform::macos::open_accessibility_settings()?;
     }
     Ok(())
@@ -2982,6 +2984,7 @@ pub async fn microphone_status() -> Result<String, String> {
         if !macos_mic::is_in_app_bundle() {
             return Ok("unsupported".to_string());
         }
+        crate::focus_diag::activation("command_request_microphone_access", "may_show_system_prompt");
         Ok(macos_mic::authorization_status_string())
     }
     #[cfg(not(target_os = "macos"))]
@@ -3024,6 +3027,7 @@ pub async fn request_microphone_access() -> Result<String, String> {
 pub async fn open_microphone_settings() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        crate::focus_diag::activation("command_open_microphone_settings", "opens_system_settings");
         std::process::Command::new("open")
             .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
             .spawn()

@@ -3,6 +3,10 @@ use tauri::Manager;
 use tracing::error;
 use tracing::info;
 
+/// True until the first overlay window of this app session has been created.
+#[cfg(not(target_os = "linux"))]
+static FIRST_OVERLAY_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 const OVERLAY_LABEL: &str = "overlay";
 
 // The recording indicator is click-through and must never become the key
@@ -27,9 +31,20 @@ pub fn show(app: &tauri::AppHandle) {
         if let Some(window) = app.get_webview_window(OVERLAY_LABEL) {
             present_existing_overlay(&window);
             info!("Overlay shown (existing window)");
+            crate::focus_diag::log(
+                "overlay_shown",
+                serde_json::json!({ "created": false, "firstCreationInSession": false }),
+            );
         } else {
+            let first = FIRST_OVERLAY_PENDING.swap(false, std::sync::atomic::Ordering::AcqRel);
             match create_overlay(app) {
-                Ok(_) => info!("Overlay created and shown"),
+                Ok(_) => {
+                    info!("Overlay created and shown");
+                    crate::focus_diag::log(
+                        "overlay_shown",
+                        serde_json::json!({ "created": true, "firstCreationInSession": first }),
+                    );
+                }
                 Err(e) => error!("Failed to create overlay: {e}"),
             }
         }

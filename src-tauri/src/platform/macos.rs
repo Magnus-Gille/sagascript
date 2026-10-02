@@ -26,12 +26,88 @@ fn should_restore_dictation_target(target: i32, current: Option<i32>, own: i32) 
     target > 0 && target != own && current == Some(own)
 }
 
-fn can_paste_to_frontmost(target: i32, current: Option<i32>, own: i32) -> bool {
+/// Guard decision plus a stable, privacy-free reason string for diagnostics.
+fn paste_guard_decision(target: i32, current: Option<i32>, own: i32) -> (bool, &'static str) {
     match current {
-        Some(pid) if pid == own => target == own,
-        Some(_) => true,
-        None => false,
+        Some(pid) if pid == own && target == own => (true, "ok_sagascript_is_original_target"),
+        Some(pid) if pid == own => (false, "reject_sagascript_frontmost_but_not_original_target"),
+        Some(_) => (true, "ok_other_app_frontmost"),
+        None => (false, "reject_no_frontmost_app"),
     }
+}
+
+#[cfg(test)]
+fn can_paste_to_frontmost(target: i32, current: Option<i32>, own: i32) -> bool {
+    paste_guard_decision(target, current, own).0
+}
+
+/// Everything the paste guard looked at, captured once so the logged decision
+/// is exactly the decision that was enforced.
+pub struct PasteGuardCheck {
+    pub valid: bool,
+    pub reason: &'static str,
+    pub target_pid: i32,
+    pub current_pid: Option<i32>,
+    pub own_pid: i32,
+}
+
+pub fn dictation_paste_guard_check() -> PasteGuardCheck {
+    let target_pid = DICTATION_TARGET_PID.load(Ordering::Acquire);
+    let current_pid = frontmost_pid();
+    let own = own_pid();
+    let (valid, reason) = paste_guard_decision(target_pid, current_pid, own);
+    PasteGuardCheck { valid, reason, target_pid, current_pid, own_pid: own }
+}
+
+fn bundle_id_for_pid(pid: i32) -> Option<String> {
+    if pid <= 0 {
+        return None;
+    }
+    NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+        .and_then(|app| app.bundleIdentifier())
+        .map(|id| id.to_string())
+}
+
+/// Diagnostic snapshot for issue #256. Privacy: only bundle identifiers, pids,
+/// booleans and Sagascript window labels. `windows` maps label to NSWindow
+/// pointer. AppKit state is read only on the main thread.
+pub fn focus_snapshot(windows: &[(String, usize)]) -> serde_json::Value {
+    use objc2_app_kit::NSApplication;
+    use objc2_foundation::MainThreadMarker;
+
+    let front = NSWorkspace::sharedWorkspace().frontmostApplication();
+    let front_pid = front.as_ref().map(|app| app.processIdentifier());
+    let front_bundle = front
+        .as_ref()
+        .and_then(|app| app.bundleIdentifier())
+        .map(|id| id.to_string());
+    let target = DICTATION_TARGET_PID.load(Ordering::Acquire);
+    let mut snapshot = serde_json::json!({
+        "frontmostPid": front_pid,
+        "frontmostBundleId": front_bundle,
+        "ownPid": own_pid(),
+        "dictationTargetPid": target,
+        "dictationTargetBundleId": bundle_id_for_pid(target),
+    });
+    let map = snapshot.as_object_mut().expect("object");
+    if let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        let key = app.keyWindow().map(|w| (&*w as *const objc2_app_kit::NSWindow) as usize);
+        let key_label = key.map(|ptr| {
+            windows
+                .iter()
+                .find(|(_, p)| *p == ptr)
+                .map(|(label, _)| label.clone())
+                .unwrap_or_else(|| "other".to_string())
+        });
+        map.insert("appActive".into(), app.isActive().into());
+        map.insert("keyWindow".into(), key_label.into());
+        map.insert("activationPolicy".into(), format!("{:?}", app.activationPolicy()).into());
+    } else {
+        map.insert("appActive".into(), serde_json::Value::Null);
+        map.insert("keyWindow".into(), serde_json::Value::Null);
+    }
+    snapshot
 }
 
 /// Preserve the editor seen at hotkey-down before recording setup or the first
@@ -54,14 +130,6 @@ pub fn restore_dictation_target_if_stolen() -> Result<bool, String> {
         return Err("Could not restore the previous paste target".to_string());
     }
     Ok(true)
-}
-
-pub fn dictation_paste_target_is_valid() -> bool {
-    can_paste_to_frontmost(
-        DICTATION_TARGET_PID.load(Ordering::Acquire),
-        frontmost_pid(),
-        own_pid(),
-    )
 }
 
 extern "C" {
@@ -166,6 +234,18 @@ mod tests {
         assert!(!should_restore_dictation_target(101, Some(303), 202));
         assert!(!should_restore_dictation_target(202, Some(202), 202));
         assert!(!should_restore_dictation_target(0, Some(202), 202));
+    }
+
+    #[test]
+    fn paste_guard_reason_names_the_failed_condition() {
+        use super::paste_guard_decision;
+        assert_eq!(paste_guard_decision(101, Some(303), 202), (true, "ok_other_app_frontmost"));
+        assert_eq!(paste_guard_decision(202, Some(202), 202), (true, "ok_sagascript_is_original_target"));
+        assert_eq!(
+            paste_guard_decision(101, Some(202), 202),
+            (false, "reject_sagascript_frontmost_but_not_original_target")
+        );
+        assert_eq!(paste_guard_decision(101, None, 202), (false, "reject_no_frontmost_app"));
     }
 
     #[test]
