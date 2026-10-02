@@ -31,15 +31,17 @@ impl CancelToken {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct JobOptions {
     pub priority: Priority,
+    pub boost: Option<std::sync::Arc<super::client::BoostSpec>>,
 }
 
 impl Default for JobOptions {
     fn default() -> Self {
         Self {
             priority: Priority::Batch,
+            boost: None,
         }
     }
 }
@@ -131,6 +133,7 @@ impl EngineHostClient {
             samples,
             JobOptions {
                 priority: Priority::Interactive,
+                boost: None,
             },
             cancel,
             None,
@@ -200,6 +203,7 @@ impl EngineHostClient {
             num_samples: (plan[i].end_sample - plan[i].start_sample) as u64,
             sample_rate: sr,
             priority: opts.priority,
+            boost: opts.boost.clone().or_else(|| self.boost()),
         };
 
         let mut queue: VecDeque<(usize, WindowTicket)> = VecDeque::new();

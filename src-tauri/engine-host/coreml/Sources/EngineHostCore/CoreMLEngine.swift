@@ -248,6 +248,7 @@ public final class CoreMLEngine: EngineBackend {
             sequenceLength: sequenceLength,
             loaded: loaded,
             realAudioSeconds: realAudioSeconds,
+            boost: request.boost,
             isCancelled: isCancelled
         )
         let decodeMilliseconds = Date().timeIntervalSince(decodeStart) * 1000
@@ -549,6 +550,7 @@ public final class CoreMLEngine: EngineBackend {
         sequenceLength: Int,
         loaded: LoadedModel,
         realAudioSeconds: Double,
+        boost: BoostConfig?,
         isCancelled: @escaping () -> Bool
     ) throws -> [TranscriptionToken] {
         let actualFrameCount = min(
@@ -561,7 +563,8 @@ public final class CoreMLEngine: EngineBackend {
             blankID: loaded.blankID,
             encoderHidden: loaded.encoderHidden,
             decoderHidden: loaded.decoderHidden,
-            decoderLayers: loaded.decoderLayers
+            decoderLayers: loaded.decoderLayers,
+            bias: boost.map { BoostTrie(config: $0, vocabulary: loaded.vocabulary, blankID: loaded.blankID) }
         )
         // A full-sized request is normally an interior sliding-window chunk;
         // its caller will merge it with the next window. Only a short final

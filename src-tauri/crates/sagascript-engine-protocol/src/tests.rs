@@ -23,6 +23,8 @@ fn request_round_trip_all_ops() {
             sample_rate: 16000,
             format: "f32le".into(),
             priority: Priority::Batch,
+            boost_terms: vec!["Gille".into()],
+            boost_weight: 2.5,
         },
         RequestOp::Cancel { target: 7 },
         RequestOp::Status,
@@ -52,6 +54,8 @@ fn request_wire_shape() {
             sample_rate: 16000,
             format: "f32le".into(),
             priority: Priority::Interactive,
+            boost_terms: vec![],
+            boost_weight: 0.0,
         },
     );
     let v: Value = serde_json::from_str(&line).unwrap();
@@ -207,4 +211,32 @@ fn millisecond_fields_accept_float_encoders() {
     assert_eq!((timings.preprocess_ms, timings.encode_ms, timings.decode_ms), (2, 30, 25));
     assert!(serde_json::from_str::<WindowTimings>(r#"{"encode_ms":-1}"#).is_err());
     assert!(serde_json::from_str::<WindowTimings>(r#"{"encode_ms":"30"}"#).is_err());
+}
+
+#[test]
+fn transcribe_window_boost_fields_are_optional_and_omitted_when_off() {
+    let old = r#"{"v":1,"id":4,"op":"transcribe_window","pcm_path":"/p","offset_samples":0,"num_samples":10,"sample_rate":16000,"format":"f32le","priority":"batch"}"#;
+    let parsed = match decode_request(old).unwrap() {
+        ParsedRequest::Ok { op, .. } => op,
+        other => panic!("{other:?}"),
+    };
+    let RequestOp::TranscribeWindow { boost_terms, boost_weight, .. } = parsed else {
+        panic!("not a transcribe_window")
+    };
+    assert!(boost_terms.is_empty());
+    assert_eq!(boost_weight, 0.0);
+    let line = encode_request(
+        4,
+        &RequestOp::TranscribeWindow {
+            pcm_path: "/p".into(),
+            offset_samples: 0,
+            num_samples: 10,
+            sample_rate: 16000,
+            format: "f32le".into(),
+            priority: Priority::Batch,
+            boost_terms: vec![],
+            boost_weight: 0.0,
+        },
+    );
+    assert!(!line.contains("boost"));
 }

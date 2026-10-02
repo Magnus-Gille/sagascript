@@ -146,8 +146,12 @@ final class TdtDecodeSession {
     private let encoderStepDestination: FloatVectorDestination
     private let decoderStepDestination: FloatVectorDestination
     private let tokenProbPrecision: TensorPrecision
+    private var bias: BiasState?
+    private let topKIDs: MLMultiArray?
+    private let topKLogits: MLMultiArray?
+    private let topKLogitsPrecision: TensorPrecision?
 
-    init(decoder: MLModel, joint: MLModel, blankID: Int, encoderHidden: Int, decoderHidden: Int, decoderLayers: Int) throws {
+    init(decoder: MLModel, joint: MLModel, blankID: Int, encoderHidden: Int, decoderHidden: Int, decoderLayers: Int, bias: BoostTrie? = nil) throws {
         self.decoder = decoder
         self.joint = joint
         self.blankID = blankID
@@ -186,9 +190,25 @@ final class TdtDecodeSession {
         ])
         jointInput = PreparedFeatureProvider(arrays: ["encoder_step": encoderStep, "decoder_step": decoderStep])
         decoderOptions.outputBackings = ["h_out": hidden, "c_out": cell]
-        jointOptions.outputBackings = [
+        var jointBackings: [String: MLMultiArray] = [
             "token_id": tokenIDBacking, "token_prob": tokenProbBacking, "duration": durationBacking,
         ]
+        if let bias, !bias.isEmpty,
+           let idsConstraint = constraint(joint, input: nil, output: "top_k_ids"), idsConstraint.dataType == .int32,
+           let logitsPrecision = try? floatPrecision(of: joint, output: "top_k_logits", model: "JointDecisionv3"),
+           let count = idsConstraint.shape.last?.intValue, count > 0 {
+            let ids = try MLMultiArray(shape: [1, 1, 1, NSNumber(value: count)], dataType: .int32)
+            let logits = try MLMultiArray(shape: [1, 1, 1, NSNumber(value: count)], dataType: logitsPrecision.dataType)
+            jointBackings["top_k_ids"] = ids
+            jointBackings["top_k_logits"] = logits
+            topKIDs = ids; topKLogits = logits; topKLogitsPrecision = logitsPrecision
+            let factor = Float(ProcessInfo.processInfo.environment["SAGASCRIPT_BOOST_START_FACTOR"] ?? "") ?? 0.25
+            self.bias = BiasState(trie: bias, startFactor: factor)
+        } else {
+            topKIDs = nil; topKLogits = nil; topKLogitsPrecision = nil
+            self.bias = nil
+        }
+        jointOptions.outputBackings = jointBackings
         encoderStepDestination = FloatVectorDestination(encoderStep, precision: encoderStepPrecision, axis: 1)
         decoderStepDestination = FloatVectorDestination(decoderStep, precision: decoderStepPrecision, axis: 1)
     }
@@ -239,9 +259,22 @@ final class TdtDecodeSession {
     private func runJoint(frames: EncoderFrames, frame: Int) throws -> Decision {
         frames.copyFrame(frame, to: encoderStepDestination)
         _ = try joint.prediction(from: jointInput, options: jointOptions)
+        var token = Int(tokenIDBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0])
+        var probability = loadFloat(UnsafeRawPointer(tokenProbBacking.dataPointer), tokenProbPrecision, 0)
+        if bias != nil, let topKIDs, let topKLogits, let precision = topKLogitsPrecision {
+            let count = topKIDs.count
+            let idPointer = topKIDs.dataPointer.bindMemory(to: Int32.self, capacity: count)
+            let raw = UnsafeRawPointer(topKLogits.dataPointer)
+            let ids = (0..<count).map { Int(idPointer[$0]) }
+            let logits = (0..<count).map { loadFloat(raw, precision, $0) }
+            if let pick = bias!.choose(ids: ids, logits: logits, frame: frame) {
+                token = pick.id
+                probability = pick.probability
+            }
+        }
         return Decision(
-            token: Int(tokenIDBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0]),
-            probability: loadFloat(UnsafeRawPointer(tokenProbBacking.dataPointer), tokenProbPrecision, 0),
+            token: token,
+            probability: probability,
             duration: Int(durationBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0])
         )
     }
@@ -331,6 +364,7 @@ final class TdtDecodeSession {
                     id: label, frame: timeIndicesCurrentLabels, duration: duration, confidence: score
                 ))
                 try runDecoder(token: label)
+                bias?.emitted(token: label, frame: timeIndicesCurrentLabels)
 
                 if timeIndicesCurrentLabels == lastEmissionTimestamp {
                     emissionsAtThisTimestamp += 1

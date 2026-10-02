@@ -319,13 +319,24 @@ public final class EngineHostServer {
             sendFailure(id: id, error: EngineHostError(code: "bad_request", message: "num_samples exceeds max_window_s", retryable: false))
             return
         }
+        var boost: BoostConfig?
+        if let terms = request["boost_terms"] as? [Any], !terms.isEmpty {
+            let weightValue = (request["boost_weight"] as? NSNumber)?.floatValue ?? 0
+            guard terms.count <= BoostConfig.maxTerms, weightValue.isFinite, weightValue >= 0, weightValue <= 20,
+                  terms.allSatisfy({ ($0 as? String).map { $0.count <= BoostConfig.maxTermLength } ?? false }) else {
+                sendFailure(id: id, error: EngineHostError(code: "bad_request", message: "boost_terms must be at most 500 strings of at most 64 characters and boost_weight within 0...20"))
+                return
+            }
+            if weightValue > 0 { boost = BoostConfig(terms: terms.compactMap { $0 as? String }, weight: weightValue) }
+        }
         let window = WindowRequest(
             pcmPath: pcmPath,
             offsetSamples: offsetSamples,
             numSamples: numSamples,
             sampleRate: sampleRate,
             format: format,
-            priority: priority
+            priority: priority,
+            boost: boost
         )
         scheduler.submit(id: id, priority: priority, work: { [weak self] flag in
             guard let self else { throw EngineHostError(code: "internal", message: "Host deallocated") }

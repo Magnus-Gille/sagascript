@@ -5,6 +5,8 @@
 //! visited encoder frame; the decoder state advances only on non-blank tokens; the
 //! duration head (argmax over the trailing logits) is a frame skip in `0..=4`.
 
+use crate::boost::BiasState;
+
 pub const HIDDEN: usize = 1024;
 /// Seconds per encoder frame: 10 ms hop x subsampling 8.
 pub const FRAME_S: f64 = 0.08;
@@ -55,6 +57,7 @@ fn argmax(values: &[f32]) -> usize {
 }
 
 /// Decode `frames` (row-major `t x HIDDEN`, `t` = valid encoder length).
+#[cfg(test)]
 pub fn decode(
     frames: &[f32],
     joint: &mut dyn Joint,
@@ -62,6 +65,19 @@ pub fn decode(
     blank: u32,
     max_tokens_per_step: usize,
     is_cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<RawToken>, DecodeError> {
+    decode_biased(frames, joint, vocab_size, blank, max_tokens_per_step, is_cancelled, None)
+}
+
+/// [`decode`] with optional context biasing (dictionary terms steer the token argmax).
+pub fn decode_biased(
+    frames: &[f32],
+    joint: &mut dyn Joint,
+    vocab_size: usize,
+    blank: u32,
+    max_tokens_per_step: usize,
+    is_cancelled: &dyn Fn() -> bool,
+    mut bias: Option<BiasState<'_>>,
 ) -> Result<Vec<RawToken>, DecodeError> {
     debug_assert_eq!(frames.len() % HIDDEN, 0);
     let total = frames.len() / HIDDEN;
@@ -83,7 +99,10 @@ pub fn decode(
                 logits.len()
             )));
         }
-        let token = argmax(&logits[..vocab_size]) as u32;
+        let token = match bias.as_mut().and_then(|b| b.choose(&logits[..vocab_size], t)) {
+            Some(boosted) => boosted as u32,
+            None => argmax(&logits[..vocab_size]) as u32,
+        };
         let step = argmax(&logits[vocab_size..]);
         if token != blank {
             state = next_state;
@@ -94,6 +113,9 @@ pub fn decode(
             });
             last = token as i32;
             emitted += 1;
+            if let Some(b) = bias.as_mut() {
+                b.emitted(token, t);
+            }
         }
         if step > 0 {
             t += step;

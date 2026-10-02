@@ -239,6 +239,8 @@ pub(crate) struct Inner {
     cv: Condvar,
     /// Serializes start / load / unload / shutdown.
     lifecycle: Mutex<()>,
+    /// Dictionary applied to every window job that does not carry its own.
+    boost: Mutex<Option<Arc<BoostSpec>>>,
     /// Pid of the host we last warned about having no interactive reservation.
     warned_no_reserve_pid: AtomicU32,
     /// Host spawns / `load` requests, for diagnostics (see [`HostSnapshot`]).
@@ -274,6 +276,7 @@ impl EngineHostClient {
             }),
             cv: Condvar::new(),
             lifecycle: Mutex::new(()),
+            boost: Mutex::new(None),
             warned_no_reserve_pid: AtomicU32::new(0),
             spawns: AtomicU64::new(0),
             loads: AtomicU64::new(0),
@@ -293,6 +296,15 @@ impl EngineHostClient {
 
     pub fn config(&self) -> &EngineHostConfig {
         &self.inner.cfg
+    }
+
+    /// Set (or clear) the context-biasing dictionary for later jobs.
+    pub fn set_boost(&self, boost: Option<BoostSpec>) {
+        *self.inner.boost.lock().unwrap_or_else(|e| e.into_inner()) = boost.map(Arc::new);
+    }
+
+    pub fn boost(&self) -> Option<Arc<BoostSpec>> {
+        self.inner.boost.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Start the host and load the model now (pre-warm). Returns its capabilities.
@@ -475,6 +487,36 @@ pub struct WindowRequest {
     pub num_samples: u64,
     pub sample_rate: u32,
     pub priority: Priority,
+    /// Context-biasing dictionary; `None` leaves decoding unchanged.
+    pub boost: Option<Arc<BoostSpec>>,
+}
+
+/// Dictionary terms and logit bonus sent with each window.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoostSpec {
+    pub terms: Vec<String>,
+    pub weight: f32,
+}
+
+impl BoostSpec {
+    /// Bounded (<= 500 terms, <= 64 chars each) and deduplicated; `None` when it would be a no-op.
+    pub fn new(terms: impl IntoIterator<Item = String>, weight: f32) -> Option<Self> {
+        if !weight.is_finite() || weight <= 0.0 {
+            return None;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let terms: Vec<String> = terms
+            .into_iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty() && t.chars().count() <= sagascript_engine_protocol::MAX_BOOST_TERM_CHARS)
+            .filter(|t| seen.insert(t.to_lowercase()))
+            .take(sagascript_engine_protocol::MAX_BOOST_TERMS)
+            .collect();
+        if terms.is_empty() {
+            return None;
+        }
+        Some(Self { terms, weight: weight.min(sagascript_engine_protocol::MAX_BOOST_WEIGHT) })
+    }
 }
 
 fn window_op(req: &WindowRequest) -> RequestOp {
@@ -485,6 +527,8 @@ fn window_op(req: &WindowRequest) -> RequestOp {
         sample_rate: req.sample_rate,
         format: "f32le".into(),
         priority: req.priority,
+        boost_terms: req.boost.as_ref().map(|b| b.terms.clone()).unwrap_or_default(),
+        boost_weight: req.boost.as_ref().map_or(0.0, |b| b.weight),
     }
 }
 
@@ -1105,4 +1149,30 @@ pub fn validate_hello(hello: &HelloResult, client: &ClientIdentity) -> Result<Ca
         );
     }
     Ok(c.clone())
+}
+
+#[cfg(test)]
+mod boost_spec_tests {
+    use super::BoostSpec;
+
+    #[test]
+    fn off_when_weight_or_terms_are_empty() {
+        assert!(BoostSpec::new(vec!["Gille".into()], 0.0).is_none());
+        assert!(BoostSpec::new(vec!["Gille".into()], f32::NAN).is_none());
+        assert!(BoostSpec::new(vec!["  ".into()], 3.0).is_none());
+    }
+
+    #[test]
+    fn bounds_and_deduplicates_terms() {
+        let long = "x".repeat(65);
+        let many: Vec<String> = (0..600).map(|i| format!("Namn{i}")).collect();
+        let spec = BoostSpec::new(
+            vec!["Gille".into(), "gille".into(), long, "Magnus Gille".into()].into_iter().chain(many),
+            99.0,
+        )
+        .unwrap();
+        assert_eq!(spec.terms.len(), 500);
+        assert_eq!(&spec.terms[..2], ["Gille", "Magnus Gille"]);
+        assert_eq!(spec.weight, 20.0);
+    }
 }

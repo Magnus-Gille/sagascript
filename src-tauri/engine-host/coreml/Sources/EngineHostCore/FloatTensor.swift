@@ -146,7 +146,7 @@ func converted(_ array: MLMultiArray, to precision: TensorPrecision, feature: St
     return result
 }
 
-private func constraint(_ model: MLModel, input name: String?, output: String?) -> MLMultiArrayConstraint? {
+func constraint(_ model: MLModel, input name: String?, output: String?) -> MLMultiArrayConstraint? {
     if let name { return model.modelDescription.inputDescriptionsByName[name]?.multiArrayConstraint }
     if let output { return model.modelDescription.outputDescriptionsByName[output]?.multiArrayConstraint }
     return nil

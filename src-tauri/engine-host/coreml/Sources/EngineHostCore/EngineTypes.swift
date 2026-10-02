@@ -77,6 +77,7 @@ public struct WindowRequest: Sendable {
     public let sampleRate: Int
     public let format: String
     public let priority: String
+    public let boost: BoostConfig?
 
     public init(
         pcmPath: String,
@@ -84,7 +85,8 @@ public struct WindowRequest: Sendable {
         numSamples: Int,
         sampleRate: Int,
         format: String,
-        priority: String
+        priority: String,
+        boost: BoostConfig? = nil
     ) {
         self.pcmPath = pcmPath
         self.offsetSamples = offsetSamples
@@ -92,6 +94,7 @@ public struct WindowRequest: Sendable {
         self.sampleRate = sampleRate
         self.format = format
         self.priority = priority
+        self.boost = boost
     }
 }
 

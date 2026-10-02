@@ -30,6 +30,14 @@ pub enum Priority {
     Batch,
 }
 
+pub const MAX_BOOST_TERMS: usize = 500;
+pub const MAX_BOOST_TERM_CHARS: usize = 64;
+pub const MAX_BOOST_WEIGHT: f32 = 20.0;
+
+fn is_zero_weight(weight: &f32) -> bool {
+    *weight == 0.0
+}
+
 /// A request body; the `op` tag and its parameters, without `v` and `id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -49,6 +57,13 @@ pub enum RequestOp {
         sample_rate: u32,
         format: String,
         priority: Priority,
+        /// Optional context-biasing dictionary (at most `MAX_BOOST_TERMS` terms of at most
+        /// `MAX_BOOST_TERM_CHARS` characters). Absent or empty: decoding is unchanged.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        boost_terms: Vec<String>,
+        /// Logit bonus for dictionary-continuing tokens (`0..=MAX_BOOST_WEIGHT`).
+        #[serde(default, skip_serializing_if = "is_zero_weight")]
+        boost_weight: f32,
     },
     Cancel {
         target: u64,

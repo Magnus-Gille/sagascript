@@ -77,6 +77,13 @@ Request:
   dir, deleted by the client). The host reads `num_samples` starting at `offset_samples`.
 - `num_samples ≤ max_window_s × sample_rate`, else `bad_request`. Shorter windows are padded
   internally; tokens beyond the real audio are dropped.
+- Optional context biasing (both hosts): `"boost_terms":["Gille","Magnus Gille"]` (at most 500 terms of
+  at most 64 characters, else `bad_request`) and `"boost_weight":5.0` (logit bonus, `0..=20`). Terms are
+  tokenized with the model's SentencePiece pieces into a prefix trie; tokens that continue a live partial
+  match get the full bonus and tokens that start a term get `weight x 0.25` (`SAGASCRIPT_BOOST_START_FACTOR`
+  overrides it for measurements). Absent, empty or zero weight: decoding is bit-for-bit unchanged. The Core ML
+  host biases within the joint's top-64 token logits; the ONNX host over all token logits. Results are still
+  the raw pieces, so replacements remain a client-side post-step. See `docs/benchmarks/pianissimo-boosting.md`.
 - `priority` is `interactive` (dictation) or `batch` (file chunks). When more requests are queued
   than `max_in_flight`, interactive ones run first. A host that is not loaded answers `not_loaded`;
   the client then reloads and resends the window once.

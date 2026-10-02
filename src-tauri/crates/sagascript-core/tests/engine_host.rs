@@ -263,6 +263,7 @@ fn out_of_order_responses_are_routed_by_id() {
         num_samples: 32_000,
         sample_rate: 16_000,
         priority: Priority::Batch,
+        boost: None,
     };
     let first = f
         .client
@@ -358,6 +359,7 @@ fn submit_slow(
                 num_samples: samples.len() as u64,
                 sample_rate: 16_000,
                 priority: Priority::Batch,
+                boost: None,
             },
             cancel,
             Duration::from_secs(1),
@@ -1048,6 +1050,7 @@ fn idle_unload_cannot_race_with_a_batch_request() {
                 num_samples: 8000,
                 sample_rate: 16000,
                 priority: Priority::Batch,
+                boost: None,
             };
             let ticket = client
                 .submit_window(&req, &CancelToken::new(), Duration::from_secs(2))?
@@ -1101,6 +1104,7 @@ fn not_loaded_response_is_retried_once_after_reload() {
                 num_samples: 8000,
                 sample_rate: 16000,
                 priority: Priority::Interactive,
+                boost: None,
             };
             let ticket = client
                 .submit_window(&req, &CancelToken::new(), Duration::from_secs(2))?

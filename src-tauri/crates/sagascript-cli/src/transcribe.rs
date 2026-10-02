@@ -135,6 +135,17 @@ pub struct TranscribeArgs {
     )]
     pub prompt_file: Option<PathBuf>,
 
+    /// Pianissimo only: steer decoding with the profile glossary terms (context
+    /// biasing). The value is the logit bonus for dictionary-continuing tokens
+    /// (try 1-5; 0 or absent = off).
+    #[arg(long, value_name = "WEIGHT")]
+    pub glossary_boost: Option<f32>,
+
+    /// Pianissimo only: extra context-biasing terms, one per line (experiments).
+    /// Used together with --glossary-boost.
+    #[arg(long, value_name = "FILE", requires = "glossary_boost")]
+    pub boost_terms_file: Option<PathBuf>,
+
     /// Opt in to strict one-edit vocabulary correction from the selected hint.
     /// Requires --json so every applied correction is reported with its source
     /// text and segment confidence. Only single-word, unambiguous hints apply.
@@ -662,6 +673,8 @@ fn transcribe_meeting_file_inner(
         diarize_cache: cache_output.map(Path::to_path_buf),
         prompt: None,
         prompt_file: None,
+        glossary_boost: None,
+        boost_terms_file: None,
         correct_hints: false,
         vad: false,
         no_vad: false,
@@ -1030,6 +1043,22 @@ fn run_pianissimo_batch(
     let load_started = Instant::now();
     let cancel_flag = crate::cancel::flag();
     let backend = std::sync::Arc::new(PianissimoBackend::start_with_cancel(cancel_flag)?);
+    if let Some(weight) = args.glossary_boost {
+        let mut terms: Vec<String> = glossary.entries().iter().map(|e| e.canonical.clone()).collect();
+        if let Some(path) = &args.boost_terms_file {
+            let text = std::fs::read_to_string(path).map_err(|e| {
+                DictationError::SettingsError(format!("Cannot read --boost-terms-file {}: {e}", path.display()))
+            })?;
+            terms.extend(text.lines().map(str::to_string));
+        }
+        match sagascript_core::transcription::engine_host::BoostSpec::new(terms, weight) {
+            Some(spec) => {
+                eprintln!("Context biasing: {} terms, weight {}", spec.terms.len(), spec.weight);
+                backend.set_boost(Some(spec));
+            }
+            None => eprintln!("Context biasing requested but no terms/weight; decoding unchanged."),
+        }
+    }
     let _abort_pianissimo = {
         let backend = backend.clone();
         crate::cancel::register(move || backend.request_abort())

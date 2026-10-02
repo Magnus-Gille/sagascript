@@ -467,13 +467,21 @@ fn transcribe_loaded(
     } else {
         let mut session = lock(&loaded.decoder);
         let mut joint = OrtJoint { session: &mut session, steps: 0, run_us: 0 };
-        let decoded = tdt::decode(
+        let trie = (!request.boost_terms.is_empty() && request.boost_weight > 0.0)
+            .then(|| crate::boost::BoostTrie::new(&request.boost_terms, request.boost_weight, &loaded.vocab))
+            .filter(|t| !t.is_empty());
+        let start_factor = std::env::var("SAGASCRIPT_BOOST_START_FACTOR")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.25);
+        let decoded = tdt::decode_biased(
             &frames,
             &mut joint,
             loaded.vocab.len(),
             loaded.vocab.blank_id(),
             loaded.max_tokens_per_step,
             is_cancelled,
+            trie.as_ref().map(|t| crate::boost::BiasState::new(t, start_factor)),
         );
         joint_steps = joint.steps;
         joint_run_ms = (joint.run_us / 1000) as u64;
