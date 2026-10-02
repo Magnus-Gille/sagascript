@@ -27,7 +27,26 @@ fn emit(event: &str, mut data: serde_json::Value, snapshot: Option<serde_json::V
             map.insert("snapshotDeferredToMainThread".into(), true.into());
         }
     }
-    crate::logging::log_global("info", "Focus", event, data);
+    crate::logging::log_global(level_for(event, &data), "Focus", event, data);
+}
+
+/// Only events needed to diagnose paste-target problems in the field are INFO;
+/// everything else is DEBUG (written only with RUST_LOG=debug).
+fn level_for(event: &str, data: &serde_json::Value) -> &'static str {
+    let is_info = match event {
+        "paste_guard_check" => data["decision"] == "reject",
+        "focus_restore_before_paste" => data["attempted"] == true,
+        "settings_window_open_requested" => data["site"] == "paste_failed_copy_fallback",
+        "activation_call" => {
+            data["site"] == "launch_activation" && data["step"] == "withdrawn_user_moved_on"
+        }
+        _ => false,
+    };
+    if is_info {
+        "info"
+    } else {
+        "debug"
+    }
 }
 
 /// Log a focus event with a snapshot of the frontmost app, app activation and
@@ -64,4 +83,40 @@ pub fn log(event: &'static str, data: serde_json::Value) {
 /// Log a window/app activation call site.
 pub fn activation(site: &'static str, step: &'static str) {
     log("activation_call", serde_json::json!({ "site": site, "step": step }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::level_for;
+    use serde_json::json;
+
+    #[test]
+    fn field_diagnostic_events_stay_info() {
+        assert_eq!(level_for("paste_guard_check", &json!({ "decision": "reject" })), "info");
+        assert_eq!(level_for("focus_restore_before_paste", &json!({ "attempted": true })), "info");
+        assert_eq!(
+            level_for(
+                "activation_call",
+                &json!({ "site": "launch_activation", "step": "withdrawn_user_moved_on" })
+            ),
+            "info"
+        );
+        assert_eq!(
+            level_for("settings_window_open_requested", &json!({ "site": "paste_failed_copy_fallback" })),
+            "info"
+        );
+    }
+
+    #[test]
+    fn everything_else_is_debug() {
+        assert_eq!(level_for("paste_guard_check", &json!({ "decision": "allow" })), "debug");
+        assert_eq!(level_for("focus_restore_before_paste", &json!({ "attempted": false })), "debug");
+        assert_eq!(level_for("settings_window_open_requested", &json!({ "site": "tray" })), "debug");
+        assert_eq!(level_for("activation_call", &json!({ "site": "main_window_reveal", "step": "show" })), "debug");
+        for e in ["hotkey_down", "overlay_shown", "focus_restore_after_overlay", "key_up_stop_requested",
+                  "capture_stopped", "transcription_result_ready", "result_emitted_to_ui",
+                  "engine_load_state_event", "startup_windows", "update_check_requested"] {
+            assert_eq!(level_for(e, &json!({})), "debug", "{e}");
+        }
+    }
 }
