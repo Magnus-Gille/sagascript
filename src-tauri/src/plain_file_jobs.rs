@@ -104,7 +104,7 @@ pub async fn transcribe_pianissimo(
             run.check()?;
             // Load the model before the deadline starts: a first-time Core ML
             // compile can take minutes and is not inference time.
-            backend.warm_up()?;
+            backend.warm_up_with_cancel(&run.cancelled)?;
             run.check()?;
             *run.deadline.lock().unwrap() = Some(Instant::now() + timeout);
             progress("transcribing", Some(0));

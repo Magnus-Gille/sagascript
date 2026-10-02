@@ -1,5 +1,6 @@
 pub(crate) mod benchmark_config;
 mod benchmark_quality;
+pub mod cancel;
 pub mod config;
 pub mod engine;
 pub mod benchmark_dictation;
@@ -231,6 +232,12 @@ path order; use --recursive to include subdirectories.
 With more than one input, --json emits an array and --jsonl emits one compact \
 {source,status,result|error} object per line. Item failures do not hide later \
 results, but the command exits non-zero after the batch; --fail-fast stops early.
+
+Ctrl-C (or SIGTERM) cancels the run cleanly: decoding stops promptly, the engine \
+host is shut down, the command prints \"Cancelled\" and exits with status 130 \
+(143 for SIGTERM); --progress-json emits a final \"cancelled\" phase. \
+A batch is cancelled as a whole and the interrupted file's partial result is \
+discarded. A second Ctrl-C force-quits.
 
 By default, uses the language and model from your persisted settings \
 (see 'sagascript config list'). Override with --language and --model.
@@ -610,6 +617,13 @@ pub fn run(cli: Cli) {
 
     // Stop the engine host (if this command started one) before exiting.
     sagascript_core::transcription::pianissimo_backend::shutdown_shared_client();
+
+    // A Ctrl-C/SIGTERM during file transcription unwinds to here with whatever
+    // error the aborted work produced; report it as a cancellation, not a failure.
+    if cancel::is_cancelled() {
+        eprintln!("Cancelled");
+        std::process::exit(cancel::exit_code());
+    }
 
     if let Err(e) = result {
         eprintln!("Error: {e}");

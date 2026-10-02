@@ -718,6 +718,10 @@ pub struct WhisperBackend {
     cached_runtime: Mutex<Option<CachedWhisperRuntime>>,
     /// Abort flag — set to true to cancel in-progress transcription
     abort_flag: Arc<AtomicBool>,
+    /// Sticky cancellation (CLI Ctrl-C): unlike `abort_flag`, lock acquisition
+    /// never clears it, so a cancel landing between inference calls (gap
+    /// re-decode slices, language detection) cannot be lost.
+    cancel_sticky: AtomicBool,
     /// Serializes model (re)loads so concurrent `ensure_model()` callers — e.g.
     /// the startup warmup thread and the first dictation — don't load the same
     /// model twice or race the warm-state reset.
@@ -758,6 +762,7 @@ impl WhisperBackend {
             loaded_runtime: Mutex::new(None),
             cached_runtime: Mutex::new(None),
             abort_flag: Arc::new(AtomicBool::new(false)),
+            cancel_sticky: AtomicBool::new(false),
             load_lock: Mutex::new(()),
         }
     }
@@ -833,6 +838,23 @@ impl WhisperBackend {
             "Transcription abort requested — signalling whisper to stop at the next compute step"
         );
         self.abort_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Persistent cancellation: aborts the running inference like
+    /// [`Self::request_abort`], and makes every later inference call on this
+    /// backend fail immediately with a "Cancelled" error. Never cleared; intended
+    /// for one-shot CLI runs that exit after cancelling.
+    pub fn request_cancel(&self) {
+        self.cancel_sticky.store(true, Ordering::SeqCst);
+        self.request_abort();
+    }
+
+    pub fn is_cancel_requested(&self) -> bool {
+        self.cancel_sticky.load(Ordering::SeqCst)
+    }
+
+    fn cancelled_error() -> DictationError {
+        DictationError::TranscriptionFailed("Cancelled".into())
     }
 
     /// FFI abort callback. whisper.cpp invokes this before each ggml graph
@@ -1306,6 +1328,11 @@ impl WhisperBackend {
         // (2) We own the lock, so we own the flag: clear any stale abort left
         // over from a previous, already-finished inference.
         self.abort_flag.store(false, Ordering::SeqCst);
+        if self.is_cancel_requested() {
+            // Sticky cancel survives the stale-flag clear above: never start
+            // new inference after a cancel.
+            return Err(Self::cancelled_error());
+        }
 
         // No Drop guard is needed for the abort cleanup below: if `f` panics,
         // the unwind poisons the state mutex and lock_state_bounded panics on
@@ -1485,10 +1512,11 @@ impl WhisperBackend {
         );
         let mut redecode_opts = opts.clone();
         redecode_opts.parallel_chunks = 1;
-        Ok(super::gap_redecode::redecode_uncovered_speech(
+        let recovered = super::gap_redecode::redecode_uncovered_speech_cancellable(
             audio,
             segments,
             &limits,
+            &|| self.is_cancel_requested(),
             |slice| {
                 self.transcribe_sync_with_options_segments(
                     slice,
@@ -1498,7 +1526,11 @@ impl WhisperBackend {
                     None,
                 )
             },
-        ))
+        );
+        if self.is_cancel_requested() {
+            return Err(Self::cancelled_error());
+        }
+        Ok(recovered)
     }
 
     /// Text form of [`Self::transcribe_sync_with_gap_recovery`], with the
@@ -3584,5 +3616,21 @@ mod warm_state_tests {
             "a call that acquired the state lock must clear the stale abort flag \
              before starting its own inference"
         );
+    }
+
+    /// A sticky cancel that lands between inference calls is not lost to the
+    /// lock-acquisition flag clear: the next call fails without running.
+    #[test]
+    fn sticky_cancel_survives_lock_acquisition_and_blocks_new_inference() {
+        let backend = WhisperBackend::new();
+        backend.request_cancel();
+        let mut ran = false;
+        let res = backend.with_warm_state_grace(Duration::from_millis(0), |_state| {
+            ran = true;
+            Ok(())
+        });
+        assert!(!ran, "no inference may start after a sticky cancel");
+        assert_eq!(res.unwrap_err().to_string(), "Transcription failed: Cancelled");
+        assert!(backend.is_cancel_requested());
     }
 }

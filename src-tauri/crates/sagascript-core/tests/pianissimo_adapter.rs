@@ -103,6 +103,60 @@ fn caller_cancel_flag_stops_a_running_file_job_quickly() {
 }
 
 #[test]
+fn cancelling_a_file_job_sends_the_protocol_cancel_and_the_next_job_works() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("log");
+    let backend = Arc::new(PianissimoBackend::with_client(client(
+        &[
+            ("FAKE_WINDOW_S", "30"),
+            ("FAKE_WINDOW_DELAY_MS", "2000"),
+            ("FAKE_LOG", log.to_str().unwrap()),
+        ],
+        tmp.path(),
+    )));
+    let job = {
+        let backend = backend.clone();
+        std::thread::spawn(move || backend.transcribe(&ramp(100), |_| {}))
+    };
+    std::thread::sleep(Duration::from_millis(600));
+    backend.request_abort();
+    assert!(job.join().unwrap().unwrap_err().to_string().contains("cancelled"));
+
+    let lines = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        lines.lines().any(|line| line.starts_with("cancel ")),
+        "the host must receive a protocol cancel, got:\n{lines}"
+    );
+    // The engine is free for the next job: same backend and client, no respawn.
+    assert!(backend.client().snapshot().running, "host must survive a cancel");
+    let next = backend.transcribe(&ramp(5), |_| {});
+    assert!(next.is_ok(), "{next:?}");
+    assert_eq!(spawn_count(&log), 1, "the same host must serve the next job");
+}
+
+#[test]
+fn warm_up_with_cancel_returns_promptly_and_keeps_the_host() {
+    let tmp = tempfile::tempdir().unwrap();
+    let backend = Arc::new(PianissimoBackend::with_client(client(
+        &[("FAKE_LOAD_DELAY_MS", "3000")],
+        tmp.path(),
+    )));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let job = {
+        let backend = backend.clone();
+        let cancelled = cancelled.clone();
+        std::thread::spawn(move || backend.warm_up_with_cancel(&cancelled))
+    };
+    std::thread::sleep(Duration::from_millis(400));
+    let at = Instant::now();
+    cancelled.store(true, Ordering::SeqCst);
+    let error = job.join().unwrap().unwrap_err();
+    assert!(error.to_string().contains("cancelled"), "{error}");
+    assert!(at.elapsed() < Duration::from_millis(500), "{:?}", at.elapsed());
+    assert!(backend.client().snapshot().running, "host keeps loading for the next job");
+}
+
+#[test]
 fn request_abort_cancels_the_active_job() {
     let tmp = tempfile::tempdir().unwrap();
     let backend = Arc::new(PianissimoBackend::with_client(client(

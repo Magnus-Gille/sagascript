@@ -712,6 +712,17 @@ fn validate_meeting_input_scope(
 }
 
 pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
+    crate::cancel::install();
+    let progress_json = args.progress_json;
+    let started = Instant::now();
+    let result = run_inner(args);
+    if crate::cancel::is_cancelled() {
+        emit_progress(progress_json, started, "cancelled", None);
+    }
+    result
+}
+
+fn run_inner(args: TranscribeArgs) -> Result<(), DictationError> {
     let stored = sagascript_core::settings::store::load();
     let profile = match args.profile.as_deref() {
         Some(id) => resolve_profile(&stored, id)?,
@@ -809,7 +820,11 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     // Model loading is lazy so a validated diarization-cache hit never maps
     // several gigabytes of weights that it will not use. Batch processing is
     // sequential, so this flag safely preserves the load-once behavior.
-    let backend = WhisperBackend::new();
+    let backend = std::sync::Arc::new(WhisperBackend::new());
+    let _abort_whisper = {
+        let backend = backend.clone();
+        crate::cancel::register(move || backend.request_cancel())
+    };
     let mut model_loaded = false;
 
     let mut items = Vec::with_capacity(if args.json { files.len() } else { 0 });
@@ -1013,10 +1028,15 @@ fn run_pianissimo_batch(
         eprintln!("Pianissimo does not use Whisper decoder hints; saved glossary replacements still apply after transcription.");
     }
     let load_started = Instant::now();
-    let backend = PianissimoBackend::start()?;
+    let cancel_flag = crate::cancel::flag();
+    let backend = std::sync::Arc::new(PianissimoBackend::start_with_cancel(cancel_flag)?);
+    let _abort_pianissimo = {
+        let backend = backend.clone();
+        crate::cancel::register(move || backend.request_abort())
+    };
     let model_verification_seconds = load_started.elapsed().as_secs_f64();
     // Start the engine host and load the model once for the whole batch.
-    let warm = backend.warm_up()?;
+    let warm = backend.warm_up_with_cancel(cancel_flag)?;
     let mut items = Vec::with_capacity(if args.json { files.len() } else { 0 });
     let (processed, failures) = process_batch(
         files,
@@ -1027,16 +1047,16 @@ fn run_pianissimo_batch(
             emit_progress(args.progress_json, started, "decoding", Some(0));
             let audio = sagascript_core::audio::decoder::decode_audio_file_with_stage_progress(
                 file,
-                None,
+                Some(&crate::cancel::check),
                 &|pct| emit_progress(args.progress_json, started, "decoding", Some(pct)),
                 &|pct| emit_progress(args.progress_json, started, "resampling", Some(pct)),
             )?;
             let duration = audio.len() as f64 / 16_000.0;
             let decode_resample_seconds = started.elapsed().as_secs_f64();
             emit_progress(args.progress_json, started, "transcribing", Some(0));
-            let result = backend.transcribe(&audio, |pct| {
+            let result = backend.transcribe_with_cancel(&audio, |pct| {
                 emit_progress(args.progress_json, started, "transcribing", Some(pct));
-            })?;
+            }, cancel_flag)?;
             let (text, corrections) = glossary.correct_text(&result.text);
             let output = pianissimo_file_json(
                 &text,
@@ -1145,6 +1165,20 @@ fn emit_jsonl_item(item: &BatchItem) -> Result<(), DictationError> {
 fn process_batch<F, E>(
     files: &[PathBuf],
     fail_fast: bool,
+    process: F,
+    emit: E,
+) -> Result<(usize, usize), DictationError>
+where
+    F: FnMut(usize, &Path) -> Result<FileTranscription, DictationError>,
+    E: FnMut(BatchExecution) -> Result<(), DictationError>,
+{
+    process_batch_with(&crate::cancel::GLOBAL, files, fail_fast, process, emit)
+}
+
+fn process_batch_with<F, E>(
+    canceller: &crate::cancel::Canceller,
+    files: &[PathBuf],
+    fail_fast: bool,
     mut process: F,
     mut emit: E,
 ) -> Result<(usize, usize), DictationError>
@@ -1155,7 +1189,11 @@ where
     let mut processed = 0usize;
     let mut failures = 0usize;
     for (index, file) in files.iter().enumerate() {
+        // Ctrl-C cancels the whole batch: no further files start and no
+        // partial result for the interrupted one is emitted.
+        canceller.check()?;
         let output = process(index, file).map_err(|error| error.to_string());
+        canceller.check()?;
         let failed = output.is_err();
         processed += 1;
         failures += usize::from(failed);
@@ -1345,7 +1383,10 @@ fn transcribe_file(
                 pb.set_position(pct as u64);
             }
         };
-        let checkpoint = || control.map_or(Ok(()), |control| control.check());
+        let checkpoint = || {
+            crate::cancel::check()?;
+            control.map_or(Ok(()), |control| control.check())
+        };
         on_decode(0);
         let audio = sagascript_core::audio::decoder::decode_audio_file_with_stage_progress(
             file, Some(&checkpoint), &on_decode, &on_resample,
@@ -1399,6 +1440,7 @@ fn transcribe_file(
             emit_progress(args.progress_json, file_started, "loading", None);
             let model_load_seconds =
                 ensure_model_loaded(backend, model, context_profile, model_loaded)?;
+            crate::cancel::check()?;
             emit_progress(args.progress_json, file_started, "language_detection", None);
             let language_detection_started = Instant::now();
             let audio = audio.as_deref().expect("cache misses decode audio");
@@ -1416,6 +1458,7 @@ fn transcribe_file(
                     None
                 }
             };
+            crate::cancel::check()?;
             (
                 model_load_seconds,
                 detected_language,
@@ -2674,6 +2717,49 @@ mod tests {
         assert_eq!(counts, (1, 1));
         assert_eq!(executions.len(), 1);
         assert_eq!(executions[0].source, PathBuf::from("bad.wav"));
+    }
+
+    #[test]
+    fn batch_cancellation_stops_a_fake_decoder_emits_nothing_and_resets_state() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let canceller = crate::cancel::Canceller::new();
+        // Fake decoder: spins until its abort flag flips, like whisper.cpp's
+        // abort callback polling between compute steps.
+        let abort = Arc::new(AtomicBool::new(false));
+        let files = vec![PathBuf::from("long.wav"), PathBuf::from("never.wav")];
+        let mut visited = Vec::new();
+        let mut executions = Vec::new();
+        let started = Instant::now();
+        let outcome = std::thread::scope(|scope| {
+            let guard_flag = abort.clone();
+            let _guard = canceller.register(move || guard_flag.store(true, Ordering::SeqCst));
+            scope.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                canceller.request();
+            });
+            process_batch_with(
+                &canceller,
+                &files,
+                false,
+                |_, file| {
+                    visited.push(file.to_path_buf());
+                    while !abort.load(Ordering::SeqCst) {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    Err(DictationError::TranscriptionFailed("aborted".into()))
+                },
+                |execution| {
+                    executions.push(execution);
+                    Ok(())
+                },
+            )
+        });
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        let error = outcome.unwrap_err();
+        assert_eq!(error.to_string(), "Transcription failed: Cancelled");
+        assert_eq!(visited, vec![PathBuf::from("long.wav")], "batch must stop");
+        assert!(executions.is_empty(), "no partial result is emitted on cancel");
     }
 
     #[test]
