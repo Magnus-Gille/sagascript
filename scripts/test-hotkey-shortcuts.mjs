@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  brightnessKeyHotkeyWarning,
   canUseBareHotkey,
   formatHotkeyDisplay,
   hotkeyKeyLabel,
@@ -94,5 +95,15 @@ test("ISO physical keys remain supported on macOS and Windows", () => {
     for (const key of ["§", "<", "a", "\\", "Dead", " "]) {
       assert.equal(tauriKeyName(key, "IntlBackslash", platform), "IntlBackslash");
     }
+  }
+});
+
+test("bare F14 and F15 warn about brightness keys on macOS only", () => {
+  for (const key of ["F14", "f15"]) {
+    assert.match(brightnessKeyHotkeyWarning(key, "macos"), /brightness/);
+    assert.equal(brightnessKeyHotkeyWarning(key, "windows"), null);
+  }
+  for (const key of ["F13", "F16", "Shift+F14", "F140"]) {
+    assert.equal(brightnessKeyHotkeyWarning(key, "macos"), null, key);
   }
 });

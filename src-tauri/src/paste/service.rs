@@ -215,6 +215,85 @@ fn validate_accessibility(trusted: bool) -> Result<(), DictationError> {
     }
 }
 
+#[cfg(not(target_os = "linux"))]
+fn simulate_paste() -> Result<(), DictationError> {
+    let mut enigo = Enigo::new(&EnigoSettings::default())
+        .map_err(|e| DictationError::PasteError(format!("Failed to create input simulator: {e}")))?;
+
+    #[cfg(target_os = "macos")]
+    let modifier = Key::Meta; // Cmd
+
+    #[cfg(not(target_os = "macos"))]
+    let modifier = Key::Control;
+
+    enigo
+        .key(modifier, Direction::Press)
+        .map_err(|e| DictationError::PasteError(format!("Key press failed: {e}")))?;
+    #[cfg(target_os = "windows")]
+    let paste_key = Key::Other(0x56); // VK_V, independent of layout/Unicode packets
+    #[cfg(target_os = "macos")]
+    let paste_key = Key::Unicode('v');
+    let click_result = enigo
+        .key(paste_key, Direction::Click)
+        .map_err(|e| DictationError::PasteError(format!("Key click failed: {e}")));
+    enigo
+        .key(modifier, Direction::Release)
+        .map_err(|e| DictationError::PasteError(format!("Key release failed: {e}")))?;
+
+    info!("Paste keystroke simulated");
+    click_result
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+extern "system" {
+    fn GetAsyncKeyState(key: i32) -> i16;
+    fn GetForegroundWindow() -> isize;
+}
+
+#[cfg(target_os = "windows")]
+fn wait_for_windows_modifiers() -> Result<(), DictationError> {
+    let target = unsafe { GetForegroundWindow() };
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_millis(crate::paste_completion::WINDOWS_MODIFIER_WAIT_MS);
+    while [0x10, 0x11, 0x12, 0x5B, 0x5C].iter().any(|key| unsafe { GetAsyncKeyState(*key) < 0 }) {
+        if std::time::Instant::now() >= deadline {
+            return Err(DictationError::PasteError("Release the shortcut keys and paste with Ctrl+V. The recognized text is on the clipboard.".into()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    if target == 0 || unsafe { GetForegroundWindow() } != target {
+        return Err(DictationError::PasteError("The focused window changed. Select the intended text field and paste with Ctrl+V.".into()));
+    }
+    Ok(())
+}
+
+/// Linux: simulate Ctrl+V via the `xdotool` CLI. enigo's X11 backend leaves the
+/// Control modifier unmapped, so we shell out instead. Requires `xdotool` and an
+/// X11 session (Wayland needs `ydotool`, which is not yet wired up).
+#[cfg(target_os = "linux")]
+fn simulate_paste() -> Result<(), DictationError> {
+    use std::process::Command;
+
+    let status = Command::new("xdotool")
+        .args(["key", "--clearmodifiers", "ctrl+v"])
+        .status()
+        .map_err(|e| {
+            DictationError::PasteError(format!(
+                "Failed to launch xdotool (install it with `apt install xdotool`): {e}"
+            ))
+        })?;
+
+    if !status.success() {
+        return Err(DictationError::PasteError(format!(
+            "xdotool exited unsuccessfully ({status})"
+        )));
+    }
+
+    info!("Paste keystroke simulated (xdotool)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod checked_paste_tests {
     use super::{run_checked_dispatch, CheckedDispatchError};
@@ -296,83 +375,4 @@ mod tests {
         assert_eq!(paste_payload("Ny rad\n"), "Ny rad\n");
         assert_eq!(paste_payload(""), "");
     }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn simulate_paste() -> Result<(), DictationError> {
-    let mut enigo = Enigo::new(&EnigoSettings::default())
-        .map_err(|e| DictationError::PasteError(format!("Failed to create input simulator: {e}")))?;
-
-    #[cfg(target_os = "macos")]
-    let modifier = Key::Meta; // Cmd
-
-    #[cfg(not(target_os = "macos"))]
-    let modifier = Key::Control;
-
-    enigo
-        .key(modifier, Direction::Press)
-        .map_err(|e| DictationError::PasteError(format!("Key press failed: {e}")))?;
-    #[cfg(target_os = "windows")]
-    let paste_key = Key::Other(0x56); // VK_V, independent of layout/Unicode packets
-    #[cfg(target_os = "macos")]
-    let paste_key = Key::Unicode('v');
-    let click_result = enigo
-        .key(paste_key, Direction::Click)
-        .map_err(|e| DictationError::PasteError(format!("Key click failed: {e}")));
-    enigo
-        .key(modifier, Direction::Release)
-        .map_err(|e| DictationError::PasteError(format!("Key release failed: {e}")))?;
-
-    info!("Paste keystroke simulated");
-    click_result
-}
-
-#[cfg(target_os = "windows")]
-#[link(name = "user32")]
-extern "system" {
-    fn GetAsyncKeyState(key: i32) -> i16;
-    fn GetForegroundWindow() -> isize;
-}
-
-#[cfg(target_os = "windows")]
-fn wait_for_windows_modifiers() -> Result<(), DictationError> {
-    let target = unsafe { GetForegroundWindow() };
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_millis(crate::paste_completion::WINDOWS_MODIFIER_WAIT_MS);
-    while [0x10, 0x11, 0x12, 0x5B, 0x5C].iter().any(|key| unsafe { GetAsyncKeyState(*key) < 0 }) {
-        if std::time::Instant::now() >= deadline {
-            return Err(DictationError::PasteError("Release the shortcut keys and paste with Ctrl+V. The recognized text is on the clipboard.".into()));
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    if target == 0 || unsafe { GetForegroundWindow() } != target {
-        return Err(DictationError::PasteError("The focused window changed. Select the intended text field and paste with Ctrl+V.".into()));
-    }
-    Ok(())
-}
-
-/// Linux: simulate Ctrl+V via the `xdotool` CLI. enigo's X11 backend leaves the
-/// Control modifier unmapped, so we shell out instead. Requires `xdotool` and an
-/// X11 session (Wayland needs `ydotool`, which is not yet wired up).
-#[cfg(target_os = "linux")]
-fn simulate_paste() -> Result<(), DictationError> {
-    use std::process::Command;
-
-    let status = Command::new("xdotool")
-        .args(["key", "--clearmodifiers", "ctrl+v"])
-        .status()
-        .map_err(|e| {
-            DictationError::PasteError(format!(
-                "Failed to launch xdotool (install it with `apt install xdotool`): {e}"
-            ))
-        })?;
-
-    if !status.success() {
-        return Err(DictationError::PasteError(format!(
-            "xdotool exited unsuccessfully ({status})"
-        )));
-    }
-
-    info!("Paste keystroke simulated (xdotool)");
-    Ok(())
 }
