@@ -19,16 +19,25 @@ const ORT_INTRA_THREADS: usize = 4;
 /// Configuration for the diarization pipeline.
 pub struct DiarizeConfig {
     /// Cosine distance threshold for agglomerative clustering (0.0–2.0).
-    /// Lower = stricter (more speakers). Default 0.45 (see docs/benchmarks/diarization-sv.md).
+    /// Lower = stricter (more speakers). Default [`DEFAULT_THRESHOLD`] (see docs/benchmarks/diarization-sv.md).
     pub threshold: f32,
     /// Minimum segment duration in seconds to keep. Default 0.3s.
     pub min_segment: f64,
     /// Merge same-speaker segments closer than this gap (seconds). Default 0.5s.
     pub min_gap: f64,
+    /// A speaker must be heard for at least this many seconds in total; smaller embedding
+    /// clusters are absorbed into the nearest cluster that reaches it. Default
+    /// [`MIN_SPEAKER_SECONDS`].
+    pub min_speaker_seconds: f64,
 }
 
+/// Default agglomerative clustering threshold (cosine distance). The single source of truth
+/// for the CLI, reprocessing and UI defaults; the clap/Svelte literals must match (tests pin
+/// the CLI ones). Chosen with the evaluation in docs/benchmarks/diarization-sv.md.
+pub const DEFAULT_THRESHOLD: f32 = 0.48;
+
 /// A speaker must be heard for at least this many seconds in total; smaller
-/// embedding clusters are absorbed into the nearest larger one.
+/// embedding clusters are absorbed into the nearest cluster that reaches it.
 pub const MIN_SPEAKER_SECONDS: f64 = 8.0;
 
 /// Threshold-independent output of segmentation and speaker embedding.
@@ -36,6 +45,10 @@ pub const MIN_SPEAKER_SECONDS: f64 = 8.0;
 /// This is deliberately serializable so callers can persist the expensive
 /// analysis and cheaply retry only agglomerative clustering with a different
 /// threshold. The schema is versioned by the caller that persists it.
+///
+/// The clustering algorithm (and its default threshold) is deliberately NOT part of a cache
+/// identity: an existing cache stays valid, and re-clustering it with a newer build can
+/// produce a different speaker set than the build that created a stored review did.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiarizationAnalysis {
     raw_segments: Vec<(f64, f64, usize)>,
@@ -79,14 +92,15 @@ pub struct DiarizationTimings {
 impl Default for DiarizeConfig {
     fn default() -> Self {
         Self {
-            // Segment-level average linkage (no per-track cap, see
-            // `assign_speaker_labels`). Swept on five Swedish Riksdag debates plus the
-            // two short clips: long debates are on a plateau at 0.35-0.45 (0.5 sits near
-            // a cliff, 0.55+ merges speakers); 0.45 plus the small-cluster absorption
-            // keeps the short 2-speaker clips at 2-3 speakers.
-            threshold: 0.45,
+            // Segment-level average linkage (no per-track cap, see `assign_speaker_labels`).
+            // Swept on 5 Swedish Riksdag debates and 8 out-of-domain two-speaker clips
+            // (docs/benchmarks/diarization-sv.md). Debates are flat up to 0.46 and lose
+            // speakers from 0.52; the telephone/short clips over-split below 0.46. 0.48 is
+            // the pooled leave-one-out choice with the widest margin on both sides.
+            threshold: DEFAULT_THRESHOLD,
             min_segment: 0.3,
             min_gap: 0.5,
+            min_speaker_seconds: MIN_SPEAKER_SECONDS,
         }
     }
 }
@@ -248,7 +262,7 @@ pub fn cluster(
             })
             .collect();
         let mut labels: Vec<usize> = clustered.iter().map(|(_, label)| *label).collect();
-        clustering::absorb_small_clusters(&embeddings, &mut labels, &durations, MIN_SPEAKER_SECONDS);
+        clustering::absorb_small_clusters(&embeddings, &mut labels, &durations, config.min_speaker_seconds);
         for (entry, label) in clustered.iter_mut().zip(labels) {
             entry.1 = label;
         }

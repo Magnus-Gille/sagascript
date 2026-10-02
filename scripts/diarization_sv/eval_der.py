@@ -11,7 +11,8 @@ Run with ~/.cache/sagascript-bench/bench/.venv/bin/python (numpy+scipy only).
 
 Metric: frame-based (10 ms) DER with a 0.25 s collar around every reference turn boundary,
 scored only inside reference speeches (gaps/chair excluded). Optimal 1:1 speaker mapping
-(Hungarian on overlap). DER = (miss + false alarm + confusion) / reference speech time.
+(Hungarian on overlap). DER = (miss + false alarm + confusion) / reference speech time. Confusion (wrong speaker
+identity, the part clustering controls) is reported first; missed speech comes from segmentation.
 """
 import argparse, json, subprocess, sys
 from pathlib import Path
@@ -74,30 +75,33 @@ def run(cmd, **kw):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin"); ap.add_argument("--cli"); ap.add_argument("--scratch", required=True)
-    ap.add_argument("--tag", default="main"); ap.add_argument("--ids")
+    ap.add_argument("--tag", default="main"); ap.add_argument("--set", default="riksdag", choices=["riksdag", "other"]); ap.add_argument("--ids"); ap.add_argument("--min-speaker", default=None, help="MIN_SPEAKER_SECONDS override (--bin only)")
     ap.add_argument("--thresholds", default="0.75"); ap.add_argument("--json-out")
     a = ap.parse_args()
-    scratch = Path(a.scratch); manifest = json.load(open(DATA / "manifest.json"))
+    scratch = Path(a.scratch); other = a.set == "other"
+    manifest = json.load(open(DATA / ("manifest-other.json" if other else "manifest.json")))
+    wavdir = scratch / "other" if other else scratch
     ids = a.ids.split(",") if a.ids else [m["id"] for m in manifest]
     res = {}
     for m in manifest:
         if m["id"] not in ids: continue
-        i = m["id"]; ref = read_rttm(DATA / f"{i}.rttm"); res[i] = {"truth": m["reference_speakers"]}
+        i = m["id"]; ref = read_rttm(DATA / (f"other-{i}.rttm" if other else f"{i}.rttm")); res[i] = {"truth": m["reference_speakers"]}
         for th in [float(x) for x in a.thresholds.split(",")]:
             if a.bin:
-                an = scratch / "analysis" / f"{i}.{a.tag}.json"; an.parent.mkdir(exist_ok=True)
-                if not an.exists(): run([a.bin, "analyze", str(scratch / f"{i}.wav"), str(an)])
-                out = scratch / "analysis" / f"{i}.{a.tag}.{th}.seg.json"
-                run([a.bin, "cluster", str(an), str(th), str(out)], stderr=subprocess.DEVNULL)
+                an = scratch / "analysis" / f"{i}.{a.tag}.json"  # analysis is tag-specific
+                an.parent.mkdir(exist_ok=True)
+                if not an.exists(): run([a.bin, "analyze", str(wavdir / f"{i}.wav"), str(an)])
+                out = scratch / "analysis" / f"{i}.{a.tag}.{th}.{a.min_speaker}.seg.json"
+                run([a.bin, "cluster", str(an), str(th), str(out)] + ([a.min_speaker] if a.min_speaker else []), stderr=subprocess.DEVNULL)
                 hyp = hyp_from_segments(json.load(open(out)))
             else:
                 cache = scratch / "runs" / a.tag / f"{i}.cache.json"; cache.parent.mkdir(parents=True, exist_ok=True)
-                p = run([a.cli, "transcribe", str(scratch / f"{i}.wav"), "--language", "sv", "--model", "kb-whisper-tiny",
+                p = run([a.cli, "transcribe", str(wavdir / f"{i}.wav"), "--language", "sv", "--model", "kb-whisper-tiny",
                          "--diarize", "--meeting-json", "--diarize-threshold", str(th), "--diarize-cache", str(cache)],
                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
                 hyp = hyp_from_meeting(json.loads(p.stdout))
             r = der(ref, hyp); res[i][str(th)] = r
-            print(f"{i:6s} th={th:<5} DER={r['der']*100:5.1f}% (miss {r['miss']*100:.1f} fa {r['fa']*100:.1f} conf {r['conf']*100:.1f}) speakers {r['hyp_speakers']}/{r['ref_speakers']} (all {r['hyp_speakers_all']})")
+            print(f"{i:6s} th={th:<5} CONF={r['conf']*100:5.1f}% DER={r['der']*100:5.1f}% (miss {r['miss']*100:.1f} fa {r['fa']*100:.1f}) speakers {r['hyp_speakers']}/{r['ref_speakers']} (all {r['hyp_speakers_all']})")
     if a.json_out: json.dump(res, open(a.json_out, "w"), indent=1)
 
 if __name__ == "__main__":

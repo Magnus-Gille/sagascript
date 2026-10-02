@@ -87,14 +87,17 @@ pub fn cluster_speakers(
 }
 
 /// Absorb clusters with less than `min_seconds` of total speech into the nearest
-/// larger cluster (cosine similarity of L2-normalised centroids).
+/// cluster that has at least `min_seconds` (cosine similarity of centroids; the
+/// similarity normalises, so unnormalised centroid sums are fine).
 ///
 /// Segment-level clustering at a threshold that separates real speakers also
 /// produces small spurious clusters from short or noisy utterances (phone audio,
 /// laughter, backchannels). A real participant speaks for more than a few
 /// seconds in total, so those clusters are merged instead of being reported as
 /// extra speakers. `labels[i]` and `durations[i]` belong to `embeddings[i]`.
-/// The largest cluster is never absorbed, so at least one speaker remains.
+/// Only clusters that reach `min_seconds` are merge targets. If no cluster does (very
+/// short audio) the smallest cluster merges into the nearest remaining one until a single
+/// speaker is left; the largest cluster is never absorbed, so at least one speaker remains.
 pub fn absorb_small_clusters(
     embeddings: &[(usize, [f32; EMBEDDING_DIM])],
     labels: &mut [usize],
@@ -129,10 +132,12 @@ pub fn absorb_small_clusters(
             c
         };
         let small_centroid = centroid(small);
+        let any_large = total.values().any(|&t| t >= min_seconds);
         let target = total
-            .keys()
-            .copied()
-            .filter(|&l| l != small)
+            .iter()
+            .rev() // max_by keeps the last maximum: reversed, ties resolve to the lowest label
+            .filter(|(&l, &t)| l != small && (!any_large || t >= min_seconds))
+            .map(|(&l, _)| l)
             .map(|l| (l, cosine_similarity(&small_centroid, &centroid(l))))
             .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(l, _)| l);
@@ -195,7 +200,8 @@ fn cutree(dendrogram: &kodama::Dendrogram<f32>, n: usize, threshold: f32) -> Vec
     (0..n).map(|i| find(&mut parent, i)).collect()
 }
 
-/// Cosine similarity between two L2-normalized (or unnormalized) vectors.
+/// Cosine similarity between two vectors. Normalises by both norms itself, so inputs need
+/// not be unit length (the absorb step passes summed centroids).
 fn cosine_similarity(a: &[f32; EMBEDDING_DIM], b: &[f32; EMBEDDING_DIM]) -> f32 {
     let dot: f32 = a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|&x| x * x).sum::<f32>().sqrt();
@@ -374,6 +380,59 @@ mod tests {
         let mut labels = vec![0, 1];
         absorb_small_clusters(&input, &mut labels, &[8.0, 20.0], 8.0);
         assert_eq!(labels, vec![0, 1]);
+    }
+
+    #[test]
+    fn small_cluster_never_merges_into_another_small_cluster() {
+        // Cluster 1 (2 s) is closest to cluster 2 (3 s, also small) but must join the large cluster 0.
+        let mut near = [0.0f32; EMBEDDING_DIM];
+        near[1] = 1.0;
+        near[2] = 0.1;
+        let input = vec![(0, unit_embedding(0)), (1, near), (2, unit_embedding(1)), (3, unit_embedding(1))];
+        let mut labels = vec![0, 1, 2, 3];
+        absorb_small_clusters(&input, &mut labels, &[40.0, 2.0, 3.0, 1.0], 8.0);
+        let unique: std::collections::HashSet<_> = labels.iter().collect();
+        assert_eq!(unique.len(), 1, "all small clusters end up in the large one: {labels:?}");
+        assert!(labels.iter().all(|&l| l == 0));
+    }
+
+    #[test]
+    fn single_speaker_input_is_unchanged() {
+        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(0)), (2, unit_embedding(0))];
+        let mut labels = vec![0, 0, 0];
+        absorb_small_clusters(&input, &mut labels, &[1.0, 1.0, 1.0], 8.0);
+        assert_eq!(labels, vec![0, 0, 0]);
+        let clustered = cluster_speakers(&input, 0.48);
+        assert!(clustered.iter().all(|(_, l)| *l == clustered[0].1));
+    }
+
+    #[test]
+    fn equal_sized_ties_resolve_deterministically_to_lowest_label() {
+        // Two equally small clusters, equidistant to two equally large ones.
+        let mut mid = [0.0f32; EMBEDDING_DIM];
+        mid[0] = 1.0;
+        mid[1] = 1.0;
+        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1)), (2, mid)];
+        let run = || {
+            let mut labels = vec![0, 1, 2];
+            absorb_small_clusters(&input, &mut labels, &[30.0, 30.0, 2.0], 8.0);
+            labels
+        };
+        let first = run();
+        assert_eq!(first, vec![0, 1, 0], "tie goes to the lowest label");
+        assert_eq!(first, run());
+    }
+
+    #[test]
+    fn duplicate_embeddings_in_different_clusters_do_not_panic() {
+        let e = unit_embedding(3);
+        let input = vec![(0, e), (1, e), (2, unit_embedding(5))];
+        let mut labels = vec![0, 1, 2];
+        absorb_small_clusters(&input, &mut labels, &[1.0, 1.0, 20.0], 8.0);
+        assert!(labels.iter().all(|l| *l == 2), "small duplicates join the large cluster: {labels:?}");
+        // Equal embeddings always cluster together at any positive threshold.
+        let clustered = cluster_speakers(&[(0, e), (1, e), (2, e)], 0.01);
+        assert!(clustered.iter().all(|(_, l)| *l == clustered[0].1));
     }
 
     #[test]

@@ -48,7 +48,7 @@ pub struct PlanArgs {
     #[arg(long, value_enum, default_value_t = ReprocessingModeArg::Recluster)]
     pub mode: ReprocessingModeArg,
     /// Agglomerative clustering threshold, in the inclusive range 0.0..=2.0.
-    #[arg(long, value_parser = parse_threshold, default_value = "0.45")]
+    #[arg(long, value_parser = parse_threshold, default_value = "0.48")]
     pub threshold: f32,
     /// Existing cache for selective modes.
     #[arg(long)]
@@ -318,6 +318,18 @@ mod tests {
     struct TestCli {
         #[command(flatten)]
         args: ReprocessingArgs,
+    }
+
+    #[test]
+    fn default_threshold_matches_diarization_default() {
+        // Pins the clap default literal against the core default.
+        let default_literal = <PlanArgs as clap::Args>::augment_args(clap::Command::new("x"))
+            .get_matches_from(["x", "a.wav", "--previous-review", "r.json", "--output", "o.json", "--language", "en"])
+            .get_one::<f32>("threshold")
+            .copied();
+        assert_eq!(default_literal, Some(0.48));
+        #[cfg(feature = "diarization")]
+        assert_eq!(default_literal, Some(sagascript_core::diarization::DEFAULT_THRESHOLD));
     }
 
     fn synthetic_review(source: &str, text: &str) -> MeetingReview {
