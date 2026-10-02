@@ -1963,7 +1963,7 @@ impl MainWindowVisibility for tauri::WebviewWindow {
         #[cfg(target_os = "macos")]
         if let Err(error) = self.app_handle().run_on_main_thread(|| {
             focus_diag::activation("main_window_reveal", "activate_ignoring_other_apps_before");
-            platform::macos::activate_app();
+            platform::macos::activate_app_for_launch();
             focus_diag::activation("main_window_reveal", "activate_ignoring_other_apps_after");
         }) {
             warn!("Failed to schedule foreground application activation: {error}");
@@ -2399,6 +2399,8 @@ fn stop_recording_and_transcribe(
                     // crash (SIGABRT) if called from a tokio worker thread.
                     let text_for_paste = text.clone();
                     let paste_started = std::time::Instant::now();
+                    #[cfg(target_os = "macos")]
+                    restore_target_before_paste(&app_handle).await;
                     let (paste_tx, paste_rx) = tokio::sync::oneshot::channel();
                     let paste_task = move || {
                         #[cfg(target_os = "macos")]
@@ -2790,6 +2792,61 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             info!("Settings hot-reloaded from disk");
         }
     });
+}
+
+/// Issue #256: a deferred activation can leave Sagascript frontmost at key-up.
+/// Re-activate the dictation target before the paste guard runs. The wait runs
+/// on a blocking thread; each AppKit call is dispatched to the main thread so
+/// its event loop keeps running and the activation can actually land. Never
+/// pastes: the guard still decides afterwards.
+#[cfg(target_os = "macos")]
+async fn restore_target_before_paste(app: &tauri::AppHandle) {
+    use platform::macos as mac;
+    fn on_main<T: Send + 'static>(
+        app: &tauri::AppHandle,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(f());
+        })
+        .ok()?;
+        rx.recv_timeout(Duration::from_millis(500)).ok()
+    }
+    let app = app.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let target = mac::dictation_target_pid();
+        let own = mac::current_pid();
+        let a1 = app.clone();
+        let a2 = app.clone();
+        let a3 = app.clone();
+        mac::restore_target_before_paste(
+            target,
+            own,
+            move || on_main(&a1, mac::frontmost_pid).flatten(),
+            move |pid| on_main(&a2, move || mac::target_is_running(pid)).unwrap_or(false),
+            move |pid| on_main(&a3, move || mac::activate_dictation_target(pid)).unwrap_or(false),
+            std::thread::sleep,
+        )
+    })
+    .await;
+    match result {
+        Ok(outcome) => {
+            if outcome.attempted || outcome.reason != "not_needed" {
+                focus_diag::log(
+                    "focus_restore_before_paste",
+                    serde_json::json!({
+                        "attempted": outcome.attempted,
+                        "restored": outcome.restored,
+                        "attempts": outcome.attempts,
+                        "waitMs": outcome.wait_ms,
+                        "reason": outcome.reason,
+                    }),
+                );
+            }
+        }
+        Err(error) => warn!("Focus restore before paste failed to run: {error}"),
+    }
 }
 
 #[cfg(test)]
