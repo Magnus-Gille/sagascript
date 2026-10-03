@@ -14,6 +14,7 @@
 //!   FAKE_CRASH_ON_WINDOW=1                              exit(4) on first window
 //!   FAKE_CRASH_ONCE_FILE=<path>                         like above, only if the file is absent (creates it)
 //!   FAKE_HANG=1                                         never answer transcribe_window
+//!   FAKE_UNLOAD_DELAY_MS                               delay before an unload completes/acks
 //!   FAKE_WINDOW_DELAY_MS, FAKE_BATCH_DELAY_MS           per-window delay (batch adds to base)
 //!   FAKE_FIRST_SLOW_MS                                  extra delay for the first window received
 //!   FAKE_IGNORE_CANCEL=1                                answer cancel but keep working
@@ -316,8 +317,20 @@ fn handle(host: &Arc<Host>, id: u64, op: RequestOp) {
         }
         RequestOp::Ping => host.write(&encode_ok(id, json!({}))),
         RequestOp::Unload => {
-            *host.loaded.lock().unwrap() = None;
-            host.write(&encode_ok(id, json!({})));
+            let delay = env_u64("FAKE_UNLOAD_DELAY_MS", 0);
+            if delay == 0 {
+                *host.loaded.lock().unwrap() = None;
+                host.write(&encode_ok(id, json!({})));
+            } else {
+                // Slow unload: other requests (status) keep being served
+                // meanwhile and still see the model as loaded.
+                let host = host.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    *host.loaded.lock().unwrap() = None;
+                    host.write(&encode_ok(id, json!({})));
+                });
+            }
         }
         RequestOp::Shutdown => {
             host.write(&encode_ok(id, json!({})));
