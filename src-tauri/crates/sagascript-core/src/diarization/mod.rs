@@ -4,6 +4,7 @@ pub mod fbank;
 pub mod merge;
 pub mod model;
 pub mod segmentation;
+pub mod twotrack;
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
@@ -207,6 +208,31 @@ pub fn analyze_with_control(
             embeddings_seconds,
             total_seconds: total_started.elapsed().as_secs_f64(),
         },
+    ))
+}
+
+/// Voice-activity segmentation only: the speech intervals (seconds) of 16 kHz
+/// mono audio, with every segmenter track collapsed into one. No embeddings,
+/// no clustering. Used for the microphone channel of a two-track recording,
+/// where the speaker is known to be the local user.
+pub fn voice_activity(
+    audio: &[f32],
+    config: &DiarizeConfig,
+    check: &dyn Fn() -> Result<(), DictationError>,
+) -> Result<Vec<(f64, f64)>, DictationError> {
+    use crate::diarization::model::{model_path, DiarizationModel};
+    check()?;
+    let seg_path = model_path(DiarizationModel::PyannoteSegmentation3);
+    crate::download::verify_file(
+        &seg_path,
+        DiarizationModel::PyannoteSegmentation3.download_integrity(),
+    )?;
+    let mut segmenter = segmentation::Segmenter::new(&seg_path)?;
+    let activations = segmenter.segment_with_control(audio, check)?;
+    let raw = activations.to_speaker_segments(config.min_segment, config.min_gap);
+    Ok(twotrack::union_intervals(
+        raw.into_iter().map(|(s, e, _)| (s, e)).collect(),
+        config.min_gap,
     ))
 }
 

@@ -1,0 +1,120 @@
+{
+ "IP_hc10606.clean.on": {
+  "label": "IP_hc10606 clean guard=on",
+  "two_track": {
+   "der": 0.1313125,
+   "conf": 0.0100625,
+   "miss": 0.115,
+   "fa": 0.00625,
+   "me_recall": 0.8544152744630071,
+   "false_me": 0.0,
+   "hyp_speakers": 3,
+   "ref_speakers": 2
+  },
+  "downmix": {
+   "der": 0.34946875,
+   "conf": 0.3453125,
+   "miss": 0.00415625,
+   "fa": 0.0,
+   "me_recall": 0.9936515513126492,
+   "false_me": 1.0,
+   "hyp_speakers": 1,
+   "ref_speakers": 2
+  }
+ },
+ "IP_hc10606.leak15.off": {
+  "label": "IP_hc10606 leak15 guard=off",
+  "two_track": {
+   "der": 0.31578125,
+   "conf": 0.03459375,
+   "miss": 0.24315625,
+   "fa": 0.03803125,
+   "me_recall": 0.6897374701670644,
+   "false_me": 0.1811764705882353,
+   "hyp_speakers": 2,
+   "ref_speakers": 2
+  }
+ },
+ "IP_hc10606.leak15.on": {
+  "label": "IP_hc10606 leak15 guard=on",
+  "two_track": {
+   "der": 0.232875,
+   "conf": 0.0100625,
+   "miss": 0.2228125,
+   "fa": 0.0,
+   "me_recall": 0.6897374701670644,
+   "false_me": 0.0,
+   "hyp_speakers": 2,
+   "ref_speakers": 2
+  },
+  "downmix": {
+   "der": 0.3453125,
+   "conf": 0.3453125,
+   "miss": 0.0,
+   "fa": 0.0,
+   "me_recall": 1.0,
+   "false_me": 1.0,
+   "hyp_speakers": 1,
+   "ref_speakers": 2
+  }
+ },
+ "IP_hd10115.clean.on": {
+  "label": "IP_hd10115 clean guard=on",
+  "two_track": {
+   "der": 0.14721938775510204,
+   "conf": 0.03727040816326531,
+   "miss": 0.10581632653061225,
+   "fa": 0.00413265306122449,
+   "me_recall": 0.40645502645502646,
+   "false_me": 0.0,
+   "hyp_speakers": 2,
+   "ref_speakers": 2
+  },
+  "downmix": {
+   "der": 0.24107142857142858,
+   "conf": 0.24107142857142858,
+   "miss": 0.0,
+   "fa": 0.0,
+   "me_recall": 1.0,
+   "false_me": 1.0,
+   "hyp_speakers": 1,
+   "ref_speakers": 2
+  }
+ },
+ "IP_hd10115.leak15.off": {
+  "label": "IP_hd10115 leak15 guard=off",
+  "two_track": {
+   "der": 0.5211479591836735,
+   "conf": 0.19339285714285714,
+   "miss": 0.18341836734693878,
+   "fa": 0.14433673469387756,
+   "me_recall": 0.20074074074074075,
+   "false_me": 0.29969747899159666,
+   "hyp_speakers": 2,
+   "ref_speakers": 2
+  }
+ },
+ "IP_hd10115.leak15.on": {
+  "label": "IP_hd10115 leak15 guard=on",
+  "two_track": {
+   "der": 0.19298469387755102,
+   "conf": 0.10997448979591837,
+   "miss": 0.08270408163265307,
+   "fa": 0.0003061224489795918,
+   "me_recall": 0.20074074074074075,
+   "false_me": 0.0,
+   "hyp_speakers": 2,
+   "ref_speakers": 2
+  },
+  "downmix": {
+   "der": 0.24107142857142858,
+   "conf": 0.24107142857142858,
+   "miss": 0.0,
+   "fa": 0.0,
+   "me_recall": 1.0,
+   "false_me": 1.0,
+   "hyp_speakers": 1,
+   "ref_speakers": 2
+  }
+ }
+}

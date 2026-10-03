@@ -111,6 +111,20 @@ pub struct TranscribeArgs {
           help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.75). Higher = fewer speakers.")]
     pub diarize_threshold: f32,
 
+    /// Treat a stereo WAV as a two-track recording (left = microphone, right =
+    /// system audio) even without the Sagascript marker: the microphone becomes
+    /// the speaker "Me" and diarization runs on the system channel only.
+    /// Recordings made by `record --source both` are detected automatically.
+    #[cfg(feature = "diarization")]
+    #[arg(long, requires = "diarize", conflicts_with = "no_two_track")]
+    pub two_track: bool,
+
+    /// Never split channels: diarize the mono downmix even for a file that
+    /// carries the two-track marker.
+    #[cfg(feature = "diarization")]
+    #[arg(long, requires = "diarize")]
+    pub no_two_track: bool,
+
     /// Read/write reusable threshold-independent diarization analysis and
     /// word timestamps. A matching cache makes threshold-only retries fast.
     #[cfg(feature = "diarization")]
@@ -659,6 +673,8 @@ fn transcribe_meeting_file_inner(
         diarize: true,
         meeting_json: true,
         diarize_threshold: threshold,
+        two_track: false,
+        no_two_track: false,
         diarize_cache: cache_output.map(Path::to_path_buf),
         prompt: None,
         prompt_file: None,
@@ -1287,10 +1303,19 @@ fn transcribe_file(
             "--diarize-cache must not point to the input recording".to_string(),
         ));
     }
+    // Two-track recordings (left = microphone, right = system audio) are
+    // diarized per channel. The reusable cache describes a mono downmix, so it
+    // is neither read nor written for them.
+    #[cfg(feature = "diarization")]
+    let two_track = args.diarize && use_two_track(args, file)?;
+    #[cfg(feature = "diarization")]
+    if two_track && args.diarize_cache.is_some() {
+        eprintln!("Note: two-track recording; --diarize-cache is not used (the cache describes a mono downmix).");
+    }
     #[cfg(feature = "diarization")]
     let cache_lookup_started = Instant::now();
     #[cfg(feature = "diarization")]
-    let cache_identity = if args.diarize && args.diarize_cache.is_some() {
+    let cache_identity = if args.diarize && args.diarize_cache.is_some() && !two_track {
         Some(match meeting_source_sha256.as_deref() {
             Some(source_sha256) => crate::diarization_cache::CacheIdentity::for_source_sha256(
                 source_sha256,
@@ -1519,62 +1544,113 @@ fn transcribe_file(
             ..DiarizeConfig::default()
         };
 
-        let (analysis, raw_segments, diarization_timings, transcription_timings) =
-            if let Some(cached) = cached {
-                performance.cache_hit = true;
-                let cached = *cached;
-                (
-                    cached.analysis,
-                    cached.transcript,
-                    DiarizationTimings::default(),
-                    DiarizationTranscriptionTimings::default(),
+        let (diarized, diarization_timings, transcription_timings) = if two_track {
+            meeting_checkpoint(control, MeetingPhase::Analyzing)?;
+            let tracks = sagascript_core::audio::system::twotrack::read_two_track_wav(file)
+                .map_err(|error| two_track_read_error(file, error))?;
+            let [mic, system]: [Vec<f32>; 2] = tracks.try_into().map_err(|_| {
+                DictationError::FileDecodeError(
+                    "A two-track recording needs exactly two channels".to_string(),
                 )
-            } else {
-                eprintln!("Running speaker diarization and Whisper timestamps concurrently...");
-                let parallel_started = Instant::now();
-                let audio = audio.as_deref().expect("cache misses decode audio");
-                meeting_checkpoint(control, MeetingPhase::Analyzing)?;
-                let (analysis, diarization_timings, transcription) = run_diarization_analysis(
-                    audio,
-                    backend,
-                    language,
-                    decoder_prompt.as_deref(),
-                    &config,
-                )?;
-                meeting_checkpoint(control, MeetingPhase::Analyzing)?;
-                performance.parallel_analysis_span_seconds =
-                    parallel_started.elapsed().as_secs_f64();
+            })?;
+            eprintln!("Two-track recording: microphone = \"Me\", diarizing the system channel only...");
+            let result = two_track_diarize(
+                &mic,
+                &system,
+                backend,
+                language,
+                decoder_prompt.as_deref(),
+                &config,
+            )?;
+            meeting_checkpoint(control, MeetingPhase::Analyzing)?;
+            result
+        } else {
+            let (analysis, raw_segments, diarization_timings, transcription_timings) =
+                if let Some(cached) = cached {
+                    performance.cache_hit = true;
+                    let cached = *cached;
+                    (
+                        cached.analysis,
+                        cached.transcript,
+                        DiarizationTimings::default(),
+                        DiarizationTranscriptionTimings::default(),
+                    )
+                } else {
+                    eprintln!("Running speaker diarization and Whisper timestamps concurrently...");
+                    let parallel_started = Instant::now();
+                    let audio = audio.as_deref().expect("cache misses decode audio");
+                    meeting_checkpoint(control, MeetingPhase::Analyzing)?;
+                    let (analysis, diarization_timings, transcription) = run_diarization_analysis(
+                        audio,
+                        backend,
+                        language,
+                        decoder_prompt.as_deref(),
+                        &config,
+                    )?;
+                    meeting_checkpoint(control, MeetingPhase::Analyzing)?;
+                    performance.parallel_analysis_span_seconds =
+                        parallel_started.elapsed().as_secs_f64();
 
-                if let (Some(path), Some(identity)) =
-                    (args.diarize_cache.as_deref(), cache_identity.clone())
-                {
-                    let cache_write_started = Instant::now();
-                    let cache = crate::diarization_cache::DiarizationCache::new(
-                        identity,
-                        analysis.clone(),
-                        transcription.segments.clone(),
-                        coverage_profile.clone(),
-                        detected_language.clone(),
-                        language_regions.clone(),
-                    );
-                    match cache_policy {
-                        CachePolicy::Normal => crate::diarization_cache::save(path, &cache)?,
-                        CachePolicy::RefreshNew => {
-                            crate::diarization_cache::save_new(path, &cache)?
+                    if let (Some(path), Some(identity)) =
+                        (args.diarize_cache.as_deref(), cache_identity.clone())
+                    {
+                        let cache_write_started = Instant::now();
+                        let cache = crate::diarization_cache::DiarizationCache::new(
+                            identity,
+                            analysis.clone(),
+                            transcription.segments.clone(),
+                            coverage_profile.clone(),
+                            detected_language.clone(),
+                            language_regions.clone(),
+                        );
+                        match cache_policy {
+                            CachePolicy::Normal => crate::diarization_cache::save(path, &cache)?,
+                            CachePolicy::RefreshNew => {
+                                crate::diarization_cache::save_new(path, &cache)?
+                            }
                         }
+                        performance.cache_write_seconds = cache_write_started.elapsed().as_secs_f64();
+                        eprintln!("Saved reusable diarization cache: {}", path.display());
                     }
-                    performance.cache_write_seconds = cache_write_started.elapsed().as_secs_f64();
-                    eprintln!("Saved reusable diarization cache: {}", path.display());
+
+                    (
+                        analysis,
+                        transcription.segments,
+                        diarization_timings,
+                        transcription.timings,
+                    )
+                };
+
+            let clustering_started = Instant::now();
+            meeting_checkpoint(control, MeetingPhase::Clustering)?;
+            let speaker_segments = cluster(&analysis, &config)?;
+            meeting_checkpoint(control, MeetingPhase::Clustering)?;
+            performance.diarization_clustering_seconds = clustering_started.elapsed().as_secs_f64();
+            eprintln!("Found {} speaker segment(s)", speaker_segments.len());
+            if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
+                for s in &speaker_segments {
+                    eprintln!("DIARSEG\t{:.3}\t{:.3}\t{}", s.start, s.end, s.speaker);
                 }
+            }
 
-                (
-                    analysis,
-                    transcription.segments,
-                    diarization_timings,
-                    transcription.timings,
-                )
-            };
+            eprintln!("Got {} word/segment(s) for merging", raw_segments.len());
+            if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
+                for (st, en, tx) in &raw_segments {
+                    eprintln!("WORD\t{:.3}\t{:.3}\t{}", st, en, tx.replace('\t', " "));
+                }
+            }
 
+            let transcript: Vec<TimestampedSegment> = raw_segments
+                .into_iter()
+                .map(|(start, end, text)| TimestampedSegment { start, end, text })
+                .collect();
+
+            (
+                merge_with_transcript(&speaker_segments, &transcript),
+                diarization_timings,
+                transcription_timings,
+            )
+        };
         performance.diarization_model_load_seconds = diarization_timings.model_load_seconds;
         performance.diarization_segmentation_seconds = diarization_timings.segmentation_seconds;
         performance.diarization_segment_extraction_seconds =
@@ -1583,33 +1659,7 @@ fn transcribe_file(
         performance.whisper_inference_seconds = transcription_timings.whisper_inference_seconds;
         performance.word_timestamp_attribution_seconds =
             transcription_timings.word_timestamp_attribution_seconds;
-
-        let clustering_started = Instant::now();
-        meeting_checkpoint(control, MeetingPhase::Clustering)?;
-        let speaker_segments = cluster(&analysis, &config)?;
-        meeting_checkpoint(control, MeetingPhase::Clustering)?;
-        performance.diarization_clustering_seconds = clustering_started.elapsed().as_secs_f64();
-        eprintln!("Found {} speaker segment(s)", speaker_segments.len());
-        if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
-            for s in &speaker_segments {
-                eprintln!("DIARSEG\t{:.3}\t{:.3}\t{}", s.start, s.end, s.speaker);
-            }
-        }
-
-        eprintln!("Got {} word/segment(s) for merging", raw_segments.len());
-        if std::env::var("SAGA_DIAR_DEBUG").is_ok() {
-            for (st, en, tx) in &raw_segments {
-                eprintln!("WORD\t{:.3}\t{:.3}\t{}", st, en, tx.replace('\t', " "));
-            }
-        }
-
         let merge_diagnostics_started = Instant::now();
-        let transcript: Vec<TimestampedSegment> = raw_segments
-            .into_iter()
-            .map(|(start, end, text)| TimestampedSegment { start, end, text })
-            .collect();
-
-        let diarized = merge_with_transcript(&speaker_segments, &transcript);
         let plain_segments = prepare_diarized_plain_segments(&diarized, language, glossary);
         let mut consolidated = consolidate(&diarized);
         for segment in &mut consolidated {
@@ -1670,6 +1720,10 @@ fn transcribe_file(
             "warnings": warnings,
             "vocabulary_corrections": glossary_corrections,
         });
+        if two_track {
+            json["local_speaker"] =
+                serde_json::Value::String(sagascript_core::diarization::twotrack::LOCAL_SPEAKER.to_string());
+        }
         performance.json_assembly_seconds = json_assembly_started.elapsed().as_secs_f64();
         performance.total_seconds = file_started.elapsed().as_secs_f64();
         json["performance"] =
@@ -1691,6 +1745,11 @@ fn transcribe_file(
                 duration,
                 &plain_segments,
             )?;
+            let meeting = if two_track {
+                with_local_user(meeting)?
+            } else {
+                meeting
+            };
             let json = serde_json::to_value(&meeting).map_err(|_| {
                 DictationError::TranscriptionFailed(
                     "Diarized meeting transcript serialization failed".to_string(),
@@ -1855,6 +1914,163 @@ fn transcribe_file(
         #[cfg(feature = "diarization")]
         meeting: None,
     })
+}
+
+/// Decide whether `file` is diarized as a two-track recording: `--no-two-track`
+/// wins, then `--two-track`, then the marker written by `record --source both`.
+/// A plain stereo file without either keeps the downmix behaviour.
+#[cfg(feature = "diarization")]
+pub(crate) fn use_two_track(args: &TranscribeArgs, file: &Path) -> Result<bool, DictationError> {
+    if args.no_two_track {
+        return Ok(false);
+    }
+    if args.two_track {
+        return Ok(true);
+    }
+    // An unreadable or non-WAV input is not an error here: the normal decoder
+    // reports it with better context.
+    Ok(sagascript_core::audio::system::twotrack::read_two_track_marker(file)
+        .ok()
+        .flatten()
+        .is_some())
+}
+
+#[cfg(feature = "diarization")]
+fn two_track_read_error(file: &Path, error: std::io::Error) -> DictationError {
+    DictationError::FileDecodeError(format!(
+        "Cannot read '{}' as a two-track recording (16 kHz 16-bit stereo WAV: left = microphone, right = system audio): {error}. Use --no-two-track to diarize a downmix.",
+        file.display()
+    ))
+}
+
+/// Mark the microphone owner in a meeting transcript, listing the speaker even
+/// when they never spoke so the field always names a known speaker.
+#[cfg(feature = "diarization")]
+fn with_local_user(mut meeting: MeetingTranscript) -> Result<MeetingTranscript, DictationError> {
+    use sagascript_core::diarization::twotrack::LOCAL_SPEAKER;
+    if !meeting.speakers.iter().any(|speaker| speaker.id == LOCAL_SPEAKER) {
+        meeting.speakers.insert(
+            0,
+            MeetingSpeaker {
+                id: LOCAL_SPEAKER.to_string(),
+                label: LOCAL_SPEAKER.to_string(),
+            },
+        );
+    }
+    meeting.with_local_speaker(LOCAL_SPEAKER).map_err(|_| {
+        DictationError::TranscriptionFailed(
+            "Diarized meeting segments failed shared transcript validation".to_string(),
+        )
+    })
+}
+
+/// Set `SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=off` to skip the crosstalk guard
+/// (diagnostics and evaluation only).
+#[cfg(feature = "diarization")]
+fn crosstalk_guard_enabled() -> bool {
+    std::env::var("SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD").map_or(true, |v| v != "off")
+}
+
+/// Two-track pipeline: the system channel goes through ordinary diarization
+/// (the others), the microphone channel through voice-activity segmentation
+/// only (the single speaker "Me"). Both channels are transcribed and the two
+/// timelines merged by time. The channels share the file's clock, so every
+/// timestamp is already relative to the original recording.
+#[cfg(feature = "diarization")]
+fn two_track_diarize(
+    mic: &[f32],
+    system: &[f32],
+    backend: &WhisperBackend,
+    language: Language,
+    prompt: Option<&str>,
+    config: &sagascript_core::diarization::DiarizeConfig,
+) -> Result<
+    (
+        Vec<DiarizedSegment>,
+        sagascript_core::diarization::DiarizationTimings,
+        sagascript_core::transcription::DiarizationTranscriptionTimings,
+    ),
+    DictationError,
+> {
+    use sagascript_core::diarization::{
+        cluster, merge::merge_with_transcript, twotrack, TimestampedSegment,
+    };
+    let to_pieces = |raw: Vec<(f64, f64, String)>| -> Vec<TimestampedSegment> {
+        raw.into_iter()
+            .map(|(start, end, text)| TimestampedSegment { start, end, text })
+            .collect()
+    };
+
+    let (analysis, mut timings, system_transcription) =
+        run_diarization_analysis(system, backend, language, prompt, config)?;
+    let speaker_segments = cluster(&analysis, config)?;
+    eprintln!("System channel: {} speaker segment(s)", speaker_segments.len());
+    let others = merge_with_transcript(&speaker_segments, &to_pieces(system_transcription.segments));
+
+    let started = Instant::now();
+    let (activity, mic_transcription) = run_mic_analysis(mic, backend, language, prompt, config)?;
+    let mut activity = activity;
+    if crosstalk_guard_enabled() {
+        let before = activity.len();
+        activity =
+            twotrack::drop_crosstalk(mic, system, &activity, twotrack::CROSSTALK_CORRELATION);
+        if activity.len() != before {
+            eprintln!(
+                "Dropped {} microphone interval(s) that mirror the system channel (speaker echo).",
+                before - activity.len()
+            );
+        }
+    }
+    let mic_pieces = to_pieces(mic_transcription.segments);
+    let local = twotrack::local_segments(&mic_pieces, &activity);
+    eprintln!(
+        "Microphone channel: {:.0}s of speech activity, kept {} of {} transcript piece(s) as \"Me\"",
+        activity.iter().map(|(s, e)| e - s).sum::<f64>(),
+        local.len(),
+        mic_pieces.len()
+    );
+    timings.total_seconds += started.elapsed().as_secs_f64();
+    let mut transcription_timings = system_transcription.timings;
+    transcription_timings.whisper_inference_seconds +=
+        mic_transcription.timings.whisper_inference_seconds;
+    transcription_timings.word_timestamp_attribution_seconds +=
+        mic_transcription.timings.word_timestamp_attribution_seconds;
+    Ok((twotrack::merge_timelines(local, others), timings, transcription_timings))
+}
+
+/// Microphone voice activity plus Whisper timestamps, overlapped on macOS like
+/// [`run_diarization_analysis`].
+#[cfg(feature = "diarization")]
+fn run_mic_analysis(
+    mic: &[f32],
+    backend: &WhisperBackend,
+    language: Language,
+    prompt: Option<&str>,
+    config: &sagascript_core::diarization::DiarizeConfig,
+) -> Result<
+    (Vec<(f64, f64)>, sagascript_core::transcription::DiarizationTranscription),
+    DictationError,
+> {
+    let activity = |mic: &[f32]| sagascript_core::diarization::voice_activity(mic, config, &|| Ok(()));
+    #[cfg(target_os = "macos")]
+    {
+        std::thread::scope(|scope| {
+            let vad = scope.spawn(|| activity(mic));
+            let transcription = backend.transcribe_sync_for_diarization_profiled(mic, language, prompt);
+            let vad = vad.join().map_err(|_| {
+                DictationError::DiarizationError(
+                    "Voice-activity worker terminated unexpectedly".to_string(),
+                )
+            })??;
+            Ok((vad, transcription?))
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let vad = activity(mic)?;
+        let transcription = backend.transcribe_sync_for_diarization_profiled(mic, language, prompt)?;
+        Ok((vad, transcription))
+    }
 }
 
 /// Overlap the CPU/ONNX diarization analysis with Metal Whisper inference on

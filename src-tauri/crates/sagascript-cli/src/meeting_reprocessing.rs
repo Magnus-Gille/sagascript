@@ -322,6 +322,18 @@ fn prepare(
             "full mode does not read a cache; selective modes require an explicit cache",
         ));
     }
+    // Two-track recordings are diarized per channel and never cached, so only a
+    // full recomputation can reproduce their "Me" attribution.
+    if mode != ReprocessingMode::Full
+        && sagascript_core::audio::system::twotrack::read_two_track_marker(input.audio)
+            .ok()
+            .flatten()
+            .is_some()
+    {
+        return Err(failure(
+            "selective reprocessing is not available for two-track recordings; use full recomputation",
+        ));
+    }
     let source_sha256 = transcribe::stable_file_sha256(input.audio, control)?;
     let prompt = input.glossary.decoder_prompt();
     let language = input.language.whisper_code().unwrap_or("auto");

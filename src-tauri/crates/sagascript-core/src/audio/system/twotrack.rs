@@ -120,10 +120,75 @@ impl TwoTrackWriter {
     }
 }
 
+/// Marker text stored in the WAV `LIST/INFO/ICMT` comment of a two-track file.
+const MARKER_PREFIX: &str = "sagascript-two-track/1";
+
+/// What a recorder says about the layout of a stereo WAV it wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TwoTrackMarker {
+    /// Recorder release that wrote the file (e.g. `1.4.3`).
+    pub recorder_version: String,
+}
+
+impl TwoTrackMarker {
+    /// Parse the comment text; `None` for anything that is not a version-1
+    /// marker with the fixed layout left = microphone, right = system.
+    fn parse(comment: &str) -> Option<Self> {
+        let mut words = comment.trim_end_matches('\0').split_whitespace();
+        if words.next()? != MARKER_PREFIX {
+            return None;
+        }
+        let (mut left, mut right, mut recorder) = (None, None, None);
+        for word in words {
+            match word.split_once('=')? {
+                ("left", v) => left = Some(v),
+                ("right", v) => right = Some(v),
+                ("recorder", v) => recorder = Some(v),
+                _ => {} // unknown keys are ignored: forward compatible
+            }
+        }
+        (left? == "microphone" && right? == "system").then(|| Self {
+            recorder_version: recorder.unwrap_or("unknown").to_string(),
+        })
+    }
+}
+
+/// `LIST` chunk (type `INFO`) carrying the software name and the marker. Ordinary
+/// players and decoders skip `LIST`; ffmpeg and most taggers write the same chunk.
+fn marker_chunk() -> Vec<u8> {
+    fn sub(out: &mut Vec<u8>, id: &[u8; 4], text: &str) {
+        let mut body = text.as_bytes().to_vec();
+        body.push(0); // INFO strings are NUL-terminated
+        out.extend_from_slice(id);
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+        if body.len() % 2 == 1 {
+            out.push(0); // RIFF chunks are word aligned
+        }
+    }
+    let version = env!("CARGO_PKG_VERSION");
+    let mut info = b"INFO".to_vec();
+    sub(&mut info, b"ISFT", &format!("Sagascript {version}"));
+    sub(
+        &mut info,
+        b"ICMT",
+        &format!("{MARKER_PREFIX} left=microphone right=system recorder={version}"),
+    );
+    let mut chunk = b"LIST".to_vec();
+    chunk.extend_from_slice(&(info.len() as u32).to_le_bytes());
+    chunk.extend_from_slice(&info);
+    chunk
+}
+
+/// Header = `RIFF`, `fmt `, optional marker `LIST` (two-channel files only),
+/// `data` chunk header. Its length does not depend on `data_bytes`, so
+/// `finish` can rewrite it in place.
 fn write_header(w: &mut impl Write, channels: u16, data_bytes: u32) -> io::Result<()> {
     let rate = TARGET_SAMPLE_RATE;
+    let marker = if channels == 2 { marker_chunk() } else { Vec::new() };
     w.write_all(b"RIFF")?;
-    w.write_all(&(data_bytes.saturating_add(36)).to_le_bytes())?;
+    let riff_size = 36u32.saturating_add(marker.len() as u32).saturating_add(data_bytes);
+    w.write_all(&riff_size.to_le_bytes())?;
     w.write_all(b"WAVEfmt ")?;
     w.write_all(&16u32.to_le_bytes())?;
     w.write_all(&1u16.to_le_bytes())?;
@@ -132,8 +197,46 @@ fn write_header(w: &mut impl Write, channels: u16, data_bytes: u32) -> io::Resul
     w.write_all(&(rate * channels as u32 * 2).to_le_bytes())?;
     w.write_all(&(channels * 2).to_le_bytes())?;
     w.write_all(&16u16.to_le_bytes())?;
+    w.write_all(&marker)?;
     w.write_all(b"data")?;
     w.write_all(&data_bytes.to_le_bytes())
+}
+
+/// Read the two-track marker from the chunks in front of the `data` chunk.
+/// `Ok(None)` for any WAV (or non-WAV) without a valid marker; only the first
+/// few KiB are read, never the audio.
+pub fn read_two_track_marker(path: &Path) -> io::Result<Option<TwoTrackMarker>> {
+    let mut head = Vec::new();
+    File::open(path)?.take(16 * 1024).read_to_end(&mut head)?;
+    if head.len() < 12 || &head[0..4] != b"RIFF" || &head[8..12] != b"WAVE" {
+        return Ok(None);
+    }
+    let mut pos = 12usize;
+    while pos + 8 <= head.len() {
+        let id = &head[pos..pos + 4];
+        let size = u32::from_le_bytes(head[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let body = pos + 8;
+        if id == b"data" {
+            return Ok(None); // the marker must precede the audio
+        }
+        if id == b"LIST" && body + 4 <= head.len() && &head[body..body + 4] == b"INFO" {
+            let end = (body + size).min(head.len());
+            let mut sub = body + 4;
+            while sub + 8 <= end {
+                let sub_size = u32::from_le_bytes(head[sub + 4..sub + 8].try_into().unwrap()) as usize;
+                let text_end = (sub + 8 + sub_size).min(end);
+                if &head[sub..sub + 4] == b"ICMT" {
+                    let text = String::from_utf8_lossy(&head[sub + 8..text_end]);
+                    if let Some(marker) = TwoTrackMarker::parse(&text) {
+                        return Ok(Some(marker));
+                    }
+                }
+                sub += 8 + sub_size + (sub_size & 1);
+            }
+        }
+        pos = body + size + (size & 1);
+    }
+    Ok(None)
 }
 
 /// Write a complete two-track file from in-memory tracks.
@@ -236,8 +339,10 @@ mod tests {
         w.finish().unwrap();
         let b = std::fs::read(&path).unwrap();
         assert_eq!(&b[0..4], b"RIFF");
-        assert_eq!(u32::from_le_bytes(b[40..44].try_into().unwrap()), 1280);
-        assert_eq!(b.len(), 44 + 1280);
+        let header = b.len() - 1280; // fmt + marker + data header
+        assert_eq!(u32::from_le_bytes(b[header - 4..header].try_into().unwrap()), 1280);
+        assert_eq!(&b[header - 8..header - 4], b"data");
+        assert_eq!(u32::from_le_bytes(b[4..8].try_into().unwrap()) as usize, b.len() - 8);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -284,6 +389,85 @@ mod tests {
         assert!(w.write_interleaved(&[0.1, 0.1]).is_err());
         assert_eq!(w.frames(), MAX_WAV_DATA_BYTES / 4, "rejected append must not count");
         drop(w); // BufWriter flushes only the header
-        assert_eq!(std::fs::metadata(&path).unwrap().len(), 44 + 4, "only the one legal frame may be written");
+        let len = std::fs::metadata(&path).unwrap().len();
+        assert!(len > 44 + 4, "marker chunk makes the header longer than a bare one");
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[bytes.len() - 4 - 8..bytes.len() - 8 + 4 - 4], b"data", "only the one legal frame follows the header");
+    }
+
+    fn chunk_ids(bytes: &[u8]) -> Vec<[u8; 4]> {
+        let (mut pos, mut ids) = (12, Vec::new());
+        while pos + 8 <= bytes.len() {
+            ids.push(bytes[pos..pos + 4].try_into().unwrap());
+            let size = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            pos += 8 + size + (size & 1);
+        }
+        ids
+    }
+
+    #[test]
+    fn marker_round_trips_and_chunks_stay_standard() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.wav");
+        write_two_track_wav(&path, &[0.1; 1600], &[0.2; 1600]).unwrap();
+        let marker = read_two_track_marker(&path).unwrap().expect("marker present");
+        assert_eq!(marker.recorder_version, env!("CARGO_PKG_VERSION"));
+        // Ordinary readers: RIFF/WAVE, then fmt, LIST (skippable), data, in
+        // order, with sizes that tile the file exactly.
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(chunk_ids(&bytes), vec![*b"fmt ", *b"LIST", *b"data"]);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize, bytes.len() - 8);
+        assert_eq!(u16::from_le_bytes(bytes[22..24].try_into().unwrap()), 2);
+        // Existing reader still returns the audio.
+        let tracks = read_two_track_wav(&path).unwrap();
+        assert_eq!((tracks.len(), tracks[0].len()), (2, 1600));
+        assert!((tracks[1][5] - 0.2).abs() < 1e-3);
+    }
+
+    #[test]
+    fn marker_absent_for_plain_stereo_and_mono() {
+        let dir = tempfile::tempdir().unwrap();
+        let stereo = dir.path().join("s.wav");
+        let mut raw = Vec::new();
+        for _ in 0..100 {
+            raw.extend_from_slice(&1000i16.to_le_bytes());
+            raw.extend_from_slice(&(-1000i16).to_le_bytes());
+        }
+        // A bare 44-byte-header stereo WAV like any other tool writes.
+        let mut bare = Vec::new();
+        bare.extend_from_slice(b"RIFF");
+        bare.extend_from_slice(&(36 + raw.len() as u32).to_le_bytes());
+        bare.extend_from_slice(b"WAVEfmt ");
+        bare.extend_from_slice(&16u32.to_le_bytes());
+        bare.extend_from_slice(&1u16.to_le_bytes());
+        bare.extend_from_slice(&2u16.to_le_bytes());
+        bare.extend_from_slice(&16_000u32.to_le_bytes());
+        bare.extend_from_slice(&64_000u32.to_le_bytes());
+        bare.extend_from_slice(&4u16.to_le_bytes());
+        bare.extend_from_slice(&16u16.to_le_bytes());
+        bare.extend_from_slice(b"data");
+        bare.extend_from_slice(&(raw.len() as u32).to_le_bytes());
+        bare.extend_from_slice(&raw);
+        std::fs::write(&stereo, &bare).unwrap();
+        assert_eq!(read_two_track_marker(&stereo).unwrap(), None);
+        assert_eq!(read_two_track_wav(&stereo).unwrap().len(), 2);
+
+        let mono = dir.path().join("mono.wav");
+        let mut w = TwoTrackWriter::create(&mono, 1).unwrap();
+        w.write_interleaved(&[0.0; 10]).unwrap();
+        w.finish().unwrap();
+        assert_eq!(read_two_track_marker(&mono).unwrap(), None);
+        let text = dir.path().join("t.wav");
+        std::fs::write(&text, b"not a wav").unwrap();
+        assert_eq!(read_two_track_marker(&text).unwrap(), None);
+    }
+
+    #[test]
+    fn marker_parse_requires_known_layout() {
+        assert!(TwoTrackMarker::parse("sagascript-two-track/1 left=microphone right=system recorder=2.0.0").is_some());
+        assert!(TwoTrackMarker::parse("sagascript-two-track/1 left=system right=microphone").is_none());
+        assert!(TwoTrackMarker::parse("sagascript-two-track/2 left=microphone right=system").is_none());
+        assert!(TwoTrackMarker::parse("something else").is_none());
+        assert!(TwoTrackMarker::parse("sagascript-two-track/1 left=microphone right=system x=y").is_some());
     }
 }

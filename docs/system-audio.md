@@ -22,9 +22,9 @@ sagascript doctor [--json]      # read-only: support + permission state
 valid with `system` or `both`. Without `--output`, `record` transcribes (for
 `both`: a mono mix of the aligned tracks). With `--output`, `mic` and `system`
 write a mono 16 kHz WAV and `both` writes the two-track file below.
-`sagascript transcribe` and the meeting workflow accept the two-track file
-unchanged (decoders downmix to mono); splitting the channels for "me vs. others"
-diarization is phase 2 (`read_two_track_wav` already exists for it).
+Plain `sagascript transcribe` accepts the two-track file unchanged (decoders
+downmix to mono). With `--diarize` / `--meeting-json` the channels are split into
+"Me" and the other participants, see "Me versus the others".
 
 ## macOS
 
@@ -168,8 +168,27 @@ correlate with the system track before diarization.
 Single stereo WAV, 16 kHz, 16-bit PCM: **left = microphone ("me"), right = system
 audio ("the others")**. Rationale over two files plus a manifest: one artefact to
 move, play, and pass to `transcribe`/`meeting`; any decoder downmixes it; the
-channel convention is documented and identified by the user choosing `both`. WAV
+channel convention is documented and marked in the file (below). WAV
 is capped at 4 GiB (about 34 hours at this rate), which the writer enforces.
+
+**Marker.** The recorder writes a standard RIFF `LIST`/`INFO` chunk between `fmt `
+and `data`, carrying `ISFT` (`Sagascript <version>`) and an `ICMT` comment
+`sagascript-two-track/1 left=microphone right=system recorder=<version>`.
+`LIST/INFO` is the chunk ffmpeg and most taggers write; players and decoders skip
+it, and the existing reader walks chunks, so the file stays playable and readable.
+The marker must precede `data` so it is found by reading the first KiB only. Only
+two-channel files written by `record --source both` carry it; mono outputs do not.
+Files written before this change have no marker: pass `--two-track` once.
+
+**Detection.** `transcribe --diarize` / `--meeting-json` treat a file as two-track
+when it carries a valid marker (layout version 1, left = microphone, right =
+system). Override: `--two-track` forces the split for a stereo WAV without a marker
+(16 kHz 16-bit PCM; anything else is an error), `--no-two-track` forces the old
+downmix even for a marked file. Both require `--diarize`, and are mutually
+exclusive. A paired on/off flag follows the existing `--vad` / `--no-vad`
+convention, keeps the common case (a file from `record`) flag-free, and is clearer
+than a `--channels mic,system` mini-language that has only one valid value.
+An ordinary stereo file without marker behaves exactly as before.
 
 ## Files, cleanup, privacy
 
@@ -240,3 +259,90 @@ cargo test -p sagascript-core --features record recorder_live -- --ignored --noc
 ```
 
 The full owner test plan is in the phase-1 PR description.
+
+## Me versus the others (two-track diarization, epic #299 phase 2)
+
+For a two-track file `transcribe --diarize` (and `--meeting-json`, and meeting
+reprocessing, which calls the same pipeline) does this instead of diarizing the
+downmix:
+
+1. Read both channels (they share one clock; padding at record time aligned them).
+2. **System channel:** the unchanged diarization pipeline (default threshold, same
+   options) plus Whisper word timestamps gives the other participants, labelled
+   `SPEAKER_0`, `SPEAKER_1`, ...
+3. **Microphone channel:** one fixed speaker, **`Me`**. Only the pyannote
+   voice-activity part runs (all tracks collapsed, no embeddings, no clustering);
+   Whisper transcribes the channel and keeps pieces that lie at least half inside
+   microphone speech activity (drops hallucinations on quiet stretches).
+4. Both timelines are merged ordered by start time (ties: `Me` first). Timestamps
+   are the original file's, no offsets. The two channels are transcribed in
+   separate passes, so it costs about two Whisper passes plus one segmentation.
+
+Output (additive, absent for ordinary files): the meeting JSON gets a top-level
+`"local_speaker": "Me"` (a speaker id; `Me` is always listed under `speakers`) and
+the legacy `--diarize --json` output gets `"local_speaker": "Me"`. Plain/markdown/
+SRT/VTT exports and `transcribe` text show the label `Me`; renaming the speaker
+keeps `local_speaker` (it is an id), merging the local speaker into another keeps
+the field on the merge target. Old readers that reject unknown fields reject only
+files that have the field. Reprocessing: full recomputation works; selective
+(`recluster`/`rediarize`) is refused for marked files because it works from a
+downmix cache. `--diarize-cache` is neither read nor written for two-track input.
+
+### Crosstalk (no headphones)
+
+Without headphones the microphone also hears the remote participants. Assumption
+for best results: **headphones**. A guard is nevertheless on by default because it
+measurably helps on the simulation below: each microphone speech interval is
+compared with the system channel over the same time. The loudness envelopes
+(20 ms RMS frames) are correlated, maximised over a +/-300 ms acoustic delay; an
+interval whose correlation is at least 0.6 is dropped as speaker echo (needs at
+least 0.5 s and a non-silent system channel). Envelope correlation is gain
+invariant, so it does not depend on how loud the microphone is relative to the
+system capture. Limits: it judges whole intervals, so a local utterance that
+merges with echo into one voice-activity interval (gap under 0.5 s) is lost
+together with it; local speech talking over the remote side is kept only if it
+decorrelates the envelopes. Set `SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=off` to
+disable it for diagnosis. Real rooms (reverberation, a speaker that is far
+quieter than the system capture, non-linear processing) are weaker correlated
+than the simulated leak: only an owner-run recording can confirm the threshold.
+Echo cancellation against the system reference remains a follow-up.
+
+### Offline evaluation
+
+Nothing was recorded. `scripts/two_track_eval/build_synthetic.py` builds a two-track
+WAV from a mono Riksdag interpellation (sv2 set, RTTM references): one reference
+speaker's turns go to the left channel (silence elsewhere), everything else to the
+right; `--leak-db -15` adds the right channel to the left at -15 dB, delayed 40 ms
+and low-passed (a listener without headphones). `eval_two_track.py` scores
+`transcribe --diarize --meeting-json` on the two-track path against the downmix
+baseline (`--no-two-track`) with a frame-based DER (10 ms, 0.25 s collar, optimal
+speaker mapping, scored inside reference speech); `run_eval.sh` drives it. Results
+(`docs/benchmarks/data/two-track/results.json`), first 420 s of each file,
+`kb-whisper-tiny`, default diarization threshold, "me" = Jessica Roden (S):
+
+| Case | Pipeline | DER % | Confusion % | Miss % | FA % | Me recall % | False Me % | Speakers |
+|---|---|---|---|---|---|---|---|---|
+| IP_hc10606 (2 spk), clean | two-track | 13.1 | 1.0 | 11.5 | 0.6 | 85 | 0 | 3/2 |
+| IP_hc10606, clean | downmix | 34.9 | 34.5 | 0.4 | 0.0 | (99) | (100) | 1/2 |
+| IP_hc10606, leak -15 dB | two-track, guard on | 23.3 | 1.0 | 22.3 | 0.0 | 69 | 0 | 2/2 |
+| IP_hc10606, leak -15 dB | two-track, guard off | 31.6 | 3.5 | 24.3 | 3.8 | 69 | 18 | 2/2 |
+| IP_hc10606, leak -15 dB | downmix | 34.5 | 34.5 | 0.0 | 0.0 | (100) | (100) | 1/2 |
+| IP_hd10115 (3 spk), clean | two-track | 14.7 | 3.7 | 10.6 | 0.4 | 41 | 0 | 2/2 |
+| IP_hd10115, clean | downmix | 24.1 | 24.1 | 0.0 | 0.0 | (100) | (100) | 1/2 |
+| IP_hd10115, leak -15 dB | two-track, guard on | 19.3 | 11.0 | 8.3 | 0.0 | 20 | 0 | 2/2 |
+| IP_hd10115, leak -15 dB | two-track, guard off | 52.1 | 19.3 | 18.3 | 14.4 | 20 | 30 | 2/2 |
+| IP_hd10115, leak -15 dB | downmix | 24.1 | 24.1 | 0.0 | 0.0 | (100) | (100) | 1/2 |
+
+Reading: the downmix baseline collapses every speaker into one cluster (the known
+#284 behaviour at this build's threshold), so its "me" columns are degenerate
+(everything is "me") and its confusion is the whole minority share. Two-track
+removes that confusion (1-4 % on clean, 1-11 % with leak) and, on the leak cases,
+the guard cuts false "Me" from 18-30 % to 0 and DER by 8-33 points. The remaining
+error is **miss**, not attribution: the microphone channel is mostly digital
+silence with long turns, and Whisper tiny transcribes only part of it (Me recall
+20-85 %), so the local user's words are under-reported. Follow-up: transcribe the
+microphone channel only inside voice-activity intervals instead of the whole
+channel, and re-measure with a larger model. Caveats: synthetic channels (perfect
+separation, a clean linear leak), tiny model, 2 files, 7 minutes each, the
+speaker count of the system channel comes from the build's diarization default.
+
