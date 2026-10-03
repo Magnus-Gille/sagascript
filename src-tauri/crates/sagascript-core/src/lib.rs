@@ -14,6 +14,7 @@ pub mod meeting_reprocess_plan;
 pub mod meeting_reprocess_proposal;
 pub mod meeting_review;
 pub mod settings;
+pub mod speaker_hint;
 pub mod transcription;
 
 #[cfg(feature = "diarization")]

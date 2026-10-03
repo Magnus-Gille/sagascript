@@ -18,6 +18,7 @@ use sagascript_core::meeting_reprocess_plan::{
 use sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal;
 use sagascript_core::meeting_review::MeetingReview;
 use sagascript_core::settings::{Language, Settings, WhisperModel};
+use sagascript_core::speaker_hint::SpeakerCountHint;
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -128,6 +129,7 @@ trait WorkBackend {
         &mut self,
         input: &ReprocessingInput<'_>,
         threshold: f32,
+        speaker_hint: Option<SpeakerCountHint>,
         cache_output: Option<&Path>,
         control: Option<&MeetingControl<'_>>,
     ) -> Result<MeetingTranscript, DictationError>;
@@ -161,6 +163,7 @@ impl WorkBackend for NativeBackend<'_> {
         &mut self,
         input: &ReprocessingInput<'_>,
         threshold: f32,
+        speaker_hint: Option<SpeakerCountHint>,
         cache_output: Option<&Path>,
         control: Option<&MeetingControl<'_>>,
     ) -> Result<MeetingTranscript, DictationError> {
@@ -173,6 +176,7 @@ impl WorkBackend for NativeBackend<'_> {
             self.whisper,
             control,
             threshold,
+            speaker_hint,
             cache_output,
         )
     }
@@ -227,13 +231,14 @@ fn execute_with_model_check(
     };
     let config = DiarizeConfig {
         threshold: plan.threshold,
+        speaker_hint: plan.speaker_hint,
         ..DiarizeConfig::default()
     };
     let proposed = match plan.mode {
         ReprocessingMode::Full => {
             checkpoint(control, MeetingPhase::Preparing)?;
             let phase = Instant::now();
-            let transcript = backend.full(input, plan.threshold, cache_output, control)?;
+            let transcript = backend.full(input, plan.threshold, plan.speaker_hint, cache_output, control)?;
             timings.full_pipeline_seconds = phase.elapsed().as_secs_f64();
             transcript
         }
@@ -255,7 +260,7 @@ fn execute_with_model_check(
             }
             checkpoint(control, MeetingPhase::Clustering)?;
             let phase = Instant::now();
-            let speakers = diarization::cluster(&cached.analysis, &config)?;
+            let (speakers, hint_outcome) = diarization::cluster_with_outcome(&cached.analysis, &config)?;
             let words = cached
                 .transcript
                 .into_iter()
@@ -273,11 +278,13 @@ fn execute_with_model_check(
                 input.model,
                 cached.coverage_profile.duration_seconds(),
                 &plain,
-            )?;
+            )?
+            .with_speaker_hint_outcome(hint_outcome);
             timings.clustering_seconds = phase.elapsed().as_secs_f64();
             transcript
         }
     };
+    let proposed = proposed.with_speaker_hint(plan.speaker_hint);
     checkpoint(control, MeetingPhase::Finalizing)?;
     transcribe::verify_meeting_source_unchanged(
         input.audio,

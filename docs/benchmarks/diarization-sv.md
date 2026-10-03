@@ -301,6 +301,130 @@ the embedding model is the same, so this is a warning, not a measurement of Swed
   threshold-only, so `--diarize-cache` reruns skip segmentation and embeddings as before. Speed:
   analysis (89 s for 53 min) is untouched; clustering stays about 0.02 s on the 74 min debate.
 
+## Speaker-count hint (issue #305, part 1)
+
+`transcribe --diarize` and `meeting reprocess plan` accept `--speakers N`, or `--min-speakers N`
+and/or `--max-speakers N`, plus `--force-speakers N`. Help text: count everyone who speaks,
+including a chair or moderator; if unsure, use `--min-speakers`. Without a hint nothing changes:
+the output is byte-identical to the threshold-only code on all 28 cached analyses (`cmp` against
+the pre-hint `diarize_eval`) and a golden test pins the full serialized output of a fixture
+produced by the pre-hint build.
+
+**Rules.** The normal pipeline (threshold cut, then `absorb_small_clusters`) runs first. If its
+speaker count already satisfies the hint, nothing changes.
+
+- *Too few found* (below an exact N or `min`): the dendrogram is walked from the root to the first
+  cut with N clusters of at least 8 s (`MIN_SPEAKER_SECONDS`) and the smaller clusters are absorbed
+  into the nearest large one. Counting clusters rather than segments matters: a plain "cut into N
+  clusters" on a 7-speaker debate gave one giant cluster plus six one-segment outliers (1 speaker
+  found, 71 % confusion on SoU40; the first version of this change). N above the number of embedded
+  segments is capped.
+- *Too many found* (above an exact N or `max`): clusters under 8 s are folded into their nearest
+  large cluster as far as the count needs, then the least-heard cluster is merged into its nearest
+  neighbour, only across centroid distances up to `hint_merge_max_distance` (**0.9**). If the
+  least-heard cluster has no neighbour within the limit the attempt is abandoned and nothing real is
+  merged: the extra speakers stay, stderr says "requested N, delivered M", and the meeting JSON
+  records `speaker_hint_satisfied: false` and `speaker_hint_delivered`. The first versions of this
+  limit skipped to better-heard clusters or merged part-way, which merged real speakers; the
+  least-heard-only, all-or-nothing rule is what removed that harm.
+- `--force-speakers N` (an exact count with `force`) merges regardless of distance and can put
+  different people under one name. It uses the same dendrogram cut as raising the count.
+- Tracks with no embedded segment count against the hint; if that, too little data or the limit
+  makes the hint unreachable the delivered count is reported the same way (tests cover
+  unembedded tracks at or above the bound and all-unembedded input).
+- Only clustering is affected, so `--diarize-cache` reruns and `meeting reprocess` recluster stay
+  cheap (SoU40, 309 embeddings: 11 ms without a hint, 24 ms when the walk runs; the walk is
+  O(n^2 log n) in the number of embedded segments and not a concern at these sizes). The hint and
+  its outcome are recorded in the meeting JSON and the hint in the reprocessing plan.
+
+**Evaluation.** Cached analyses, threshold 0.34, `eval_der.py --hint`; per-recording results and
+parameters are committed in `data/diarization-sv/hint-grid.json` (code commit in its `meta`), and
+these tables are printed by `collect_hint_grid.py tables`. T is the manifest's
+`reference_speakers`, which does not count the chair; "exact" is speakers found (at least 5 s of
+scored speech) equal to T. Each cell is exact count, mean confusion / mean DER.
+
+| Variant | Riksdag debates (5) | Other Riksdag (9) | Swedish, band-limited (6) | French/Norwegian calls (8) |
+| --- | --- | --- | --- | --- |
+| threshold only | 0/5, 0.9 % / 13.2 % | 2/9, 1.8 % / 9.8 % | 1/6, 1.8 % / 12.6 % | 1/8, 14.0 % / 19.2 % |
+| forced exact T | 4/5, 7.3 % / 19.5 % | 6/9, 20.6 % / 28.6 % | 4/6, 17.7 % / 28.5 % | 8/8, 1.8 % / 7.1 % |
+| forced exact T+1 | 1/5, 3.0 % / 15.3 % | 3/9, 1.9 % / 9.9 % | 2/6, 2.2 % / 13.1 % | 1/8, 11.7 % / 17.0 % |
+| exact T, limit 0.6 | 5/5, 1.0 % / 13.2 % | 5/9, 2.1 % / 10.1 % | 5/6, 1.8 % / 12.6 % | 7/8, 5.8 % / 10.6 % |
+| exact T, limit 0.75 | 5/5, 1.0 % / 13.2 % | 8/9, 1.9 % / 9.9 % | 6/6, 1.6 % / 12.5 % | 7/8, 5.8 % / 10.6 % |
+| exact T, limit 0.9 | 5/5, 1.0 % / 13.2 % | 9/9, 1.7 % / 9.7 % | 6/6, 1.6 % / 12.4 % | 7/8, 5.8 % / 10.6 % |
+| exact T, limit 1.0 | 5/5, 1.0 % / 13.2 % | 9/9, 1.7 % / 9.7 % | 6/6, 1.6 % / 12.4 % | 7/8, 5.8 % / 10.6 % |
+| exact T+1, limit 0.6 | 0/5, 0.9 % / 13.1 % | 2/9, 1.8 % / 9.8 % | 1/6, 1.6 % / 12.5 % | 0/8, 15.6 % / 20.7 % |
+| exact T+1, limit 0.75 | 0/5, 0.9 % / 13.1 % | 2/9, 1.7 % / 9.7 % | 1/6, 1.6 % / 12.5 % | 0/8, 15.6 % / 20.7 % |
+| exact T+1, limit 0.9 | 0/5, 0.9 % / 13.1 % | 2/9, 1.7 % / 9.7 % | 1/6, 1.6 % / 12.5 % | 0/8, 15.6 % / 20.7 % |
+| exact T+1, limit 1.0 | 0/5, 0.9 % / 13.1 % | 2/9, 1.7 % / 9.7 % | 1/6, 1.6 % / 12.5 % | 0/8, 15.6 % / 20.7 % |
+| min T, limit 0.6 | 0/5, 0.9 % / 13.2 % | 2/9, 1.8 % / 9.8 % | 1/6, 1.8 % / 12.6 % | 1/8, 14.0 % / 19.2 % |
+| min T, limit 0.75 | 0/5, 0.9 % / 13.2 % | 2/9, 1.8 % / 9.8 % | 1/6, 1.8 % / 12.6 % | 1/8, 14.0 % / 19.2 % |
+| min T, limit 0.9 | 0/5, 0.9 % / 13.2 % | 2/9, 1.8 % / 9.8 % | 1/6, 1.8 % / 12.6 % | 1/8, 14.0 % / 19.2 % |
+| min T, limit 1.0 | 0/5, 0.9 % / 13.2 % | 2/9, 1.8 % / 9.8 % | 1/6, 1.8 % / 12.6 % | 1/8, 14.0 % / 19.2 % |
+| max T+1, limit 0.6 | 0/5, 0.9 % / 13.1 % | 2/9, 1.8 % / 9.8 % | 1/6, 1.6 % / 12.5 % | 1/8, 11.7 % / 16.8 % |
+| max T+1, limit 0.75 | 0/5, 0.9 % / 13.1 % | 2/9, 1.7 % / 9.7 % | 1/6, 1.6 % / 12.5 % | 1/8, 11.7 % / 16.8 % |
+| max T+1, limit 0.9 | 0/5, 0.9 % / 13.1 % | 2/9, 1.7 % / 9.7 % | 1/6, 1.6 % / 12.5 % | 1/8, 11.7 % / 16.8 % |
+| max T+1, limit 1.0 | 0/5, 0.9 % / 13.1 % | 2/9, 1.7 % / 9.7 % | 1/6, 1.6 % / 12.5 % | 1/8, 11.7 % / 16.8 % |
+
+Findings.
+
+- **Forced exact T reproduces the harm of an undercount.** On chamber audio it merges two real
+  speakers while leaving the chair alone (`data/diarization-sv/hint-merge-evidence.json`: in
+  IP_hb10760 and IP_hc10606 the minister and the opposing MP, 344 s and 422 s, 244 s and 347 s, all
+  inside reference speech, end up in one cluster, while the 52 s / 70 s cluster with 73-78 % of its
+  speech outside every reference speech, the chair, keeps its own label; SoU39 and JuU41 show the
+  same). Confusion goes from 0.9-1.8 % to 7-21 %. Forced T+1 is mostly harmless on chamber audio but
+  wrong for calls, which have no chair (11.7 % vs 14.0 % threshold-only).
+- **The distance-limited exact T keeps the chamber result and recovers most of the call benefit.**
+  Limit 0.9 (plateau up to 1.0): Riksdag debates 5/5 exact at 1.0 % confusion (threshold only 0/5,
+  0.9 %), other Riksdag 9/9 at 1.7 % (2/9, 1.8 %), band-limited 6/6 at 1.6 % (1/6, 1.8 %), calls 7/8
+  at 5.8 % (1/8, 14.0 %; forced reaches 8/8 at 1.8 %). The one call it does not fix is `dj_2022_feu` (38.9 %; forced
+  reaches 8.8 % with its dendrogram re-cut), and the calls overall keep 5.8 % where forced reaches
+  1.8 %: the price of not merging across the limit. Chamber recordings move by at most about 1 pp
+  (SoU39 0.9 to 2.1 %, FS_20260604 5.5 to 7.1 %, FS_20260611 3.8 to 4.9 %) and several improve.
+- **Choice of limit.** 0.6 and 0.75 leave chamber recordings unsatisfied (5/9 and 8/9 exact on
+  other Riksdag) with no confusion gain; 0.9 and 1.0 give identical results here, and 0.9 is the
+  lower of the two (a lower limit is the safer one). The existing absorption limit
+  0.75 would have left one other-Riksdag recording unsatisfied.
+- `min T` never acts here (the pipeline already finds at least T), `max T+1` only trims the calls
+  (14.0 % to 11.7 %); an overcounted exact T+1 hurts calls (15.6 %), so count everyone, no more.
+
+Per recording (found / truth, confusion), threshold only vs exact T at limit 0.9 vs forced exact T,
+rows where they differ:
+
+| Recording | Threshold only | Exact T, limit 0.9 | Forced exact T |
+| --- | --- | --- | --- |
+| JuU41 | 5/4, 0.5 % | 4/4, 0.2 % | 4/4, 8.0 % |
+| SoU38 | 7/6, 1.2 % | 6/6, 1.0 % | 6/6, 1.0 % |
+| SoU39 | 8/7, 0.9 % | 7/7, 2.1 % | 7/7, 15.2 % |
+| SoU40 | 8/7, 1.1 % | 7/7, 1.1 % | 6/7, 11.6 % |
+| UU24 | 5/4, 0.9 % | 4/4, 0.5 % | 4/4, 0.5 % |
+| FS_20260604 | 20/19, 5.5 % | 19/19, 7.1 % | 19/19, 7.4 % |
+| FS_20260611 | 19/18, 3.8 % | 18/18, 4.9 % | 17/18, 5.4 % |
+| IP_hb10618 | 4/2, 1.3 % | 2/2, 0.4 % | 2/2, 46.1 % |
+| IP_hb10760 | 3/2, 1.0 % | 2/2, 0.4 % | 2/2, 40.5 % |
+| IP_hc10606 | 3/2, 2.4 % | 2/2, 1.6 % | 2/2, 38.7 % |
+| IP_hd10115 | 4/3, 0.9 % | 3/3, 0.7 % | 3/3, 0.7 % |
+| IP_hd10256 | 3/2, 1.0 % | 2/2, 0.7 % | 2/2, 0.7 % |
+| IP_hd10562 | 3/3, 0.2 % | 3/3, 0.1 % | 2/3, 32.8 % |
+| PL_20260610 | 6/6, 0.0 % | 6/6, 0.0 % | 5/6, 13.1 % |
+| FS_20260611_tel | 20/18, 4.6 % | 18/18, 5.6 % | 17/18, 10.5 % |
+| IP_hc10606_tel | 3/2, 2.4 % | 2/2, 1.5 % | 2/2, 38.3 % |
+| IP_hd10256_tel | 3/2, 1.2 % | 2/2, 0.8 % | 2/2, 0.8 % |
+| IP_hd10562_tel | 3/3, 0.2 % | 3/3, 0.1 % | 2/3, 32.1 % |
+| SoU38_tel | 7/6, 1.3 % | 6/6, 1.1 % | 6/6, 1.1 % |
+| UU24_tel | 5/4, 0.9 % | 4/4, 0.5 % | 4/4, 23.1 % |
+| dj_2022_avc_16_ans | 3/2, 7.3 % | 2/2, 1.9 % | 2/2, 1.9 % |
+| dj_2022_douleur_abdo | 3/2, 12.1 % | 2/2, 2.1 % | 2/2, 0.9 % |
+| dj_2022_feu | 1/2, 41.0 % | 1/2, 38.9 % | 2/2, 8.8 % |
+| dj_2022_grand_mere_battue | 4/2, 10.3 % | 2/2, 0.8 % | 2/2, 0.4 % |
+| dj_2022_intox_med | 3/2, 5.9 % | 2/2, 1.0 % | 2/2, 0.9 % |
+| dj_2022_mere_fievre | 3/2, 5.2 % | 2/2, 0.1 % | 2/2, 0.5 % |
+| dj_2023_coups | 5/2, 30.7 % | 2/2, 1.2 % | 2/2, 0.6 % |
+
+Not evaluated: a real Swedish online-meeting recording (the issue's phase-3 acceptance) and the
+two-track recording-type defaults (part 2 of the issue). The only recordings without a chair are
+the French and Norwegian calls.
+
 ## Reproduce
 
 ```bash
@@ -319,4 +443,6 @@ python scripts/diarization_sv/eval_der.py --cli target/release/sagascript --scra
 
 `diarize_eval` (`crates/sagascript-core/examples/diarize_eval.rs`) runs the diarization stages
 without Whisper: `analyze <audio> <analysis.json>` and
-`cluster <analysis.json> <threshold> <segments.json> [min_speaker_seconds] [absorb_max_distance]`.
+`cluster <analysis.json> <threshold> <segments.json> [min_speaker_seconds] [absorb_max_distance] [hint] [hint_merge_max_distance]`,
+where `hint` is `N`, `N!` (forced), `MIN-MAX`, `MIN-` or `-MAX`. `eval_der.py --hint truth|truth+1|range:A:B|force:truth [--hint-merge-distance D]` sets it
+relative to each recording's `reference_speakers`; `collect_hint_grid.py` and `hint_evidence.py` build the committed JSON.
