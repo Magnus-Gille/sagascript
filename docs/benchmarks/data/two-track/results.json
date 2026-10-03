@@ -1,6 +1,6 @@
 {
- "kb-whisper-small.IP_hc10606.clean.on": {
-  "label": "kb-whisper-small.IP_hc10606.clean guard=on",
+ "kb-whisper-small.IP_hc10606.clean.off": {
+  "label": "kb-whisper-small.IP_hc10606.clean guard=off",
   "two_track": {
    "der": 0.0520625,
    "conf": 0.00628125,
@@ -31,26 +31,26 @@
    "ref_speakers": 2
   }
  },
- "kb-whisper-small.IP_hc10606.dt15.on": {
-  "label": "kb-whisper-small.IP_hc10606.dt15 guard=on",
+ "kb-whisper-small.IP_hc10606.dt15.off": {
+  "label": "kb-whisper-small.IP_hc10606.dt15 guard=off",
   "two_track": {
-   "der": 0.22596875,
-   "conf": 0.07121875,
-   "miss": 0.04578125,
-   "fa": 0.10896875,
-   "me_recall": 0.8471599045346062,
-   "false_me": 0.0,
+   "der": 0.51584375,
+   "conf": 0.10096875,
+   "miss": 0.1884375,
+   "fa": 0.2264375,
+   "me_recall": 0.8640572792362768,
+   "false_me": 0.42742081447963803,
    "hyp_speakers": 3,
    "ref_speakers": 2
   },
   "me_words": {
    "ref_words": 424,
-   "me_words": 425,
-   "raw_words": 443,
-   "word_recall": 0.8655660377358491,
-   "wer": 0.2099056603773585,
+   "me_words": 710,
+   "raw_words": 729,
+   "word_recall": 0.8820754716981132,
+   "wer": 0.8490566037735849,
    "vad_coverage": 0.9219761904761903,
-   "active_coverage_after_guard": 0.9027904761904761
+   "active_coverage_after_guard": 0.9219761904761903
   },
   "downmix": {
    "der": 0.34584375,
@@ -63,24 +63,46 @@
    "ref_speakers": 2
   }
  },
- "kb-whisper-small.IP_hc10606.leak15.on": {
-  "label": "kb-whisper-small.IP_hc10606.leak15 guard=on",
+ "kb-whisper-small.IP_hc10606.dt15.on": {
+  "label": "kb-whisper-small.IP_hc10606.dt15 guard=on",
   "two_track": {
-   "der": 0.0575,
-   "conf": 0.00634375,
-   "miss": 0.0386875,
-   "fa": 0.01246875,
-   "me_recall": 0.9595704057279236,
-   "false_me": 0.0,
+   "der": 0.22803125,
+   "conf": 0.06396875,
+   "miss": 0.04728125,
+   "fa": 0.11678125,
+   "me_recall": 0.8627207637231503,
+   "false_me": 0.0027149321266968325,
    "hyp_speakers": 3,
    "ref_speakers": 2
   },
   "me_words": {
    "ref_words": 424,
-   "me_words": 424,
-   "raw_words": 434,
+   "me_words": 433,
+   "raw_words": 449,
+   "word_recall": 0.8773584905660378,
+   "wer": 0.20518867924528303,
+   "vad_coverage": 0.9219761904761903,
+   "active_coverage_after_guard": 0.9172047619047616
+  }
+ },
+ "kb-whisper-small.IP_hc10606.leak15.off": {
+  "label": "kb-whisper-small.IP_hc10606.leak15 guard=off",
+  "two_track": {
+   "der": 0.34975,
+   "conf": 0.043375,
+   "miss": 0.18459375,
+   "fa": 0.12178125,
+   "me_recall": 0.9602863961813842,
+   "false_me": 0.42380090497737555,
+   "hyp_speakers": 3,
+   "ref_speakers": 2
+  },
+  "me_words": {
+   "ref_words": 424,
+   "me_words": 703,
+   "raw_words": 720,
    "word_recall": 0.8891509433962265,
-   "wer": 0.16981132075471697,
+   "wer": 0.8278301886792453,
    "vad_coverage": 0.914180952380952,
    "active_coverage_after_guard": 0.914180952380952
   },
@@ -95,8 +117,30 @@
    "ref_speakers": 2
   }
  },
- "kb-whisper-small.IP_hd10115.clean.on": {
-  "label": "kb-whisper-small.IP_hd10115.clean guard=on",
+ "kb-whisper-small.IP_hc10606.leak15.on": {
+  "label": "kb-whisper-small.IP_hc10606.leak15 guard=on",
+  "two_track": {
+   "der": 0.06275,
+   "conf": 0.00646875,
+   "miss": 0.043,
+   "fa": 0.01328125,
+   "me_recall": 0.9595704057279236,
+   "false_me": 0.0027149321266968325,
+   "hyp_speakers": 3,
+   "ref_speakers": 2
+  },
+  "me_words": {
+   "ref_words": 424,
+   "me_words": 427,
+   "raw_words": 440,
+   "word_recall": 0.8891509433962265,
+   "wer": 0.17688679245283018,
+   "vad_coverage": 0.914180952380952,
+   "active_coverage_after_guard": 0.914180952380952
+  }
+ },
+ "kb-whisper-small.IP_hd10115.clean.off": {
+  "label": "kb-whisper-small.IP_hd10115.clean guard=off",
   "two_track": {
    "der": 0.02857142857142857,
    "conf": 0.0,
@@ -127,26 +171,80 @@
    "ref_speakers": 2
   }
  },
- "kb-whisper-small.IP_hd10115.dt15.on": {
-  "label": "kb-whisper-small.IP_hd10115.dt15 guard=on",
+ "kb-whisper-small.IP_hd10115.dt15.off": {
+  "label": "kb-whisper-small.IP_hd10115.dt15 guard=off",
   "two_track": {
-   "der": 0.11275510204081633,
-   "conf": 0.04607142857142857,
-   "miss": 0.023443877551020408,
-   "fa": 0.043239795918367345,
-   "me_recall": 0.7155555555555555,
-   "false_me": 0.0007394957983193277,
+   "der": 0.7411479591836735,
+   "conf": 0.11229591836734694,
+   "miss": 0.37630102040816327,
+   "fa": 0.25255102040816324,
+   "me_recall": 0.7073015873015873,
+   "false_me": 0.3686386554621849,
    "hyp_speakers": 2,
    "ref_speakers": 2
   },
   "me_words": {
    "ref_words": 181,
-   "me_words": 169,
-   "raw_words": 191,
-   "word_recall": 0.8729281767955801,
-   "wer": 0.17679558011049723,
+   "me_words": 733,
+   "raw_words": 757,
+   "word_recall": 0.9226519337016574,
+   "wer": 3.1712707182320443,
    "vad_coverage": 0.9303578947368416,
-   "active_coverage_after_guard": 0.8355999999999995
+   "active_coverage_after_guard": 0.9303578947368416
+  },
+  "downmix": {
+   "der": 0.24107142857142858,
+   "conf": 0.24107142857142858,
+   "miss": 0.0,
+   "fa": 0.0,
+   "me_recall": 1.0,
+   "false_me": 1.0,
+   "hyp_speakers": 1,
+   "ref_speakers": 2
+  }
+ },
+ "kb-whisper-small.IP_hd10115.dt15.on": {
+  "label": "kb-whisper-small.IP_hd10115.dt15 guard=on",
+  "two_track": {
+   "der": 0.1458673469387755,
+   "conf": 0.045408163265306126,
+   "miss": 0.042933673469387756,
+   "fa": 0.057525510204081635,
+   "me_recall": 0.7299470899470899,
+   "false_me": 0.021176470588235293,
+   "hyp_speakers": 2,
+   "ref_speakers": 2
+  },
+  "me_words": {
+   "ref_words": 181,
+   "me_words": 199,
+   "raw_words": 232,
+   "word_recall": 0.9005524861878453,
+   "wer": 0.287292817679558,
+   "vad_coverage": 0.9303578947368416,
+   "active_coverage_after_guard": 0.8671789473684205
+  }
+ },
+ "kb-whisper-small.IP_hd10115.leak15.off": {
+  "label": "kb-whisper-small.IP_hd10115.leak15 guard=off",
+  "two_track": {
+   "der": 0.6336989795918367,
+   "conf": 0.06568877551020408,
+   "miss": 0.3539285714285714,
+   "fa": 0.21408163265306124,
+   "me_recall": 0.9934391534391535,
+   "false_me": 0.3686386554621849,
+   "hyp_speakers": 2,
+   "ref_speakers": 2
+  },
+  "me_words": {
+   "ref_words": 181,
+   "me_words": 732,
+   "raw_words": 762,
+   "word_recall": 0.8895027624309392,
+   "wer": 3.2430939226519335,
+   "vad_coverage": 0.8096105263157878,
+   "active_coverage_after_guard": 0.8096105263157878
   },
   "downmix": {
    "der": 0.24107142857142858,
@@ -162,37 +260,27 @@
  "kb-whisper-small.IP_hd10115.leak15.on": {
   "label": "kb-whisper-small.IP_hd10115.leak15 guard=on",
   "two_track": {
-   "der": 0.030025510204081632,
-   "conf": 5.102040816326531e-05,
-   "miss": 0.029464285714285714,
-   "fa": 0.0005102040816326531,
+   "der": 0.06372448979591837,
+   "conf": 0.004158163265306123,
+   "miss": 0.0476530612244898,
+   "fa": 0.01191326530612245,
    "me_recall": 0.9035978835978836,
-   "false_me": 0.0007394957983193277,
+   "false_me": 0.021176470588235293,
    "hyp_speakers": 2,
    "ref_speakers": 2
   },
   "me_words": {
    "ref_words": 181,
-   "me_words": 171,
-   "raw_words": 184,
+   "me_words": 194,
+   "raw_words": 225,
    "word_recall": 0.8895027624309392,
-   "wer": 0.14917127071823205,
+   "wer": 0.27624309392265195,
    "vad_coverage": 0.8096105263157878,
    "active_coverage_after_guard": 0.8096105263157878
-  },
-  "downmix": {
-   "der": 0.24107142857142858,
-   "conf": 0.24107142857142858,
-   "miss": 0.0,
-   "fa": 0.0,
-   "me_recall": 1.0,
-   "false_me": 1.0,
-   "hyp_speakers": 1,
-   "ref_speakers": 2
   }
  },
- "kb-whisper-tiny.IP_hc10606.clean.on": {
-  "label": "kb-whisper-tiny.IP_hc10606.clean guard=on",
+ "kb-whisper-tiny.IP_hc10606.clean.off": {
+  "label": "kb-whisper-tiny.IP_hc10606.clean guard=off",
   "two_track": {
    "der": 0.09209375,
    "conf": 0.0,
@@ -243,28 +331,6 @@
    "wer": 0.9911894273127754,
    "vad_coverage": 0.9219761904761903,
    "active_coverage_after_guard": 0.9219761904761903
-  }
- },
- "kb-whisper-tiny.IP_hc10606.dt15.on": {
-  "label": "kb-whisper-tiny.IP_hc10606.dt15 guard=on",
-  "two_track": {
-   "der": 0.1925,
-   "conf": 0.0538125,
-   "miss": 0.0824375,
-   "fa": 0.05625,
-   "me_recall": 0.8382816229116945,
-   "false_me": 0.0,
-   "hyp_speakers": 2,
-   "ref_speakers": 2
-  },
-  "me_words": {
-   "ref_words": 454,
-   "me_words": 419,
-   "raw_words": 441,
-   "word_recall": 0.7466960352422908,
-   "wer": 0.3237885462555066,
-   "vad_coverage": 0.9219761904761903,
-   "active_coverage_after_guard": 0.9027904761904761
   },
   "downmix": {
    "der": 0.3453125,
@@ -275,6 +341,28 @@
    "false_me": 1.0,
    "hyp_speakers": 1,
    "ref_speakers": 2
+  }
+ },
+ "kb-whisper-tiny.IP_hc10606.dt15.on": {
+  "label": "kb-whisper-tiny.IP_hc10606.dt15 guard=on",
+  "two_track": {
+   "der": 0.19746875,
+   "conf": 0.0475625,
+   "miss": 0.08784375,
+   "fa": 0.0620625,
+   "me_recall": 0.8484009546539379,
+   "false_me": 0.006877828054298643,
+   "hyp_speakers": 2,
+   "ref_speakers": 2
+  },
+  "me_words": {
+   "ref_words": 454,
+   "me_words": 427,
+   "raw_words": 447,
+   "word_recall": 0.7555066079295154,
+   "wer": 0.3237885462555066,
+   "vad_coverage": 0.9219761904761903,
+   "active_coverage_after_guard": 0.9172047619047616
   }
  },
  "kb-whisper-tiny.IP_hc10606.leak15.off": {
@@ -297,28 +385,6 @@
    "wer": 1.0726872246696035,
    "vad_coverage": 0.914180952380952,
    "active_coverage_after_guard": 0.914180952380952
-  }
- },
- "kb-whisper-tiny.IP_hc10606.leak15.on": {
-  "label": "kb-whisper-tiny.IP_hc10606.leak15 guard=on",
-  "two_track": {
-   "der": 0.148375,
-   "conf": 0.065625,
-   "miss": 0.073375,
-   "fa": 0.009375,
-   "me_recall": 0.833126491646778,
-   "false_me": 0.0,
-   "hyp_speakers": 3,
-   "ref_speakers": 2
-  },
-  "me_words": {
-   "ref_words": 454,
-   "me_words": 365,
-   "raw_words": 379,
-   "word_recall": 0.6387665198237885,
-   "wer": 0.3964757709251101,
-   "vad_coverage": 0.914180952380952,
-   "active_coverage_after_guard": 0.914180952380952
   },
   "downmix": {
    "der": 0.3453125,
@@ -331,8 +397,30 @@
    "ref_speakers": 2
   }
  },
- "kb-whisper-tiny.IP_hd10115.clean.on": {
-  "label": "kb-whisper-tiny.IP_hd10115.clean guard=on",
+ "kb-whisper-tiny.IP_hc10606.leak15.on": {
+  "label": "kb-whisper-tiny.IP_hc10606.leak15 guard=on",
+  "two_track": {
+   "der": 0.15421875,
+   "conf": 0.0679375,
+   "miss": 0.07684375,
+   "fa": 0.0094375,
+   "me_recall": 0.833126491646778,
+   "false_me": 0.006877828054298643,
+   "hyp_speakers": 3,
+   "ref_speakers": 2
+  },
+  "me_words": {
+   "ref_words": 454,
+   "me_words": 368,
+   "raw_words": 385,
+   "word_recall": 0.6387665198237885,
+   "wer": 0.40308370044052866,
+   "vad_coverage": 0.914180952380952,
+   "active_coverage_after_guard": 0.914180952380952
+  }
+ },
+ "kb-whisper-tiny.IP_hd10115.clean.off": {
+  "label": "kb-whisper-tiny.IP_hd10115.clean guard=off",
   "two_track": {
    "der": 0.08415816326530612,
    "conf": 0.026096938775510205,
@@ -383,28 +471,6 @@
    "wer": 3.471264367816092,
    "vad_coverage": 0.9303578947368416,
    "active_coverage_after_guard": 0.9303578947368416
-  }
- },
- "kb-whisper-tiny.IP_hd10115.dt15.on": {
-  "label": "kb-whisper-tiny.IP_hd10115.dt15 guard=on",
-  "two_track": {
-   "der": 0.1292091836734694,
-   "conf": 0.0536734693877551,
-   "miss": 0.025357142857142856,
-   "fa": 0.05017857142857143,
-   "me_recall": 0.677037037037037,
-   "false_me": 0.0006722689075630252,
-   "hyp_speakers": 2,
-   "ref_speakers": 2
-  },
-  "me_words": {
-   "ref_words": 174,
-   "me_words": 166,
-   "raw_words": 180,
-   "word_recall": 0.8793103448275862,
-   "wer": 0.1896551724137931,
-   "vad_coverage": 0.9303578947368416,
-   "active_coverage_after_guard": 0.8355999999999995
   },
   "downmix": {
    "der": 0.24107142857142858,
@@ -415,6 +481,28 @@
    "false_me": 1.0,
    "hyp_speakers": 1,
    "ref_speakers": 2
+  }
+ },
+ "kb-whisper-tiny.IP_hd10115.dt15.on": {
+  "label": "kb-whisper-tiny.IP_hd10115.dt15 guard=on",
+  "two_track": {
+   "der": 0.1581377551020408,
+   "conf": 0.052831632653061227,
+   "miss": 0.04683673469387755,
+   "fa": 0.05846938775510204,
+   "me_recall": 0.6874074074074074,
+   "false_me": 0.01384873949579832,
+   "hyp_speakers": 2,
+   "ref_speakers": 2
+  },
+  "me_words": {
+   "ref_words": 174,
+   "me_words": 198,
+   "raw_words": 224,
+   "word_recall": 0.9137931034482759,
+   "wer": 0.3045977011494253,
+   "vad_coverage": 0.9303578947368416,
+   "active_coverage_after_guard": 0.8671789473684205
   }
  },
  "kb-whisper-tiny.IP_hd10115.leak15.off": {
@@ -437,28 +525,6 @@
    "wer": 4.063218390804598,
    "vad_coverage": 0.8096105263157878,
    "active_coverage_after_guard": 0.8096105263157878
-  }
- },
- "kb-whisper-tiny.IP_hd10115.leak15.on": {
-  "label": "kb-whisper-tiny.IP_hd10115.leak15 guard=on",
-  "two_track": {
-   "der": 0.08561224489795918,
-   "conf": 0.026326530612244898,
-   "miss": 0.059005102040816326,
-   "fa": 0.0002806122448979592,
-   "me_recall": 0.6508994708994709,
-   "false_me": 0.0006722689075630252,
-   "hyp_speakers": 2,
-   "ref_speakers": 2
-  },
-  "me_words": {
-   "ref_words": 174,
-   "me_words": 187,
-   "raw_words": 198,
-   "word_recall": 0.7298850574712644,
-   "wer": 0.4367816091954023,
-   "vad_coverage": 0.8096105263157878,
-   "active_coverage_after_guard": 0.8096105263157878
   },
   "downmix": {
    "der": 0.24107142857142858,
@@ -469,6 +535,28 @@
    "false_me": 1.0,
    "hyp_speakers": 1,
    "ref_speakers": 2
+  }
+ },
+ "kb-whisper-tiny.IP_hd10115.leak15.on": {
+  "label": "kb-whisper-tiny.IP_hd10115.leak15 guard=on",
+  "two_track": {
+   "der": 0.11655612244897959,
+   "conf": 0.028520408163265305,
+   "miss": 0.07994897959183674,
+   "fa": 0.00808673469387755,
+   "me_recall": 0.6508994708994709,
+   "false_me": 0.01384873949579832,
+   "hyp_speakers": 2,
+   "ref_speakers": 2
+  },
+  "me_words": {
+   "ref_words": 174,
+   "me_words": 213,
+   "raw_words": 242,
+   "word_recall": 0.7298850574712644,
+   "wer": 0.5862068965517241,
+   "vad_coverage": 0.8096105263157878,
+   "active_coverage_after_guard": 0.8096105263157878
   }
  }
 }

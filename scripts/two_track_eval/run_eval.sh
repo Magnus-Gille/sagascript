@@ -23,11 +23,12 @@ for spec in "IP_hc10606|Jessica_Rodén_(S)" "IP_hd10115|Jessica_Rodén_(S)"; do
       reftxt="$S/$id.$model.meref.txt"
       [ -s "$reftxt" ] || "$CLI" transcribe "$meonly" --language sv --model "$model" > "$reftxt" 2>/dev/null
       tag="$model.$id.$variant"
+      # Default (guard off) with the downmix baseline; then --crosstalk-guard.
       $PY "$HERE/eval_two_track.py" --cli "$CLI" --wav "$wav" --ref "$ref" --me "$me" --model "$model" --me-ref-text "$reftxt" \
-          --label "$tag guard=on" > "$S/results/$tag.on.json"
-      if [ "$variant" != clean ] && [ "$model" = kb-whisper-tiny ]; then
+          --label "$tag guard=off" > "$S/results/$tag.off.json"
+      if [ "$variant" != clean ]; then
         $PY "$HERE/eval_two_track.py" --cli "$CLI" --wav "$wav" --ref "$ref" --me "$me" --model "$model" --me-ref-text "$reftxt" \
-            --label "$tag guard=off" --guard-off --no-baseline > "$S/results/$tag.off.json"
+            --label "$tag guard=on" --guard-on --no-baseline > "$S/results/$tag.on.json"
       fi
     done
     rm -f "$wav"

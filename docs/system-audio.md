@@ -314,11 +314,23 @@ independent local speech carries about as much energy as the echo (a worked
 counterexample is a regression test, `equal_energy_double_talk_is_a_known_limitation`),
 the window still looks like pure echo and **the user's own words are deleted**.
 Deleting the user's speech silently is worse than a mislabelled echo.
-Measured on the synthetic set below (leak and double-talk at -15 dB): it removes
-all false "Me" (38-43 % -> 0 %) and keeps 90-98 % of the detected local speech in
-the double-talk variant, but those channels are simulated and not equal-energy.
+Measured on the synthetic set below (leak and double-talk at -15 dB, guard at this
+head): `--crosstalk-guard` takes false "Me" from 37-43 % to 0-2 % and DER from
+35-74 % to 6-23 % in the leak and double-talk variants. In double-talk it keeps
+all (hc10606, 92 -> 92 %) or 94 % (hd10115, 93 -> 87 %) of the voice-activity-
+detected local speech, but those channels are simulated and not equal-energy.
 Real rooms (reverberation, far quieter loudspeaker, non-linear processing)
 correlate less; only an owner-run recording can say how the thresholds behave.
+
+Two guard unit tests were loosened in round three, when the delay search was
+changed to keep the microphone window fixed (and the threshold raised from 0.6 to
+0.8): the simulated user's voice gain went from 0.1 to 0.4 (about 20 dB above the
+echo, a user close to the microphone), because at 0.1 two unrelated synthetic
+envelopes happened to correlate above the bar over a 1 s window; and the
+"pure echo is removed" bound went from under 0.5 s kept to at most 1.0 s kept of
+7 s, because the first window of the file has no negative-delay reference and sits
+on the burst onset. Both are limits of the simulation and of envelope matching,
+not new capability.
 
 ### Offline evaluation
 
@@ -345,34 +357,38 @@ default diarization threshold, models `kb-whisper-tiny` and the larger installed
 
 | Case | Pipeline | DER % | Conf % | Miss % | FA % | Me speech recall % | False Me % | Me word recall / WER % | VAD / after-guard coverage % | words ref / raw / kept |
 |---|---|---|---|---|---|---|---|---|---|---|
-| kb-whisper-small.IP_hc10606.clean guard=on | two-track | 5.2 | 0.6 | 3.3 | 1.3 | 97 | 0 | 90 / 11 | 91 / 91 | 424 / 419 / 408 |
-| kb-whisper-small.IP_hc10606.clean guard=on | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
-| kb-whisper-small.IP_hc10606.dt15 guard=on | two-track | 22.6 | 7.1 | 4.6 | 10.9 | 85 | 0 | 87 / 21 | 92 / 90 | 424 / 443 / 425 |
-| kb-whisper-small.IP_hc10606.dt15 guard=on | downmix | 34.6 | 34.5 | 0.1 | 0.0 | 100 | 100 |  | | |
-| kb-whisper-small.IP_hc10606.leak15 guard=on | two-track | 5.8 | 0.6 | 3.9 | 1.2 | 96 | 0 | 89 / 17 | 91 / 91 | 424 / 434 / 424 |
-| kb-whisper-small.IP_hc10606.leak15 guard=on | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
-| kb-whisper-small.IP_hd10115.clean guard=on | two-track | 2.9 | 0.0 | 2.9 | 0.0 | 90 | 0 | 89 / 14 | 81 / 81 | 181 / 181 / 170 |
-| kb-whisper-small.IP_hd10115.clean guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
-| kb-whisper-small.IP_hd10115.dt15 guard=on | two-track | 11.3 | 4.6 | 2.3 | 4.3 | 72 | 0 | 87 / 18 | 93 / 84 | 181 / 191 / 169 |
-| kb-whisper-small.IP_hd10115.dt15 guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
-| kb-whisper-small.IP_hd10115.leak15 guard=on | two-track | 3.0 | 0.0 | 2.9 | 0.1 | 90 | 0 | 89 / 15 | 81 / 81 | 181 / 184 / 171 |
-| kb-whisper-small.IP_hd10115.leak15 guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
-| kb-whisper-tiny.IP_hc10606.clean guard=on | two-track | 9.2 | 0.0 | 8.0 | 1.2 | 92 | 0 | 70 / 34 | 91 / 91 | 454 / 368 / 361 |
-| kb-whisper-tiny.IP_hc10606.clean guard=on | downmix | 34.9 | 34.5 | 0.4 | 0.0 | 99 | 100 |  | | |
+| kb-whisper-small.IP_hc10606.clean guard=off | two-track | 5.2 | 0.6 | 3.3 | 1.3 | 97 | 0 | 90 / 11 | 91 / 91 | 424 / 419 / 408 |
+| kb-whisper-small.IP_hc10606.clean guard=off | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hc10606.dt15 guard=off | two-track | 51.6 | 10.1 | 18.8 | 22.6 | 86 | 43 | 88 / 85 | 92 / 92 | 424 / 729 / 710 |
+| kb-whisper-small.IP_hc10606.dt15 guard=off | downmix | 34.6 | 34.5 | 0.1 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hc10606.dt15 guard=on | two-track | 22.8 | 6.4 | 4.7 | 11.7 | 86 | 0 | 88 / 21 | 92 / 92 | 424 / 449 / 433 |
+| kb-whisper-small.IP_hc10606.leak15 guard=off | two-track | 35.0 | 4.3 | 18.5 | 12.2 | 96 | 42 | 89 / 83 | 91 / 91 | 424 / 720 / 703 |
+| kb-whisper-small.IP_hc10606.leak15 guard=off | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hc10606.leak15 guard=on | two-track | 6.3 | 0.6 | 4.3 | 1.3 | 96 | 0 | 89 / 18 | 91 / 91 | 424 / 440 / 427 |
+| kb-whisper-small.IP_hd10115.clean guard=off | two-track | 2.9 | 0.0 | 2.9 | 0.0 | 90 | 0 | 89 / 14 | 81 / 81 | 181 / 181 / 170 |
+| kb-whisper-small.IP_hd10115.clean guard=off | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hd10115.dt15 guard=off | two-track | 74.1 | 11.2 | 37.6 | 25.3 | 71 | 37 | 92 / 317 | 93 / 93 | 181 / 757 / 733 |
+| kb-whisper-small.IP_hd10115.dt15 guard=off | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hd10115.dt15 guard=on | two-track | 14.6 | 4.5 | 4.3 | 5.8 | 73 | 2 | 90 / 29 | 93 / 87 | 181 / 232 / 199 |
+| kb-whisper-small.IP_hd10115.leak15 guard=off | two-track | 63.4 | 6.6 | 35.4 | 21.4 | 99 | 37 | 89 / 324 | 81 / 81 | 181 / 762 / 732 |
+| kb-whisper-small.IP_hd10115.leak15 guard=off | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hd10115.leak15 guard=on | two-track | 6.4 | 0.4 | 4.8 | 1.2 | 90 | 2 | 89 / 28 | 81 / 81 | 181 / 225 / 194 |
+| kb-whisper-tiny.IP_hc10606.clean guard=off | two-track | 9.2 | 0.0 | 8.0 | 1.2 | 92 | 0 | 70 / 34 | 91 / 91 | 454 / 368 / 361 |
+| kb-whisper-tiny.IP_hc10606.clean guard=off | downmix | 34.9 | 34.5 | 0.4 | 0.0 | 99 | 100 |  | | |
 | kb-whisper-tiny.IP_hc10606.dt15 guard=off | two-track | 40.8 | 12.5 | 15.2 | 13.1 | 86 | 43 | 76 / 99 | 92 / 92 | 454 / 755 / 734 |
-| kb-whisper-tiny.IP_hc10606.dt15 guard=on | two-track | 19.2 | 5.4 | 8.2 | 5.6 | 84 | 0 | 75 / 32 | 92 / 90 | 454 / 441 / 419 |
-| kb-whisper-tiny.IP_hc10606.dt15 guard=on | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hc10606.dt15 guard=off | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hc10606.dt15 guard=on | two-track | 19.7 | 4.8 | 8.8 | 6.2 | 85 | 1 | 76 / 32 | 92 / 92 | 454 / 447 / 427 |
 | kb-whisper-tiny.IP_hc10606.leak15 guard=off | two-track | 37.7 | 14.8 | 15.7 | 7.1 | 83 | 42 | 64 / 107 | 91 / 91 | 454 / 693 / 674 |
-| kb-whisper-tiny.IP_hc10606.leak15 guard=on | two-track | 14.8 | 6.6 | 7.3 | 0.9 | 83 | 0 | 64 / 40 | 91 / 91 | 454 / 379 / 365 |
-| kb-whisper-tiny.IP_hc10606.leak15 guard=on | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
-| kb-whisper-tiny.IP_hd10115.clean guard=on | two-track | 8.4 | 2.6 | 5.8 | 0.0 | 65 | 0 | 73 / 43 | 81 / 81 | 174 / 196 / 186 |
-| kb-whisper-tiny.IP_hd10115.clean guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hc10606.leak15 guard=off | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hc10606.leak15 guard=on | two-track | 15.4 | 6.8 | 7.7 | 0.9 | 83 | 1 | 64 / 40 | 91 / 91 | 454 / 385 / 368 |
+| kb-whisper-tiny.IP_hd10115.clean guard=off | two-track | 8.4 | 2.6 | 5.8 | 0.0 | 65 | 0 | 73 / 43 | 81 / 81 | 174 / 196 / 186 |
+| kb-whisper-tiny.IP_hd10115.clean guard=off | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
 | kb-whisper-tiny.IP_hd10115.dt15 guard=off | two-track | 64.7 | 19.5 | 26.0 | 19.2 | 67 | 38 | 92 / 347 | 93 / 93 | 174 / 777 / 755 |
-| kb-whisper-tiny.IP_hd10115.dt15 guard=on | two-track | 12.9 | 5.4 | 2.5 | 5.0 | 68 | 0 | 88 / 19 | 93 / 84 | 174 / 180 / 166 |
-| kb-whisper-tiny.IP_hd10115.dt15 guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hd10115.dt15 guard=off | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hd10115.dt15 guard=on | two-track | 15.8 | 5.3 | 4.7 | 5.8 | 69 | 1 | 91 / 30 | 93 / 87 | 174 / 224 / 198 |
 | kb-whisper-tiny.IP_hd10115.leak15 guard=off | two-track | 60.8 | 15.1 | 30.4 | 15.3 | 67 | 38 | 72 / 406 | 81 / 81 | 174 / 845 / 818 |
-| kb-whisper-tiny.IP_hd10115.leak15 guard=on | two-track | 8.6 | 2.6 | 5.9 | 0.0 | 65 | 0 | 73 / 44 | 81 / 81 | 174 / 198 / 187 |
-| kb-whisper-tiny.IP_hd10115.leak15 guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hd10115.leak15 guard=off | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hd10115.leak15 guard=on | two-track | 11.7 | 2.9 | 8.0 | 0.8 | 65 | 1 | 73 / 59 | 81 / 81 | 174 / 242 / 213 |
 
 Fix round (microphone words, Whisper over the whole channel -> Whisper only inside padded
 voice-activity regions, zero-duration words kept): on the tiny model "Me" speech
@@ -381,27 +397,21 @@ to 9.2 / 8.4 %. Part of the earlier loss was a bug: single-token words have
 `start == end` and were always dropped by the activity filter. (Old table: first
 version of this section in the git history.)
 
-Reading:
+Reading (every number above is from the code at this head; "guard=off" is the default, "guard=on" is `--crosstalk-guard`):
 - The downmix baseline collapses every speaker into one cluster (the known #284 behaviour
   at this build's threshold): confusion 24-35 %, and its "me" columns are degenerate
   (everything is "me").
 - Two-track removes that confusion; with the larger model the clean cases reach DER 2.9 and
-  5.2 %. Word agreement with the proxy is about 90 % (WER 11-14 %) for the small model and
-  64-88 % (WER 18-44 %) for the tiny model; this says how well the two-track path
-  reproduces the model's own clean-speech transcript, not how correct the words are.
-- Where "Me" speech is still missing: voice-activity coverage is 91 % (hc10606) and only
-  81 % (hd10115) of the user's reference speech, so the segmenter, not Whisper, is the
-  largest remaining loss on hd10115; the guard removes 0-9 points more in double-talk.
-- Crosstalk, guard on vs off for `leak15`/`dt15` (tiny; the table rows labelled
-  guard=on were run with the guard enabled): false Me 38-43 % -> 0, DER 38-65 % -> 9-19 %.
-  Without the guard the leaked remote speech is labelled "Me", which is why the hint
-  and the opt-in flag exist; see above for why the guard is not the default.
-- The first version's "remaining error is missed speech" no longer holds in general:
-  in double-talk, confusion and false alarm matter as much as miss (the unreferenced
-  remote speech in `dt15` counts as false alarm).
-Note: the table was produced with the guard on by default and with the earlier window
-alignment (the microphone window was shifted by the delay instead of the system reference,
-since fixed); it was not re-run after the guard became opt-in, so treat the guard=on rows
-as indicative of `--crosstalk-guard`, and the `clean` rows as unaffected. Caveats: synthetic channels (perfect separation, a linear leak), proxy word references,
-two files of 7 minutes, the speaker count of the system channel comes from this build's
-diarization default.
+  5.2 %. Word agreement with the proxy (same model, clean me-only audio) is about 90 %
+  (WER 11-14 %) for the small model and 70-73 % (WER 34-43 %) for the tiny model on the
+  clean files; this says how well the two-track path reproduces the model's own
+  clean-speech transcript, not how correct the words are.
+- Voice-activity coverage is 91 % (hc10606) and 81 % (hd10115) of the user's reference
+  speech, so the segmenter, not Whisper, is the largest remaining loss on hd10115.
+- Without headphones (leak15, dt15) and without the guard, leaked remote speech is labelled
+  "Me": false Me 37-43 %, raw Me words 1.5-5x the proxy, DER 35-74 %. With `--crosstalk-guard`
+  false Me is 0-2 % and DER 6-23 %. In double-talk the unreferenced remote speech counts as
+  false alarm in both settings.
+Caveats: synthetic channels (perfect separation, a linear leak), proxy word references (no
+human transcript), two files of 7 minutes, the speaker count of the system channel comes
+from this build's diarization default.

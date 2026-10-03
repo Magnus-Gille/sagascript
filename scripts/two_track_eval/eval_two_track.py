@@ -139,12 +139,12 @@ def main():
     ap.add_argument("--model", default="kb-whisper-tiny")
     ap.add_argument("--me-ref-text", help="reference transcript of the local user's turns (plain transcription of the me-only WAV)")
     ap.add_argument("--label", default=None); ap.add_argument("--no-baseline", action="store_true")
-    ap.add_argument("--guard-off", action="store_true", help="two-track run with the crosstalk guard disabled")
+    ap.add_argument("--guard-on", action="store_true", help="two-track run with --crosstalk-guard (off by default)")
     a = ap.parse_args()
     ref = read_rttm(a.ref); out = {"label": a.label or a.wav}
-    env = {"SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD": "off"} if a.guard_off else None
+    env = None
     env = dict(env or {}); env["SAGA_DIAR_DEBUG"] = "1"
-    m, err = run_cli(a.cli, a.wav, [], env, a.model, want_stderr=True)
+    m, err = run_cli(a.cli, a.wav, ["--crosstalk-guard"] if a.guard_on else [], env, a.model, want_stderr=True)
     assert m.get("local_speaker") == ME, "two-track pipeline did not engage (no local_speaker)"
     out["two_track"] = score(ref, hyp_from_meeting(m), a.me, ME)
     if a.me_ref_text:
