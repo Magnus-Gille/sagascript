@@ -1125,6 +1125,28 @@
      }
     }
    ]
+  },
+  {
+   "name": "signed_zero_logits_rank_equal_so_the_lower_id_stands",
+   "terms": [
+    "Magnus"
+   ],
+   "params": {
+    "weight": 2.0,
+    "start_factor": 0.0,
+    "blank_margin": 100.0,
+    "max_gap_frames": 8
+   },
+   "steps": [
+    {
+     "frame": 0,
+     "logits": {
+      "80": 0.0,
+      "0": -0.0
+     },
+     "expected": null
+    }
+   ]
   }
  ],
  "request_cases": [
@@ -2284,6 +2306,23 @@
     "boost_terms": [
      "ééééééééééééééééééééééééééééééééé"
     ]
+   },
+   "valid": false
+  },
+  {
+   "name": "weight_just_above_20",
+   "fields": {
+    "boost_terms": [
+     "Magnus"
+    ],
+    "boost_weight": 20.0000001
+   },
+   "valid": false
+  },
+  {
+   "name": "weight_tiny_negative",
+   "fields": {
+    "boost_weight": -1e-50
    },
    "valid": false
   }

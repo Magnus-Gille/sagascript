@@ -321,7 +321,7 @@ public final class EngineHostServer {
         var weight: Float = 0
         if let raw = request["boost_weight"] {
             guard let number = raw as? NSNumber, String(cString: number.objCType) != "c",
-                  number.floatValue.isFinite, number.floatValue >= 0, number.floatValue <= 20 else {
+                  number.doubleValue.isFinite, number.doubleValue >= 0, number.doubleValue <= 20 else {
                 return bad("boost_weight must be a number within 0...20")
             }
             weight = number.floatValue

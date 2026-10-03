@@ -265,7 +265,9 @@ pub struct BiasState<'a> {
 
 /// Candidate order: higher logit first, ties to the lower id.
 fn better(a: &(f32, u32), b: &(f32, u32)) -> std::cmp::Ordering {
-    b.0.total_cmp(&a.0).then(a.1.cmp(&b.1))
+    // Signed zeros rank equal (as the Swift host's `>` does), so ties go to the lower id.
+    let norm = |x: f32| if x == 0.0 { 0.0 } else { x };
+    norm(b.0).total_cmp(&norm(a.0)).then(a.1.cmp(&b.1))
 }
 
 impl<'a> BiasState<'a> {

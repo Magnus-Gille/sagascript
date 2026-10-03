@@ -209,8 +209,9 @@ factor 0 (now the default)**. With a realistic dictionary (5% of terms in the au
 127 target name tokens (FLEURS) and all Riksdag speaker names with no WER cost, and on audio without those
 names it changes at most 4 of 1647 words. Keep the dictionary under about 200 terms in the UI (400 is the
 stress case), turn it off automatically when empty, and surface "biasing not applied" (hosts report
-`boost_active` / `boost_reason`; the CLI warns). Start factor 0.25 recovers no extra names in these sets and
-costs 2.5 to 4 times the changed words, so it is not recommended. Blank gate and duration cap are cheap and
+`boost_active` / `boost_reason`; the CLI warns). On the realistic long-form dictionaries start factor 0.25 recovers no extra target
+names and costs 2.5 to 4 times the changed words; on the small window-cut set it recovers a little more
+(+2 of 30 at cutA and mid-window), which does not outweigh that cost, so zero stays the recommendation. Blank gate and duration cap are cheap and
 tested but not an accuracy lever.
 
 | Criterion | Status |
