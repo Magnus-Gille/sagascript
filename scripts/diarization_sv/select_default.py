@@ -10,8 +10,8 @@ thresholds whose training-set mean is within that of the minimum; the fold's cho
 median of the tied thresholds. The full-set plateau gives the final default and its margins.
 
   select_default.py GRID.json [--variant NAME] > tables.md
-  select_default.py GRID.json --table 0.36     # per-recording table (needs the `oldcode` variant)
-  select_default.py GRID.json --at 0.36        # variant comparison at one threshold
+  select_default.py GRID.json --table 0.48,0.36,0.34     # per-recording table (needs the `oldcode` variant)
+  select_default.py GRID.json --at 0.34        # variant comparison at one threshold
 """
 import argparse, json, statistics
 
@@ -30,7 +30,7 @@ def pick(train, ths):
     return tied[len(tied) // 2], tied, best
 
 def main():
-    ap = argparse.ArgumentParser(); ap.add_argument("grid"); ap.add_argument("--variant", default="shipped")
+    ap = argparse.ArgumentParser(); ap.add_argument("grid"); ap.add_argument("--variant", default="shipped"); ap.add_argument("--shipped", type=float, default=None)
     a = ap.parse_args()
     g = json.load(open(a.grid))[a.variant]
     ths = sorted(float(t) for t in next(iter(next(iter(g.values())).values())))
@@ -50,15 +50,21 @@ def main():
     for t in ths:
         print(f"| {t:.2f} | {mean(v[t] for v in recs.values()):.2f} % |")
     print(f"\nFull-set minimum {best:.2f} %; near-tie plateau {tied[0]:.2f}-{tied[-1]:.2f}; midpoint {c:.2f}; margins {c - tied[0]:.2f} below, {tied[-1] - c:.2f} above.")
+    if a.shipped is not None:
+        s = round(a.shipped, 2)
+        print(f"\nScript pick: {c:.2f}. Shipped default: {s:.2f} (owner decision); margins on the clean set {s - tied[0]:.2f} below, {tied[-1] - s:.2f} above; mean confusion there {mean(v[s] for v in recs.values()):.2f} %.")
 
-def table(grid, new, old="0.75"):
-    """Per-recording table: old code at 0.75 (variant `oldcode`), shipped code at 0.48 and at `new`."""
+def table(grid, news, old="0.75"):
+    """Per-recording table: old code at 0.75 (variant `oldcode`) and shipped code at each of `news`
+    (comma list, e.g. 0.48,0.36,0.34)."""
     g = json.load(open(grid)); cell = lambda r: f"{r[2]}/{r[3]}, {r[0]:.1f} / {r[1]:.1f} %"
-    print(f"| Recording | main code, 0.75 | new code, 0.48 | new code, {new} (default) |\n| --- | --- | --- | --- |")
+    cols = [str(round(float(t), 2)) for t in news.split(",")]
+    print("| Recording | main code, 0.75 | " + " | ".join(f"new code, {c}" for c in cols) + " |")
+    print("| --- | --- | " + " | ".join("---" for _ in cols) + " |")
     for sset in ("riksdag", "sv2", "degraded", "other"):
         for i in g["shipped"][sset]:
             sh = g["shipped"][sset][i]
-            print(f"| {i} | {cell(g['oldcode'][sset][i][old])} | {cell(sh['0.48'])} | {cell(sh[new])} |")
+            print(f"| {i} | {cell(g['oldcode'][sset][i][old])} | " + " | ".join(cell(sh[c]) for c in cols) + " |")
 
 def variants(grid, th):
     """Mean confusion / DER and speaker-count agreement (found in truth..truth+1) per variant at `th`."""

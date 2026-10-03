@@ -37,7 +37,7 @@ pub struct DiarizeConfig {
 /// Default agglomerative clustering threshold (cosine distance). The single source of truth
 /// for the CLI, reprocessing and UI defaults; the clap/Svelte literals must match (tests pin
 /// the CLI ones). Chosen with the evaluation in docs/benchmarks/diarization-sv.md.
-pub const DEFAULT_THRESHOLD: f32 = 0.36;
+pub const DEFAULT_THRESHOLD: f32 = 0.34;
 
 /// A speaker must be heard for at least this many seconds in total; smaller
 /// embedding clusters are absorbed into the nearest cluster that reaches it.
@@ -99,10 +99,10 @@ impl Default for DiarizeConfig {
     fn default() -> Self {
         Self {
             // Segment-level average linkage (no per-track cap, see `assign_speaker_labels`).
-            // Chosen on Swedish recordings only (14 Riksdag recordings, leave-one-recording-out;
-            // docs/benchmarks/diarization-sv.md): mean confusion is flat for 0.26-0.46 and 0.36 is
-            // the midpoint, 0.10 from both edges. Telephone-band, French and Norwegian audio did not
-            // influence the choice.
+            // Swedish recordings only (14 Riksdag recordings, leave-one-recording-out;
+            // docs/benchmarks/diarization-sv.md): clean-audio confusion is flat for 0.26-0.46 (the
+            // selection script's midpoint is 0.36). 0.34 is the owner's choice: no measurable cost
+            // on clean Swedish, and the last value before the band-limited-audio edge at 0.36.
             threshold: DEFAULT_THRESHOLD,
             min_segment: 0.3,
             min_gap: 0.5,
@@ -548,7 +548,7 @@ mod tests {
             v
         };
         // Two real speakers (20 s each) on ONE track, plus a 1 s glitch at cosine distance 0.5 from
-        // speaker 0 (above the 0.36 clustering threshold, so only absorption can join it) and a 1 s
+        // speaker 0 (above the 0.34 clustering threshold, so only absorption can join it) and a 1 s
         // segment far from both (a distinct, if tiny, speaker: not forced into either).
         let mut near0 = unit(0);
         near0[0] = 0.5;

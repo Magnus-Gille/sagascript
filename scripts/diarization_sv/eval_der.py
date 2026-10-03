@@ -6,7 +6,7 @@ Run with ~/.cache/sagascript-bench/bench/.venv/bin/python (numpy+scipy only).
   eval_der.py --bin <diarize_eval> --scratch DIR [--thresholds 0.5,0.75] [--set riksdag|other|sv2|degraded] [--ids SoU40,...]
       analysis-only path (no Whisper): <bin> analyze (cached in DIR/analysis/<id>.<tag>.json),
       then <bin> cluster per threshold.
-  eval_der.py --cli <sagascript> --scratch DIR --ids SoU38 [--thresholds 0.36]
+  eval_der.py --cli <sagascript> --scratch DIR --ids SoU38 [--thresholds 0.34]
       end-to-end: `sagascript transcribe --diarize --meeting-json --diarize-cache`.
 
 Metric: frame-based (10 ms) DER with a 0.25 s collar around every reference turn boundary,

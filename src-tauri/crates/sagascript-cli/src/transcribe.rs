@@ -104,11 +104,11 @@ pub struct TranscribeArgs {
     )]
     pub meeting_json: bool,
 
-    /// Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.36). Higher = fewer speakers.
+    /// Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.34). Higher = fewer speakers.
     #[cfg(feature = "diarization")]
-    #[arg(long, value_name = "THRESHOLD", default_value = "0.36",
+    #[arg(long, value_name = "THRESHOLD", default_value = "0.34",
           value_parser = parse_diarize_threshold,
-          help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.36). Higher = fewer speakers.")]
+          help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.34). Higher = fewer speakers.")]
     pub diarize_threshold: f32,
 
     /// Read/write reusable threshold-independent diarization analysis and
@@ -3688,7 +3688,7 @@ mod diarize_threshold_tests {
     #[test]
     fn default_applies_when_flag_omitted() {
         let cli = TestCli::try_parse_from(["sagascript", "file.wav"]).unwrap();
-        assert_eq!(cli.args.diarize_threshold, 0.36);
+        assert_eq!(cli.args.diarize_threshold, 0.34);
         #[cfg(feature = "diarization")]
         assert_eq!(cli.args.diarize_threshold, sagascript_core::diarization::DEFAULT_THRESHOLD);
     }

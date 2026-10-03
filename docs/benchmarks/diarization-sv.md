@@ -65,29 +65,30 @@ Rebuild: `scripts/diarization_sv/build_refs.py` (the five debates), `build_refs_
 ## Results (Swedish, per recording)
 
 Cells are speakers found / truth, then confusion / DER. `main code, 0.75` is the code and default
-before this PR; the other columns are this PR's code at the previous PR default 0.48 and at the new
-default 0.36.
+before this PR; the other columns are this PR's code at the earlier PR default 0.48, at the
+script-selected midpoint 0.36 and at the shipped default **0.34** (owner decision, see "Choosing the
+default").
 
-| Recording | main code, 0.75 | new code, 0.48 | new code, 0.36 (default) |
-| --- | --- | --- | --- |
-| JuU41 | 1/4, 53.2 / 68.8 % | 5/4, 0.5 / 16.1 % | 5/4, 0.5 / 16.1 % |
-| SoU38 | 2/6, 53.3 / 68.0 % | 6/6, 1.0 / 15.6 % | 7/6, 1.2 / 15.8 % |
-| SoU39 | 1/7, 67.3 / 77.9 % | 8/7, 0.9 / 11.6 % | 8/7, 0.9 / 11.6 % |
-| SoU40 | 1/7, 71.1 / 81.2 % | 7/7, 11.6 / 21.8 % | 8/7, 1.1 / 11.2 % |
-| UU24 | 2/4, 44.6 / 54.9 % | 5/4, 0.9 / 11.2 % | 5/4, 0.9 / 11.2 % |
-| FS_20260604 | 1/19, 77.7 / 82.4 % | 19/19, 7.4 / 12.2 % | 20/19, 5.5 / 10.3 % |
-| FS_20260611 | 2/18, 64.0 / 72.0 % | 18/18, 5.5 / 13.4 % | 19/18, 3.8 / 11.7 % |
-| IP_hb10618 | 1/2, 46.0 / 51.3 % | 4/2, 1.3 / 6.6 % | 4/2, 1.3 / 6.6 % |
-| IP_hb10760 | 1/2, 40.2 / 50.4 % | 3/2, 1.0 / 11.2 % | 3/2, 1.0 / 11.2 % |
-| IP_hc10606 | 1/2, 38.0 / 45.7 % | 3/2, 2.4 / 10.1 % | 3/2, 2.4 / 10.1 % |
-| IP_hd10115 | 1/3, 44.6 / 54.0 % | 4/3, 0.9 / 10.2 % | 4/3, 0.9 / 10.2 % |
-| IP_hd10256 | 1/2, 42.7 / 47.3 % | 3/2, 1.0 / 5.6 % | 3/2, 1.0 / 5.6 % |
-| IP_hd10562 | 1/3, 48.8 / 57.3 % | 3/3, 0.2 / 8.8 % | 3/3, 0.2 / 8.8 % |
-| PL_20260610 | 1/6, 68.7 / 82.3 % | 6/6, 0.0 / 13.7 % | 6/6, 0.0 / 13.7 % |
+| Recording | main code, 0.75 | new code, 0.48 | new code, 0.36 | new code, 0.34 |
+| --- | --- | --- | --- | --- |
+| JuU41 | 1/4, 53.2 / 68.8 % | 5/4, 0.5 / 16.1 % | 5/4, 0.5 / 16.1 % | 5/4, 0.5 / 16.1 % |
+| SoU38 | 2/6, 53.3 / 68.0 % | 6/6, 1.0 / 15.6 % | 7/6, 1.2 / 15.8 % | 7/6, 1.2 / 15.8 % |
+| SoU39 | 1/7, 67.3 / 77.9 % | 8/7, 0.9 / 11.6 % | 8/7, 0.9 / 11.6 % | 8/7, 0.9 / 11.6 % |
+| SoU40 | 1/7, 71.1 / 81.2 % | 7/7, 11.6 / 21.8 % | 8/7, 1.1 / 11.2 % | 8/7, 1.1 / 11.2 % |
+| UU24 | 2/4, 44.6 / 54.9 % | 5/4, 0.9 / 11.2 % | 5/4, 0.9 / 11.2 % | 5/4, 0.9 / 11.2 % |
+| FS_20260604 | 1/19, 77.7 / 82.4 % | 19/19, 7.4 / 12.2 % | 20/19, 5.5 / 10.3 % | 20/19, 5.5 / 10.3 % |
+| FS_20260611 | 2/18, 64.0 / 72.0 % | 18/18, 5.5 / 13.4 % | 19/18, 3.8 / 11.7 % | 19/18, 3.8 / 11.7 % |
+| IP_hb10618 | 1/2, 46.0 / 51.3 % | 4/2, 1.3 / 6.6 % | 4/2, 1.3 / 6.6 % | 4/2, 1.3 / 6.6 % |
+| IP_hb10760 | 1/2, 40.2 / 50.4 % | 3/2, 1.0 / 11.2 % | 3/2, 1.0 / 11.2 % | 3/2, 1.0 / 11.2 % |
+| IP_hc10606 | 1/2, 38.0 / 45.7 % | 3/2, 2.4 / 10.1 % | 3/2, 2.4 / 10.1 % | 3/2, 2.4 / 10.1 % |
+| IP_hd10115 | 1/3, 44.6 / 54.0 % | 4/3, 0.9 / 10.2 % | 4/3, 0.9 / 10.2 % | 4/3, 0.9 / 10.2 % |
+| IP_hd10256 | 1/2, 42.7 / 47.3 % | 3/2, 1.0 / 5.6 % | 3/2, 1.0 / 5.6 % | 3/2, 1.0 / 5.6 % |
+| IP_hd10562 | 1/3, 48.8 / 57.3 % | 3/3, 0.2 / 8.8 % | 3/3, 0.2 / 8.8 % | 3/3, 0.2 / 8.8 % |
+| PL_20260610 | 1/6, 68.7 / 82.3 % | 6/6, 0.0 / 13.7 % | 6/6, 0.0 / 13.7 % | 6/6, 0.0 / 13.7 % |
 
 Mean confusion over the 14 recordings: main code at 0.75 about 54 %; new code at 0.48 2.5 %; at
-0.36 1.5 %. On the two-speaker interpellations the old code found **one** speaker for two (38-46 %
-confusion): the track cap fixed here is not only a many-speaker problem. At 0.36 the extra speaker
+0.36 and 0.34 both 1.5 %. On the two-speaker interpellations the old code found **one** speaker for two (38-46 %
+confusion): the track cap fixed here is not only a many-speaker problem. At 0.34 the extra speaker
 is mostly the chair in the interpellations and debates; question time over-splits by one (19-20 for
 18-19).
 
@@ -97,20 +98,20 @@ Stand-in for call audio until real Swedish call recordings exist; reference RTTM
 source clips (`build_degraded.py`; ffmpeg band-pass, not a real codec or phone line). Separate row,
 not part of the selection.
 
-| Recording | main code, 0.75 | new code, 0.48 | new code, 0.36 (default) |
-| --- | --- | --- | --- |
-| FS_20260611_tel | 1/18, 65.1 / 74.6 % | 16/18, 12.3 / 21.9 % | 20/18, 4.6 / 14.1 % |
-| IP_hc10606_tel | 1/2, 37.5 / 47.3 % | 3/2, 2.4 / 12.1 % | 3/2, 2.4 / 12.1 % |
-| IP_hd10256_tel | 1/2, 42.0 / 48.0 % | 3/2, 1.2 / 7.3 % | 3/2, 1.2 / 7.3 % |
-| IP_hd10562_tel | 1/3, 47.9 / 58.1 % | 2/3, 32.2 / 42.5 % | 2/3, 32.2 / 42.5 % |
-| SoU38_tel | 1/6, 64.9 / 81.7 % | 6/6, 1.1 / 17.9 % | 7/6, 1.3 / 18.1 % |
-| UU24_tel | 2/4, 54.0 / 66.6 % | 5/4, 0.9 / 13.5 % | 5/4, 0.9 / 13.5 % |
+| Recording | main code, 0.75 | new code, 0.48 | new code, 0.36 | new code, 0.34 |
+| --- | --- | --- | --- | --- |
+| FS_20260611_tel | 1/18, 65.1 / 74.6 % | 16/18, 12.3 / 21.9 % | 20/18, 4.6 / 14.1 % | 20/18, 4.6 / 14.1 % |
+| IP_hc10606_tel | 1/2, 37.5 / 47.3 % | 3/2, 2.4 / 12.1 % | 3/2, 2.4 / 12.1 % | 3/2, 2.4 / 12.1 % |
+| IP_hd10256_tel | 1/2, 42.0 / 48.0 % | 3/2, 1.2 / 7.3 % | 3/2, 1.2 / 7.3 % | 3/2, 1.2 / 7.3 % |
+| IP_hd10562_tel | 1/3, 47.9 / 58.1 % | 2/3, 32.2 / 42.5 % | 2/3, 32.2 / 42.5 % | 3/3, 0.2 / 10.5 % |
+| SoU38_tel | 1/6, 64.9 / 81.7 % | 6/6, 1.1 / 17.9 % | 7/6, 1.3 / 18.1 % | 7/6, 1.3 / 18.1 % |
+| UU24_tel | 2/4, 54.0 / 66.6 % | 5/4, 0.9 / 13.5 % | 5/4, 0.9 / 13.5 % | 5/4, 0.9 / 13.5 % |
 
-Mean confusion at 0.36 is 7.1 % (the clean sources of the same clips: 1.6 %), driven by one
-recording: `IP_hd10562_tel` finds 2 speakers for 3 (32 % confusion) at 0.36 and above, but 3 found
-with 0.2 % confusion at 0.34 and below (mean over the six: about 1.7 %). The telephone-band set prefers 0.34 or lower. The default was not
-selected on it, but **0.36 sits at that cliff for band-limited audio**; this is the main open risk
-for call audio.
+Mean confusion on the band-limited set is 1.76 % at 0.34 and 7.08 % at 0.36 (the clean sources of the
+same clips: 1.6 %), driven by one recording: `IP_hd10562_tel` finds 3 of 3 speakers with 0.20 %
+confusion at 0.34 and below, but 2 of 3 with 32.16 % at 0.36 and above. **0.34 is the last value
+before that edge**, so it has no margin on the band-limited side; real call audio could sit on the
+other side of it. This is the main open risk for call audio.
 
 ## Choosing the default (Swedish only)
 
@@ -179,11 +180,25 @@ Mean held-out confusion 1.47 %.
 | 0.70 | 34.88 % |
 | 0.75 | 49.33 % |
 
+Generated by `select_default.py ... --shipped 0.34`:
+
+Full-set minimum 1.47 %; near-tie plateau 0.26-0.46; midpoint 0.36; margins 0.10 below, 0.10 above.
+
+Script pick: 0.36. Shipped default: 0.34 (owner decision); margins on the clean set 0.08 below, 0.12 above; mean confusion there 1.47 %.
+
 The Swedish data show a flat plateau: mean confusion is 1.5 % for every threshold from 0.26 to 0.46,
 rises at 0.48 (SoU40 loses a speaker: 1.1 % to 11.6 % confusion) and again from 0.50, and below 0.26
-recordings over-split (0.22 and lower). The default is the plateau midpoint, **0.36**, with 0.10 of
-margin on both sides. The 0.48 chosen earlier from a pooled Swedish/French/Norwegian sweep sat at
-the plateau edge for Swedish. The French and Norwegian clips did not influence the choice.
+recordings over-split (0.22 and lower). `select_default.py` picks the plateau midpoint 0.36 (0.10 of margin on both sides). The 0.48 chosen earlier from a pooled Swedish/French/Norwegian sweep sat at
+the plateau edge for Swedish.
+
+**The shipped default is 0.34, by owner decision**, not the script's 0.36. Reasons: on the clean
+Swedish set every value from 0.30 to 0.44 gives the same mean confusion (Riksdag 0.9 %, new
+recordings 1.78 %), so 0.36 was only the midpoint and 0.34 costs nothing measurable there; on the
+band-limited Swedish copies 0.34 gives 1.76 % mean confusion against 7.08 % at 0.36; and
+over-splitting is the cheaper error to correct in review. Margins at 0.34: 0.08 below (plateau
+starts at 0.26) and 0.12 above on clean Swedish; none above on band-limited audio (see above). The
+secondary French/Norwegian set barely moves between the two (mean confusion 14.0 % vs 13.0 %) and
+did not influence the choice.
 
 ### Absorption of small clusters and `MIN_SPEAKER_SECONDS`
 
@@ -193,23 +208,23 @@ nearest cluster that reaches 8 s, **only if** their centroid cosine distance is 
 collapsed into one speaker unconditionally (unit tests cover clearly separated short speakers).
 A rejected small cluster is reconsidered after every merge (a merge moves the target centroid).
 Re-running the sweep after adding that changed no Swedish per-recording confusion at 0.36 or 0.48
-(the secondary set did change: mean confusion at 0.36 14.2 % -> 13.0 %).
+(the secondary set did change: mean confusion at 0.36 14.2 % -> 13.0 %, 14.0 % at 0.34).
 Variants swept: `legacy` = no distance limit, `d50`/`d60`/`d90` = other limits, `ms4`/`ms12`/`ms20` =
 other minimum seconds; each cell is mean confusion / DER and the number of recordings with truth
 or truth + 1 speakers found.
 
-### Variants at threshold 0.36
+### Variants at threshold 0.34
 
 | Variant | Swedish (14) conf / DER, count ok | Telephone-band (6) | French/Norwegian (8, non-gating) |
 | --- | --- | --- | --- |
-| d50 | 1.5 / 11.1 %, 13/14 | 7.2 / 18.0 %, 4/6 | 13.8 / 19.8 %, 7/8 |
-| d60 | 1.5 / 11.0 %, 13/14 | 7.1 / 18.0 %, 4/6 | 14.4 / 19.8 %, 7/8 |
-| d90 | 1.5 / 11.0 %, 13/14 | 7.1 / 17.9 %, 4/6 | 15.0 / 20.0 %, 6/8 |
-| legacy | 1.5 / 11.0 %, 13/14 | 7.1 / 17.9 %, 4/6 | 15.0 / 20.1 %, 6/8 |
-| ms12 | 1.4 / 11.0 %, 14/14 | 7.0 / 17.8 %, 5/6 | 10.4 / 15.6 %, 7/8 |
-| ms20 | 1.4 / 11.0 %, 14/14 | 7.0 / 17.8 %, 5/6 | 6.3 / 11.6 %, 7/8 |
-| ms4 | 1.5 / 11.0 %, 13/14 | 7.2 / 18.0 %, 2/6 | 23.7 / 29.5 %, 3/8 |
-| shipped | 1.5 / 11.0 %, 13/14 | 7.1 / 17.9 %, 4/6 | 13.0 / 18.1 %, 6/8 |
+| d50 | 1.5 / 11.1 %, 13/14 | 1.8 / 12.7 %, 5/6 | 15.4 / 21.9 %, 6/8 |
+| d60 | 1.5 / 11.0 %, 13/14 | 1.8 / 12.7 %, 5/6 | 13.7 / 19.7 %, 6/8 |
+| d90 | 1.5 / 11.0 %, 13/14 | 1.8 / 12.6 %, 5/6 | 14.9 / 20.0 %, 5/8 |
+| legacy | 1.5 / 11.0 %, 13/14 | 1.8 / 12.6 %, 5/6 | 14.9 / 20.0 %, 5/8 |
+| ms12 | 1.4 / 11.0 %, 14/14 | 1.6 / 12.5 %, 6/6 | 9.6 / 14.8 %, 7/8 |
+| ms20 | 1.4 / 11.0 %, 14/14 | 1.6 / 12.5 %, 6/6 | 6.3 / 11.6 %, 7/8 |
+| ms4 | 1.5 / 11.0 %, 13/14 | 1.9 / 12.7 %, 3/6 | 24.2 / 30.0 %, 3/8 |
+| shipped | 1.5 / 11.0 %, 13/14 | 1.8 / 12.6 %, 5/6 | 14.0 / 19.2 %, 5/8 |
 
 On the Swedish set none of them changes confusion by more than 0.1 pp (1.4-1.5 %). 12 and 20 s find
 the right speaker count on 14/14 instead of 13/14 and are better on the secondary set, but the gain
@@ -225,19 +240,19 @@ Not used for the choice. Seven simulated French emergency-dispatch calls
 CC0-1.0, per-turn clips concatenated by `test-audio/diarization/fetch.sh`; its two reference
 speakers overlap for about 2 s). Manifest and licences: `manifest-other.json`.
 
-| Recording | main code, 0.75 | new code, 0.48 | new code, 0.36 (default) |
-| --- | --- | --- | --- |
-| dj_2022_avc_16_ans | 2/2, 1.2 / 8.6 % | 2/2, 1.9 / 8.0 % | 3/2, 7.3 / 13.3 % |
-| dj_2022_douleur_abdo | 2/2, 0.0 / 10.9 % | 3/2, 7.8 / 18.6 % | 3/2, 13.3 / 22.3 % |
-| dj_2022_feu | 2/2, 0.0 / 4.0 % | 2/2, 10.9 / 10.9 % | 1/2, 41.0 / 41.0 % |
-| dj_2022_grand_mere_battue | 2/2, 0.2 / 7.8 % | 2/2, 0.8 / 7.9 % | 3/2, 4.5 / 11.6 % |
-| dj_2022_intox_med | 2/2, 0.3 / 4.1 % | 4/2, 9.2 / 11.7 % | 3/2, 6.8 / 9.3 % |
-| dj_2022_mere_fievre | 2/2, 0.1 / 4.5 % | 2/2, 0.5 / 4.8 % | 2/2, 0.5 / 4.8 % |
-| dj_2023_coups | 2/2, 0.2 / 6.1 % | 2/2, 0.7 / 6.5 % | 5/2, 30.7 / 35.9 % |
-| nb_samtale_nb12 | 2/2, 0.0 / 7.0 % | 2/2, 0.0 / 7.0 % | 2/2, 0.0 / 7.0 % |
+| Recording | main code, 0.75 | new code, 0.48 | new code, 0.36 | new code, 0.34 |
+| --- | --- | --- | --- | --- |
+| dj_2022_avc_16_ans | 2/2, 1.2 / 8.6 % | 2/2, 1.9 / 8.0 % | 3/2, 7.3 / 13.3 % | 3/2, 7.3 / 13.3 % |
+| dj_2022_douleur_abdo | 2/2, 0.0 / 10.9 % | 3/2, 7.8 / 18.6 % | 3/2, 13.3 / 22.3 % | 3/2, 12.1 / 21.2 % |
+| dj_2022_feu | 2/2, 0.0 / 4.0 % | 2/2, 10.9 / 10.9 % | 1/2, 41.0 / 41.0 % | 1/2, 41.0 / 41.0 % |
+| dj_2022_grand_mere_battue | 2/2, 0.2 / 7.8 % | 2/2, 0.8 / 7.9 % | 3/2, 4.5 / 11.6 % | 4/2, 10.3 / 17.3 % |
+| dj_2022_intox_med | 2/2, 0.3 / 4.1 % | 4/2, 9.2 / 11.7 % | 3/2, 6.8 / 9.3 % | 3/2, 5.9 / 8.4 % |
+| dj_2022_mere_fievre | 2/2, 0.1 / 4.5 % | 2/2, 0.5 / 4.8 % | 2/2, 0.5 / 4.8 % | 3/2, 5.2 / 9.6 % |
+| dj_2023_coups | 2/2, 0.2 / 6.1 % | 2/2, 0.7 / 6.5 % | 5/2, 30.7 / 35.9 % | 5/2, 30.7 / 35.9 % |
+| nb_samtale_nb12 | 2/2, 0.0 / 7.0 % | 2/2, 0.0 / 7.0 % | 2/2, 0.0 / 7.0 % | 2/2, 0.0 / 7.0 % |
 
-The Swedish-selected default **0.36 over-splits and merges these clips** (mean confusion 13.0 %,
-versus 4.0 % at 0.48 and 0.3 % for the old code at 0.75): `dj_2022_feu` finds one speaker for two
+The shipped default **0.34 over-splits and merges these clips** (mean confusion 14.0 %, 13.0 % at
+0.36, 4.0 % at 0.48 and 0.3 % for the old code at 0.75): `dj_2022_feu` finds one speaker for two
 and `dj_2023_coups` five for two. Simulated French dispatch calls are not Swedish call audio and
 the embedding model is the same, so this is a warning, not a measurement of Swedish phone behaviour.
 
@@ -245,7 +260,7 @@ the embedding model is the same, so this is a warning, not a measurement of Swed
 
 - Parliamentary speech only; no Swedish conversational meeting, different room, overlapping
   speech or real phone audio. English and other languages are not evaluated.
-- Band-limited audio: the cliff at 0.36 above. Short two-speaker phone-style audio can over-split.
+- Band-limited audio: the edge just above 0.34 on band-limited audio (see above). Short two-speaker phone-style audio can over-split.
 - Existing meeting reviews will produce different speaker sets when reclustered with this build:
   the analysis cache stays valid (the clustering algorithm and default threshold are not part of the
   cache identity), but recluster re-runs clustering with the new algorithm. Stored reviews from the
@@ -258,7 +273,7 @@ the embedding model is the same, so this is a warning, not a measurement of Swed
   speakers (`IP_hb10760` and `IP_hc10606` have the same two speakers), so leave-one-recording-out
   does not show generalisation to unseen rooms or speakers. SoU40 supplies about 75 % of the mean
   improvement from 0.48 to 0.36, and the two question-time recordings supply about 45 % of the
-  remaining confusion at 0.36. On the secondary set only 2 of 8 clips get exactly the reference
+  remaining confusion at 0.36 or 0.34. On the secondary set only 1 of 8 clips (2 of 8 at 0.36) get exactly the reference
   speaker count.
 
 ## Diagnosis
@@ -281,7 +296,7 @@ the embedding model is the same, so this is a warning, not a measurement of Swed
   (`assign_speaker_labels`); tracks are only a fallback label for segments too short to embed or
   whose embedding is degenerate (zero norm).
 - `diarization/clustering.rs`: `absorb_small_clusters` (see above), aggregates computed once.
-- Default threshold 0.75 -> 0.36 (`DEFAULT_THRESHOLD` in core; the `transcribe --diarize-threshold`,
+- Default threshold 0.75 -> 0.34 (`DEFAULT_THRESHOLD` in core; the `transcribe --diarize-threshold`,
   `meeting reprocess` CLI and reprocessing UI literals are pinned by tests). Clustering stays
   threshold-only, so `--diarize-cache` reruns skip segmentation and embeddings as before. Speed:
   analysis (89 s for 53 min) is untouched; clustering stays about 0.02 s on the 74 min debate.
@@ -295,11 +310,11 @@ python scripts/diarization_sv/build_degraded.py && python scripts/diarization_sv
 # One set, explicit thresholds (default: the shipped DEFAULT_THRESHOLD read from core).
 # --tag names the cached analysis; use a new tag if the analysis stage changes.
 python scripts/diarization_sv/eval_der.py --bin target/release/examples/diarize_eval \
-  --scratch ~/.cache/sagascript-bench/diar-284 --set sv2 --tag main --thresholds 0.36,0.48
+  --scratch ~/.cache/sagascript-bench/diar-284 --set sv2 --tag main --thresholds 0.34,0.36,0.48
 # Variants: --min-speaker 12, --absorb-max-distance 2.0 (no limit). Collect sweeps into grid.json with
 # collect_grid.py; select_default.py prints the leave-one-out, per-recording and variant tables.
 # End to end through the CLI (runs Whisper; slow), explicit threshold:
-python scripts/diarization_sv/eval_der.py --cli target/release/sagascript --scratch <dir> --ids UU24 --thresholds 0.36
+python scripts/diarization_sv/eval_der.py --cli target/release/sagascript --scratch <dir> --ids UU24 --thresholds 0.34
 ```
 
 `diarize_eval` (`crates/sagascript-core/examples/diarize_eval.rs`) runs the diarization stages

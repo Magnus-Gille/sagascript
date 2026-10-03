@@ -447,7 +447,7 @@ mod tests {
     fn single_speaker_input_is_unchanged() {
         let input = vec![(0, unit_embedding(0)), (1, unit_embedding(0)), (2, unit_embedding(0))];
         assert_eq!(absorb(&input, &[0, 0, 0], &[1.0, 1.0, 1.0], 0.75), vec![0, 0, 0]);
-        let clustered = cluster_speakers(&input, 0.36);
+        let clustered = cluster_speakers(&input, 0.34);
         assert!(clustered.iter().all(|(_, l)| *l == clustered[0].1));
     }
 
