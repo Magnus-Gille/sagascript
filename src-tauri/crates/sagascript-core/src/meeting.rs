@@ -5,7 +5,7 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::speaker_hint::SpeakerCountHint;
+use crate::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 
 const SCHEMA_VERSION: u32 = 1;
 const MAX_DURATION_SECONDS: f64 = 14_400.0;
@@ -90,6 +90,12 @@ pub struct MeetingTranscript {
     /// Speaker-count hint the diarization used (issue #305). Absent when none was given.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker_hint: Option<SpeakerCountHint>,
+    /// Whether the hint was met and how many speakers were delivered (set with a hint when the
+    /// diarization reported it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_hint_satisfied: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_hint_delivered: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,6 +110,10 @@ struct MeetingTranscriptWire {
     speakers: Vec<MeetingSpeaker>,
     #[serde(default)]
     speaker_hint: Option<SpeakerCountHint>,
+    #[serde(default)]
+    speaker_hint_satisfied: Option<bool>,
+    #[serde(default)]
+    speaker_hint_delivered: Option<usize>,
 }
 
 impl<'de> Deserialize<'de> for MeetingTranscript {
@@ -121,6 +131,8 @@ impl<'de> Deserialize<'de> for MeetingTranscript {
             segments: wire.segments,
             speakers: wire.speakers,
             speaker_hint: wire.speaker_hint,
+            speaker_hint_satisfied: wire.speaker_hint_satisfied,
+            speaker_hint_delivered: wire.speaker_hint_delivered,
         };
         document.validate().map_err(serde::de::Error::custom)?;
         Ok(document)
@@ -175,6 +187,8 @@ impl MeetingTranscript {
             segments,
             speakers,
             speaker_hint: None,
+            speaker_hint_satisfied: None,
+            speaker_hint_delivered: None,
         };
         document.validate()?;
         Ok(document)
@@ -183,6 +197,13 @@ impl MeetingTranscript {
     /// Record the speaker-count hint the diarization used.
     pub fn with_speaker_hint(mut self, hint: Option<SpeakerCountHint>) -> Self {
         self.speaker_hint = hint;
+        self
+    }
+
+    /// Record whether the hint was met and the delivered speaker count.
+    pub fn with_speaker_hint_outcome(mut self, outcome: Option<SpeakerHintOutcome>) -> Self {
+        self.speaker_hint_satisfied = outcome.map(|o| o.satisfied);
+        self.speaker_hint_delivered = outcome.map(|o| o.delivered);
         self
     }
 
@@ -214,6 +235,11 @@ impl MeetingTranscript {
             if hint.is_empty() || hint.validate().is_err() {
                 return Err(MeetingError::InvalidField("speaker_hint"));
             }
+        }
+        if self.speaker_hint_satisfied.is_some() != self.speaker_hint_delivered.is_some()
+            || (self.speaker_hint.is_none() && self.speaker_hint_satisfied.is_some())
+        {
+            return Err(MeetingError::InvalidField("speaker_hint_satisfied"));
         }
 
         let mut speaker_ids = BTreeSet::new();
@@ -547,6 +573,28 @@ mod tests {
             speakers(),
         )
         .expect("fixture is valid")
+    }
+
+    /// A meeting document written before speaker hints existed.
+    const PRE_HINT_DOCUMENT: &str = r#"{"schema_version":1,"source_sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","language":"en","model":"model","duration_seconds":10.0,"segments":[{"id":"seg-000001","start":0.0,"end":1.0,"text":"first","speaker":"a"}],"speakers":[{"id":"a","label":"A"}]}"#;
+
+    #[test]
+    fn pre_hint_document_still_reads_and_writes_the_same_bytes() {
+        let read: MeetingTranscript = serde_json::from_str(PRE_HINT_DOCUMENT).unwrap();
+        assert_eq!(read.speaker_hint, None);
+        assert_eq!(serde_json::to_string(&read).unwrap(), PRE_HINT_DOCUMENT);
+    }
+
+    #[test]
+    fn hint_outcome_round_trips_and_must_accompany_a_hint() {
+        use crate::speaker_hint::SpeakerHintOutcome;
+        let outcome = Some(SpeakerHintOutcome { satisfied: false, delivered: 3 });
+        let doc = document().with_speaker_hint(Some(SpeakerCountHint::exact(2))).with_speaker_hint_outcome(outcome);
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains(r#""speaker_hint_satisfied":false"#) && json.contains(r#""speaker_hint_delivered":3"#));
+        assert_eq!(serde_json::from_str::<MeetingTranscript>(&json).unwrap(), doc);
+        // An outcome without a hint is not a valid document.
+        assert!(document().with_speaker_hint_outcome(outcome).validate().is_err());
     }
 
     #[test]

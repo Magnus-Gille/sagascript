@@ -260,7 +260,7 @@ fn execute_with_model_check(
             }
             checkpoint(control, MeetingPhase::Clustering)?;
             let phase = Instant::now();
-            let speakers = diarization::cluster(&cached.analysis, &config)?;
+            let (speakers, hint_outcome) = diarization::cluster_with_outcome(&cached.analysis, &config)?;
             let words = cached
                 .transcript
                 .into_iter()
@@ -278,7 +278,8 @@ fn execute_with_model_check(
                 input.model,
                 cached.coverage_profile.duration_seconds(),
                 &plain,
-            )?;
+            )?
+            .with_speaker_hint_outcome(hint_outcome);
             timings.clustering_seconds = phase.elapsed().as_secs_f64();
             transcript
         }

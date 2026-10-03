@@ -680,9 +680,10 @@ fn transcribe_meeting_file_inner(
         meeting_json: true,
         diarize_threshold: threshold,
         speaker_count: crate::speaker_args::SpeakerCountArgs {
-            speakers: speaker_hint.and_then(|hint| hint.exact),
+            speakers: speaker_hint.and_then(|hint| hint.exact).filter(|_| !speaker_hint.is_some_and(|h| h.force)),
             min_speakers: speaker_hint.and_then(|hint| hint.min),
             max_speakers: speaker_hint.and_then(|hint| hint.max),
+            force_speakers: speaker_hint.filter(|h| h.force).and_then(|h| h.exact),
         },
         diarize_cache: cache_output.map(Path::to_path_buf),
         prompt: None,
@@ -760,7 +761,7 @@ fn speaker_hint_from_args(
         .map_err(|message| DictationError::SettingsError(format!("--speakers: {message}")))?;
     if hint.is_some() && !args.diarize {
         return Err(DictationError::SettingsError(
-            "--speakers, --min-speakers and --max-speakers require --diarize".to_string(),
+            "--speakers, --min-speakers, --max-speakers and --force-speakers require --diarize".to_string(),
         ));
     }
     Ok(hint)
@@ -1583,7 +1584,7 @@ fn transcribe_file(
             eprintln!("Note: --beam / --vad have no effect with --diarize.");
         }
         use sagascript_core::diarization::{
-            cluster,
+            cluster_with_outcome,
             merge::{consolidate, merge_with_transcript},
             DiarizationTimings, DiarizeConfig, TimestampedSegment,
         };
@@ -1678,7 +1679,7 @@ fn transcribe_file(
 
         let clustering_started = Instant::now();
         meeting_checkpoint(control, MeetingPhase::Clustering)?;
-        let speaker_segments = cluster(&analysis, &config)?;
+        let (speaker_segments, hint_outcome) = cluster_with_outcome(&analysis, &config)?;
         meeting_checkpoint(control, MeetingPhase::Clustering)?;
         performance.diarization_clustering_seconds = clustering_started.elapsed().as_secs_f64();
         eprintln!("Found {} speaker segment(s)", speaker_segments.len());
@@ -1783,7 +1784,8 @@ fn transcribe_file(
                 duration,
                 &plain_segments,
             )?
-            .with_speaker_hint(speaker_hint);
+            .with_speaker_hint(speaker_hint)
+            .with_speaker_hint_outcome(hint_outcome);
             let json = serde_json::to_value(&meeting).map_err(|_| {
                 DictationError::TranscriptionFailed(
                     "Diarized meeting transcript serialization failed".to_string(),

@@ -95,6 +95,8 @@ def hint_arg(spec, truth):
     """Translate a --hint spec into the diarize_eval hint argument for a recording with `truth` speakers."""
     if spec is None:
         return []
+    if spec.startswith("force:"):
+        return [hint_arg(spec[6:], truth)[0] + "!"]
     if spec.startswith("truth"):
         return [str(max(1, truth + int(spec[5:] or 0)))]
     kind, lo, hi = spec.split(":")
@@ -117,7 +119,9 @@ def main():
     ap.add_argument("--hint", default=None,
                     help="speaker-count hint (--bin only; issue #305), relative to the manifest's reference_speakers T: "
                          "'truth' = exactly T, 'truth+1' = exactly T+1 (counts a Riksdag chair), "
-                         "'range:A:B' = min T+A and max T+B (e.g. range:0:1; either side may be empty)")
+                         "'range:A:B' = min T+A and max T+B (e.g. range:0:1; either side may be empty); "
+                         "'force:truth' / 'force:truth+1' = forced exact count (merges regardless of distance)")
+    ap.add_argument("--hint-merge-distance", default=None, help="distance limit for merging toward a lower count (--hint only)")
     ap.add_argument("--thresholds", default=None, help="comma list; default = the shipped DEFAULT_THRESHOLD")
     ap.add_argument("--json-out")
     a = ap.parse_args()
@@ -141,7 +145,9 @@ def main():
                 an.parent.mkdir(exist_ok=True)
                 if not an.exists(): run([a.bin, "analyze", str(wavdir / f"{i}.wav"), str(an)])
                 hint = hint_arg(a.hint, m["reference_speakers"])
-                htag = f".hint-{hint[0]}" if hint else ""
+                if hint and a.hint_merge_distance:
+                    hint.append(a.hint_merge_distance)
+                htag = f".hint-{'-'.join(hint)}" if hint else ""
                 out = scratch / "analysis" / f"{i}.{a.tag}.{th}.{a.min_speaker}.{a.absorb_max_distance}{htag}.seg.json"
                 extra = ([a.min_speaker or "8"] + ([a.absorb_max_distance] if a.absorb_max_distance else [])) if (a.min_speaker or a.absorb_max_distance) else []
                 if hint:  # the hint is the 7th positional argument; fill the two before it with the defaults

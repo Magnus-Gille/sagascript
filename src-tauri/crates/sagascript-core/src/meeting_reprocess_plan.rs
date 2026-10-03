@@ -389,6 +389,20 @@ mod tests {
         }
     }
 
+    /// A plan written before speaker hints existed. The revision was computed independently
+    /// (sha256 of the hint-free payload JSON in Python), not by this code.
+    const PRE_HINT_PLAN: &str = r#"{"schema_version":1,"mode":"recluster","context":{"source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","previous_revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","transcription_context_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","analysis_context_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","cache_sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},"threshold":0.75,"required_work":{"decode_audio":false,"transcription":false,"language_detection":false,"segmentation":false,"embeddings":false,"clustering":true},"revision":"388dc03111067ffb3e0fece712a115e86d948d2d0dbbc40d7e60f697a28bcc5a"}"#;
+
+    #[test]
+    fn plan_without_a_hint_keeps_its_pre_hint_bytes_and_revision() {
+        let plan = plan(ReprocessingMode::Recluster);
+        assert_eq!(plan.revision, "388dc03111067ffb3e0fece712a115e86d948d2d0dbbc40d7e60f697a28bcc5a");
+        assert_eq!(serde_json::to_string(&plan).unwrap(), PRE_HINT_PLAN);
+        let read: ReprocessingPlan = serde_json::from_str(PRE_HINT_PLAN).unwrap();
+        assert_eq!(read, plan);
+        assert_eq!(read.speaker_hint, None);
+    }
+
     #[test]
     fn speaker_hint_changes_the_revision_only_when_set_and_round_trips() {
         let plain = plan(ReprocessingMode::Recluster);

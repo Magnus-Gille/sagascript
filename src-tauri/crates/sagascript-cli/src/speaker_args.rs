@@ -1,4 +1,4 @@
-//! Shared `--speakers` / `--min-speakers` / `--max-speakers` flags (issue #305).
+//! Shared `--speakers` / `--min-speakers` / `--max-speakers` / `--force-speakers` flags (issue #305).
 
 use clap::Args;
 use sagascript_core::speaker_hint::SpeakerCountHint;
@@ -6,29 +6,39 @@ use sagascript_core::speaker_hint::SpeakerCountHint;
 /// Speaker-count hint flags, flattened into every command that clusters speakers.
 #[derive(Args, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SpeakerCountArgs {
-    /// Number of speakers in the recording: groups voices into exactly this many speakers
-    /// instead of using the distance threshold.
+    /// Expected number of speakers, counting everyone who speaks, including a chair or moderator.
+    /// Voices that are clearly different are not merged to reach it (the result says if it fell
+    /// short); if you are unsure of the count, use --min-speakers.
     #[arg(
         long,
         value_name = "N",
         value_parser = parse_speaker_count,
-        conflicts_with_all = ["min_speakers", "max_speakers"]
+        conflicts_with_all = ["min_speakers", "max_speakers", "force_speakers"]
     )]
     pub speakers: Option<usize>,
 
-    /// Fewest speakers to expect: if the threshold finds fewer, voices are split into this many.
-    #[arg(long, value_name = "N", value_parser = parse_speaker_count)]
+    /// Fewest speakers to expect: if fewer are found, voices are split to reach this many.
+    #[arg(long, value_name = "N", value_parser = parse_speaker_count, conflicts_with = "force_speakers")]
     pub min_speakers: Option<usize>,
 
-    /// Most speakers to expect: if the threshold finds more, voices are merged down to this many.
-    #[arg(long, value_name = "N", value_parser = parse_speaker_count)]
+    /// Most speakers to expect: if more are found, close voices are merged, but clearly different
+    /// voices stay separate and the result says if the maximum was not reached.
+    #[arg(long, value_name = "N", value_parser = parse_speaker_count, conflicts_with = "force_speakers")]
     pub max_speakers: Option<usize>,
+
+    /// Exactly this many speakers, even if that merges clearly different people (an undercount
+    /// puts one person's words under another's name).
+    #[arg(long, value_name = "N", value_parser = parse_speaker_count)]
+    pub force_speakers: Option<usize>,
 }
 
 impl SpeakerCountArgs {
     /// The validated hint, or `None` when no flag was given.
     pub fn hint(&self) -> Result<Option<SpeakerCountHint>, String> {
-        SpeakerCountHint::from_parts(self.speakers, self.min_speakers, self.max_speakers)
+        match self.force_speakers {
+            Some(n) => Ok(Some(SpeakerCountHint::forced(n))),
+            None => SpeakerCountHint::from_parts(self.speakers, self.min_speakers, self.max_speakers, false),
+        }
     }
 }
 
@@ -79,6 +89,15 @@ mod tests {
             parse(&["--min-speakers", "3", "--max-speakers", "3"]),
             Ok(Some(SpeakerCountHint::range(Some(3), Some(3))))
         );
+    }
+
+    #[test]
+    fn force_speakers_is_an_exclusive_forced_exact_count() {
+        assert_eq!(parse(&["--force-speakers", "2"]), Ok(Some(SpeakerCountHint::forced(2))));
+        for other in ["--speakers", "--min-speakers", "--max-speakers"] {
+            assert!(parse(&["--force-speakers", "2", other, "2"]).is_err(), "{other}");
+        }
+        assert!(parse(&["--force-speakers", "0"]).is_err());
     }
 
     #[test]
