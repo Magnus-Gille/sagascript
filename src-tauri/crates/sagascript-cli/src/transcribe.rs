@@ -550,6 +550,7 @@ pub fn transcribe_meeting_file(
         0.75,
         None,
         CachePolicy::Normal,
+        None,
     )
 }
 
@@ -577,6 +578,7 @@ pub fn transcribe_meeting_file_with_control(
         0.75,
         None,
         CachePolicy::Normal,
+        None,
     )
 }
 
@@ -595,6 +597,7 @@ pub fn transcribe_meeting_file_full(
     control: Option<&MeetingControl<'_>>,
     threshold: f32,
     cache_output: Option<&Path>,
+    two_track: Option<bool>,
 ) -> Result<MeetingTranscript, DictationError> {
     if !threshold.is_finite() {
         return Err(DictationError::SettingsError(
@@ -642,6 +645,7 @@ pub fn transcribe_meeting_file_full(
         threshold,
         cache_output,
         CachePolicy::RefreshNew,
+        two_track,
     )
 }
 
@@ -658,6 +662,7 @@ fn transcribe_meeting_file_inner(
     threshold: f32,
     cache_output: Option<&Path>,
     cache_policy: CachePolicy,
+    two_track: Option<bool>,
 ) -> Result<MeetingTranscript, DictationError> {
     let args = TranscribeArgs {
         progress_json: false,
@@ -673,8 +678,10 @@ fn transcribe_meeting_file_inner(
         diarize: true,
         meeting_json: true,
         diarize_threshold: threshold,
-        two_track: false,
-        no_two_track: false,
+        // `None`: detect from the marker; `Some(layout)`: reproduce a recorded
+        // channel-layout decision (reprocessing).
+        two_track: two_track == Some(true),
+        no_two_track: two_track == Some(false),
         diarize_cache: cache_output.map(Path::to_path_buf),
         prompt: None,
         prompt_file: None,
@@ -1308,6 +1315,8 @@ fn transcribe_file(
     // is neither read nor written for them.
     #[cfg(feature = "diarization")]
     let two_track = args.diarize && use_two_track(args, file)?;
+    #[cfg(not(feature = "diarization"))]
+    let two_track = false;
     #[cfg(feature = "diarization")]
     if two_track && args.diarize_cache.is_some() {
         eprintln!("Note: two-track recording; --diarize-cache is not used (the cache describes a mono downmix).");
@@ -1369,7 +1378,13 @@ fn transcribe_file(
     if args.meeting_json {
         meeting_checkpoint(control, MeetingPhase::Decoding)?;
     }
-    let (audio, decode_resample_seconds, duration) = if cache_hit {
+    // Channels of a two-track recording, read once (header-validated, streamed).
+    // Language detection and coverage use their mono mix, released afterwards.
+    #[allow(unused_mut, unused_assignments)]
+    #[cfg_attr(not(feature = "diarization"), allow(unused_variables))]
+    let mut two_track_tracks: Option<[Vec<f32>; 2]> = None;
+    #[allow(unused_mut, unused_assignments)]
+    let (mut audio, decode_resample_seconds, duration) = if cache_hit {
         #[cfg(feature = "diarization")]
         {
             let duration = cached
@@ -1382,6 +1397,22 @@ fn transcribe_file(
         }
         #[cfg(not(feature = "diarization"))]
         unreachable!("cache hits require the diarization feature")
+    } else if two_track {
+        eprintln!("Reading two-track recording {}...", file.display());
+        let started = Instant::now();
+        checkpoint_cancel(control)?;
+        let tracks = sagascript_core::audio::twotrack::read_two_track_wav(file)
+            .map_err(|error| two_track_read_error(file, error))?;
+        let [mic, system]: [Vec<f32>; 2] = tracks.try_into().map_err(|_| {
+            DictationError::FileDecodeError(
+                "A two-track recording needs exactly two channels".to_string(),
+            )
+        })?;
+        let mix = sagascript_core::audio::twotrack::mix_tracks(&mic, &system);
+        let duration = mix.len() as f64 / 16_000.0;
+        eprintln!("Audio: {:.1}s, {} samples per channel", duration, mix.len());
+        two_track_tracks = Some([mic, system]);
+        (Some(mix), started.elapsed().as_secs_f64(), duration)
     } else {
         eprintln!("Decoding {}...", file.display());
         let decode_started = Instant::now();
@@ -1546,12 +1577,9 @@ fn transcribe_file(
 
         let (diarized, diarization_timings, transcription_timings) = if two_track {
             meeting_checkpoint(control, MeetingPhase::Analyzing)?;
-            let tracks = sagascript_core::audio::system::twotrack::read_two_track_wav(file)
-                .map_err(|error| two_track_read_error(file, error))?;
-            let [mic, system]: [Vec<f32>; 2] = tracks.try_into().map_err(|_| {
-                DictationError::FileDecodeError(
-                    "A two-track recording needs exactly two channels".to_string(),
-                )
+            let _ = audio.take(); // the mono mix is no longer needed
+            let [mic, system] = two_track_tracks.take().ok_or_else(|| {
+                DictationError::FileDecodeError("two-track channels were not loaded".to_string())
             })?;
             eprintln!("Two-track recording: microphone = \"Me\", diarizing the system channel only...");
             let result = two_track_diarize(
@@ -1929,13 +1957,17 @@ pub(crate) fn use_two_track(args: &TranscribeArgs, file: &Path) -> Result<bool, 
     }
     // An unreadable or non-WAV input is not an error here: the normal decoder
     // reports it with better context.
-    Ok(sagascript_core::audio::system::twotrack::read_two_track_marker(file)
+    Ok(sagascript_core::audio::twotrack::read_two_track_marker(file)
         .ok()
         .flatten()
         .is_some())
 }
 
-#[cfg(feature = "diarization")]
+fn checkpoint_cancel(control: Option<&MeetingControl<'_>>) -> Result<(), DictationError> {
+    crate::cancel::check()?;
+    control.map_or(Ok(()), |control| control.check())
+}
+
 fn two_track_read_error(file: &Path, error: std::io::Error) -> DictationError {
     DictationError::FileDecodeError(format!(
         "Cannot read '{}' as a two-track recording (16 kHz 16-bit stereo WAV: left = microphone, right = system audio): {error}. Use --no-two-track to diarize a downmix.",
@@ -2008,69 +2040,68 @@ fn two_track_diarize(
     let others = merge_with_transcript(&speaker_segments, &to_pieces(system_transcription.segments));
 
     let started = Instant::now();
-    let (activity, mic_transcription) = run_mic_analysis(mic, backend, language, prompt, config)?;
-    let mut activity = activity;
+    let duration = mic.len() as f64 / 16_000.0;
+    let debug = std::env::var("SAGA_DIAR_DEBUG").is_ok();
+    // Voice activity first: a silent microphone channel needs no Whisper pass,
+    // and only padded activity regions are transcribed (whole-channel decoding
+    // of a mostly silent track drops speech).
+    let mut activity = sagascript_core::diarization::voice_activity(mic, config, &|| Ok(()))?;
+    if debug {
+        for (s, e) in &activity {
+            eprintln!("MICVAD\t{s:.3}\t{e:.3}");
+        }
+    }
     if crosstalk_guard_enabled() {
-        let before = activity.len();
-        activity =
-            twotrack::drop_crosstalk(mic, system, &activity, twotrack::CROSSTALK_CORRELATION);
-        if activity.len() != before {
+        let before = secs_of(&activity);
+        activity = twotrack::drop_crosstalk(mic, system, &activity, twotrack::CROSSTALK_CORRELATION);
+        if before - secs_of(&activity) > 0.5 {
             eprintln!(
-                "Dropped {} microphone interval(s) that mirror the system channel (speaker echo).",
-                before - activity.len()
+                "Dropped {:.1}s of microphone activity that mirrors the system channel (speaker echo).",
+                before - secs_of(&activity)
             );
         }
     }
-    let mic_pieces = to_pieces(mic_transcription.segments);
+    if debug {
+        for (s, e) in &activity {
+            eprintln!("MICACT\t{s:.3}\t{e:.3}");
+        }
+    }
+    let mut mic_pieces: Vec<TimestampedSegment> = Vec::new();
+    let mut transcription_timings = system_transcription.timings;
+    for (start, end) in twotrack::transcription_regions(&activity, 0.3, 1.5, duration) {
+        let from = (start * 16_000.0) as usize;
+        let to = ((end * 16_000.0) as usize).min(mic.len());
+        if to <= from {
+            continue;
+        }
+        let part = backend.transcribe_sync_for_diarization_profiled(&mic[from..to], language, prompt)?;
+        transcription_timings.whisper_inference_seconds += part.timings.whisper_inference_seconds;
+        transcription_timings.word_timestamp_attribution_seconds +=
+            part.timings.word_timestamp_attribution_seconds;
+        mic_pieces.extend(part.segments.into_iter().map(|(s, e, text)| {
+            // Back to the original file's clock.
+            TimestampedSegment { start: s + start, end: e + start, text }
+        }));
+    }
+    if debug {
+        for p in &mic_pieces {
+            eprintln!("MICRAW\t{:.3}\t{:.3}\t{}", p.start, p.end, p.text.replace('\t', " "));
+        }
+    }
     let local = twotrack::local_segments(&mic_pieces, &activity);
     eprintln!(
         "Microphone channel: {:.0}s of speech activity, kept {} of {} transcript piece(s) as \"Me\"",
-        activity.iter().map(|(s, e)| e - s).sum::<f64>(),
+        secs_of(&activity),
         local.len(),
         mic_pieces.len()
     );
     timings.total_seconds += started.elapsed().as_secs_f64();
-    let mut transcription_timings = system_transcription.timings;
-    transcription_timings.whisper_inference_seconds +=
-        mic_transcription.timings.whisper_inference_seconds;
-    transcription_timings.word_timestamp_attribution_seconds +=
-        mic_transcription.timings.word_timestamp_attribution_seconds;
     Ok((twotrack::merge_timelines(local, others), timings, transcription_timings))
 }
 
-/// Microphone voice activity plus Whisper timestamps, overlapped on macOS like
-/// [`run_diarization_analysis`].
 #[cfg(feature = "diarization")]
-fn run_mic_analysis(
-    mic: &[f32],
-    backend: &WhisperBackend,
-    language: Language,
-    prompt: Option<&str>,
-    config: &sagascript_core::diarization::DiarizeConfig,
-) -> Result<
-    (Vec<(f64, f64)>, sagascript_core::transcription::DiarizationTranscription),
-    DictationError,
-> {
-    let activity = |mic: &[f32]| sagascript_core::diarization::voice_activity(mic, config, &|| Ok(()));
-    #[cfg(target_os = "macos")]
-    {
-        std::thread::scope(|scope| {
-            let vad = scope.spawn(|| activity(mic));
-            let transcription = backend.transcribe_sync_for_diarization_profiled(mic, language, prompt);
-            let vad = vad.join().map_err(|_| {
-                DictationError::DiarizationError(
-                    "Voice-activity worker terminated unexpectedly".to_string(),
-                )
-            })??;
-            Ok((vad, transcription?))
-        })
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let vad = activity(mic)?;
-        let transcription = backend.transcribe_sync_for_diarization_profiled(mic, language, prompt)?;
-        Ok((vad, transcription))
-    }
+fn secs_of(intervals: &[(f64, f64)]) -> f64 {
+    intervals.iter().map(|(s, e)| e - s).sum()
 }
 
 /// Overlap the CPU/ONNX diarization analysis with Metal Whisper inference on

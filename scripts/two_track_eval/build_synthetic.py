@@ -56,6 +56,9 @@ def main():
     ap.add_argument("--crop", default=None, help="START:END seconds")
     ap.add_argument("--leak-db", type=float, default=None, help="level of the right channel leaking into the microphone, in dB")
     ap.add_argument("--leak-delay-ms", type=float, default=40.0)
+    ap.add_argument("--double-talk", action="store_true",
+                    help="also play unreferenced remote speech (the others' audio shifted by 60 s) on the system channel while the local user speaks")
+    ap.add_argument("--me-only-out", help="mono WAV of the local user's turns only, gaps shortened, for a reference transcript")
     ap.add_argument("--no-marker", action="store_true")
     ap.add_argument("--out", required=True); ap.add_argument("--ref-out")
     a = ap.parse_args()
@@ -75,11 +78,21 @@ def main():
     mask = np.clip(np.convolve(mask, k, mode="same"), 0, 1)
     left = audio * mask
     right = audio * (1.0 - mask)
+    if a.double_talk:
+        right = right + np.roll(right, 60 * SR) * mask
     if a.leak_db is not None:
         d = int(a.leak_delay_ms / 1000 * SR)
         leak = np.convolve(np.concatenate([np.zeros(d, np.float32), right])[:len(right)], np.ones(4) / 4, mode="same")
         left = left + (10 ** (a.leak_db / 20)) * leak
     write_two_track(a.out, left, right, marker=not a.no_marker)
+    if a.me_only_out:
+        parts = []
+        for s, e, n in sorted(turns):
+            if n == a.me:
+                parts += [audio[int(s * SR):int(e * SR)], np.zeros(int(0.4 * SR), np.float32)]
+        pcm = (np.clip(np.concatenate(parts), -1, 1) * 32767).astype("<i2").tobytes()
+        with wave.open(a.me_only_out, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR); w.writeframes(pcm)
     if a.ref_out:
         with open(a.ref_out, "w") as f:
             for s, e, n in turns:

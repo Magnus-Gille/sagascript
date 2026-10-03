@@ -174,6 +174,8 @@ impl WorkBackend for NativeBackend<'_> {
             control,
             threshold,
             cache_output,
+            // Reproduce the channel layout the reviewed transcript was made with.
+            Some(input.previous.original.local_speaker.is_some()),
         )
     }
 }
@@ -322,14 +324,11 @@ fn prepare(
             "full mode does not read a cache; selective modes require an explicit cache",
         ));
     }
-    // Two-track recordings are diarized per channel and never cached, so only a
-    // full recomputation can reproduce their "Me" attribution.
-    if mode != ReprocessingMode::Full
-        && sagascript_core::audio::system::twotrack::read_two_track_marker(input.audio)
-            .ok()
-            .flatten()
-            .is_some()
-    {
+    // Provenance: a reviewed transcript with a local speaker came from the
+    // two-track pipeline. Those are diarized per channel and never cached, so
+    // only a full recomputation (which repeats the layout) can reproduce them.
+    let two_track = input.previous.original.local_speaker.is_some();
+    if two_track && mode != ReprocessingMode::Full {
         return Err(failure(
             "selective reprocessing is not available for two-track recordings; use full recomputation",
         ));
@@ -340,8 +339,12 @@ fn prepare(
     let model = transcribe::model_id_string(input.model);
     // Bind aliases as well as decoder terms: post-inference correction changes
     // must invalidate an already displayed plan too.
-    let transcription_context_sha256 =
-        hash_json(&(1u32, language, model, input.glossary.render()))?;
+    let transcription_context_sha256 = if two_track {
+        // Bind the channel layout so a plan made for a downmix cannot run as two-track.
+        hash_json(&(1u32, language, model, input.glossary.render(), "two-track"))?
+    } else {
+        hash_json(&(1u32, language, model, input.glossary.render()))?
+    };
     let analysis_context_sha256 = hash_json(&(1u32, AnalysisIdentity::current()))?;
     let (cache_sha256, cache) = if let Some(path) = input.cache {
         let before = transcribe::stable_file_sha256(path, control)?;

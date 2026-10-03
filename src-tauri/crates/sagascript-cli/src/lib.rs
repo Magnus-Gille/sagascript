@@ -1160,7 +1160,7 @@ mod tests {
         use crate::transcribe::use_two_track;
         let dir = tempfile::tempdir().unwrap();
         let marked = dir.path().join("marked.wav");
-        sagascript_core::audio::system::twotrack::write_two_track_wav(&marked, &[0.1; 800], &[0.1; 800]).unwrap();
+        sagascript_core::audio::twotrack::write_two_track_wav(&marked, &[0.1; 800], &[0.1; 800]).unwrap();
         // The same samples as an ordinary stereo WAV: strip the marker chunk.
         let plain = dir.path().join("plain.wav");
         let bytes = std::fs::read(&marked).unwrap();

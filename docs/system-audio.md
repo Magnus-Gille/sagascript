@@ -290,59 +290,110 @@ downmix cache. `--diarize-cache` is neither read nor written for two-track input
 
 ### Crosstalk (no headphones)
 
-Without headphones the microphone also hears the remote participants. Assumption
-for best results: **headphones**. A guard is nevertheless on by default because it
-measurably helps on the simulation below: each microphone speech interval is
-compared with the system channel over the same time. The loudness envelopes
-(20 ms RMS frames) are correlated, maximised over a +/-300 ms acoustic delay; an
-interval whose correlation is at least 0.6 is dropped as speaker echo (needs at
-least 0.5 s and a non-silent system channel). Envelope correlation is gain
-invariant, so it does not depend on how loud the microphone is relative to the
-system capture. Limits: it judges whole intervals, so a local utterance that
-merges with echo into one voice-activity interval (gap under 0.5 s) is lost
-together with it; local speech talking over the remote side is kept only if it
-decorrelates the envelopes. Set `SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=off` to
-disable it for diagnosis. Real rooms (reverberation, a speaker that is far
-quieter than the system capture, non-linear processing) are weaker correlated
-than the simulated leak: only an owner-run recording can confirm the threshold.
-Echo cancellation against the system reference remains a follow-up.
+Assumption for best results: **headphones**. Without them the microphone also
+hears the remote participants. A guard is on by default because it measurably
+helps on the simulations below. Every microphone speech interval is cut into
+windows of about a second. For each window the loudness envelopes (20 ms RMS) of
+microphone and system channel are compared at the best acoustic delay (+/-300 ms).
+A window is dropped as speaker echo only when both hold: the envelope correlation
+is at least 0.6, and the system channel explains at least half of the microphone
+energy (the residual after the best scaled copy of the system envelope is at most
+0.5). The second test keeps local speech at its own level on top of the echo
+(double-talk). Windows under 0.5 s, and windows where the system channel is
+silent, are never judged. Envelope correlation is gain invariant, so it does not
+depend on how loud the microphone is relative to the system capture. A flat
+(non-fluctuating) envelope has no correlation to measure, so such windows are
+kept: the guard errs towards keeping local speech.
+
+Double-talk measurement (`dt15`: remote speech keeps playing and leaking at -15 dB
+while the user speaks): the share of the user's reference speech covered by
+microphone activity before / after the guard is 92 -> 90 % (hc10606) and 93 -> 84 %
+(hd10115), the same for both models, so 98 % and 90 % of the detected local speech
+survives, while false "Me" falls from 38-43 % to 0. Word recall is unchanged
+(tiny 76 -> 75 %, small 87 %). The guard therefore stays on by default.
+`SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=off` disables it for diagnosis. Limits: the
+channels are synthetic (a clean delayed linear leak). Real rooms (reverberation, a
+loudspeaker far quieter than the system capture, non-linear processing) correlate
+less, so only an owner-run recording can confirm the thresholds. Echo cancellation
+against the system reference remains a follow-up.
 
 ### Offline evaluation
 
 Nothing was recorded. `scripts/two_track_eval/build_synthetic.py` builds a two-track
 WAV from a mono Riksdag interpellation (sv2 set, RTTM references): one reference
 speaker's turns go to the left channel (silence elsewhere), everything else to the
-right; `--leak-db -15` adds the right channel to the left at -15 dB, delayed 40 ms
-and low-passed (a listener without headphones). `eval_two_track.py` scores
+right. Variants: `clean`; `leak15` (the right channel is added to the left at -15 dB,
+delayed 40 ms, low-passed: no headphones); `dt15` (leak plus unreferenced remote
+speech playing while the user talks: double-talk). `eval_two_track.py` scores
 `transcribe --diarize --meeting-json` on the two-track path against the downmix
-baseline (`--no-two-track`) with a frame-based DER (10 ms, 0.25 s collar, optimal
-speaker mapping, scored inside reference speech); `run_eval.sh` drives it. Results
-(`docs/benchmarks/data/two-track/results.json`), first 420 s of each file,
-`kb-whisper-tiny`, default diarization threshold, "me" = Jessica Roden (S):
+baseline (`--no-two-track`): frame-based DER (10 ms, 0.25 s collar, optimal speaker
+mapping, scored inside reference speech), and for "Me" the share of the user's
+reference speech labelled Me, the share of the others' speech wrongly labelled Me,
+and **words**: the Me text against a reference transcript (the same model on a mono
+file of the user's turns only, a Whisper-vs-Whisper proxy, no human transcript),
+word recall (LCS) and WER, plus where speech is lost (voice-activity coverage, after
+the guard, raw Whisper words vs kept words). `run_eval.sh` drives it, `summarize.py`
+prints the table; raw results are in `docs/benchmarks/data/two-track/results.json`.
+First 420 s of IP_hc10606 (2 speakers) and IP_hd10115 (3), "me" = Jessica Roden (S),
+default diarization threshold, models `kb-whisper-tiny` and the larger installed
+`kb-whisper-small`:
 
-| Case | Pipeline | DER % | Confusion % | Miss % | FA % | Me recall % | False Me % | Speakers |
-|---|---|---|---|---|---|---|---|---|
-| IP_hc10606 (2 spk), clean | two-track | 13.1 | 1.0 | 11.5 | 0.6 | 85 | 0 | 3/2 |
-| IP_hc10606, clean | downmix | 34.9 | 34.5 | 0.4 | 0.0 | (99) | (100) | 1/2 |
-| IP_hc10606, leak -15 dB | two-track, guard on | 23.3 | 1.0 | 22.3 | 0.0 | 69 | 0 | 2/2 |
-| IP_hc10606, leak -15 dB | two-track, guard off | 31.6 | 3.5 | 24.3 | 3.8 | 69 | 18 | 2/2 |
-| IP_hc10606, leak -15 dB | downmix | 34.5 | 34.5 | 0.0 | 0.0 | (100) | (100) | 1/2 |
-| IP_hd10115 (3 spk), clean | two-track | 14.7 | 3.7 | 10.6 | 0.4 | 41 | 0 | 2/2 |
-| IP_hd10115, clean | downmix | 24.1 | 24.1 | 0.0 | 0.0 | (100) | (100) | 1/2 |
-| IP_hd10115, leak -15 dB | two-track, guard on | 19.3 | 11.0 | 8.3 | 0.0 | 20 | 0 | 2/2 |
-| IP_hd10115, leak -15 dB | two-track, guard off | 52.1 | 19.3 | 18.3 | 14.4 | 20 | 30 | 2/2 |
-| IP_hd10115, leak -15 dB | downmix | 24.1 | 24.1 | 0.0 | 0.0 | (100) | (100) | 1/2 |
+| Case | Pipeline | DER % | Conf % | Miss % | FA % | Me speech recall % | False Me % | Me word recall / WER % | VAD / after-guard coverage % | words ref / raw / kept |
+|---|---|---|---|---|---|---|---|---|---|---|
+| kb-whisper-small.IP_hc10606.clean guard=on | two-track | 5.2 | 0.6 | 3.3 | 1.3 | 97 | 0 | 90 / 11 | 91 / 91 | 424 / 419 / 408 |
+| kb-whisper-small.IP_hc10606.clean guard=on | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hc10606.dt15 guard=on | two-track | 22.6 | 7.1 | 4.6 | 10.9 | 85 | 0 | 87 / 21 | 92 / 90 | 424 / 443 / 425 |
+| kb-whisper-small.IP_hc10606.dt15 guard=on | downmix | 34.6 | 34.5 | 0.1 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hc10606.leak15 guard=on | two-track | 5.8 | 0.6 | 3.9 | 1.2 | 96 | 0 | 89 / 17 | 91 / 91 | 424 / 434 / 424 |
+| kb-whisper-small.IP_hc10606.leak15 guard=on | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hd10115.clean guard=on | two-track | 2.9 | 0.0 | 2.9 | 0.0 | 90 | 0 | 89 / 14 | 81 / 81 | 181 / 181 / 170 |
+| kb-whisper-small.IP_hd10115.clean guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hd10115.dt15 guard=on | two-track | 11.3 | 4.6 | 2.3 | 4.3 | 72 | 0 | 87 / 18 | 93 / 84 | 181 / 191 / 169 |
+| kb-whisper-small.IP_hd10115.dt15 guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hd10115.leak15 guard=on | two-track | 3.0 | 0.0 | 2.9 | 0.1 | 90 | 0 | 89 / 15 | 81 / 81 | 181 / 184 / 171 |
+| kb-whisper-small.IP_hd10115.leak15 guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hc10606.clean guard=on | two-track | 9.2 | 0.0 | 8.0 | 1.2 | 92 | 0 | 70 / 34 | 91 / 91 | 454 / 368 / 361 |
+| kb-whisper-tiny.IP_hc10606.clean guard=on | downmix | 34.9 | 34.5 | 0.4 | 0.0 | 99 | 100 |  | | |
+| kb-whisper-tiny.IP_hc10606.dt15 guard=off | two-track | 40.8 | 12.5 | 15.2 | 13.1 | 86 | 43 | 76 / 99 | 92 / 92 | 454 / 755 / 734 |
+| kb-whisper-tiny.IP_hc10606.dt15 guard=on | two-track | 19.2 | 5.4 | 8.2 | 5.6 | 84 | 0 | 75 / 32 | 92 / 90 | 454 / 441 / 419 |
+| kb-whisper-tiny.IP_hc10606.dt15 guard=on | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hc10606.leak15 guard=off | two-track | 37.7 | 14.8 | 15.7 | 7.1 | 83 | 42 | 64 / 107 | 91 / 91 | 454 / 693 / 674 |
+| kb-whisper-tiny.IP_hc10606.leak15 guard=on | two-track | 14.8 | 6.6 | 7.3 | 0.9 | 83 | 0 | 64 / 40 | 91 / 91 | 454 / 379 / 365 |
+| kb-whisper-tiny.IP_hc10606.leak15 guard=on | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hd10115.clean guard=on | two-track | 8.4 | 2.6 | 5.8 | 0.0 | 65 | 0 | 73 / 43 | 81 / 81 | 174 / 196 / 186 |
+| kb-whisper-tiny.IP_hd10115.clean guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hd10115.dt15 guard=off | two-track | 64.7 | 19.5 | 26.0 | 19.2 | 67 | 38 | 92 / 347 | 93 / 93 | 174 / 777 / 755 |
+| kb-whisper-tiny.IP_hd10115.dt15 guard=on | two-track | 12.9 | 5.4 | 2.5 | 5.0 | 68 | 0 | 88 / 19 | 93 / 84 | 174 / 180 / 166 |
+| kb-whisper-tiny.IP_hd10115.dt15 guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hd10115.leak15 guard=off | two-track | 60.8 | 15.1 | 30.4 | 15.3 | 67 | 38 | 72 / 406 | 81 / 81 | 174 / 845 / 818 |
+| kb-whisper-tiny.IP_hd10115.leak15 guard=on | two-track | 8.6 | 2.6 | 5.9 | 0.0 | 65 | 0 | 73 / 44 | 81 / 81 | 174 / 198 / 187 |
+| kb-whisper-tiny.IP_hd10115.leak15 guard=on | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
 
-Reading: the downmix baseline collapses every speaker into one cluster (the known
-#284 behaviour at this build's threshold), so its "me" columns are degenerate
-(everything is "me") and its confusion is the whole minority share. Two-track
-removes that confusion (1-4 % on clean, 1-11 % with leak) and, on the leak cases,
-the guard cuts false "Me" from 18-30 % to 0 and DER by 8-33 points. The remaining
-error is **miss**, not attribution: the microphone channel is mostly digital
-silence with long turns, and Whisper tiny transcribes only part of it (Me recall
-20-85 %), so the local user's words are under-reported. Follow-up: transcribe the
-microphone channel only inside voice-activity intervals instead of the whole
-channel, and re-measure with a larger model. Caveats: synthetic channels (perfect
-separation, a clean linear leak), tiny model, 2 files, 7 minutes each, the
-speaker count of the system channel comes from the build's diarization default.
+Fix round (microphone words, Whisper over the whole channel -> Whisper only inside padded
+voice-activity regions, zero-duration words kept): on the tiny model "Me" speech
+recall on the clean files went from 85 / 41 % to 92 / 65 %, and DER from 13.1 / 14.7 %
+to 9.2 / 8.4 %. Part of the earlier loss was a bug: single-token words have
+`start == end` and were always dropped by the activity filter. (Old table: first
+version of this section in the git history.)
 
+Reading:
+- The downmix baseline collapses every speaker into one cluster (the known #284 behaviour
+  at this build's threshold): confusion 24-35 %, and its "me" columns are degenerate
+  (everything is "me").
+- Two-track removes that confusion. With the larger model the clean cases reach DER 2.9 and
+  5.2 %, word recall about 90 %, WER 11-14 % against the proxy reference. With the tiny
+  model word recall is 64-88 % and WER 18-44 % (hallucinated or dropped words), so word
+  quality is mostly a model effect.
+- Where "Me" speech is still missing: voice-activity coverage is 91 % (hc10606) and only
+  81 % (hd10115) of the user's reference speech, so the segmenter, not Whisper, is the
+  largest remaining loss on hd10115; the guard removes 0-9 points more in double-talk;
+  Whisper then recovers 85-90 % of the words with the small model.
+- Crosstalk: guard on vs off for `leak15`/`dt15` (tiny): false Me 38-43 % -> 0, DER
+  38-65 % -> 9-19 %, raw Me words 1.5-5x the reference without the guard.
+- The "remaining error is missed speech" conclusion of the first version no longer holds
+  in general: with the small model confusion and false alarm matter as much as miss in
+  double-talk (the unreferenced remote speech in `dt15` appears as extra other-speaker
+  speech, counted as false alarm).
+Caveats: synthetic channels (perfect separation, a linear leak), proxy word references,
+two files of 7 minutes, the speaker count of the system channel comes from this build's
+diarization default.
