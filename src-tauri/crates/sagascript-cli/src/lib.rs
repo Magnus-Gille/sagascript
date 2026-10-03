@@ -1151,7 +1151,10 @@ mod tests {
         let off = parse_transcribe(&["--meeting-json", "--diarize", "--no-two-track"]).unwrap();
         assert!(off.no_two_track && !off.two_track);
         let auto = parse_transcribe(&["--diarize"]).unwrap();
-        assert!(!auto.two_track && !auto.no_two_track);
+        assert!(!auto.two_track && !auto.no_two_track && !auto.crosstalk_guard, "guard is opt-in");
+        assert!(parse_transcribe(&["--crosstalk-guard"]).is_err());
+        assert!(parse_transcribe(&["--diarize", "--no-two-track", "--crosstalk-guard"]).is_err());
+        assert!(parse_transcribe(&["--diarize", "--crosstalk-guard"]).unwrap().crosstalk_guard);
     }
 
     #[cfg(feature = "diarization")]

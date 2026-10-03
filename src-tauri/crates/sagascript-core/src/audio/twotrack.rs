@@ -233,11 +233,20 @@ fn invalid(m: &str) -> io::Error {
 /// positioned at the first audio byte. Requires 16 kHz 16-bit PCM and honours
 /// the RIFF/file extent so a hostile chunk size cannot make us read past it.
 fn parse_header(file: &mut File) -> io::Result<WavHeader> {
-    let file_len = file.metadata()?.len();
+    let mut file_len = file.metadata()?.len();
     let mut riff = [0u8; 12];
     file.read_exact(&mut riff).map_err(|_| invalid("not a WAV file"))?;
     if &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
         return Err(invalid("not a WAV file"));
+    }
+    // The RIFF size bounds every chunk. 0 and 0xFFFFFFFF mean "unknown"
+    // (streaming writers); a size beyond the file is a truncated file.
+    let riff_size = u32::from_le_bytes(riff[4..8].try_into().unwrap()) as u64;
+    if riff_size != 0 && riff_size != u32::MAX as u64 {
+        if riff_size < 4 {
+            return Err(invalid("inconsistent RIFF size"));
+        }
+        file_len = file_len.min(riff_size + 8);
     }
     let mut channels = 0u16;
     let mut marker = None;
@@ -252,7 +261,10 @@ fn parse_header(file: &mut File) -> io::Result<WavHeader> {
                 if channels == 0 {
                     return Err(invalid("missing fmt chunk"));
                 }
-                return Ok(WavHeader { channels, data_len: size.min(file_len.saturating_sub(body)), marker });
+                if body > file_len {
+                    return Err(invalid("data chunk lies outside the RIFF extent"));
+                }
+                return Ok(WavHeader { channels, data_len: size.min(file_len - body), marker });
             }
             b"fmt " => {
                 if size < 16 || body + 16 > file_len {
@@ -264,8 +276,13 @@ fn parse_header(file: &mut File) -> io::Result<WavHeader> {
                 channels = u16::from_le_bytes(fmt[2..4].try_into().unwrap());
                 let rate = u32::from_le_bytes(fmt[4..8].try_into().unwrap());
                 let bits = u16::from_le_bytes(fmt[14..16].try_into().unwrap());
+                let byte_rate = u32::from_le_bytes(fmt[8..12].try_into().unwrap());
+                let block_align = u16::from_le_bytes(fmt[12..14].try_into().unwrap());
                 if tag != 1 || bits != 16 || rate != TARGET_SAMPLE_RATE || channels == 0 {
                     return Err(invalid("expected 16 kHz 16-bit PCM"));
+                }
+                if block_align as u32 != channels as u32 * 2 || byte_rate != rate * block_align as u32 {
+                    return Err(invalid("inconsistent fmt block alignment"));
                 }
             }
             b"LIST" if size <= MAX_INFO_BYTES && body + size <= file_len => {
@@ -327,32 +344,45 @@ pub fn write_two_track_wav(path: &Path, mic: &[f32], system: &[f32]) -> io::Resu
 }
 
 /// Longest recording the reader accepts (same bound as the decoder: ~4 hours
-/// of 16 kHz audio), checked from the data size before any allocation.
+/// of 16 kHz audio).
 pub const MAX_READ_FRAMES: u64 = 4 * 3600 * TARGET_SAMPLE_RATE as u64;
 
-/// Read a 16 kHz 16-bit PCM WAV as separate channels (used by the diarization
-/// path to separate "me" from "others"). The header is validated first and
-/// only the `data` payload is streamed into the channel buffers, so memory is
-/// bounded by the audio itself and trailing chunks are never read.
-pub fn read_two_track_wav(path: &Path) -> io::Result<Vec<Vec<f32>>> {
-    let mut file = File::open(path)?;
-    let header = parse_header(&mut file)?;
-    let channels = header.channels as usize;
-    let frame_bytes = 2 * channels as u64;
-    let frames = header.data_len / frame_bytes;
-    if frames > MAX_READ_FRAMES {
+/// Budget for the decoded `f32` channel buffers, derived from the frame limit.
+pub const MAX_READ_DECODED_BYTES: u64 = MAX_READ_FRAMES * 2 * std::mem::size_of::<f32>() as u64;
+
+/// Decoded size of `frames` stereo frames, checked against the budget before
+/// any buffer is reserved.
+fn check_read_budget(frames: u64) -> io::Result<()> {
+    let bytes = frames.checked_mul(2 * std::mem::size_of::<f32>() as u64);
+    if frames > MAX_READ_FRAMES || bytes.is_none_or(|b| b > MAX_READ_DECODED_BYTES) {
         return Err(invalid("recording is longer than the ~4 hour limit"));
     }
-    let mut tracks = vec![Vec::with_capacity(frames as usize); channels];
-    let mut reader = io::BufReader::with_capacity(1 << 16, file.take(frames * frame_bytes));
-    let mut frame = vec![0u8; frame_bytes as usize];
+    Ok(())
+}
+
+/// Read a 16 kHz 16-bit **stereo** PCM WAV as `[left, right]` (used by the
+/// diarization path to separate "me" from "others"). The header is validated
+/// first (exactly two channels, consistent block alignment, chunk sizes inside
+/// the RIFF extent) and the decoded size is checked against a budget before any
+/// allocation. Only the `data` payload is streamed; trailing chunks are never read.
+pub fn read_two_track_wav(path: &Path) -> io::Result<[Vec<f32>; 2]> {
+    let mut file = File::open(path)?;
+    let header = parse_header(&mut file)?;
+    if header.channels != 2 {
+        return Err(invalid("a two-track recording has exactly two channels"));
+    }
+    let frames = header.data_len / 4;
+    check_read_budget(frames)?;
+    let mut left = Vec::with_capacity(frames as usize);
+    let mut right = Vec::with_capacity(frames as usize);
+    let mut reader = io::BufReader::with_capacity(1 << 16, file.take(frames * 4));
+    let mut frame = [0u8; 4];
     for _ in 0..frames {
         reader.read_exact(&mut frame)?;
-        for (c, s) in frame.as_chunks::<2>().0.iter().enumerate() {
-            tracks[c].push(i16::from_le_bytes(*s) as f32 / i16::MAX as f32);
-        }
+        left.push(i16::from_le_bytes([frame[0], frame[1]]) as f32 / i16::MAX as f32);
+        right.push(i16::from_le_bytes([frame[2], frame[3]]) as f32 / i16::MAX as f32);
     }
-    Ok(tracks)
+    Ok([left, right])
 }
 
 #[cfg(test)]
@@ -386,7 +416,6 @@ mod tests {
         let system = vec![0.25f32; 800];
         write_two_track_wav(&path, &mic, &system).unwrap();
         let tracks = read_two_track_wav(&path).unwrap();
-        assert_eq!(tracks.len(), 2);
         assert_eq!(tracks[0].len(), 1600);
         assert_eq!(tracks[1].len(), 1600);
         assert!((tracks[0][0] - 0.5).abs() < 1e-3);
@@ -515,7 +544,7 @@ mod tests {
         bare.extend_from_slice(&raw);
         std::fs::write(&stereo, &bare).unwrap();
         assert_eq!(read_two_track_marker(&stereo).unwrap(), None);
-        assert_eq!(read_two_track_wav(&stereo).unwrap().len(), 2);
+        assert_eq!(read_two_track_wav(&stereo).unwrap()[0].len(), 100);
 
         let mono = dir.path().join("mono.wav");
         let mut w = TwoTrackWriter::create(&mono, 1).unwrap();
@@ -645,5 +674,58 @@ mod tests {
         assert!(write_header(&mut Vec::new(), 2, max as u32 + 1).is_err());
         // The old limit (data up to u32::MAX - 36) is no longer accepted for stereo.
         assert!(check_wav_capacity((u32::MAX as u64 - 36) / 4, 2).is_err());
+    }
+
+    #[test]
+    fn reader_rejects_other_channel_counts_before_allocating() {
+        let dir = tempfile::tempdir().unwrap();
+        for channels in [1u16, 3, 128] {
+            let p = dir.path().join(format!("c{channels}.wav"));
+            std::fs::write(&p, bare_wav(channels, 16_000, 16, &[], &[], &vec![0u8; 2 * channels as usize * 10], &[])).unwrap();
+            let e = read_two_track_wav(&p).unwrap_err();
+            assert!(e.to_string().contains("exactly two channels"), "{channels}: {e}");
+        }
+    }
+
+    #[test]
+    fn read_budget_has_a_hard_four_hour_boundary() {
+        assert!(check_read_budget(MAX_READ_FRAMES).is_ok());
+        assert!(check_read_budget(MAX_READ_FRAMES + 1).is_err());
+        assert!(check_read_budget(u64::MAX).is_err(), "overflow is an error, not a wrap");
+        assert_eq!(MAX_READ_DECODED_BYTES, MAX_READ_FRAMES * 8);
+    }
+
+    #[test]
+    fn reader_honours_block_alignment_and_riff_extent() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut audio = Vec::new();
+        for i in 0..100i16 {
+            audio.extend_from_slice(&i.to_le_bytes());
+            audio.extend_from_slice(&i.to_le_bytes());
+        }
+        let good = bare_wav(2, 16_000, 16, &[], &[], &audio, &[]);
+        let probe = |name: &str, bytes: Vec<u8>| {
+            let p = dir.path().join(name);
+            std::fs::write(&p, bytes).unwrap();
+            read_two_track_wav(&p)
+        };
+        assert_eq!(probe("ok.wav", good.clone()).unwrap()[0].len(), 100);
+        // fmt block alignment that does not match the channel count.
+        let mut bad_align = good.clone();
+        bad_align[32..34].copy_from_slice(&2u16.to_le_bytes());
+        assert!(probe("align.wav", bad_align).is_err());
+        // RIFF size too small to contain the fmt chunk and data header.
+        let mut tiny = good.clone();
+        tiny[4..8].copy_from_slice(&10u32.to_le_bytes());
+        assert!(probe("tiny.wav", tiny).is_err());
+        // RIFF size that ends inside the audio clamps the data (here 60 frames).
+        let mut short = good.clone();
+        let riff = (4 + 24 + 8 + 240) as u32;
+        short[4..8].copy_from_slice(&riff.to_le_bytes());
+        assert_eq!(probe("short.wav", short).unwrap()[0].len(), 60);
+        // Trailing bytes after the RIFF extent are ignored; unknown size (0) uses the file.
+        let mut unknown = good.clone();
+        unknown[4..8].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(probe("unknown.wav", unknown).unwrap()[0].len(), 100);
     }
 }

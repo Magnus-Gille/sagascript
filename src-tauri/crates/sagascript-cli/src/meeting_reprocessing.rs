@@ -176,6 +176,7 @@ impl WorkBackend for NativeBackend<'_> {
             cache_output,
             // Reproduce the channel layout the reviewed transcript was made with.
             Some(input.previous.original.local_speaker.is_some()),
+            input.previous.original.crosstalk_guard.unwrap_or(false),
         )
     }
 }
@@ -341,7 +342,14 @@ fn prepare(
     // must invalidate an already displayed plan too.
     let transcription_context_sha256 = if two_track {
         // Bind the channel layout so a plan made for a downmix cannot run as two-track.
-        hash_json(&(1u32, language, model, input.glossary.render(), "two-track"))?
+        hash_json(&(
+            1u32,
+            language,
+            model,
+            input.glossary.render(),
+            "two-track",
+            input.previous.original.crosstalk_guard.unwrap_or(false),
+        ))?
     } else {
         hash_json(&(1u32, language, model, input.glossary.render()))?
     };

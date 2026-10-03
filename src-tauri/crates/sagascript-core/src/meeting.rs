@@ -89,6 +89,10 @@ pub struct MeetingTranscript {
     /// two-track recording). Additive: absent for ordinary transcripts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_speaker: Option<String>,
+    /// Whether the optional microphone crosstalk guard was on for a two-track
+    /// transcript. Additive; absent for ordinary transcripts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crosstalk_guard: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +107,8 @@ struct MeetingTranscriptWire {
     speakers: Vec<MeetingSpeaker>,
     #[serde(default)]
     local_speaker: Option<String>,
+    #[serde(default)]
+    crosstalk_guard: Option<bool>,
 }
 
 impl<'de> Deserialize<'de> for MeetingTranscript {
@@ -120,6 +126,7 @@ impl<'de> Deserialize<'de> for MeetingTranscript {
             segments: wire.segments,
             speakers: wire.speakers,
             local_speaker: wire.local_speaker,
+            crosstalk_guard: wire.crosstalk_guard,
         };
         document.validate().map_err(serde::de::Error::custom)?;
         Ok(document)
@@ -174,6 +181,7 @@ impl MeetingTranscript {
             segments,
             speakers,
             local_speaker: None,
+            crosstalk_guard: None,
         };
         document.validate()?;
         Ok(document)
@@ -556,12 +564,16 @@ mod tests {
     fn local_speaker_is_additive_validated_and_follows_merges() {
         let plain = document();
         let json = plain.to_json().unwrap();
-        assert!(!json.contains("local_speaker"), "absent unless set");
+        assert!(!json.contains("local_speaker") && !json.contains("crosstalk_guard"), "absent unless set");
         let me = plain.clone().with_local_speaker("a").unwrap();
         let json = me.to_json().unwrap();
         assert!(json.contains("\"local_speaker\":\"a\""));
         let back: MeetingTranscript = serde_json::from_str(&json).unwrap();
         assert_eq!(back, me);
+        let mut guarded = me.clone();
+        guarded.crosstalk_guard = Some(true);
+        let back: MeetingTranscript = serde_json::from_str(&guarded.to_json().unwrap()).unwrap();
+        assert_eq!(back.crosstalk_guard, Some(true));
         assert_eq!(
             plain.clone().with_local_speaker("zzz").unwrap_err(),
             MeetingError::UnknownSpeaker

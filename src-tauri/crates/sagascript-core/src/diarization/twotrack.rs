@@ -158,28 +158,32 @@ pub struct EchoTest {
 }
 
 /// Compare the microphone and system loudness envelopes over `[start, end]`
-/// seconds. `None` when the window is too short or the system channel is silent.
+/// seconds. The microphone window stays fixed; the system reference is shifted
+/// by the acoustic delay (the microphone hears the system `lag` frames late, so
+/// `mic[t]` is compared with `system[t - lag]`). Delays whose reference window
+/// falls outside the system channel are skipped. `None` when the window is too
+/// short, extends past the microphone channel, the system channel is silent, or
+/// no delay has a valid aligned reference: such audio is never judged.
 pub fn echo_test(mic: &[f32], system: &[f32], start: f64, end: f64) -> Option<EchoTest> {
     let from = (start.max(0.0) * 16_000.0) as usize;
     let frames = (((end - start) * 16_000.0) as usize) / FRAME;
-    if frames < MIN_FRAMES {
+    if frames < MIN_FRAMES || from + frames * FRAME > mic.len() {
         return None;
     }
-    let sys = envelope(system, from, frames);
-    if sys.iter().sum::<f32>() / (frames as f32) < SYSTEM_FLOOR_RMS {
-        return None;
-    }
-    let sys_energy: f32 = sys.iter().map(|x| x * x).sum();
+    let mic_env = envelope(mic, from, frames);
+    let mic_energy: f32 = mic_env.iter().map(|x| x * x).sum();
     let mut best: Option<EchoTest> = None;
     for lag in -MAX_LAG_FRAMES..=MAX_LAG_FRAMES {
-        // The microphone hears the system audio `lag` frames late.
-        let shifted = from as i64 + lag * FRAME as i64;
-        if shifted < 0 {
-            continue;
+        let reference = from as i64 - lag * FRAME as i64;
+        if reference < 0 || reference as usize + frames * FRAME > system.len() {
+            continue; // no valid aligned comparison at this delay
         }
-        let mic_env = envelope(mic, shifted as usize, frames);
+        let sys = envelope(system, reference as usize, frames);
+        if sys.iter().sum::<f32>() / (frames as f32) < SYSTEM_FLOOR_RMS {
+            continue; // nothing playing at this alignment
+        }
+        let sys_energy: f32 = sys.iter().map(|x| x * x).sum();
         let correlation = pearson(&mic_env, &sys);
-        let mic_energy: f32 = mic_env.iter().map(|x| x * x).sum();
         let gain = mic_env.iter().zip(&sys).map(|(m, s)| m * s).sum::<f32>() / sys_energy.max(1e-12);
         let residual_energy: f32 =
             mic_env.iter().zip(&sys).map(|(m, s)| (m - gain * s) * (m - gain * s)).sum();
@@ -191,8 +195,10 @@ pub fn echo_test(mic: &[f32], system: &[f32], start: f64, end: f64) -> Option<Ec
     best
 }
 
-/// Envelope correlation at or above which a window may be speaker echo.
-pub const CROSSTALK_CORRELATION: f32 = 0.6;
+/// Envelope correlation at or above which a window may be speaker echo. Taking
+/// the best of 31 delays inflates chance correlation between two unrelated
+/// speech envelopes, so the bar is high: pure echo scores 0.98 and above.
+pub const CROSSTALK_CORRELATION: f32 = 0.8;
 /// ... and the system channel must explain at least half the microphone energy,
 /// so a local voice at its own level on top of the echo is kept.
 pub const CROSSTALK_MAX_RESIDUAL: f32 = 0.5;
@@ -207,8 +213,12 @@ fn window_is_echo(mic: &[f32], system: &[f32], start: f64, end: f64, threshold: 
 
 /// Drop the parts of microphone activity that look like the system audio
 /// leaking into the microphone (no headphones). Each interval is judged in
-/// windows of about a second, so a local reply next to echo survives and local
-/// speech on top of echo (energy the system channel does not explain) is kept.
+/// windows of about a second; the dropped span is exactly the judged window.
+///
+/// Known limitation (see the equal-energy test): the test works on loudness
+/// envelopes, so a window in which independent local speech carries as much
+/// energy as the echo can still look like pure echo and is deleted. This is why
+/// the guard is opt-in.
 pub fn drop_crosstalk(
     mic: &[f32],
     system: &[f32],
@@ -297,7 +307,7 @@ mod tests {
     /// Noise bursts with a syllable-like loudness modulation (a flat envelope
     /// has no correlation to measure). `delay` shifts the modulation like an
     /// acoustic path would.
-    fn noise(len: usize, on: &[(usize, usize)], gain: f32, seed: u32, mod_seed: u32, delay: usize) -> Vec<f32> {
+    fn noise(len: usize, on: &[(usize, usize)], gain: f32, seed: u32, mod_seed: u32, delay: i64) -> Vec<f32> {
         let mut x = vec![0.0f32; len];
         let mut state = seed;
         let (f1, f2) = (3.0 + (mod_seed % 5) as f32 * 0.7, 0.9 + (mod_seed % 3) as f32 * 0.4);
@@ -306,7 +316,7 @@ mod tests {
         for &(a, b) in on {
             for (i, v) in x[a..b.min(len)].iter_mut().enumerate() {
                 state = state.wrapping_mul(1664525).wrapping_add(1013904223);
-                let t = (a + i).saturating_sub(delay) as f32;
+                let t = ((a + i) as i64 - delay) as f32;
                 let m = 0.3 + 0.7 * (f1 * t * tau + p1).sin().abs() * (0.5 + 0.5 * (f2 * t * tau + p2).sin());
                 *v = ((state >> 16) as f32 / 32768.0 - 1.0) * gain * m;
             }
@@ -335,7 +345,7 @@ mod tests {
         let echo = noise(n, &late, 0.03, 2, 7, 640);
         // Local speech: independent bursts, two of which overlap the remote voice.
         let own_on = [(24_000, 40_000), (88_000, 104_000), (150_000, 166_000), (230_000, 246_000)];
-        let own = noise(n, &own_on, 0.1, 3, 11, 0);
+        let own = noise(n, &own_on, 0.4, 3, 11, 0); // user close to the microphone: ~20 dB above the echo
         let own_iv: Vec<(f64, f64)> = own_on.iter().map(|&(a, b)| (a as f64 / 16_000.0, b as f64 / 16_000.0)).collect();
         (system, add(&echo, &own), own_iv)
     }
@@ -346,7 +356,9 @@ mod tests {
         let echo = noise(system.len(), &[(640, 56_640), (72_640, 120_640)], 0.03, 2, 7, 640);
         let whole = [(0.0, 7.0), (4.5, 7.5)];
         let kept = drop_crosstalk(&echo, &system, &whole[..1], CROSSTALK_CORRELATION);
-        assert!(secs(&kept) < 0.5, "pure echo is removed, kept {kept:?}");
+        // The window at the start of the file has no negative-delay reference and
+        // sits on the burst onset; the rest of the 7 s of pure echo goes.
+        assert!(secs(&kept) <= 1.0, "pure echo is removed, kept {kept:?}");
         let silence = vec![0.0; system.len()];
         assert_eq!(drop_crosstalk(&echo, &silence, &whole[..1], CROSSTALK_CORRELATION), whole[..1].to_vec());
         // Windows shorter than 0.5 s are never judged.
@@ -367,5 +379,67 @@ mod tests {
         let echo_total = secs(&activity) - overlap_secs(&activity, &own);
         let echo_kept = secs(&kept) - own_kept;
         assert!(echo_kept / echo_total < 0.5, "echo still kept: {echo_kept}/{echo_total}");
+    }
+
+    #[test]
+    fn equal_energy_double_talk_is_a_known_limitation() {
+        // Codex's counterexample: system level alternates between a and 2a,
+        // the microphone hears it at gain 1 plus independent local audio of
+        // constant RMS sqrt(2.5)a, i.e. 38-71 % of its energy is the user's.
+        // The envelope tests cannot tell, so the guard deletes the window.
+        let n = 16_000 * 4;
+        let a = 0.05f32;
+        let mut system = vec![0.0f32; n];
+        let mut local = vec![0.0f32; n];
+        let (mut s1, mut s2) = (11u32, 23u32);
+        for (i, (sv, lv)) in system.iter_mut().zip(local.iter_mut()).enumerate() {
+            s1 = s1.wrapping_mul(1664525).wrapping_add(1013904223);
+            s2 = s2.wrapping_mul(22695477).wrapping_add(1);
+            let level = if (i / 3200) % 2 == 0 { a } else { 2.0 * a };
+            *sv = ((s1 >> 16) as f32 / 32768.0 - 1.0) * level * 3f32.sqrt();
+            *lv = ((s2 >> 16) as f32 / 32768.0 - 1.0) * (2.5f32).sqrt() * a * 3f32.sqrt();
+        }
+        let mic = add(&system, &local);
+        let t = echo_test(&mic, &system, 0.5, 3.5).unwrap();
+        assert!(t.correlation > 0.95 && t.residual < 0.1, "{t:?}");
+        let kept = drop_crosstalk(&mic, &system, &[(0.5, 3.5)], CROSSTALK_CORRELATION);
+        assert!(secs(&kept) < 0.5, "documented limitation: genuine local speech deleted, kept {kept:?}");
+    }
+
+    #[test]
+    fn replies_next_to_window_boundaries_survive_with_either_delay_sign() {
+        // Echo for 4 s, at +300 ms and at -300 ms (the search range is symmetric);
+        // loud local replies sit just before and just after the internal
+        // window boundary at 2 s, inside the neighbouring windows.
+        for delay in [4_800i64, -4_800] {
+            let n = 16_000 * 6;
+            let on = [(0usize, 16_000 * 4)];
+            let system = noise(n, &on, 0.3, 1, 7, 0);
+            let echo_start = delay.max(0) as usize;
+            let echo = noise(n, &[(echo_start, echo_start + 16_000 * 4)], 0.03, 2, 7, delay);
+            // Replies at [1.6, 1.95] and [2.05, 2.4] s: both on different sides of 2.0.
+            let replies = noise(n, &[(25_600, 31_200), (32_800, 38_400)], 0.4, 3, 11, 0);
+            let mic = add(&echo, &replies);
+            let kept = drop_crosstalk(&mic, &system, &[(0.5, 4.5)], CROSSTALK_CORRELATION);
+            let reply = [(1.6, 1.95), (2.05, 2.4)];
+            let survived = overlap_secs(&kept, &reply) / secs(&reply);
+            assert!(survived >= 0.9, "delay {delay}: replies survived {survived}, kept {kept:?}");
+        }
+    }
+
+    #[test]
+    fn audio_without_a_valid_aligned_reference_is_never_judged() {
+        let n = 16_000 * 3;
+        let system = noise(n, &[(0, n)], 0.3, 1, 7, 0);
+        let echo = noise(n, &[(0, n)], 0.03, 2, 7, 0);
+        // Window at the very start: negative-lag references fall before 0 and
+        // are skipped, the zero/positive ones remain valid, so it is judged.
+        assert!(echo_test(&echo, &system, 0.0, 1.0).is_some());
+        // Window running past either channel is not judged and survives.
+        assert!(echo_test(&echo, &system, 2.5, 3.5).is_none());
+        let kept = drop_crosstalk(&echo, &system, &[(2.7, 3.2)], CROSSTALK_CORRELATION);
+        assert_eq!(kept.len(), 1);
+        // A system channel shorter than the microphone leaves no valid reference.
+        assert!(echo_test(&echo, &system[..16_000], 1.5, 2.5).is_none());
     }
 }

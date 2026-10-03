@@ -280,7 +280,7 @@ downmix:
 
 Output (additive, absent for ordinary files): the meeting JSON gets a top-level
 `"local_speaker": "Me"` (a speaker id; `Me` is always listed under `speakers`) and
-the legacy `--diarize --json` output gets `"local_speaker": "Me"`. Plain/markdown/
+`"crosstalk_guard": false|true`; the legacy `--diarize --json` output gets both too. Plain/markdown/
 SRT/VTT exports and `transcribe` text show the label `Me`; renaming the speaker
 keeps `local_speaker` (it is an id), merging the local speaker into another keeps
 the field on the merge target. Old readers that reject unknown fields reject only
@@ -290,32 +290,35 @@ downmix cache. `--diarize-cache` is neither read nor written for two-track input
 
 ### Crosstalk (no headphones)
 
-Assumption for best results: **headphones**. Without them the microphone also
-hears the remote participants. A guard is on by default because it measurably
-helps on the simulations below. Every microphone speech interval is cut into
-windows of about a second. For each window the loudness envelopes (20 ms RMS) of
-microphone and system channel are compared at the best acoustic delay (+/-300 ms).
-A window is dropped as speaker echo only when both hold: the envelope correlation
-is at least 0.6, and the system channel explains at least half of the microphone
-energy (the residual after the best scaled copy of the system envelope is at most
-0.5). The second test keeps local speech at its own level on top of the echo
-(double-talk). Windows under 0.5 s, and windows where the system channel is
-silent, are never judged. Envelope correlation is gain invariant, so it does not
-depend on how loud the microphone is relative to the system capture. A flat
-(non-fluctuating) envelope has no correlation to measure, so such windows are
-kept: the guard errs towards keeping local speech.
+**Record with headphones.** Without them the microphone also hears the remote
+participants, and **other participants' speech may be attributed to "Me"**. That
+is visible and correctable in review, so it is the default. When Sagascript sees a
+substantial stretch of the microphone that mirrors the system audio it prints one
+stderr hint recommending headphones or `--crosstalk-guard`. Real echo cancellation
+(using the system channel as a waveform reference) is follow-up work.
 
-Double-talk measurement (`dt15`: remote speech keeps playing and leaking at -15 dB
-while the user speaks): the share of the user's reference speech covered by
-microphone activity before / after the guard is 92 -> 90 % (hc10606) and 93 -> 84 %
-(hd10115), the same for both models, so 98 % and 90 % of the detected local speech
-survives, while false "Me" falls from 38-43 % to 0. Word recall is unchanged
-(tiny 76 -> 75 %, small 87 %). The guard therefore stays on by default.
-`SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=off` disables it for diagnosis. Limits: the
-channels are synthetic (a clean delayed linear leak). Real rooms (reverberation, a
-loudspeaker far quieter than the system capture, non-linear processing) correlate
-less, so only an owner-run recording can confirm the thresholds. Echo cancellation
-against the system reference remains a follow-up.
+`--crosstalk-guard` (or `SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=on`) switches on an
+**opt-in** guard; the meeting JSON records it as `"crosstalk_guard": true` and
+reprocessing repeats it. Every microphone speech interval is cut into windows of
+about a second. In each window the loudness envelopes (20 ms RMS) of the
+microphone (fixed window) and the system channel (reference shifted by the
+acoustic delay, +/-300 ms) are compared. A window is dropped when the envelope
+correlation is at least 0.8 (best of 31 delays inflates chance correlation between
+unrelated speech, so the bar is high; the table below was measured at 0.6) and the fitted system envelope leaves at most half of
+the microphone energy unexplained. Windows shorter than 0.5 s, windows without a
+valid aligned system reference (channel edges), and windows where the system is
+silent are never judged and are kept; only the judged window is ever removed.
+
+Why it is not the default: the test works on envelopes, not waveforms. When
+independent local speech carries about as much energy as the echo (a worked
+counterexample is a regression test, `equal_energy_double_talk_is_a_known_limitation`),
+the window still looks like pure echo and **the user's own words are deleted**.
+Deleting the user's speech silently is worse than a mislabelled echo.
+Measured on the synthetic set below (leak and double-talk at -15 dB): it removes
+all false "Me" (38-43 % -> 0 %) and keeps 90-98 % of the detected local speech in
+the double-talk variant, but those channels are simulated and not equal-energy.
+Real rooms (reverberation, far quieter loudspeaker, non-linear processing)
+correlate less; only an owner-run recording can say how the thresholds behave.
 
 ### Offline evaluation
 
@@ -329,9 +332,11 @@ speech playing while the user talks: double-talk). `eval_two_track.py` scores
 baseline (`--no-two-track`): frame-based DER (10 ms, 0.25 s collar, optimal speaker
 mapping, scored inside reference speech), and for "Me" the share of the user's
 reference speech labelled Me, the share of the others' speech wrongly labelled Me,
-and **words**: the Me text against a reference transcript (the same model on a mono
-file of the user's turns only, a Whisper-vs-Whisper proxy, no human transcript),
-word recall (LCS) and WER, plus where speech is lost (voice-activity coverage, after
+and **words**: agreement of the Me text with a proxy transcript produced by the same
+model on a mono file of the user's turns only (word recall by LCS, and WER against
+the proxy). This measures consistency with what that model hears in clean speech,
+**not absolute word accuracy**: there is no human reference, and errors the model
+makes in both runs do not show. It also reports where speech is lost (voice-activity coverage, after
 the guard, raw Whisper words vs kept words). `run_eval.sh` drives it, `summarize.py`
 prints the table; raw results are in `docs/benchmarks/data/two-track/results.json`.
 First 420 s of IP_hc10606 (2 speakers) and IP_hd10115 (3), "me" = Jessica Roden (S),
@@ -380,20 +385,23 @@ Reading:
 - The downmix baseline collapses every speaker into one cluster (the known #284 behaviour
   at this build's threshold): confusion 24-35 %, and its "me" columns are degenerate
   (everything is "me").
-- Two-track removes that confusion. With the larger model the clean cases reach DER 2.9 and
-  5.2 %, word recall about 90 %, WER 11-14 % against the proxy reference. With the tiny
-  model word recall is 64-88 % and WER 18-44 % (hallucinated or dropped words), so word
-  quality is mostly a model effect.
+- Two-track removes that confusion; with the larger model the clean cases reach DER 2.9 and
+  5.2 %. Word agreement with the proxy is about 90 % (WER 11-14 %) for the small model and
+  64-88 % (WER 18-44 %) for the tiny model; this says how well the two-track path
+  reproduces the model's own clean-speech transcript, not how correct the words are.
 - Where "Me" speech is still missing: voice-activity coverage is 91 % (hc10606) and only
   81 % (hd10115) of the user's reference speech, so the segmenter, not Whisper, is the
-  largest remaining loss on hd10115; the guard removes 0-9 points more in double-talk;
-  Whisper then recovers 85-90 % of the words with the small model.
-- Crosstalk: guard on vs off for `leak15`/`dt15` (tiny): false Me 38-43 % -> 0, DER
-  38-65 % -> 9-19 %, raw Me words 1.5-5x the reference without the guard.
-- The "remaining error is missed speech" conclusion of the first version no longer holds
-  in general: with the small model confusion and false alarm matter as much as miss in
-  double-talk (the unreferenced remote speech in `dt15` appears as extra other-speaker
-  speech, counted as false alarm).
-Caveats: synthetic channels (perfect separation, a linear leak), proxy word references,
+  largest remaining loss on hd10115; the guard removes 0-9 points more in double-talk.
+- Crosstalk, guard on vs off for `leak15`/`dt15` (tiny; the table rows labelled
+  guard=on were run with the guard enabled): false Me 38-43 % -> 0, DER 38-65 % -> 9-19 %.
+  Without the guard the leaked remote speech is labelled "Me", which is why the hint
+  and the opt-in flag exist; see above for why the guard is not the default.
+- The first version's "remaining error is missed speech" no longer holds in general:
+  in double-talk, confusion and false alarm matter as much as miss (the unreferenced
+  remote speech in `dt15` counts as false alarm).
+Note: the table was produced with the guard on by default and with the earlier window
+alignment (the microphone window was shifted by the delay instead of the system reference,
+since fixed); it was not re-run after the guard became opt-in, so treat the guard=on rows
+as indicative of `--crosstalk-guard`, and the `clean` rows as unaffected. Caveats: synthetic channels (perfect separation, a linear leak), proxy word references,
 two files of 7 minutes, the speaker count of the system channel comes from this build's
 diarization default.
