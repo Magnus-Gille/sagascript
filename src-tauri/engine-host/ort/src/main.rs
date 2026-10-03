@@ -5,6 +5,7 @@ mod ort_engine;
 mod pcm;
 mod server;
 mod tdt;
+mod boost;
 mod vocab;
 
 use ort_engine::{OrtEngine, RuntimeConfig};

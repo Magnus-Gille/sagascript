@@ -5,6 +5,8 @@
 //! visited encoder frame; the decoder state advances only on non-blank tokens; the
 //! duration head (argmax over the trailing logits) is a frame skip in `0..=4`.
 
+use crate::boost::BiasState;
+
 pub const HIDDEN: usize = 1024;
 /// Seconds per encoder frame: 10 ms hop x subsampling 8.
 pub const FRAME_S: f64 = 0.08;
@@ -55,6 +57,7 @@ fn argmax(values: &[f32]) -> usize {
 }
 
 /// Decode `frames` (row-major `t x HIDDEN`, `t` = valid encoder length).
+#[cfg(test)]
 pub fn decode(
     frames: &[f32],
     joint: &mut dyn Joint,
@@ -62,6 +65,19 @@ pub fn decode(
     blank: u32,
     max_tokens_per_step: usize,
     is_cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<RawToken>, DecodeError> {
+    decode_biased(frames, joint, vocab_size, blank, max_tokens_per_step, is_cancelled, None)
+}
+
+/// [`decode`] with optional context biasing (dictionary terms steer the token argmax).
+pub fn decode_biased(
+    frames: &[f32],
+    joint: &mut dyn Joint,
+    vocab_size: usize,
+    blank: u32,
+    max_tokens_per_step: usize,
+    is_cancelled: &dyn Fn() -> bool,
+    mut bias: Option<BiasState<'_>>,
 ) -> Result<Vec<RawToken>, DecodeError> {
     debug_assert_eq!(frames.len() % HIDDEN, 0);
     let total = frames.len() / HIDDEN;
@@ -83,8 +99,18 @@ pub fn decode(
                 logits.len()
             )));
         }
-        let token = argmax(&logits[..vocab_size]) as u32;
-        let step = argmax(&logits[vocab_size..]);
+        let mut step = argmax(&logits[vocab_size..]);
+        let token = match bias.as_mut().and_then(|b| b.choose(&logits[..vocab_size], t).map(|c| (c, b.params().override_duration_cap))) {
+            Some((boosted, cap)) => {
+                if boosted.overrode_blank {
+                    // The duration head described the blank this token replaced, which often
+                    // skips several frames; it predicts no duration per token, so cap the skip.
+                    step = step.min(cap);
+                }
+                boosted.id
+            }
+            None => argmax(&logits[..vocab_size]) as u32,
+        };
         if token != blank {
             state = next_state;
             out.push(RawToken {
@@ -94,6 +120,9 @@ pub fn decode(
             });
             last = token as i32;
             emitted += 1;
+            if let Some(b) = bias.as_mut() {
+                b.emitted(token, t);
+            }
         }
         if step > 0 {
             t += step;
@@ -211,6 +240,44 @@ mod tests {
         let (tokens, joint) = run(vec![(1, 4)], 2, 10);
         assert_eq!(tokens.len(), 1);
         assert_eq!(joint.calls, 1);
+    }
+
+    fn biased(cap: usize) -> Vec<RawToken> {
+        use crate::boost::{BiasParams, BiasState, BoostTrie};
+        let vocab = crate::vocab::Vocab::parse("▁a 0\nb 1\nc 2\n<blk> 3\n").unwrap();
+        let trie = BoostTrie::new(&["a".to_string()], &vocab);
+        let mut params = BiasParams::new(5.0);
+        params.start_factor = 1.0;
+        params.blank_margin = 100.0;
+        params.override_duration_cap = cap;
+        let mut joint = Scripted { script: vec![(3, 4)], calls: 0, seen_targets: vec![], seen_frames: vec![] };
+        decode_biased(&frames(3), &mut joint, V, BLANK, 10, &|| false, Some(BiasState::new(&trie, params, BLANK))).unwrap()
+    }
+
+    #[test]
+    fn a_boosted_token_that_overrides_blank_does_not_inherit_the_blanks_long_skip() {
+        // Every frame is blank with duration 4; the dictionary token wins each time.
+        // Capped at 1 frame it is emitted on frames 0, 1 and 2; uncapped the first emission would
+        // skip past the end of the audio and swallow the rest.
+        let frames: Vec<usize> = biased(1).iter().map(|t| t.frame).collect();
+        assert_eq!(frames, vec![0, 1, 2]);
+        assert_eq!(biased(4).iter().map(|t| t.frame).collect::<Vec<_>>(), vec![0]);
+    }
+
+    #[test]
+    fn a_prefix_emitted_by_the_decoder_activates_its_continuation() {
+        use crate::boost::{BiasParams, BiasState, BoostTrie};
+        let vocab = crate::vocab::Vocab::parse("▁a 0\nb 1\nc 2\n<blk> 3\n").unwrap();
+        let trie = BoostTrie::new(&["ab".to_string()], &vocab);
+        let params = BiasParams::new(5.0); // start factor 0: only the continuation is boosted
+        // Frame 0: model emits "▁a" (dur 1). Frame 1: the model prefers blank, "b" is boosted.
+        let mut joint = Scripted { script: vec![(0, 1), (3, 1)], calls: 0, seen_targets: vec![], seen_frames: vec![] };
+        let tokens = decode_biased(&frames(2), &mut joint, V, BLANK, 10, &|| false, Some(BiasState::new(&trie, params, BLANK))).unwrap();
+        assert_eq!(tokens.iter().map(|t| t.id).collect::<Vec<_>>(), vec![0, 1]);
+        // Without the prefix having been emitted, "b" alone is not boosted.
+        let mut joint = Scripted { script: vec![(3, 1)], calls: 0, seen_targets: vec![], seen_frames: vec![] };
+        let tokens = decode_biased(&frames(2), &mut joint, V, BLANK, 10, &|| false, Some(BiasState::new(&trie, params, BLANK))).unwrap();
+        assert!(tokens.is_empty());
     }
 
     #[test]

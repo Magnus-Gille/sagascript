@@ -212,6 +212,7 @@ struct Loaded {
     vocab: Vocab,
     max_tokens_per_step: usize,
     trace: bool,
+    boost_tries: crate::boost::BoostTrieCache,
     preprocessor: Mutex<Session>,
     encoder: Mutex<Session>,
     decoder: Mutex<Session>,
@@ -305,6 +306,7 @@ impl OrtEngine {
             vocab,
             max_tokens_per_step,
             trace: self.config.trace,
+            boost_tries: crate::boost::BoostTrieCache::default(),
             preprocessor: Mutex::new(preprocessor),
             encoder: Mutex::new(encoder),
             decoder: Mutex::new(decoder),
@@ -462,18 +464,33 @@ fn transcribe_loaded(
     let started = Instant::now();
     let mut joint_steps = 0;
     let mut joint_run_ms = 0;
+    let mut boost_us = 0u64;
+    let boosting = !request.boost_terms.is_empty() && request.boost_weight > 0.0;
+    let mut boost_active = boosting.then_some(true);
     let raw = if valid == 0 {
         Vec::new()
     } else {
         let mut session = lock(&loaded.decoder);
         let mut joint = OrtJoint { session: &mut session, steps: 0, run_us: 0 };
-        let decoded = tdt::decode(
+        let trie = boosting.then(|| {
+            let (trie, micros) = loaded.boost_tries.get(&request.boost_terms, &loaded.vocab);
+            boost_us = micros;
+            trie
+        });
+        let trie = trie.filter(|t| !t.is_empty());
+        if boosting && trie.is_none() {
+            boost_active = Some(false); // no term could be tokenized
+        }
+        let params = crate::boost::BiasParams::from_env(request.boost_weight);
+        let blank = loaded.vocab.blank_id();
+        let decoded = tdt::decode_biased(
             &frames,
             &mut joint,
             loaded.vocab.len(),
-            loaded.vocab.blank_id(),
+            blank,
             loaded.max_tokens_per_step,
             is_cancelled,
+            trie.as_deref().map(|t| crate::boost::BiasState::new(t, params, blank)),
         );
         joint_steps = joint.steps;
         joint_run_ms = (joint.run_us / 1000) as u64;
@@ -509,7 +526,9 @@ fn transcribe_loaded(
     Ok(TranscribeWindowResult {
         tokens,
         audio_s,
-        timings: WindowTimings { preprocess_ms, encode_ms, decode_ms },
+        timings: WindowTimings { preprocess_ms, encode_ms, decode_ms, boost_us },
+        boost_active,
+        boost_reason: (boost_active == Some(false)).then(|| "no_usable_terms".to_string()),
     })
 }
 
@@ -537,6 +556,7 @@ impl Engine for OrtEngine {
             languages: vec!["sv".into()],
             compute_units: vec!["cpu".into()],
             min_macos: None,
+            context_biasing: true,
         }
     }
 

@@ -23,6 +23,8 @@ fn request_round_trip_all_ops() {
             sample_rate: 16000,
             format: "f32le".into(),
             priority: Priority::Batch,
+            boost_terms: vec!["Gille".into()],
+            boost_weight: 2.5,
         },
         RequestOp::Cancel { target: 7 },
         RequestOp::Status,
@@ -52,6 +54,8 @@ fn request_wire_shape() {
             sample_rate: 16000,
             format: "f32le".into(),
             priority: Priority::Interactive,
+            boost_terms: vec![],
+            boost_weight: 0.0,
         },
     );
     let v: Value = serde_json::from_str(&line).unwrap();
@@ -207,4 +211,63 @@ fn millisecond_fields_accept_float_encoders() {
     assert_eq!((timings.preprocess_ms, timings.encode_ms, timings.decode_ms), (2, 30, 25));
     assert!(serde_json::from_str::<WindowTimings>(r#"{"encode_ms":-1}"#).is_err());
     assert!(serde_json::from_str::<WindowTimings>(r#"{"encode_ms":"30"}"#).is_err());
+}
+
+#[test]
+fn transcribe_window_boost_fields_are_optional_and_omitted_when_off() {
+    let old = r#"{"v":1,"id":4,"op":"transcribe_window","pcm_path":"/p","offset_samples":0,"num_samples":10,"sample_rate":16000,"format":"f32le","priority":"batch"}"#;
+    let parsed = match decode_request(old).unwrap() {
+        ParsedRequest::Ok { op, .. } => op,
+        other => panic!("{other:?}"),
+    };
+    let RequestOp::TranscribeWindow { boost_terms, boost_weight, .. } = parsed else {
+        panic!("not a transcribe_window")
+    };
+    assert!(boost_terms.is_empty());
+    assert_eq!(boost_weight, 0.0);
+    let line = encode_request(
+        4,
+        &RequestOp::TranscribeWindow {
+            pcm_path: "/p".into(),
+            offset_samples: 0,
+            num_samples: 10,
+            sample_rate: 16000,
+            format: "f32le".into(),
+            priority: Priority::Batch,
+            boost_terms: vec![],
+            boost_weight: 0.0,
+        },
+    );
+    assert!(!line.contains("boost"));
+}
+
+#[test]
+fn context_biasing_capability_and_result_fields_are_backwards_compatible() {
+    // An older host: no `context_biasing` capability, no `boost_active`, no `boost_us`.
+    let caps: Capabilities = serde_json::from_str(
+        r#"{"sample_rate":16000,"max_window_s":30,"preferred_window_s":30,"preferred_overlap_s":6,"max_in_flight":1}"#,
+    )
+    .unwrap();
+    assert!(!caps.context_biasing);
+    let old: TranscribeWindowResult = serde_json::from_str(r#"{"tokens":[],"audio_s":1.0,"timings":{"decode_ms":3}}"#).unwrap();
+    assert_eq!(old.boost_active, None);
+    assert_eq!(old.timings.boost_us, 0);
+    // New host: reported when a dictionary was sent, omitted otherwise.
+    let new: TranscribeWindowResult =
+        serde_json::from_str(r#"{"tokens":[],"audio_s":1.0,"timings":{"boost_us":120.0},"boost_active":false}"#).unwrap();
+    assert_eq!(new.boost_active, Some(false));
+    assert_eq!(new.timings.boost_us, 120);
+    let line = serde_json::to_string(&old).unwrap();
+    assert!(!line.contains("boost"));
+}
+
+#[test]
+fn malformed_boost_fields_are_rejected_without_echoing_the_dictionary() {
+    let line = r#"{"v":1,"id":4,"op":"transcribe_window","pcm_path":"/p","offset_samples":0,"num_samples":10,"sample_rate":16000,"format":"f32le","priority":"batch","boost_terms":"Magnus Gille secret"}"#;
+    match decode_request(line).unwrap() {
+        ParsedRequest::BadParams { message, .. } => {
+            assert!(!message.contains("Magnus") && !message.contains("secret"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
 }

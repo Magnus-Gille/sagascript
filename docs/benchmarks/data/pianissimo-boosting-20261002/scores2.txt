@@ -1,0 +1,16 @@
+fleurs60 sf 0.5 w 3 true {'name_recall': 74.63, 'names': 272, 'wer': 6.91, 'false_ins': 0}
+fleurs60 sf 0.5 w 3 fp {'name_recall': 65.81, 'names': 272, 'wer': 7.29, 'false_ins': 0}
+fleurs60 sf 0.5 w 5 true {'name_recall': 77.21, 'names': 272, 'wer': 7.07, 'false_ins': 0}
+fleurs60 sf 0.5 w 5 fp {'name_recall': 65.07, 'names': 272, 'wer': 7.61, 'false_ins': 0}
+fleurs60 sf 0.25 w 3 true {'name_recall': 74.26, 'names': 272, 'wer': 6.77, 'false_ins': 0}
+fleurs60 sf 0.25 w 3 fp {'name_recall': 65.81, 'names': 272, 'wer': 7.2, 'false_ins': 0}
+fleurs60 sf 0.25 w 5 true {'name_recall': 76.84, 'names': 272, 'wer': 6.74, 'false_ins': 0}
+fleurs60 sf 0.25 w 5 fp {'name_recall': 66.18, 'names': 272, 'wer': 7.23, 'false_ins': 0}
+riksdag sf 0.5 w 3 true {'name_recall': 95.52, 'names': 201, 'wer': 23.47, 'false_ins': 0}
+riksdag sf 0.5 w 3 fp {'name_recall': 93.03, 'names': 201, 'wer': 23.36, 'false_ins': 0}
+riksdag sf 0.5 w 5 true {'name_recall': 96.52, 'names': 201, 'wer': 23.63, 'false_ins': 0}
+riksdag sf 0.5 w 5 fp {'name_recall': 92.54, 'names': 201, 'wer': 23.55, 'false_ins': 2}
+riksdag sf 0.25 w 3 true {'name_recall': 96.52, 'names': 201, 'wer': 23.36, 'false_ins': 0}
+riksdag sf 0.25 w 3 fp {'name_recall': 93.53, 'names': 201, 'wer': 23.36, 'false_ins': 0}
+riksdag sf 0.25 w 5 true {'name_recall': 97.01, 'names': 201, 'wer': 23.38, 'false_ins': 0}
+riksdag sf 0.25 w 5 fp {'name_recall': 93.03, 'names': 201, 'wer': 23.37, 'false_ins': 0}

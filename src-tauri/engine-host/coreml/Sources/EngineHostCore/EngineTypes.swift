@@ -44,6 +44,7 @@ public struct HostCapabilities: Sendable {
             "languages": ["sv"],
             "compute_units": ["ane", "gpu", "cpu", "all"],
             "min_macos": "14.0",
+            "context_biasing": true,
         ]
     }
 }
@@ -77,6 +78,7 @@ public struct WindowRequest: Sendable {
     public let sampleRate: Int
     public let format: String
     public let priority: String
+    public let boost: BoostConfig?
 
     public init(
         pcmPath: String,
@@ -84,7 +86,8 @@ public struct WindowRequest: Sendable {
         numSamples: Int,
         sampleRate: Int,
         format: String,
-        priority: String
+        priority: String,
+        boost: BoostConfig? = nil
     ) {
         self.pcmPath = pcmPath
         self.offsetSamples = offsetSamples
@@ -92,6 +95,7 @@ public struct WindowRequest: Sendable {
         self.sampleRate = sampleRate
         self.format = format
         self.priority = priority
+        self.boost = boost
     }
 }
 
@@ -119,9 +123,15 @@ public struct WindowResult: Sendable {
     public let preprocessMilliseconds: Double
     public let encodeMilliseconds: Double
     public let decodeMilliseconds: Double
+    /// nil when no dictionary was sent; otherwise whether biasing was in effect for this window.
+    public var boostActive: Bool? = nil
+    /// Why biasing was not applied (`no_usable_terms`, `no_top_k_outputs`); nil when active or not requested.
+    public var boostReason: String? = nil
+    /// Trie build time in microseconds (0 when cached or not requested).
+    public var boostMicroseconds: Int = 0
 
     public func jsonObject() -> [String: Any] {
-        [
+        var object: [String: Any] = [
             "tokens": tokens.map { $0.jsonObject() },
             "audio_s": audioSeconds,
             "timings": [
@@ -130,6 +140,14 @@ public struct WindowResult: Sendable {
                 "decode_ms": Int(decodeMilliseconds.rounded()),
             ],
         ]
+        if let boostActive {
+            object["boost_active"] = boostActive
+            if let boostReason { object["boost_reason"] = boostReason }
+            var timings = object["timings"] as? [String: Any] ?? [:]
+            timings["boost_us"] = boostMicroseconds
+            object["timings"] = timings
+        }
+        return object
     }
 }
 

@@ -239,6 +239,13 @@ pub(crate) struct Inner {
     cv: Condvar,
     /// Serializes start / load / unload / shutdown.
     lifecycle: Mutex<()>,
+    /// Dictionary applied to every window job that does not carry its own.
+    boost: Mutex<Option<Arc<BoostSpec>>>,
+    /// Context-biasing outcome counters (see [`BoostReport`]).
+    boost_windows: AtomicU64,
+    boost_inactive_windows: AtomicU64,
+    boost_unusable_windows: AtomicU64,
+    boost_us: AtomicU64,
     /// Pid of the host we last warned about having no interactive reservation.
     warned_no_reserve_pid: AtomicU32,
     /// Host spawns / `load` requests, for diagnostics (see [`HostSnapshot`]).
@@ -274,6 +281,11 @@ impl EngineHostClient {
             }),
             cv: Condvar::new(),
             lifecycle: Mutex::new(()),
+            boost: Mutex::new(None),
+            boost_windows: AtomicU64::new(0),
+            boost_inactive_windows: AtomicU64::new(0),
+            boost_unusable_windows: AtomicU64::new(0),
+            boost_us: AtomicU64::new(0),
             warned_no_reserve_pid: AtomicU32::new(0),
             spawns: AtomicU64::new(0),
             loads: AtomicU64::new(0),
@@ -293,6 +305,25 @@ impl EngineHostClient {
 
     pub fn config(&self) -> &EngineHostConfig {
         &self.inner.cfg
+    }
+
+    /// Set (or clear) the context-biasing dictionary for later jobs.
+    pub fn set_boost(&self, boost: Option<BoostSpec>) {
+        *self.inner.boost.lock().unwrap_or_else(|e| e.into_inner()) = boost.map(Arc::new);
+    }
+
+    /// What happened to the dictionary on the windows sent so far.
+    pub fn boost_report(&self) -> BoostReport {
+        BoostReport {
+            windows: self.inner.boost_windows.load(Ordering::Relaxed),
+            inactive_windows: self.inner.boost_inactive_windows.load(Ordering::Relaxed),
+            unusable_windows: self.inner.boost_unusable_windows.load(Ordering::Relaxed),
+            trie_build_us: self.inner.boost_us.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn boost(&self) -> Option<Arc<BoostSpec>> {
+        self.inner.boost.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Start the host and load the model now (pre-warm). Returns its capabilities.
@@ -475,6 +506,90 @@ pub struct WindowRequest {
     pub num_samples: u64,
     pub sample_rate: u32,
     pub priority: Priority,
+    /// Context-biasing dictionary; `None` leaves decoding unchanged.
+    pub boost: Option<Arc<BoostSpec>>,
+}
+
+/// Outcome of context biasing over the windows sent so far. A window is inactive when the host
+/// did not report `boost_active: true` (an older host that ignores the fields, or a model
+/// without top-K joint outputs), so the dictionary had no effect on it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BoostReport {
+    /// Windows that carried a dictionary and completed.
+    pub windows: u64,
+    /// Windows the host could not apply the dictionary to (older host, or a model without top-K outputs).
+    pub inactive_windows: u64,
+    /// Windows where the host reported that no dictionary term could be tokenized.
+    pub unusable_windows: u64,
+    /// Total trie build time reported by the host.
+    pub trie_build_us: u64,
+}
+
+impl BoostReport {
+    /// Windows where biasing was in effect (it may still have changed nothing).
+    pub fn active_windows(&self) -> u64 {
+        self.windows.saturating_sub(self.inactive_windows + self.unusable_windows)
+    }
+
+    /// A user-facing warning when biasing did not (fully) take effect, else `None`.
+    pub fn warning(&self) -> Option<String> {
+        if self.inactive_windows > 0 {
+            Some(format!(
+                "Context biasing was NOT applied to {} of {} windows: the engine host does not support it \
+                 (older host or a model without top-K joint outputs). Transcription ran without the dictionary.",
+                self.inactive_windows, self.windows
+            ))
+        } else if self.unusable_windows > 0 {
+            Some(format!(
+                "Context biasing had no effect on {} of {} windows: none of the dictionary terms could be \
+                 tokenized with the model's vocabulary.",
+                self.unusable_windows, self.windows
+            ))
+        } else {
+            None
+        }
+    }
+}
+
+/// Dictionary terms and logit bonus sent with each window.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoostSpec {
+    pub terms: Vec<String>,
+    pub weight: f32,
+    /// Distinct terms dropped because more than `MAX_BOOST_TERMS` were given.
+    pub truncated: usize,
+    /// Terms dropped for exceeding `MAX_BOOST_TERM_CHARS`.
+    pub too_long: usize,
+}
+
+impl BoostSpec {
+    /// Bounded (<= 500 terms, <= 64 chars each) and deduplicated; `None` when it would be a no-op.
+    pub fn new(terms: impl IntoIterator<Item = String>, weight: f32) -> Option<Self> {
+        if !weight.is_finite() || weight <= 0.0 {
+            return None;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut too_long = 0;
+        let mut distinct: Vec<String> = Vec::new();
+        for term in terms.into_iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) {
+            if term.chars().count() > sagascript_engine_protocol::MAX_BOOST_TERM_CHARS {
+                too_long += 1;
+            } else if seen.insert(term.to_lowercase()) {
+                distinct.push(term);
+            }
+        }
+        let truncated = distinct.len().saturating_sub(sagascript_engine_protocol::MAX_BOOST_TERMS);
+        distinct.truncate(sagascript_engine_protocol::MAX_BOOST_TERMS);
+        if distinct.is_empty() {
+            return None;
+        }
+        Some(Self {
+            terms: distinct,
+            weight: weight.min(sagascript_engine_protocol::MAX_BOOST_WEIGHT),
+            truncated,
+            too_long,
+        })
+    }
 }
 
 fn window_op(req: &WindowRequest) -> RequestOp {
@@ -485,6 +600,8 @@ fn window_op(req: &WindowRequest) -> RequestOp {
         sample_rate: req.sample_rate,
         format: "f32le".into(),
         priority: req.priority,
+        boost_terms: req.boost.as_ref().map(|b| b.terms.clone()).unwrap_or_default(),
+        boost_weight: req.boost.as_ref().map_or(0.0, |b| b.weight),
     }
 }
 
@@ -531,6 +648,18 @@ impl WindowTicket {
                     self.pending = None;
                     let r: TranscribeWindowResult =
                         parse_result(v).map_err(|e| EngineHostError::Protocol(e.0))?;
+                    if self.req.boost.is_some() {
+                        self.inner.boost_windows.fetch_add(1, Ordering::Relaxed);
+                        self.inner.boost_us.fetch_add(r.timings.boost_us, Ordering::Relaxed);
+                        if r.boost_active != Some(true) {
+                            let counter = if r.boost_reason.as_deref() == Some("no_usable_terms") {
+                                &self.inner.boost_unusable_windows
+                            } else {
+                                &self.inner.boost_inactive_windows
+                            };
+                            counter.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
                     return Ok(WindowOutput {
                         tokens: r.tokens,
                         audio_s: r.audio_s,
@@ -1105,4 +1234,42 @@ pub fn validate_hello(hello: &HelloResult, client: &ClientIdentity) -> Result<Ca
         );
     }
     Ok(c.clone())
+}
+
+#[cfg(test)]
+mod boost_spec_tests {
+    use super::BoostSpec;
+
+    #[test]
+    fn off_when_weight_or_terms_are_empty() {
+        assert!(BoostSpec::new(vec!["Gille".into()], 0.0).is_none());
+        assert!(BoostSpec::new(vec!["Gille".into()], f32::NAN).is_none());
+        assert!(BoostSpec::new(vec!["  ".into()], 3.0).is_none());
+    }
+
+    #[test]
+    fn report_warns_only_when_windows_ran_without_biasing() {
+        use super::BoostReport;
+        assert!(BoostReport { windows: 3, inactive_windows: 0, unusable_windows: 0, trie_build_us: 5 }.warning().is_none());
+        let warning = BoostReport { windows: 3, inactive_windows: 3, unusable_windows: 0, trie_build_us: 0 }.warning().unwrap();
+        assert!(warning.contains("NOT applied to 3 of 3"));
+        let unusable = BoostReport { windows: 2, inactive_windows: 0, unusable_windows: 2, trie_build_us: 0 };
+        assert!(unusable.warning().unwrap().contains("could be tokenized") && unusable.active_windows() == 0);
+    }
+
+    #[test]
+    fn bounds_and_deduplicates_terms() {
+        let long = "x".repeat(65);
+        let many: Vec<String> = (0..600).map(|i| format!("Namn{i}")).collect();
+        let spec = BoostSpec::new(
+            vec!["Gille".into(), "gille".into(), long, "Magnus Gille".into()].into_iter().chain(many),
+            99.0,
+        )
+        .unwrap();
+        assert_eq!(spec.terms.len(), 500);
+        assert_eq!(spec.too_long, 1);
+        assert_eq!(spec.truncated, 102); // 2 distinct short terms + 600 others, minus 500
+        assert_eq!(&spec.terms[..2], ["Gille", "Magnus Gille"]);
+        assert_eq!(spec.weight, 20.0);
+    }
 }

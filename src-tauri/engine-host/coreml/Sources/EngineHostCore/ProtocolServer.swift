@@ -300,6 +300,35 @@ public final class EngineHostServer {
         }
     }
 
+    /// Validates `boost_terms` / `boost_weight` (presence, type and bounds, whether or not terms are
+    /// given) with fixed error texts: dictionary terms are personal data and are never echoed.
+    static func parseBoost(_ request: [String: Any]) -> Result<BoostConfig?, EngineHostError> {
+        func bad(_ message: String) -> Result<BoostConfig?, EngineHostError> {
+            .failure(EngineHostError(code: "bad_request", message: message))
+        }
+        var terms: [String] = []
+        if let raw = request["boost_terms"] {
+            guard let array = raw as? [Any], array.count <= BoostConfig.maxTerms else {
+                return bad("boost_terms must be an array of at most 500 strings")
+            }
+            for item in array {
+                guard let term = item as? String, term.unicodeScalars.count <= BoostConfig.maxTermLength else {
+                    return bad("boost_terms must be an array of at most 500 strings of at most 64 characters")
+                }
+                terms.append(term)
+            }
+        }
+        var weight: Float = 0
+        if let raw = request["boost_weight"] {
+            guard let number = raw as? NSNumber, String(cString: number.objCType) != "c",
+                  number.doubleValue.isFinite, number.doubleValue >= 0, number.doubleValue <= 20 else {
+                return bad("boost_weight must be a number within 0...20")
+            }
+            weight = number.floatValue
+        }
+        return .success(!terms.isEmpty && weight > 0 ? BoostConfig(terms: terms, weight: weight) : nil)
+    }
+
     private func handleTranscribe(id: UInt64, request: [String: Any]) {
         guard let pcmPath = request["pcm_path"] as? String, pcmPath.hasPrefix("/"),
               let offsetSamples = integer(request["offset_samples"]), offsetSamples >= 0,
@@ -319,13 +348,19 @@ public final class EngineHostServer {
             sendFailure(id: id, error: EngineHostError(code: "bad_request", message: "num_samples exceeds max_window_s", retryable: false))
             return
         }
+        let boost: BoostConfig?
+        switch Self.parseBoost(request) {
+        case let .success(config): boost = config
+        case let .failure(error): sendFailure(id: id, error: error); return
+        }
         let window = WindowRequest(
             pcmPath: pcmPath,
             offsetSamples: offsetSamples,
             numSamples: numSamples,
             sampleRate: sampleRate,
             format: format,
-            priority: priority
+            priority: priority,
+            boost: boost
         )
         scheduler.submit(id: id, priority: priority, work: { [weak self] flag in
             guard let self else { throw EngineHostError(code: "internal", message: "Host deallocated") }

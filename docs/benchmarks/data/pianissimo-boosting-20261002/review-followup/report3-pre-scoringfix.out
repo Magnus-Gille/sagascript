@@ -1,0 +1,32 @@
+== (c)
+nn w0 {'wer': 4.98, 'names_hit': 0, 'names_total': 0, 'false_ins': 0, 'dict_terms': 500, 'ref_words': 1647}
+c-nn-w1 {'wer': 5.16, 'names_hit': 0, 'names_total': 0, 'false_ins': 0, 'dict_terms': 500, 'ref_words': 1647, 'changed_words': 3}
+c-nn-w2 {'wer': 5.34, 'names_hit': 0, 'names_total': 0, 'false_ins': 0, 'dict_terms': 500, 'ref_words': 1647, 'changed_words': 7}
+c-nn-w3 {'wer': 5.53, 'names_hit': 0, 'names_total': 0, 'false_ins': 0, 'dict_terms': 500, 'ref_words': 1647, 'changed_words': 12}
+c-nn-w5 {'wer': 5.83, 'names_hit': 0, 'names_total': 0, 'false_ins': 0, 'dict_terms': 500, 'ref_words': 1647, 'changed_words': 17}
+c-nn-w3-sf0 {'wer': 5.04, 'names_hit': 0, 'names_total': 0, 'false_ins': 0, 'dict_terms': 500, 'ref_words': 1647, 'changed_words': 2}
+c-nn-w5-sf0 {'wer': 5.16, 'names_hit': 0, 'names_total': 0, 'false_ins': 0, 'dict_terms': 500, 'ref_words': 1647, 'changed_words': 4}
+f60 w0 {'wer': 7.06, 'names_hit': 182, 'names_total': 272, 'false_ins': 1, 'dict_terms': 481, 'ref_words': 6293}
+c-f60-w1 {'wer': 7.1, 'names_hit': 182, 'names_total': 272, 'false_ins': 1, 'dict_terms': 481, 'ref_words': 6293, 'changed_words': 8}
+c-f60-w2 {'wer': 7.09, 'names_hit': 183, 'names_total': 272, 'false_ins': 1, 'dict_terms': 481, 'ref_words': 6293, 'changed_words': 27}
+c-f60-w3 {'wer': 7.17, 'names_hit': 183, 'names_total': 272, 'false_ins': 2, 'dict_terms': 481, 'ref_words': 6293, 'changed_words': 50}
+c-f60-w5 {'wer': 7.26, 'names_hit': 181, 'names_total': 272, 'false_ins': 5, 'dict_terms': 481, 'ref_words': 6293, 'changed_words': 85}
+c-f60-w3-sf0 {'wer': 7.12, 'names_hit': 180, 'names_total': 272, 'false_ins': 1, 'dict_terms': 481, 'ref_words': 6293, 'changed_words': 11}
+c-f60-w5-sf0 {'wer': 7.12, 'names_hit': 179, 'names_total': 272, 'false_ins': 3, 'dict_terms': 481, 'ref_words': 6293, 'changed_words': 24}
+rik w0 {'wer': 23.4, 'names_hit': 187, 'names_total': 201, 'false_ins': 4, 'dict_terms': 481, 'ref_words': 8553}
+c-rik-w1 {'wer': 23.42, 'names_hit': 187, 'names_total': 201, 'false_ins': 4, 'dict_terms': 481, 'ref_words': 8553, 'changed_words': 12}
+c-rik-w2 {'wer': 23.42, 'names_hit': 190, 'names_total': 201, 'false_ins': 4, 'dict_terms': 481, 'ref_words': 8553, 'changed_words': 23}
+c-rik-w3 {'wer': 23.44, 'names_hit': 190, 'names_total': 201, 'false_ins': 4, 'dict_terms': 481, 'ref_words': 8553, 'changed_words': 32}
+c-rik-w5 {'wer': 23.51, 'names_hit': 191, 'names_total': 201, 'false_ins': 4, 'dict_terms': 481, 'ref_words': 8553, 'changed_words': 70}
+c-rik-w3-sf0 {'wer': 23.41, 'names_hit': 187, 'names_total': 201, 'false_ins': 4, 'dict_terms': 481, 'ref_words': 8553, 'changed_words': 2}
+c-rik-w5-sf0 {'wer': 23.41, 'names_hit': 187, 'names_total': 201, 'false_ins': 4, 'dict_terms': 481, 'ref_words': 8553, 'changed_words': 8}
+== (a)
+f60 N=100 w=3: targets base 18/25 -> 17/25; all names base 910 -> 911 of 1360; false ins (base 0) 0; WER delta mean +0.10; words changed total 185 (5 seeds)
+f60 N=100 w=5: targets base 18/25 -> 18/25; all names base 910 -> 914 of 1360; false ins (base 0) 3; WER delta mean +0.12; words changed total 325 (5 seeds)
+f60 N=100 w=5-sf0: targets base 18/25 -> 20/25; all names base 910 -> 902 of 1360; false ins (base 0) 1; WER delta mean +0.03; words changed total 46 (5 seeds)
+f60 N=400 w=3: targets base 81/127 -> 92/127; all names base 910 -> 925 of 1360; false ins (base 5) 9; WER delta mean +0.07; words changed total 269 (5 seeds)
+f60 N=400 w=5: targets base 81/127 -> 90/127; all names base 910 -> 915 of 1360; false ins (base 5) 21; WER delta mean +0.18; words changed total 463 (5 seeds)
+f60 N=400 w=5-sf0: targets base 81/127 -> 91/127; all names base 910 -> 907 of 1360; false ins (base 5) 12; WER delta mean +0.02; words changed total 154 (5 seeds)
+rik N=400 w=3: targets base 150/190 -> 190/190; all names base 935 -> 975 of 1005; false ins (base 12) 6; WER delta mean -0.04; words changed total 222
+rik N=400 w=5: targets base 150/190 -> 185/190; all names base 935 -> 970 of 1005; false ins (base 12) 3; WER delta mean +0.04; words changed total 410
+rik N=400 w=5-sf0: targets base 150/190 -> 185/190; all names base 935 -> 970 of 1005; false ins (base 12) 3; WER delta mean -0.08; words changed total 144
