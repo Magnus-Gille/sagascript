@@ -8,7 +8,8 @@ use sagascript_core::speaker_hint::SpeakerCountHint;
 pub struct SpeakerCountArgs {
     /// Expected number of speakers, counting everyone who speaks, including a chair or moderator.
     /// Voices that are clearly different are not merged to reach it (the result says if it fell
-    /// short); if you are unsure of the count, use --min-speakers.
+    /// short), except that a short extra voice (under 8 seconds) may join the nearest larger
+    /// speaker; if you are unsure of the count, use --min-speakers.
     #[arg(
         long,
         value_name = "N",

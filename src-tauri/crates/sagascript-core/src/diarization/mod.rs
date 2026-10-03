@@ -347,12 +347,15 @@ pub fn cluster_with_outcome(
         if let Some(hint) = &config.speaker_hint {
             let budget = |count: usize| count.saturating_sub(unembedded_tracks).max(1);
             let (lo, hi) = hint.bounds();
+            // The upper bound is unreachable when fallback tracks plus one embedded cluster
+            // already exceed it: reduce nothing, keep the normal labels and report the shortfall.
+            let hi_infeasible = hi.is_some_and(|hi| hi < unembedded_tracks + 1);
             let (lo, hi) = (budget(lo), hi.map(budget));
             let found = clustered.iter().map(|(_, label)| *label).collect::<std::collections::BTreeSet<_>>().len();
             let target = if found < lo {
                 Some(lo)
             } else {
-                hi.filter(|&hi| found > hi)
+                hi.filter(|&hi| found > hi && !hi_infeasible)
             };
             if let Some(target) = target {
                 if target > embeddings.len() {
@@ -374,14 +377,22 @@ pub fn cluster_with_outcome(
                     // Clusters under the minimum speech are not speakers (the pipeline keeps them
                     // only because they are far from everyone): fold them in first, as far as the
                     // count needs. Only then are real speakers merged, within the distance limit.
-                    clustering::absorb_small_clusters_floor(
-                        &embeddings,
-                        &mut labels,
-                        &durations,
-                        config.min_speaker_seconds,
-                        f32::INFINITY,
-                        target,
-                    );
+                    // Only into existing large clusters; with none (short audio) the limited
+                    // merge below decides instead.
+                    let mut seconds = std::collections::BTreeMap::<usize, f64>::new();
+                    for (&label, &d) in labels.iter().zip(&durations) {
+                        *seconds.entry(label).or_default() += d;
+                    }
+                    if seconds.values().any(|&s| s >= config.min_speaker_seconds) {
+                        clustering::absorb_small_clusters_floor(
+                            &embeddings,
+                            &mut labels,
+                            &durations,
+                            config.min_speaker_seconds,
+                            f32::INFINITY,
+                            target,
+                        );
+                    }
                     clustering::merge_least_heard_within(
                         &embeddings,
                         &mut labels,
@@ -869,11 +880,52 @@ mod tests {
     #[test]
     fn unreachable_bound_from_unembedded_tracks_is_reported_not_hidden() {
         let analysis = unembedded_track_analysis();
-        // One fallback track already uses the whole budget of 1; the embedded speakers still need
-        // at least one cluster, so even a forced exact 1 delivers 2.
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))), (2, false));
+        // One fallback track already uses the whole budget of 1 and the embedded speakers need at
+        // least one cluster: unreachable, so nothing is merged and the shortfall is reported.
+        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))), (3, false));
         // Unforced, the orthogonal embedded voices also stay apart.
         assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::range(None, Some(1)))), (3, false));
+    }
+
+    #[test]
+    fn short_clusters_are_not_folded_together_without_a_large_cluster() {
+        let dim = embedding::EMBEDDING_DIM;
+        let unit = |d: usize| {
+            let mut v = vec![0.0f32; dim];
+            v[d] = 1.0;
+            v
+        };
+        // Two sequential 4 s segments, orthogonal embeddings: no cluster reaches 8 s.
+        let analysis = DiarizationAnalysis {
+            raw_segments: vec![(0.0, 4.0, 0), (5.0, 9.0, 0)],
+            embeddings: vec![(0, unit(0)), (1, unit(1))],
+        };
+        assert_eq!(speaker_count(&cluster(&analysis, &DiarizeConfig::default()).unwrap()), 2);
+        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(1))), (2, false));
+        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))), (1, true));
+    }
+
+    #[test]
+    fn unreachable_total_bound_merges_nothing_real() {
+        let dim = embedding::EMBEDDING_DIM;
+        let mut a = vec![0.0f32; dim];
+        a[0] = 1.0;
+        let mut b = vec![0.0f32; dim];
+        b[0] = 0.5;
+        b[1] = 0.866; // distance 0.5 from `a`: mergeable under the 0.9 limit
+        // Two 20 s embedded voices on track 0 plus a fully unembedded track 1.
+        let analysis = DiarizationAnalysis {
+            raw_segments: vec![(0.0, 20.0, 0), (21.0, 41.0, 0), (42.0, 42.1, 1)],
+            embeddings: vec![(0, a), (1, b)],
+        };
+        let base = cluster(&analysis, &DiarizeConfig::default()).unwrap();
+        for hint in [SpeakerCountHint::exact(1), SpeakerCountHint::range(None, Some(1)), SpeakerCountHint::forced(1)] {
+            let (segments, outcome) = cluster_with_outcome(&analysis, &with_hint(hint)).unwrap();
+            assert_eq!(labels_of(&segments), labels_of(&base), "{hint:?}");
+            assert_eq!(outcome, Some(SpeakerHintOutcome { satisfied: false, delivered: 3 }), "{hint:?}");
+        }
+        // Reachable: the embedded pair merges (3 -> 2 total).
+        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(2))), (2, true));
     }
 
     #[test]

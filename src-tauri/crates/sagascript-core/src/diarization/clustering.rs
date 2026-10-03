@@ -806,6 +806,26 @@ mod tests {
     }
 
     #[test]
+    fn merge_least_heard_ties_boundary_and_isolated_cluster() {
+        let run = |input: &[(usize, [f32; EMBEDDING_DIM])], durations: &[f64], target: usize, limit: f32| {
+            let mut labels: Vec<usize> = (0..input.len()).collect();
+            let left = merge_least_heard_within(input, &mut labels, durations, target, limit);
+            (left, labels)
+        };
+        // Equal seconds: the lowest label is least heard; equally near neighbours: the lowest label.
+        let tied = vec![(0, unit_embedding(0)), (1, mix(0, 1.0, 1, 1.0)), (2, mix(1, 1.0, 0, 1.0))];
+        assert_eq!(run(&tied, &[10.0, 10.0, 10.0], 2, 1.5), (2, vec![1, 1, 2]));
+        // An isolated least-heard cluster is not skipped in favour of a better-heard pair.
+        let isolated = vec![(0, unit_embedding(5)), (1, unit_embedding(0)), (2, mix(0, 0.8, 2, 0.6))];
+        assert_eq!(run(&isolated, &[2.0, 30.0, 40.0], 2, 0.9), (3, vec![0, 1, 2]));
+        // Boundary: distance exactly at the limit merges, just above does not.
+        let pair = vec![(0, unit_embedding(0)), (1, mix(0, 0.5, 1, 0.866_025_4))];
+        let d = 1.0 - cosine_similarity(&pair[0].1, &pair[1].1);
+        assert_eq!(run(&pair, &[10.0, 20.0], 1, d).0, 1);
+        assert_eq!(run(&pair, &[10.0, 20.0], 1, d - 1e-4).0, 2);
+    }
+
+    #[test]
     fn count_walk_takes_the_first_qualifying_cut_even_if_the_count_later_falls() {
         // a1 and a2 (5 s each, 0.2 apart) form one 10 s speaker; b (30 s) is 1.0 away. Large clusters
         // by cut: k=1 -> 1, k=2 -> 2 ({a1,a2},{b}), k=3 -> 1 (a1 and a2 are each below 8 s).
