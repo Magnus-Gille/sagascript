@@ -91,6 +91,7 @@ impl Engine for Arc<MockEngine> {
             languages: vec!["sv".into()],
             compute_units: vec!["cpu".into()],
             min_macos: None,
+            context_biasing: false,
         }
     }
     fn execution_slots(&self) -> usize {
@@ -133,6 +134,8 @@ impl Engine for Arc<MockEngine> {
             tokens: vec![WireToken { id: 1, text: "▁hej".into(), start: 0.0, duration: 0.08, confidence: None }],
             audio_s: request.num_samples as f64 / 16_000.0,
             timings: WindowTimings::default(),
+            boost_active: None,
+            boost_reason: None,
         })
     }
     fn unload(&self) {

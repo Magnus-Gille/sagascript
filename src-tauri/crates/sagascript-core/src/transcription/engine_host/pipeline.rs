@@ -31,15 +31,17 @@ impl CancelToken {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct JobOptions {
     pub priority: Priority,
+    pub boost: Option<std::sync::Arc<super::client::BoostSpec>>,
 }
 
 impl Default for JobOptions {
     fn default() -> Self {
         Self {
             priority: Priority::Batch,
+            boost: None,
         }
     }
 }
@@ -54,6 +56,8 @@ pub struct WindowTiming {
     pub preprocess_ms: u64,
     pub encode_ms: u64,
     pub decode_ms: u64,
+    /// Context-biasing trie build time the host reported for this window (0: cached or unused).
+    pub boost_us: u64,
     /// Client-observed submit-to-result time.
     pub round_trip_ms: u64,
 }
@@ -131,6 +135,7 @@ impl EngineHostClient {
             samples,
             JobOptions {
                 priority: Priority::Interactive,
+                boost: None,
             },
             cancel,
             None,
@@ -200,6 +205,7 @@ impl EngineHostClient {
             num_samples: (plan[i].end_sample - plan[i].start_sample) as u64,
             sample_rate: sr,
             priority: opts.priority,
+            boost: opts.boost.clone().or_else(|| self.boost()),
         };
 
         let mut queue: VecDeque<(usize, WindowTicket)> = VecDeque::new();
@@ -305,6 +311,7 @@ fn merge_output(
         preprocess_ms: out.timings.preprocess_ms,
         encode_ms: out.timings.encode_ms,
         decode_ms: out.timings.decode_ms,
+        boost_us: out.timings.boost_us,
         round_trip_ms: out.round_trip_ms,
     });
     if tokens.is_empty() {

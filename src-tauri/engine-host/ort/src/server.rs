@@ -42,12 +42,15 @@ pub struct LoadParams {
     pub compute_units: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WindowRequest {
     pub pcm_path: PathBuf,
     pub offset_samples: u64,
     pub num_samples: u64,
     pub priority: Priority,
+    /// Context-biasing dictionary and logit bonus (empty terms or zero weight: off).
+    pub boost_terms: Vec<String>,
+    pub boost_weight: f32,
 }
 
 /// Build identity reported in `hello`.
@@ -239,7 +242,9 @@ impl<E: Engine> Server<E> {
                 sample_rate,
                 format,
                 priority,
-            } => self.handle_transcribe(id, pcm_path, offset_samples, num_samples, sample_rate, &format, priority),
+                boost_terms,
+                boost_weight,
+            } => self.handle_transcribe(id, pcm_path, offset_samples, num_samples, sample_rate, &format, priority, boost_terms, boost_weight),
             RequestOp::Unload => {
                 let this = Arc::clone(self);
                 self.run_control(Box::new(move || {
@@ -350,6 +355,8 @@ impl<E: Engine> Server<E> {
         sample_rate: u32,
         format: &str,
         priority: Priority,
+        boost_terms: Vec<String>,
+        boost_weight: f32,
     ) {
         let path = PathBuf::from(&pcm_path);
         if !path.is_absolute() || num_samples == 0 || format != "f32le" {
@@ -366,7 +373,16 @@ impl<E: Engine> Server<E> {
             self.send_failure(id, ErrorCode::BadRequest, "num_samples exceeds max_window_s", false);
             return;
         }
-        let request = WindowRequest { pcm_path: path, offset_samples, num_samples, priority };
+        use sagascript_engine_protocol::{MAX_BOOST_TERMS, MAX_BOOST_TERM_CHARS, MAX_BOOST_WEIGHT};
+        if boost_terms.len() > MAX_BOOST_TERMS
+            || boost_terms.iter().any(|t| t.chars().count() > MAX_BOOST_TERM_CHARS)
+            || !boost_weight.is_finite()
+            || !(0.0..=MAX_BOOST_WEIGHT).contains(&boost_weight)
+        {
+            self.send_failure(id, ErrorCode::BadRequest, "boost_terms must be at most 500 strings of at most 64 characters and boost_weight within 0..=20", false);
+            return;
+        }
+        let request = WindowRequest { pcm_path: path, offset_samples, num_samples, priority, boost_terms, boost_weight };
         {
             let mut sched = lock(&self.sched);
             let sequence = sched.next_sequence;

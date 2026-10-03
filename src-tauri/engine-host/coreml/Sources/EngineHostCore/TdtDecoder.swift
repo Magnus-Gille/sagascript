@@ -146,8 +146,16 @@ final class TdtDecodeSession {
     private let encoderStepDestination: FloatVectorDestination
     private let decoderStepDestination: FloatVectorDestination
     private let tokenProbPrecision: TensorPrecision
+    private var bias: BiasState?
+    /// Biasing was requested and the joint exposes top-K outputs, so it is in effect.
+    private(set) var boostActive: Bool
+    private(set) var boostReason: String?
+    private let overrideDurationCap: Int
+    private var topKIDs: MLMultiArray?
+    private var topKLogits: MLMultiArray?
+    private var topKLogitsPrecision: TensorPrecision?
 
-    init(decoder: MLModel, joint: MLModel, blankID: Int, encoderHidden: Int, decoderHidden: Int, decoderLayers: Int) throws {
+    init(decoder: MLModel, joint: MLModel, blankID: Int, encoderHidden: Int, decoderHidden: Int, decoderLayers: Int, bias: (trie: BoostTrie, params: BiasParams)? = nil) throws {
         self.decoder = decoder
         self.joint = joint
         self.blankID = blankID
@@ -186,9 +194,32 @@ final class TdtDecodeSession {
         ])
         jointInput = PreparedFeatureProvider(arrays: ["encoder_step": encoderStep, "decoder_step": decoderStep])
         decoderOptions.outputBackings = ["h_out": hidden, "c_out": cell]
-        jointOptions.outputBackings = [
+        var jointBackings: [String: MLMultiArray] = [
             "token_id": tokenIDBacking, "token_prob": tokenProbBacking, "duration": durationBacking,
         ]
+        overrideDurationCap = bias?.params.overrideDurationCap ?? 1
+        topKIDs = nil; topKLogits = nil; topKLogitsPrecision = nil
+        self.bias = nil
+        boostActive = false
+        boostReason = nil
+        if let bias {
+            if bias.trie.isEmpty {
+                boostReason = "no_usable_terms"  // no dictionary term could be tokenized
+            } else if let idsConstraint = constraint(joint, input: nil, output: "top_k_ids"), idsConstraint.dataType == .int32,
+                      let logitsPrecision = try? floatPrecision(of: joint, output: "top_k_logits", model: "JointDecisionv3"),
+                      let count = idsConstraint.shape.last?.intValue, count > 0 {
+                let ids = try MLMultiArray(shape: [1, 1, 1, NSNumber(value: count)], dataType: .int32)
+                let logits = try MLMultiArray(shape: [1, 1, 1, NSNumber(value: count)], dataType: logitsPrecision.dataType)
+                jointBackings["top_k_ids"] = ids
+                jointBackings["top_k_logits"] = logits
+                topKIDs = ids; topKLogits = logits; topKLogitsPrecision = logitsPrecision
+                self.bias = BiasState(trie: bias.trie, params: bias.params, blankID: blankID)
+                boostActive = true
+            } else {
+                boostReason = "no_top_k_outputs"  // older joint model without top-K outputs
+            }
+        }
+        jointOptions.outputBackings = jointBackings
         encoderStepDestination = FloatVectorDestination(encoderStep, precision: encoderStepPrecision, axis: 1)
         decoderStepDestination = FloatVectorDestination(decoderStep, precision: decoderStepPrecision, axis: 1)
     }
@@ -197,6 +228,7 @@ final class TdtDecodeSession {
         let token: Int
         let probability: Float
         let duration: Int
+        var overrodeBlank = false
     }
 
     /// Runs the prediction network on one token and refreshes `decoderStep`.
@@ -236,14 +268,34 @@ final class TdtDecodeSession {
         }
     }
 
-    private func runJoint(frames: EncoderFrames, frame: Int) throws -> Decision {
+    /// `biasFrame` is the time coordinate for the biasing gap logic (defaults to the encoder frame;
+    /// the end-of-audio flush revisits encoder frames out of order, so it passes its own clock).
+    private func runJoint(frames: EncoderFrames, frame: Int, biasFrame: Int? = nil) throws -> Decision {
         frames.copyFrame(frame, to: encoderStepDestination)
         _ = try joint.prediction(from: jointInput, options: jointOptions)
-        return Decision(
-            token: Int(tokenIDBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0]),
-            probability: loadFloat(UnsafeRawPointer(tokenProbBacking.dataPointer), tokenProbPrecision, 0),
-            duration: Int(durationBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0])
-        )
+        var token = Int(tokenIDBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0])
+        var probability = loadFloat(UnsafeRawPointer(tokenProbBacking.dataPointer), tokenProbPrecision, 0)
+        var duration = Int(durationBacking.dataPointer.bindMemory(to: Int32.self, capacity: 1)[0])
+        var overrodeBlank = false
+        if bias != nil, let topKIDs, let topKLogits, let precision = topKLogitsPrecision {
+            // Candidates are the joint's top-K (sorted by logit); parity with the ONNX host caps them at 64.
+            let count = min(topKIDs.count, BoostConfig.topK)
+            let idPointer = topKIDs.dataPointer.bindMemory(to: Int32.self, capacity: count)
+            let raw = UnsafeRawPointer(topKLogits.dataPointer)
+            let ids = (0..<count).map { Int(idPointer[$0]) }
+            let logits = (0..<count).map { loadFloat(raw, precision, $0) }
+            if let pick = bias!.choose(ids: ids, logits: logits, frame: biasFrame ?? frame) {
+                token = pick.id
+                probability = pick.probability
+                if pick.overrodeBlank {
+                    // The duration head described the blank it replaced, which often skips several
+                    // frames; the joint predicts no duration per token, so cap the skip.
+                    duration = min(duration, overrideDurationCap)
+                    overrodeBlank = true
+                }
+            }
+        }
+        return Decision(token: token, probability: probability, duration: duration, overrodeBlank: overrodeBlank)
     }
 
     private func confidence(_ probability: Float) -> Double {
@@ -331,6 +383,7 @@ final class TdtDecodeSession {
                     id: label, frame: timeIndicesCurrentLabels, duration: duration, confidence: score
                 ))
                 try runDecoder(token: label)
+                bias?.emitted(token: label, frame: timeIndicesCurrentLabels)
 
                 if timeIndicesCurrentLabels == lastEmissionTimestamp {
                     emissionsAtThisTimestamp += 1
@@ -360,7 +413,8 @@ final class TdtDecodeSession {
                     min(effectiveLength - 1, frames.count - 1),
                     min(max(0, effectiveLength - 2), frames.count - 1),
                 ]
-                let decision = try runJoint(frames: frames, frame: variations[additionalSteps % variations.count])
+                let flushFrame = min(finalTimeIndices, effectiveLength - 1)
+                let decision = try runJoint(frames: frames, frame: variations[additionalSteps % variations.count], biasFrame: flushFrame)
                 let duration = try mapDuration(decision.duration)
                 if decision.token == blankID {
                     consecutiveBlanks += 1
@@ -368,11 +422,13 @@ final class TdtDecodeSession {
                     consecutiveBlanks = 0
                     emissions.append(TdtEmission(
                         id: decision.token,
-                        frame: min(finalTimeIndices, effectiveLength - 1),
+                        frame: flushFrame,
                         duration: duration,
                         confidence: confidence(decision.probability)
                     ))
                     try runDecoder(token: decision.token)
+                    // Keep the partial matches in step with what the flush emitted.
+                    bias?.emitted(token: decision.token, frame: flushFrame)
                 }
                 finalTimeIndices = min(finalTimeIndices + max(1, duration), effectiveLength)
                 additionalSteps += 1

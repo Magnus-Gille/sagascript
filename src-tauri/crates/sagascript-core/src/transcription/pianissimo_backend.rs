@@ -712,6 +712,11 @@ impl PianissimoBackend {
         }
     }
 
+    /// Steer decoding with dictionary terms (context biasing); `None` clears it.
+    pub fn set_boost(&self, boost: Option<super::engine_host::BoostSpec>) {
+        self.client.set_boost(boost);
+    }
+
     pub fn client(&self) -> &EngineHostClient {
         &self.client
     }

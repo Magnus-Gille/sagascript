@@ -30,6 +30,14 @@ pub enum Priority {
     Batch,
 }
 
+pub const MAX_BOOST_TERMS: usize = 500;
+pub const MAX_BOOST_TERM_CHARS: usize = 64;
+pub const MAX_BOOST_WEIGHT: f32 = 20.0;
+
+fn is_zero_weight(weight: &f32) -> bool {
+    *weight == 0.0
+}
+
 /// A request body; the `op` tag and its parameters, without `v` and `id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -49,6 +57,13 @@ pub enum RequestOp {
         sample_rate: u32,
         format: String,
         priority: Priority,
+        /// Optional context-biasing dictionary (at most `MAX_BOOST_TERMS` terms of at most
+        /// `MAX_BOOST_TERM_CHARS` characters). Absent or empty: decoding is unchanged.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        boost_terms: Vec<String>,
+        /// Logit bonus for dictionary-continuing tokens (`0..=MAX_BOOST_WEIGHT`).
+        #[serde(default, skip_serializing_if = "is_zero_weight")]
+        boost_weight: f32,
     },
     Cancel {
         target: u64,
@@ -119,6 +134,27 @@ pub struct DecodeError(pub String);
 
 /// Decode a request line. Fails only when no usable `id` can be found
 /// (answer `protocol`, id 0).
+/// Presence, type and bounds of `boost_terms` / `boost_weight` (checked even when the other field is
+/// absent or empty), with fixed value-free error texts. Mirrored by the Core ML host.
+pub fn validate_boost_fields(obj: &serde_json::Map<String, Value>) -> Result<(), &'static str> {
+    if let Some(terms) = obj.get("boost_terms") {
+        let ok = terms.as_array().is_some_and(|a| {
+            a.len() <= MAX_BOOST_TERMS
+                && a.iter().all(|t| t.as_str().is_some_and(|t| t.chars().count() <= MAX_BOOST_TERM_CHARS))
+        });
+        if !ok {
+            return Err("boost_terms must be an array of at most 500 strings of at most 64 characters");
+        }
+    }
+    if let Some(weight) = obj.get("boost_weight") {
+        let ok = weight.as_f64().is_some_and(|w| w.is_finite() && (0.0..=f64::from(MAX_BOOST_WEIGHT)).contains(&w));
+        if !ok {
+            return Err("boost_weight must be a number within 0...20");
+        }
+    }
+    Ok(())
+}
+
 pub fn decode_request(line: &str) -> Result<ParsedRequest, DecodeError> {
     let value: Value =
         serde_json::from_str(line.trim()).map_err(|e| DecodeError(format!("invalid JSON: {e}")))?;
@@ -147,6 +183,13 @@ pub fn decode_request(line: &str) -> Result<ParsedRequest, DecodeError> {
     ];
     if !KNOWN.contains(&op_name.as_str()) {
         return Ok(ParsedRequest::UnknownOp { id, op: op_name });
+    }
+    if op_name == "transcribe_window" {
+        // Dictionary terms are personal data: reject malformed fields with fixed texts before typed
+        // deserialization, whose errors would echo the offending value.
+        if let Err(message) = validate_boost_fields(obj) {
+            return Ok(ParsedRequest::BadParams { id, message: message.into() });
+        }
     }
     match serde_json::from_value::<RequestOp>(value) {
         Ok(op) => Ok(ParsedRequest::Ok { id, op }),
@@ -262,6 +305,10 @@ pub struct Capabilities {
     pub compute_units: Vec<String>,
     #[serde(default)]
     pub min_macos: Option<String>,
+    /// The host honours `boost_terms` / `boost_weight` on `transcribe_window`. Absent (an older
+    /// host) means it ignores them and decodes unboosted.
+    #[serde(default)]
+    pub context_biasing: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -327,6 +374,13 @@ pub struct WindowTimings {
     pub encode_ms: u64,
     #[serde(default, deserialize_with = "lenient_u64")]
     pub decode_ms: u64,
+    /// Microseconds spent building the context-biasing trie (0 on a cache hit or when unused).
+    #[serde(default, deserialize_with = "lenient_u64", skip_serializing_if = "is_zero_u64")]
+    pub boost_us: u64,
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -336,6 +390,14 @@ pub struct TranscribeWindowResult {
     pub audio_s: f64,
     #[serde(default)]
     pub timings: WindowTimings,
+    /// Present only when the request carried a dictionary: whether biasing was in effect. `false`
+    /// means the host could not apply it (for example a model without top-K outputs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boost_active: Option<bool>,
+    /// With `boost_active: false`: `no_usable_terms` (no term could be tokenized) or
+    /// `no_top_k_outputs` (the model cannot expose candidates). Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boost_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

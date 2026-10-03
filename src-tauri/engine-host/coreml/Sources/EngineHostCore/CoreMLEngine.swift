@@ -5,6 +5,7 @@ import Foundation
 
 public final class CoreMLEngine: EngineBackend {
     private final class LoadedModel {
+        let boostTries = BoostTrieCache()
         let preprocessor: MLModel
         let encoder: MLModel
         let decoder: MLModel
@@ -243,21 +244,25 @@ public final class CoreMLEngine: EngineBackend {
 
         let decodeStart = Date()
         let realAudioSeconds = Double(request.numSamples) / Double(request.sampleRate)
-        let tokens = try decode(
+        let decoded = try decode(
             encoderOutput: encoderOutput,
             sequenceLength: sequenceLength,
             loaded: loaded,
             realAudioSeconds: realAudioSeconds,
+            boost: request.boost,
             isCancelled: isCancelled
         )
         let decodeMilliseconds = Date().timeIntervalSince(decodeStart) * 1000
 
         return WindowResult(
-            tokens: tokens,
+            tokens: decoded.tokens,
             audioSeconds: Double(request.numSamples) / Double(request.sampleRate),
             preprocessMilliseconds: preprocessMilliseconds,
             encodeMilliseconds: encodeMilliseconds,
-            decodeMilliseconds: decodeMilliseconds
+            decodeMilliseconds: decodeMilliseconds,
+            boostActive: decoded.boostActive,
+            boostReason: decoded.boostReason,
+            boostMicroseconds: decoded.boostMicroseconds
         )
     }
 
@@ -549,19 +554,28 @@ public final class CoreMLEngine: EngineBackend {
         sequenceLength: Int,
         loaded: LoadedModel,
         realAudioSeconds: Double,
+        boost: BoostConfig?,
         isCancelled: @escaping () -> Bool
-    ) throws -> [TranscriptionToken] {
+    ) throws -> (tokens: [TranscriptionToken], boostActive: Bool?, boostReason: String?, boostMicroseconds: Int) {
         let actualFrameCount = min(
             sequenceLength,
             max(1, Int(ceil(realAudioSeconds / loaded.frameSeconds)))
         )
+        var boostMicroseconds = 0
+        var biasing: (trie: BoostTrie, params: BiasParams)?
+        if let boost {
+            let built = loaded.boostTries.trie(for: boost, vocabulary: loaded.vocabulary, blankID: loaded.blankID)
+            boostMicroseconds = built.1
+            biasing = (built.0, BiasParams.fromEnvironment(weight: boost.weight))
+        }
         let session = try TdtDecodeSession(
             decoder: loaded.decoder,
             joint: loaded.joint,
             blankID: loaded.blankID,
             encoderHidden: loaded.encoderHidden,
             decoderHidden: loaded.decoderHidden,
-            decoderLayers: loaded.decoderLayers
+            decoderLayers: loaded.decoderLayers,
+            bias: biasing
         )
         // A full-sized request is normally an interior sliding-window chunk;
         // its caller will merge it with the next window. Only a short final
@@ -574,7 +588,7 @@ public final class CoreMLEngine: EngineBackend {
             isLastChunk: isFinalWindow,
             isCancelled: isCancelled
         )
-        return emissions.compactMap { emission in
+        let tokens: [TranscriptionToken] = emissions.compactMap { emission in
             let correctedFrame = max(0, emission.frame - 1)
             let start = Double(correctedFrame) * loaded.frameSeconds
             guard start < realAudioSeconds, let text = loaded.vocabulary[emission.id], !text.isEmpty else { return nil }
@@ -586,6 +600,7 @@ public final class CoreMLEngine: EngineBackend {
                 confidence: emission.confidence
             )
         }
+        return (tokens, boost == nil ? nil : session.boostActive, boost == nil ? nil : session.boostReason, boostMicroseconds)
     }
 
     private func checkCancelled(_ isCancelled: () -> Bool) throws {

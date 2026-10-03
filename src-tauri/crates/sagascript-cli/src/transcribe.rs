@@ -135,6 +135,17 @@ pub struct TranscribeArgs {
     )]
     pub prompt_file: Option<PathBuf>,
 
+    /// Pianissimo only: steer decoding with the profile glossary terms (context
+    /// biasing). The value is the logit bonus for dictionary-continuing tokens
+    /// (try 1-5; 0 or absent = off).
+    #[arg(long, value_name = "WEIGHT")]
+    pub glossary_boost: Option<f32>,
+
+    /// Pianissimo only: extra context-biasing terms, one per line (experiments).
+    /// Used together with --glossary-boost.
+    #[arg(long, value_name = "FILE", requires = "glossary_boost")]
+    pub boost_terms_file: Option<PathBuf>,
+
     /// Opt in to strict one-edit vocabulary correction from the selected hint.
     /// Requires --json so every applied correction is reported with its source
     /// text and segment confidence. Only single-word, unambiguous hints apply.
@@ -662,6 +673,8 @@ fn transcribe_meeting_file_inner(
         diarize_cache: cache_output.map(Path::to_path_buf),
         prompt: None,
         prompt_file: None,
+        glossary_boost: None,
+        boost_terms_file: None,
         correct_hints: false,
         vad: false,
         no_vad: false,
@@ -982,15 +995,21 @@ fn pianissimo_file_json(
             "total_seconds": perf.total_seconds,
             "engine": perf.engine,
             "engine_warm": perf.engine_warm,
-            "windows": perf.windows.iter().map(|w| serde_json::json!({
-                "index": w.index,
-                "audio_seconds": (w.end_sample - w.start_sample) as f64 / 16_000.0,
-                "tokens": w.tokens,
-                "preprocess_ms": w.preprocess_ms,
-                "encode_ms": w.encode_ms,
-                "decode_ms": w.decode_ms,
-                "round_trip_ms": w.round_trip_ms,
-            })).collect::<Vec<_>>(),
+            "windows": perf.windows.iter().map(|w| {
+                let mut window = serde_json::json!({
+                    "index": w.index,
+                    "audio_seconds": (w.end_sample - w.start_sample) as f64 / 16_000.0,
+                    "tokens": w.tokens,
+                    "preprocess_ms": w.preprocess_ms,
+                    "encode_ms": w.encode_ms,
+                    "decode_ms": w.decode_ms,
+                    "round_trip_ms": w.round_trip_ms,
+                });
+                if w.boost_us > 0 {
+                    window["boost_us"] = serde_json::json!(w.boost_us);
+                }
+                window
+            }).collect::<Vec<_>>(),
         },
     })
 }
@@ -1030,6 +1049,32 @@ fn run_pianissimo_batch(
     let load_started = Instant::now();
     let cancel_flag = crate::cancel::flag();
     let backend = std::sync::Arc::new(PianissimoBackend::start_with_cancel(cancel_flag)?);
+    if let Some(weight) = args.glossary_boost {
+        let mut terms: Vec<String> = glossary.entries().iter().map(|e| e.canonical.clone()).collect();
+        if let Some(path) = &args.boost_terms_file {
+            let text = std::fs::read_to_string(path).map_err(|e| {
+                DictationError::SettingsError(format!("Cannot read --boost-terms-file {}: {e}", path.display()))
+            })?;
+            terms.extend(text.lines().map(str::to_string));
+        }
+        match sagascript_core::transcription::engine_host::BoostSpec::new(terms, weight) {
+            Some(spec) => {
+                eprintln!("Context biasing requested: {} terms, weight {}", spec.terms.len(), spec.weight);
+                if spec.truncated > 0 {
+                    eprintln!(
+                        "Warning: only the first {} distinct terms are used; {} more were ignored.",
+                        spec.terms.len(),
+                        spec.truncated
+                    );
+                }
+                if spec.too_long > 0 {
+                    eprintln!("Warning: {} term(s) longer than 64 characters were ignored.", spec.too_long);
+                }
+                backend.set_boost(Some(spec));
+            }
+            None => eprintln!("Context biasing requested but no terms/weight; decoding unchanged."),
+        }
+    }
     let _abort_pianissimo = {
         let backend = backend.clone();
         crate::cancel::register(move || backend.request_abort())
@@ -1114,6 +1159,18 @@ fn run_pianissimo_batch(
             Ok(())
         },
     )?;
+    if args.glossary_boost.is_some() {
+        let report = backend.client().boost_report();
+        match report.warning() {
+            Some(warning) => eprintln!("Warning: {warning}"),
+            None if report.active_windows() > 0 => eprintln!(
+                "Context biasing active on {} window(s); trie build {:.1} ms.",
+                report.active_windows(),
+                report.trie_build_us as f64 / 1000.0
+            ),
+            None => {}
+        }
+    }
     if args.json {
         if files.len() == 1 && failures == 0 {
             let BatchItem::Ok { result, .. } = &items[0] else { unreachable!() };
@@ -3748,6 +3805,7 @@ mod diarize_threshold_tests {
                         preprocess_ms: 4,
                         encode_ms: 500,
                         decode_ms: 70,
+                        boost_us: 0,
                         round_trip_ms: 580,
                     }],
                 },

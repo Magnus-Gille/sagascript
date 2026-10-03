@@ -1,0 +1,30 @@
+{"name_recall": 75.0, "names": 76, "wer": 6.62, "false_ins": 0, "ds": "fleurs15", "kind": "true", "w": 0}
+{"name_recall": 77.63, "names": 76, "wer": 6.62, "false_ins": 0, "ds": "fleurs15", "kind": "true", "w": 1}
+{"name_recall": 80.26, "names": 76, "wer": 6.68, "false_ins": 0, "ds": "fleurs15", "kind": "true", "w": 2}
+{"name_recall": 81.58, "names": 76, "wer": 6.43, "false_ins": 0, "ds": "fleurs15", "kind": "true", "w": 3}
+{"name_recall": 81.58, "names": 76, "wer": 8.0, "false_ins": 0, "ds": "fleurs15", "kind": "true", "w": 5}
+{"name_recall": 75.0, "names": 76, "wer": 6.62, "false_ins": 0, "ds": "fleurs15", "kind": "fp", "w": 0}
+{"name_recall": 73.68, "names": 76, "wer": 6.81, "false_ins": 0, "ds": "fleurs15", "kind": "fp", "w": 1}
+{"name_recall": 72.37, "names": 76, "wer": 6.99, "false_ins": 0, "ds": "fleurs15", "kind": "fp", "w": 2}
+{"name_recall": 69.74, "names": 76, "wer": 7.25, "false_ins": 0, "ds": "fleurs15", "kind": "fp", "w": 3}
+{"name_recall": 65.79, "names": 76, "wer": 9.26, "false_ins": 2, "ds": "fleurs15", "kind": "fp", "w": 5}
+{"name_recall": 66.91, "names": 272, "wer": 7.06, "false_ins": 0, "ds": "fleurs60", "kind": "true", "w": 0}
+{"name_recall": 70.96, "names": 272, "wer": 6.93, "false_ins": 0, "ds": "fleurs60", "kind": "true", "w": 1}
+{"name_recall": 73.16, "names": 272, "wer": 7.18, "false_ins": 0, "ds": "fleurs60", "kind": "true", "w": 2}
+{"name_recall": 74.63, "names": 272, "wer": 7.31, "false_ins": 0, "ds": "fleurs60", "kind": "true", "w": 3}
+{"name_recall": 76.1, "names": 272, "wer": 9.85, "false_ins": 0, "ds": "fleurs60", "kind": "true", "w": 5}
+{"name_recall": 66.91, "names": 272, "wer": 7.06, "false_ins": 0, "ds": "fleurs60", "kind": "fp", "w": 0}
+{"name_recall": 65.81, "names": 272, "wer": 7.17, "false_ins": 0, "ds": "fleurs60", "kind": "fp", "w": 1}
+{"name_recall": 65.81, "names": 272, "wer": 7.37, "false_ins": 0, "ds": "fleurs60", "kind": "fp", "w": 2}
+{"name_recall": 65.07, "names": 272, "wer": 7.55, "false_ins": 0, "ds": "fleurs60", "kind": "fp", "w": 3}
+{"name_recall": 61.76, "names": 272, "wer": 10.07, "false_ins": 7, "ds": "fleurs60", "kind": "fp", "w": 5}
+{"name_recall": 93.03, "names": 201, "wer": 23.4, "false_ins": 0, "speaker_recall": 78.95, "speaker_tokens": 38, "ds": "riksdag", "kind": "true", "w": 0}
+{"name_recall": 93.03, "names": 201, "wer": 23.47, "false_ins": 0, "speaker_recall": 78.95, "speaker_tokens": 38, "ds": "riksdag", "kind": "true", "w": 1}
+{"name_recall": 93.03, "names": 201, "wer": 23.68, "false_ins": 0, "speaker_recall": 78.95, "speaker_tokens": 38, "ds": "riksdag", "kind": "true", "w": 2}
+{"name_recall": 92.54, "names": 201, "wer": 23.8, "false_ins": 0, "speaker_recall": 78.95, "speaker_tokens": 38, "ds": "riksdag", "kind": "true", "w": 3}
+{"name_recall": 91.04, "names": 201, "wer": 24.25, "false_ins": 0, "speaker_recall": 78.95, "speaker_tokens": 38, "ds": "riksdag", "kind": "true", "w": 5}
+{"name_recall": 93.03, "names": 201, "wer": 23.4, "false_ins": 0, "speaker_recall": 78.95, "speaker_tokens": 38, "ds": "riksdag", "kind": "fp", "w": 0}
+{"name_recall": 93.03, "names": 201, "wer": 23.35, "false_ins": 0, "speaker_recall": 78.95, "speaker_tokens": 38, "ds": "riksdag", "kind": "fp", "w": 1}
+{"name_recall": 93.03, "names": 201, "wer": 23.51, "false_ins": 1, "speaker_recall": 78.95, "speaker_tokens": 38, "ds": "riksdag", "kind": "fp", "w": 2}
+{"name_recall": 92.04, "names": 201, "wer": 23.64, "false_ins": 1, "speaker_recall": 78.95, "speaker_tokens": 38, "ds": "riksdag", "kind": "fp", "w": 3}
+{"name_recall": 88.56, "names": 201, "wer": 24.27, "false_ins": 5, "speaker_recall": 76.32, "speaker_tokens": 38, "ds": "riksdag", "kind": "fp", "w": 5}
