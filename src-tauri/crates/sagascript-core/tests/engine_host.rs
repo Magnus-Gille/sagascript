@@ -495,19 +495,20 @@ fn restart_backoff_then_failed_until_reset() {
 fn idle_unload_then_shutdown() {
     let f = fixture_with(&[], |c| {
         c.idle_unload = Some(Duration::from_millis(250));
-        c.idle_shutdown = Some(Duration::from_millis(300));
+        // Wide gap after the unload so the "unloaded but alive" state stays
+        // observable on a loaded runner (shutdown idles from the unload ack).
+        c.idle_shutdown = Some(Duration::from_millis(1500));
         c.supervisor_tick = Duration::from_millis(50);
     });
     f.client.warm().unwrap();
     let pid = f.client.snapshot().pid.unwrap();
+    // `snapshot().loaded` leads the host (it flips when the unload is sent, so
+    // no request is dispatched to a host about to unload); wait on the host's
+    // own state, not the snapshot.
     wait_until("idle unload", Duration::from_secs(3), || {
-        !f.client.snapshot().loaded
+        f.client.status().is_ok_and(|s| s.model_id.is_none())
     });
-    let st = f.client.status().unwrap();
-    assert_eq!(
-        st.model_id, None,
-        "host should have unloaded but stay alive"
-    );
+    assert!(!f.client.snapshot().loaded);
     assert!(f.client.snapshot().running);
     wait_until("idle shutdown", Duration::from_secs(3), || {
         !f.client.snapshot().running
@@ -520,6 +521,33 @@ fn idle_unload_then_shutdown() {
         .unwrap();
     assert_eq!(out.tokens.len(), 2);
     assert_eq!(f.client.snapshot().crashes_in_window, 0);
+}
+
+#[test]
+fn snapshot_leads_a_slow_host_unload_and_requests_wait_for_it() {
+    let f = fixture_with(&[("FAKE_UNLOAD_DELAY_MS", "400")], |c| {
+        c.idle_unload = Some(Duration::from_millis(100));
+        c.idle_shutdown = None;
+        c.supervisor_tick = Duration::from_millis(20);
+    });
+    f.client.warm().unwrap();
+    wait_until("snapshot reports unloaded", Duration::from_secs(3), || {
+        !f.client.snapshot().loaded
+    });
+    // The host has not acknowledged the unload yet, so it still holds the model.
+    assert_eq!(
+        f.client.status().unwrap().model_id.as_deref(),
+        Some("fake-model")
+    );
+    wait_until("host unloaded", Duration::from_secs(3), || {
+        f.client.status().is_ok_and(|s| s.model_id.is_none())
+    });
+    // A request after the unload reloads lazily and succeeds.
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(out.tokens.len(), 2);
 }
 
 #[test]
