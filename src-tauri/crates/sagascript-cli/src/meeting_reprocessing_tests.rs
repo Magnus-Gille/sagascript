@@ -388,3 +388,35 @@ fn cancellation_during_analysis_returns_no_proposal_or_review_mutation() {
     assert_counts(&backend, 1, 1, 0);
     assert_eq!(fixture.previous, previous);
 }
+
+#[test]
+fn two_track_provenance_refuses_selective_modes_and_binds_the_full_plan() {
+    let mut fixture = Fixture::new(true);
+    let plain_full = {
+        let input = fixture.input(None);
+        plan_reprocessing(&input, ReprocessingMode::Full, 0.75, None).expect("plain full plan")
+    };
+    // The reviewed transcript came from the two-track pipeline (a local speaker),
+    // whether or not the audio file carries a marker.
+    let original = fixture
+        .previous
+        .original
+        .clone()
+        .with_local_speaker("SPEAKER_0")
+        .expect("valid local speaker");
+    fixture.previous = MeetingReview::new(original).expect("two-track review");
+
+    for mode in [ReprocessingMode::Recluster, ReprocessingMode::Rediarize] {
+        let input = fixture.input(Some(&fixture.cache));
+        let error = plan_reprocessing(&input, mode, 0.75, None).expect_err("selective refused");
+        assert!(error.to_string().contains("two-track"), "{error}");
+    }
+    let input = fixture.input(None);
+    let two_track_full =
+        plan_reprocessing(&input, ReprocessingMode::Full, 0.75, None).expect("full plan");
+    assert_ne!(
+        plain_full.context.transcription_context_sha256,
+        two_track_full.context.transcription_context_sha256,
+        "the channel layout is part of the plan identity"
+    );
+}

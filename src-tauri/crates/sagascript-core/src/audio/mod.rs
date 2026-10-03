@@ -7,6 +7,7 @@ pub mod resample;
 pub mod speech;
 #[cfg(feature = "record")]
 pub mod system;
+pub mod twotrack;
 pub mod wav;
 
 pub use speech::has_audio_signal;

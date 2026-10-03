@@ -19,6 +19,8 @@ export interface MeetingTranscript {
   duration_seconds: number;
   segments: MeetingSegment[];
   speakers: MeetingSpeaker[];
+  /** Speaker id of the person who recorded (two-track recordings only). */
+  local_speaker?: string;
 }
 
 export type MeetingExportFormat = "plain" | "markdown" | "json" | "srt" | "vtt";
