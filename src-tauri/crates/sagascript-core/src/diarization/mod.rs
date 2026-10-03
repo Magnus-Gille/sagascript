@@ -11,6 +11,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DictationError;
+pub use crate::speaker_hint::SpeakerCountHint;
 
 /// Keep both CPU-bound ONNX stages within the Apple-Silicon performance-core
 /// budget while Whisper runs concurrently on Metal.
@@ -32,6 +33,11 @@ pub struct DiarizeConfig {
     /// A small cluster is only absorbed into a cluster whose centroid cosine distance is at most
     /// this; otherwise it stays a distinct speaker. Default [`ABSORB_MAX_DISTANCE`].
     pub absorb_max_distance: f32,
+    /// Optional speaker-count hint (exact, or min and/or max). `None` (the default) leaves
+    /// clustering exactly as the threshold decides. With a hint the dendrogram is cut by count
+    /// instead; see [`cluster`] for the precise rules. Applies only to the clustering stage, so it
+    /// works on a cached [`DiarizationAnalysis`] without re-running analysis.
+    pub speaker_hint: Option<SpeakerCountHint>,
 }
 
 /// Default agglomerative clustering threshold (cosine distance). The single source of truth
@@ -108,6 +114,7 @@ impl Default for DiarizeConfig {
             min_gap: 0.5,
             min_speaker_seconds: MIN_SPEAKER_SECONDS,
             absorb_max_distance: ABSORB_MAX_DISTANCE,
+            speaker_hint: None,
         }
     }
 }
@@ -236,11 +243,34 @@ pub fn analyze_with_control(
 }
 
 /// Apply the cheap threshold-dependent clustering stage to prior analysis.
+///
+/// Speaker-count hint (`config.speaker_hint`), all rules deterministic:
+/// - No hint: the distance-threshold cut and small-cluster absorption, exactly as before.
+/// - With a hint the normal pipeline runs first. If the number of speakers it finds (clusters
+///   after absorption) already satisfies the hint, nothing changes. Otherwise the result is
+///   re-clustered to the nearest allowed count: exact N, or `min` when fewer were found, or `max`
+///   when more were found. The count cut itself is [`clustering::cluster_to_count`]: it walks the
+///   dendrogram to the first cut with N clusters of at least `min_speaker_seconds`, then absorbs
+///   the smaller ones into the nearest of them without the usual distance limit (the hint says
+///   they belong to someone), so the count is of real speakers, not of one-off outlier segments.
+/// - A count above the number of embedded segments is capped to it (reported on stderr); N = 1
+///   puts every embedded segment in one cluster.
+/// - Absorption therefore never takes the count below an exact N or `min`; a `max` only caps the
+///   count, and absorption may still leave fewer.
+/// - Tracks with no embedded segment at all keep their separate fallback label. They are counted
+///   against the hint, so the embedded clusters get the hint minus those tracks (at least 1).
+///   The hint therefore bounds the final speaker count, except when there are no embeddings at all
+///   (then there is nothing to cluster and the tracks alone decide).
 pub fn cluster(
     analysis: &DiarizationAnalysis,
     config: &DiarizeConfig,
 ) -> Result<Vec<SpeakerSegment>, DictationError> {
     analysis.validate()?;
+    if let Some(hint) = &config.speaker_hint {
+        hint.validate().map_err(|message| {
+            DictationError::DiarizationError(format!("Invalid speaker-count hint: {message}"))
+        })?;
+    }
     let raw_segments = &analysis.raw_segments;
     let embeddings = analysis
         .embeddings
@@ -264,6 +294,16 @@ pub fn cluster(
     let clustered = if embeddings.is_empty() {
         Vec::new()
     } else {
+        // Fully unembedded tracks each become an output speaker via the fallback; count them
+        // against the hint so the hint bounds the final speaker count.
+        let embedded_tracks: std::collections::BTreeSet<usize> =
+            embeddings.iter().map(|(index, _)| raw_segments[*index].2).collect();
+        let unembedded_tracks = raw_segments
+            .iter()
+            .map(|(_, _, track)| *track)
+            .collect::<std::collections::BTreeSet<_>>()
+            .difference(&embedded_tracks)
+            .count();
         let mut clustered = clustering::cluster_speakers(&embeddings, config.threshold);
         let durations: Vec<f64> = embeddings
             .iter()
@@ -279,6 +319,32 @@ pub fn cluster(
         );
         for (entry, label) in clustered.iter_mut().zip(labels) {
             entry.1 = label;
+        }
+        if let Some(hint) = &config.speaker_hint {
+            let budget = |count: usize| count.saturating_sub(unembedded_tracks).max(1);
+            let (lo, hi) = hint.bounds();
+            let (lo, hi) = (budget(lo), hi.map(budget));
+            let found = clustered.iter().map(|(_, label)| *label).collect::<std::collections::BTreeSet<_>>().len();
+            let target = if found < lo {
+                Some(lo)
+            } else {
+                hi.filter(|&hi| found > hi)
+            };
+            if let Some(target) = target {
+                if target > embeddings.len() {
+                    eprintln!(
+                        "  Speaker hint of {target} exceeds the {} embedded segment(s); using {}",
+                        embeddings.len(),
+                        embeddings.len()
+                    );
+                }
+                clustered = clustering::cluster_to_count(
+                    &embeddings,
+                    &durations,
+                    config.min_speaker_seconds,
+                    target,
+                );
+            }
         }
         clustered
     };
@@ -565,6 +631,134 @@ mod tests {
         assert_ne!(segments[0].speaker, segments[1].speaker);
         assert_eq!(segments[2].speaker, segments[0].speaker);
         assert!(segments[3].speaker != segments[0].speaker && segments[3].speaker != segments[1].speaker);
+    }
+
+    /// Deterministic 40-segment fixture (also generated by an equivalent Python script to record
+    /// the golden labels with the pre-#305 build): speakers 0, 1, 2 plus one 7 s segment (index 13)
+    /// at cosine distance 0.4 from speaker 0, which only absorption merges at the default config.
+    fn hint_fixture() -> DiarizationAnalysis {
+        let mut raw_segments = Vec::new();
+        let mut embeddings = Vec::new();
+        for i in 0..40usize {
+            let s = if i == 13 { 3 } else { (i * i + i / 2) % 3 };
+            let mut v = vec![0.0f32; embedding::EMBEDDING_DIM];
+            if s == 3 {
+                v[0] = 0.6;
+                v[30] = 0.8;
+            } else {
+                v[s * 10] = 1.0;
+            }
+            v[s * 10 + 1 + i % 3] = ((i * 13) % 7) as f32 / 64.0;
+            v[100 + i % 5] = ((i * 11) % 5) as f32 / 64.0;
+            let start = i as f64 * 10.0;
+            raw_segments.push((start, start + 5.0 + (i % 4) as f64 * 2.0, i % 2));
+            embeddings.push((i, v));
+        }
+        DiarizationAnalysis { raw_segments, embeddings }
+    }
+
+    fn labels_of(segments: &[SpeakerSegment]) -> String {
+        segments.iter().map(|s| s.speaker.trim_start_matches("SPEAKER_")).collect::<Vec<_>>().join("")
+    }
+
+    fn with_hint(hint: SpeakerCountHint) -> DiarizeConfig {
+        DiarizeConfig { speaker_hint: Some(hint), ..DiarizeConfig::default() }
+    }
+
+    fn speaker_count(segments: &[SpeakerSegment]) -> usize {
+        segments.iter().map(|s| s.speaker.clone()).collect::<std::collections::BTreeSet<_>>().len()
+    }
+
+    /// Golden recorded from the build before the hint existed (main at e85a42f).
+    const NO_HINT_GOLDEN: &str = "0121000121000021000121000121000121000121";
+
+    #[test]
+    fn no_hint_output_is_identical_to_the_pre_hint_build() {
+        let analysis = hint_fixture();
+        let segments = cluster(&analysis, &DiarizeConfig::default()).unwrap();
+        assert_eq!(labels_of(&segments), NO_HINT_GOLDEN);
+        assert_eq!(
+            serde_json::to_string(&segments).unwrap(),
+            serde_json::to_string(&cluster(&analysis, &DiarizeConfig { speaker_hint: None, ..DiarizeConfig::default() }).unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn exact_count_cuts_the_dendrogram_regardless_of_threshold() {
+        let analysis = hint_fixture();
+        // 4: the data has three real speakers plus a 7 s segment (below the 8 s minimum), so the
+        // count is met by splitting a real speaker, never by keeping the short segment alone.
+        let four = cluster(&analysis, &with_hint(SpeakerCountHint::exact(4))).unwrap();
+        assert_eq!(speaker_count(&four), 4);
+        let three = cluster(&analysis, &with_hint(SpeakerCountHint::exact(3))).unwrap();
+        assert_eq!(labels_of(&three), NO_HINT_GOLDEN, "the default already finds 3: unchanged");
+        // 2 and 1 merge the closest clusters first, even with a strict threshold.
+        let strict = DiarizeConfig { threshold: 0.0, speaker_hint: Some(SpeakerCountHint::exact(2)), ..DiarizeConfig::default() };
+        assert_eq!(speaker_count(&cluster(&analysis, &strict).unwrap()), 2);
+        assert_eq!(speaker_count(&cluster(&analysis, &with_hint(SpeakerCountHint::exact(2))).unwrap()), 2);
+        assert_eq!(speaker_count(&cluster(&analysis, &with_hint(SpeakerCountHint::exact(1))).unwrap()), 1);
+        // A very high threshold would merge everything; the exact count still splits.
+        let lax = DiarizeConfig { threshold: 2.0, speaker_hint: Some(SpeakerCountHint::exact(3)), ..DiarizeConfig::default() };
+        assert_eq!(speaker_count(&cluster(&analysis, &lax).unwrap()), 3);
+        // Reproducible.
+        assert_eq!(
+            labels_of(&cluster(&analysis, &with_hint(SpeakerCountHint::exact(3))).unwrap()),
+            labels_of(&cluster(&analysis, &with_hint(SpeakerCountHint::exact(3))).unwrap())
+        );
+    }
+
+    #[test]
+    fn exact_count_larger_than_the_embedded_segments_is_capped() {
+        let analysis = hint_fixture();
+        let segments = cluster(&analysis, &with_hint(SpeakerCountHint::exact(1000))).unwrap();
+        assert_eq!(speaker_count(&segments), 40, "one speaker per embedded segment");
+    }
+
+    #[test]
+    fn min_and_max_only_act_outside_the_range_and_absorption_respects_min() {
+        let analysis = hint_fixture();
+        // Threshold alone finds 3 speakers after absorption: a range containing 3 changes nothing.
+        let inside = cluster(&analysis, &with_hint(SpeakerCountHint::range(Some(2), Some(3)))).unwrap();
+        assert_eq!(labels_of(&inside), NO_HINT_GOLDEN);
+        // max below the found count re-cuts at max.
+        assert_eq!(speaker_count(&cluster(&analysis, &with_hint(SpeakerCountHint::range(None, Some(2)))).unwrap()), 2);
+        // min above the count the pipeline finds re-clusters to min.
+        assert_eq!(speaker_count(&cluster(&analysis, &with_hint(SpeakerCountHint::range(Some(4), None))).unwrap()), 4);
+        let lax = DiarizeConfig { threshold: 2.0, speaker_hint: Some(SpeakerCountHint::range(Some(2), None)), ..DiarizeConfig::default() };
+        assert_eq!(speaker_count(&cluster(&analysis, &lax).unwrap()), 2);
+        // max does not stop absorption from going lower than max (1 <= max 5): found 3 stays 3.
+        assert_eq!(speaker_count(&cluster(&analysis, &with_hint(SpeakerCountHint::range(None, Some(5)))).unwrap()), 3);
+    }
+
+    #[test]
+    fn hint_counts_fully_unembedded_tracks_against_the_budget() {
+        let dim = embedding::EMBEDDING_DIM;
+        let unit = |d: usize| {
+            let mut v = vec![0.0f32; dim];
+            v[d] = 1.0;
+            v
+        };
+        // Track 0 holds two embedded speakers; track 1 has only a segment too short to embed.
+        let analysis = DiarizationAnalysis {
+            raw_segments: vec![(0.0, 20.0, 0), (21.0, 41.0, 0), (42.0, 42.1, 1)],
+            embeddings: vec![(0, unit(0)), (1, unit(1))],
+        };
+        let without = cluster(&analysis, &DiarizeConfig::default()).unwrap();
+        assert_eq!(speaker_count(&without), 3);
+        // Exact 2 total: the fallback track takes one, so the embedded segments form one cluster.
+        let hinted = cluster(&analysis, &with_hint(SpeakerCountHint::exact(2))).unwrap();
+        assert_eq!(speaker_count(&hinted), 2);
+        assert_eq!(hinted[0].speaker, hinted[1].speaker);
+        assert_ne!(hinted[0].speaker, hinted[2].speaker);
+        // Exact 3 reproduces the unhinted result.
+        assert_eq!(labels_of(&cluster(&analysis, &with_hint(SpeakerCountHint::exact(3))).unwrap()), labels_of(&without));
+    }
+
+    #[test]
+    fn invalid_hint_is_rejected_by_cluster() {
+        let analysis = hint_fixture();
+        assert!(cluster(&analysis, &with_hint(SpeakerCountHint::exact(0))).is_err());
+        assert!(cluster(&analysis, &with_hint(SpeakerCountHint::range(Some(3), Some(2)))).is_err());
     }
 
     #[test]

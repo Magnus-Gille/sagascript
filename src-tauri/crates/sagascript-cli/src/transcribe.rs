@@ -111,6 +111,10 @@ pub struct TranscribeArgs {
           help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.34). Higher = fewer speakers.")]
     pub diarize_threshold: f32,
 
+    #[cfg(feature = "diarization")]
+    #[command(flatten)]
+    pub speaker_count: crate::speaker_args::SpeakerCountArgs,
+
     /// Read/write reusable threshold-independent diarization analysis and
     /// word timestamps. A matching cache makes threshold-only retries fast.
     #[cfg(feature = "diarization")]
@@ -546,6 +550,7 @@ pub fn transcribe_meeting_file(
         None,
         sagascript_core::diarization::DEFAULT_THRESHOLD,
         None,
+        None,
         CachePolicy::Normal,
     )
 }
@@ -573,6 +578,7 @@ pub fn transcribe_meeting_file_with_control(
         Some(control),
         sagascript_core::diarization::DEFAULT_THRESHOLD,
         None,
+        None,
         CachePolicy::Normal,
     )
 }
@@ -591,6 +597,7 @@ pub fn transcribe_meeting_file_full(
     backend: &WhisperBackend,
     control: Option<&MeetingControl<'_>>,
     threshold: f32,
+    speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
     cache_output: Option<&Path>,
 ) -> Result<MeetingTranscript, DictationError> {
     if !threshold.is_finite() {
@@ -637,6 +644,7 @@ pub fn transcribe_meeting_file_full(
         backend,
         control,
         threshold,
+        speaker_hint,
         cache_output,
         CachePolicy::RefreshNew,
     )
@@ -653,6 +661,7 @@ fn transcribe_meeting_file_inner(
     backend: &WhisperBackend,
     control: Option<&MeetingControl<'_>>,
     threshold: f32,
+    speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
     cache_output: Option<&Path>,
     cache_policy: CachePolicy,
 ) -> Result<MeetingTranscript, DictationError> {
@@ -670,6 +679,11 @@ fn transcribe_meeting_file_inner(
         diarize: true,
         meeting_json: true,
         diarize_threshold: threshold,
+        speaker_count: crate::speaker_args::SpeakerCountArgs {
+            speakers: speaker_hint.and_then(|hint| hint.exact),
+            min_speakers: speaker_hint.and_then(|hint| hint.min),
+            max_speakers: speaker_hint.and_then(|hint| hint.max),
+        },
         diarize_cache: cache_output.map(Path::to_path_buf),
         prompt: None,
         prompt_file: None,
@@ -735,7 +749,26 @@ pub fn run(args: TranscribeArgs) -> Result<(), DictationError> {
     result
 }
 
+/// The validated speaker-count hint from `--speakers`/`--min-speakers`/`--max-speakers`.
+#[cfg(feature = "diarization")]
+fn speaker_hint_from_args(
+    args: &TranscribeArgs,
+) -> Result<Option<sagascript_core::speaker_hint::SpeakerCountHint>, DictationError> {
+    let hint = args
+        .speaker_count
+        .hint()
+        .map_err(|message| DictationError::SettingsError(format!("--speakers: {message}")))?;
+    if hint.is_some() && !args.diarize {
+        return Err(DictationError::SettingsError(
+            "--speakers, --min-speakers and --max-speakers require --diarize".to_string(),
+        ));
+    }
+    Ok(hint)
+}
+
 fn run_inner(args: TranscribeArgs) -> Result<(), DictationError> {
+    #[cfg(feature = "diarization")]
+    speaker_hint_from_args(&args)?;
     let stored = sagascript_core::settings::store::load();
     let profile = match args.profile.as_deref() {
         Some(id) => resolve_profile(&stored, id)?,
@@ -1571,8 +1604,10 @@ fn transcribe_file(
             acceleration.backend, acceleration.coreml_status
         );
 
+        let speaker_hint = speaker_hint_from_args(args)?;
         let config = DiarizeConfig {
             threshold: args.diarize_threshold,
+            speaker_hint,
             ..DiarizeConfig::default()
         };
 
@@ -1747,7 +1782,8 @@ fn transcribe_file(
                 model,
                 duration,
                 &plain_segments,
-            )?;
+            )?
+            .with_speaker_hint(speaker_hint);
             let json = serde_json::to_value(&meeting).map_err(|_| {
                 DictationError::TranscriptionFailed(
                     "Diarized meeting transcript serialization failed".to_string(),
@@ -3754,6 +3790,25 @@ mod diarize_threshold_tests {
     fn accepts_boundary_values() {
         assert_eq!(parse_threshold("0.0").unwrap(), 0.0);
         assert_eq!(parse_threshold("2.0").unwrap(), 2.0);
+    }
+
+    #[test]
+    fn speaker_count_flags_parse_and_require_diarize() {
+        let cli = TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--speakers", "3"]).unwrap();
+        assert_eq!(
+            speaker_hint_from_args(&cli.args).unwrap(),
+            Some(sagascript_core::speaker_hint::SpeakerCountHint::exact(3))
+        );
+        let none = TestCli::try_parse_from(["sagascript", "f.wav", "--diarize"]).unwrap();
+        assert_eq!(speaker_hint_from_args(&none.args).unwrap(), None);
+        // Without --diarize a hint is an error, not silently ignored.
+        let no_diarize = TestCli::try_parse_from(["sagascript", "f.wav", "--min-speakers", "2"]).unwrap();
+        assert!(speaker_hint_from_args(&no_diarize.args).is_err());
+        // Invalid combinations are rejected at parse or validation time.
+        assert!(TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--speakers", "0"]).is_err());
+        assert!(TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--speakers", "2", "--max-speakers", "3"]).is_err());
+        let inverted = TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--min-speakers", "4", "--max-speakers", "2"]).unwrap();
+        assert!(speaker_hint_from_args(&inverted.args).is_err());
     }
 
     #[test]

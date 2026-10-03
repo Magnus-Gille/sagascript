@@ -71,6 +71,7 @@ impl WorkBackend for CountingBackend {
         &mut self,
         input: &ReprocessingInput<'_>,
         _threshold: f32,
+        _speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
         _cache_output: Option<&Path>,
         _control: Option<&MeetingControl<'_>>,
     ) -> Result<MeetingTranscript, DictationError> {

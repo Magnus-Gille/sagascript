@@ -16,6 +16,7 @@ use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 use serde_json::json;
 
+use crate::speaker_args::SpeakerCountArgs;
 use crate::meeting_proposal::{read_json, write_json_new};
 use crate::meeting_reprocessing::{
     execute_reprocessing, plan_reprocessing, ReprocessingInput, ReprocessingResult,
@@ -50,6 +51,8 @@ pub struct PlanArgs {
     /// Agglomerative clustering threshold, in the inclusive range 0.0..=2.0.
     #[arg(long, value_parser = parse_threshold, default_value = "0.34")]
     pub threshold: f32,
+    #[command(flatten)]
+    pub speaker_count: SpeakerCountArgs,
     /// Existing cache for selective modes.
     #[arg(long)]
     pub cache: Option<PathBuf>,
@@ -153,7 +156,13 @@ fn run_plan(args: PlanArgs) -> Result<(), DictationError> {
         model: runtime.model,
         glossary: &runtime.glossary,
     };
-    let plan = plan_reprocessing(&input, args.mode.into(), args.threshold, None)?;
+    let speaker_hint = args
+        .speaker_count
+        .hint()
+        .map_err(|message| DictationError::SettingsError(format!("--speakers: {message}")))?;
+    let plan = plan_reprocessing(&input, args.mode.into(), args.threshold, None)?
+        .with_speaker_hint(speaker_hint)
+        .map_err(|error| DictationError::SettingsError(error.to_string()))?;
     write_json_new(&args.output, &plan)
 }
 
@@ -321,6 +330,19 @@ mod tests {
     }
 
     #[test]
+    fn plan_accepts_speaker_count_flags() {
+        let base = ["x", "a.wav", "--previous-review", "r.json", "--output", "o.json", "--language", "en"];
+        let parse = |extra: &[&str]| {
+            <PlanArgs as clap::Args>::augment_args(clap::Command::new("x"))
+                .try_get_matches_from(base.iter().chain(extra.iter()).copied())
+        };
+        assert!(parse(&["--speakers", "2"]).is_ok());
+        assert!(parse(&["--min-speakers", "2", "--max-speakers", "3"]).is_ok());
+        assert!(parse(&["--speakers", "0"]).is_err());
+        assert!(parse(&["--speakers", "2", "--min-speakers", "1"]).is_err());
+    }
+
+    #[test]
     fn default_threshold_matches_diarization_default() {
         // Pins the clap default literal against the core default.
         let default_literal = <PlanArgs as clap::Args>::augment_args(clap::Command::new("x"))
@@ -437,6 +459,7 @@ mod tests {
             previous_review: root.join("missing-review"),
             mode: ReprocessingModeArg::Full,
             threshold: 0.75,
+            speaker_count: SpeakerCountArgs::default(),
             cache: None,
             runtime: RuntimeArgs {
                 language: None,

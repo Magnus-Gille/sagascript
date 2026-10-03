@@ -301,6 +301,105 @@ the embedding model is the same, so this is a warning, not a measurement of Swed
   threshold-only, so `--diarize-cache` reruns skip segmentation and embeddings as before. Speed:
   analysis (89 s for 53 min) is untouched; clustering stays about 0.02 s on the 74 min debate.
 
+## Speaker-count hint (issue #305, part 1)
+
+`transcribe --diarize` and `meeting reprocess plan` accept `--speakers N`, or `--min-speakers N`
+and/or `--max-speakers N`. Without a hint nothing changes: the output is byte-identical to the
+threshold-only code on all 28 cached analyses of the sets above (checked with `cmp` against the
+pre-hint `diarize_eval`, and pinned by a golden test).
+
+**Rules.** The normal pipeline (threshold cut, then `absorb_small_clusters`) runs first. If its
+speaker count already satisfies the hint, nothing changes. Otherwise the recording is re-clustered
+to the nearest allowed count (`clustering::cluster_to_count`): the dendrogram is walked from the
+root to the first cut with N clusters of at least 8 s (`MIN_SPEAKER_SECONDS`), and the smaller
+clusters are absorbed into the nearest large one with no distance limit. Counting clusters rather
+than segments matters: a plain "cut into N clusters" on a 7-speaker debate gave one giant cluster
+plus six one-segment outliers (1 speaker found, 71 % confusion on SoU40; the first version of this
+change). Absorption therefore never takes the count below an exact N or a minimum; a maximum only
+caps the count. N above the number of embedded segments is capped to it (stderr says so); if no cut
+has N clusters of 8 s (short audio) a plain cut into N clusters is used. Tracks with no embedded
+segment count against the hint. Only clustering is affected, so `--diarize-cache` reruns and
+`meeting reprocess` recluster stay cheap. The hint is recorded in the meeting JSON
+(`speaker_hint`) and in the reprocessing plan.
+
+**Evaluation** (cached analyses, threshold 0.34, `eval_der.py --hint`). T is the manifest's
+`reference_speakers`, which does not include the chair. "Exact" is speakers found (at least 5 s of
+scored speech) equal to T. The chair is a real voice that is never scored, so on Riksdag sets
+"truth + 1" is the count a user who counts the chair would give; both are shown.
+
+| Set | Hint | Exact | Mean confusion | Mean DER |
+| --- | --- | --- | --- | --- |
+| Riksdag debates (5) | threshold only | 0/5 | 0.9 % | 13.2 % |
+| | exact T | 4/5 | 7.3 % | 19.5 % |
+| | exact T+1 | 1/5 | 3.0 % | 15.3 % |
+| | min T, max T+1 | 1/5 | 3.0 % | 15.3 % |
+| Other Riksdag (9) | threshold only | 2/9 | 1.8 % | 9.8 % |
+| | exact T | 6/9 | 20.6 % | 28.6 % |
+| | exact T+1 | 3/9 | 1.9 % | 9.9 % |
+| | min T, max T+1 | 3/9 | 1.9 % | 9.9 % |
+| Swedish, band-limited (6) | threshold only | 1/6 | 1.8 % | 12.6 % |
+| | exact T | 4/6 | 17.7 % | 28.5 % |
+| | exact T+1 | 2/6 | 2.2 % | 13.1 % |
+| | min T, max T+1 | 2/6 | 2.2 % | 13.1 % |
+| French/Norwegian calls (8, no chair) | threshold only | 1/8 | 14.0 % | 19.2 % |
+| | exact T | **8/8** | **1.8 %** | **7.1 %** |
+| | exact T+1 | 1/8 | 11.7 % | 17.0 % |
+| | min T, max T+1 | 2/8 | 7.8 % | 13.1 % |
+
+Findings.
+
+- **Calls (no chair): the exact true count fixes the over-split.** Every recording gets the right
+  count and mean confusion falls from 14.0 % to 1.8 % (`dj_2023_coups` 5 found for 2, 30.7 % to
+  0.6 %; `dj_2022_feu` 1 for 2, 41.0 % to 8.8 %; `dj_2022_grand_mere_battue` 4 for 2, 10.3 % to
+  0.4 %). Only `nb_samtale_nb12` was already right.
+- **Chamber audio: counting the chair is required.** Exact T makes the count match but forces the
+  chair's cluster to take a seat, so, consistent with the numbers, two real speakers end up merged instead (confusion 0.9 % to
+  7.3 % on debates, 1.8 % to 20.6 % on the other Riksdag recordings, for example IP_hb10760 1.0 to
+  40.5 %). Exact T+1 and min T / max T+1 mostly reproduce the threshold result (the default
+  already finds T or T+1) and fix a few cases: IP_hb10618 4 found for 2 (chair split in two) drops
+  to 3 and 1.3 to 0.8 % confusion. They also cost something where the default found T+2 (SoU40:
+  1.1 to 11.6 % confusion).
+- Exact T helps only a little on chamber audio (IP_hd10256 3 to 2 found, 1.0 to 0.7 %; IP_hd10115
+  4 to 3, 0.9 to 0.7 %; SoU38 7 to 6, 1.2 to 1.0 %; UU24 5 to 4, 0.9 to 0.5 %) and hurts on the
+  rest. A hint should count everyone who speaks, including a chair or moderator; the UI wording
+  in the follow-up should say so.
+- The hint picks the cut of the dendrogram, not better speaker embeddings: on question time
+  (FS_*, 18-19 speakers) and SoU40 confusion stays at 5-12 % at any count.
+
+Per recording, where an exact-T hint changed the result (found / truth, confusion):
+
+| Recording | Threshold only | Exact T | Exact T+1 |
+| --- | --- | --- | --- |
+| dj_2022_feu | 1/2, 41.0 % | 2/2, 8.8 % | 2/2, 10.9 % |
+| dj_2022_grand_mere_battue | 4/2, 10.3 % | 2/2, 0.4 % | 3/2, 3.5 % |
+| dj_2022_intox_med | 3/2, 5.9 % | 2/2, 0.9 % | 3/2, 4.8 % |
+| dj_2023_coups | 5/2, 30.7 % | 2/2, 0.6 % | 3/2, 21.2 % |
+| dj_2022_avc_16_ans | 3/2, 7.3 % | 2/2, 1.9 % | 3/2, 5.9 % |
+| dj_2022_douleur_abdo | 3/2, 12.1 % | 2/2, 0.9 % | 3/2, 8.2 % |
+| dj_2022_mere_fievre | 3/2, 5.1 % | 2/2, 0.5 % | 3/2, 7.9 % |
+| nb_samtale_nb12 | 2/2, 0.0 % | 2/2, 0.0 % | 3/2, 31.0 % |
+| IP_hd10256 | 3/2, 1.0 % | 2/2, 0.7 % | 3/2, 1.0 % |
+| IP_hc10606 | 3/2, 2.4 % | 2/2, 38.7 % | 3/2, 2.4 % |
+| IP_hb10760 | 3/2, 1.0 % | 2/2, 40.5 % | 3/2, 1.0 % |
+| IP_hb10618 | 4/2, 1.3 % | 2/2, 46.1 % | 3/2, 0.8 % |
+| IP_hd10562 | 3/3, 0.2 % | 2/3, 32.8 % | 3/3, 0.2 % |
+| IP_hd10115 | 4/3, 0.9 % | 3/3, 0.7 % | 4/3, 0.9 % |
+| FS_20260611 | 19/18, 3.8 % | 17/18, 5.4 % | 18/18, 5.5 % |
+| FS_20260604 | 20/19, 5.5 % | 19/19, 7.4 % | 20/19, 5.5 % |
+| PL_20260610 | 6/6, 0.0 % | 5/6, 13.1 % | 6/6, 0.0 % |
+| SoU40 | 8/7, 1.1 % | 6/7, 11.6 % | 7/7, 11.6 % |
+| SoU39 | 8/7, 0.9 % | 7/7, 15.2 % | 8/7, 0.9 % |
+| JuU41 | 5/4, 0.5 % | 4/4, 8.0 % | 5/4, 0.5 % |
+| SoU38 | 7/6, 1.2 % | 6/6, 1.0 % | 7/6, 1.2 % |
+| UU24 | 5/4, 0.9 % | 4/4, 0.5 % | 5/4, 0.9 % |
+
+The band-limited copies behave like their sources (`IP_hc10606_tel` 2.4 to 38.3 %, `UU24_tel`
+0.9 to 23.2 %, `IP_hd10256_tel` 1.2 to 0.8 %, `SoU38_tel` 1.3 to 1.1 %). Not evaluated: a real
+Swedish online-meeting recording (the issue's phase-3 acceptance) and the two-track recording-type
+defaults (part 2 of the issue). The only recordings without a chair are the French and Norwegian
+calls, which is also the only set the 0.34 default over-splits, so the evidence that a hint helps
+is for calls; for chamber audio the hint mostly matters as a way to say "this has N people".
+
 ## Reproduce
 
 ```bash
@@ -319,4 +418,6 @@ python scripts/diarization_sv/eval_der.py --cli target/release/sagascript --scra
 
 `diarize_eval` (`crates/sagascript-core/examples/diarize_eval.rs`) runs the diarization stages
 without Whisper: `analyze <audio> <analysis.json>` and
-`cluster <analysis.json> <threshold> <segments.json> [min_speaker_seconds] [absorb_max_distance]`.
+`cluster <analysis.json> <threshold> <segments.json> [min_speaker_seconds] [absorb_max_distance] [hint]`,
+where `hint` is `N`, `MIN-MAX`, `MIN-` or `-MAX`. `eval_der.py --hint truth|truth+1|range:A:B` sets it
+relative to each recording's `reference_speakers`.

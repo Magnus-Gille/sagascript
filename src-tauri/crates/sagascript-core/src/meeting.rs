@@ -5,6 +5,8 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::speaker_hint::SpeakerCountHint;
+
 const SCHEMA_VERSION: u32 = 1;
 const MAX_DURATION_SECONDS: f64 = 14_400.0;
 const MAX_SEGMENTS: usize = 100_000;
@@ -85,6 +87,9 @@ pub struct MeetingTranscript {
     pub duration_seconds: f64,
     pub segments: Vec<MeetingSegment>,
     pub speakers: Vec<MeetingSpeaker>,
+    /// Speaker-count hint the diarization used (issue #305). Absent when none was given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_hint: Option<SpeakerCountHint>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,6 +102,8 @@ struct MeetingTranscriptWire {
     duration_seconds: f64,
     segments: Vec<MeetingSegment>,
     speakers: Vec<MeetingSpeaker>,
+    #[serde(default)]
+    speaker_hint: Option<SpeakerCountHint>,
 }
 
 impl<'de> Deserialize<'de> for MeetingTranscript {
@@ -113,6 +120,7 @@ impl<'de> Deserialize<'de> for MeetingTranscript {
             duration_seconds: wire.duration_seconds,
             segments: wire.segments,
             speakers: wire.speakers,
+            speaker_hint: wire.speaker_hint,
         };
         document.validate().map_err(serde::de::Error::custom)?;
         Ok(document)
@@ -166,9 +174,16 @@ impl MeetingTranscript {
             duration_seconds,
             segments,
             speakers,
+            speaker_hint: None,
         };
         document.validate()?;
         Ok(document)
+    }
+
+    /// Record the speaker-count hint the diarization used.
+    pub fn with_speaker_hint(mut self, hint: Option<SpeakerCountHint>) -> Self {
+        self.speaker_hint = hint;
+        self
     }
 
     pub fn validate(&self) -> Result<(), MeetingError> {
@@ -194,6 +209,11 @@ impl MeetingTranscript {
         }
         if self.speakers.len() > MAX_SPEAKERS {
             return Err(MeetingError::InvalidField("speakers"));
+        }
+        if let Some(hint) = &self.speaker_hint {
+            if hint.is_empty() || hint.validate().is_err() {
+                return Err(MeetingError::InvalidField("speaker_hint"));
+            }
         }
 
         let mut speaker_ids = BTreeSet::new();
@@ -527,6 +547,22 @@ mod tests {
             speakers(),
         )
         .expect("fixture is valid")
+    }
+
+    #[test]
+    fn speaker_hint_is_additive_and_round_trips() {
+        let plain = document();
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("speaker_hint"), "absent without a hint");
+        assert_eq!(serde_json::from_str::<MeetingTranscript>(&json).unwrap(), plain);
+
+        let hinted = document().with_speaker_hint(Some(SpeakerCountHint::exact(2)));
+        let json = serde_json::to_string(&hinted).unwrap();
+        assert!(json.contains(r#""speaker_hint":{"exact":2}"#));
+        assert_eq!(serde_json::from_str::<MeetingTranscript>(&json).unwrap(), hinted);
+
+        let invalid = document().with_speaker_hint(Some(SpeakerCountHint::exact(0)));
+        assert!(invalid.validate().is_err());
     }
 
     #[test]
