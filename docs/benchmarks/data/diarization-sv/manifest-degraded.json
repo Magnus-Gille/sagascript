@@ -1,0 +1,50 @@
+[
+ {
+  "id": "IP_hd10256_tel",
+  "source_set": "sv2",
+  "source_id": "IP_hd10256",
+  "ffmpeg_af": "highpass=f=300,lowpass=f=3400,aresample=8000,aresample=16000",
+  "wav_16k_mono_sha256": "b60be2ae200e825dff958a24a4ccf56272daa60ecca5d8a1d49ef82320173627",
+  "reference_speakers": 2
+ },
+ {
+  "id": "IP_hc10606_tel",
+  "source_set": "sv2",
+  "source_id": "IP_hc10606",
+  "ffmpeg_af": "highpass=f=300,lowpass=f=3400,aresample=8000,aresample=16000",
+  "wav_16k_mono_sha256": "ccdd456b887cd14dba33824ad6c78301da848c2f800b1bf1e54b51d356422dda",
+  "reference_speakers": 2
+ },
+ {
+  "id": "IP_hd10562_tel",
+  "source_set": "sv2",
+  "source_id": "IP_hd10562",
+  "ffmpeg_af": "highpass=f=300,lowpass=f=3400,aresample=8000,aresample=16000",
+  "wav_16k_mono_sha256": "402a89997b6faa50c4aabcd45440fb5d74ca36bf2db9b52cbe2a322a364a9561",
+  "reference_speakers": 3
+ },
+ {
+  "id": "FS_20260611_tel",
+  "source_set": "sv2",
+  "source_id": "FS_20260611",
+  "ffmpeg_af": "highpass=f=300,lowpass=f=3400,aresample=8000,aresample=16000",
+  "wav_16k_mono_sha256": "8c0ea55f3275719614b16c726e4c813a3cf299ed5b1b5f7a5c7821d54fdb2e69",
+  "reference_speakers": 18
+ },
+ {
+  "id": "SoU38_tel",
+  "source_set": "riksdag",
+  "source_id": "SoU38",
+  "ffmpeg_af": "highpass=f=300,lowpass=f=3400,aresample=8000,aresample=16000",
+  "wav_16k_mono_sha256": "e11e1db3b9a4164184adda8d11ee3a58ef68c0f66e0ed593f35e27595a265b20",
+  "reference_speakers": 6
+ },
+ {
+  "id": "UU24_tel",
+  "source_set": "riksdag",
+  "source_id": "UU24",
+  "ffmpeg_af": "highpass=f=300,lowpass=f=3400,aresample=8000,aresample=16000",
+  "wav_16k_mono_sha256": "7957372af97f0f3d245e4f9665ab3d67e946afe2a6ad67d3c7e0fc6ad76363bd",
+  "reference_speakers": 4
+ }
+]

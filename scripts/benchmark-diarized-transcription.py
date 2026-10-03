@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--language", required=True)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--threshold", type=float, default=0.75)
+    parser.add_argument("--threshold", type=float, default=0.34)
     parser.add_argument("--cache", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument(

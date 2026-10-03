@@ -64,3 +64,7 @@ dev-overrides = []
 
 [lints]
 workspace = true
+
+[[example]]
+name = "diarize_eval"
+required-features = ["diarization"]

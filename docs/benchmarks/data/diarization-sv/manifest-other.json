@@ -1,0 +1,81 @@
+[
+ {
+  "id": "dj_2022_feu",
+  "domain": "fr-phone-dispatch",
+  "source": "https://huggingface.co/datasets/medkit/simsamu/resolve/main/dj_2022_feu/dj_2022_feu.m4a",
+  "licence": "MIT (medkit/simsamu)",
+  "source_sha256": "f0365ca6cc8ced19130b363b895913903cb3a8c34dc6764aa1cb2c574411f90c",
+  "wav_16k_mono_sha256": "1463f7859f84c176c38154922398883814c3af818a35ca885dfc28f009b04163",
+  "duration_seconds": 58.5,
+  "reference_speakers": 2
+ },
+ {
+  "id": "dj_2022_grand_mere_battue",
+  "domain": "fr-phone-dispatch",
+  "source": "https://huggingface.co/datasets/medkit/simsamu/resolve/main/dj_2022_grand_mere_battue/dj_2022_grand_mere_battue.m4a",
+  "licence": "MIT (medkit/simsamu)",
+  "source_sha256": "ac5ba3678a1011c6cd20f41432772c4e90a21d795694abcce25f4e21318226ec",
+  "wav_16k_mono_sha256": "74185d492cbee432c4c4674f6672f1168019b9ecd09da6923cf81d0163a6ab90",
+  "duration_seconds": 440.4,
+  "reference_speakers": 2
+ },
+ {
+  "id": "dj_2022_intox_med",
+  "domain": "fr-phone-dispatch",
+  "source": "https://huggingface.co/datasets/medkit/simsamu/resolve/main/dj_2022_intox_med/dj_2022_intox_med.m4a",
+  "licence": "MIT (medkit/simsamu)",
+  "source_sha256": "9fa96ac0725e35a577ec6e04ef17e7c314e67e360add2bae2fcf21d292d90b21",
+  "wav_16k_mono_sha256": "9eee5b85c4e4d04c0c3e0f53c19e77cb3d5ac25cc87fb226bf90f1fb5fd8de62",
+  "duration_seconds": 331.8,
+  "reference_speakers": 2
+ },
+ {
+  "id": "dj_2023_coups",
+  "domain": "fr-phone-dispatch",
+  "source": "https://huggingface.co/datasets/medkit/simsamu/resolve/main/dj_2023_coups/dj_2023_coups.m4a",
+  "licence": "MIT (medkit/simsamu)",
+  "source_sha256": "e082b7e7174ea272d847920eb3fe7c0465419c37f15614b28d89b1dda3f97e26",
+  "wav_16k_mono_sha256": "fba06d122e98b1dfbd7ec1b32654118995e49520498674b1d6ce8aff50b6fce9",
+  "duration_seconds": 266.9,
+  "reference_speakers": 2
+ },
+ {
+  "id": "dj_2022_avc_16_ans",
+  "domain": "fr-phone-dispatch",
+  "source": "https://huggingface.co/datasets/medkit/simsamu/resolve/main/dj_2022_avc_16_ans/dj_2022_avc_16_ans.m4a",
+  "licence": "MIT (medkit/simsamu)",
+  "source_sha256": "26180de84dd7cd8810114d59427aa5878e3b2fb38d453c837a05df1ae083e630",
+  "wav_16k_mono_sha256": "7324ff7e583b09a14df90fd70d96b3444f5605545c08b953213afce161fbb792",
+  "duration_seconds": 245.7,
+  "reference_speakers": 2
+ },
+ {
+  "id": "dj_2022_douleur_abdo",
+  "domain": "fr-phone-dispatch",
+  "source": "https://huggingface.co/datasets/medkit/simsamu/resolve/main/dj_2022_douleur_abdo/dj_2022_douleur_abdo.m4a",
+  "licence": "MIT (medkit/simsamu)",
+  "source_sha256": "78d54fcce934b31423de409f8d4e1a59958bd4d127b9ecf4beae5bd9a01c04b2",
+  "wav_16k_mono_sha256": "af3e28c3aba4af8ed4ce11b8c013b5e53ebcc9d9a91d9c82049b6048827c5b35",
+  "duration_seconds": 230.9,
+  "reference_speakers": 2
+ },
+ {
+  "id": "dj_2022_mere_fievre",
+  "domain": "fr-phone-dispatch",
+  "source": "https://huggingface.co/datasets/medkit/simsamu/resolve/main/dj_2022_mere_fievre/dj_2022_mere_fievre.m4a",
+  "licence": "MIT (medkit/simsamu)",
+  "source_sha256": "9d77136a553d5e5d22e686ae51826c5f5d7f998b60a2133e50a86878077b5a68",
+  "wav_16k_mono_sha256": "bcc63d2c6739489202b0715155e89cc6033c75014b19431ebb3bed4a108b3b6b",
+  "duration_seconds": 170.8,
+  "reference_speakers": 2
+ },
+ {
+  "id": "nb_samtale_nb12",
+  "domain": "no-conversation",
+  "source": "https://huggingface.co/datasets/Sprakbanken/nb_samtale (recording nb-12, per-turn WAVs concatenated by test-audio/diarization/fetch.sh)",
+  "licence": "CC0-1.0 (Sprakbanken/nb_samtale)",
+  "wav_16k_mono_sha256": "b85b58b33546670c3a50d89b6b3fda9c6f908e9de8d8ea4df4f7fd0810367abf",
+  "duration_seconds": 41.8,
+  "reference_speakers": 2
+ }
+]
