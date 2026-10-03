@@ -7,6 +7,11 @@ use clap::Args;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use sagascript_core::audio::resample::TARGET_SAMPLE_RATE;
+use sagascript_core::audio::system::recorder::{SystemRecorder, SystemTrack};
+use sagascript_core::audio::system::twotrack::{
+    mix_tracks, pad_front, track_start_padding, write_two_track_wav,
+};
+use sagascript_core::audio::system::{AppSelector, AudioSource, CaptureTarget};
 use sagascript_core::audio::AudioCaptureService;
 use sagascript_core::error::DictationError;
 use sagascript_core::settings::{HotkeyProfile, Language, Settings, WhisperModel};
@@ -38,6 +43,14 @@ pub struct RecordArgs {
     #[arg(short, long, value_name = "SECONDS")]
     pub duration: Option<f64>,
 
+    /// Audio source: the microphone, the computer's system audio, or both as two tracks
+    #[arg(long, value_name = "SOURCE", default_value = "mic", value_parser = ["mic", "system", "both"])]
+    pub source: String,
+
+    /// Limit system capture to one app: macOS bundle id, pid, or executable name
+    #[arg(long, value_name = "APP")]
+    pub app: Option<String>,
+
     /// Save audio to WAV file instead of transcribing
     #[arg(short, long, value_name = "PATH")]
     pub output: Option<String>,
@@ -68,7 +81,67 @@ pub struct RecordArgs {
     pub prompt_file: Option<PathBuf>,
 }
 
+/// Parse `--source`/`--app` into a validated capture plan.
+pub fn resolve_source(source: &str, app: Option<&str>) -> Result<(AudioSource, CaptureTarget), DictationError> {
+    let source: AudioSource = source.parse()?;
+    let target = match app {
+        None => CaptureTarget::All,
+        Some(_) if !source.needs_system() => {
+            return Err(DictationError::SettingsError(
+                "--app only applies to system audio; use --source system or --source both".into(),
+            ))
+        }
+        Some(app) => CaptureTarget::App(AppSelector::parse(app)?),
+    };
+    Ok((source, target))
+}
+
+/// The microphone service keeps at most this many seconds in memory and then
+/// silently stops appending. `--source both` must not let that truncate the mic
+/// channel while the system track keeps growing, so it is limited to this length.
+fn max_record_secs(source: AudioSource) -> Option<f64> {
+    (source == AudioSource::Both).then_some(sagascript_core::audio::capture::MAX_BUFFER_SECONDS as f64)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StopReason {
+    Duration,
+    MicCapacity,
+}
+
+/// When to stop. The requested duration counts from the start of the wait loop;
+/// the microphone-capacity limit counts from when the microphone was requested
+/// (its buffer fills from then, including slow system-recorder start-up).
+fn stop_reason(
+    duration: Option<f64>,
+    since_loop_start: f64,
+    mic_cap: Option<f64>,
+    since_mic_requested: f64,
+) -> Option<StopReason> {
+    if mic_cap.is_some_and(|max| since_mic_requested >= max) {
+        return Some(StopReason::MicCapacity);
+    }
+    duration.filter(|d| since_loop_start >= *d).map(|_| StopReason::Duration)
+}
+
+fn validate_duration(source: AudioSource, duration: Option<f64>) -> Result<(), DictationError> {
+    match (max_record_secs(source), duration) {
+        (Some(max), Some(d)) if d > max => Err(DictationError::SettingsError(format!(
+            "--source both is limited to {} minutes (the microphone buffer is in memory); \
+             use --source system for longer recordings, or record in parts",
+            (max / 60.0) as u32
+        ))),
+        _ => Ok(()),
+    }
+}
+
+const SYSTEM_AUDIO_BANNER: &str = "\
+== RECORDING SYSTEM AUDIO ==  Everything the computer plays is being captured and stored locally.\n\
+   Recording other people may require their consent. Press Ctrl+C to stop.";
+
 pub fn run(args: RecordArgs) -> Result<(), DictationError> {
+    let (source, target) = resolve_source(&args.source, args.app.as_deref())?;
+    validate_duration(source, args.duration)?;
     let stored = sagascript_core::settings::store::load();
     let profile = match args.profile.as_deref() {
         Some(profile_id) => resolve_profile(&stored, profile_id)?,
@@ -143,9 +216,30 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let r = running.clone();
     ctrlc_handler(r);
 
-    // Start recording
+    // Start recording. The banner is the visible indicator and consent reminder
+    // and must appear before any system-audio capture begins.
+    if source.needs_system() {
+        eprintln!("{SYSTEM_AUDIO_BANNER}");
+    }
     let mut capture = AudioCaptureService::new();
-    capture.start_capture()?;
+    let mic_requested = std::time::Instant::now();
+    if source.needs_mic() {
+        capture.start_capture()?;
+    }
+    let system = if source.needs_system() {
+        let started = std::time::Instant::now();
+        match SystemRecorder::start(&target) {
+            Ok(recorder) => Some((recorder, started)),
+            Err(error) => {
+                if source.needs_mic() {
+                    let _ = capture.stop_capture();
+                }
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
 
     if let Some(secs) = args.duration {
         eprintln!("Recording for {secs}s... (press Ctrl+C to stop early)");
@@ -160,15 +254,54 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
         if !running.load(Ordering::Relaxed) {
             break;
         }
-        if let Some(secs) = args.duration {
-            if start.elapsed().as_secs_f64() >= secs {
+        match stop_reason(
+            args.duration,
+            start.elapsed().as_secs_f64(),
+            max_record_secs(source),
+            mic_requested.elapsed().as_secs_f64(),
+        ) {
+            Some(StopReason::Duration) => break,
+            Some(StopReason::MicCapacity) => {
+                eprintln!("Stopping: --source both is limited to {} minutes.", (max_record_secs(source).unwrap_or(0.0) / 60.0) as u32);
                 break;
             }
+            None => {}
         }
     }
 
-    let audio = capture.stop_capture()?;
+    let mic_first_callback_ms = capture.metrics().first_callback_ms.unwrap_or(0);
+    // Stop and join BOTH paths before propagating either error, so a microphone
+    // failure cannot leave the system recorder (and its spool file) behind.
+    let mic_result = if source.needs_mic() { Some(capture.stop_capture()) } else { None };
+    if source.needs_mic() && capture.was_truncated() {
+        // Reported whatever the stop reason (duration, limit or Ctrl+C).
+        eprintln!(
+            "Warning: the microphone buffer limit ({} minutes) was reached and later microphone audio was discarded.",
+            sagascript_core::audio::capture::MAX_BUFFER_SECONDS / 60
+        );
+    }
+    let system_result = system.map(|(recorder, started)| {
+        let offset_ms = started.duration_since(mic_requested).as_millis() as u64;
+        (recorder.stop(), offset_ms)
+    });
+    let mic_audio = mic_result.transpose()?;
+    let system_track: Option<(SystemTrack, u64)> =
+        system_result.map(|(track, offset_ms)| track.map(|t| (t, offset_ms))).transpose()?;
+    if let Some((track, _)) = &system_track {
+        if track.silent {
+            eprintln!("Warning: the system-audio track is silent. Nothing was playing, or permission was denied (run `sagascript doctor`).");
+        }
+    }
+    let (audio, two_track) = combine_tracks(source, mic_audio, system_track, mic_first_callback_ms);
     let duration = audio.len() as f64 / TARGET_SAMPLE_RATE as f64;
+    if let Some((mic, system)) = &two_track {
+        eprintln!(
+            "Track lengths: mic {:.1}s, system {:.1}s (drift {} ms)",
+            mic.len() as f64 / TARGET_SAMPLE_RATE as f64,
+            system.len() as f64 / TARGET_SAMPLE_RATE as f64,
+            sagascript_core::audio::system::convert::drift_ms(mic.len(), system.len())
+        );
+    }
     eprintln!(
         "Captured {:.1}s of audio ({} samples)",
         duration,
@@ -181,9 +314,24 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
 
     // Save WAV if requested
     if let Some(output_path) = &args.output {
-        let wav_bytes = sagascript_core::audio::wav::encode_wav(&audio);
-        std::fs::write(output_path, &wav_bytes)
-            .map_err(|e| DictationError::FileDecodeError(format!("Failed to write WAV: {e}")))?;
+        if let Some((mic, system)) = &two_track {
+            write_two_track_wav(std::path::Path::new(output_path), mic, system)
+                .map_err(|e| DictationError::FileDecodeError(format!("Failed to write WAV: {e}")))?;
+            eprintln!("Two-track WAV: left = microphone, right = system audio.");
+        } else {
+            // Same 0600 writer as the two-track path: meeting audio must not be
+            // created with the default umask.
+            let write = || -> std::io::Result<()> {
+                sagascript_core::audio::system::twotrack::check_wav_capacity(audio.len() as u64, 1)?;
+                let mut w = sagascript_core::audio::system::twotrack::TwoTrackWriter::create(
+                    std::path::Path::new(output_path),
+                    1,
+                )?;
+                w.write_interleaved(&audio)?;
+                w.finish().map(|_| ())
+            };
+            write().map_err(|e| DictationError::FileDecodeError(format!("Failed to write WAV: {e}")))?;
+        }
         eprintln!("Saved to {output_path}");
         return Ok(());
     }
@@ -243,6 +391,7 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
             "language": language,
             "model": model_id,
             "duration_seconds": duration,
+            "source": args.source,
             "vocabulary_corrections": vocabulary_corrections,
         });
         println!("{}", serde_json::to_string_pretty(&json).unwrap());
@@ -259,6 +408,32 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     }
 
     Ok(())
+}
+
+/// Aligned (microphone, system) tracks of a `both` recording.
+type AlignedTracks = (Vec<f32>, Vec<f32>);
+
+/// Returns the mono audio to transcribe and, for `both`, the aligned
+/// (microphone, system) tracks for a two-track file.
+fn combine_tracks(
+    source: AudioSource,
+    mic: Option<Vec<f32>>,
+    system: Option<(SystemTrack, u64)>,
+    mic_first_callback_ms: u64,
+) -> (Vec<f32>, Option<AlignedTracks>) {
+    match (source, mic, system) {
+        (AudioSource::Both, Some(mic), Some((system, system_offset_ms))) => {
+            // Sample 0 of the mic is its first callback; sample 0 of the system
+            // track is the moment its capture was requested.
+            let (mic_pad, system_pad) = track_start_padding(mic_first_callback_ms, system_offset_ms);
+            let mic = pad_front(&mic, mic_pad);
+            let system = pad_front(&system.samples, system_pad);
+            (mix_tracks(&mic, &system), Some((mic, system)))
+        }
+        (_, Some(mic), None) => (mic, None),
+        (_, None, Some((system, _))) => (system.samples, None),
+        _ => (Vec::new(), None),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -386,6 +561,7 @@ fn ctrlc_handler(running: Arc<AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::{
+        combine_tracks, resolve_source, SystemTrack,
         resolve_record_model, resolve_record_model_for_profile, validate_pianissimo_record_options, write_plain_record_output,
         RecordModel,
     };
@@ -529,5 +705,69 @@ mod tests {
         let mut output = Vec::new();
         assert!(write_plain_record_output(&mut output, "hello").unwrap());
         assert_eq!(output, b"hello\n");
+    }
+
+    #[test]
+    fn mic_capacity_deadline_counts_from_mic_start() {
+        use super::{stop_reason, StopReason};
+        // Slow system start: loop has run 800 s, but the mic has been filling 901 s.
+        assert_eq!(stop_reason(Some(900.0), 800.0, Some(900.0), 901.0), Some(StopReason::MicCapacity));
+        assert_eq!(stop_reason(Some(100.0), 100.0, Some(900.0), 105.0), Some(StopReason::Duration));
+        assert_eq!(stop_reason(Some(100.0), 99.0, Some(900.0), 104.0), None);
+        assert_eq!(stop_reason(None, 5000.0, None, 5000.0), None); // system-only: no cap
+        assert_eq!(stop_reason(None, 10.0, Some(900.0), 900.0), Some(StopReason::MicCapacity));
+    }
+
+    #[test]
+    fn both_is_limited_to_the_microphone_buffer_length() {
+        use sagascript_core::audio::system::AudioSource;
+        assert!(super::validate_duration(AudioSource::Both, Some(900.0)).is_ok());
+        assert!(super::validate_duration(AudioSource::Both, Some(901.0)).is_err());
+        assert!(super::validate_duration(AudioSource::Both, None).is_ok());
+        assert!(super::validate_duration(AudioSource::System, Some(7200.0)).is_ok());
+        assert_eq!(super::max_record_secs(AudioSource::System), None);
+    }
+
+    #[test]
+    fn source_defaults_to_mic_and_validates_app() {
+        use sagascript_core::audio::system::{AppSelector, AudioSource, CaptureTarget};
+        assert_eq!(resolve_source("mic", None).unwrap(), (AudioSource::Mic, CaptureTarget::All));
+        assert_eq!(
+            resolve_source("both", Some("us.zoom.xos")).unwrap(),
+            (AudioSource::Both, CaptureTarget::App(AppSelector::BundleId("us.zoom.xos".into())))
+        );
+        assert!(resolve_source("mic", Some("1234")).is_err());
+        assert!(resolve_source("speakers", None).is_err());
+    }
+
+    #[test]
+    fn both_aligns_and_mixes_tracks() {
+        use sagascript_core::audio::system::{AudioSource, NativeFormat};
+        let system = SystemTrack {
+            samples: vec![1.0; 16],
+            native: NativeFormat { sample_rate: 48_000, channels: 2 },
+            silent: false,
+        };
+        // System started 1 ms (16 samples) after the mic's first callback.
+        let (mixed, two) = combine_tracks(AudioSource::Both, Some(vec![1.0; 32]), Some((system, 1)), 0);
+        let (mic, sys) = two.unwrap();
+        assert_eq!((mic.len(), sys.len()), (32, 32));
+        assert_eq!(sys[0], 0.0);
+        assert_eq!(sys[16], 1.0);
+        assert_eq!(mixed[0], 0.5);
+        assert_eq!(mixed[20], 1.0);
+    }
+
+    #[test]
+    fn system_only_uses_system_samples() {
+        use sagascript_core::audio::system::{AudioSource, NativeFormat};
+        let system = SystemTrack {
+            samples: vec![0.25; 4],
+            native: NativeFormat { sample_rate: 16_000, channels: 1 },
+            silent: false,
+        };
+        let (audio, two) = combine_tracks(AudioSource::System, None, Some((system, 0)), 0);
+        assert_eq!(audio, vec![0.25; 4]);
+        assert!(two.is_none());
     }
 }

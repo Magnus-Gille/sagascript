@@ -46,9 +46,15 @@ ndarray = { version = "0.17", optional = true }
 # whisper-rs is declared per-target because macOS enables Metal/CoreML;
 # Windows and Linux use the CPU backend (Vulkan is a separate, currently-broken opt-in).
 [target.'cfg(target_os = "macos")'.dependencies]
+# System-audio capture (Core Audio process taps), only with the `record` feature.
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSDictionary", "NSString", "NSValue", "NSUUID", "NSObject"] }
 whisper-rs = { version = "0.15", features = ["coreml", "metal", "tracing_backend"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+# System-audio capture (WASAPI loopback), only with the `record` feature.
+windows-core = { version = "0.61", optional = true }
+windows = { version = "0.61", optional = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Com_StructuredStorage"] }
 whisper-rs = { version = "0.15", features = ["tracing_backend"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -56,7 +62,7 @@ whisper-rs = { version = "0.15", features = ["tracing_backend"] }
 
 [features]
 default = []
-record = ["dep:cpal"]
+record = ["dep:cpal", "dep:objc2", "dep:objc2-foundation", "dep:windows", "dep:windows-core"]
 diarization = ["dep:ort", "dep:rustfft", "dep:kodama", "dep:ndarray"]
 # Honor SAGASCRIPT_ENGINE_HOST / SAGASCRIPT_PIANISSIMO_MODEL_DIR in a release build.
 # Off by default: signed builds must not trust the environment for the sidecar or model.

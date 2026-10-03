@@ -5,6 +5,8 @@ pub mod capture;
 pub mod decoder;
 pub mod resample;
 pub mod speech;
+#[cfg(feature = "record")]
+pub mod system;
 pub mod wav;
 
 pub use speech::has_audio_signal;
