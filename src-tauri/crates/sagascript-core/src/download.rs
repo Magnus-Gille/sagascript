@@ -59,6 +59,43 @@ const MAGIC_PREFIX_LEN: usize = 8;
 /// long, so this is generous on purpose.
 const ORPHAN_TMP_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
+/// Network bounds for one download. Defaults are sized for multi-GB models on
+/// slow lines; tests inject tiny values.
+///
+/// - `connect_timeout` (30 s): TCP/TLS connect must finish quickly.
+/// - `idle_timeout` (60 s): no body bytes (and no response headers) for this
+///   long aborts the transfer, so a stalled server cannot hold it open.
+/// - total deadline: `total_base` (5 min) plus the pinned size divided by
+///   `min_bytes_per_sec` (128 KiB/s). This scales with the manifest size, so a
+///   multi-GB download on a slow but moving line is never cut short, while a
+///   server trickling bytes below the floor still gets bounded (about 6.8 h
+///   for a 3 GB model).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadLimits {
+    pub connect_timeout: Duration,
+    pub idle_timeout: Duration,
+    pub total_base: Duration,
+    pub min_bytes_per_sec: u64,
+}
+
+impl Default for DownloadLimits {
+    fn default() -> Self {
+        Self {
+            connect_timeout: Duration::from_secs(30),
+            idle_timeout: Duration::from_secs(60),
+            total_base: Duration::from_secs(5 * 60),
+            min_bytes_per_sec: 128 * 1024,
+        }
+    }
+}
+
+impl DownloadLimits {
+    /// Overall wall-clock deadline for an artifact of `size` bytes.
+    pub fn total_deadline(&self, size: u64) -> Duration {
+        self.total_base + Duration::from_secs(size / self.min_bytes_per_sec.max(1))
+    }
+}
+
 /// Immutable integrity metadata for a downloadable model artifact. Values are
 /// taken from the pinned Hugging Face revision's git-LFS metadata (`oid
 /// sha256` and `size`), not from a mutable branch or a locally computed guess.
@@ -105,6 +142,28 @@ pub async fn download_to_path(
     expected_magic: Option<&[u8]>,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<(), DictationError> {
+    download_to_path_with_limits(
+        url,
+        dest,
+        tmp_ext,
+        integrity,
+        expected_magic,
+        DownloadLimits::default(),
+        progress_callback,
+    )
+    .await
+}
+
+/// [`download_to_path`] with explicit network bounds.
+pub async fn download_to_path_with_limits(
+    url: &str,
+    dest: &Path,
+    tmp_ext: &str,
+    integrity: DownloadIntegrity,
+    expected_magic: Option<&[u8]>,
+    limits: DownloadLimits,
+    progress_callback: impl Fn(u64, u64) + Send + 'static,
+) -> Result<(), DictationError> {
     if let Some(dir) = dest.parent() {
         std::fs::create_dir_all(dir).map_err(|e| {
             DictationError::ModelDownloadFailed(format!("Failed to create models directory: {e}"))
@@ -114,8 +173,15 @@ pub async fn download_to_path(
 
     let tmp_path = unique_tmp_path(dest, tmp_ext);
 
-    if let Err(e) =
-        fetch_to_tmp(url, &tmp_path, integrity, expected_magic, progress_callback).await
+    if let Err(e) = fetch_to_tmp(
+        url,
+        &tmp_path,
+        integrity,
+        expected_magic,
+        limits,
+        progress_callback,
+    )
+    .await
     {
         let _ = tokio::fs::remove_file(&tmp_path).await;
         return Err(e);
@@ -150,14 +216,35 @@ async fn fetch_to_tmp(
     tmp_path: &Path,
     integrity: DownloadIntegrity,
     expected_magic: Option<&[u8]>,
+    limits: DownloadLimits,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<(), DictationError> {
-    let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .send()
-        .await
+    let deadline = tokio::time::Instant::now() + limits.total_deadline(integrity.size);
+    let total_err = || {
+        DictationError::ModelDownloadFailed(format!(
+            "Download exceeded the total time limit ({}s) for a {}-byte model",
+            limits.total_deadline(integrity.size).as_secs(),
+            integrity.size
+        ))
+    };
+    let idle_err = || {
+        DictationError::ModelDownloadFailed(format!(
+            "Download stalled: no data received for {}s",
+            limits.idle_timeout.as_secs()
+        ))
+    };
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(limits.connect_timeout)
+        .build()
         .map_err(|e| DictationError::ModelDownloadFailed(format!("Download failed: {e}")))?;
+    let send = tokio::time::timeout(limits.idle_timeout, client.get(url).send());
+    let response = match tokio::time::timeout_at(deadline, send).await {
+        Err(_) => return Err(total_err()),
+        Ok(Err(_)) => return Err(idle_err()),
+        Ok(Ok(r)) => r
+            .map_err(|e| DictationError::ModelDownloadFailed(format!("Download failed: {e}")))?,
+    };
 
     if !response.status().is_success() {
         return Err(DictationError::ModelDownloadFailed(format!(
@@ -167,6 +254,14 @@ async fn fetch_to_tmp(
     }
 
     let content_length = response.content_length();
+    if let Some(len) = content_length {
+        if len != integrity.size {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "Server advertised {len} bytes but the pinned manifest expects {} bytes",
+                integrity.size
+            )));
+        }
+    }
     let total_size = content_length.unwrap_or(0);
     let mut downloaded: u64 = 0;
     let mut prefix: Vec<u8> = Vec::with_capacity(MAGIC_PREFIX_LEN);
@@ -177,9 +272,22 @@ async fn fetch_to_tmp(
     })?;
 
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| DictationError::ModelDownloadFailed(format!("Download error: {e}")))?;
+    loop {
+        let next = tokio::time::timeout(limits.idle_timeout, stream.next());
+        let chunk = match tokio::time::timeout_at(deadline, next).await {
+            Err(_) => return Err(total_err()),
+            Ok(Err(_)) => return Err(idle_err()),
+            Ok(Ok(None)) => break,
+            Ok(Ok(Some(c))) => c.map_err(|e| {
+                DictationError::ModelDownloadFailed(format!("Download error: {e}"))
+            })?,
+        };
+        if chunk.len() as u64 > integrity.size.saturating_sub(downloaded) {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "Download exceeds the pinned manifest size of {} bytes",
+                integrity.size
+            )));
+        }
         if prefix.len() < MAGIC_PREFIX_LEN {
             let take = (MAGIC_PREFIX_LEN - prefix.len()).min(chunk.len());
             prefix.extend_from_slice(&chunk[..take]);
@@ -1288,6 +1396,146 @@ mod tests {
             "failed replacement must clean its unique temp file"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // -- bounded downloads --
+
+    #[derive(Clone, Copy)]
+    enum Serve {
+        /// Content-Length header (None = omitted), then body, then optional stall.
+        Body { declared: Option<usize>, body_len: usize, stall: Duration },
+    }
+
+    fn serve(mode: Serve) -> String {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let Serve::Body { declared, body_len, stall } = mode;
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            let mut head = String::from("HTTP/1.1 200 OK\r\nConnection: close\r\n");
+            if let Some(d) = declared {
+                head.push_str(&format!("Content-Length: {d}\r\n"));
+            }
+            head.push_str("\r\n");
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&vec![b'a'; body_len]);
+            let _ = stream.flush();
+            std::thread::sleep(stall);
+        });
+        format!("http://{address}/model.bin")
+    }
+
+    fn fast_limits() -> DownloadLimits {
+        DownloadLimits {
+            connect_timeout: Duration::from_millis(500),
+            idle_timeout: Duration::from_millis(300),
+            total_base: Duration::from_secs(5),
+            min_bytes_per_sec: 1024,
+        }
+    }
+
+    async fn bounded(mode: Serve, size: u64) -> (Result<(), DictationError>, Duration, PathBuf) {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.bin");
+        let integrity = DownloadIntegrity {
+            // Never reached on the failure paths below.
+            sha256: "6c736b3dfa943bf4e7c61df78d1dfcad9a3d8b56369f0559670497b19127e74d",
+            size,
+        };
+        let start = std::time::Instant::now();
+        let result = download_to_path_with_limits(
+            &serve(mode),
+            &path,
+            "bin",
+            integrity,
+            None,
+            fast_limits(),
+            |_, _| {},
+        )
+        .await;
+        (result, start.elapsed(), dir)
+    }
+
+    fn assert_clean(dir: &Path) {
+        assert!(
+            std::fs::read_dir(dir).unwrap().next().is_none(),
+            "failed download must leave no partial or temp file"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn oversized_body_without_length_fails_promptly_and_leaves_nothing() {
+        let (r, took, dir) = bounded(
+            Serve::Body { declared: None, body_len: 4 * 1024 * 1024, stall: Duration::from_secs(3) },
+            14,
+        )
+        .await;
+        let err = r.unwrap_err().to_string();
+        assert!(err.contains("exceeds the pinned manifest size"), "{err}");
+        assert!(took < Duration::from_secs(2), "{took:?}");
+        assert_clean(&dir);
+    }
+
+    #[tokio::test]
+    async fn wrong_content_length_is_rejected_before_any_write() {
+        let (r, took, dir) = bounded(
+            Serve::Body { declared: Some(1_000_000), body_len: 14, stall: Duration::from_secs(3) },
+            14,
+        )
+        .await;
+        let err = r.unwrap_err().to_string();
+        assert!(err.contains("Server advertised 1000000"), "{err}");
+        assert!(took < Duration::from_secs(2), "{took:?}");
+        assert_clean(&dir);
+    }
+
+    #[tokio::test]
+    async fn stalled_body_fails_within_idle_deadline_and_leaves_nothing() {
+        let (r, took, dir) = bounded(
+            Serve::Body { declared: Some(14), body_len: 5, stall: Duration::from_secs(4) },
+            14,
+        )
+        .await;
+        let err = r.unwrap_err().to_string();
+        assert!(err.contains("stalled"), "{err}");
+        assert!(took < Duration::from_secs(2), "{took:?}");
+        assert_clean(&dir);
+    }
+
+    #[tokio::test]
+    async fn valid_pinned_download_succeeds_with_limits() {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.bin");
+        let expected = DownloadIntegrity {
+            sha256: "6c736b3dfa943bf4e7c61df78d1dfcad9a3d8b56369f0559670497b19127e74d",
+            size: 14,
+        };
+        download_to_path_with_limits(
+            &serve_once(b"verified model"),
+            &path,
+            "bin",
+            expected,
+            None,
+            fast_limits(),
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"verified model");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn total_deadline_scales_with_size() {
+        let l = DownloadLimits::default();
+        assert!(l.total_deadline(3 * 1024 * 1024 * 1024) > Duration::from_secs(6 * 3600));
+        assert!(l.total_deadline(0) >= Duration::from_secs(300));
     }
 
     // -- unique_tmp_path --
