@@ -1,14 +1,14 @@
 use std::path::Path;
 
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::codecs::{Decoder, DecoderOptions};
+use symphonia::core::formats::{FormatOptions, Packet};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use tracing::info;
 
-use super::resample::{mix_to_mono, resample_to_16khz_with_control};
+use super::resample::resample_to_16khz_with_control;
 use crate::error::DictationError;
 
 /// Supported audio/video file extensions.
@@ -17,12 +17,10 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
 ];
 
 /// Hard ceiling on decoded audio length, expressed in samples of a 16kHz mono
-/// clip of equivalent duration (~4 hours: `4 * 3600 * 16_000`). Without a
-/// cap, `decode_audio_file` accumulates the ENTIRE decoded PCM stream into a
-/// single `Vec<f32>` before resampling — a multi-hour, high-sample-rate
-/// multichannel file (or an adversarial/corrupt one that decodes to far more
-/// "audio" than its file size implies) can require tens of GB and OOM the
-/// process.
+/// clip of equivalent duration (~4 hours: `4 * 3600 * 16_000`). Complements the
+/// byte budget ([`DecodeBudget`]): the decoder accumulates the whole mono
+/// stream before resampling, and an adversarial/corrupt file can decode to far
+/// more "audio" than its file size implies.
 ///
 /// The check is done against a *duration-normalized* sample count (raw
 /// accumulated samples, divided by channel count and source sample rate, then
@@ -55,6 +53,102 @@ fn check_decode_size_cap(
         )));
     }
 
+    Ok(())
+}
+
+/// Memory budget for one decode, in bytes of `f32` PCM.
+///
+/// Decoding streams: each packet is downmixed to mono as it arrives, so the
+/// source-rate multichannel PCM is never retained (only one packet's worth of
+/// interleaved samples exists at a time). What stays resident is the
+/// source-rate mono signal (4 bytes per source frame) plus, at the end, the
+/// 16 kHz resampled copy. `max_total_bytes` bounds that peak
+/// (`mono_frames * 4 + ceil(mono_frames * 16_000 / rate) * 4`) and
+/// `max_packet_bytes` bounds the transient per-packet conversion buffers
+/// (interleaved sample buffer plus its mono downmix).
+///
+/// 4 GiB admits the ~4 hour duration cap at the usual 44.1/48 kHz rates
+/// (~3.5 GiB peak at 48 kHz) so long recordings keep working, while rejecting
+/// 4 hours of 96 kHz+ audio (~6 GiB) that previously needed far more.
+#[derive(Debug, Clone, Copy)]
+struct DecodeBudget {
+    max_total_bytes: usize,
+    max_packet_bytes: usize,
+}
+
+const DEFAULT_DECODE_BUDGET: DecodeBudget = DecodeBudget {
+    max_total_bytes: 4 * 1024 * 1024 * 1024,
+    max_packet_bytes: 256 * 1024 * 1024,
+};
+
+const SAMPLE_BYTES: usize = std::mem::size_of::<f32>();
+
+fn budget_error(what: &str) -> DictationError {
+    DictationError::FileDecodeError(format!(
+        "Audio file decodes to too much PCM data ({what}); aborting to avoid unbounded memory use"
+    ))
+}
+
+/// `frames * channels * 4` with checked arithmetic.
+fn pcm_bytes(frames: usize, channels: usize) -> Result<usize, DictationError> {
+    frames
+        .checked_mul(channels.max(1))
+        .and_then(|samples| samples.checked_mul(SAMPLE_BYTES))
+        .ok_or_else(|| budget_error("size overflow"))
+}
+
+/// Peak bytes while `mono_frames` source-rate frames are held and converted
+/// to 16 kHz: the mono buffer plus the resampled output buffer.
+fn conversion_peak_bytes(mono_frames: usize, sample_rate: u32) -> Result<usize, DictationError> {
+    let rate = if sample_rate == 0 { 44_100 } else { sample_rate } as u128;
+    let out_frames = (mono_frames as u128 * 16_000).div_ceil(rate);
+    let out_frames = usize::try_from(out_frames).map_err(|_| budget_error("size overflow"))?;
+    pcm_bytes(mono_frames, 1)?
+        .checked_add(pcm_bytes(out_frames, 1)?)
+        .ok_or_else(|| budget_error("size overflow"))
+}
+
+/// Check, before any allocation, that one decoded packet of `capacity_frames`
+/// frames x `channels` fits the transient conversion budget (interleaved
+/// buffer plus mono downmix).
+fn check_packet_budget(
+    capacity_frames: usize,
+    channels: usize,
+    budget: &DecodeBudget,
+) -> Result<(), DictationError> {
+    let bytes = pcm_bytes(capacity_frames, channels.max(1).saturating_add(1))?;
+    if bytes > budget.max_packet_bytes {
+        return Err(budget_error("single packet"));
+    }
+    Ok(())
+}
+
+/// Append `mono_add` frames (produced from `samples`) to `mono`, enforcing the
+/// byte budget and the duration cap BEFORE the buffer grows. Growth is
+/// geometric but never beyond the budget, and uses fallible reservation so an
+/// allocation failure is an error rather than an abort.
+fn append_mono_within_budget(
+    mono: &mut Vec<f32>,
+    add_frames: usize,
+    sample_rate: u32,
+    budget: &DecodeBudget,
+    fill: impl FnOnce(&mut Vec<f32>),
+) -> Result<(), DictationError> {
+    let new_len = mono
+        .len()
+        .checked_add(add_frames)
+        .ok_or_else(|| budget_error("size overflow"))?;
+    if conversion_peak_bytes(new_len, sample_rate)? > budget.max_total_bytes {
+        return Err(budget_error("total decoded audio"));
+    }
+    check_decode_size_cap(new_len, 1, sample_rate)?;
+    if new_len > mono.capacity() {
+        let ceiling = (budget.max_total_bytes / SAMPLE_BYTES).max(new_len);
+        let target = mono.capacity().saturating_mul(2).clamp(new_len, ceiling);
+        mono.try_reserve_exact(target - mono.len())
+            .map_err(|_| budget_error("allocation refused"))?;
+    }
+    fill(mono);
     Ok(())
 }
 
@@ -132,6 +226,118 @@ fn note_decode_error(
     Ok(())
 }
 
+/// Packet loop, separated from container probing so tests can drive it with a
+/// scripted packet source and decoder.
+#[allow(clippy::too_many_arguments)]
+fn decode_packets(
+    next_packet: &mut dyn FnMut() -> symphonia::core::errors::Result<Packet>,
+    decoder: &mut dyn Decoder,
+    track_id: u32,
+    sample_rate: u32,
+    codec_channels: usize,
+    total_bytes: u64,
+    checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
+    on_decode: Option<&dyn Fn(u8)>,
+    budget: &DecodeBudget,
+) -> Result<(Vec<f32>, usize), DictationError> {
+    let mut consumed_bytes = 0u64;
+    let mut last_decode_pct = 0u8;
+    let mut mono: Vec<f32> = Vec::new();
+    let mut actual_channels: usize = codec_channels.max(1);
+    let mut consecutive_errors = 0usize;
+
+    // Decode all packets
+    loop {
+        if let Some(checkpoint) = checkpoint {
+            checkpoint()?;
+        }
+        let packet = match next_packet() {
+            Ok(p) => p,
+            Err(symphonia::core::errors::Error::IoError(ref e))
+                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break; // End of stream
+            }
+            Err(e) => {
+                // Non-fatal decode errors are skipped, but only within the
+                // unconditional consecutive-error budget (at most
+                // MAX_CONSECUTIVE_DECODE_ERRORS log lines per failing run).
+                info!("Decode warning (skipping packet): {e}");
+                note_decode_error(&mut consecutive_errors, "format")?;
+                continue;
+            }
+        };
+
+        // Skip packets from other tracks
+        if packet.track_id() != track_id {
+            continue;
+        }
+
+        // Measured progress: consumed packet bytes over file size. Counted
+        // here (not after decode) so undecodable packets still count as
+        // consumed input. Clamped to 99 — container overhead means packet
+        // bytes asymptote below 100; clean EOF snaps to 100 after resample.
+        if total_bytes > 0 {
+            consumed_bytes = consumed_bytes.saturating_add(packet.data.len() as u64);
+            let pct = decode_percent(consumed_bytes, total_bytes).min(99);
+            if pct > last_decode_pct {
+                last_decode_pct = pct;
+                if let Some(on_decode) = on_decode {
+                    on_decode(pct);
+                }
+            }
+        }
+
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => {
+                note_decode_progress(&mut consecutive_errors);
+                d
+            }
+            Err(e) => {
+                info!("Decode warning (skipping packet): {e}");
+                note_decode_error(&mut consecutive_errors, "codec")?;
+                continue;
+            }
+        };
+
+        if let Some(checkpoint) = checkpoint {
+            checkpoint()?;
+        }
+        let spec = *decoded.spec();
+        // Use actual channel count from decoded frame spec (more reliable than codec_params)
+        actual_channels = spec.channels.count().max(1);
+        let capacity = decoded.capacity();
+        let frames = decoded.frames();
+
+        // Budget checks happen before the sample buffer or `mono` can grow.
+        check_packet_budget(capacity, actual_channels, budget)?;
+        if let Some(checkpoint) = checkpoint {
+            checkpoint()?;
+        }
+
+        let mut sample_buf = SampleBuffer::<f32>::new(capacity as u64, spec);
+        sample_buf.copy_interleaved_ref(decoded);
+        let samples = sample_buf.samples();
+        let channels = actual_channels;
+
+        // Streaming downmix: average each frame's channels as it arrives so the
+        // multichannel source-rate PCM is never accumulated.
+        append_mono_within_budget(&mut mono, frames, sample_rate, budget, |mono| {
+            if channels <= 1 {
+                mono.extend_from_slice(samples);
+            } else {
+                mono.extend(
+                    samples
+                        .chunks(channels)
+                        .map(|frame| frame.iter().sum::<f32>() / channels as f32),
+                );
+            }
+        })?;
+    }
+
+    Ok((mono, actual_channels))
+}
+
 fn decode_audio_file_inner(
     path: &Path,
     checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
@@ -164,9 +370,6 @@ fn decode_audio_file_inner(
     // unlike packet counts or durations the container may omit or misreport.
     // Zero (unstatable file) disables percent emission entirely.
     let total_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    let mut consumed_bytes = 0u64;
-    let mut last_decode_pct = 0u8;
-
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     // Map format aliases: Symphonia doesn't know about .qta but decodes it as mov/isomp4
@@ -218,106 +421,29 @@ fn decode_audio_file_inner(
             DictationError::FileDecodeError(format!("Failed to create decoder: {e}"))
         })?;
 
-    let mut all_samples: Vec<f32> = Vec::new();
-    let mut actual_channels: usize = codec_channels.max(1);
-    let mut consecutive_errors = 0usize;
+    let mut next_packet = || format.next_packet();
+    let (mono, actual_channels) = decode_packets(
+        &mut next_packet,
+        decoder.as_mut(),
+        track_id,
+        sample_rate,
+        codec_channels,
+        total_bytes,
+        checkpoint,
+        on_decode,
+        &DEFAULT_DECODE_BUDGET,
+    )?;
 
-    // Decode all packets
-    loop {
-        if let Some(checkpoint) = checkpoint {
-            checkpoint()?;
-        }
-        let packet = match format.next_packet() {
-            Ok(p) => p,
-            Err(symphonia::core::errors::Error::IoError(ref e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break; // End of stream
-            }
-            Err(e) => {
-                // Log non-fatal decode errors and continue
-                info!("Decode warning (skipping packet): {e}");
-                if checkpoint.is_some() {
-                    note_decode_error(&mut consecutive_errors, "format")?;
-                }
-                continue;
-            }
-        };
-
-        // Skip packets from other tracks
-        if packet.track_id() != track_id {
-            continue;
-        }
-
-        // Measured progress: consumed packet bytes over file size. Counted
-        // here (not after decode) so undecodable packets still count as
-        // consumed input. Clamped to 99 — container overhead means packet
-        // bytes asymptote below 100; clean EOF snaps to 100 after resample.
-        if total_bytes > 0 {
-            consumed_bytes = consumed_bytes.saturating_add(packet.data.len() as u64);
-            let pct = decode_percent(consumed_bytes, total_bytes).min(99);
-            if pct > last_decode_pct {
-                last_decode_pct = pct;
-                if let Some(on_decode) = on_decode {
-                    on_decode(pct);
-                }
-            }
-        }
-
-        let decoded = match decoder.decode(&packet) {
-            Ok(d) => {
-                note_decode_progress(&mut consecutive_errors);
-                d
-            }
-            Err(e) => {
-                info!("Decode warning (skipping packet): {e}");
-                if checkpoint.is_some() {
-                    note_decode_error(&mut consecutive_errors, "codec")?;
-                }
-                continue;
-            }
-        };
-
-        if let Some(checkpoint) = checkpoint {
-            checkpoint()?;
-        }
-        let spec = *decoded.spec();
-        // Use actual channel count from decoded frame spec (more reliable than codec_params)
-        actual_channels = spec.channels.count().max(1);
-        let num_frames = decoded.capacity();
-
-        if let Some(checkpoint) = checkpoint {
-            let frame_samples = num_frames.checked_mul(actual_channels).ok_or_else(|| {
-                DictationError::FileDecodeError("Decoded audio frame is too large".to_string())
-            })?;
-            let projected_samples = all_samples.len().checked_add(frame_samples).ok_or_else(|| {
-                DictationError::FileDecodeError("Decoded audio is too large".to_string())
-            })?;
-            check_decode_size_cap(projected_samples, actual_channels, sample_rate)?;
-            checkpoint()?;
-        }
-
-        let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
-        sample_buf.copy_interleaved_ref(decoded);
-
-        all_samples.extend_from_slice(sample_buf.samples());
-
-        // Abort early (before accumulating further) if this file would decode
-        // to an unreasonably long clip. Checked every packet so we bail out
-        // during decode rather than after the huge buffer already exists.
-        check_decode_size_cap(all_samples.len(), actual_channels, sample_rate)?;
-    }
-
-    if all_samples.is_empty() {
+    if mono.is_empty() {
         return Err(DictationError::FileDecodeError(
             "No audio samples decoded from file".to_string(),
         ));
     }
 
-    let duration_secs = all_samples.len() as f64 / (sample_rate as f64 * actual_channels as f64);
+    let duration_secs = mono.len() as f64 / sample_rate as f64;
     info!(
-        "Decoded {} raw samples ({:.1}s), {} ch at {} Hz, resampling to 16kHz mono",
-        all_samples.len(),
+        "Decoded {} mono frames ({:.1}s), {} ch at {} Hz, resampling to 16kHz mono",
+        mono.len(),
         duration_secs,
         actual_channels,
         sample_rate,
@@ -334,7 +460,6 @@ fn decode_audio_file_inner(
         }
         cb(0);
     }
-    let mono = mix_to_mono(&all_samples, actual_channels);
     let last_reported = std::cell::Cell::new(0u8);
     let resample_cb = on_resample.map(|cb| {
         move |frac: f64| {
@@ -672,5 +797,237 @@ mod tests {
         // Unknown size disables display: never divide, never emit.
         assert_eq!(decode_percent(500, 0), 0);
         assert_eq!(decode_percent(0, 0), 0);
+    }
+
+    // -- scripted packet source / decoder for termination tests --
+
+    use symphonia::core::audio::{AudioBuffer, AudioBufferRef, Channels, Signal, SignalSpec};
+    use symphonia::core::codecs::{CodecDescriptor, CodecParameters, FinalizeResult};
+    use symphonia::core::errors::Error as SymError;
+
+    /// Decoder that always fails (`fail == true`) or returns a fixed buffer.
+    struct ScriptedDecoder {
+        params: CodecParameters,
+        fail: bool,
+        buf: AudioBuffer<f32>,
+    }
+
+    impl ScriptedDecoder {
+        fn new(fail: bool, rate: u32, channels: Channels, frames: usize) -> Self {
+            let spec = SignalSpec::new(rate, channels);
+            let mut buf = AudioBuffer::<f32>::new(frames as u64, spec);
+            buf.render_silence(Some(frames));
+            Self { params: CodecParameters::new(), fail, buf }
+        }
+    }
+
+    impl Decoder for ScriptedDecoder {
+        fn try_new(_: &CodecParameters, _: &DecoderOptions) -> symphonia::core::errors::Result<Self> {
+            unimplemented!()
+        }
+        fn supported_codecs() -> &'static [CodecDescriptor] {
+            &[]
+        }
+        fn reset(&mut self) {}
+        fn codec_params(&self) -> &CodecParameters {
+            &self.params
+        }
+        fn decode(&mut self, _: &Packet) -> symphonia::core::errors::Result<AudioBufferRef<'_>> {
+            if self.fail {
+                Err(SymError::DecodeError("scripted codec failure"))
+            } else {
+                Ok(AudioBufferRef::F32(std::borrow::Cow::Borrowed(&self.buf)))
+            }
+        }
+        fn finalize(&mut self) -> FinalizeResult {
+            FinalizeResult::default()
+        }
+        fn last_decoded(&self) -> AudioBufferRef<'_> {
+            AudioBufferRef::F32(std::borrow::Cow::Borrowed(&self.buf))
+        }
+    }
+
+    /// Run the loop with a source that yields `script_len` non-EOF items
+    /// (format errors when `format_errors`, else packets for a decoder that
+    /// fails) and then a clean EOF, so a missing budget terminates the test
+    /// instead of hanging it. Returns (result, items pulled).
+    fn run_error_script(
+        format_errors: bool,
+        script_len: usize,
+        checkpoint: Option<&dyn Fn() -> Result<(), DictationError>>,
+    ) -> (Result<(Vec<f32>, usize), DictationError>, usize) {
+        let pulled = std::cell::Cell::new(0usize);
+        let mut next = || {
+            let n = pulled.get();
+            pulled.set(n + 1);
+            if n >= script_len {
+                return Err(SymError::IoError(std::io::Error::from(
+                    std::io::ErrorKind::UnexpectedEof,
+                )));
+            }
+            if format_errors {
+                Err(SymError::DecodeError("scripted format failure"))
+            } else {
+                Ok(Packet::new_from_slice(0, 0, 0, &[0u8; 4]))
+            }
+        };
+        let mut decoder = ScriptedDecoder::new(true, 16_000, Channels::FRONT_LEFT, 16);
+        let result = decode_packets(&mut next, &mut decoder, 0, 16_000, 1, 0, checkpoint, None, &DEFAULT_DECODE_BUDGET);
+        (result, pulled.get())
+    }
+
+    fn assert_bounded_failure(
+        outcome: (Result<(Vec<f32>, usize), DictationError>, usize),
+        what: &str,
+    ) {
+        let (result, pulled) = outcome;
+        match result {
+            Err(DictationError::FileDecodeError(message)) => {
+                assert!(message.contains("too many consecutive"), "{what}: {message}");
+            }
+            other => panic!("{what}: expected bounded failure, got {other:?}"),
+        }
+        assert_eq!(pulled, MAX_CONSECUTIVE_DECODE_ERRORS, "{what}: pulls before abort");
+    }
+
+    #[test]
+    fn callback_free_decode_stops_on_endless_format_errors() {
+        assert_bounded_failure(run_error_script(true, 100_000, None), "callback-free format");
+    }
+
+    #[test]
+    fn callback_free_decode_stops_on_endless_codec_errors() {
+        assert_bounded_failure(run_error_script(false, 100_000, None), "callback-free codec");
+    }
+
+    #[test]
+    fn controlled_decode_stops_on_endless_errors() {
+        let checkpoint = || Ok(());
+        assert_bounded_failure(run_error_script(true, 100_000, Some(&checkpoint)), "controlled format");
+        assert_bounded_failure(run_error_script(false, 100_000, Some(&checkpoint)), "controlled codec");
+    }
+
+    #[test]
+    fn progress_callbacks_do_not_change_error_budget() {
+        let pulled = std::cell::Cell::new(0usize);
+        let mut next = || {
+            pulled.set(pulled.get() + 1);
+            if pulled.get() > 100_000 {
+                return Err(SymError::IoError(std::io::Error::from(
+                    std::io::ErrorKind::UnexpectedEof,
+                )));
+            }
+            Err(SymError::DecodeError("scripted format failure"))
+        };
+        let mut decoder = ScriptedDecoder::new(true, 16_000, Channels::FRONT_LEFT, 16);
+        let on_decode = |_: u8| {};
+        let result = decode_packets(&mut next, &mut decoder, 0, 16_000, 1, 1000, None, Some(&on_decode), &DEFAULT_DECODE_BUDGET);
+        assert!(result.is_err());
+        assert_eq!(pulled.get(), MAX_CONSECUTIVE_DECODE_ERRORS);
+    }
+
+    #[test]
+    fn invalid_media_fails_promptly_through_both_entry_points() {
+        let path = std::env::temp_dir().join(format!("sagascript-invalid-{}.mp3", uuid::Uuid::new_v4()));
+        let garbage: Vec<u8> = [0xFFu8, 0xFB, 0x90, 0x00].into_iter().cycle().take(64 * 1024).collect();
+        std::fs::write(&path, garbage).unwrap();
+        let start = std::time::Instant::now();
+        let plain = decode_audio_file(&path);
+        let controlled = decode_audio_file_with_control(&path, &|| Ok(()));
+        std::fs::remove_file(&path).unwrap();
+        assert!(plain.is_err());
+        assert!(controlled.is_err());
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    // -- decoded-byte budget --
+
+    #[test]
+    fn pcm_size_arithmetic_is_checked_for_extreme_shapes() {
+        // No allocation: pure arithmetic.
+        assert_eq!(pcm_bytes(1_000, 2).unwrap(), 8_000);
+        // 4 h of 192 kHz x 32 channels is ~354 GB; must compute, not overflow.
+        let frames = 4 * 3600 * 192_000;
+        assert_eq!(pcm_bytes(frames, 32).unwrap(), frames * 32 * 4);
+        assert!(pcm_bytes(usize::MAX, 2).is_err());
+        assert!(pcm_bytes(usize::MAX / 4 + 1, 1).is_err());
+        assert!(check_packet_budget(usize::MAX, 32, &DEFAULT_DECODE_BUDGET).is_err());
+        assert!(conversion_peak_bytes(usize::MAX, 8_000).is_err());
+        assert!(conversion_peak_bytes(usize::MAX, 0).is_err());
+    }
+
+    #[test]
+    fn budget_admits_long_ordinary_recordings_and_rejects_extreme_rates() {
+        let hours = |h: usize, rate: usize| h * 3600 * rate;
+        let b = DEFAULT_DECODE_BUDGET.max_total_bytes;
+        for rate in [8_000u32, 16_000, 44_100, 48_000] {
+            let peak = conversion_peak_bytes(hours(4, rate as usize), rate).unwrap();
+            assert!(peak <= b, "4h at {rate} Hz must fit, peak={peak}");
+        }
+        assert!(conversion_peak_bytes(hours(1, 192_000), 192_000).unwrap() <= b);
+        assert!(conversion_peak_bytes(hours(4, 96_000), 96_000).unwrap() > b);
+        assert!(conversion_peak_bytes(hours(4, 192_000), 192_000).unwrap() > b);
+    }
+
+    #[test]
+    fn packet_budget_counts_interleaved_and_mono_buffers() {
+        let budget = DecodeBudget { max_total_bytes: usize::MAX, max_packet_bytes: 12_000 };
+        // 1000 frames x (2 channels + 1 mono) x 4 bytes == 12_000: fits.
+        assert!(check_packet_budget(1_000, 2, &budget).is_ok());
+        assert!(check_packet_budget(1_001, 2, &budget).is_err());
+        // Many channels blow the same packet budget at far fewer frames.
+        assert!(check_packet_budget(1_000, 32, &budget).is_err());
+    }
+
+    #[test]
+    fn budget_rejection_happens_before_buffer_growth() {
+        let budget = DecodeBudget { max_total_bytes: 4_000, max_packet_bytes: usize::MAX };
+        let mut mono: Vec<f32> = Vec::with_capacity(10);
+        mono.extend_from_slice(&[0.5; 10]);
+        let capacity = mono.capacity();
+        let filled = std::cell::Cell::new(false);
+        // 16 kHz: peak = 2 * 4 bytes per frame; 10 + 500 frames = 4_080 > 4_000.
+        let result = append_mono_within_budget(&mut mono, 500, 16_000, &budget, |_| filled.set(true));
+        assert!(matches!(result, Err(DictationError::FileDecodeError(_))));
+        assert!(!filled.get(), "fill must not run after a rejection");
+        assert_eq!(mono.len(), 10);
+        assert_eq!(mono.capacity(), capacity, "buffer must not grow on rejection");
+        // Within budget it grows, never past the budget ceiling.
+        append_mono_within_budget(&mut mono, 100, 16_000, &budget, |m| m.extend_from_slice(&[0.0; 100])).unwrap();
+        assert_eq!(mono.len(), 110);
+        assert!(mono.capacity() <= budget.max_total_bytes / SAMPLE_BYTES);
+    }
+
+    #[test]
+    fn decode_loop_aborts_on_oversized_packet_without_decoding_further() {
+        // 1000-frame stereo packets against a 4 KiB per-packet budget.
+        let budget = DecodeBudget { max_total_bytes: usize::MAX, max_packet_bytes: 4_096 };
+        let pulled = std::cell::Cell::new(0usize);
+        let mut next = || {
+            pulled.set(pulled.get() + 1);
+            Ok(Packet::new_from_slice(0, 0, 0, &[0u8; 4]))
+        };
+        let mut decoder = ScriptedDecoder::new(false, 48_000, Channels::FRONT_LEFT | Channels::FRONT_RIGHT, 1_000);
+        let result = decode_packets(&mut next, &mut decoder, 0, 48_000, 2, 0, None, None, &budget);
+        assert!(matches!(result, Err(DictationError::FileDecodeError(_))));
+        assert_eq!(pulled.get(), 1);
+    }
+
+    #[test]
+    fn decode_loop_downmixes_streaming_and_stops_at_total_budget() {
+        // 100-frame stereo packets (L=1, R=0 after silence is 0 -> mono 0).
+        let budget = DecodeBudget { max_total_bytes: 3_200, max_packet_bytes: usize::MAX };
+        let pulled = std::cell::Cell::new(0usize);
+        let mut next = || {
+            pulled.set(pulled.get() + 1);
+            Ok(Packet::new_from_slice(0, 0, 0, &[0u8; 4]))
+        };
+        let mut decoder = ScriptedDecoder::new(false, 16_000, Channels::FRONT_LEFT | Channels::FRONT_RIGHT, 100);
+        let result = decode_packets(&mut next, &mut decoder, 0, 16_000, 2, 0, None, None, &budget);
+        // Each packet adds 100 mono frames = 800 bytes of peak at 16 kHz; the
+        // 5th packet (500 frames = 4_000 > 3_200) is rejected: 4 pulls... the
+        // 4th (400 frames = 3_200) still fits, so rejection is on pull 5.
+        assert!(matches!(result, Err(DictationError::FileDecodeError(_))));
+        assert_eq!(pulled.get(), 5);
     }
 }
