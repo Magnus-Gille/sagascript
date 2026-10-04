@@ -38,6 +38,47 @@ impl fmt::Display for MeetingError {
 
 impl std::error::Error for MeetingError {}
 
+/// How the microphone crosstalk guard of a two-track transcription is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CrosstalkGuardMode {
+    /// Apply the guard only when echo of the system audio is detected.
+    Auto,
+    On,
+    Off,
+}
+
+impl CrosstalkGuardMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+}
+
+impl std::str::FromStr for CrosstalkGuardMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "auto" => Ok(Self::Auto),
+            "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
+            other => Err(format!("unknown crosstalk guard mode '{other}' (auto, on, off)")),
+        }
+    }
+}
+
+/// The guard decision recorded with a two-track transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrosstalkGuardRecord {
+    pub mode: CrosstalkGuardMode,
+    /// Whether the guard was actually applied (always true for `on`, false for `off`).
+    pub applied: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MeetingSpeaker {
@@ -89,10 +130,10 @@ pub struct MeetingTranscript {
     /// two-track recording). Additive: absent for ordinary transcripts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_speaker: Option<String>,
-    /// Whether the optional microphone crosstalk guard was on for a two-track
+    /// Crosstalk guard mode and whether it was applied, for a two-track
     /// transcript. Additive; absent for ordinary transcripts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crosstalk_guard: Option<bool>,
+    pub crosstalk_guard: Option<CrosstalkGuardRecord>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,7 +149,7 @@ struct MeetingTranscriptWire {
     #[serde(default)]
     local_speaker: Option<String>,
     #[serde(default)]
-    crosstalk_guard: Option<bool>,
+    crosstalk_guard: Option<CrosstalkGuardRecord>,
 }
 
 impl<'de> Deserialize<'de> for MeetingTranscript {
@@ -571,9 +612,14 @@ mod tests {
         let back: MeetingTranscript = serde_json::from_str(&json).unwrap();
         assert_eq!(back, me);
         let mut guarded = me.clone();
-        guarded.crosstalk_guard = Some(true);
-        let back: MeetingTranscript = serde_json::from_str(&guarded.to_json().unwrap()).unwrap();
-        assert_eq!(back.crosstalk_guard, Some(true));
+        guarded.crosstalk_guard =
+            Some(CrosstalkGuardRecord { mode: CrosstalkGuardMode::Auto, applied: true });
+        let json = guarded.to_json().unwrap();
+        assert!(json.contains(r#""crosstalk_guard":{"mode":"auto","applied":true}"#), "{json}");
+        let back: MeetingTranscript = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.crosstalk_guard, guarded.crosstalk_guard);
+        assert!("sometimes".parse::<CrosstalkGuardMode>().is_err());
+        assert_eq!("off".parse::<CrosstalkGuardMode>().unwrap().as_str(), "off");
         assert_eq!(
             plain.clone().with_local_speaker("zzz").unwrap_err(),
             MeetingError::UnknownSpeaker

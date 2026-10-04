@@ -11,7 +11,7 @@ use sagascript_core::diarization::{
     self, merge::merge_with_transcript, DiarizationAnalysis, DiarizeConfig, TimestampedSegment,
 };
 use sagascript_core::error::DictationError;
-use sagascript_core::meeting::MeetingTranscript;
+use sagascript_core::meeting::{CrosstalkGuardMode, MeetingTranscript};
 use sagascript_core::meeting_reprocess_plan::{
     ReprocessingContext, ReprocessingMode, ReprocessingPlan, RequiredWork,
 };
@@ -176,7 +176,7 @@ impl WorkBackend for NativeBackend<'_> {
             cache_output,
             // Reproduce the channel layout the reviewed transcript was made with.
             Some(input.previous.original.local_speaker.is_some()),
-            input.previous.original.crosstalk_guard.unwrap_or(false),
+            guard_mode(input.previous),
         )
     }
 }
@@ -348,7 +348,7 @@ fn prepare(
             model,
             input.glossary.render(),
             "two-track",
-            input.previous.original.crosstalk_guard.unwrap_or(false),
+            guard_mode(input.previous).as_str(),
         ))?
     } else {
         hash_json(&(1u32, language, model, input.glossary.render()))?
@@ -391,6 +391,14 @@ fn prepare(
         },
         cache,
     })
+}
+
+/// The recorded crosstalk guard mode of a reviewed two-track transcript.
+fn guard_mode(previous: &MeetingReview) -> CrosstalkGuardMode {
+    previous
+        .original
+        .crosstalk_guard
+        .map_or(CrosstalkGuardMode::Auto, |record| record.mode)
 }
 
 fn hash_json(value: &impl Serialize) -> Result<String, DictationError> {

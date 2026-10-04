@@ -419,4 +419,20 @@ fn two_track_provenance_refuses_selective_modes_and_binds_the_full_plan() {
         two_track_full.context.transcription_context_sha256,
         "the channel layout is part of the plan identity"
     );
+
+    // The recorded crosstalk guard mode is repeated by reprocessing and bound
+    // into the plan identity: auto (no record), on and off all differ.
+    use sagascript_core::meeting::{CrosstalkGuardMode, CrosstalkGuardRecord};
+    let mut hashes = vec![two_track_full.context.transcription_context_sha256.clone()];
+    for mode in [CrosstalkGuardMode::On, CrosstalkGuardMode::Off] {
+        let mut original = fixture.previous.original.clone();
+        original.crosstalk_guard = Some(CrosstalkGuardRecord { mode, applied: mode == CrosstalkGuardMode::On });
+        fixture.previous = MeetingReview::new(original).expect("review with guard record");
+        let input = fixture.input(None);
+        let plan = plan_reprocessing(&input, ReprocessingMode::Full, 0.75, None).expect("plan");
+        hashes.push(plan.context.transcription_context_sha256.clone());
+    }
+    hashes.sort();
+    hashes.dedup();
+    assert_eq!(hashes.len(), 3, "auto, on and off give distinct plan identities");
 }

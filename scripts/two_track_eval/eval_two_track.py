@@ -139,14 +139,17 @@ def main():
     ap.add_argument("--model", default="kb-whisper-tiny")
     ap.add_argument("--me-ref-text", help="reference transcript of the local user's turns (plain transcription of the me-only WAV)")
     ap.add_argument("--label", default=None); ap.add_argument("--no-baseline", action="store_true")
-    ap.add_argument("--guard-on", action="store_true", help="two-track run with --crosstalk-guard (off by default)")
+    ap.add_argument("--guard", choices=["auto", "on", "off"], default="auto", help="crosstalk guard mode (CLI default: auto)")
     a = ap.parse_args()
     ref = read_rttm(a.ref); out = {"label": a.label or a.wav}
     env = None
     env = dict(env or {}); env["SAGA_DIAR_DEBUG"] = "1"
-    m, err = run_cli(a.cli, a.wav, ["--crosstalk-guard"] if a.guard_on else [], env, a.model, want_stderr=True)
+    m, err = run_cli(a.cli, a.wav, {"auto": [], "on": ["--crosstalk-guard"], "off": ["--no-crosstalk-guard"]}[a.guard], env, a.model, want_stderr=True)
     assert m.get("local_speaker") == ME, "two-track pipeline did not engage (no local_speaker)"
     out["two_track"] = score(ref, hyp_from_meeting(m), a.me, ME)
+    echo = parse_debug(err, "ECHO")
+    out["guard"] = dict(mode=m["crosstalk_guard"]["mode"], applied=m["crosstalk_guard"]["applied"],
+                        echo_seconds=echo[0][0] if echo else None, mic_activity_seconds=echo[0][1] if echo else None)
     if a.me_ref_text:
         out["me_words"] = word_report(m, err, open(a.me_ref_text).read(), [(s, e) for s, e, n in ref if n == a.me])
     if not a.no_baseline:

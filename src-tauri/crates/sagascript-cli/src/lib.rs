@@ -1151,10 +1151,40 @@ mod tests {
         let off = parse_transcribe(&["--meeting-json", "--diarize", "--no-two-track"]).unwrap();
         assert!(off.no_two_track && !off.two_track);
         let auto = parse_transcribe(&["--diarize"]).unwrap();
-        assert!(!auto.two_track && !auto.no_two_track && !auto.crosstalk_guard, "guard is opt-in");
+        assert!(!auto.two_track && !auto.no_two_track && !auto.crosstalk_guard && !auto.no_crosstalk_guard);
         assert!(parse_transcribe(&["--crosstalk-guard"]).is_err());
+        assert!(parse_transcribe(&["--no-crosstalk-guard"]).is_err());
         assert!(parse_transcribe(&["--diarize", "--no-two-track", "--crosstalk-guard"]).is_err());
+        assert!(parse_transcribe(&["--diarize", "--no-two-track", "--no-crosstalk-guard"]).is_err());
+        assert!(parse_transcribe(&["--diarize", "--crosstalk-guard", "--no-crosstalk-guard"]).is_err());
         assert!(parse_transcribe(&["--diarize", "--crosstalk-guard"]).unwrap().crosstalk_guard);
+        assert!(parse_transcribe(&["--diarize", "--no-crosstalk-guard"]).unwrap().no_crosstalk_guard);
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn crosstalk_guard_mode_resolves_flags_over_environment_and_defaults_to_auto() {
+        use crate::transcribe::crosstalk_guard_mode;
+        use sagascript_core::meeting::CrosstalkGuardMode as M;
+        let var = "SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD";
+        let prior = std::env::var(var).ok();
+        std::env::remove_var(var);
+        assert_eq!(crosstalk_guard_mode(&parse_transcribe(&["--diarize"]).unwrap()).unwrap(), M::Auto);
+        assert_eq!(crosstalk_guard_mode(&parse_transcribe(&["--diarize", "--crosstalk-guard"]).unwrap()).unwrap(), M::On);
+        assert_eq!(crosstalk_guard_mode(&parse_transcribe(&["--diarize", "--no-crosstalk-guard"]).unwrap()).unwrap(), M::Off);
+        let plain = parse_transcribe(&["--diarize"]).unwrap();
+        for (value, mode) in [("on", M::On), ("off", M::Off), ("auto", M::Auto)] {
+            std::env::set_var(var, value);
+            assert_eq!(crosstalk_guard_mode(&plain).unwrap(), mode, "{value}");
+        }
+        std::env::set_var(var, "on");
+        assert_eq!(crosstalk_guard_mode(&parse_transcribe(&["--diarize", "--no-crosstalk-guard"]).unwrap()).unwrap(), M::Off, "flag wins");
+        std::env::set_var(var, "bogus");
+        assert!(crosstalk_guard_mode(&plain).is_err());
+        match prior {
+            Some(v) => std::env::set_var(var, v),
+            None => std::env::remove_var(var),
+        }
     }
 
     #[cfg(feature = "diarization")]

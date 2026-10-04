@@ -19,7 +19,9 @@ use sagascript_core::audio::decoder::SUPPORTED_EXTENSIONS;
 use sagascript_core::diarization::DiarizedSegment;
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]
-use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
+use sagascript_core::meeting::{
+    CrosstalkGuardMode, CrosstalkGuardRecord, MeetingSegmentInput, MeetingSpeaker, MeetingTranscript,
+};
 use sagascript_core::settings::{
     FileModel, FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel,
 };
@@ -119,14 +121,19 @@ pub struct TranscribeArgs {
     #[arg(long, requires = "diarize", conflicts_with = "no_two_track")]
     pub two_track: bool,
 
-    /// For a two-track recording made without headphones: drop microphone
-    /// stretches that mirror the system audio (speaker echo) before they are
-    /// labelled "Me". Off by default because it can also delete the user's own
-    /// words when they speak over the remote side. Also enabled by
-    /// SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=on. Recorded in the meeting JSON.
+    /// Force the crosstalk guard on for a two-track recording: drop microphone
+    /// stretches that mirror the system audio (speaker echo, no headphones)
+    /// before they are labelled "Me". By default (auto) the guard is applied only
+    /// when echo is detected. It can also delete your own words when you speak
+    /// over the remote side. Also SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=on|off|auto.
+    #[cfg(feature = "diarization")]
+    #[arg(long, requires = "diarize", conflicts_with_all = ["no_two_track", "no_crosstalk_guard"])]
+    pub crosstalk_guard: bool,
+
+    /// Never apply the crosstalk guard, even when echo is detected.
     #[cfg(feature = "diarization")]
     #[arg(long, requires = "diarize", conflicts_with = "no_two_track")]
-    pub crosstalk_guard: bool,
+    pub no_crosstalk_guard: bool,
 
     /// Never split channels: diarize the mono downmix even for a file that
     /// carries the two-track marker.
@@ -560,7 +567,7 @@ pub fn transcribe_meeting_file(
         None,
         CachePolicy::Normal,
         None,
-        false,
+        CrosstalkGuardMode::Auto,
     )
 }
 
@@ -589,7 +596,7 @@ pub fn transcribe_meeting_file_with_control(
         None,
         CachePolicy::Normal,
         None,
-        false,
+        CrosstalkGuardMode::Auto,
     )
 }
 
@@ -609,7 +616,7 @@ pub fn transcribe_meeting_file_full(
     threshold: f32,
     cache_output: Option<&Path>,
     two_track: Option<bool>,
-    crosstalk_guard: bool,
+    crosstalk_guard: CrosstalkGuardMode,
 ) -> Result<MeetingTranscript, DictationError> {
     if !threshold.is_finite() {
         return Err(DictationError::SettingsError(
@@ -676,7 +683,7 @@ fn transcribe_meeting_file_inner(
     cache_output: Option<&Path>,
     cache_policy: CachePolicy,
     two_track: Option<bool>,
-    crosstalk_guard: bool,
+    crosstalk_guard: CrosstalkGuardMode,
 ) -> Result<MeetingTranscript, DictationError> {
     let args = TranscribeArgs {
         progress_json: false,
@@ -696,7 +703,8 @@ fn transcribe_meeting_file_inner(
         // channel-layout decision (reprocessing).
         two_track: two_track == Some(true),
         no_two_track: two_track == Some(false),
-        crosstalk_guard: crosstalk_guard && two_track != Some(false),
+        crosstalk_guard: crosstalk_guard == CrosstalkGuardMode::On,
+        no_crosstalk_guard: crosstalk_guard == CrosstalkGuardMode::Off,
         diarize_cache: cache_output.map(Path::to_path_buf),
         prompt: None,
         prompt_file: None,
@@ -1585,25 +1593,31 @@ fn transcribe_file(
             ..DiarizeConfig::default()
         };
 
+        let guard_mode = if two_track {
+            crosstalk_guard_mode(args)?
+        } else {
+            CrosstalkGuardMode::Auto
+        };
+        let mut guard_applied = false;
         let (diarized, diarization_timings, transcription_timings) = if two_track {
             meeting_checkpoint(control, MeetingPhase::Analyzing)?;
             let _ = audio.take(); // the mono mix is no longer needed
             let [mic, system] = two_track_tracks.take().ok_or_else(|| {
                 DictationError::FileDecodeError("two-track channels were not loaded".to_string())
             })?;
-            let guard = crosstalk_guard_enabled(args);
             eprintln!("Two-track recording: microphone = \"Me\", diarizing the system channel only...");
-            let result = two_track_diarize(
+            let (diarized, diarization_timings, transcription_timings, applied) = two_track_diarize(
                 &mic,
                 &system,
                 backend,
                 language,
                 decoder_prompt.as_deref(),
                 &config,
-                guard,
+                guard_mode,
             )?;
+            guard_applied = applied;
             meeting_checkpoint(control, MeetingPhase::Analyzing)?;
-            result
+            (diarized, diarization_timings, transcription_timings)
         } else {
             let (analysis, raw_segments, diarization_timings, transcription_timings) =
                 if let Some(cached) = cached {
@@ -1763,7 +1777,10 @@ fn transcribe_file(
         if two_track {
             json["local_speaker"] =
                 serde_json::Value::String(sagascript_core::diarization::twotrack::LOCAL_SPEAKER.to_string());
-            json["crosstalk_guard"] = serde_json::Value::Bool(crosstalk_guard_enabled(args));
+            json["crosstalk_guard"] = serde_json::json!({
+                "mode": guard_mode.as_str(),
+                "applied": guard_applied,
+            });
         }
         performance.json_assembly_seconds = json_assembly_started.elapsed().as_secs_f64();
         performance.total_seconds = file_started.elapsed().as_secs_f64();
@@ -1787,7 +1804,10 @@ fn transcribe_file(
                 &plain_segments,
             )?;
             let meeting = if two_track {
-                with_local_user(meeting, crosstalk_guard_enabled(args))?
+                with_local_user(
+                    meeting,
+                    CrosstalkGuardRecord { mode: guard_mode, applied: guard_applied },
+                )?
             } else {
                 meeting
             };
@@ -1991,7 +2011,10 @@ fn two_track_read_error(file: &Path, error: std::io::Error) -> DictationError {
 /// Mark the microphone owner in a meeting transcript, listing the speaker even
 /// when they never spoke so the field always names a known speaker.
 #[cfg(feature = "diarization")]
-fn with_local_user(mut meeting: MeetingTranscript, guard: bool) -> Result<MeetingTranscript, DictationError> {
+fn with_local_user(
+    mut meeting: MeetingTranscript,
+    guard: CrosstalkGuardRecord,
+) -> Result<MeetingTranscript, DictationError> {
     use sagascript_core::diarization::twotrack::LOCAL_SPEAKER;
     if !meeting.speakers.iter().any(|speaker| speaker.id == LOCAL_SPEAKER) {
         meeting.speakers.insert(
@@ -2010,12 +2033,22 @@ fn with_local_user(mut meeting: MeetingTranscript, guard: bool) -> Result<Meetin
     })
 }
 
-/// The crosstalk guard is opt-in: `--crosstalk-guard` or
-/// `SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=on`.
+/// Resolve the guard mode: `--crosstalk-guard` / `--no-crosstalk-guard`, then
+/// `SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=on|off|auto`, default auto.
 #[cfg(feature = "diarization")]
-fn crosstalk_guard_enabled(args: &TranscribeArgs) -> bool {
-    args.crosstalk_guard
-        || std::env::var("SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD").is_ok_and(|v| v == "on")
+pub(crate) fn crosstalk_guard_mode(args: &TranscribeArgs) -> Result<CrosstalkGuardMode, DictationError> {
+    if args.crosstalk_guard {
+        return Ok(CrosstalkGuardMode::On);
+    }
+    if args.no_crosstalk_guard {
+        return Ok(CrosstalkGuardMode::Off);
+    }
+    match std::env::var("SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD") {
+        Ok(value) => value
+            .parse()
+            .map_err(|message: String| DictationError::SettingsError(format!("SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD: {message}"))),
+        Err(_) => Ok(CrosstalkGuardMode::Auto),
+    }
 }
 
 /// Two-track pipeline: the system channel goes through ordinary diarization
@@ -2031,12 +2064,13 @@ fn two_track_diarize(
     language: Language,
     prompt: Option<&str>,
     config: &sagascript_core::diarization::DiarizeConfig,
-    guard: bool,
+    guard_mode: CrosstalkGuardMode,
 ) -> Result<
     (
         Vec<DiarizedSegment>,
         sagascript_core::diarization::DiarizationTimings,
         sagascript_core::transcription::DiarizationTranscriptionTimings,
+        bool,
     ),
     DictationError,
 > {
@@ -2070,15 +2104,21 @@ fn two_track_diarize(
     let screened =
         twotrack::drop_crosstalk(mic, system, &activity, twotrack::CROSSTALK_CORRELATION);
     let echo_seconds = secs_of(&activity) - secs_of(&screened);
+    let guard = twotrack::guard_applies(guard_mode, echo_seconds, secs_of(&activity));
+    if debug {
+        eprintln!("ECHO\t{echo_seconds:.3}\t{:.3}", secs_of(&activity));
+    }
     if guard {
-        if echo_seconds > 0.5 {
-            eprintln!("Dropped {echo_seconds:.1}s of microphone activity that mirrors the system channel (speaker echo).");
+        match guard_mode {
+            CrosstalkGuardMode::Auto => eprintln!(
+                "Echo detected: {echo_seconds:.0}s of the microphone channel mirrors the system audio, so the crosstalk guard was applied. Headphones give the best result (--no-crosstalk-guard disables the guard)."
+            ),
+            _ if echo_seconds > 0.5 => eprintln!(
+                "Dropped {echo_seconds:.1}s of microphone activity that mirrors the system channel (speaker echo)."
+            ),
+            _ => {}
         }
         activity = screened;
-    } else if echo_seconds > 3.0_f64.max(0.1 * secs_of(&activity)) {
-        eprintln!(
-            "Hint: {echo_seconds:.0}s of the microphone channel looks like the system audio leaking in (no headphones?). It may be labelled \"Me\". Use headphones when recording, or --crosstalk-guard (it can also drop your own words)."
-        );
     }
     if debug {
         for (s, e) in &activity {
@@ -2115,7 +2155,7 @@ fn two_track_diarize(
         mic_pieces.len()
     );
     timings.total_seconds += started.elapsed().as_secs_f64();
-    Ok((twotrack::merge_timelines(local, others), timings, transcription_timings))
+    Ok((twotrack::merge_timelines(local, others), timings, transcription_timings, guard))
 }
 
 #[cfg(feature = "diarization")]
@@ -2861,6 +2901,28 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn two_track_output_records_guard_mode_and_application() {
+        use sagascript_core::meeting::{CrosstalkGuardMode, CrosstalkGuardRecord};
+        let doc = MeetingTranscript::new(
+            "0".repeat(64),
+            "sv",
+            "model",
+            10.0,
+            vec![MeetingSegmentInput { start: 0.0, end: 1.0, text: "hej".into(), speaker: "SPEAKER_0".into() }],
+            vec![MeetingSpeaker { id: "SPEAKER_0".into(), label: "SPEAKER_0".into() }],
+        )
+        .unwrap();
+        for (mode, applied) in [(CrosstalkGuardMode::Auto, true), (CrosstalkGuardMode::Auto, false), (CrosstalkGuardMode::Off, false)] {
+            let out = super::with_local_user(doc.clone(), CrosstalkGuardRecord { mode, applied }).unwrap();
+            let json = serde_json::to_value(&out).unwrap();
+            assert_eq!(json["local_speaker"], "Me");
+            assert_eq!(json["crosstalk_guard"]["mode"], mode.as_str());
+            assert_eq!(json["crosstalk_guard"]["applied"], applied);
+        }
+    }
+
     use super::*;
 
     #[cfg(feature = "diarization")]

@@ -211,6 +211,27 @@ fn window_is_echo(mic: &[f32], system: &[f32], start: f64, end: f64, threshold: 
     test.is_some_and(|t| t.correlation >= threshold && t.residual <= CROSSTALK_MAX_RESIDUAL)
 }
 
+/// Echo is considered present when the guard test flags more than 3 s, and
+/// more than a tenth, of the microphone speech activity.
+pub fn echo_detected(echo_seconds: f64, activity_seconds: f64) -> bool {
+    echo_seconds > 3.0_f64.max(0.1 * activity_seconds)
+}
+
+/// Whether the guard is applied: forced by `On`/`Off`, otherwise (`Auto`)
+/// when echo is detected.
+pub fn guard_applies(
+    mode: crate::meeting::CrosstalkGuardMode,
+    echo_seconds: f64,
+    activity_seconds: f64,
+) -> bool {
+    use crate::meeting::CrosstalkGuardMode as M;
+    match mode {
+        M::On => true,
+        M::Off => false,
+        M::Auto => echo_detected(echo_seconds, activity_seconds),
+    }
+}
+
 /// Drop the parts of microphone activity that look like the system audio
 /// leaking into the microphone (no headphones). Each interval is judged in
 /// windows of about a second; the dropped span is exactly the judged window.
@@ -269,6 +290,21 @@ mod tests {
         let texts: Vec<_> = out.iter().map(|s| s.text.as_str()).collect();
         assert_eq!(texts, vec!["hej"]); // "edge" is only 0.2/0.8 inside
         assert!(out.iter().all(|s| s.speaker == LOCAL_SPEAKER));
+    }
+
+    #[test]
+    fn auto_mode_applies_the_guard_only_when_echo_is_detected() {
+        use crate::meeting::CrosstalkGuardMode::{Auto, Off, On};
+        // Headphones: nothing flagged. A few stray seconds stay below the bar.
+        assert!(!guard_applies(Auto, 0.0, 120.0));
+        assert!(!guard_applies(Auto, 3.0, 20.0));
+        assert!(!guard_applies(Auto, 10.0, 120.0), "under a tenth of the activity");
+        // Echo: more than 3 s and more than a tenth of the activity.
+        assert!(guard_applies(Auto, 20.0, 120.0));
+        assert!(guard_applies(Auto, 4.0, 30.0));
+        // Forced modes ignore the measurement.
+        assert!(guard_applies(On, 0.0, 120.0));
+        assert!(!guard_applies(Off, 100.0, 120.0));
     }
 
     #[test]
