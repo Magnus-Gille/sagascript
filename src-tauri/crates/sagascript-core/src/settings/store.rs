@@ -379,7 +379,7 @@ pub fn load_from(path: &Path) -> Settings {
 
 /// Persist settings to disk using read-merge-write to preserve unknown or
 /// legacy keys while writing the canonical Settings fields.
-/// Uses atomic write: write to .tmp then rename.
+/// Uses atomic write: write a private temp file, fsync, then rename.
 pub fn save(settings: &Settings) -> Result<(), String> {
     let path = settings_path();
     with_settings_lock(&path, || {
@@ -757,17 +757,28 @@ fn atomic_write(path: &Path, contents: &[u8], label: &str) -> Result<(), String>
         .unwrap_or_else(|| PathBuf::from("."));
     create_private_dir_all(&parent)
         .map_err(|error| format!("Failed to create {label} directory: {error}"))?;
-    let tmp_path = destination.with_extension(format!(
-        "{}.tmp",
-        destination
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or("file")
-    ));
-    std::fs::write(&tmp_path, contents)
-        .map_err(|error| format!("Failed to write {label}: {error}"))?;
-    std::fs::rename(&tmp_path, &destination)
-        .map_err(|error| format!("Failed to install {label}: {error}"))?;
+    // Exclusive, uniquely named, owner-only (0600 on Unix) temporary file in the
+    // destination directory; removed automatically if anything below fails.
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".sagascript-")
+        .suffix(".tmp")
+        .tempfile_in(&parent)
+        .map_err(|error| format!("Failed to create {label} temporary file: {error}"))?;
+    {
+        use std::io::Write;
+        tmp.write_all(contents)
+            .and_then(|()| tmp.as_file().sync_all())
+            .map_err(|error| format!("Failed to write {label}: {error}"))?;
+    }
+    // Keep an existing target's permissions (e.g. a deliberately restrictive or
+    // shared mode); a new file stays owner-only.
+    if let Ok(existing) = std::fs::metadata(&destination) {
+        if existing.is_file() {
+            let _ = tmp.as_file().set_permissions(existing.permissions());
+        }
+    }
+    tmp.persist(&destination)
+        .map_err(|error| format!("Failed to install {label}: {}", error.error))?;
     Ok(())
 }
 
@@ -1817,5 +1828,119 @@ mod tests {
                 "no corrupt file existed, so no .bak should be created"
             );
         });
+    }
+
+    #[cfg(unix)]
+    mod private_atomic_write {
+        use super::*;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        #[cfg(target_os = "macos")]
+        type ModeT = u16;
+        #[cfg(not(target_os = "macos"))]
+        type ModeT = u32;
+        extern "C" {
+            fn umask(mask: ModeT) -> ModeT;
+        }
+
+        /// Sets umask 022 for the test and restores the previous value.
+        struct Umask022(ModeT);
+        impl Umask022 {
+            fn set() -> Self {
+                // SAFETY: umask has no memory-safety preconditions.
+                Self(unsafe { umask(0o022) })
+            }
+        }
+        impl Drop for Umask022 {
+            fn drop(&mut self) {
+                // SAFETY: as above.
+                unsafe { umask(self.0) };
+            }
+        }
+
+        fn mode(path: &Path) -> u32 {
+            fs::metadata(path).unwrap().permissions().mode() & 0o777
+        }
+
+        fn names(dir: &Path) -> Vec<String> {
+            let mut v: Vec<String> = fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        }
+
+        #[test]
+        fn private_target_stays_private_and_repeated_saves_leave_no_temp_files() {
+            let _umask = Umask022::set();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("custom-settings.json");
+            fs::write(&path, b"{}").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            for i in 0..3 {
+                atomic_write(&path, format!("{{\"n\":{i}}}").as_bytes(), "settings").unwrap();
+                assert_eq!(mode(&path), 0o600);
+            }
+            assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"n":2}"#);
+            assert_eq!(names(dir.path()), vec!["custom-settings.json"]);
+        }
+
+        #[test]
+        fn new_file_is_created_private_under_a_permissive_umask() {
+            let _umask = Umask022::set();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("glossary.txt");
+            atomic_write(&path, b"term", "glossary").unwrap();
+            assert_eq!(mode(&path), 0o600);
+        }
+
+        #[test]
+        fn existing_target_permissions_are_preserved() {
+            let _umask = Umask022::set();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("settings.json");
+            fs::write(&path, b"{}").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+            atomic_write(&path, b"{\"a\":1}", "settings").unwrap();
+            assert_eq!(mode(&path), 0o640);
+        }
+
+        #[test]
+        fn relative_and_absolute_symlinks_are_written_through_privately() {
+            let _umask = Umask022::set();
+            let dir = tempfile::tempdir().unwrap();
+            let real = dir.path().join("dotfiles");
+            fs::create_dir(&real).unwrap();
+            for (name, absolute) in [("rel", false), ("abs", true)] {
+                let target = real.join(format!("{name}.json"));
+                fs::write(&target, b"{}").unwrap();
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+                let link = dir.path().join(format!("{name}-link.json"));
+                if absolute {
+                    symlink(&target, &link).unwrap();
+                } else {
+                    symlink(format!("dotfiles/{name}.json"), &link).unwrap();
+                }
+                atomic_write(&link, b"{\"x\":1}", "settings").unwrap();
+                assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+                assert_eq!(fs::read_to_string(&target).unwrap(), r#"{"x":1}"#);
+                assert_eq!(mode(&target), 0o600);
+            }
+            assert_eq!(names(&real), vec!["abs.json", "rel.json"]);
+            assert!(names(dir.path()).iter().all(|n| !n.contains("tmp")));
+        }
+
+        #[test]
+        fn failed_install_leaves_original_and_no_temp_file() {
+            let dir = tempfile::tempdir().unwrap();
+            // Renaming a file over a non-empty directory fails.
+            let path = dir.path().join("settings.json");
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("keep"), b"original").unwrap();
+            assert!(atomic_write(&path, b"{}", "settings").is_err());
+            assert_eq!(fs::read(path.join("keep")).unwrap(), b"original");
+            assert_eq!(names(dir.path()), vec!["settings.json"]);
+        }
     }
 }
