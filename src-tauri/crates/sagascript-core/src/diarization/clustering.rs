@@ -32,6 +32,14 @@ pub fn cluster_speakers(
         return vec![(embeddings[0].0, 0)];
     }
 
+    let dendrogram = build_dendrogram(embeddings);
+    let raw_labels = cutree(&dendrogram, n, threshold);
+    relabel_by_first_appearance(embeddings, &raw_labels)
+}
+
+/// Average-linkage dendrogram over the cosine distances of `embeddings` (at least two).
+fn build_dendrogram(embeddings: &[(usize, [f32; EMBEDDING_DIM])]) -> kodama::Dendrogram<f32> {
+    let n = embeddings.len();
     // Build condensed cosine distance matrix (upper triangle, row-major)
     let mut condensed: Vec<f32> = Vec::with_capacity(n * (n - 1) / 2);
     for i in 0..n {
@@ -59,10 +67,15 @@ pub fn cluster_speakers(
         );
     }
 
-    let dendrogram = linkage(&mut condensed, n, Method::Average);
-    let raw_labels = cutree(&dendrogram, n, threshold);
+    linkage(&mut condensed, n, Method::Average)
+}
 
-    // Remap raw cluster IDs to contiguous 0-based labels in order of first appearance
+/// Remap raw cluster IDs to contiguous 0-based labels in order of first appearance.
+fn relabel_by_first_appearance(
+    embeddings: &[(usize, [f32; EMBEDDING_DIM])],
+    raw_labels: &[usize],
+) -> Vec<(usize, usize)> {
+    let n = embeddings.len();
     let mut id_map: Vec<Option<usize>> = vec![None; n * 2];
     let mut next_id = 0usize;
     let mut labels = vec![0usize; n];
@@ -84,6 +97,150 @@ pub fn cluster_speakers(
         .zip(labels.iter())
         .map(|((local_idx, _), &global_id)| (*local_idx, global_id))
         .collect()
+}
+
+/// Cluster embeddings into exactly `target` speakers (issue #305), or as close as the data allows.
+///
+/// A "speaker" is a cluster with at least `min_seconds` of speech, the same notion
+/// [`absorb_small_clusters`] uses. A plain count cut is not enough: average linkage leaves short
+/// outlier segments as singletons until late, so cutting a Riksdag debate into 7 clusters yields
+/// one giant cluster and six one-segment outliers. So:
+///
+/// 1. Walk the dendrogram from the root (k = 1, 2, ...) to the first cut with at least `target`
+///    clusters of `min_seconds`. Splitting is not monotone (both halves of a big cluster can be
+///    small), hence a walk instead of a search. Ties between equal-dissimilarity merges follow
+///    kodama's deterministic step order.
+/// 2. Absorb every smaller cluster into its nearest large cluster by centroid, with no distance
+///    limit: the hint says those segments belong to one of the speakers.
+///
+/// Each split raises the number of large clusters by at most one, so the first qualifying cut has
+/// exactly `target` of them.
+///
+/// If even the finest cut has fewer than `target` large clusters (short or sparse audio), fall
+/// back to cutting the dendrogram into min(`target`, embeddings) clusters without absorption.
+/// `durations[i]` belongs to `embeddings[i]`. The result never has fewer clusters than the target
+/// unless there are fewer embeddings.
+pub fn cluster_to_count(
+    embeddings: &[(usize, [f32; EMBEDDING_DIM])],
+    durations: &[f64],
+    min_seconds: f64,
+    target: usize,
+) -> Vec<(usize, usize)> {
+    debug_assert_eq!(embeddings.len(), durations.len());
+    let n = embeddings.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        return vec![(embeddings[0].0, 0)];
+    }
+    let target = target.clamp(1, n);
+    let dendrogram = build_dendrogram(embeddings);
+
+    let large_clusters = |raw: &[usize]| {
+        let mut seconds: std::collections::BTreeMap<usize, f64> = std::collections::BTreeMap::new();
+        for (&label, &d) in raw.iter().zip(durations) {
+            *seconds.entry(label).or_default() += d.max(0.0);
+        }
+        seconds.values().filter(|&&s| s >= min_seconds).count()
+    };
+    let Some(raw) = (1..=n)
+        .map(|k| cutree_count(&dendrogram, n, k))
+        .find(|raw| large_clusters(raw) >= target)
+    else {
+        let raw = cutree_count(&dendrogram, n, target);
+        return relabel_by_first_appearance(embeddings, &raw);
+    };
+
+    let mut labels: Vec<usize> = raw;
+    absorb_small_clusters_floor(embeddings, &mut labels, durations, min_seconds, f32::INFINITY, target);
+    let labels: Vec<(usize, usize)> = embeddings
+        .iter()
+        .zip(&labels)
+        .map(|((local_idx, _), &label)| (*local_idx, label))
+        .collect();
+    // Contiguous labels in order of first appearance, like `cluster_speakers`.
+    let mut order: Vec<usize> = Vec::new();
+    labels
+        .iter()
+        .map(|&(local_idx, label)| {
+            let id = order.iter().position(|&l| l == label).unwrap_or_else(|| {
+                order.push(label);
+                order.len() - 1
+            });
+            (local_idx, id)
+        })
+        .collect()
+}
+
+/// Reduce the cluster count to `target` by merging the least-heard speakers into their nearest
+/// cluster, never across more than `max_distance` (centroid cosine distance) (issue #305).
+///
+/// Each step takes the cluster with the least speech (ties: lowest label) and merges it into the
+/// nearest other cluster within `max_distance` (ties: lowest label). If the least-heard cluster
+/// has no such neighbour the attempt fails rather than skipping to a better-heard speaker, which
+/// would merge a real speaker in place of the one the user did not count. The result is all or
+/// nothing: if the count cannot reach `target` under the limit, `labels` is left unchanged.
+/// Returns the number of clusters afterwards (the original count when unchanged).
+pub fn merge_least_heard_within(
+    embeddings: &[(usize, [f32; EMBEDDING_DIM])],
+    labels: &mut [usize],
+    durations: &[f64],
+    target: usize,
+    max_distance: f32,
+) -> usize {
+    struct Agg {
+        seconds: f64,
+        sum: [f32; EMBEDDING_DIM],
+    }
+    let mut clusters: std::collections::BTreeMap<usize, Agg> = std::collections::BTreeMap::new();
+    for (((_, e), &label), &d) in embeddings.iter().zip(labels.iter()).zip(durations) {
+        let agg = clusters.entry(label).or_insert(Agg { seconds: 0.0, sum: [0.0; EMBEDDING_DIM] });
+        agg.seconds += d.max(0.0);
+        for (acc, v) in agg.sum.iter_mut().zip(e.iter()) {
+            *acc += *v;
+        }
+    }
+    let original = clusters.len();
+    let target = target.max(1);
+    let mut merged_into: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    while clusters.len() > target {
+        let mut order: Vec<usize> = clusters.keys().copied().collect();
+        order.sort_by(|a, b| {
+            clusters[a].seconds.partial_cmp(&clusters[b].seconds).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let step = order.iter().take(1).find_map(|&small| {
+            clusters
+                .iter()
+                .filter(|(&l, _)| l != small)
+                .map(|(&l, a)| (l, cosine_similarity(&clusters[&small].sum, &a.sum)))
+                .filter(|(_, sim)| 1.0 - sim <= max_distance)
+                .fold(None, |best: Option<(usize, f32)>, c| match best {
+                    Some(b) if b.1 >= c.1 => Some(b),
+                    _ => Some(c),
+                })
+                .map(|(target_label, _)| (small, target_label))
+        });
+        let Some((small, into)) = step else {
+            return original;
+        };
+        let moved = clusters.remove(&small).expect("small cluster exists");
+        let t = clusters.get_mut(&into).expect("target cluster exists");
+        t.seconds += moved.seconds;
+        for (acc, v) in t.sum.iter_mut().zip(moved.sum.iter()) {
+            *acc += *v;
+        }
+        for v in merged_into.values_mut().filter(|v| **v == small) {
+            *v = into;
+        }
+        merged_into.insert(small, into);
+    }
+    for label in labels.iter_mut() {
+        if let Some(&t) = merged_into.get(label) {
+            *label = t;
+        }
+    }
+    clusters.len()
 }
 
 /// A usable embedding is finite and non-degenerate. Zero (or non-finite) vectors carry no
@@ -112,6 +269,21 @@ pub fn absorb_small_clusters(
     min_seconds: f64,
     max_distance: f32,
 ) {
+    absorb_small_clusters_floor(embeddings, labels, durations, min_seconds, max_distance, 0);
+}
+
+/// [`absorb_small_clusters`] that never takes the cluster count below `min_clusters`: once that
+/// many clusters remain it stops, even if smaller-than-minimum clusters are left (a speaker-count
+/// hint says they are real speakers). `0` or `1` behaves like the unfloored function for any input
+/// with at least two clusters.
+pub fn absorb_small_clusters_floor(
+    embeddings: &[(usize, [f32; EMBEDDING_DIM])],
+    labels: &mut [usize],
+    durations: &[f64],
+    min_seconds: f64,
+    max_distance: f32,
+    min_clusters: usize,
+) {
     debug_assert_eq!(embeddings.len(), labels.len());
     debug_assert_eq!(embeddings.len(), durations.len());
     struct Agg {
@@ -129,7 +301,7 @@ pub fn absorb_small_clusters(
     let mut merged_into: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
     let mut kept_distinct: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     loop {
-        if clusters.len() < 2 {
+        if clusters.len() < 2 || clusters.len() <= min_clusters {
             break;
         }
         // Smallest cluster below the minimum that has not been found to have no acceptable target.
@@ -182,6 +354,21 @@ pub fn absorb_small_clusters(
 ///
 /// Composite cluster labels (≥ n) are tracked to find their representative.
 fn cutree(dendrogram: &kodama::Dendrogram<f32>, n: usize, threshold: f32) -> Vec<usize> {
+    cut_merges(dendrogram, n, |_, dissimilarity| dissimilarity <= threshold)
+}
+
+/// Cut a dendrogram into exactly `k` clusters (1 <= k <= n) by applying its first `n - k` merges.
+/// Average linkage is monotone, so those are the `n - k` lowest-dissimilarity merges.
+fn cutree_count(dendrogram: &kodama::Dendrogram<f32>, n: usize, k: usize) -> Vec<usize> {
+    let apply = n - k.clamp(1, n);
+    cut_merges(dendrogram, n, |step_idx, _| step_idx < apply)
+}
+
+fn cut_merges(
+    dendrogram: &kodama::Dendrogram<f32>,
+    n: usize,
+    apply: impl Fn(usize, f32) -> bool,
+) -> Vec<usize> {
     // Union-Find over observations 0..n
     let mut parent: Vec<usize> = (0..n).collect();
 
@@ -213,7 +400,7 @@ fn cutree(dendrogram: &kodama::Dendrogram<f32>, n: usize, threshold: f32) -> Vec
         // The new composite cluster (n + step_idx) is represented by rep1
         representative[step_idx] = rep1;
 
-        if step.dissimilarity <= threshold {
+        if apply(step_idx, step.dissimilarity) {
             let root1 = find(&mut parent, rep1);
             let root2 = find(&mut parent, rep2);
             if root1 != root2 {
@@ -514,6 +701,154 @@ mod tests {
         assert!(out.iter().all(|l| *l == out[0]), "chain collapses to one cluster: {out:?}");
         assert_eq!(out, absorb(&input, &[0, 1, 2, 3], &[1.0, 2.0, 3.0, 2.5], 0.75));
     }
+
+    fn count(result: &[(usize, usize)]) -> usize {
+        result.iter().map(|r| r.1).collect::<std::collections::BTreeSet<_>>().len()
+    }
+
+    /// Two near-identical vectors (A), plus B and C which are 0.55 apart and 1.0 from A.
+    fn abc() -> Vec<(usize, [f32; EMBEDDING_DIM])> {
+        let a1 = mix(0, 1.0, 1, 0.05);
+        let a2 = mix(0, 1.0, 2, 0.05);
+        let b = unit_embedding(10);
+        let c = mix(10, 0.5, 11, 1.0);
+        vec![(0, a1), (1, a2), (2, b), (3, c)]
+    }
+
+    const LONG: [f64; 4] = [30.0; 4];
+
+    #[test]
+    fn count_cut_applies_the_lowest_dissimilarity_merges_first() {
+        let input = abc();
+        assert_eq!(count(&cluster_speakers(&input, 0.34)), 3);
+        let two = cluster_to_count(&input, &LONG, 8.0, 2);
+        assert_eq!(count(&two), 2);
+        assert_eq!(two[0].1, two[1].1, "A merges first");
+        assert_eq!(two[2].1, two[3].1, "then B and C (0.55) before A (1.0)");
+        assert_eq!(count(&cluster_to_count(&input, &LONG, 8.0, 1)), 1);
+        assert_eq!(count(&cluster_to_count(&input, &LONG, 8.0, 3)), 3);
+        assert_eq!(count(&cluster_to_count(&input, &LONG, 8.0, 4)), 4);
+    }
+
+    #[test]
+    fn count_larger_than_the_clusterable_items_is_capped() {
+        let input = abc();
+        assert_eq!(count(&cluster_to_count(&input, &LONG, 8.0, 99)), 4);
+        // Short audio (no cluster reaches the minimum) falls back to a plain count cut.
+        assert_eq!(count(&cluster_to_count(&input, &[1.0; 4], 8.0, 3)), 3);
+        // A single item cannot be split; nothing to cluster is empty.
+        assert_eq!(cluster_to_count(&input[..1], &[30.0], 8.0, 3), vec![(0, 0)]);
+        assert!(cluster_to_count(&[], &[], 8.0, 3).is_empty());
+    }
+
+    #[test]
+    fn count_cut_with_tied_distances_is_exact_and_deterministic() {
+        // Four mutually orthogonal vectors: every pairwise distance is 1.0.
+        let input: Vec<_> = (0..4).map(|i| (i, unit_embedding(i))).collect();
+        for k in 1..=4 {
+            let first = cluster_to_count(&input, &[10.0; 4], 8.0, k);
+            assert_eq!(count(&first), k);
+            assert_eq!(first, cluster_to_count(&input, &[10.0; 4], 8.0, k));
+        }
+    }
+
+    #[test]
+    fn count_cut_counts_speakers_not_outlier_segments() {
+        // Two real speakers (A, B; 0.8 apart, 60 s each) and two 1 s outliers orthogonal to
+        // everything. A naive 2-cluster cut keeps A and B together and splits off an outlier.
+        let input = vec![
+            (0, unit_embedding(0)),
+            (1, mix(0, 1.0, 2, 0.05)),
+            (2, mix(0, 0.2, 1, 1.0)),
+            (3, mix(0, 0.2, 1, 1.0)),
+            (4, unit_embedding(20)),
+            (5, unit_embedding(21)),
+        ];
+        let durations = [30.0, 30.0, 30.0, 30.0, 1.0, 1.0];
+        let two = cluster_to_count(&input, &durations, 8.0, 2);
+        assert_eq!(count(&two), 2);
+        assert_eq!(two[0].1, two[1].1);
+        assert_eq!(two[2].1, two[3].1);
+        assert_ne!(two[0].1, two[2].1, "A and B stay separate speakers");
+        // Asking for more speakers than there are large clusters falls back to a plain cut.
+        assert_eq!(count(&cluster_to_count(&input, &durations, 8.0, 5)), 5);
+    }
+
+    #[test]
+    fn absorption_floor_never_drops_below_the_requested_count() {
+        let input = vec![(0, unit_embedding(0)), (1, unit_embedding(1)), (2, mix(0, 0.8, 2, 0.6))];
+        let run = |floor: usize| {
+            let mut l = vec![0, 1, 2];
+            absorb_small_clusters_floor(&input, &mut l, &[30.0, 30.0, 2.0], 8.0, 0.75, floor);
+            l
+        };
+        assert_eq!(run(0), vec![0, 1, 0], "no floor: the small cluster is absorbed");
+        assert_eq!(run(1), vec![0, 1, 0]);
+        assert_eq!(run(2), vec![0, 1, 0], "two clusters remain, which meets the floor");
+        assert_eq!(run(3), vec![0, 1, 2], "floor 3 forbids any merge");
+        assert_eq!(run(10), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn merge_least_heard_is_all_or_nothing_under_the_distance_limit() {
+        // Clusters 0 and 1 are 0.2 apart, cluster 2 is orthogonal to both (distance 1.0).
+        let input = vec![(0, unit_embedding(0)), (1, mix(0, 0.8, 2, 0.6)), (2, unit_embedding(5))];
+        let durations = [60.0, 20.0, 40.0];
+        let run = |target: usize, limit: f32| {
+            let mut labels = vec![0, 1, 2];
+            let left = merge_least_heard_within(&input, &mut labels, &durations, target, limit);
+            (left, labels)
+        };
+        assert_eq!(run(2, 0.75), (2, vec![0, 0, 2]), "the least-heard close voice joins its neighbour");
+        assert_eq!(run(1, 0.75), (3, vec![0, 1, 2]), "cannot reach 1 under the limit: unchanged");
+        assert_eq!(run(1, 1.5), (1, vec![0, 0, 0]));
+        assert_eq!(run(3, 1.5), (3, vec![0, 1, 2]), "already at the target");
+    }
+
+    #[test]
+    fn merge_least_heard_ties_boundary_and_isolated_cluster() {
+        let run = |input: &[(usize, [f32; EMBEDDING_DIM])], durations: &[f64], target: usize, limit: f32| {
+            let mut labels: Vec<usize> = (0..input.len()).collect();
+            let left = merge_least_heard_within(input, &mut labels, durations, target, limit);
+            (left, labels)
+        };
+        // Equal seconds: the lowest label is least heard; equally near neighbours: the lowest label.
+        let tied = vec![(0, unit_embedding(0)), (1, mix(0, 1.0, 1, 1.0)), (2, mix(1, 1.0, 0, 1.0))];
+        assert_eq!(run(&tied, &[10.0, 10.0, 10.0], 2, 1.5), (2, vec![1, 1, 2]));
+        // An isolated least-heard cluster is not skipped in favour of a better-heard pair.
+        let isolated = vec![(0, unit_embedding(5)), (1, unit_embedding(0)), (2, mix(0, 0.8, 2, 0.6))];
+        assert_eq!(run(&isolated, &[2.0, 30.0, 40.0], 2, 0.9), (3, vec![0, 1, 2]));
+        // Boundary: distance exactly at the limit merges, just above does not.
+        let pair = vec![(0, unit_embedding(0)), (1, mix(0, 0.5, 1, 0.866_025_4))];
+        let d = 1.0 - cosine_similarity(&pair[0].1, &pair[1].1);
+        assert_eq!(run(&pair, &[10.0, 20.0], 1, d).0, 1);
+        assert_eq!(run(&pair, &[10.0, 20.0], 1, d - 1e-4).0, 2);
+    }
+
+    #[test]
+    fn count_walk_takes_the_first_qualifying_cut_even_if_the_count_later_falls() {
+        // a1 and a2 (5 s each, 0.2 apart) form one 10 s speaker; b (30 s) is 1.0 away. Large clusters
+        // by cut: k=1 -> 1, k=2 -> 2 ({a1,a2},{b}), k=3 -> 1 (a1 and a2 are each below 8 s).
+        let input = vec![(0, unit_embedding(0)), (1, mix(0, 0.8, 2, 0.6)), (2, unit_embedding(5))];
+        let durations = [5.0, 5.0, 30.0];
+        let two = cluster_to_count(&input, &durations, 8.0, 2);
+        assert_eq!(two, vec![(0, 0), (1, 0), (2, 1)]);
+        // Three large clusters never occur: plain three-way cut.
+        assert_eq!(cluster_to_count(&input, &durations, 8.0, 3), vec![(0, 0), (1, 1), (2, 2)]);
+    }
+
+    #[test]
+    fn tied_distances_resolve_to_a_pinned_partition() {
+        // Four mutually orthogonal 10 s voices: all distances tie, so the partition is whatever
+        // kodama's deterministic step order gives. Pin it so a dependency change shows up.
+        let input: Vec<_> = (0..4).map(|i| (i, unit_embedding(i))).collect();
+        let by_k: Vec<Vec<usize>> = (1..=4)
+            .map(|k| cluster_to_count(&input, &[10.0; 4], 8.0, k).iter().map(|r| r.1).collect())
+            .collect();
+        assert_eq!(by_k, PINNED_TIE_PARTITIONS.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
+    }
+
+    const PINNED_TIE_PARTITIONS: [[usize; 4]; 4] = [[0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 1, 2], [0, 1, 2, 3]];
 
     #[test]
     fn zero_and_non_finite_embeddings_are_unusable() {

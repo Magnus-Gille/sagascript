@@ -1,0 +1,296 @@
+{
+ "IP_hb10760": {
+  "SPEAKER_0": {
+   "seconds": 52.0,
+   "outside_ref": 0.78,
+   "ref_speakers": {
+    "Jessica_Rodén_(S)": 7.1,
+    "Statsrådet_Lotta_Edholm_(L)": 4.2
+   },
+   "forced_cluster": [
+    "SPEAKER_0"
+   ]
+  },
+  "SPEAKER_1": {
+   "seconds": 343.7,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Statsrådet_Lotta_Edholm_(L)": 343.7
+   },
+   "forced_cluster": [
+    "SPEAKER_1"
+   ]
+  },
+  "SPEAKER_2": {
+   "seconds": 422.2,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Jessica_Rodén_(S)": 422.2
+   },
+   "forced_cluster": [
+    "SPEAKER_1"
+   ]
+  }
+ },
+ "IP_hc10606": {
+  "SPEAKER_0": {
+   "seconds": 69.8,
+   "outside_ref": 0.73,
+   "ref_speakers": {
+    "Jessica_Rodén_(S)": 11.7,
+    "Statsrådet_Lotta_Edholm_(L)": 7.0
+   },
+   "forced_cluster": [
+    "SPEAKER_0"
+   ]
+  },
+  "SPEAKER_1": {
+   "seconds": 244.4,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Statsrådet_Lotta_Edholm_(L)": 244.4
+   },
+   "forced_cluster": [
+    "SPEAKER_1"
+   ]
+  },
+  "SPEAKER_2": {
+   "seconds": 347.1,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Jessica_Rodén_(S)": 347.1
+   },
+   "forced_cluster": [
+    "SPEAKER_1"
+   ]
+  }
+ },
+ "IP_hb10618": {
+  "SPEAKER_0": {
+   "seconds": 32.5,
+   "outside_ref": 0.7,
+   "ref_speakers": {
+    "Statsrådet_Camilla_Waltersson_Grönvall_(M)": 6.5,
+    "Christofer_Bergenblock_(C)": 3.1
+   },
+   "forced_cluster": [
+    "SPEAKER_0"
+   ]
+  },
+  "SPEAKER_1": {
+   "seconds": 617.8,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Statsrådet_Camilla_Waltersson_Grönvall_(M)": 617.8
+   },
+   "forced_cluster": [
+    "SPEAKER_0"
+   ]
+  },
+  "SPEAKER_2": {
+   "seconds": 588.0,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Christofer_Bergenblock_(C)": 588.0
+   },
+   "forced_cluster": [
+    "SPEAKER_0"
+   ]
+  },
+  "SPEAKER_4": {
+   "seconds": 11.0,
+   "outside_ref": 0.29,
+   "ref_speakers": {
+    "Statsrådet_Camilla_Waltersson_Grönvall_(M)": 5.1,
+    "Christofer_Bergenblock_(C)": 2.7
+   },
+   "forced_cluster": [
+    "SPEAKER_1"
+   ]
+  }
+ },
+ "IP_hd10562": {
+  "SPEAKER_0": {
+   "seconds": 84.4,
+   "outside_ref": 0.95,
+   "ref_speakers": {
+    "Utbildnings-_och_integrationsminister_Simona_Mohamsson_(L)": 2.5,
+    "Jessica_Rodén_(S)": 1.4
+   },
+   "forced_cluster": [
+    "SPEAKER_0"
+   ]
+  },
+  "SPEAKER_1": {
+   "seconds": 605.4,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Utbildnings-_och_integrationsminister_Simona_Mohamsson_(L)": 605.4
+   },
+   "forced_cluster": [
+    "SPEAKER_1"
+   ]
+  },
+  "SPEAKER_2": {
+   "seconds": 465.6,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Jessica_Rodén_(S)": 465.6
+   },
+   "forced_cluster": [
+    "SPEAKER_1"
+   ]
+  },
+  "SPEAKER_3": {
+   "seconds": 228.5,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Ewa_Pihl_Krabbe_(S)": 227.6
+   },
+   "forced_cluster": [
+    "SPEAKER_2"
+   ]
+  }
+ },
+ "SoU39": {
+  "SPEAKER_0": {
+   "seconds": 114.5,
+   "outside_ref": 0.72,
+   "ref_speakers": {
+    "Martina_Johansson_(C)": 10.2,
+    "Maj_Karlsson_(V)": 5.9
+   },
+   "forced_cluster": [
+    "SPEAKER_0"
+   ]
+  },
+  "SPEAKER_1": {
+   "seconds": 432.5,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Christian_Carlsson_(KD)": 432.5
+   },
+   "forced_cluster": [
+    "SPEAKER_1"
+   ]
+  },
+  "SPEAKER_2": {
+   "seconds": 746.8,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Maj_Karlsson_(V)": 745.6,
+    "Ulrika_Westerlund_(MP)": 0.2
+   },
+   "forced_cluster": [
+    "SPEAKER_2"
+   ]
+  },
+  "SPEAKER_3": {
+   "seconds": 461.3,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Martina_Johansson_(C)": 461.3
+   },
+   "forced_cluster": [
+    "SPEAKER_3"
+   ]
+  },
+  "SPEAKER_5": {
+   "seconds": 406.3,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Gustaf_Lantz_(S)": 406.3
+   },
+   "forced_cluster": [
+    "SPEAKER_4"
+   ]
+  },
+  "SPEAKER_7": {
+   "seconds": 491.0,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Ulrika_Westerlund_(MP)": 490.3,
+    "Maj_Karlsson_(V)": 0.7
+   },
+   "forced_cluster": [
+    "SPEAKER_2",
+    "SPEAKER_5"
+   ]
+  },
+  "SPEAKER_8": {
+   "seconds": 45.8,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Lina_Nordquist_(L)": 44.7,
+    "Maj_Karlsson_(V)": 1.1
+   },
+   "forced_cluster": [
+    "SPEAKER_6"
+   ]
+  },
+  "SPEAKER_13": {
+   "seconds": 421.5,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Jessica_Stegrud_(SD)": 421.5
+   },
+   "forced_cluster": [
+    "SPEAKER_5"
+   ]
+  }
+ },
+ "JuU41": {
+  "SPEAKER_0": {
+   "seconds": 65.2,
+   "outside_ref": 0.78,
+   "ref_speakers": {
+    "Adam_Marttinen_(SD)": 7.1,
+    "Ulrika_Liljeberg_(C)": 6.0
+   },
+   "forced_cluster": [
+    "SPEAKER_0"
+   ]
+  },
+  "SPEAKER_1": {
+   "seconds": 765.6,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Teresa_Carvalho_(S)": 765.6
+   },
+   "forced_cluster": [
+    "SPEAKER_1"
+   ]
+  },
+  "SPEAKER_2": {
+   "seconds": 883.5,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Gudrun_Nordborg_(V)": 883.5
+   },
+   "forced_cluster": [
+    "SPEAKER_2"
+   ]
+  },
+  "SPEAKER_5": {
+   "seconds": 513.4,
+   "outside_ref": 0.0,
+   "ref_speakers": {
+    "Adam_Marttinen_(SD)": 512.5,
+    "Ulrika_Liljeberg_(C)": 0.8
+   },
+   "forced_cluster": [
+    "SPEAKER_3"
+   ]
+  },
+  "SPEAKER_6": {
+   "seconds": 225.4,
+   "outside_ref": 0.02,
+   "ref_speakers": {
+    "Ulrika_Liljeberg_(C)": 220.5
+   },
+   "forced_cluster": [
+    "SPEAKER_2"
+   ]
+  }
+ }
+}

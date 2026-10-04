@@ -14,6 +14,8 @@ pub mod meeting_reprocessing;
 pub mod meeting_reprocessing_cli;
 pub mod models;
 pub mod open;
+#[cfg(feature = "diarization")]
+pub mod speaker_args;
 // Live recording is optional (`record` feature, on by default) so a pure
 // batch-transcribe build (`--no-default-features`) carries no audio-capture
 // stack — on Linux, no cpal/ALSA.

@@ -8,6 +8,8 @@ use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::speaker_hint::SpeakerCountHint;
+
 pub const REPROCESSING_PLAN_SCHEMA_VERSION: u32 = 1;
 
 /// The bounded reprocessing operation selected by the caller.
@@ -126,6 +128,10 @@ pub struct ReprocessingPlan {
     pub mode: ReprocessingMode,
     pub context: ReprocessingContext,
     pub threshold: f32,
+    /// Optional speaker-count hint (issue #305); part of the revision only when set, so plans
+    /// without a hint keep their previous revision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_hint: Option<SpeakerCountHint>,
     pub required_work: RequiredWork,
     pub revision: String,
 }
@@ -137,6 +143,8 @@ struct ReprocessingPlanWire {
     mode: ReprocessingMode,
     context: ReprocessingContext,
     threshold: f32,
+    #[serde(default)]
+    speaker_hint: Option<SpeakerCountHint>,
     required_work: RequiredWork,
     revision: String,
 }
@@ -152,6 +160,7 @@ impl<'de> Deserialize<'de> for ReprocessingPlan {
             mode: wire.mode,
             context: wire.context,
             threshold: wire.threshold,
+            speaker_hint: wire.speaker_hint,
             required_work: wire.required_work,
             revision: wire.revision,
         };
@@ -166,6 +175,8 @@ struct RevisionPayload<'a> {
     mode: ReprocessingMode,
     context: &'a ReprocessingContext,
     threshold: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speaker_hint: Option<SpeakerCountHint>,
     required_work: &'a RequiredWork,
 }
 
@@ -184,12 +195,24 @@ impl ReprocessingPlan {
             mode,
             context,
             threshold,
+            speaker_hint: None,
             required_work: RequiredWork::for_mode(mode),
             revision: String::new(),
         };
         plan.revision = plan.compute_revision()?;
         plan.validate()?;
         Ok(plan)
+    }
+
+    /// The same plan with a speaker-count hint (and its recomputed revision).
+    pub fn with_speaker_hint(
+        mut self,
+        hint: Option<SpeakerCountHint>,
+    ) -> Result<Self, ReprocessingPlanError> {
+        self.speaker_hint = hint;
+        self.revision = self.compute_revision()?;
+        self.validate()?;
+        Ok(self)
     }
 
     /// Validate the schema, context, mode-derived work, and content revision.
@@ -201,6 +224,11 @@ impl ReprocessingPlan {
         }
         self.context.validate_for_mode(self.mode)?;
         validate_threshold(self.threshold)?;
+        if let Some(hint) = &self.speaker_hint {
+            if hint.is_empty() || hint.validate().is_err() {
+                return Err(ReprocessingPlanError::InvalidField("speaker_hint"));
+            }
+        }
         if self.required_work != RequiredWork::for_mode(self.mode) {
             return Err(ReprocessingPlanError::InvalidField("required_work"));
         }
@@ -236,6 +264,7 @@ impl ReprocessingPlan {
             mode: self.mode,
             context: &self.context,
             threshold: self.threshold,
+            speaker_hint: self.speaker_hint,
             required_work: &self.required_work,
         };
         let bytes =
@@ -358,6 +387,33 @@ mod tests {
                 Err(ReprocessingPlanError::StaleContext)
             );
         }
+    }
+
+    /// A plan written before speaker hints existed. The revision was computed independently
+    /// (sha256 of the hint-free payload JSON in Python), not by this code.
+    const PRE_HINT_PLAN: &str = r#"{"schema_version":1,"mode":"recluster","context":{"source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","previous_revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","transcription_context_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","analysis_context_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","cache_sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},"threshold":0.75,"required_work":{"decode_audio":false,"transcription":false,"language_detection":false,"segmentation":false,"embeddings":false,"clustering":true},"revision":"388dc03111067ffb3e0fece712a115e86d948d2d0dbbc40d7e60f697a28bcc5a"}"#;
+
+    #[test]
+    fn plan_without_a_hint_keeps_its_pre_hint_bytes_and_revision() {
+        let plan = plan(ReprocessingMode::Recluster);
+        assert_eq!(plan.revision, "388dc03111067ffb3e0fece712a115e86d948d2d0dbbc40d7e60f697a28bcc5a");
+        assert_eq!(serde_json::to_string(&plan).unwrap(), PRE_HINT_PLAN);
+        let read: ReprocessingPlan = serde_json::from_str(PRE_HINT_PLAN).unwrap();
+        assert_eq!(read, plan);
+        assert_eq!(read.speaker_hint, None);
+    }
+
+    #[test]
+    fn speaker_hint_changes_the_revision_only_when_set_and_round_trips() {
+        let plain = plan(ReprocessingMode::Recluster);
+        assert!(!serde_json::to_string(&plain).unwrap().contains("speaker_hint"));
+        let hinted = plain.clone().with_speaker_hint(Some(SpeakerCountHint::exact(2))).unwrap();
+        assert_ne!(hinted.revision, plain.revision);
+        let back: ReprocessingPlan = serde_json::from_str(&serde_json::to_string(&hinted).unwrap()).unwrap();
+        assert_eq!(back, hinted);
+        let cleared = hinted.with_speaker_hint(None).unwrap();
+        assert_eq!(cleared, plain, "removing the hint restores the original revision");
+        assert!(plain.with_speaker_hint(Some(SpeakerCountHint::exact(0))).is_err());
     }
 
     #[test]

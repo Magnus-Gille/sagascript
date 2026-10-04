@@ -27,6 +27,7 @@ struct CountingBackend {
     fail_analyze: bool,
     fail_full: bool,
     cancel_during_analyze: bool,
+    last_full_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
 }
 
 impl WorkBackend for CountingBackend {
@@ -71,10 +72,12 @@ impl WorkBackend for CountingBackend {
         &mut self,
         input: &ReprocessingInput<'_>,
         _threshold: f32,
+        speaker_hint: Option<sagascript_core::speaker_hint::SpeakerCountHint>,
         _cache_output: Option<&Path>,
         _control: Option<&MeetingControl<'_>>,
     ) -> Result<MeetingTranscript, DictationError> {
         self.full_calls += 1;
+        self.last_full_hint = speaker_hint;
         if self.fail_full {
             return Err(DictationError::TranscriptionFailed(
                 "synthetic full failure".to_string(),
@@ -236,6 +239,48 @@ fn work_modes_invoke_only_their_selected_backend_stages() {
     )
     .expect("full execution");
     assert_counts(&full, 0, 0, 1);
+}
+
+#[test]
+fn speaker_hint_flows_through_plan_execution_and_persistence_in_every_mode() {
+    use sagascript_core::meeting_reprocess_plan::ReprocessingPlan;
+    use sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal;
+    use sagascript_core::speaker_hint::SpeakerCountHint;
+
+    let hint = SpeakerCountHint::exact(2);
+    let fixture = Fixture::new(true);
+    let selective = fixture.input(Some(&fixture.cache));
+    let full_input = fixture.input(None);
+    for mode in [ReprocessingMode::Recluster, ReprocessingMode::Rediarize, ReprocessingMode::Full] {
+        let input = if mode == ReprocessingMode::Full { &full_input } else { &selective };
+        let plan = plan_reprocessing_with_model_check(input, mode, 0.75, None, || true)
+            .expect("plan")
+            .with_speaker_hint(Some(hint))
+            .expect("hinted plan");
+        // The plan is persisted and re-read before execution, as the CLI does.
+        let plan: ReprocessingPlan =
+            serde_json::from_str(&serde_json::to_string(&plan).expect("plan json")).expect("plan reads back");
+        assert_eq!(plan.speaker_hint, Some(hint));
+        let mut backend = CountingBackend::default();
+        let result = execute_with(&plan, &plan.revision, input, None, None, &mut backend)
+            .expect("hinted execution");
+        assert_eq!(backend.last_full_hint, (mode == ReprocessingMode::Full).then_some(hint), "{mode:?}");
+        let proposed = &result.proposal.proposed;
+        assert_eq!(proposed.speaker_hint, Some(hint), "{mode:?}");
+        if mode != ReprocessingMode::Full {
+            // The synthetic analysis has no speech, so the requested 2 cannot be delivered.
+            assert_eq!(proposed.speaker_hint_satisfied, Some(false), "{mode:?}");
+            assert_eq!(proposed.speaker_hint_delivered, Some(0), "{mode:?}");
+        }
+        let reread: MeetingReprocessingProposal =
+            serde_json::from_str(&serde_json::to_string(&result.proposal).expect("proposal json"))
+                .expect("proposal reads back");
+        assert_eq!(&reread, &result.proposal);
+        // A plan without a hint is unchanged in revision and in bytes.
+        let plain = plan_reprocessing_with_model_check(input, mode, 0.75, None, || true).expect("plain plan");
+        assert!(!serde_json::to_string(&plain).expect("json").contains("speaker_hint"));
+        assert_ne!(plain.revision, plan.revision);
+    }
 }
 
 fn assert_selective_failure_without_full_fallback(mutate: impl FnOnce(&Fixture)) {
