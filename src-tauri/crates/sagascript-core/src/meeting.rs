@@ -38,6 +38,47 @@ impl fmt::Display for MeetingError {
 
 impl std::error::Error for MeetingError {}
 
+/// How the microphone crosstalk guard of a two-track transcription is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CrosstalkGuardMode {
+    /// Apply the guard only when echo of the system audio is detected.
+    Auto,
+    On,
+    Off,
+}
+
+impl CrosstalkGuardMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+}
+
+impl std::str::FromStr for CrosstalkGuardMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "auto" => Ok(Self::Auto),
+            "on" => Ok(Self::On),
+            "off" => Ok(Self::Off),
+            other => Err(format!("unknown crosstalk guard mode '{other}' (auto, on, off)")),
+        }
+    }
+}
+
+/// The guard decision recorded with a two-track transcript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrosstalkGuardRecord {
+    pub mode: CrosstalkGuardMode,
+    /// Whether the guard was actually applied (always true for `on`, false for `off`).
+    pub applied: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MeetingSpeaker {
@@ -85,6 +126,14 @@ pub struct MeetingTranscript {
     pub duration_seconds: f64,
     pub segments: Vec<MeetingSegment>,
     pub speakers: Vec<MeetingSpeaker>,
+    /// Speaker id of the person who recorded (the microphone channel of a
+    /// two-track recording). Additive: absent for ordinary transcripts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_speaker: Option<String>,
+    /// Crosstalk guard mode and whether it was applied, for a two-track
+    /// transcript. Additive; absent for ordinary transcripts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crosstalk_guard: Option<CrosstalkGuardRecord>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,6 +146,10 @@ struct MeetingTranscriptWire {
     duration_seconds: f64,
     segments: Vec<MeetingSegment>,
     speakers: Vec<MeetingSpeaker>,
+    #[serde(default)]
+    local_speaker: Option<String>,
+    #[serde(default)]
+    crosstalk_guard: Option<CrosstalkGuardRecord>,
 }
 
 impl<'de> Deserialize<'de> for MeetingTranscript {
@@ -113,6 +166,8 @@ impl<'de> Deserialize<'de> for MeetingTranscript {
             duration_seconds: wire.duration_seconds,
             segments: wire.segments,
             speakers: wire.speakers,
+            local_speaker: wire.local_speaker,
+            crosstalk_guard: wire.crosstalk_guard,
         };
         document.validate().map_err(serde::de::Error::custom)?;
         Ok(document)
@@ -166,9 +221,18 @@ impl MeetingTranscript {
             duration_seconds,
             segments,
             speakers,
+            local_speaker: None,
+            crosstalk_guard: None,
         };
         document.validate()?;
         Ok(document)
+    }
+
+    /// Mark `speaker_id` as the local user (the microphone owner).
+    pub fn with_local_speaker(mut self, speaker_id: impl Into<String>) -> Result<Self, MeetingError> {
+        self.local_speaker = Some(speaker_id.into());
+        self.validate()?;
+        Ok(self)
     }
 
     pub fn validate(&self) -> Result<(), MeetingError> {
@@ -197,6 +261,11 @@ impl MeetingTranscript {
         }
 
         let mut speaker_ids = BTreeSet::new();
+        if let Some(local) = &self.local_speaker {
+            if !self.speakers.iter().any(|speaker| &speaker.id == local) {
+                return Err(MeetingError::UnknownSpeaker);
+            }
+        }
         for speaker in &self.speakers {
             validate_id(&speaker.id, "speaker id")?;
             if !speaker_ids.insert(&speaker.id) {
@@ -288,6 +357,9 @@ impl MeetingTranscript {
             }
         }
         next.speakers.retain(|speaker| speaker.id != from_id);
+        if next.local_speaker.as_deref() == Some(from_id) {
+            next.local_speaker = Some(to_id.to_string());
+        }
         next.validate()?;
         Ok(next)
     }
@@ -527,6 +599,35 @@ mod tests {
             speakers(),
         )
         .expect("fixture is valid")
+    }
+
+    #[test]
+    fn local_speaker_is_additive_validated_and_follows_merges() {
+        let plain = document();
+        let json = plain.to_json().unwrap();
+        assert!(!json.contains("local_speaker") && !json.contains("crosstalk_guard"), "absent unless set");
+        let me = plain.clone().with_local_speaker("a").unwrap();
+        let json = me.to_json().unwrap();
+        assert!(json.contains("\"local_speaker\":\"a\""));
+        let back: MeetingTranscript = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, me);
+        let mut guarded = me.clone();
+        guarded.crosstalk_guard =
+            Some(CrosstalkGuardRecord { mode: CrosstalkGuardMode::Auto, applied: true });
+        let json = guarded.to_json().unwrap();
+        assert!(json.contains(r#""crosstalk_guard":{"mode":"auto","applied":true}"#), "{json}");
+        let back: MeetingTranscript = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.crosstalk_guard, guarded.crosstalk_guard);
+        assert!("sometimes".parse::<CrosstalkGuardMode>().is_err());
+        assert_eq!("off".parse::<CrosstalkGuardMode>().unwrap().as_str(), "off");
+        assert_eq!(
+            plain.clone().with_local_speaker("zzz").unwrap_err(),
+            MeetingError::UnknownSpeaker
+        );
+        let merged = me.merge_speakers("a", "b").unwrap();
+        assert_eq!(merged.local_speaker.as_deref(), Some("b"));
+        let renamed = me.rename_speaker("a", "Magnus").unwrap();
+        assert_eq!(renamed.local_speaker.as_deref(), Some("a"));
     }
 
     #[test]

@@ -1130,6 +1130,98 @@ mod tests {
         assert_eq!(args.diarize_cache, Some(PathBuf::from("analysis.json")));
     }
 
+    #[cfg(feature = "diarization")]
+    fn parse_transcribe(extra: &[&str]) -> Result<crate::transcribe::TranscribeArgs, clap::Error> {
+        let mut argv = vec!["sagascript", "transcribe", "call.wav"];
+        argv.extend_from_slice(extra);
+        match Cli::try_parse_from(argv.iter().copied())?.command.unwrap() {
+            Command::Transcribe(args) => Ok(args),
+            _ => panic!("expected Transcribe"),
+        }
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn two_track_flags_need_diarize_and_exclude_each_other() {
+        assert!(parse_transcribe(&["--two-track"]).is_err());
+        assert!(parse_transcribe(&["--no-two-track"]).is_err());
+        assert!(parse_transcribe(&["--diarize", "--two-track", "--no-two-track"]).is_err());
+        let forced = parse_transcribe(&["--diarize", "--two-track"]).unwrap();
+        assert!(forced.two_track && !forced.no_two_track);
+        let off = parse_transcribe(&["--meeting-json", "--diarize", "--no-two-track"]).unwrap();
+        assert!(off.no_two_track && !off.two_track);
+        let auto = parse_transcribe(&["--diarize"]).unwrap();
+        assert!(!auto.two_track && !auto.no_two_track && !auto.crosstalk_guard && !auto.no_crosstalk_guard);
+        assert!(parse_transcribe(&["--crosstalk-guard"]).is_err());
+        assert!(parse_transcribe(&["--no-crosstalk-guard"]).is_err());
+        assert!(parse_transcribe(&["--diarize", "--no-two-track", "--crosstalk-guard"]).is_err());
+        assert!(parse_transcribe(&["--diarize", "--no-two-track", "--no-crosstalk-guard"]).is_err());
+        assert!(parse_transcribe(&["--diarize", "--crosstalk-guard", "--no-crosstalk-guard"]).is_err());
+        assert!(parse_transcribe(&["--diarize", "--crosstalk-guard"]).unwrap().crosstalk_guard);
+        assert!(parse_transcribe(&["--diarize", "--no-crosstalk-guard"]).unwrap().no_crosstalk_guard);
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn crosstalk_guard_mode_resolves_flags_over_environment_and_defaults_to_auto() {
+        use crate::transcribe::crosstalk_guard_mode;
+        use sagascript_core::meeting::CrosstalkGuardMode as M;
+        let var = "SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD";
+        let prior = std::env::var(var).ok();
+        std::env::remove_var(var);
+        assert_eq!(crosstalk_guard_mode(&parse_transcribe(&["--diarize"]).unwrap()).unwrap(), M::Auto);
+        assert_eq!(crosstalk_guard_mode(&parse_transcribe(&["--diarize", "--crosstalk-guard"]).unwrap()).unwrap(), M::On);
+        assert_eq!(crosstalk_guard_mode(&parse_transcribe(&["--diarize", "--no-crosstalk-guard"]).unwrap()).unwrap(), M::Off);
+        let plain = parse_transcribe(&["--diarize"]).unwrap();
+        for (value, mode) in [("on", M::On), ("off", M::Off), ("auto", M::Auto)] {
+            std::env::set_var(var, value);
+            assert_eq!(crosstalk_guard_mode(&plain).unwrap(), mode, "{value}");
+        }
+        std::env::set_var(var, "on");
+        assert_eq!(crosstalk_guard_mode(&parse_transcribe(&["--diarize", "--no-crosstalk-guard"]).unwrap()).unwrap(), M::Off, "flag wins");
+        std::env::set_var(var, "bogus");
+        assert!(crosstalk_guard_mode(&plain).is_err());
+        match prior {
+            Some(v) => std::env::set_var(var, v),
+            None => std::env::remove_var(var),
+        }
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn two_track_detection_uses_marker_with_explicit_override() {
+        use crate::transcribe::use_two_track;
+        let dir = tempfile::tempdir().unwrap();
+        let marked = dir.path().join("marked.wav");
+        sagascript_core::audio::twotrack::write_two_track_wav(&marked, &[0.1; 800], &[0.1; 800]).unwrap();
+        // The same samples as an ordinary stereo WAV: strip the marker chunk.
+        let plain = dir.path().join("plain.wav");
+        let bytes = std::fs::read(&marked).unwrap();
+        let list = bytes.windows(4).position(|w| w == b"LIST").unwrap();
+        let list_len = 8 + u32::from_le_bytes(bytes[list + 4..list + 8].try_into().unwrap()) as usize;
+        let mut bare = bytes[..list].to_vec();
+        bare.extend_from_slice(&bytes[list + list_len..]);
+        let riff = (bare.len() - 8) as u32;
+        bare[4..8].copy_from_slice(&riff.to_le_bytes());
+        std::fs::write(&plain, &bare).unwrap();
+
+        let args = |extra: &[&str], file: &std::path::Path| {
+            let mut a = vec!["--diarize"];
+            a.extend_from_slice(extra);
+            let mut parsed = parse_transcribe(&a).unwrap();
+            parsed.files = vec![file.to_path_buf()];
+            parsed
+        };
+        assert!(use_two_track(&args(&[], &marked), &marked).unwrap(), "marker detected");
+        assert!(!use_two_track(&args(&[], &plain), &plain).unwrap(), "plain stereo keeps downmix");
+        assert!(use_two_track(&args(&["--two-track"], &plain), &plain).unwrap(), "forced");
+        assert!(!use_two_track(&args(&["--no-two-track"], &marked), &marked).unwrap(), "disabled");
+        // Not a WAV at all: not two-track unless forced (the decoder reports the problem).
+        let text = dir.path().join("x.m4a");
+        std::fs::write(&text, b"junk").unwrap();
+        assert!(!use_two_track(&args(&[], &text), &text).unwrap());
+    }
+
     #[test]
     fn parse_transcribe_batch_flags_and_inputs() {
         let cli = Cli::try_parse_from([

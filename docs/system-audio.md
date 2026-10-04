@@ -22,9 +22,9 @@ sagascript doctor [--json]      # read-only: support + permission state
 valid with `system` or `both`. Without `--output`, `record` transcribes (for
 `both`: a mono mix of the aligned tracks). With `--output`, `mic` and `system`
 write a mono 16 kHz WAV and `both` writes the two-track file below.
-`sagascript transcribe` and the meeting workflow accept the two-track file
-unchanged (decoders downmix to mono); splitting the channels for "me vs. others"
-diarization is phase 2 (`read_two_track_wav` already exists for it).
+Plain `sagascript transcribe` accepts the two-track file unchanged (decoders
+downmix to mono). With `--diarize` / `--meeting-json` the channels are split into
+"Me" and the other participants, see "Me versus the others".
 
 ## macOS
 
@@ -168,8 +168,27 @@ correlate with the system track before diarization.
 Single stereo WAV, 16 kHz, 16-bit PCM: **left = microphone ("me"), right = system
 audio ("the others")**. Rationale over two files plus a manifest: one artefact to
 move, play, and pass to `transcribe`/`meeting`; any decoder downmixes it; the
-channel convention is documented and identified by the user choosing `both`. WAV
+channel convention is documented and marked in the file (below). WAV
 is capped at 4 GiB (about 34 hours at this rate), which the writer enforces.
+
+**Marker.** The recorder writes a standard RIFF `LIST`/`INFO` chunk between `fmt `
+and `data`, carrying `ISFT` (`Sagascript <version>`) and an `ICMT` comment
+`sagascript-two-track/1 left=microphone right=system recorder=<version>`.
+`LIST/INFO` is the chunk ffmpeg and most taggers write; players and decoders skip
+it, and the existing reader walks chunks, so the file stays playable and readable.
+The marker must precede `data` so it is found by reading the first KiB only. Only
+two-channel files written by `record --source both` carry it; mono outputs do not.
+Files written before this change have no marker: pass `--two-track` once.
+
+**Detection.** `transcribe --diarize` / `--meeting-json` treat a file as two-track
+when it carries a valid marker (layout version 1, left = microphone, right =
+system). Override: `--two-track` forces the split for a stereo WAV without a marker
+(16 kHz 16-bit PCM; anything else is an error), `--no-two-track` forces the old
+downmix even for a marked file. Both require `--diarize`, and are mutually
+exclusive. A paired on/off flag follows the existing `--vad` / `--no-vad`
+convention, keeps the common case (a file from `record`) flag-free, and is clearer
+than a `--channels mic,system` mini-language that has only one valid value.
+An ordinary stereo file without marker behaves exactly as before.
 
 ## Files, cleanup, privacy
 
@@ -240,3 +259,180 @@ cargo test -p sagascript-core --features record recorder_live -- --ignored --noc
 ```
 
 The full owner test plan is in the phase-1 PR description.
+
+## Me versus the others (two-track diarization, epic #299 phase 2)
+
+For a two-track file `transcribe --diarize` (and `--meeting-json`, and meeting
+reprocessing, which calls the same pipeline) does this instead of diarizing the
+downmix:
+
+1. Read both channels (they share one clock; padding at record time aligned them).
+2. **System channel:** the unchanged diarization pipeline (default threshold, same
+   options) plus Whisper word timestamps gives the other participants, labelled
+   `SPEAKER_0`, `SPEAKER_1`, ...
+3. **Microphone channel:** one fixed speaker, **`Me`**. Only the pyannote
+   voice-activity part runs (all tracks collapsed, no embeddings, no clustering);
+   Whisper transcribes the channel and keeps pieces that lie at least half inside
+   microphone speech activity (drops hallucinations on quiet stretches).
+4. Both timelines are merged ordered by start time (ties: `Me` first). Timestamps
+   are the original file's, no offsets. The two channels are transcribed in
+   separate passes, so it costs about two Whisper passes plus one segmentation.
+
+Output (additive, absent for ordinary files): the meeting JSON gets a top-level
+`"local_speaker": "Me"` (a speaker id; `Me` is always listed under `speakers`) and
+`"crosstalk_guard": {"mode": "auto|on|off", "applied": true|false}`; the legacy
+`--diarize --json` output gets both too. Plain/markdown/
+SRT/VTT exports and `transcribe` text show the label `Me`; renaming the speaker
+keeps `local_speaker` (it is an id), merging the local speaker into another keeps
+the field on the merge target. Old readers that reject unknown fields reject only
+files that have the field. Reprocessing: full recomputation works; selective
+(`recluster`/`rediarize`) is refused for marked files because it works from a
+downmix cache. `--diarize-cache` is neither read nor written for two-track input.
+
+### Crosstalk (no headphones)
+
+**Record with headphones for the best result.** Without them the microphone also
+hears the remote participants, which can attribute other participants' speech to
+"Me". A crosstalk guard handles this, in three modes:
+
+- **auto (default):** run the echo check below on the microphone activity; if more
+  than 3 s and more than a tenth of it looks like system audio, apply the guard and
+  print one line (echo detected, guard applied, headphones give the best result,
+  `--no-crosstalk-guard` disables it). With headphones nothing is flagged and nothing
+  changes.
+- **on** (`--crosstalk-guard`): always apply the guard.
+- **off** (`--no-crosstalk-guard`): never apply it.
+
+`SAGASCRIPT_TWO_TRACK_CROSSTALK_GUARD=on|off|auto` sets the mode when no flag is given.
+The flags require `--diarize`, exclude each other and `--no-two-track`. The meeting
+JSON records `"crosstalk_guard": {"mode": ..., "applied": ...}`; reprocessing repeats
+the recorded mode and the plan identity binds it. Real echo cancellation (using the
+system channel as a waveform reference) is follow-up work, #309.
+
+The echo check and guard: every microphone speech interval is cut into windows of
+about a second. In each window the loudness envelopes (20 ms RMS) of the microphone
+(fixed window) and the system channel (reference shifted by the acoustic delay,
++/-300 ms) are compared. A window is flagged when the envelope correlation is at
+least 0.8 (best of 31 delays inflates chance correlation between unrelated speech,
+so the bar is high) and the fitted system envelope leaves at most half of the
+microphone energy unexplained. Windows shorter than 0.5 s, windows without a valid
+aligned system reference (channel edges), and windows where the system is silent
+are never judged and are kept; when the guard is applied only flagged windows are
+removed.
+
+**Known limitation (equal-energy double-talk).** The test works on envelopes, not
+waveforms. When independent local speech carries about as much energy as the echo (a
+worked counterexample is a regression test,
+`equal_energy_double_talk_is_a_known_limitation`), the window still looks like pure
+echo and **the user's own words are deleted** when the guard is applied. Use
+`--no-crosstalk-guard` if you speak over the remote side a lot.
+
+Measured on the synthetic set below (code at this head, default `auto` mode). The echo
+check is silent on every clean (headphones) case (0 s flagged of 77-192 s of microphone
+activity) and fires on every leak and double-talk case (128-283 s flagged of 322-378 s),
+so `auto` applied the guard exactly there; `auto` and forced `on` give identical output
+(checked on the tiny model), and forced `off` shows what the guard prevents. On the
+leak and double-talk variants the guard takes false "Me" from 37-43 % to 0-2 % and DER
+from 35-74 % to 6-23 %. In double-talk it keeps all (hc10606, 92 -> 92 %) or 94 %
+(hd10115, 93 -> 87 %) of the voice-activity-detected local speech, but those channels
+are simulated and not equal-energy. Real rooms (reverberation, far quieter
+loudspeaker, non-linear processing) correlate less, so auto may fire less or not at
+all there; only an owner-run recording can say how the thresholds behave.
+
+Two guard unit tests were loosened in round three, when the delay search was
+changed to keep the microphone window fixed (and the threshold raised from 0.6 to
+0.8): the simulated user's voice gain went from 0.1 to 0.4 (about 20 dB above the
+echo, a user close to the microphone), because at 0.1 two unrelated synthetic
+envelopes happened to correlate above the bar over a 1 s window; and the
+"pure echo is removed" bound went from under 0.5 s kept to at most 1.0 s kept of
+7 s, because the first window of the file has no negative-delay reference and sits
+on the burst onset. Both are limits of the simulation and of envelope matching,
+not new capability.
+
+### Offline evaluation
+
+Nothing was recorded. `scripts/two_track_eval/build_synthetic.py` builds a two-track
+WAV from a mono Riksdag interpellation (sv2 set, RTTM references): one reference
+speaker's turns go to the left channel (silence elsewhere), everything else to the
+right. Variants: `clean`; `leak15` (the right channel is added to the left at -15 dB,
+delayed 40 ms, low-passed: no headphones); `dt15` (leak plus unreferenced remote
+speech playing while the user talks: double-talk). `eval_two_track.py` scores
+`transcribe --diarize --meeting-json` on the two-track path against the downmix
+baseline (`--no-two-track`): frame-based DER (10 ms, 0.25 s collar, optimal speaker
+mapping, scored inside reference speech), and for "Me" the share of the user's
+reference speech labelled Me, the share of the others' speech wrongly labelled Me,
+and **words**: agreement of the Me text with a proxy transcript produced by the same
+model on a mono file of the user's turns only (word recall by LCS, and WER against
+the proxy). This measures consistency with what that model hears in clean speech,
+**not absolute word accuracy**: there is no human reference, and errors the model
+makes in both runs do not show. It also reports where speech is lost (voice-activity coverage, after
+the guard, raw Whisper words vs kept words). `run_eval.sh` drives it, `summarize.py`
+prints the table; raw results are in `docs/benchmarks/data/two-track/results.json`.
+First 420 s of IP_hc10606 (2 speakers) and IP_hd10115 (3), "me" = Jessica Roden (S),
+default diarization threshold, models `kb-whisper-tiny` and the larger installed
+`kb-whisper-small`:
+
+| Case | Pipeline | DER % | Conf % | Miss % | FA % | Me speech recall % | False Me % | Me word recall / WER % | VAD / after-guard coverage % | words ref / raw / kept |
+|---|---|---|---|---|---|---|---|---|---|---|
+| kb-whisper-small.IP_hc10606.clean guard=auto (applied=False, echo 0s of 192s) | two-track | 5.2 | 0.6 | 3.3 | 1.3 | 97 | 0 | 90 / 11 | 91 / 91 | 424 / 419 / 408 |
+| kb-whisper-small.IP_hc10606.clean guard=auto | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hc10606.dt15 guard=auto (applied=True, echo 129s of 324s) | two-track | 22.8 | 6.4 | 4.7 | 11.7 | 86 | 0 | 88 / 21 | 92 / 92 | 424 / 449 / 433 |
+| kb-whisper-small.IP_hc10606.dt15 guard=auto | downmix | 34.6 | 34.5 | 0.1 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hc10606.dt15 guard=off (applied=False, echo 129s of 324s) | two-track | 51.6 | 10.1 | 18.8 | 22.6 | 86 | 43 | 88 / 85 | 92 / 92 | 424 / 729 / 710 |
+| kb-whisper-small.IP_hc10606.leak15 guard=auto (applied=True, echo 128s of 322s) | two-track | 6.3 | 0.6 | 4.3 | 1.3 | 96 | 0 | 89 / 18 | 91 / 91 | 424 / 440 / 427 |
+| kb-whisper-small.IP_hc10606.leak15 guard=auto | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hc10606.leak15 guard=off (applied=False, echo 128s of 322s) | two-track | 35.0 | 4.3 | 18.5 | 12.2 | 96 | 42 | 89 / 83 | 91 / 91 | 424 / 720 / 703 |
+| kb-whisper-small.IP_hd10115.clean guard=auto (applied=False, echo 0s of 77s) | two-track | 2.9 | 0.0 | 2.9 | 0.0 | 90 | 0 | 89 / 14 | 81 / 81 | 181 / 181 / 170 |
+| kb-whisper-small.IP_hd10115.clean guard=auto | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hd10115.dt15 guard=auto (applied=True, echo 283s of 378s) | two-track | 14.6 | 4.5 | 4.3 | 5.8 | 73 | 2 | 90 / 29 | 93 / 87 | 181 / 232 / 199 |
+| kb-whisper-small.IP_hd10115.dt15 guard=auto | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hd10115.dt15 guard=off (applied=False, echo 283s of 378s) | two-track | 74.1 | 11.2 | 37.6 | 25.3 | 71 | 37 | 92 / 317 | 93 / 93 | 181 / 757 / 733 |
+| kb-whisper-small.IP_hd10115.leak15 guard=auto (applied=True, echo 277s of 367s) | two-track | 6.4 | 0.4 | 4.8 | 1.2 | 90 | 2 | 89 / 28 | 81 / 81 | 181 / 225 / 194 |
+| kb-whisper-small.IP_hd10115.leak15 guard=auto | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-small.IP_hd10115.leak15 guard=off (applied=False, echo 277s of 367s) | two-track | 63.4 | 6.6 | 35.4 | 21.4 | 99 | 37 | 89 / 324 | 81 / 81 | 181 / 762 / 732 |
+| kb-whisper-tiny.IP_hc10606.clean guard=auto (applied=False, echo 0s of 192s) | two-track | 9.2 | 0.0 | 8.0 | 1.2 | 92 | 0 | 70 / 34 | 91 / 91 | 454 / 368 / 361 |
+| kb-whisper-tiny.IP_hc10606.clean guard=auto | downmix | 34.9 | 34.5 | 0.4 | 0.0 | 99 | 100 |  | | |
+| kb-whisper-tiny.IP_hc10606.dt15 guard=auto (applied=True, echo 129s of 324s) | two-track | 19.7 | 4.8 | 8.8 | 6.2 | 85 | 1 | 76 / 32 | 92 / 92 | 454 / 447 / 427 |
+| kb-whisper-tiny.IP_hc10606.dt15 guard=auto | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hc10606.dt15 guard=off (applied=False, echo 129s of 324s) | two-track | 40.8 | 12.5 | 15.2 | 13.1 | 86 | 43 | 76 / 99 | 92 / 92 | 454 / 755 / 734 |
+| kb-whisper-tiny.IP_hc10606.dt15 guard=on (applied=True, echo 129s of 324s) | two-track | 19.7 | 4.8 | 8.8 | 6.2 | 85 | 1 | 76 / 32 | 92 / 92 | 454 / 447 / 427 |
+| kb-whisper-tiny.IP_hc10606.leak15 guard=auto (applied=True, echo 128s of 322s) | two-track | 15.4 | 6.8 | 7.7 | 0.9 | 83 | 1 | 64 / 40 | 91 / 91 | 454 / 385 / 368 |
+| kb-whisper-tiny.IP_hc10606.leak15 guard=auto | downmix | 34.5 | 34.5 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hc10606.leak15 guard=off (applied=False, echo 128s of 322s) | two-track | 37.7 | 14.8 | 15.7 | 7.1 | 83 | 42 | 64 / 107 | 91 / 91 | 454 / 693 / 674 |
+| kb-whisper-tiny.IP_hc10606.leak15 guard=on (applied=True, echo 128s of 322s) | two-track | 15.4 | 6.8 | 7.7 | 0.9 | 83 | 1 | 64 / 40 | 91 / 91 | 454 / 385 / 368 |
+| kb-whisper-tiny.IP_hd10115.clean guard=auto (applied=False, echo 0s of 77s) | two-track | 8.4 | 2.6 | 5.8 | 0.0 | 65 | 0 | 73 / 43 | 81 / 81 | 174 / 196 / 186 |
+| kb-whisper-tiny.IP_hd10115.clean guard=auto | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hd10115.dt15 guard=auto (applied=True, echo 283s of 378s) | two-track | 15.8 | 5.3 | 4.7 | 5.8 | 69 | 1 | 91 / 30 | 93 / 87 | 174 / 224 / 198 |
+| kb-whisper-tiny.IP_hd10115.dt15 guard=auto | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hd10115.dt15 guard=off (applied=False, echo 283s of 378s) | two-track | 64.7 | 19.5 | 26.0 | 19.2 | 67 | 38 | 92 / 347 | 93 / 93 | 174 / 777 / 755 |
+| kb-whisper-tiny.IP_hd10115.dt15 guard=on (applied=True, echo 283s of 378s) | two-track | 15.8 | 5.3 | 4.7 | 5.8 | 69 | 1 | 91 / 30 | 93 / 87 | 174 / 224 / 198 |
+| kb-whisper-tiny.IP_hd10115.leak15 guard=auto (applied=True, echo 277s of 367s) | two-track | 11.7 | 2.9 | 8.0 | 0.8 | 65 | 1 | 73 / 59 | 81 / 81 | 174 / 242 / 213 |
+| kb-whisper-tiny.IP_hd10115.leak15 guard=auto | downmix | 24.1 | 24.1 | 0.0 | 0.0 | 100 | 100 |  | | |
+| kb-whisper-tiny.IP_hd10115.leak15 guard=off (applied=False, echo 277s of 367s) | two-track | 60.8 | 15.1 | 30.4 | 15.3 | 67 | 38 | 72 / 406 | 81 / 81 | 174 / 845 / 818 |
+| kb-whisper-tiny.IP_hd10115.leak15 guard=on (applied=True, echo 277s of 367s) | two-track | 11.7 | 2.9 | 8.0 | 0.8 | 65 | 1 | 73 / 59 | 81 / 81 | 174 / 242 / 213 |
+
+Fix round (microphone words, Whisper over the whole channel -> Whisper only inside padded
+voice-activity regions, zero-duration words kept): on the tiny model "Me" speech
+recall on the clean files went from 85 / 41 % to 92 / 65 %, and DER from 13.1 / 14.7 %
+to 9.2 / 8.4 %. Part of the earlier loss was a bug: single-token words have
+`start == end` and were always dropped by the activity filter. (Old table: first
+version of this section in the git history.)
+
+Reading (every number above is from the code at this head; guard=auto is the default, guard=on is `--crosstalk-guard`, guard=off is `--no-crosstalk-guard`; the parenthesis shows whether the guard was applied and the echo seconds the check flagged):
+- The downmix baseline collapses every speaker into one cluster (the known #284 behaviour
+  at this build's threshold): confusion 24-35 %, and its "me" columns are degenerate
+  (everything is "me").
+- Two-track removes that confusion; with the larger model the clean cases reach DER 2.9 and
+  5.2 %. Word agreement with the proxy (same model, clean me-only audio) is about 90 %
+  (WER 11-14 %) for the small model and 70-73 % (WER 34-43 %) for the tiny model on the
+  clean files; this says how well the two-track path reproduces the model's own
+  clean-speech transcript, not how correct the words are.
+- Voice-activity coverage is 91 % (hc10606) and 81 % (hd10115) of the user's reference
+  speech, so the segmenter, not Whisper, is the largest remaining loss on hd10115.
+- Without headphones (leak15, dt15) and without the guard, leaked remote speech is labelled
+  "Me": false Me 37-43 %, raw Me words 1.5-5x the proxy, DER 35-74 %. With the guard (auto
+  applied it on all of those cases) false Me is 0-2 % and DER 6-23 %. In double-talk the unreferenced remote speech counts as
+  false alarm in both settings.
+Caveats: synthetic channels (perfect separation, a linear leak), proxy word references (no
+human transcript), two files of 7 minutes, the speaker count of the system channel comes
+from this build's diarization default.
