@@ -174,10 +174,10 @@ pub async fn download_to_path_with_limits(
     }
 
     let tmp_path = unique_tmp_path(dest, tmp_ext);
-    // Removes the temp file on any early exit: error, cancellation or panic.
-    let mut guard = TmpFileGuard::new(tmp_path.clone());
-
-    fetch_to_tmp(
+    // The guard is created together with the file (inside the blocking
+    // creation task), so it removes the file on error, cancellation, panic, or
+    // an abandoned creation; it is kept through the rename below.
+    let mut guard = fetch_to_tmp(
         url,
         &tmp_path,
         integrity,
@@ -253,7 +253,7 @@ async fn fetch_to_tmp(
     expected_magic: Option<&[u8]>,
     limits: DownloadLimits,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
-) -> Result<(), DictationError> {
+) -> Result<TmpFileGuard, DictationError> {
     let deadline = tokio::time::Instant::now() + limits.total_deadline(integrity.size);
     match tokio::time::timeout_at(
         deadline,
@@ -284,7 +284,7 @@ async fn fetch_inner(
     // Called synchronously after every chunk; it must be cheap and
     // non-blocking, since it holds up the transfer (and cannot be pre-empted).
     progress_callback: impl Fn(u64, u64) + Send + 'static,
-) -> Result<(), DictationError> {
+) -> Result<TmpFileGuard, DictationError> {
     let expired = || tokio::time::Instant::now() >= deadline;
     let idle_err = || {
         DictationError::ModelDownloadFailed(format!(
@@ -314,6 +314,12 @@ async fn fetch_inner(
         if !response.status().is_redirection() {
             break response;
         }
+        if !is_followed_redirect(response.status()) {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "Unsupported redirect status {} from {current}",
+                response.status()
+            )));
+        }
         let Some(location) = response
             .headers()
             .get(reqwest::header::LOCATION)
@@ -327,9 +333,8 @@ async fn fetch_inner(
                 "Too many redirects (more than {MAX_REDIRECTS})"
             )));
         }
-        current = response.url().join(location).map_err(|e| {
-            DictationError::ModelDownloadFailed(format!("Invalid redirect target: {e}"))
-        })?;
+        current = redirect_target(&current, location)
+            .map_err(DictationError::ModelDownloadFailed)?;
     };
 
     if !response.status().is_success() {
@@ -353,9 +358,18 @@ async fn fetch_inner(
     let mut prefix: Vec<u8> = Vec::with_capacity(MAGIC_PREFIX_LEN);
     let mut hasher = Sha256::new();
 
-    let mut file = tokio::fs::File::create(tmp_path).await.map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to create temp file: {e}"))
-    })?;
+    // Create the file and its cleanup guard together on the blocking pool. If
+    // this future is cancelled while creation is queued, the abandoned result
+    // (guard included) is dropped once creation finishes and removes the file.
+    let create_path = tmp_path.to_path_buf();
+    let (std_file, guard) = tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::create(&create_path)?;
+        Ok::<_, std::io::Error>((file, TmpFileGuard::new(create_path)))
+    })
+    .await
+    .map_err(|e| DictationError::ModelDownloadFailed(format!("Temp file task failed: {e}")))?
+    .map_err(|e| DictationError::ModelDownloadFailed(format!("Failed to create temp file: {e}")))?;
+    let mut file = tokio::fs::File::from_std(std_file);
 
     let mut stream = response.bytes_stream();
     loop {
@@ -408,7 +422,30 @@ async fn fetch_inner(
     )
     .map_err(DictationError::ModelDownloadFailed)?;
 
-    Ok(())
+    Ok(guard)
+}
+
+/// Only these statuses are followed; any other 3xx is an error.
+fn is_followed_redirect(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
+}
+
+/// Resolve a redirect `Location` against the current URL, refusing an
+/// HTTPS-to-HTTP downgrade (pinned model URLs are HTTPS; a downgrade would
+/// expose which models are downloaded).
+fn redirect_target(current: &reqwest::Url, location: &str) -> Result<reqwest::Url, String> {
+    let next = current
+        .join(location)
+        .map_err(|e| format!("Invalid redirect target: {e}"))?;
+    if current.scheme() == "https" && next.scheme() != "https" {
+        return Err(format!(
+            "Refusing HTTPS-to-{} redirect downgrade from {} to {}",
+            next.scheme().to_uppercase(),
+            current.host_str().unwrap_or("?"),
+            next.host_str().unwrap_or("?")
+        ));
+    }
+    Ok(next)
 }
 
 /// Pure validation of a completed-but-not-yet-renamed download. Kept free of
@@ -1408,24 +1445,11 @@ mod tests {
     }
 
     fn serve_once(body: &'static [u8]) -> String {
-        use std::io::{Read as _, Write as _};
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 1024];
-            let _ = stream.read(&mut request);
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .unwrap();
-            stream.write_all(body).unwrap();
-        });
-        format!("http://{address}/model.bin")
+        let (url, _handle) = serve_scripts(vec![vec![
+            ok_head(Some(body.len())),
+            Step::Write(body.to_vec()),
+        ]]);
+        url
     }
 
     #[tokio::test]
@@ -2004,6 +2028,101 @@ mod tests {
         assert_empty(&dir, "panicking callback left a partial file");
         join_server(server).await;
         let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[test]
+    fn redirect_downgrade_is_refused_and_https_upgrade_allowed() {
+        let https = reqwest::Url::parse("https://huggingface.co/a/model.bin").unwrap();
+        let err = redirect_target(&https, "http://cdn.example/model.bin").unwrap_err();
+        assert!(err.contains("downgrade") && err.contains("cdn.example"), "{err}");
+        assert_eq!(
+            redirect_target(&https, "/other").unwrap().as_str(),
+            "https://huggingface.co/other"
+        );
+        let http = reqwest::Url::parse("http://127.0.0.1:1/a").unwrap();
+        assert!(redirect_target(&http, "https://cdn.example/x").is_ok());
+    }
+
+    #[test]
+    fn only_standard_redirect_statuses_are_followed() {
+        for ok in [301, 302, 303, 307, 308] {
+            assert!(is_followed_redirect(reqwest::StatusCode::from_u16(ok).unwrap()));
+        }
+        for bad in [300, 304, 305, 306, 310] {
+            assert!(!is_followed_redirect(reqwest::StatusCode::from_u16(bad).unwrap()));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unsupported_redirect_status_is_an_error() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let multiple = Step::Write(
+                b"HTTP/1.1 300 Multiple Choices\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_vec(),
+            );
+            let (r, _, dir, _) = run_scripts(vec![vec![multiple]], 14, fast_limits()).await;
+            let err = r.unwrap_err().to_string();
+            assert!(err.contains("Unsupported redirect status 300"), "{err}");
+            assert_empty(&dir, "unsupported redirect left a file");
+            let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redirected_response_failing_integrity_leaves_no_file() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            // Right length, wrong SHA-256.
+            let (r, _, dir, _) = run_scripts(
+                vec![
+                    vec![redirect_head()],
+                    vec![ok_head(Some(14)), Step::Write(b"tampered model".to_vec())],
+                ],
+                14,
+                fast_limits(),
+            )
+            .await;
+            assert!(r.is_err());
+            assert!(!dir.join("model.bin").exists());
+            assert_empty(&dir, "integrity failure left a file");
+            let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_while_file_creation_is_queued_leaves_no_file() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            // Saturate the blocking pool is impractical; instead cancel right
+            // after the response arrives, racing creation. Whatever the
+            // interleaving, no file may remain once creation has settled.
+            for _ in 0..20 {
+                let dir = temp_test_dir();
+                std::fs::create_dir_all(&dir).unwrap();
+                let (url, server) = serve_scripts(vec![vec![
+                    ok_head(Some(14)),
+                    Step::Sleep(Duration::from_millis(300)),
+                ]]);
+                let path = dir.join("model.bin");
+                let task = tokio::spawn(async move {
+                    download_to_path_with_limits(
+                        &url, &path, "bin", pinned(14), None, limits(5000, 20_000), |_, _| {},
+                    )
+                    .await
+                });
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                task.abort();
+                let _ = task.await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert_empty(&dir, "cancelled download left a file");
+                join_server(server).await;
+                let _ = std::fs::remove_dir_all(dir);
+            }
         })
         .await
         .expect("test exceeded its hard timeout");
