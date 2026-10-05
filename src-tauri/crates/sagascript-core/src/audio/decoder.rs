@@ -1455,8 +1455,8 @@ mod tests {
     }
 
     /// Hashes of the output of main's (08d0a0c) unmodified decode+resample
-    /// pipeline, frozen so resampler compatibility with main stays pinned
-    /// independently of the current resampler.
+    /// pipeline (macOS aarch64), frozen so resampler compatibility with main
+    /// stays pinned independently of the current resampler.
     #[test]
     fn decode_output_matches_frozen_hashes_from_main() {
         fn fnv(v: &[f32]) -> u64 {
@@ -1479,7 +1479,13 @@ mod tests {
             let path = dir.join(format!("frozen_{rate}.wav"));
             std::fs::write(&path, pcm_wav(rate, ch, bits, float, frames)).unwrap();
             let got = decode_audio_file(&path).unwrap();
-            assert_eq!((got.len(), fnv(&got)), (len, hash), "{rate} Hz {ch} ch {bits}-bit");
+            assert_eq!(got.len(), len, "{rate} Hz {ch} ch {bits}-bit");
+            // Float results (libm sin in the fixture, sinc resampler) differ
+            // bit-for-bit across platforms, so the hashes were frozen on, and
+            // are only asserted for, macOS aarch64.
+            if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                assert_eq!(fnv(&got), hash, "{rate} Hz {ch} ch {bits}-bit");
+            }
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
