@@ -59,6 +59,45 @@ const MAGIC_PREFIX_LEN: usize = 8;
 /// long, so this is generous on purpose.
 const ORPHAN_TMP_MAX_AGE: Duration = Duration::from_secs(60 * 60);
 
+/// Network bounds for one download. Defaults are sized for multi-GB models on
+/// slow lines; tests inject tiny values.
+///
+/// - `connect_timeout` (30 s): TCP/TLS connect must finish quickly.
+/// - `idle_timeout` (60 s): no body bytes (and no response headers) for this
+///   long aborts the transfer, so a stalled server cannot hold it open.
+/// - total deadline: `total_base` (5 min) plus the pinned size divided by
+///   `min_bytes_per_sec` (128 KiB/s). This scales with the manifest size, so a
+///   multi-GB download on a slow but moving line is allowed to finish, while a
+///   server trickling bytes below the floor still gets bounded (about 6.8 h
+///   for a 3 GB model). The guarantee is a minimum *average* rate of
+///   `min_bytes_per_sec` plus `total_base`, not that arbitrarily slow
+///   downloads always finish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DownloadLimits {
+    pub connect_timeout: Duration,
+    pub idle_timeout: Duration,
+    pub total_base: Duration,
+    pub min_bytes_per_sec: u64,
+}
+
+impl Default for DownloadLimits {
+    fn default() -> Self {
+        Self {
+            connect_timeout: Duration::from_secs(30),
+            idle_timeout: Duration::from_secs(60),
+            total_base: Duration::from_secs(5 * 60),
+            min_bytes_per_sec: 128 * 1024,
+        }
+    }
+}
+
+impl DownloadLimits {
+    /// Overall wall-clock deadline for an artifact of `size` bytes.
+    pub fn total_deadline(&self, size: u64) -> Duration {
+        self.total_base + Duration::from_secs(size / self.min_bytes_per_sec.max(1))
+    }
+}
+
 /// Immutable integrity metadata for a downloadable model artifact. Values are
 /// taken from the pinned Hugging Face revision's git-LFS metadata (`oid
 /// sha256` and `size`), not from a mutable branch or a locally computed guess.
@@ -105,6 +144,28 @@ pub async fn download_to_path(
     expected_magic: Option<&[u8]>,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
 ) -> Result<(), DictationError> {
+    download_to_path_with_limits(
+        url,
+        dest,
+        tmp_ext,
+        integrity,
+        expected_magic,
+        DownloadLimits::default(),
+        progress_callback,
+    )
+    .await
+}
+
+/// [`download_to_path`] with explicit network bounds.
+pub async fn download_to_path_with_limits(
+    url: &str,
+    dest: &Path,
+    tmp_ext: &str,
+    integrity: DownloadIntegrity,
+    expected_magic: Option<&[u8]>,
+    limits: DownloadLimits,
+    progress_callback: impl Fn(u64, u64) + Send + 'static,
+) -> Result<(), DictationError> {
     if let Some(dir) = dest.parent() {
         std::fs::create_dir_all(dir).map_err(|e| {
             DictationError::ModelDownloadFailed(format!("Failed to create models directory: {e}"))
@@ -113,24 +174,25 @@ pub async fn download_to_path(
     }
 
     let tmp_path = unique_tmp_path(dest, tmp_ext);
+    // The guard is created together with the file (inside the blocking
+    // creation task), so it removes the file on error, cancellation, panic, or
+    // an abandoned creation; it is kept through the rename below.
+    let mut guard = fetch_to_tmp(
+        url,
+        &tmp_path,
+        integrity,
+        expected_magic,
+        limits,
+        progress_callback,
+    )
+    .await?;
 
-    if let Err(e) =
-        fetch_to_tmp(url, &tmp_path, integrity, expected_magic, progress_callback).await
-    {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return Err(e);
-    }
-
-    if let Err(e) = tokio::fs::rename(&tmp_path, dest).await {
-        // The download itself succeeded and was already validated — only the
-        // final move failed (e.g. a cross-device rename). Clean up rather
-        // than leave a uniquely-named temp file that nothing will ever look
-        // for again.
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return Err(DictationError::ModelDownloadFailed(format!(
-            "Failed to rename temp file: {e}"
-        )));
-    }
+    // The download itself was already validated; if only the final move fails
+    // (e.g. a cross-device rename) the guard still removes the temp file.
+    tokio::fs::rename(&tmp_path, dest).await.map_err(|e| {
+        DictationError::ModelDownloadFailed(format!("Failed to rename temp file: {e}"))
+    })?;
+    guard.disarm();
 
     // The streamed bytes were verified immediately above. Cache that result
     // against the installed file's filesystem fingerprint so normal model
@@ -142,22 +204,138 @@ pub async fn download_to_path(
     Ok(())
 }
 
-/// Do the actual network fetch + stream-to-file + validate, in one `Result`
-/// so `download_to_path` can clean up the temp file with a single arm
-/// instead of repeating `let _ = remove_file(...).await;` after every `?`.
+/// Maximum number of HTTP redirects followed (matches reqwest's default).
+const MAX_REDIRECTS: usize = 10;
+
+/// Owns the temporary download file: removes it on drop (error return,
+/// cancellation of the future, or panic unwinding) unless disarmed after a
+/// successful rename. Removal is a synchronous best-effort `remove_file`; on
+/// Unix an in-flight blocking write to the unlinked inode is harmless.
+struct TmpFileGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TmpFileGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TmpFileGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn total_err(limits: DownloadLimits, size: u64) -> DictationError {
+    DictationError::ModelDownloadFailed(format!(
+        "Download exceeded the total time limit ({}s) for a {size}-byte model",
+        limits.total_deadline(size).as_secs(),
+    ))
+}
+
+/// Do the actual network fetch + stream-to-file + validate. The temp file is
+/// cleaned up by the caller's [`TmpFileGuard`]. The total deadline wraps every
+/// asynchronous step (headers, redirects, body, writes, flush) and is also
+/// checked explicitly between chunks and before validation, because the
+/// synchronous progress callback and hashing cannot be pre-empted.
 async fn fetch_to_tmp(
     url: &str,
     tmp_path: &Path,
     integrity: DownloadIntegrity,
     expected_magic: Option<&[u8]>,
+    limits: DownloadLimits,
     progress_callback: impl Fn(u64, u64) + Send + 'static,
-) -> Result<(), DictationError> {
-    let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| DictationError::ModelDownloadFailed(format!("Download failed: {e}")))?;
+) -> Result<TmpFileGuard, DictationError> {
+    let deadline = tokio::time::Instant::now() + limits.total_deadline(integrity.size);
+    match tokio::time::timeout_at(
+        deadline,
+        fetch_inner(
+            url,
+            tmp_path,
+            integrity,
+            expected_magic,
+            limits,
+            deadline,
+            progress_callback,
+        ),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(total_err(limits, integrity.size)),
+    }
+}
+
+async fn fetch_inner(
+    url: &str,
+    tmp_path: &Path,
+    integrity: DownloadIntegrity,
+    expected_magic: Option<&[u8]>,
+    limits: DownloadLimits,
+    deadline: tokio::time::Instant,
+    // Called synchronously after every chunk; it must be cheap and
+    // non-blocking, since it holds up the transfer (and cannot be pre-empted).
+    progress_callback: impl Fn(u64, u64) + Send + 'static,
+) -> Result<TmpFileGuard, DictationError> {
+    let expired = || tokio::time::Instant::now() >= deadline;
+    let idle_err = || {
+        DictationError::ModelDownloadFailed(format!(
+            "Download stalled: no data received for {}s",
+            limits.idle_timeout.as_secs()
+        ))
+    };
+    let failed =
+        |e: reqwest::Error| DictationError::ModelDownloadFailed(format!("Download failed: {e}"));
+
+    // Redirects are followed manually so the header-phase idle timeout applies
+    // per hop rather than to the whole chain; the total deadline is shared.
+    let client = reqwest::Client::builder()
+        .connect_timeout(limits.connect_timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(failed)?;
+    let mut current = reqwest::Url::parse(url)
+        .map_err(|e| DictationError::ModelDownloadFailed(format!("Invalid download URL: {e}")))?;
+    let mut hops = 0;
+    let response = loop {
+        let response =
+            tokio::time::timeout(limits.idle_timeout, client.get(current.clone()).send())
+                .await
+                .map_err(|_| idle_err())?
+                .map_err(failed)?;
+        if !response.status().is_redirection() {
+            break response;
+        }
+        if !is_followed_redirect(response.status()) {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "Unsupported redirect status {} from {current}",
+                response.status()
+            )));
+        }
+        let Some(location) = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+        else {
+            break response;
+        };
+        hops += 1;
+        if hops > MAX_REDIRECTS {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "Too many redirects (more than {MAX_REDIRECTS})"
+            )));
+        }
+        current = redirect_target(&current, location)
+            .map_err(DictationError::ModelDownloadFailed)?;
+    };
 
     if !response.status().is_success() {
         return Err(DictationError::ModelDownloadFailed(format!(
@@ -167,19 +345,49 @@ async fn fetch_to_tmp(
     }
 
     let content_length = response.content_length();
+    if let Some(len) = content_length {
+        if len != integrity.size {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "Server advertised {len} bytes but the pinned manifest expects {} bytes",
+                integrity.size
+            )));
+        }
+    }
     let total_size = content_length.unwrap_or(0);
     let mut downloaded: u64 = 0;
     let mut prefix: Vec<u8> = Vec::with_capacity(MAGIC_PREFIX_LEN);
     let mut hasher = Sha256::new();
 
-    let mut file = tokio::fs::File::create(tmp_path).await.map_err(|e| {
-        DictationError::ModelDownloadFailed(format!("Failed to create temp file: {e}"))
-    })?;
+    // Create the file and its cleanup guard together on the blocking pool. If
+    // this future is cancelled while creation is queued, the abandoned result
+    // (guard included) is dropped once creation finishes and removes the file.
+    let create_path = tmp_path.to_path_buf();
+    let (std_file, guard) = tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::create(&create_path)?;
+        Ok::<_, std::io::Error>((file, TmpFileGuard::new(create_path)))
+    })
+    .await
+    .map_err(|e| DictationError::ModelDownloadFailed(format!("Temp file task failed: {e}")))?
+    .map_err(|e| DictationError::ModelDownloadFailed(format!("Failed to create temp file: {e}")))?;
+    let mut file = tokio::fs::File::from_std(std_file);
 
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| DictationError::ModelDownloadFailed(format!("Download error: {e}")))?;
+    loop {
+        let chunk = match tokio::time::timeout(limits.idle_timeout, stream.next())
+            .await
+            .map_err(|_| idle_err())?
+        {
+            None => break,
+            Some(c) => {
+                c.map_err(|e| DictationError::ModelDownloadFailed(format!("Download error: {e}")))?
+            }
+        };
+        if chunk.len() as u64 > integrity.size.saturating_sub(downloaded) {
+            return Err(DictationError::ModelDownloadFailed(format!(
+                "Download exceeds the pinned manifest size of {} bytes",
+                integrity.size
+            )));
+        }
         if prefix.len() < MAGIC_PREFIX_LEN {
             let take = (MAGIC_PREFIX_LEN - prefix.len()).min(chunk.len());
             prefix.extend_from_slice(&chunk[..take]);
@@ -190,12 +398,18 @@ async fn fetch_to_tmp(
         downloaded += chunk.len() as u64;
         hasher.update(&chunk);
         progress_callback(downloaded, total_size);
+        if expired() {
+            return Err(total_err(limits, integrity.size));
+        }
     }
 
     file.flush()
         .await
         .map_err(|e| DictationError::ModelDownloadFailed(format!("Flush error: {e}")))?;
     drop(file);
+    if expired() {
+        return Err(total_err(limits, integrity.size));
+    }
 
     let sha256 = format!("{:x}", hasher.finalize());
     validate_download(
@@ -206,9 +420,32 @@ async fn fetch_to_tmp(
         integrity,
         expected_magic,
     )
-        .map_err(DictationError::ModelDownloadFailed)?;
+    .map_err(DictationError::ModelDownloadFailed)?;
 
-    Ok(())
+    Ok(guard)
+}
+
+/// Only these statuses are followed; any other 3xx is an error.
+fn is_followed_redirect(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
+}
+
+/// Resolve a redirect `Location` against the current URL, refusing an
+/// HTTPS-to-HTTP downgrade (pinned model URLs are HTTPS; a downgrade would
+/// expose which models are downloaded).
+fn redirect_target(current: &reqwest::Url, location: &str) -> Result<reqwest::Url, String> {
+    let next = current
+        .join(location)
+        .map_err(|e| format!("Invalid redirect target: {e}"))?;
+    if current.scheme() == "https" && next.scheme() != "https" {
+        return Err(format!(
+            "Refusing HTTPS-to-{} redirect downgrade from {} to {}",
+            next.scheme().to_uppercase(),
+            current.host_str().unwrap_or("?"),
+            next.host_str().unwrap_or("?")
+        ));
+    }
+    Ok(next)
 }
 
 /// Pure validation of a completed-but-not-yet-renamed download. Kept free of
@@ -1208,24 +1445,11 @@ mod tests {
     }
 
     fn serve_once(body: &'static [u8]) -> String {
-        use std::io::{Read as _, Write as _};
-        use std::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 1024];
-            let _ = stream.read(&mut request);
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            )
-            .unwrap();
-            stream.write_all(body).unwrap();
-        });
-        format!("http://{address}/model.bin")
+        let (url, _handle) = serve_scripts(vec![vec![
+            ok_head(Some(body.len())),
+            Step::Write(body.to_vec()),
+        ]]);
+        url
     }
 
     #[tokio::test]
@@ -1288,6 +1512,627 @@ mod tests {
             "failed replacement must clean its unique temp file"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // -- bounded downloads --
+
+    const GOOD_SHA: &str = "6c736b3dfa943bf4e7c61df78d1dfcad9a3d8b56369f0559670497b19127e74d";
+
+    enum Step {
+        Write(Vec<u8>),
+        Sleep(Duration),
+    }
+
+    fn ok_head(content_length: Option<usize>) -> Step {
+        let mut head = String::from("HTTP/1.1 200 OK\r\nConnection: close\r\n");
+        if let Some(n) = content_length {
+            head.push_str(&format!("Content-Length: {n}\r\n"));
+        }
+        head.push_str("\r\n");
+        Step::Write(head.into_bytes())
+    }
+
+    fn redirect_head() -> Step {
+        Step::Write(
+            b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec(),
+        )
+    }
+
+    /// Serves one scripted connection per entry, in order. The handle yields
+    /// the server-side write errors so success-path tests can assert none.
+    fn serve_scripts(
+        scripts: Vec<Vec<Step>>,
+    ) -> (String, std::thread::JoinHandle<Vec<std::io::Error>>) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let mut errors = Vec::new();
+            listener.set_nonblocking(true).unwrap();
+            // Never wait forever for a client: give up after a fixed budget so
+            // the thread always exits on its own.
+            let give_up = std::time::Instant::now() + Duration::from_secs(8);
+            for script in scripts {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((s, _)) => break s,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            if std::time::Instant::now() > give_up {
+                                return errors;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(e) => {
+                            errors.push(e);
+                            return errors;
+                        }
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+                let mut request = [0_u8; 2048];
+                let _ = stream.read(&mut request);
+                for step in script {
+                    match step {
+                        Step::Write(bytes) => {
+                            if let Err(e) = stream.write_all(&bytes).and_then(|_| stream.flush()) {
+                                errors.push(e);
+                                break;
+                            }
+                        }
+                        Step::Sleep(d) => std::thread::sleep(d),
+                    }
+                }
+            }
+            errors
+        });
+        (format!("http://{address}/model.bin"), handle)
+    }
+
+    /// Joins a server thread without blocking the async runtime (a blocked
+    /// current-thread runtime cannot close the client socket, which can
+    /// deadlock a server mid-write). The thread also self-terminates.
+    async fn join_server(
+        server: std::thread::JoinHandle<Vec<std::io::Error>>,
+    ) -> Vec<std::io::Error> {
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            tokio::task::spawn_blocking(move || server.join().unwrap()),
+        )
+        .await
+        .expect("server thread did not exit")
+        .unwrap()
+    }
+
+    fn limits(idle_ms: u64, total_base_ms: u64) -> DownloadLimits {
+        DownloadLimits {
+            connect_timeout: Duration::from_secs(2),
+            idle_timeout: Duration::from_millis(idle_ms),
+            total_base: Duration::from_millis(total_base_ms),
+            min_bytes_per_sec: u64::MAX,
+        }
+    }
+
+    fn fast_limits() -> DownloadLimits {
+        limits(300, 20_000)
+    }
+
+    fn pinned(size: u64) -> DownloadIntegrity {
+        DownloadIntegrity {
+            sha256: GOOD_SHA,
+            size,
+        }
+    }
+
+    fn assert_empty(dir: &Path, why: &str) {
+        assert!(std::fs::read_dir(dir).unwrap().next().is_none(), "{why}");
+    }
+
+    /// Runs a download of `size` pinned bytes against `scripts`, returning the
+    /// result, elapsed time and the (still existing) directory.
+    async fn run_scripts(
+        scripts: Vec<Vec<Step>>,
+        size: u64,
+        limits: DownloadLimits,
+    ) -> (
+        Result<(), DictationError>,
+        Duration,
+        PathBuf,
+        Vec<std::io::Error>,
+    ) {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (url, server) = serve_scripts(scripts);
+        let start = std::time::Instant::now();
+        let result = download_to_path_with_limits(
+            &url,
+            &dir.join("model.bin"),
+            "bin",
+            pinned(size),
+            None,
+            limits,
+            |_, _| {},
+        )
+        .await;
+        let took = start.elapsed();
+        (result, took, dir, join_server(server).await)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn oversized_body_without_length_fails_promptly_and_leaves_nothing() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let (r, took, dir, _) = run_scripts(
+            vec![vec![
+                ok_head(None),
+                Step::Write(vec![b'a'; 4 * 1024 * 1024]),
+                Step::Sleep(Duration::from_secs(3)),
+            ]],
+            14,
+            fast_limits(),
+        )
+        .await;
+        let err = r.unwrap_err().to_string();
+        assert!(err.contains("exceeds the pinned manifest size"), "{err}");
+        assert!(took < Duration::from_millis(2500), "{took:?}");
+        assert_empty(&dir, "oversized download left a file");
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cumulative_overflow_across_acceptable_chunks_is_rejected() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let part = || Step::Write(vec![b'a'; 8]);
+        let pause = || Step::Sleep(Duration::from_millis(100));
+        let (r, _, dir, _) = run_scripts(
+            vec![vec![
+                ok_head(None),
+                part(),
+                pause(),
+                part(),
+                pause(),
+                part(),
+            ]],
+            14,
+            fast_limits(),
+        )
+        .await;
+        let err = r.unwrap_err().to_string();
+        assert!(err.contains("exceeds the pinned manifest size"), "{err}");
+        assert_empty(&dir, "overflowing download left a file");
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wrong_content_length_is_rejected_before_any_write() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (url, server) = serve_scripts(vec![vec![
+            ok_head(Some(1_000_000)),
+            Step::Write(vec![b'a'; 14]),
+            Step::Sleep(Duration::from_secs(1)),
+        ]]);
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let err = download_to_path_with_limits(
+            &url,
+            &dir.join("model.bin"),
+            "bin",
+            pinned(14),
+            None,
+            fast_limits(),
+            move |_, _| {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            },
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("Server advertised 1000000"), "{err}");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no chunk may be processed"
+        );
+        assert_empty(&dir, "rejected download left a file");
+        join_server(server).await;
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stalled_body_fails_within_idle_deadline_and_leaves_nothing() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let (r, took, dir, _) = run_scripts(
+            vec![vec![
+                ok_head(Some(14)),
+                Step::Write(vec![b'a'; 5]),
+                Step::Sleep(Duration::from_secs(3)),
+            ]],
+            14,
+            fast_limits(),
+        )
+        .await;
+        let err = r.unwrap_err().to_string();
+        assert!(err.contains("stalled"), "{err}");
+        assert!(took < Duration::from_millis(2500), "{took:?}");
+        assert_empty(&dir, "stalled download left a file");
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stalled_headers_fail_within_idle_deadline() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let (r, took, dir, _) = run_scripts(
+            vec![vec![Step::Sleep(Duration::from_secs(3))]],
+            14,
+            fast_limits(),
+        )
+        .await;
+        assert!(r.unwrap_err().to_string().contains("stalled"));
+        assert!(took < Duration::from_millis(2500), "{took:?}");
+        assert_empty(&dir, "header stall left a file");
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redirect_chain_slower_than_idle_in_total_but_not_per_hop_succeeds() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let slow = || Step::Sleep(Duration::from_millis(400));
+        let (r, took, dir, errors) = run_scripts(
+            vec![
+                vec![slow(), redirect_head()],
+                vec![slow(), redirect_head()],
+                vec![
+                    slow(),
+                    ok_head(Some(14)),
+                    Step::Write(b"verified model".to_vec()),
+                ],
+            ],
+            14,
+            limits(1000, 20_000),
+        )
+        .await;
+        r.unwrap();
+        assert!(
+            took > Duration::from_millis(1000),
+            "chain must exceed one idle period: {took:?}"
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            std::fs::read(dir.join("model.bin")).unwrap(),
+            b"verified model"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redirect_loop_is_bounded() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let scripts = (0..=MAX_REDIRECTS).map(|_| vec![redirect_head()]).collect();
+        let (r, _, dir, _) = run_scripts(scripts, 14, fast_limits()).await;
+        assert!(r.unwrap_err().to_string().contains("Too many redirects"));
+        assert_empty(&dir, "redirect loop left a file");
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn valid_pinned_download_succeeds_with_limits() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        for head in [ok_head(Some(14)), ok_head(None)] {
+            let (r, _, dir, errors) = run_scripts(
+                vec![vec![head, Step::Write(b"verified model".to_vec())]],
+                14,
+                fast_limits(),
+            )
+            .await;
+            r.unwrap();
+            assert!(errors.is_empty(), "{errors:?}");
+            assert_eq!(
+                std::fs::read(dir.join("model.bin")).unwrap(),
+                b"verified model"
+            );
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn chunked_download_without_content_length_succeeds() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let head = Step::Write(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec(),
+        );
+        let (r, _, dir, errors) = run_scripts(
+            vec![vec![
+                head,
+                Step::Write(b"8\r\nverified\r\n".to_vec()),
+                Step::Sleep(Duration::from_millis(50)),
+                Step::Write(b"6\r\n model\r\n0\r\n\r\n".to_vec()),
+            ]],
+            14,
+            fast_limits(),
+        )
+        .await;
+        r.unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(
+            std::fs::read(dir.join("model.bin")).unwrap(),
+            b"verified model"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    /// Callback that outlasts the total deadline while data is still arriving.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn total_deadline_expiring_during_processing_fails() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (url, server) = serve_scripts(vec![vec![
+            ok_head(Some(14)),
+            Step::Write(b"verified".to_vec()),
+            Step::Sleep(Duration::from_millis(50)),
+            Step::Write(b" model".to_vec()),
+        ]]);
+        let err = download_to_path_with_limits(
+            &url,
+            &dir.join("model.bin"),
+            "bin",
+            pinned(14),
+            None,
+            limits(2000, 300),
+            |_, _| std::thread::sleep(Duration::from_millis(500)),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("total time limit"), "{err}");
+        assert_empty(&dir, "expired download left a file");
+        join_server(server).await;
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    /// Deadline passes during the final chunk's callback; EOF is immediately
+    /// ready afterwards and must not be allowed to succeed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn total_deadline_expiring_just_before_eof_fails() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (url, server) = serve_scripts(vec![vec![
+            ok_head(Some(14)),
+            Step::Write(b"verified model".to_vec()),
+        ]]);
+        let err = download_to_path_with_limits(
+            &url,
+            &dir.join("model.bin"),
+            "bin",
+            pinned(14),
+            None,
+            limits(2000, 300),
+            |_, _| std::thread::sleep(Duration::from_millis(500)),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("total time limit"), "{err}");
+        assert!(!dir.join("model.bin").exists());
+        assert_empty(&dir, "expired download left a file");
+        join_server(server).await;
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aborting_the_download_task_removes_the_partial_file() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (url, server) = serve_scripts(vec![vec![
+            ok_head(Some(14)),
+            Step::Write(b"verified".to_vec()),
+            Step::Sleep(Duration::from_secs(2)),
+        ]]);
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let tx = std::sync::Mutex::new(tx);
+        let path = dir.join("model.bin");
+        let task = tokio::spawn(async move {
+            download_to_path_with_limits(
+                &url,
+                &path,
+                "bin",
+                pinned(14),
+                None,
+                limits(10_000, 20_000),
+                move |_, _| {
+                    let _ = tx.lock().unwrap().send(());
+                },
+            )
+            .await
+        });
+        // Wait (off the runtime thread) until a partial file has been written.
+        tokio::task::spawn_blocking(move || rx.recv_timeout(Duration::from_secs(5)).unwrap())
+            .await
+            .unwrap();
+        assert!(
+            std::fs::read_dir(&dir).unwrap().next().is_some(),
+            "partial file expected"
+        );
+        task.abort();
+        let _ = task.await;
+        assert_empty(&dir, "aborted download left a partial file");
+        join_server(server).await;
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn panicking_progress_callback_removes_the_partial_file() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+        let dir = temp_test_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let (url, server) = serve_scripts(vec![vec![
+            ok_head(Some(14)),
+            Step::Write(b"verified".to_vec()),
+            Step::Sleep(Duration::from_millis(300)),
+        ]]);
+        let path = dir.join("model.bin");
+        let task = tokio::spawn(async move {
+            download_to_path_with_limits(
+                &url,
+                &path,
+                "bin",
+                pinned(14),
+                None,
+                fast_limits(),
+                |_, _| panic!("callback boom"),
+            )
+            .await
+        });
+        assert!(task.await.unwrap_err().is_panic());
+        assert_empty(&dir, "panicking callback left a partial file");
+        join_server(server).await;
+        let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[test]
+    fn redirect_downgrade_is_refused_and_https_upgrade_allowed() {
+        let https = reqwest::Url::parse("https://huggingface.co/a/model.bin").unwrap();
+        let err = redirect_target(&https, "http://cdn.example/model.bin").unwrap_err();
+        assert!(err.contains("downgrade") && err.contains("cdn.example"), "{err}");
+        assert_eq!(
+            redirect_target(&https, "/other").unwrap().as_str(),
+            "https://huggingface.co/other"
+        );
+        let http = reqwest::Url::parse("http://127.0.0.1:1/a").unwrap();
+        assert!(redirect_target(&http, "https://cdn.example/x").is_ok());
+    }
+
+    #[test]
+    fn only_standard_redirect_statuses_are_followed() {
+        for ok in [301, 302, 303, 307, 308] {
+            assert!(is_followed_redirect(reqwest::StatusCode::from_u16(ok).unwrap()));
+        }
+        for bad in [300, 304, 305, 306, 310] {
+            assert!(!is_followed_redirect(reqwest::StatusCode::from_u16(bad).unwrap()));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unsupported_redirect_status_is_an_error() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let multiple = Step::Write(
+                b"HTTP/1.1 300 Multiple Choices\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_vec(),
+            );
+            let (r, _, dir, _) = run_scripts(vec![vec![multiple]], 14, fast_limits()).await;
+            let err = r.unwrap_err().to_string();
+            assert!(err.contains("Unsupported redirect status 300"), "{err}");
+            assert_empty(&dir, "unsupported redirect left a file");
+            let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn redirected_response_failing_integrity_leaves_no_file() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            // Right length, wrong SHA-256.
+            let (r, _, dir, _) = run_scripts(
+                vec![
+                    vec![redirect_head()],
+                    vec![ok_head(Some(14)), Step::Write(b"tampered model".to_vec())],
+                ],
+                14,
+                fast_limits(),
+            )
+            .await;
+            assert!(r.is_err());
+            assert!(!dir.join("model.bin").exists());
+            assert_empty(&dir, "integrity failure left a file");
+            let _ = std::fs::remove_dir_all(dir);
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_while_file_creation_is_queued_leaves_no_file() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            // Saturate the blocking pool is impractical; instead cancel right
+            // after the response arrives, racing creation. Whatever the
+            // interleaving, no file may remain once creation has settled.
+            for _ in 0..20 {
+                let dir = temp_test_dir();
+                std::fs::create_dir_all(&dir).unwrap();
+                let (url, server) = serve_scripts(vec![vec![
+                    ok_head(Some(14)),
+                    Step::Sleep(Duration::from_millis(300)),
+                ]]);
+                let path = dir.join("model.bin");
+                let task = tokio::spawn(async move {
+                    download_to_path_with_limits(
+                        &url, &path, "bin", pinned(14), None, limits(5000, 20_000), |_, _| {},
+                    )
+                    .await
+                });
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                task.abort();
+                let _ = task.await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                assert_empty(&dir, "cancelled download left a file");
+                join_server(server).await;
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        })
+        .await
+        .expect("test exceeded its hard timeout");
+    }
+
+    #[test]
+    fn total_deadline_scales_with_size() {
+        let l = DownloadLimits::default();
+        assert!(l.total_deadline(3 * 1024 * 1024 * 1024) > Duration::from_secs(6 * 3600));
+        assert!(l.total_deadline(0) >= Duration::from_secs(300));
     }
 
     // -- unique_tmp_path --
