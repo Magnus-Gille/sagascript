@@ -59,6 +59,12 @@ fn check_decode_size_cap(
 /// Memory budget for one decode, in bytes. All arithmetic is `u64` with checked
 /// conversion to `usize`, so it is independent of the target's pointer width.
 ///
+/// Scope: this budget covers Sagascript's OWN decode, downmix and resample
+/// buffers, plus the checked codec constructors (ALAC, PCM, ADPCM; FLAC, AAC
+/// and MP3 are bounded by the codecs themselves). Symphonia's container
+/// parsing (ISOMP4, MKV, core io) and Vorbis setup allocate outside this
+/// budget; see follow-up issue #319.
+///
 /// Decoding streams: each packet is downmixed to mono as it arrives, so the
 /// source-rate multichannel PCM is never retained. What stays resident is the
 /// source-rate mono signal (4 bytes per source frame, counted by allocated
@@ -67,8 +73,10 @@ fn check_decode_size_cap(
 /// * `max_total_bytes` is a ceiling on the real peak of those allocations:
 ///   `capacity * 4 + resampled_output + conversion_scratch_bytes`, and also on
 ///   the transient old+new overlap while the mono buffer reallocates
-///   (`1.5 * capacity * 4`). The mono capacity is therefore capped at
-///   [`max_mono_frames`], which reserves room for the converted output.
+///   (`old + new capacity`). Mono capacity only takes values on a halving
+///   grid below [`max_mono_frames`] (`ceiling >> j`), so a growth step never
+///   has `old > new / 2`; each reservation is additionally checked against
+///   the actual `old + new` capacity plus the other live buffers.
 /// * `conversion_scratch_bytes` covers resampler state, padding and flush.
 /// * `max_packet_bytes` bounds per-packet decoder/conversion buffers, both the
 ///   codec's own buffers (checked before the decoder is constructed) and ours.
@@ -84,7 +92,7 @@ struct DecodeBudget {
 
 const DEFAULT_DECODE_BUDGET: DecodeBudget = DecodeBudget {
     max_total_bytes: 4 * 1024 * 1024 * 1024,
-    max_packet_bytes: 256 * 1024 * 1024,
+    max_packet_bytes: 64 * 1024 * 1024,
     conversion_scratch_bytes: 64 * 1024 * 1024,
 };
 
@@ -124,12 +132,15 @@ fn conversion_peak_bytes(
 }
 
 /// Largest mono capacity (frames) whose conversion peak AND reallocation
-/// overlap (`1.5x` the mono buffer) both stay within `max_total_bytes`.
+/// overlap (`1.5x` the mono buffer on the halving growth grid) both stay
+/// within `max_total_bytes`, leaving `max_packet_bytes` for packet buffers.
 fn max_mono_frames(sample_rate: u32, budget: &DecodeBudget) -> u64 {
     let rate = effective_rate(sample_rate);
+    // Keep room for scratch and for the live per-packet buffers.
     let avail = budget
         .max_total_bytes
-        .saturating_sub(budget.conversion_scratch_bytes) as u128;
+        .saturating_sub(budget.conversion_scratch_bytes)
+        .saturating_sub(budget.max_packet_bytes.min(budget.max_total_bytes / 16)) as u128;
     // Per-frame cost in units of 1/rate bytes: max(6, 4 + 4*16000/rate) bytes.
     let per_frame_x_rate = (6 * rate).max(4 * rate + 64_000);
     let frames = avail * rate / per_frame_x_rate;
@@ -160,9 +171,13 @@ fn check_packet_budget(
 ///   cookie and allocates `frame_length x channels` plus a tail buffer.
 /// * PCM/ADPCM allocate `max_frames_per_packet x channels` in the widest
 ///   sample type (8 bytes).
-/// * FLAC (u16 block size, <= 8 ch), Vorbis (block size <= 2^15, <= 8 ch),
-///   AAC (1024 frames, <= 2 ch) and MP3 (1152 frames) have shapes the codec
-///   itself bounds well below the packet budget.
+/// * FLAC (u16 block size, <= 8 ch), AAC (1024 frames, <= 2 ch), MP3 (1152
+///   frames) and the Vorbis output buffer (block size <= 2^15, <= 8 ch) have
+///   shapes the codec itself bounds well below the packet budget.
+///
+/// Not covered (follow-up issue #319): Symphonia's own container parsing
+/// (ISOMP4 stsz/packet storage, MKV EBML lengths, core io) and Vorbis setup
+/// codebooks allocate before or outside this check.
 fn check_codec_allocation(
     params: &CodecParameters,
     budget: &DecodeBudget,
@@ -209,32 +224,56 @@ fn make_decoder(
         .map_err(|e| DictationError::FileDecodeError(format!("Failed to create decoder: {e}")))
 }
 
+/// Smallest capacity on the halving grid `ceiling >> j` that holds `new_len`.
+fn grid_capacity(new_len: usize, ceiling: usize) -> usize {
+    let mut c = ceiling.max(new_len);
+    while c / 2 >= new_len && c / 2 >= 4096 {
+        c /= 2;
+    }
+    c
+}
+
 /// Append `add_frames` frames to `mono`, enforcing the byte budget and the
-/// duration cap BEFORE the buffer grows. Growth is geometric but capped at
-/// [`max_mono_frames`], and uses fallible reservation so an allocation
-/// failure is an error rather than an abort.
+/// duration cap BEFORE the buffer grows. `other_live_bytes` is what else is
+/// allocated right now (current packet buffers). Before reserving, the real
+/// reallocation footprint `(old + new capacity) * 4 + other + scratch` is
+/// checked against the budget; the target is reduced to the exact need, or the
+/// call is rejected, when it does not fit. Fallible reservation turns an
+/// allocation failure into an error rather than an abort.
 fn append_mono_within_budget(
     mono: &mut Vec<f32>,
     add_frames: usize,
     sample_rate: u32,
     budget: &DecodeBudget,
+    other_live_bytes: u64,
     fill: impl FnOnce(&mut Vec<f32>),
 ) -> Result<(), DictationError> {
     let new_len = mono
         .len()
         .checked_add(add_frames)
         .ok_or_else(|| budget_error("size overflow"))?;
-    if new_len as u64 > max_mono_frames(sample_rate, budget) {
+    let ceiling = max_mono_frames(sample_rate, budget);
+    if new_len as u64 > ceiling {
         return Err(budget_error("total decoded audio"));
     }
     check_decode_size_cap(new_len, 1, sample_rate)?;
     if new_len > mono.capacity() {
-        // Capacity (not length) is what is allocated, so cap it at the frame
-        // ceiling that leaves room for the converted output.
-        let ceiling = usize::try_from(max_mono_frames(sample_rate, budget))
-            .unwrap_or(usize::MAX)
-            .max(new_len);
-        let target = mono.capacity().saturating_mul(2).clamp(new_len, ceiling);
+        let old = mono.capacity() as u64;
+        let fits = |target: usize| -> bool {
+            old.checked_add(target as u64)
+                .and_then(|frames| pcm_bytes(frames, 1).ok())
+                .and_then(|b| b.checked_add(other_live_bytes))
+                .and_then(|b| b.checked_add(budget.conversion_scratch_bytes))
+                .is_some_and(|b| b <= budget.max_total_bytes)
+        };
+        let ceiling = usize::try_from(ceiling).unwrap_or(usize::MAX);
+        let mut target = grid_capacity(new_len, ceiling);
+        if !fits(target) {
+            target = new_len;
+            if !fits(target) {
+                return Err(budget_error("reallocation overlap"));
+            }
+        }
         mono.try_reserve_exact(target - mono.len())
             .map_err(|_| budget_error("allocation refused"))?;
     }
@@ -409,10 +448,12 @@ fn decode_packets(
         sample_buf.copy_interleaved_ref(decoded);
         let samples = sample_buf.samples();
         let channels = actual_channels;
+        // Live besides `mono`: the interleaved sample buffer just allocated.
+        let other_live = pcm_bytes(capacity as u64, actual_channels as u64)?;
 
         // Streaming downmix: average each frame's channels as it arrives so the
         // multichannel source-rate PCM is never accumulated.
-        append_mono_within_budget(&mut mono, frames, sample_rate, budget, |mono| {
+        append_mono_within_budget(&mut mono, frames, sample_rate, budget, other_live, |mono| {
             if channels <= 1 {
                 mono.extend_from_slice(samples);
             } else {
@@ -1201,7 +1242,7 @@ mod tests {
 
     #[test]
     fn budget_rejection_happens_before_buffer_growth() {
-        let budget = DecodeBudget { max_total_bytes: 4_000, max_packet_bytes: u64::MAX, conversion_scratch_bytes: 0 };
+        let budget = DecodeBudget { max_total_bytes: 4_000, max_packet_bytes: 0, conversion_scratch_bytes: 0 };
         // 16 kHz: 8 bytes per frame (mono + output) -> ceiling 500 frames.
         assert_eq!(max_mono_frames(16_000, &budget), 500);
         let mut mono: Vec<f32> = Vec::with_capacity(10);
@@ -1209,7 +1250,7 @@ mod tests {
         let capacity = mono.capacity();
         let filled = std::cell::Cell::new(false);
         let (result, largest) = largest_alloc_during(|| {
-            append_mono_within_budget(&mut mono, 600, 16_000, &budget, |_| filled.set(true))
+            append_mono_within_budget(&mut mono, 600, 16_000, &budget, 0, |_| filled.set(true))
         });
         assert!(matches!(result, Err(DictationError::FileDecodeError(_))));
         assert!(!filled.get());
@@ -1217,13 +1258,55 @@ mod tests {
         assert!(largest < 1024, "only the error message may allocate, saw {largest}");
         // Fill to the ceiling: capacity never exceeds it, so peak stays bounded.
         for _ in 0..1000 {
-            if append_mono_within_budget(&mut mono, 50, 16_000, &budget, |m| m.extend_from_slice(&[0.0; 50])).is_err() {
+            if append_mono_within_budget(&mut mono, 50, 16_000, &budget, 0, |m| m.extend_from_slice(&[0.0; 50])).is_err() {
                 break;
             }
             assert!(mono.capacity() as u64 <= max_mono_frames(16_000, &budget));
             assert!(conversion_peak_bytes(mono.capacity() as u64, 16_000, &budget).unwrap() <= budget.max_total_bytes);
         }
         assert!(mono.len() <= 500);
+    }
+
+    #[test]
+    fn reallocation_overlap_counts_old_plus_new_capacity() {
+        // 48 kHz: 6 bytes/frame -> ceiling 1000 frames for a 6_000 byte budget.
+        let budget = DecodeBudget { max_total_bytes: 6_000, max_packet_bytes: 0, conversion_scratch_bytes: 0 };
+        assert_eq!(max_mono_frames(48_000, &budget), 1_000);
+        // Previous capacity (900) is greater than half the clamped target.
+        let mut mono: Vec<f32> = Vec::with_capacity(900);
+        mono.resize(900, 0.0);
+        let old_cap = mono.capacity() as u64;
+        let r = append_mono_within_budget(&mut mono, 50, 48_000, &budget, 0, |m| m.extend_from_slice(&[0.0; 50]));
+        let new_cap = mono.capacity() as u64;
+        if new_cap != old_cap {
+            assert!(r.is_ok());
+            assert!((old_cap + new_cap) * 4 <= budget.max_total_bytes, "old {old_cap} + new {new_cap} frames overlap the budget");
+        } else {
+            assert!(r.is_err(), "must reject when growth cannot fit");
+            assert_eq!(mono.len(), 900);
+        }
+    }
+
+    #[test]
+    fn growth_steps_never_overlap_past_the_budget_and_reach_the_ceiling() {
+        let budget = DecodeBudget { max_total_bytes: 60_000, max_packet_bytes: 0, conversion_scratch_bytes: 0 };
+        let ceiling = max_mono_frames(48_000, &budget);
+        let mut mono: Vec<f32> = Vec::new();
+        let mut last = 0u64;
+        loop {
+            let old = mono.capacity() as u64;
+            let r = append_mono_within_budget(&mut mono, 7, 48_000, &budget, 0, |m| m.extend_from_slice(&[0.0; 7]));
+            let new = mono.capacity() as u64;
+            if new != old && old > 0 {
+                assert!((old + new) * 4 <= budget.max_total_bytes, "old {old} + new {new}");
+            }
+            if r.is_err() {
+                break;
+            }
+            last = mono.len() as u64;
+            assert!(new <= ceiling);
+        }
+        assert!(last + 7 > ceiling, "must be able to fill up to the ceiling, got {last} of {ceiling}");
     }
 
     #[test]
@@ -1252,8 +1335,8 @@ mod tests {
             decoder.buf.chan_mut(0)[i] = 0.5;
             decoder.buf.chan_mut(1)[i] = -0.25;
         }
-        let budget = DecodeBudget { max_total_bytes: 4_800, max_packet_bytes: u64::MAX, conversion_scratch_bytes: 0 };
-        // ceiling = 600 frames (8 bytes/frame at 16 kHz).
+        let budget = DecodeBudget { max_total_bytes: 5_600, max_packet_bytes: 1_200, conversion_scratch_bytes: 0 };
+        // ceiling = (5_600 - 350 packet margin) / 8 = 656 frames at 16 kHz.
         let pulled = std::cell::Cell::new(0usize);
         let mut next = || {
             pulled.set(pulled.get() + 1);
@@ -1369,5 +1452,35 @@ mod tests {
         }
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(checked, 9);
+    }
+
+    /// Hashes of the output of main's (08d0a0c) unmodified decode+resample
+    /// pipeline, frozen so resampler compatibility with main stays pinned
+    /// independently of the current resampler.
+    #[test]
+    fn decode_output_matches_frozen_hashes_from_main() {
+        fn fnv(v: &[f32]) -> u64 {
+            let mut h = 0xcbf29ce484222325u64;
+            for s in v {
+                for b in s.to_bits().to_le_bytes() {
+                    h ^= b as u64;
+                    h = h.wrapping_mul(0x100000001b3);
+                }
+            }
+            h
+        }
+        let dir = std::env::temp_dir().join(format!("sagascript-frozen-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (rate, ch, bits, float, frames, len, hash) in [
+            (44_100u32, 2u16, 16u16, false, 20_011usize, 7_383usize, 0x6578a6d283bd38fa_u64),
+            (48_000, 1, 32, true, 9_999, 3_370, 0x1e226ca4855289c0),
+            (8_000, 2, 16, false, 1_025, 3_836, 0xb42a5ee8279acd85),
+        ] {
+            let path = dir.join(format!("frozen_{rate}.wav"));
+            std::fs::write(&path, pcm_wav(rate, ch, bits, float, frames)).unwrap();
+            let got = decode_audio_file(&path).unwrap();
+            assert_eq!((got.len(), fnv(&got)), (len, hash), "{rate} Hz {ch} ch {bits}-bit");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
