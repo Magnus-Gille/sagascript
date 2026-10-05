@@ -41,6 +41,20 @@ pub fn resample_to_16khz_with_control(
     on_progress: Option<&dyn Fn(f64)>,
     checkpoint: &dyn Fn() -> Result<(), String>,
 ) -> Result<Vec<f32>, String> {
+    resample_to_16khz_bounded(mono, source_rate, on_progress, checkpoint, usize::MAX)
+}
+
+/// Like [`resample_to_16khz_with_control`], but the output never exceeds
+/// `max_output_samples`: the limit is checked (including rubato's flush and
+/// padding output) before every growth, and reservations are fallible, so an
+/// oversized conversion returns an error instead of allocating or aborting.
+pub fn resample_to_16khz_bounded(
+    mono: Vec<f32>,
+    source_rate: u32,
+    on_progress: Option<&dyn Fn(f64)>,
+    checkpoint: &dyn Fn() -> Result<(), String>,
+    max_output_samples: usize,
+) -> Result<Vec<f32>, String> {
     checkpoint()?;
     if source_rate == TARGET_SAMPLE_RATE || mono.is_empty() {
         return Ok(mono);
@@ -64,7 +78,32 @@ pub fn resample_to_16khz_with_control(
     let mut resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 1)
         .map_err(|e| format!("Failed to create resampler: {e}"))?;
 
-    let mut output = Vec::with_capacity((mono.len() as f64 * ratio) as usize + 1024);
+    // Expected output plus rubato's padding/flush headroom (a few max-size
+    // output chunks), reserved fallibly and refused if over the limit.
+    let expected = (mono.len() as f64 * ratio).ceil() as usize;
+    let headroom = resampler.output_frames_max().saturating_mul(3).saturating_add(1024);
+    let reserve = expected.saturating_add(headroom);
+    let mut output: Vec<f32> = Vec::new();
+    let initial = reserve.min(max_output_samples);
+    if expected > max_output_samples {
+        return Err("resampled output exceeds the memory budget".to_string());
+    }
+    output
+        .try_reserve_exact(initial)
+        .map_err(|_| "resampler output allocation refused".to_string())?;
+    let append = |output: &mut Vec<f32>, extra: &[f32]| -> Result<(), String> {
+        let new_len = output.len().saturating_add(extra.len());
+        if new_len > max_output_samples {
+            return Err("resampled output exceeds the memory budget".to_string());
+        }
+        if new_len > output.capacity() {
+            output
+                .try_reserve_exact(new_len - output.len())
+                .map_err(|_| "resampler output allocation refused".to_string())?;
+        }
+        output.extend_from_slice(extra);
+        Ok(())
+    };
 
     // Process full chunks (rubato maintains state between calls)
     let full_chunks = mono.len() / chunk_size;
@@ -75,7 +114,7 @@ pub fn resample_to_16khz_with_control(
         let result = resampler
             .process(&chunk, None)
             .map_err(|e| format!("Resample failed: {e}"))?;
-        output.extend_from_slice(&result[0]);
+        append(&mut output, &result[0])?;
         if let Some(on_progress) = on_progress {
             if full_chunks > 0 {
                 on_progress(i as f64 / full_chunks as f64);
@@ -91,12 +130,12 @@ pub fn resample_to_16khz_with_control(
         let result = resampler
             .process_partial(Some(&remainder), None)
             .map_err(|e| format!("Resample partial failed: {e}"))?;
-        output.extend_from_slice(&result[0]);
+        append(&mut output, &result[0])?;
     } else {
         let result = resampler
             .process_partial(None::<&[Vec<f32>]>, None)
             .map_err(|e| format!("Resample flush failed: {e}"))?;
-        output.extend_from_slice(&result[0]);
+        append(&mut output, &result[0])?;
     }
 
     checkpoint()?;
@@ -276,5 +315,27 @@ mod tests {
             result.iter().all(|s| s.is_finite()),
             "Output contains NaN or Inf"
         );
+    }
+
+    #[test]
+    fn bounded_resample_rejects_before_allocating_and_matches_unbounded() {
+        let data: Vec<f32> = (0..1024).map(|i| (i as f32 * 0.01).sin()).collect();
+        let free = resample_to_16khz_with_control(data.clone(), 8_000, None, &|| Ok(())).unwrap();
+        assert!(free.len() > 1024);
+        // Limit just below the true output: must error rather than grow.
+        let err = resample_to_16khz_bounded(data.clone(), 8_000, None, &|| Ok(()), free.len() - 1);
+        assert!(err.is_err(), "limit below the real output must be rejected");
+        // An exactly sufficient limit succeeds with bit-identical output.
+        let ok = resample_to_16khz_bounded(data, 8_000, None, &|| Ok(()), free.len()).unwrap();
+        assert_eq!(
+            ok.iter().map(|f| f.to_bits()).collect::<Vec<_>>(),
+            free.iter().map(|f| f.to_bits()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn bounded_resample_refuses_oversized_estimate_up_front() {
+        let r = resample_to_16khz_bounded(vec![0.0; 44_100], 44_100, None, &|| Ok(()), 100);
+        assert!(r.is_err());
     }
 }
