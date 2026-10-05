@@ -2092,15 +2092,18 @@ mod tests {
         let path = dir.path().join("settings.json");
         fs::write(&path, b"{}").unwrap();
         let user = std::env::var("USERNAME").unwrap();
-        let status = Command::new("icacls")
-            .arg(&path)
-            .args(["/inheritance:r", "/grant:r"])
-            .arg(format!("{user}:F"))
-            .output()
-            .unwrap();
-        assert!(status.status.success());
+        let icacls = |args: &[&str]| {
+            let out = Command::new("icacls").arg(&path).args(args).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+        };
+        icacls(&["/inheritance:r", "/grant:r", &format!("{user}:F")]);
+        // Drop SYSTEM so the restricted ACL differs from an inherited one.
+        icacls(&["/remove:g", "*S-1-5-18"]);
         let before = acl(&path);
-        assert_eq!(before.len(), 1, "{before:?}");
+        let fresh = dir.path().join("fresh.json");
+        fs::write(&fresh, b"{}").unwrap();
+        assert_ne!(before, acl(&fresh), "precondition: restricted ACL must differ from inherited");
+        fs::remove_file(&fresh).unwrap();
 
         atomic_write(&path, b"{\"a\":1}", "settings").unwrap();
         atomic_write(&path, b"{\"a\":2}", "settings").unwrap();
