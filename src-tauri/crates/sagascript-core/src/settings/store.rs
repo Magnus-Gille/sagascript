@@ -379,7 +379,7 @@ pub fn load_from(path: &Path) -> Settings {
 
 /// Persist settings to disk using read-merge-write to preserve unknown or
 /// legacy keys while writing the canonical Settings fields.
-/// Uses atomic write: write to .tmp then rename.
+/// Uses atomic write: write a private temp file, fsync, then rename.
 pub fn save(settings: &Settings) -> Result<(), String> {
     let path = settings_path();
     with_settings_lock(&path, || {
@@ -522,7 +522,7 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
                     path.display()
                 );
                 let bak_path = path.with_extension("json.bak");
-                if let Err(be) = std::fs::write(&bak_path, &contents) {
+                if let Err(be) = atomic_write(&bak_path, contents.as_bytes(), "corrupt settings backup") {
                     tracing::warn!(
                         "Failed to write corrupt settings backup to {}: {be}",
                         bak_path.display()
@@ -757,17 +757,164 @@ fn atomic_write(path: &Path, contents: &[u8], label: &str) -> Result<(), String>
         .unwrap_or_else(|| PathBuf::from("."));
     create_private_dir_all(&parent)
         .map_err(|error| format!("Failed to create {label} directory: {error}"))?;
-    let tmp_path = destination.with_extension(format!(
-        "{}.tmp",
-        destination
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or("file")
-    ));
-    std::fs::write(&tmp_path, contents)
+    install_replacement(&destination, &parent, contents, label, &copy_target_permissions)
+}
+
+/// Copy an existing regular target's permissions onto the replacement file.
+fn copy_target_permissions(file: &std::fs::File, existing: &std::fs::Metadata) -> std::io::Result<()> {
+    file.set_permissions(existing.permissions())
+}
+
+fn install_replacement(
+    destination: &Path,
+    parent: &Path,
+    contents: &[u8],
+    label: &str,
+    copy_permissions: &dyn Fn(&std::fs::File, &std::fs::Metadata) -> std::io::Result<()>,
+) -> Result<(), String> {
+    use std::io::Write;
+
+    // Exclusive, uniquely named, owner-only (0600 on Unix) temporary file in the
+    // destination directory; removed automatically if anything below fails.
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".sagascript-")
+        .suffix(".tmp")
+        .tempfile_in(parent)
+        .map_err(|error| format!("Failed to create {label} temporary file: {error}"))?;
+    // Distinguish an absent target from an unreadable one; fail closed on the latter.
+    let existing = match std::fs::metadata(destination) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!("Failed to inspect existing {label}: {error}"));
+        }
+    };
+    tmp.write_all(contents)
         .map_err(|error| format!("Failed to write {label}: {error}"))?;
-    std::fs::rename(&tmp_path, &destination)
-        .map_err(|error| format!("Failed to install {label}: {error}"))?;
+    // Keep an existing target's permissions (e.g. a deliberately restrictive or
+    // shared mode); a new file stays owner-only. Applied before the final fsync.
+    if let Some(existing) = existing.as_ref().filter(|metadata| metadata.is_file()) {
+        copy_permissions(tmp.as_file(), existing)
+            .map_err(|error| format!("Failed to preserve {label} permissions: {error}"))?;
+    }
+    tmp.as_file()
+        .sync_all()
+        .map_err(|error| format!("Failed to sync {label} before install: {error}"))?;
+    install_temp_file(tmp, destination, existing.is_some(), label)?;
+    sync_directory(parent)
+        .map_err(|error| format!("Installed {label} but failed to sync its directory: {error}"))
+}
+
+/// Unix: rename(2) replaces atomically.
+#[cfg(unix)]
+fn install_temp_file(
+    tmp: tempfile::NamedTempFile,
+    destination: &Path,
+    _target_exists: bool,
+    label: &str,
+) -> Result<(), String> {
+    tmp.persist(destination)
+        .map(|_| ())
+        .map_err(|error| format!("Failed to install {label}: {}", error.error))
+}
+
+/// Windows: `ReplaceFileW` replaces atomically and merges the replaced file's
+/// attributes and security descriptor (its ACL) into the replacement, so a
+/// restricted target stays restricted. A new file inherits from its directory.
+/// Durability is whatever NTFS gives the replace after the data was flushed;
+/// there is no portable directory fsync.
+#[cfg(windows)]
+fn install_temp_file(
+    tmp: tempfile::NamedTempFile,
+    destination: &Path,
+    target_exists: bool,
+    label: &str,
+) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    if !target_exists {
+        return tmp
+            .persist(destination)
+            .map(|_| ())
+            .map_err(|error| format!("Failed to install {label}: {}", error.error));
+    }
+    // Close the handle; the TempPath removes the replacement unless kept.
+    let temp_path = tmp.into_temp_path();
+    // A backup name is mandatory for safety. Microsoft's ReplaceFileW remarks:
+    // on ERROR_UNABLE_TO_MOVE_REPLACEMENT (1176), "If lpBackupFileName was
+    // specified, the replaced and replacement files retain their original file
+    // names. Otherwise, the replaced file no longer exists and the replacement
+    // file exists under its original name." On ERROR_UNABLE_TO_MOVE_REPLACEMENT_2
+    // (1177), "the replaced file exists under the name of the backup file".
+    // Reserve a unique, never auto-deleted name next to the target.
+    let backup = {
+        let reserved = tempfile::Builder::new()
+            .prefix(".sagascript-bak-")
+            .suffix(".tmp")
+            .tempfile_in(destination.parent().unwrap_or_else(|| Path::new(".")))
+            .map_err(|error| format!("Failed to reserve {label} backup name: {error}"))?
+            .into_temp_path();
+        let path = reserved.to_path_buf();
+        reserved
+            .close()
+            .map_err(|error| format!("Failed to reserve {label} backup name: {error}"))?;
+        path
+    };
+    let wide = |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() };
+    let replaced = wide(destination);
+    let replacement = wide(&temp_path);
+    let backup_wide = wide(&backup);
+    // SAFETY: all buffers are NUL-terminated and outlive the call; the
+    // remaining pointer arguments are documented as reserved nulls.
+    let ok = unsafe {
+        ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            backup_wide.as_ptr(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if ok != 0 {
+        if let Err(error) = std::fs::remove_file(&backup) {
+            tracing::warn!("Failed to remove {label} backup {}: {error}", backup.display());
+        }
+        return Ok(());
+    }
+    let os_error = std::io::Error::last_os_error();
+    const ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: i32 = 1177;
+    if os_error.raw_os_error() == Some(ERROR_UNABLE_TO_MOVE_REPLACEMENT_2) {
+        // The original now lives under the backup name: move it back.
+        if let Err(restore) = std::fs::rename(&backup, destination) {
+            let kept = temp_path.keep().ok();
+            return Err(format!(
+                "Failed to install {label}: {os_error}; restoring the original from {} also failed ({restore}); new contents kept at {}",
+                backup.display(),
+                kept.map_or_else(|| "(unknown)".to_string(), |p| p.display().to_string())
+            ));
+        }
+    }
+    // Never let cleanup delete the only remaining copy.
+    if !destination.exists() {
+        let kept = temp_path.keep().ok();
+        return Err(format!(
+            "Failed to install {label}: {os_error}; the original is missing, new contents kept at {}",
+            kept.map_or_else(|| "(unknown)".to_string(), |p| p.display().to_string())
+        ));
+    }
+    let _ = std::fs::remove_file(&backup);
+    Err(format!("Failed to install {label}: {os_error}"))
+}
+
+#[cfg(unix)]
+fn sync_directory(dir: &Path) -> std::io::Result<()> {
+    std::fs::File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -1817,5 +1964,212 @@ mod tests {
                 "no corrupt file existed, so no .bak should be created"
             );
         });
+    }
+
+    #[cfg(unix)]
+    mod private_atomic_write {
+        use super::*;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        const CHILD_ENV: &str = "SAGASCRIPT_UMASK_CHILD";
+
+        #[cfg(target_os = "macos")]
+        type ModeT = u16;
+        #[cfg(not(target_os = "macos"))]
+        type ModeT = u32;
+        extern "C" {
+            fn umask(mask: ModeT) -> ModeT;
+        }
+
+        fn mode(path: &Path) -> u32 {
+            fs::metadata(path).unwrap().permissions().mode() & 0o777
+        }
+
+        fn names(dir: &Path) -> Vec<String> {
+            let mut v: Vec<String> = fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        }
+
+        /// Re-runs the umask scenarios in a child process so the process-wide
+        /// umask is never changed in this (parallel) test binary.
+        #[test]
+        fn private_modes_hold_under_umask_022_in_a_child_process() {
+            if std::env::var_os(CHILD_ENV).is_some() {
+                return;
+            }
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "settings::store::tests::private_atomic_write::umask_child_scenarios",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_ENV, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "child failed:\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        #[test]
+        fn umask_child_scenarios() {
+            if std::env::var_os(CHILD_ENV).is_none() {
+                return;
+            }
+            // The child process exits after this single test; never restored.
+            // SAFETY: umask has no memory-safety preconditions.
+            unsafe { umask(0o022) };
+
+            // A private target stays private across repeated saves.
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("custom-settings.json");
+            fs::write(&path, b"{}").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            for i in 0..3 {
+                atomic_write(&path, format!("{{\"n\":{i}}}").as_bytes(), "settings").unwrap();
+                assert_eq!(mode(&path), 0o600);
+            }
+            assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"n":2}"#);
+            assert_eq!(names(dir.path()), vec!["custom-settings.json"]);
+
+            // A new file is created private.
+            let new = dir.path().join("glossary.txt");
+            atomic_write(&new, b"term", "glossary").unwrap();
+            assert_eq!(mode(&new), 0o600);
+
+            // Narrower and broader existing modes are preserved.
+            for m in [0o400, 0o640] {
+                let p = dir.path().join(format!("m{m:o}.json"));
+                fs::write(&p, b"{}").unwrap();
+                fs::set_permissions(&p, fs::Permissions::from_mode(m)).unwrap();
+                atomic_write(&p, b"{\"a\":1}", "settings").unwrap();
+                assert_eq!(mode(&p), m);
+                assert_eq!(fs::read(&p).unwrap(), b"{\"a\":1}");
+            }
+
+            // Relative and absolute symlinks are written through privately.
+            let real = dir.path().join("dotfiles");
+            fs::create_dir(&real).unwrap();
+            for (name, absolute) in [("rel", false), ("abs", true)] {
+                let target = real.join(format!("{name}.json"));
+                fs::write(&target, b"{}").unwrap();
+                fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+                let link = dir.path().join(format!("{name}-link.json"));
+                if absolute {
+                    symlink(&target, &link).unwrap();
+                } else {
+                    symlink(format!("dotfiles/{name}.json"), &link).unwrap();
+                }
+                atomic_write(&link, b"{\"x\":1}", "settings").unwrap();
+                assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+                assert_eq!(fs::read_to_string(&target).unwrap(), r#"{"x":1}"#);
+                assert_eq!(mode(&target), 0o600);
+            }
+            assert_eq!(names(&real), vec!["abs.json", "rel.json"]);
+
+            // The corrupt-settings backup is private.
+            let settings = dir.path().join("cfg").join("settings.json");
+            fs::create_dir_all(settings.parent().unwrap()).unwrap();
+            fs::write(&settings, b"not json").unwrap();
+            fs::set_permissions(&settings, fs::Permissions::from_mode(0o600)).unwrap();
+            save_to(&settings, &Settings::default()).unwrap();
+            assert_eq!(mode(&settings.with_extension("json.bak")), 0o600);
+            assert_eq!(mode(&settings), 0o600);
+        }
+
+        #[test]
+        fn failed_install_leaves_original_and_no_temp_file() {
+            let dir = tempfile::tempdir().unwrap();
+            // Renaming a file over a non-empty directory fails.
+            let path = dir.path().join("settings.json");
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("keep"), b"original").unwrap();
+            assert!(atomic_write(&path, b"{}", "settings").is_err());
+            assert_eq!(fs::read(path.join("keep")).unwrap(), b"original");
+            assert_eq!(names(dir.path()), vec!["settings.json"]);
+        }
+
+        #[test]
+        fn permission_copy_failure_aborts_before_replacement() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("settings.json");
+            fs::write(&path, b"original").unwrap();
+            let fail = |_: &fs::File, _: &fs::Metadata| {
+                Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected"))
+            };
+            let error = install_replacement(&path, dir.path(), b"new", "settings", &fail).unwrap_err();
+            assert!(error.contains("preserve settings permissions"), "{error}");
+            assert_eq!(fs::read(&path).unwrap(), b"original");
+            assert_eq!(names(dir.path()), vec!["settings.json"]);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn blocked_replace_keeps_original_and_leaves_no_temp_or_backup() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, b"original").unwrap();
+        // Open without FILE_SHARE_DELETE so the replace cannot move the target.
+        let _held = fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+        assert!(atomic_write(&path, b"new", "settings").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        let names: Vec<_> = fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(names.len(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restricted_dacl_survives_an_atomic_save() {
+        use std::process::Command;
+
+        fn acl(path: &Path) -> Vec<String> {
+            let out = Command::new("icacls").arg(path).output().unwrap();
+            assert!(out.status.success());
+            let text = String::from_utf8_lossy(&out.stdout).into_owned();
+            let prefix = path.to_string_lossy().into_owned();
+            let mut aces: Vec<String> = text
+                .lines()
+                .map(|l| l.replace(&prefix, "").trim().to_string())
+                .filter(|l| l.contains(":("))
+                .collect();
+            aces.sort();
+            aces
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, b"{}").unwrap();
+        let user = std::env::var("USERNAME").unwrap();
+        let icacls = |args: &[&str]| {
+            let out = Command::new("icacls").arg(&path).args(args).output().unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+        };
+        icacls(&["/inheritance:r", "/grant:r", &format!("{user}:F")]);
+        // Drop SYSTEM so the restricted ACL differs from an inherited one.
+        icacls(&["/remove:g", "*S-1-5-18"]);
+        let before = acl(&path);
+        let fresh = dir.path().join("fresh.json");
+        fs::write(&fresh, b"{}").unwrap();
+        assert_ne!(before, acl(&fresh), "precondition: restricted ACL must differ from inherited");
+        fs::remove_file(&fresh).unwrap();
+
+        atomic_write(&path, b"{\"a\":1}", "settings").unwrap();
+        atomic_write(&path, b"{\"a\":2}", "settings").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"a":2}"#);
+        assert_eq!(acl(&path), before);
+        let leftovers: Vec<_> = fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(leftovers.len(), 1);
     }
 }
