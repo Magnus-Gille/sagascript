@@ -839,30 +839,73 @@ fn install_temp_file(
             .map(|_| ())
             .map_err(|error| format!("Failed to install {label}: {}", error.error));
     }
-    // Close the handle; the TempPath still removes the file on failure.
+    // Close the handle; the TempPath removes the replacement unless kept.
     let temp_path = tmp.into_temp_path();
+    // A backup name is mandatory for safety. Microsoft's ReplaceFileW remarks:
+    // on ERROR_UNABLE_TO_MOVE_REPLACEMENT (1176), "If lpBackupFileName was
+    // specified, the replaced and replacement files retain their original file
+    // names. Otherwise, the replaced file no longer exists and the replacement
+    // file exists under its original name." On ERROR_UNABLE_TO_MOVE_REPLACEMENT_2
+    // (1177), "the replaced file exists under the name of the backup file".
+    // Reserve a unique, never auto-deleted name next to the target.
+    let backup = {
+        let reserved = tempfile::Builder::new()
+            .prefix(".sagascript-bak-")
+            .suffix(".tmp")
+            .tempfile_in(destination.parent().unwrap_or_else(|| Path::new(".")))
+            .map_err(|error| format!("Failed to reserve {label} backup name: {error}"))?
+            .into_temp_path();
+        let path = reserved.to_path_buf();
+        reserved
+            .close()
+            .map_err(|error| format!("Failed to reserve {label} backup name: {error}"))?;
+        path
+    };
     let wide = |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() };
     let replaced = wide(destination);
     let replacement = wide(&temp_path);
-    // SAFETY: both buffers are NUL-terminated and outlive the call; the
-    // remaining pointer arguments are documented as optional/reserved nulls.
+    let backup_wide = wide(&backup);
+    // SAFETY: all buffers are NUL-terminated and outlive the call; the
+    // remaining pointer arguments are documented as reserved nulls.
     let ok = unsafe {
         ReplaceFileW(
             replaced.as_ptr(),
             replacement.as_ptr(),
-            std::ptr::null(),
+            backup_wide.as_ptr(),
             0,
             std::ptr::null(),
             std::ptr::null(),
         )
     };
-    if ok == 0 {
+    if ok != 0 {
+        if let Err(error) = std::fs::remove_file(&backup) {
+            tracing::warn!("Failed to remove {label} backup {}: {error}", backup.display());
+        }
+        return Ok(());
+    }
+    let os_error = std::io::Error::last_os_error();
+    const ERROR_UNABLE_TO_MOVE_REPLACEMENT_2: i32 = 1177;
+    if os_error.raw_os_error() == Some(ERROR_UNABLE_TO_MOVE_REPLACEMENT_2) {
+        // The original now lives under the backup name: move it back.
+        if let Err(restore) = std::fs::rename(&backup, destination) {
+            let kept = temp_path.keep().ok();
+            return Err(format!(
+                "Failed to install {label}: {os_error}; restoring the original from {} also failed ({restore}); new contents kept at {}",
+                backup.display(),
+                kept.map_or_else(|| "(unknown)".to_string(), |p| p.display().to_string())
+            ));
+        }
+    }
+    // Never let cleanup delete the only remaining copy.
+    if !destination.exists() {
+        let kept = temp_path.keep().ok();
         return Err(format!(
-            "Failed to install {label}: {}",
-            std::io::Error::last_os_error()
+            "Failed to install {label}: {os_error}; the original is missing, new contents kept at {}",
+            kept.map_or_else(|| "(unknown)".to_string(), |p| p.display().to_string())
         ));
     }
-    Ok(())
+    let _ = std::fs::remove_file(&backup);
+    Err(format!("Failed to install {label}: {os_error}"))
 }
 
 #[cfg(unix)]
@@ -2067,6 +2110,22 @@ mod tests {
             assert_eq!(fs::read(&path).unwrap(), b"original");
             assert_eq!(names(dir.path()), vec!["settings.json"]);
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn blocked_replace_keeps_original_and_leaves_no_temp_or_backup() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, b"original").unwrap();
+        // Open without FILE_SHARE_DELETE so the replace cannot move the target.
+        let _held = fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+        assert!(atomic_write(&path, b"new", "settings").is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        let names: Vec<_> = fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(names.len(), 1);
     }
 
     #[cfg(windows)]
