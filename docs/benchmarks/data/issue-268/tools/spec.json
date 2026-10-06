@@ -1,0 +1,3 @@
+[{"name":"r1-15s","cmd":["$HOME/.cache/sagascript-bench/issue-268/run-r1.sh"],"variant":"x-ane","warmup":true,"timeout":900},
+ {"name":"r2-30s","cmd":["$HOME/.cache/sagascript-bench/issue-268/run-w30.sh"],"variant":"x-ane","warmup":true,"timeout":900},
+ {"name":"r2-40s","cmd":["$HOME/.cache/sagascript-bench/issue-268/run-w40.sh"],"variant":"x-ane","warmup":true,"timeout":900}]

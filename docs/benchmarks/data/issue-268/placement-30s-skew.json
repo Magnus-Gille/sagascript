@@ -1,0 +1,27 @@
+scikit-learn version 1.7.2 is not supported. Minimum required version: 0.17. Maximum required version: 1.5.1. Disabling scikit-learn conversion API.
+{
+  "model": "/Users/magnus/.cache/sagascript-bench/issue-268/models/pianissimo-sv-coreml-r2s-30s/Encoder.mlpackage",
+  "compute_units": "ComputeUnit.CPU_AND_NE",
+  "ops": 1354,
+  "counts": {
+    "CPU": 4,
+    "ANE": 1350
+  },
+  "percent": {
+    "CPU": 0.3,
+    "ANE": 99.7
+  },
+  "non_ane_ops": {
+    "ios17.cast": {
+      "CPU": 2,
+      "ANE": 2
+    },
+    "ios17.expand_dims": {
+      "ANE": 2,
+      "CPU": 1
+    },
+    "ios17.less": {
+      "CPU": 1
+    }
+  }
+}
