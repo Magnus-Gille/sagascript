@@ -112,6 +112,10 @@ function makeControls(overrides = {}) {
 function createHarness(controls) {
   const functions = [
     "meetingFailureText",
+    "updateMeetingClock",
+    "startMeetingClock",
+    "stopMeetingClock",
+    "acceptMeetingTiming",
     "waitForMeetingActions",
     "enqueueMeetingAction",
     "acceptMeetingReview",
@@ -128,7 +132,13 @@ function createHarness(controls) {
     let meetingTranscript = controls.initialTranscript;
     let meetingJobId = "job-active";
     let meetingJobStatus = "running";
-    let meetingPhase = "Running";
+    let meetingPhase = controls.initialPhase ?? "Running";
+    let meetingElapsedMs = 0, meetingPhaseElapsedMs = 0, meetingLastCheckedAgoMs = null;
+    let meetingClock, meetingClockBaseAt = 0, meetingElapsedBase = 0, meetingPhaseElapsedBase = 0;
+    let meetingLastCheckedAt = null, meetingTimingAvailable = false;
+    const performance = { now: () => controls.now ?? 0 };
+    const setInterval = callback => { controls.clockTick = callback; return 1; };
+    const clearInterval = () => { controls.clockTick = null; };
     let meetingError = "";
     let meetingPollingFailed = false;
     let meetingPollGeneration = 1;
@@ -201,6 +211,7 @@ function createHarness(controls) {
       executeCurrentMeetingPlan,
       planCurrentMeeting,
       pollMeetingJob,
+      startMeetingClock, stopMeetingClock, acceptMeetingTiming,
       retryCurrentMeetingProposalPreview,
       saveCurrentMeetingProposal,
       setActionQueue: (queue) => { meetingActionQueue = queue; },
@@ -221,6 +232,7 @@ function createHarness(controls) {
         meetingReviewResetKey,
         meetingJobId,
         transcribing,
+        meetingElapsedMs, meetingPhaseElapsedMs, meetingLastCheckedAgoMs, meetingTimingAvailable,
       }),
     };
   `;
@@ -259,6 +271,34 @@ for (const [label, invalidate] of [
     assert.equal(state.meetingReprocessingBusy, false);
   });
 }
+
+test("meeting timer interpolates native durations, survives missing polls, and resets for a new run", () => {
+  const controls = makeControls({ now: 100, initialPhase: "analyzing" });
+  const exercise = createHarness(controls);
+  exercise.startMeetingClock();
+  assert.equal(exercise.snapshot().meetingElapsedMs, 0);
+  assert.equal(exercise.snapshot().meetingLastCheckedAgoMs, null);
+  assert.equal(exercise.snapshot().meetingTimingAvailable, false);
+  exercise.acceptMeetingTiming({ status: "running", phase: "analyzing", elapsed_ms: 125000, phase_elapsed_ms: 65000 });
+  assert.equal(exercise.snapshot().meetingTimingAvailable, true);
+  controls.now = 2100;
+  controls.clockTick();
+  assert.equal(exercise.snapshot().meetingElapsedMs, 127000);
+  assert.equal(exercise.snapshot().meetingPhaseElapsedMs, 67000);
+  assert.equal(exercise.snapshot().meetingLastCheckedAgoMs, 2000);
+  exercise.acceptMeetingTiming({ status: "running", phase: "analyzing", elapsed_ms: 125000, phase_elapsed_ms: 65000 });
+  assert.equal(exercise.snapshot().meetingElapsedMs, 127000, "delayed active snapshots cannot move the live elapsed clock backwards");
+  assert.equal(exercise.snapshot().meetingPhaseElapsedMs, 67000, "same-phase clocks cannot move backwards either");
+  exercise.acceptMeetingTiming({ status: "completed", phase: "finalizing", elapsed_ms: 126000, phase_elapsed_ms: 1000 });
+  assert.equal(exercise.snapshot().meetingElapsedMs, 126000, "terminal times use the exact native worker duration");
+  exercise.stopMeetingClock();
+  assert.equal(controls.clockTick, null);
+  exercise.startMeetingClock();
+  assert.equal(exercise.snapshot().meetingElapsedMs, 0);
+  assert.equal(exercise.snapshot().meetingPhaseElapsedMs, 0);
+  assert.equal(exercise.snapshot().meetingLastCheckedAgoMs, null);
+  exercise.stopMeetingClock();
+});
 
 test("planning stores its selection without replacing the active review", async () => {
   const controls = makeControls();

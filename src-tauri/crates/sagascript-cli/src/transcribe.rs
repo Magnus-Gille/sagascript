@@ -1230,16 +1230,53 @@ fn progress_step(phase: &str) -> Option<u8> {
     }
 }
 
+fn progress_event(
+    phase: &str,
+    percent: Option<u8>,
+    step: Option<u8>,
+    steps_total: Option<u8>,
+    elapsed_ms: u128,
+) -> serde_json::Value {
+    serde_json::json!({
+        "event": "transcription_progress",
+        "phase": phase,
+        "step": step,
+        "steps_total": steps_total,
+        "percent": percent,
+        "elapsed_ms": elapsed_ms,
+    })
+}
+
+#[cfg(feature = "diarization")]
+fn meeting_progress_event(phase: &str, elapsed_ms: u128) -> serde_json::Value {
+    // Meeting phases are not part of the plain transcription three-step
+    // grouping. They expose boundaries only; no overall or time-derived
+    // percentage is honest here.
+    progress_event(phase, None, None, None, elapsed_ms)
+}
+
 fn emit_progress(enabled: bool, started: Instant, phase: &str, percent: Option<u8>) {
     if enabled {
-        eprintln!("{}", serde_json::json!({
-            "event": "transcription_progress",
-            "phase": phase,
-            "step": progress_step(phase),
-            "steps_total": 3,
-            "percent": percent,
-            "elapsed_ms": started.elapsed().as_millis(),
-        }));
+        eprintln!(
+            "{}",
+            progress_event(
+                phase,
+                percent,
+                progress_step(phase),
+                Some(3),
+                started.elapsed().as_millis(),
+            )
+        );
+    }
+}
+
+#[cfg(feature = "diarization")]
+fn emit_meeting_progress(enabled: bool, started: Instant, phase: &str) {
+    if enabled {
+        eprintln!(
+            "{}",
+            meeting_progress_event(phase, started.elapsed().as_millis())
+        );
     }
 }
 
@@ -1612,6 +1649,7 @@ fn transcribe_file(
             ..DiarizeConfig::default()
         };
 
+        emit_meeting_progress(args.progress_json, file_started, "analyzing");
         let (analysis, raw_segments, diarization_timings, transcription_timings) =
             if let Some(cached) = cached {
                 performance.cache_hit = true;
@@ -1678,6 +1716,7 @@ fn transcribe_file(
             transcription_timings.word_timestamp_attribution_seconds;
 
         let clustering_started = Instant::now();
+        emit_meeting_progress(args.progress_json, file_started, "clustering");
         meeting_checkpoint(control, MeetingPhase::Clustering)?;
         let (speaker_segments, hint_outcome) = cluster_with_outcome(&analysis, &config)?;
         meeting_checkpoint(control, MeetingPhase::Clustering)?;
@@ -1696,6 +1735,7 @@ fn transcribe_file(
             }
         }
 
+        emit_meeting_progress(args.progress_json, file_started, "finalizing");
         let merge_diagnostics_started = Instant::now();
         let transcript: Vec<TimestampedSegment> = raw_segments
             .into_iter()
@@ -1792,12 +1832,14 @@ fn transcribe_file(
                 )
             })?;
             meeting_checkpoint(control, MeetingPhase::Finalizing)?;
+            emit_meeting_progress(args.progress_json, file_started, "completed");
             return Ok(FileTranscription {
                 json,
                 plain,
                 meeting: Some(meeting),
             });
         }
+        emit_meeting_progress(args.progress_json, file_started, "completed");
         return Ok(FileTranscription {
             json,
             plain,
@@ -2691,6 +2733,18 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn meeting_progress_event_is_indeterminate_and_elapsed() {
+        let event = meeting_progress_event("analyzing", 42);
+        assert_eq!(event["event"], "transcription_progress");
+        assert_eq!(event["phase"], "analyzing");
+        assert!(event["percent"].is_null());
+        assert!(event["step"].is_null());
+        assert!(event["steps_total"].is_null());
+        assert_eq!(event["elapsed_ms"], 42);
+    }
 
     #[cfg(feature = "diarization")]
     #[test]

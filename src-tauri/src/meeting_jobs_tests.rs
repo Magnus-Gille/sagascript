@@ -63,6 +63,8 @@ fn snapshot(id: &str, status: JobStatus) -> MeetingSnapshot {
         id: id.into(),
         status,
         phase: "preparing".into(),
+        elapsed_ms: 0,
+        phase_elapsed_ms: 0,
         error: Some("old error".into()),
         transcript: Some(valid_transcript()),
         #[cfg(feature = "diarization")]
@@ -94,11 +96,44 @@ fn reprocessing_result() -> sagascript_cli::meeting_reprocessing::ReprocessingRe
 }
 
 fn job(id: &str, status: JobStatus) -> MeetingJob {
+    let started_at = Instant::now();
     MeetingJob {
         snapshot: snapshot(id, status),
+        started_at,
+        phase_started_at: started_at,
         cancelled: Arc::new(AtomicBool::new(false)),
         backend: None,
     }
+}
+
+#[test]
+fn meeting_clock_tracks_phase_changes_and_freezes_after_worker_exit() {
+    let mut running = job("clock", JobStatus::Running);
+    let started = running.started_at;
+    let first = running.snapshot_at(started + Duration::from_secs(65));
+    assert_eq!(first.elapsed_ms, 65_000);
+    assert_eq!(first.phase_elapsed_ms, 65_000);
+
+    running.set_phase("analyzing".into(), started + Duration::from_secs(65));
+    // Repeated phase checkpoints and polls must not restart the phase clock.
+    running.set_phase("analyzing".into(), started + Duration::from_secs(80));
+    let second = running.snapshot_at(started + Duration::from_secs(90));
+    assert_eq!(second.elapsed_ms, 90_000);
+    assert_eq!(second.phase_elapsed_ms, 25_000);
+
+    running.snapshot.status = JobStatus::Cancelling;
+    let cancelling = running.snapshot_at(started + Duration::from_secs(95));
+    assert_eq!(cancelling.elapsed_ms, 95_000);
+    assert_eq!(cancelling.phase_elapsed_ms, 30_000);
+
+    running.snapshot = cancelling;
+    finish_snapshot(&mut running.snapshot, Err("cancelled".into()), true, false);
+    let finished = running.snapshot_at(started + Duration::from_secs(120));
+    assert_eq!(finished.elapsed_ms, 95_000);
+    assert_eq!(finished.phase_elapsed_ms, 30_000);
+    let json = serde_json::to_value(finished).expect("timing snapshot serializes");
+    assert_eq!(json["elapsed_ms"], 95_000);
+    assert_eq!(json["phase_elapsed_ms"], 30_000);
 }
 
 fn staging_files(path: &Path) -> Vec<PathBuf> {

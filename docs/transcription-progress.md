@@ -21,6 +21,38 @@ reaching 100%. The GUI leaves failed/cancelled steps unchecked and preserves
 green checks only for steps already completed. This grouping is for plain
 transcription, not the meeting workflow.
 
+Meeting transcription uses the same `transcription_progress` event name with
+phase boundaries and elapsed time. `sagascript transcribe FILE --diarize
+--progress-json` emits `analyzing`, `clustering`, `finalizing`, and a
+successful `completed` event after the existing decode/model events. The
+`--meeting-json` output path emits the same terminal events before writing its
+shared transcript JSON. These four boundary events have `percent: null`,
+`step: null`, and `steps_total: null`; they do not borrow the plain three-step grouping or invent
+an overall percentage. Their phase order is:
+
+1. `analyzing`: concurrent Whisper timestamping and speaker segmentation/
+   embedding analysis. This is a boundary, not a heartbeat.
+2. `clustering`: speaker clustering and label assignment.
+3. `finalizing`: merge, diagnostics, source verification, and output assembly.
+4. `completed`: emitted after the requested transcription output has been
+   assembled successfully. It describes transcription completion; later clipboard
+   actions or a batch cancellation can still fail or cancel the command.
+
+`elapsed_ms` is wall-clock time for the current input file. It is diagnostic
+feedback and is not a completion estimate. Earlier decode/model events retain
+their existing stage-local percentages and plain stage fields; those fields
+do not describe overall meeting completion.
+
+The desktop meeting view shows the current phase, total elapsed time, time in
+that phase, and an indeterminate status bar. Native monotonic job durations
+anchor the display, which ticks between status polls and freezes when the
+worker exits. Repeated checkpoints in the same phase do not reset its timer.
+The last successful status check is shown separately: it confirms the app
+answered, not that native analysis made progress. Failed or delayed responses
+pause the bar and explain that processing may still be running. Cancellation
+keeps timing until the worker actually stops. Elapsed time never determines
+a completion percentage or ETA.
+
 - `decoding`: packet bytes / source bytes; container overhead can leave a
   remainder until packet decoding ends. This is an approximate byte fraction,
   especially for video containers with other tracks.
@@ -31,10 +63,10 @@ transcription, not the meeting workflow.
 - `transcribing`: native Whisper percentages.
 - `finalizing`, `completed`: postprocessing and successful completion.
 
-The detailed terminal-independent timeline currently covers the plain
-transcription path. It is not a claim of full GUI/CLI feature or event parity.
-GUI plain imports use the same core decode/conversion callbacks; they do not
-perform the CLI's separate language diagnostics.
+The detailed terminal-independent timeline covers both plain transcription and
+the meeting phase boundaries described above. GUI plain imports use the same
+core decode/conversion callbacks; they do not perform the CLI's separate
+language diagnostics.
 
 GUI plain imports have run-ID-scoped `plain-transcription-progress` events.
 They lease a warm backend separate from live dictation/training, so Stop cannot

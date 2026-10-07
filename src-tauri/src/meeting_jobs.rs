@@ -32,6 +32,8 @@ pub struct MeetingSnapshot {
     id: String,
     status: JobStatus,
     phase: String,
+    elapsed_ms: u64,
+    phase_elapsed_ms: u64,
     error: Option<String>,
     transcript: Option<MeetingTranscript>,
     #[cfg(feature = "diarization")]
@@ -56,8 +58,31 @@ pub struct ReprocessingRequest {
 
 struct MeetingJob {
     snapshot: MeetingSnapshot,
+    started_at: Instant,
+    phase_started_at: Instant,
     cancelled: Arc<AtomicBool>,
     backend: Option<Arc<WhisperBackend>>,
+}
+
+impl MeetingJob {
+    fn snapshot_at(&self, now: Instant) -> MeetingSnapshot {
+        let mut snapshot = self.snapshot.clone();
+        if snapshot.status.busy() {
+            snapshot.elapsed_ms = now.saturating_duration_since(self.started_at).as_millis() as u64;
+            snapshot.phase_elapsed_ms = now
+                .saturating_duration_since(self.phase_started_at)
+                .as_millis() as u64;
+        }
+        snapshot
+    }
+
+    #[cfg(any(feature = "diarization", test))]
+    fn set_phase(&mut self, phase: String, now: Instant) {
+        if self.snapshot.phase != phase {
+            self.snapshot.phase = phase;
+            self.phase_started_at = now;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -139,16 +164,21 @@ async fn begin_job(
         }
         let backend = Arc::new(WhisperBackend::new());
         let cancelled = Arc::new(AtomicBool::new(false));
+        let started_at = Instant::now();
         *slot = Some(MeetingJob {
             snapshot: MeetingSnapshot {
                 id: id.clone(),
                 status: JobStatus::Running,
                 phase: "preparing".into(),
+                elapsed_ms: 0,
+                phase_elapsed_ms: 0,
                 error: None,
                 transcript: None,
                 reprocessing: None,
             },
             backend: Some(backend.clone()),
+            started_at,
+            phase_started_at: started_at,
             cancelled: cancelled.clone(),
         });
         drop(ctrl);
@@ -173,10 +203,11 @@ async fn begin_job(
                         {
                             if job.snapshot.status == JobStatus::Running {
                                 // Serialize the closed enum, never text or a source path.
-                                job.snapshot.phase = serde_json::to_value(phase)
+                                let phase = serde_json::to_value(phase)
                                     .ok()
                                     .and_then(|value| value.as_str().map(str::to_owned))
                                     .unwrap_or_else(|| "processing".into());
+                                job.set_phase(phase, Instant::now());
                             }
                         }
                     }
@@ -254,6 +285,8 @@ async fn begin_job(
             let mut released = false;
             if let Ok(mut slot) = state.0.lock() {
                 if let Some(job) = slot.as_mut().filter(|job| job.snapshot.id == worker_id) {
+                    // Freeze the durations only once the actual worker has exited.
+                    job.snapshot = job.snapshot_at(Instant::now());
                     let controller = app.state::<SharedController>();
                     if let Ok(mut ctrl) = controller.lock() {
                         let has_result = match &result {
@@ -345,7 +378,7 @@ pub fn get_meeting_job(
         .map_err(|_| lock_error())?
         .as_ref()
         .filter(|job| job.snapshot.id == job_id)
-        .map(|job| job.snapshot.clone())
+        .map(|job| job.snapshot_at(Instant::now()))
         .ok_or_else(|| {
             "This meeting job is no longer available. No transcript was saved automatically.".into()
         })

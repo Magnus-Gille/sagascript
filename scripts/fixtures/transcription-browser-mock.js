@@ -108,6 +108,21 @@ window.qa = {
     if (!task) throw new Error(`No meeting to fail: ${path}`);
     task.failPoll = true;
   },
+  meetingProgress: (path, phase, elapsedMs, phaseElapsedMs) => {
+    const task = meetingTask(path);
+    if (!task) throw new Error(`No meeting to update: ${path}`);
+    Object.assign(task, { phase, elapsedMs, phaseElapsedMs });
+  },
+  holdPoll: (path) => {
+    const task = meetingTask(path);
+    task.pollHeld = new Promise(resolve => { task.releasePoll = resolve; });
+  },
+  releasePoll: (path) => {
+    const task = meetingTask(path);
+    task.releasePoll?.();
+    task.pollHeld = null;
+  },
+  deferCancellation: (path) => { meetingTask(path).deferCancellation = true; },
   maximum: () => maximum,
 };
 mockIPC(async (cmd, args = {}) => {
@@ -203,6 +218,7 @@ mockIPC(async (cmd, args = {}) => {
     case "save_transcription_text": return true;
     case "copy_transcription_text": return null;
     case "begin_meeting_file": {
+      if (window.qaFailMeetingStart) throw new Error("Finish the current dictation before importing a meeting.");
       active++; maximum = Math.max(maximum, active);
       const id = `meeting-${++sequence}`;
       meetings.set(id, { path: args.filePath, status: "running", released: false });
@@ -225,13 +241,19 @@ mockIPC(async (cmd, args = {}) => {
     }
     case "get_meeting_job": {
       const task = meetings.get(args.jobId);
+      if (task.pollHeld) await task.pollHeld;
       if (task.failPoll) { task.failPoll = false; throw new Error("Synthetic poll failure"); }
-      if (task.status !== "running" && !task.released) { active--; task.released = true; }
-      return { id: args.jobId, status: task.status, phase: task.status, error: null,
+      if (["completed", "cancelled", "failed"].includes(task.status) && !task.released) { active--; task.released = true; }
+      return { id: args.jobId, status: task.status, phase: task.phase ?? "preparing", error: null,
+        elapsed_ms: task.elapsedMs ?? 0, phase_elapsed_ms: task.phaseElapsedMs ?? 0,
         transcript: task.status === "completed" && !task.reprocessing ? transcript(task.path) : null,
         reprocessing: task.status === "completed" && task.reprocessing ? reprocessingResult(task) : null };
     }
-    case "cancel_meeting_job": meetings.get(args.jobId).status = "cancelled"; return true;
+    case "cancel_meeting_job": {
+      const task = meetings.get(args.jobId);
+      task.status = task.deferCancellation ? "cancelling" : "cancelled";
+      return true;
+    }
     case "create_meeting_review": return {
       review: { schema_version: 1, original: args.transcript, original_revision: "original", generation: 0,
         batches: [], revision: "revision-0" }, transcript: args.transcript,
