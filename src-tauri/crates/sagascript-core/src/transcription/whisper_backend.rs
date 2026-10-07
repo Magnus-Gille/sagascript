@@ -2072,9 +2072,18 @@ impl WhisperBackend {
                     let mut coverage_segments = Vec::with_capacity(n_segments as usize);
                     for i in 0..n_segments {
                         let Some(segment) = state.get_segment(i) else { continue };
-                        let Some(text) = meaningful_whisper_segment_text(&segment, i) else {
-                            continue;
+                        let text = match segment.to_str() {
+                            Ok(text) => strip_timestamp_tokens(text).trim().to_string(),
+                            Err(error) => {
+                                warn!(
+                                    "Segment {i} failed UTF-8 conversion, dropping from transcript: {error}"
+                                );
+                                continue;
+                            }
                         };
+                        if text.is_empty() {
+                            continue;
+                        }
                         coverage_segments.push(TranscriptSegment {
                             start: segment.start_timestamp() as f64 / 100.0 + t_offset,
                             end: segment.end_timestamp() as f64 / 100.0 + t_offset,
@@ -2101,7 +2110,7 @@ impl WhisperBackend {
                     let mut coverage_segments = Vec::with_capacity(n_segments as usize);
                     for i in 0..n_segments {
                         let Some(segment) = state.get_segment(i) else { continue };
-                        if let Some(text) = meaningful_whisper_segment_text(&segment, i) {
+                        if let Some(text) = meaningful_whisper_segment_coverage_text(&segment, i) {
                             coverage_segments.push(TranscriptSegment {
                                 start: segment.start_timestamp() as f64 / 100.0 + t_offset,
                                 end: segment.end_timestamp() as f64 / 100.0 + t_offset,
@@ -2476,23 +2485,52 @@ fn macos_perf_cores() -> Option<i32> {
         .filter(|&n| n > 0)
 }
 
-/// Return meaningful text from a Whisper segment for coarse coverage diagnostics.
+/// Return meaningful text after stripping generated timestamp/special tokens.
 #[cfg(feature = "diarization")]
-fn meaningful_whisper_segment_text(
+fn meaningful_coverage_text(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let text = strip_timestamp_tokens(&text).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Return meaningful text from a Whisper segment for coarse coverage diagnostics.
+///
+/// Coverage is diagnostic metadata, so invalid UTF-8 is replaced lossily. The
+/// user-facing diarized transcript remains strict and is handled separately.
+#[cfg(feature = "diarization")]
+fn meaningful_whisper_segment_coverage_text(
     segment: &whisper_rs::WhisperSegment<'_>,
     index: i32,
 ) -> Option<String> {
-    let text = match segment.to_str() {
-        Ok(text) => text,
+    let bytes = match segment.to_bytes() {
+        Ok(bytes) => bytes,
         Err(error) => {
             warn!(
-                "Segment {index} failed UTF-8 conversion, dropping from coverage diagnostics: {error}"
+                "Segment {index} text could not be read, dropping from coverage diagnostics: {error}"
             );
             return None;
         }
     };
-    let text = strip_timestamp_tokens(text).trim().to_string();
-    (!text.is_empty()).then_some(text)
+    meaningful_coverage_text(bytes)
+}
+
+#[cfg(all(test, feature = "diarization"))]
+mod coverage_text_tests {
+    use super::meaningful_coverage_text;
+
+    #[test]
+    fn lossy_replacement_is_retained_when_segment_has_meaningful_text() {
+        assert_eq!(
+            meaningful_coverage_text(b"\xff spoken text"),
+            Some("\u{FFFD} spoken text".to_string())
+        );
+    }
+
+    #[test]
+    fn timestamp_only_and_whitespace_segments_are_excluded() {
+        assert_eq!(meaningful_coverage_text(b" <|0.00|> <|1.20|> "), None);
+        assert_eq!(meaningful_coverage_text(b"   \t\n"), None);
+    }
 }
 
 /// Extract segment timing from per-token DTW timestamps.

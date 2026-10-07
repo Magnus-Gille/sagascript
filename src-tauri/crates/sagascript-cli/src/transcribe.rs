@@ -1674,13 +1674,17 @@ fn transcribe_file(
                 let parallel_started = Instant::now();
                 let audio = audio.as_deref().expect("cache misses decode audio");
                 meeting_checkpoint(control, MeetingPhase::Analyzing)?;
-                let (analysis, diarization_timings, transcription) = run_diarization_analysis(
+                let (analysis, diarization_timings, mut transcription) = run_diarization_analysis(
                     audio,
                     backend,
                     language,
                     decoder_prompt.as_deref(),
                     &config,
                 )?;
+                transcription.coverage_segments = canonicalize_coverage_segments(
+                    transcription.coverage_segments,
+                    coverage_profile.duration_seconds(),
+                );
                 meeting_checkpoint(control, MeetingPhase::Analyzing)?;
                 performance.parallel_analysis_span_seconds =
                     parallel_started.elapsed().as_secs_f64();
@@ -2035,6 +2039,28 @@ fn run_diarization_analysis(
             backend.transcribe_sync_for_diarization_profiled(audio, language, prompt)?;
         Ok((analysis, timings, transcription))
     }
+}
+
+#[cfg(feature = "diarization")]
+fn canonicalize_coverage_segments(
+    segments: Vec<TranscriptSegment>,
+    duration: f64,
+) -> Vec<TranscriptSegment> {
+    if !duration.is_finite() || duration < 0.0 {
+        return Vec::new();
+    }
+
+    segments
+        .into_iter()
+        .filter_map(|mut segment| {
+            if !segment.start.is_finite() || !segment.end.is_finite() {
+                return None;
+            }
+            segment.start = segment.start.clamp(0.0, duration);
+            segment.end = segment.end.clamp(0.0, duration);
+            (segment.end > segment.start).then_some(segment)
+        })
+        .collect()
 }
 
 fn expand_inputs(inputs: &[PathBuf], recursive: bool) -> Result<Vec<PathBuf>, DictationError> {
@@ -3102,12 +3128,18 @@ mod tests {
             },
             TranscriptSegment {
                 start: 9.0,
-                end: 11.0,
+                end: 11.02,
                 text: "second".to_string(),
                 avg_logprob: None,
                 no_speech_prob: 0.0,
             },
         ];
+        let coverage_profile = CoverageProfile::from_audio(&vec![0.05_f32; 11 * 16_000]);
+        let coverage_segments = canonicalize_coverage_segments(
+            coverage_segments,
+            coverage_profile.duration_seconds(),
+        );
+        assert_eq!(coverage_segments[1].end, 11.0);
         let source_identity = crate::diarization_cache::CacheIdentity::for_input(
             &input,
             "en",
@@ -3116,15 +3148,20 @@ mod tests {
         )
         .unwrap();
         let cache_value = crate::diarization_cache::DiarizationCache::new_with_coverage_segments(
-            source_identity,
+            source_identity.clone(),
             analysis,
             vec![(1.0, 1.0, "first".to_string()), (9.0, 9.0, "second".to_string())],
             coverage_segments,
-            CoverageProfile::from_audio(&vec![0.05_f32; 11 * 16_000]),
+            coverage_profile,
             None,
             None,
         );
         crate::diarization_cache::save(&cache, &cache_value).unwrap();
+        let loaded = crate::diarization_cache::load(&cache, &source_identity).unwrap();
+        let crate::diarization_cache::CacheLookup::Hit(loaded) = loaded else {
+            panic!("canonicalized coarse coverage should produce a cache hit");
+        };
+        assert_eq!(loaded.coverage_segments.as_ref().unwrap()[1].end, 11.0);
 
         let args_for_threshold = |threshold| TranscribeArgs {
             progress_json: false,
@@ -3180,6 +3217,8 @@ mod tests {
         for json in [&strict, &broad] {
             assert!((json["coverage_ratio"].as_f64().unwrap() - 4.0 / 11.0).abs() < 1e-6);
             assert_eq!(json["uncovered_spans"].as_array().unwrap().len(), 1);
+            assert_eq!(json["uncovered_spans"][0]["start"], 2.0);
+            assert_eq!(json["uncovered_spans"][0]["end"], 9.0);
             assert_eq!(json["warnings"], strict["warnings"]);
             assert_eq!(json["warnings"][0]["code"], "uncovered_speech");
         }
