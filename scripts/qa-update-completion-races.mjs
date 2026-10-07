@@ -17,9 +17,26 @@ try {
   await page.getByRole("checkbox", { name: "Speaker diarization" }).check();
   await page.evaluate(() => window.qa.drop(["/fixtures/race-meeting.wav"]));
   await page.waitForFunction(() => window.qa.calls.some(c => c.cmd === "begin_meeting_file"));
-  await page.evaluate(() => window.qa.finishMeeting("/fixtures/race-meeting.wav"));
+  await page.getByRole("button", { name: "Cancel meeting", exact: true }).waitFor();
+  await page.waitForFunction(() => window.qa.calls.some(c => c.cmd === "get_meeting_job"));
+  await page.evaluate(() => {
+    window.qa.holdPoll("/fixtures/race-meeting.wav");
+    window.qa.finishMeeting("/fixtures/race-meeting.wav");
+    window.qa.prepareUpdate("completion-race");
+  });
+  await page.waitForTimeout(100);
+  const heldPoll = await page.evaluate(() => ({
+    completion: window.qa.calls.findLast(c =>
+      c.cmd === "complete_update_preparation" && c.args.nonce === "completion-race"),
+    reviewCalls: window.qa.calls.filter(c => c.cmd === "create_meeting_review").length,
+  }));
+  assert.equal(heldPoll.completion, undefined,
+    heldPoll.completion
+      ? `must wait for the held terminal poll before acknowledging update (error: ${heldPoll.completion.args.error ?? "none"})`
+      : "must wait for the held terminal poll before acknowledging update");
+  assert.equal(heldPoll.reviewCalls, 0, "held terminal poll must precede review initialization");
+  await page.evaluate(() => window.qa.releasePoll("/fixtures/race-meeting.wav"));
   await page.waitForFunction(() => typeof window.qaReleaseReview === "function");
-  await page.evaluate(() => window.qa.prepareUpdate("completion-race"));
   await page.waitForTimeout(100);
   const earlyCompletion = await page.evaluate(() => window.qa.calls.findLast(c =>
     c.cmd === "complete_update_preparation" && c.args.nonce === "completion-race"));
@@ -33,7 +50,13 @@ try {
   const calls = await page.evaluate(() => window.qa.calls);
   const completion = calls.findLast(c => c.cmd === "complete_update_preparation" && c.args.nonce === "completion-race");
   assert.equal(completion?.args.error, null, "update preparation must succeed after the held review is released");
-  const saved = calls.findLast(c => c.cmd === "save_update_recovery").args.payload;
+  const completionIndex = calls.findLastIndex(c => c.cmd === "complete_update_preparation" && c.args.nonce === "completion-race");
+  const beforeCompletion = calls.slice(0, completionIndex);
+  const savedIndex = beforeCompletion.findLastIndex(c => c.cmd === "save_update_recovery"
+    && c.args.payload?.meetings?.some(meeting => meeting.path === "/fixtures/race-meeting.wav"));
+  assert.ok(savedIndex >= 0,
+    "meeting recovery must be saved before successful update acknowledgement");
+  const saved = beforeCompletion[savedIndex].args.payload;
   assert.equal(saved.meetings.length, 1);
   assert.equal(saved.meetings[0].review.transcript.source_sha256, "/fixtures/race-meeting.wav");
   await page.evaluate(() => window.qa.abortUpdate());
