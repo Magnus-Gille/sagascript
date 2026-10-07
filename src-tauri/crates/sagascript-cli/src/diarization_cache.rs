@@ -7,10 +7,11 @@ use sagascript_core::error::DictationError;
 use sagascript_core::transcription::diagnostics::{
     CoverageProfile, LanguageDetection, LanguageRegionDiagnostics,
 };
+use sagascript_core::transcription::TranscriptSegment;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const CACHE_SCHEMA_VERSION: u32 = 4;
+const CACHE_SCHEMA_VERSION: u32 = 5;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +75,8 @@ pub(crate) struct DiarizationCache {
     pub(crate) analysis: DiarizationAnalysis,
     pub(crate) transcript: Vec<(f64, f64, String)>,
     #[serde(default)]
+    pub(crate) coverage_segments: Option<Vec<TranscriptSegment>>,
+    #[serde(default)]
     pub(crate) coverage_profile: CoverageProfile,
     #[serde(default)]
     pub(crate) detected_language: Option<LanguageDetection>,
@@ -119,10 +122,44 @@ impl CacheIdentity {
 }
 
 impl DiarizationCache {
+    /// Synthetic fixture constructor retained for crate tests and legacy test helpers.
+    /// Its coarse spans mirror the supplied transcript tuples; production cache writes use
+    /// `new_with_coverage_segments` with authentic Whisper segment bounds.
+    #[cfg(test)]
     pub(crate) fn new(
         identity: CacheIdentity,
         analysis: DiarizationAnalysis,
         transcript: Vec<(f64, f64, String)>,
+        coverage_profile: CoverageProfile,
+        detected_language: Option<LanguageDetection>,
+        language_regions: Option<LanguageRegionDiagnostics>,
+    ) -> Self {
+        let coverage_segments = transcript
+            .iter()
+            .map(|(start, end, text)| TranscriptSegment {
+                start: *start,
+                end: *end,
+                text: text.clone(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            })
+            .collect();
+        Self::new_with_coverage_segments(
+            identity,
+            analysis,
+            transcript,
+            coverage_segments,
+            coverage_profile,
+            detected_language,
+            language_regions,
+        )
+    }
+
+    pub(crate) fn new_with_coverage_segments(
+        identity: CacheIdentity,
+        analysis: DiarizationAnalysis,
+        transcript: Vec<(f64, f64, String)>,
+        coverage_segments: Vec<TranscriptSegment>,
         coverage_profile: CoverageProfile,
         detected_language: Option<LanguageDetection>,
         language_regions: Option<LanguageRegionDiagnostics>,
@@ -132,6 +169,7 @@ impl DiarizationCache {
             analysis_identity: Some(AnalysisIdentity::current()),
             analysis,
             transcript,
+            coverage_segments: Some(coverage_segments),
             coverage_profile,
             detected_language,
             language_regions,
@@ -169,6 +207,9 @@ fn load_internal(
         return Ok(CacheLookup::Miss(
             "input, model, language, prompt, or schema changed",
         ));
+    }
+    if cached.coverage_segments.is_none() {
+        return Ok(CacheLookup::Miss("coarse coverage segments are missing"));
     }
     let Some(analysis_identity) = cached.analysis_identity.as_ref() else {
         return Ok(CacheLookup::Miss("analysis provenance is missing"));
@@ -234,6 +275,19 @@ fn validate_cache_payload(cached: &DiarizationCache) -> Result<(), DictationErro
     }) {
         return Err(DictationError::DiarizationError(
             "Cached diarization contains invalid transcript timestamps".to_string(),
+        ));
+    }
+    if cached.coverage_segments.as_ref().is_some_and(|segments| {
+        segments.iter().any(|segment| {
+            !segment.start.is_finite()
+                || !segment.end.is_finite()
+                || segment.start < 0.0
+                || segment.end < segment.start
+                || segment.end > duration + 0.001
+        })
+    }) {
+        return Err(DictationError::DiarizationError(
+            "Cached diarization contains invalid coarse coverage timestamps".to_string(),
         ));
     }
     Ok(())
@@ -448,7 +502,7 @@ mod tests {
                 "schema_version".to_string(),
             ]
         );
-        assert_eq!(object["schema_version"], serde_json::json!(4));
+        assert_eq!(object["schema_version"], serde_json::json!(5));
         assert!(!object.contains_key("threshold"));
 
         let _ = std::fs::remove_dir_all(dir);
@@ -585,10 +639,17 @@ mod tests {
             serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#).unwrap();
         save(
             &cache_path,
-            &DiarizationCache::new(
+            &DiarizationCache::new_with_coverage_segments(
                 expected.clone(),
                 analysis,
                 vec![(0.0, 1.0, " hej".into())],
+                vec![TranscriptSegment {
+                    start: 0.0,
+                    end: 1.0,
+                    text: "coarse hej".into(),
+                    avg_logprob: None,
+                    no_speech_prob: 0.0,
+                }],
                 CoverageProfile::from_audio(&vec![0.1; 16_000]),
                 Some(LanguageDetection {
                     language: "sv".into(),
@@ -620,6 +681,7 @@ mod tests {
             panic!("expected cache hit");
         };
         assert_eq!(hit.transcript.len(), 1);
+        assert_eq!(hit.coverage_segments.as_ref().unwrap()[0].text, "coarse hej");
         assert_eq!(hit.detected_language.unwrap().language, "sv");
         let regions = hit.language_regions.unwrap();
         assert_eq!(regions.regions[0].language, "sv");
@@ -647,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn prior_schema_is_a_cache_miss() {
+    fn schema4_json_without_coarse_field_is_a_normal_cache_miss() {
         let dir = temp_dir();
         std::fs::create_dir_all(&dir).unwrap();
         let input = dir.join("audio.m4a");
@@ -655,7 +717,7 @@ mod tests {
         let cache_path = dir.join("analysis.json");
         let expected = identity(&input);
         let mut old_identity = expected.clone();
-        old_identity.schema_version -= 1;
+        old_identity.schema_version = 4;
         let analysis: DiarizationAnalysis =
             serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#).unwrap();
         save(
@@ -673,6 +735,10 @@ mod tests {
         let mut old_json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&cache_path).unwrap()).unwrap();
         old_json.as_object_mut().unwrap().remove("coverage_profile");
+        old_json
+            .as_object_mut()
+            .unwrap()
+            .remove("coverage_segments");
         old_json
             .as_object_mut()
             .unwrap()
@@ -695,6 +761,33 @@ mod tests {
             load_for_rediarization(&cache_path, &old_identity).unwrap(),
             CacheLookup::Miss(_)
         ));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn current_schema_without_coarse_coverage_is_a_cache_miss() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        std::fs::write(&input, b"audio").unwrap();
+        let cache_path = dir.join("analysis.json");
+        let expected = identity(&input);
+        write_minimal_cache(&cache_path, expected.clone());
+
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("coverage_segments");
+        std::fs::write(&cache_path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        assert!(matches!(
+            load(&cache_path, &expected).unwrap(),
+            CacheLookup::Miss("coarse coverage segments are missing")
+        ));
+        assert!(matches!(
+            load_for_rediarization(&cache_path, &expected).unwrap(),
+            CacheLookup::Miss("coarse coverage segments are missing")
+        ));
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -890,6 +983,24 @@ mod tests {
         std::fs::write(
             &cache_path,
             serde_json::to_vec(&invalid_transcript).unwrap(),
+        )
+        .unwrap();
+        assert!(load(&cache_path, &expected).is_err());
+        assert!(load_for_rediarization(&cache_path, &expected).is_err());
+
+        write_minimal_cache(&cache_path, expected.clone());
+        let mut invalid_coverage: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&cache_path).unwrap()).unwrap();
+        invalid_coverage["coverage_segments"] = serde_json::json!([{
+            "start": 0.8,
+            "end": 0.2,
+            "text": "malformed",
+            "avg_logprob": null,
+            "no_speech_prob": 0.0
+        }]);
+        std::fs::write(
+            &cache_path,
+            serde_json::to_vec(&invalid_coverage).unwrap(),
         )
         .unwrap();
         assert!(load(&cache_path, &expected).is_err());

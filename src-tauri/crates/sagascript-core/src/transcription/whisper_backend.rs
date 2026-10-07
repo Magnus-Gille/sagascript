@@ -289,6 +289,7 @@ pub struct TranscriptSegment {
 #[derive(Debug, Clone)]
 pub struct DiarizationTranscription {
     pub segments: Vec<(f64, f64, String)>,
+    pub coverage_segments: Vec<TranscriptSegment>,
     pub timings: DiarizationTranscriptionTimings,
 }
 
@@ -2000,6 +2001,7 @@ impl WhisperBackend {
             Granularity::Segment,
         )?;
         words.segments = fallback.segments;
+        words.coverage_segments = fallback.coverage_segments;
         words.timings.whisper_inference_seconds += fallback.timings.whisper_inference_seconds;
         words.timings.word_timestamp_attribution_seconds +=
             fallback.timings.word_timestamp_attribution_seconds;
@@ -2065,23 +2067,21 @@ impl WhisperBackend {
             let n_segments = state.full_n_segments();
             let mut results = Vec::with_capacity(n_segments as usize);
 
-            match granularity {
+            let coverage_segments = match granularity {
                 Granularity::Segment => {
+                    let mut coverage_segments = Vec::with_capacity(n_segments as usize);
                     for i in 0..n_segments {
                         let Some(segment) = state.get_segment(i) else { continue };
-                        let text = match segment.to_str() {
-                            Ok(s) => s,
-                            Err(e) => {
-                                warn!(
-                                    "Segment {i} failed UTF-8 conversion, dropping from transcript: {e}"
-                                );
-                                continue;
-                            }
-                        };
-                        let text = strip_timestamp_tokens(text).trim().to_string();
-                        if text.is_empty() {
+                        let Some(text) = meaningful_whisper_segment_text(&segment, i) else {
                             continue;
-                        }
+                        };
+                        coverage_segments.push(TranscriptSegment {
+                            start: segment.start_timestamp() as f64 / 100.0 + t_offset,
+                            end: segment.end_timestamp() as f64 / 100.0 + t_offset,
+                            text: text.clone(),
+                            avg_logprob: None,
+                            no_speech_prob: segment.no_speech_probability(),
+                        });
                         // Derive segment timing from DTW timestamps on first/last non-special
                         // token. DTW timestamps are in centiseconds; -1 means not computed.
                         // Fall back to segment-level timestamps if DTW was not available.
@@ -2092,13 +2092,24 @@ impl WhisperBackend {
                         });
                         results.push((t0, t1, text));
                     }
+                    coverage_segments
                 }
                 Granularity::Word => {
                     // Collect per-token timings for ALL segments first, then group
                     // in a single pass so cross-segment DTW inheritance is correct.
                     let mut segs: Vec<Vec<TokenTiming>> = Vec::with_capacity(n_segments as usize);
+                    let mut coverage_segments = Vec::with_capacity(n_segments as usize);
                     for i in 0..n_segments {
                         let Some(segment) = state.get_segment(i) else { continue };
+                        if let Some(text) = meaningful_whisper_segment_text(&segment, i) {
+                            coverage_segments.push(TranscriptSegment {
+                                start: segment.start_timestamp() as f64 / 100.0 + t_offset,
+                                end: segment.end_timestamp() as f64 / 100.0 + t_offset,
+                                text,
+                                avg_logprob: None,
+                                no_speech_prob: segment.no_speech_probability(),
+                            });
+                        }
                         let n_tok = segment.n_tokens();
                         let mut token_timings = Vec::with_capacity(n_tok as usize);
                         for j in 0..n_tok {
@@ -2118,11 +2129,13 @@ impl WhisperBackend {
                     // words_from_segments returns empty if no valid DTW exists,
                     // which triggers the CLI fallback to segment-level timestamps.
                     results = words_from_segments(&segs);
+                    coverage_segments
                 }
-            }
+            };
 
             Ok(DiarizationTranscription {
                 segments: results,
+                coverage_segments,
                 timings: DiarizationTranscriptionTimings {
                     whisper_inference_seconds,
                     word_timestamp_attribution_seconds: attribution_started
@@ -2461,6 +2474,25 @@ fn macos_perf_cores() -> Option<i32> {
         .parse::<i32>()
         .ok()
         .filter(|&n| n > 0)
+}
+
+/// Return meaningful text from a Whisper segment for coarse coverage diagnostics.
+#[cfg(feature = "diarization")]
+fn meaningful_whisper_segment_text(
+    segment: &whisper_rs::WhisperSegment<'_>,
+    index: i32,
+) -> Option<String> {
+    let text = match segment.to_str() {
+        Ok(text) => text,
+        Err(error) => {
+            warn!(
+                "Segment {index} failed UTF-8 conversion, dropping from coverage diagnostics: {error}"
+            );
+            return None;
+        }
+    };
+    let text = strip_timestamp_tokens(text).trim().to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 /// Extract segment timing from per-token DTW timestamps.

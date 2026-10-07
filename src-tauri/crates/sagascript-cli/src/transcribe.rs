@@ -243,20 +243,6 @@ pub(crate) fn prepare_diarized_plain_segments(
 }
 
 #[cfg(feature = "diarization")]
-fn coverage_segments_before_consolidation(segments: &[DiarizedSegment]) -> Vec<TranscriptSegment> {
-    segments
-        .iter()
-        .map(|segment| TranscriptSegment {
-            start: segment.start,
-            end: segment.end,
-            text: segment.text.clone(),
-            avg_logprob: None,
-            no_speech_prob: 0.0,
-        })
-        .collect()
-}
-
-#[cfg(feature = "diarization")]
 const MAX_MEETING_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, serde::Serialize, PartialEq, Eq)]
@@ -1664,13 +1650,22 @@ fn transcribe_file(
         };
 
         emit_meeting_progress(args.progress_json, file_started, "analyzing");
-        let (analysis, raw_segments, diarization_timings, transcription_timings) =
+        let (
+            analysis,
+            raw_segments,
+            coverage_segments,
+            diarization_timings,
+            transcription_timings,
+        ) =
             if let Some(cached) = cached {
                 performance.cache_hit = true;
                 let cached = *cached;
                 (
                     cached.analysis,
                     cached.transcript,
+                    cached
+                        .coverage_segments
+                        .expect("validated cache must contain coverage segments"),
                     DiarizationTimings::default(),
                     DiarizationTranscriptionTimings::default(),
                 )
@@ -1694,10 +1689,11 @@ fn transcribe_file(
                     (args.diarize_cache.as_deref(), cache_identity.clone())
                 {
                     let cache_write_started = Instant::now();
-                    let cache = crate::diarization_cache::DiarizationCache::new(
+                    let cache = crate::diarization_cache::DiarizationCache::new_with_coverage_segments(
                         identity,
                         analysis.clone(),
                         transcription.segments.clone(),
+                        transcription.coverage_segments.clone(),
                         coverage_profile.clone(),
                         detected_language.clone(),
                         language_regions.clone(),
@@ -1715,6 +1711,7 @@ fn transcribe_file(
                 (
                     analysis,
                     transcription.segments,
+                    transcription.coverage_segments,
                     diarization_timings,
                     transcription.timings,
                 )
@@ -1757,7 +1754,6 @@ fn transcribe_file(
             .collect();
 
         let diarized = merge_with_transcript(&speaker_segments, &transcript);
-        let diagnostic_segments = coverage_segments_before_consolidation(&diarized);
         let plain_segments = prepare_diarized_plain_segments(&diarized, language, glossary);
         let mut consolidated = consolidate(&diarized);
         for segment in &mut consolidated {
@@ -1775,7 +1771,7 @@ fn transcribe_file(
             .into_iter()
             .map(|(_, correction)| correction)
             .collect::<Vec<_>>();
-        let coverage = analyze_coverage_profile(&coverage_profile, &diagnostic_segments);
+        let coverage = analyze_coverage_profile(&coverage_profile, &coverage_segments);
         let mut warnings = combined_warnings(&coverage, language, detected_language.as_ref());
         if let Some(diagnostics) = &language_regions {
             warnings.extend(diagnostics.warnings.clone());
@@ -3073,70 +3069,122 @@ mod tests {
 
     #[cfg(feature = "diarization")]
     #[test]
-    fn diarized_coverage_is_independent_of_speaker_consolidation() {
-        let audio = vec![0.05_f32; 11 * 16_000];
-        let profile = CoverageProfile::from_audio(&audio);
-        let same_speaker = vec![
-            DiarizedSegment {
+    fn cached_transcribe_uses_coarse_coverage_across_threshold_sweep() {
+        use sagascript_core::diarization::embedding::EMBEDDING_DIM;
+        use sagascript_core::diarization::DiarizationAnalysis;
+        use sagascript_core::transcription::diagnostics::CoverageProfile;
+
+        let root = std::env::temp_dir().join(format!(
+            "sagascript-coarse-coverage-cache-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("synthetic.wav");
+        let cache = root.join("synthetic-cache.json");
+        std::fs::write(&input, b"synthetic source bytes").unwrap();
+
+        let mut first_embedding = vec![0.0_f32; EMBEDDING_DIM];
+        first_embedding[0] = 1.0;
+        let mut second_embedding = vec![0.0_f32; EMBEDDING_DIM];
+        second_embedding[1] = 1.0;
+        let analysis: DiarizationAnalysis = serde_json::from_value(serde_json::json!({
+            "raw_segments": [[0.0, 6.0, 0], [6.0, 11.0, 1]],
+            "embeddings": [[0, first_embedding], [1, second_embedding]],
+        }))
+        .unwrap();
+        let coverage_segments = vec![
+            TranscriptSegment {
                 start: 0.0,
                 end: 2.0,
-                speaker: "SPEAKER_0".to_string(),
                 text: "first".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
             },
-            DiarizedSegment {
+            TranscriptSegment {
                 start: 9.0,
                 end: 11.0,
-                speaker: "SPEAKER_0".to_string(),
                 text: "second".to_string(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
             },
         ];
-        let alternating_speakers = vec![
-            DiarizedSegment {
-                speaker: "SPEAKER_0".to_string(),
-                ..same_speaker[0].clone()
-            },
-            DiarizedSegment {
-                speaker: "SPEAKER_1".to_string(),
-                ..same_speaker[1].clone()
-            },
-        ];
-        assert_eq!(
-            sagascript_core::diarization::merge::consolidate(&same_speaker).len(),
-            1
+        let source_identity = crate::diarization_cache::CacheIdentity::for_input(
+            &input,
+            "en",
+            model_id_string(WhisperModel::TinyEn),
+            Some("alpha"),
+        )
+        .unwrap();
+        let cache_value = crate::diarization_cache::DiarizationCache::new_with_coverage_segments(
+            source_identity,
+            analysis,
+            vec![(1.0, 1.0, "first".to_string()), (9.0, 9.0, "second".to_string())],
+            coverage_segments,
+            CoverageProfile::from_audio(&vec![0.05_f32; 11 * 16_000]),
+            None,
+            None,
         );
-        assert_eq!(
-            sagascript_core::diarization::merge::consolidate(&alternating_speakers).len(),
-            2
-        );
+        crate::diarization_cache::save(&cache, &cache_value).unwrap();
 
-        let coverage_before_consolidation = |segments: &[DiarizedSegment]| {
-            let diagnostic_segments = coverage_segments_before_consolidation(segments);
-            analyze_coverage_profile(&profile, &diagnostic_segments)
+        let args_for_threshold = |threshold| TranscribeArgs {
+            progress_json: false,
+            files: vec![input.clone()],
+            recursive: false,
+            language: Some("en".to_string()),
+            profile: None,
+            model: Some("tiny.en".to_string()),
+            json: true,
+            jsonl: false,
+            fail_fast: true,
+            clipboard: false,
+            diarize: true,
+            meeting_json: false,
+            diarize_threshold: threshold,
+            speaker_count: crate::speaker_args::SpeakerCountArgs::default(),
+            diarize_cache: Some(cache.clone()),
+            prompt: Some("alpha".to_string()),
+            prompt_file: None,
+            glossary_boost: None,
+            boost_terms_file: None,
+            correct_hints: false,
+            vad: false,
+            no_vad: false,
+            beam_size: None,
+            parallel: None,
+        };
+        let run = |threshold| {
+            let args = args_for_threshold(threshold);
+            let backend = WhisperBackend::new();
+            let mut model_loaded = false;
+            transcribe_file(
+                &args,
+                &input,
+                &backend,
+                &Settings::default(),
+                Language::English,
+                WhisperModel::TinyEn,
+                &mut model_loaded,
+                &Glossary::parse("alpha"),
+                &[],
+                None,
+                CachePolicy::Normal,
+            )
+            .unwrap()
+            .json
         };
 
-        let same_speaker_coverage = coverage_before_consolidation(&same_speaker);
-        let alternating_speaker_coverage = coverage_before_consolidation(&alternating_speakers);
+        let strict = run(0.34);
+        let broad = run(1.1);
+        assert_eq!(strict["speakers"].as_array().unwrap().len(), 2);
+        assert_eq!(broad["speakers"].as_array().unwrap().len(), 1);
+        for json in [&strict, &broad] {
+            assert!((json["coverage_ratio"].as_f64().unwrap() - 4.0 / 11.0).abs() < 1e-6);
+            assert_eq!(json["uncovered_spans"].as_array().unwrap().len(), 1);
+            assert_eq!(json["warnings"], strict["warnings"]);
+            assert_eq!(json["warnings"][0]["code"], "uncovered_speech");
+        }
 
-        assert_eq!(
-            same_speaker_coverage.coverage_ratio,
-            alternating_speaker_coverage.coverage_ratio
-        );
-        assert_eq!(
-            same_speaker_coverage.uncovered_spans,
-            alternating_speaker_coverage.uncovered_spans
-        );
-        assert!(
-            (same_speaker_coverage.coverage_ratio - 4.0 / 11.0).abs() < 1e-6,
-            "coverage should count only the two 2-second transcript units"
-        );
-        assert_eq!(same_speaker_coverage.uncovered_spans.len(), 1);
-        let gap = &same_speaker_coverage.uncovered_spans[0];
-        assert!(gap.start <= 2.0 && gap.end >= 9.0);
-        assert!(gap.speech_seconds > 6.0);
-        assert_eq!(
-            same_speaker_coverage.warnings,
-            alternating_speaker_coverage.warnings
-        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(feature = "diarization")]
