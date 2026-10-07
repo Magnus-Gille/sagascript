@@ -539,6 +539,97 @@ mod tests {
     }
 
     #[test]
+    fn cache_round_trip_preserves_analysis_and_word_timestamp_bits() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("synthetic.wav");
+        let cache_path = dir.join("analysis.json");
+        std::fs::write(&input, b"synthetic source bytes").unwrap();
+
+        // This is the frame arithmetic used by diarization segmentation, retained
+        // here to catch one-ULP JSON parser changes rather than decimal examples.
+        let frame_start = 7.0_f64 * (270.0_f64 / 16_000.0_f64);
+        let frame_end = 0.5_f64;
+        let word_end = frame_start + 0.01_f64;
+        let embedding_norm = (1..=256)
+            .map(|value| {
+                let value = value as f32;
+                value * value
+            })
+            .sum::<f32>()
+            .sqrt();
+        let embedding = (1..=256)
+            .map(|value| value as f32 / embedding_norm)
+            .collect::<Vec<_>>();
+        let analysis: DiarizationAnalysis = serde_json::from_value(serde_json::json!({
+            "raw_segments": [[frame_start, frame_end, 0]],
+            "embeddings": [[0, embedding]],
+        }))
+        .unwrap();
+        let analysis_before = serde_json::to_value(&analysis).unwrap();
+        let transcript = vec![(frame_start, word_end, "word".to_string())];
+        let profile = CoverageProfile::from_audio(&vec![0.1_f32; 16_000]);
+        let expected = identity_for(&input, "sv", "kb-whisper-large", None);
+        save(
+            &cache_path,
+            &DiarizationCache::new_with_coverage_segments(
+                expected.clone(),
+                analysis,
+                transcript.clone(),
+                vec![TranscriptSegment {
+                    start: frame_start,
+                    end: word_end,
+                    text: "word".to_string(),
+                    avg_logprob: None,
+                    no_speech_prob: 0.0,
+                }],
+                profile,
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+
+        let CacheLookup::Hit(hit) = load(&cache_path, &expected).unwrap() else {
+            panic!("synthetic precision cache should hit");
+        };
+        let analysis_after = serde_json::to_value(&hit.analysis).unwrap();
+        assert_eq!(
+            analysis_before["raw_segments"][0][0]
+                .as_f64()
+                .unwrap()
+                .to_bits(),
+            analysis_after["raw_segments"][0][0]
+                .as_f64()
+                .unwrap()
+                .to_bits()
+        );
+        assert_eq!(
+            analysis_before["raw_segments"][0][1]
+                .as_f64()
+                .unwrap()
+                .to_bits(),
+            analysis_after["raw_segments"][0][1]
+                .as_f64()
+                .unwrap()
+                .to_bits()
+        );
+        for index in 0..256 {
+            let before = analysis_before["embeddings"][0][1][index]
+                .as_f64()
+                .unwrap() as f32;
+            let after = analysis_after["embeddings"][0][1][index]
+                .as_f64()
+                .unwrap() as f32;
+            assert_eq!(before.to_bits(), after.to_bits(), "embedding component {index}");
+        }
+        assert_eq!(hit.transcript[0].0.to_bits(), transcript[0].0.to_bits());
+        assert_eq!(hit.transcript[0].1.to_bits(), transcript[0].1.to_bits());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn empty_and_missing_prompt_are_the_same_identity() {
         let dir = temp_dir();
         std::fs::create_dir_all(&dir).unwrap();
