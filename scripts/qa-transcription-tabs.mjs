@@ -179,14 +179,46 @@ try {
   // through Settings as a recovery entry. That live update must not be
   // rehydrated over the in-flight result or strand this queue item as running.
   await page.getByRole("checkbox", { name: "Speaker diarization" }).check();
+  await page.clock.install();
   await drop(["/fixtures/meeting-one.wav", "/fixtures/meeting-two.wav", "/fixtures/meeting-three.wav"]);
   await waitStatus("meeting-one.wav", "running");
+  await status("meeting-one.wav", "running").click();
+  await page.evaluate(() => window.qa.meetingProgress("/fixtures/meeting-one.wav", "analyzing", 125000, 65000));
+  const meetingProgress = page.locator('[role="tabpanel"]:visible .meeting-progress');
+  await meetingProgress.getByText("Elapsed: 02:05", { exact: true }).waitFor();
+  await meetingProgress.getByText("This stage: 01:05", { exact: true }).waitFor();
+  const meetingBar = meetingProgress.getByRole("progressbar");
+  assert.equal(await meetingBar.getAttribute("aria-valuenow"), null, "analysis has no measured percentage");
+  await meetingProgress.getByText("Status checked just now", { exact: true }).waitFor();
+  await page.screenshot({ path: outputPath("sagascript-meeting-progress.png"), fullPage: true });
+  await page.evaluate(() => window.qa.holdPoll("/fixtures/meeting-one.wav"));
+  // A timer tick continues even when no backend response arrives.
+  await page.clock.runFor(2000);
+  await meetingProgress.getByText("Elapsed: 02:07", { exact: true }).waitFor();
+  await page.clock.runFor(11500);
+  await meetingProgress.getByText(/No status response for/).waitFor();
+  assert.equal(await meetingBar.locator(".progress-indicator").evaluate(node => getComputedStyle(node).animationPlayState), "paused",
+    "a missing response must pause the activity animation");
+  await page.evaluate(() => window.qa.releasePoll("/fixtures/meeting-one.wav"));
+  await page.clock.runFor(1000);
+  await meetingProgress.getByText("Status checked just now", { exact: true }).waitFor();
+  await page.evaluate(() => window.qa.meetingProgress("/fixtures/meeting-one.wav", "clustering", 145000, 1000));
+  await page.clock.runFor(1000);
+  await meetingProgress.getByText("This stage: 00:01", { exact: true }).waitFor();
+  await page.evaluate(() => window.qa.meetingProgress("/fixtures/meeting-one.wav", "clustering", 147000, 3000));
+  await page.clock.runFor(1000);
+  await meetingProgress.getByText("This stage: 00:03", { exact: true }).waitFor();
+  await page.clock.resume();
   await page.evaluate(() => window.qa.failPoll("/fixtures/meeting-one.wav"));
   await page.getByRole("button", { name: "Retry status check", exact: true }).waitFor();
+  await meetingProgress.getByText("Status check failed — processing may still be running.", { exact: true }).waitFor();
   await waitStatus("meeting-two.wav", "queued");
   await meeting("/fixtures/meeting-one.wav");
   await page.getByRole("button", { name: "Retry status check", exact: true }).click();
   await waitStatus("meeting-one.wav", "completed");
+  const finishedElapsed = await meetingProgress.locator(".elapsed").innerText();
+  await page.clock.runFor(3000);
+  assert.equal(await meetingProgress.locator(".elapsed").innerText(), finishedElapsed, "terminal elapsed time must freeze");
   await waitStatus("meeting-two.wav", "running");
   // A non-selected running meeting can lose its poll response. It is surfaced
   // in the persistent queue summary and can be brought into view explicitly.
@@ -242,7 +274,13 @@ try {
   // Cancellation must release the queue only after its terminal status is read.
   await drop(["/fixtures/meeting-cancel.wav", "/fixtures/meeting-after.wav"]);
   await waitStatus("meeting-cancel.wav", "running");
+  await status("meeting-cancel.wav", "running").click();
+  await page.evaluate(() => window.qa.deferCancellation("/fixtures/meeting-cancel.wav"));
   await page.getByRole("button", { name: "Cancel meeting", exact: true }).click();
+  await page.getByRole("button", { name: "Cancelling…", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Cancelling meeting processing", exact: true }).waitFor();
+  await waitStatus("meeting-after.wav", "queued");
+  await meeting("/fixtures/meeting-cancel.wav", "cancelled");
   await waitStatus("meeting-cancel.wav", "cancelled");
   await waitStatus("meeting-after.wav", "running");
   await meeting("/fixtures/meeting-after.wav");

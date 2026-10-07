@@ -95,6 +95,9 @@ export interface MeetingJobSnapshot {
   id: string;
   status: MeetingJobStatus;
   phase: string;
+  /** Native monotonic durations; optional for older desktop transports. */
+  elapsed_ms?: number;
+  phase_elapsed_ms?: number;
   error: string | null;
   transcript: MeetingTranscript | null;
   reprocessing?: import("./meeting-reprocessing-types").ReprocessingResult | null;

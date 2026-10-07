@@ -32,7 +32,7 @@ test("meeting phases have human-readable labels and the long-running analysis ex
 });
 
 test("status titles cover running, cancellation, and terminal outcomes", () => {
-  assert.equal(statusTitle("running"), "Starting meeting processing");
+  assert.equal(statusTitle("running"), "Processing meeting");
   assert.equal(statusTitle("cancelling"), "Cancelling meeting processing");
   assert.equal(statusTitle("completed"), "Meeting processing complete");
   assert.equal(statusTitle("cancelled"), "Meeting processing cancelled");

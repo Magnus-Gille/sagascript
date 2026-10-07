@@ -48,7 +48,7 @@ export function statusTitle(status: MeetingJobStatus): string {
     case "cancelling":
       return "Cancelling meeting processing";
     case "running":
-      return "Starting meeting processing";
+      return "Processing meeting";
   }
 }
 

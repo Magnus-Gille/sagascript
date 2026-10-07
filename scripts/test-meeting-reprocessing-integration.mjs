@@ -112,6 +112,10 @@ function makeControls(overrides = {}) {
 function createHarness(controls) {
   const functions = [
     "meetingFailureText",
+    "updateMeetingClock",
+    "startMeetingClock",
+    "stopMeetingClock",
+    "acceptMeetingTiming",
     "waitForMeetingActions",
     "enqueueMeetingAction",
     "acceptMeetingReview",
@@ -129,6 +133,12 @@ function createHarness(controls) {
     let meetingJobId = "job-active";
     let meetingJobStatus = "running";
     let meetingPhase = "Running";
+    let meetingElapsedMs = 0, meetingPhaseElapsedMs = 0, meetingLastCheckedAgoMs = null;
+    let meetingClock, meetingClockBaseAt = 0, meetingElapsedBase = 0, meetingPhaseElapsedBase = 0;
+    let meetingLastCheckedAt = null;
+    const performance = { now: () => controls.now ?? 0 };
+    const setInterval = callback => { controls.clockTick = callback; return 1; };
+    const clearInterval = () => { controls.clockTick = null; };
     let meetingError = "";
     let meetingPollingFailed = false;
     let meetingPollGeneration = 1;
@@ -201,6 +211,7 @@ function createHarness(controls) {
       executeCurrentMeetingPlan,
       planCurrentMeeting,
       pollMeetingJob,
+      startMeetingClock, stopMeetingClock, acceptMeetingTiming,
       retryCurrentMeetingProposalPreview,
       saveCurrentMeetingProposal,
       setActionQueue: (queue) => { meetingActionQueue = queue; },
@@ -221,6 +232,7 @@ function createHarness(controls) {
         meetingReviewResetKey,
         meetingJobId,
         transcribing,
+        meetingElapsedMs, meetingPhaseElapsedMs, meetingLastCheckedAgoMs,
       }),
     };
   `;
@@ -259,6 +271,27 @@ for (const [label, invalidate] of [
     assert.equal(state.meetingReprocessingBusy, false);
   });
 }
+
+test("meeting timer interpolates native durations, survives missing polls, and resets for a new run", () => {
+  const controls = makeControls({ now: 100 });
+  const exercise = createHarness(controls);
+  exercise.startMeetingClock();
+  assert.equal(exercise.snapshot().meetingElapsedMs, 0);
+  assert.equal(exercise.snapshot().meetingLastCheckedAgoMs, null);
+  exercise.acceptMeetingTiming({ phase: "analyzing", elapsed_ms: 125000, phase_elapsed_ms: 65000 });
+  controls.now = 2100;
+  controls.clockTick();
+  assert.equal(exercise.snapshot().meetingElapsedMs, 127000);
+  assert.equal(exercise.snapshot().meetingPhaseElapsedMs, 67000);
+  assert.equal(exercise.snapshot().meetingLastCheckedAgoMs, 2000);
+  exercise.stopMeetingClock();
+  assert.equal(controls.clockTick, null);
+  exercise.startMeetingClock();
+  assert.equal(exercise.snapshot().meetingElapsedMs, 0);
+  assert.equal(exercise.snapshot().meetingPhaseElapsedMs, 0);
+  assert.equal(exercise.snapshot().meetingLastCheckedAgoMs, null);
+  exercise.stopMeetingClock();
+});
 
 test("planning stores its selection without replacing the active review", async () => {
   const controls = makeControls();

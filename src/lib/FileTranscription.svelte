@@ -11,6 +11,7 @@
   import { onDestroy, tick, untrack } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import TranscriptionStages from "./TranscriptionStages.svelte";
+  import MeetingProgress from "./MeetingProgress.svelte";
   import { initialStages, startStages, acceptRunProgress, finishStages } from "./transcribe-stages";
   import { canCancelPlainTranscription, transcribeSaveDefaults, isMissingTranscribeFileError } from "./transcribe-ui-state";
   import {
@@ -111,6 +112,14 @@
   let meetingResultId: string | null = $state(null);
   let meetingJobStatus: MeetingJobStatus | null = $state(null);
   let meetingPhase: string = $state("");
+  let meetingElapsedMs = $state(0);
+  let meetingPhaseElapsedMs = $state(0);
+  let meetingLastCheckedAgoMs = $state<number | null>(null);
+  let meetingClock: ReturnType<typeof setInterval> | undefined;
+  let meetingClockBaseAt = 0;
+  let meetingElapsedBase = 0;
+  let meetingPhaseElapsedBase = 0;
+  let meetingLastCheckedAt: number | null = null;
   let meetingError: string = $state("");
   let meetingPollingFailed: boolean = $state(false);
   let meetingPollGeneration = 0;
@@ -209,16 +218,48 @@
 
   onDestroy(() => {
     meetingPollGeneration += 1;
+    stopMeetingClock();
   });
 
   function meetingFailureText(value: unknown, fallback: string): string {
     return typeof value === "string" ? value : value instanceof Error ? value.message : fallback;
   }
 
-  function meetingStageText(): string {
-    if (meetingJobStatus === "cancelling") return "Cancelling meeting…";
-    if (meetingJobStatus === "running") return meetingPhase ? `Meeting: ${meetingPhase}` : "Starting meeting…";
-    return meetingPhase || "Meeting import";
+  function updateMeetingClock(now = performance.now()): void {
+    const sinceSnapshot = Math.max(0, now - meetingClockBaseAt);
+    meetingElapsedMs = meetingElapsedBase + sinceSnapshot;
+    meetingPhaseElapsedMs = meetingPhaseElapsedBase + sinceSnapshot;
+    meetingLastCheckedAgoMs = meetingLastCheckedAt === null ? null : Math.max(0, now - meetingLastCheckedAt);
+  }
+
+  function startMeetingClock(): void {
+    stopMeetingClock();
+    meetingClockBaseAt = performance.now();
+    meetingElapsedBase = 0;
+    meetingPhaseElapsedBase = 0;
+    meetingLastCheckedAt = null;
+    meetingElapsedMs = 0;
+    meetingPhaseElapsedMs = 0;
+    meetingLastCheckedAgoMs = null;
+    meetingClock = setInterval(updateMeetingClock, 250);
+  }
+
+  function stopMeetingClock(): void {
+    clearInterval(meetingClock);
+    meetingClock = undefined;
+  }
+
+  function acceptMeetingTiming(snapshot: MeetingJobSnapshot): void {
+    const now = performance.now();
+    updateMeetingClock(now);
+    // Native monotonic durations are authoritative. Interpolate between polls
+    // solely to keep the elapsed display ticking, never to estimate completion.
+    meetingElapsedBase = snapshot.elapsed_ms ?? meetingElapsedMs;
+    meetingPhaseElapsedBase = snapshot.phase_elapsed_ms
+      ?? (snapshot.phase === meetingPhase ? meetingPhaseElapsedMs : 0);
+    meetingClockBaseAt = now;
+    meetingLastCheckedAt = now;
+    updateMeetingClock(now);
   }
 
   function waitForMeetingPoll(): Promise<void> {
@@ -279,9 +320,11 @@
         },
         onSnapshot: (snapshot: MeetingJobSnapshot) => {
           if (generation !== meetingPollGeneration) return;
+          acceptMeetingTiming(snapshot);
           meetingJobStatus = snapshot.status;
           meetingPhase = snapshot.phase;
           if (snapshot.status === "completed" || snapshot.status === "cancelled" || snapshot.status === "failed") {
+            stopMeetingClock();
             meetingJobId = null;
             transcribing = false;
             meetingPollingFailed = false;
@@ -364,6 +407,7 @@
     meetingJobId = null;
     meetingJobStatus = "running";
     meetingPhase = "Starting";
+    startMeetingClock();
     try {
       await waitForMeetingActions();
       if (generation !== meetingPollGeneration) return;
@@ -380,6 +424,8 @@
       meetingJobId = null;
       meetingJobStatus = "failed";
       meetingPhase = "Failed";
+      updateMeetingClock();
+      stopMeetingClock();
       meetingError = meetingFailureText(error, "Could not start meeting import.");
     }
   }
@@ -495,7 +541,6 @@
       if (generation !== meetingPollGeneration || meetingJobId !== jobId) return;
       if (accepted) {
         meetingJobStatus = "cancelling";
-        meetingPhase = "Cancelling";
         meetingError = "";
       } else {
         meetingError = "The meeting has already finished. Its final status is being retrieved.";
@@ -657,6 +702,7 @@
     meetingPollingFailed = false;
     meetingJobStatus = "running";
     meetingPhase = "Preparing reprocessing";
+    startMeetingClock();
     try {
       const id = await beginMeetingReprocessing(selected, review,
         job.prompt, job.profileId);
@@ -669,6 +715,8 @@
       meetingJobId = null;
       meetingJobStatus = "failed";
       meetingError = meetingFailureText(error, "Reprocessing failed; the previous review is unchanged.");
+      updateMeetingClock();
+      stopMeetingClock();
       throw error;
     }
   }
@@ -747,10 +795,13 @@
 {:else if job.status === "cancelled" && !meetingError}
   <p role="status">Cancelled.</p>
 {/if}
+          {#if meetingJobStatus !== null}
+            <MeetingProgress status={meetingJobStatus} phase={meetingPhase}
+              elapsedMs={meetingElapsedMs} phaseElapsedMs={meetingPhaseElapsedMs}
+              lastCheckedAgoMs={meetingLastCheckedAgoMs} pollingFailed={meetingPollingFailed} />
+          {/if}
           {#if transcribing}
             {#if meetingJobStatus !== null}
-              <div class="spinner"></div>
-              <div class="drop-zone-text">{meetingStageText()}</div>
               {#if meetingJobId && meetingPollingFailed}
                 <button class="secondary" onclick={retryMeetingPolling}>Retry status check</button>
               {:else if meetingJobId}
@@ -880,8 +931,6 @@
 
   .drop-zone-text { font-size: 13px; color: var(--text-muted); margin: 10px 0; }
   .result-actions { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-  .spinner { width: 24px; height: 24px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
   button { margin: 6px 4px 6px 0; padding: 7px 12px; background: var(--bg-secondary); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
   button:disabled { opacity: 0.5; cursor: default; }
 </style>

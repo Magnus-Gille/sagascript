@@ -26,8 +26,8 @@ phase boundaries and elapsed time. `sagascript transcribe FILE --diarize
 --progress-json` emits `analyzing`, `clustering`, `finalizing`, and a
 successful `completed` event after the existing decode/model events. The
 `--meeting-json` output path emits the same terminal events before writing its
-shared transcript JSON. Meeting events have `percent: null`, `step: null`, and
-`steps_total: null`; they do not borrow the plain three-step grouping or invent
+shared transcript JSON. These four boundary events have `percent: null`,
+`step: null`, and `steps_total: null`; they do not borrow the plain three-step grouping or invent
 an overall percentage. Their phase order is:
 
 1. `analyzing`: concurrent Whisper timestamping and speaker segmentation/
@@ -38,9 +38,19 @@ an overall percentage. Their phase order is:
    successfully; failures do not emit it.
 
 `elapsed_ms` is wall-clock time for the current input file. It is diagnostic
-feedback and is not a completion estimate. A status bar may mark earlier
-meeting phases complete and leave the active phase indeterminate; elapsed time
-must not be converted into a progress percentage.
+feedback and is not a completion estimate. Earlier decode/model events retain
+their existing stage-local percentages and plain stage fields; those fields
+do not describe overall meeting completion.
+
+The desktop meeting view shows the current phase, total elapsed time, time in
+that phase, and an indeterminate status bar. Native monotonic job durations
+anchor the display, which ticks between status polls and freezes when the
+worker exits. Repeated checkpoints in the same phase do not reset its timer.
+The last successful status check is shown separately: it confirms the app
+answered, not that native analysis made progress. Failed or delayed responses
+pause the bar and explain that processing may still be running. Cancellation
+keeps timing until the worker actually stops. Elapsed time never determines
+a completion percentage or ETA.
 
 - `decoding`: packet bytes / source bytes; container overhead can leave a
   remainder until packet decoding ends. This is an approximate byte fraction,

@@ -27,7 +27,7 @@
   }: Props = $props();
 
   const isTerminal = $derived(status === "completed" || status === "cancelled" || status === "failed");
-  const isStale = $derived(lastCheckedAgoMs !== null && lastCheckedAgoMs > 10_000);
+  const isStale = $derived((lastCheckedAgoMs ?? elapsedMs) > 10_000);
   const animationPaused = $derived(status !== "running" || pollingFailed || isStale);
   const phaseIsKnown = $derived(
     phase === "preparing" || phase === "decoding" || phase === "loading_model"
@@ -46,13 +46,13 @@
   );
 </script>
 
-<section class="meeting-progress" aria-labelledby="meeting-progress-title">
+<section class="meeting-progress" aria-label="Meeting progress">
   <div class="progress-heading">
     <div>
-      <h2 id="meeting-progress-title">{statusTitle(status)}</h2>
+      <h2>{statusTitle(status)}</h2>
       <p class="phase-label">{phaseLabel(phase)}</p>
     </div>
-    <div class="elapsed" aria-label="Total elapsed time">{formatDuration(elapsedMs)}</div>
+    <div class="elapsed">Elapsed: {formatDuration(elapsedMs)}</div>
   </div>
 
   <div
@@ -70,7 +70,7 @@
   </div>
 
   <div class="progress-meta">
-    <span class="phase-time">Current phase: {formatDuration(phaseElapsedMs)}</span>
+    <span class="phase-time">This stage: {formatDuration(phaseElapsedMs)}</span>
     {#if status === "cancelling"}
       <span class="status-note">Cancellation requested — waiting for the worker.</span>
     {:else if status === "completed"}
@@ -86,9 +86,11 @@
     {/if}
   </div>
 
+  {#if !isTerminal}
   <p class:warning={pollingFailed || isStale} class="status-check" role="status">
     {statusCheckMessage(lastCheckedAgoMs, pollingFailed)}
   </p>
+  {/if}
 </section>
 
 <style>
@@ -97,7 +99,7 @@
     box-sizing: border-box;
     padding: 14px 15px;
     color: var(--text, #f1f1f3);
-    background: var(--panel, #1c1c20);
+    background: var(--bg-secondary, #1c1c20);
     border: 1px solid var(--border, #36363d);
     border-radius: 10px;
   }
@@ -201,7 +203,7 @@
   @media (max-width: 420px) {
     .meeting-progress { padding: 12px; }
     .progress-meta { align-items: flex-start; flex-direction: column; gap: 3px; }
-    .status-note { text-align: left; }
+    .status-note { flex: none; text-align: left; }
   }
 
   @media (prefers-reduced-motion: reduce) {
