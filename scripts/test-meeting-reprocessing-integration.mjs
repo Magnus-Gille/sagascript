@@ -135,7 +135,7 @@ function createHarness(controls) {
     let meetingPhase = "Running";
     let meetingElapsedMs = 0, meetingPhaseElapsedMs = 0, meetingLastCheckedAgoMs = null;
     let meetingClock, meetingClockBaseAt = 0, meetingElapsedBase = 0, meetingPhaseElapsedBase = 0;
-    let meetingLastCheckedAt = null;
+    let meetingLastCheckedAt = null, meetingTimingAvailable = false;
     const performance = { now: () => controls.now ?? 0 };
     const setInterval = callback => { controls.clockTick = callback; return 1; };
     const clearInterval = () => { controls.clockTick = null; };
@@ -232,7 +232,7 @@ function createHarness(controls) {
         meetingReviewResetKey,
         meetingJobId,
         transcribing,
-        meetingElapsedMs, meetingPhaseElapsedMs, meetingLastCheckedAgoMs,
+        meetingElapsedMs, meetingPhaseElapsedMs, meetingLastCheckedAgoMs, meetingTimingAvailable,
       }),
     };
   `;
@@ -278,12 +278,18 @@ test("meeting timer interpolates native durations, survives missing polls, and r
   exercise.startMeetingClock();
   assert.equal(exercise.snapshot().meetingElapsedMs, 0);
   assert.equal(exercise.snapshot().meetingLastCheckedAgoMs, null);
-  exercise.acceptMeetingTiming({ phase: "analyzing", elapsed_ms: 125000, phase_elapsed_ms: 65000 });
+  assert.equal(exercise.snapshot().meetingTimingAvailable, false);
+  exercise.acceptMeetingTiming({ status: "running", phase: "analyzing", elapsed_ms: 125000, phase_elapsed_ms: 65000 });
+  assert.equal(exercise.snapshot().meetingTimingAvailable, true);
   controls.now = 2100;
   controls.clockTick();
   assert.equal(exercise.snapshot().meetingElapsedMs, 127000);
   assert.equal(exercise.snapshot().meetingPhaseElapsedMs, 67000);
   assert.equal(exercise.snapshot().meetingLastCheckedAgoMs, 2000);
+  exercise.acceptMeetingTiming({ status: "running", phase: "analyzing", elapsed_ms: 125000, phase_elapsed_ms: 65000 });
+  assert.equal(exercise.snapshot().meetingElapsedMs, 127000, "delayed active snapshots cannot move the live elapsed clock backwards");
+  exercise.acceptMeetingTiming({ status: "completed", phase: "finalizing", elapsed_ms: 126000, phase_elapsed_ms: 1000 });
+  assert.equal(exercise.snapshot().meetingElapsedMs, 126000, "terminal times use the exact native worker duration");
   exercise.stopMeetingClock();
   assert.equal(controls.clockTick, null);
   exercise.startMeetingClock();

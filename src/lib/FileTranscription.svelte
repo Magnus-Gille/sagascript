@@ -115,6 +115,7 @@
   let meetingElapsedMs = $state(0);
   let meetingPhaseElapsedMs = $state(0);
   let meetingLastCheckedAgoMs = $state<number | null>(null);
+  let meetingTimingAvailable = $state(false);
   let meetingClock: ReturnType<typeof setInterval> | undefined;
   let meetingClockBaseAt = 0;
   let meetingElapsedBase = 0;
@@ -241,6 +242,7 @@
     meetingElapsedMs = 0;
     meetingPhaseElapsedMs = 0;
     meetingLastCheckedAgoMs = null;
+    meetingTimingAvailable = false;
     meetingClock = setInterval(updateMeetingClock, 250);
   }
 
@@ -252,11 +254,18 @@
   function acceptMeetingTiming(snapshot: MeetingJobSnapshot): void {
     const now = performance.now();
     updateMeetingClock(now);
-    // Native monotonic durations are authoritative. Interpolate between polls
-    // solely to keep the elapsed display ticking, never to estimate completion.
-    meetingElapsedBase = snapshot.elapsed_ms ?? meetingElapsedMs;
-    meetingPhaseElapsedBase = snapshot.phase_elapsed_ms
+    // Interpolate between polls without moving live clocks backwards when an
+    // older snapshot arrives late. Terminal snapshots supply the exact worker
+    // duration; a new phase starts from its own native clock.
+    const active = snapshot.status === "running" || snapshot.status === "cancelling";
+    const elapsed = snapshot.elapsed_ms ?? meetingElapsedMs;
+    const phaseElapsed = snapshot.phase_elapsed_ms
       ?? (snapshot.phase === meetingPhase ? meetingPhaseElapsedMs : 0);
+    meetingElapsedBase = active ? Math.max(meetingElapsedMs, elapsed) : elapsed;
+    meetingPhaseElapsedBase = active && snapshot.phase === meetingPhase
+      ? Math.max(meetingPhaseElapsedMs, phaseElapsed) : phaseElapsed;
+    meetingTimingAvailable = typeof snapshot.elapsed_ms === "number"
+      && typeof snapshot.phase_elapsed_ms === "number";
     meetingClockBaseAt = now;
     meetingLastCheckedAt = now;
     updateMeetingClock(now);
@@ -795,7 +804,7 @@
 {:else if job.status === "cancelled" && !meetingError}
   <p role="status">Cancelled.</p>
 {/if}
-          {#if meetingJobStatus !== null}
+          {#if meetingJobStatus !== null && (transcribing || meetingTimingAvailable)}
             <MeetingProgress status={meetingJobStatus} phase={meetingPhase}
               elapsedMs={meetingElapsedMs} phaseElapsedMs={meetingPhaseElapsedMs}
               lastCheckedAgoMs={meetingLastCheckedAgoMs} pollingFailed={meetingPollingFailed} />

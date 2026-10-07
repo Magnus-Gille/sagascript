@@ -62,6 +62,8 @@ try {
   await page.getByRole("tab", { name: "recovered-meeting.wav completed" }).click();
   const speakerDraft = page.getByRole("textbox", { name: "Rename Speaker 1" });
   assert.equal(await speakerDraft.inputValue(), "Anna");
+  assert.equal(await page.locator('[role="tabpanel"]:visible .meeting-progress').count(), 0,
+    "restored reviews have no measured processing durations");
   await speakerDraft.scrollIntoViewIfNeeded();
   await page.screenshot({ path: join(outputDir, "sagascript-update-recovered-meeting.png"), fullPage: true });
   await page.evaluate(() => window.qa.prepareUpdate("qa-nonce"));

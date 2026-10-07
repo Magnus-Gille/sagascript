@@ -34,8 +34,9 @@ an overall percentage. Their phase order is:
    embedding analysis. This is a boundary, not a heartbeat.
 2. `clustering`: speaker clustering and label assignment.
 3. `finalizing`: merge, diagnostics, source verification, and output assembly.
-4. `completed`: emitted only after the requested output has been assembled
-   successfully; failures do not emit it.
+4. `completed`: emitted after the requested transcription output has been
+   assembled successfully. It describes transcription completion; later clipboard
+   actions or a batch cancellation can still fail or cancel the command.
 
 `elapsed_ms` is wall-clock time for the current input file. It is diagnostic
 feedback and is not a completion estimate. Earlier decode/model events retain

@@ -218,6 +218,7 @@ mockIPC(async (cmd, args = {}) => {
     case "save_transcription_text": return true;
     case "copy_transcription_text": return null;
     case "begin_meeting_file": {
+      if (window.qaFailMeetingStart) throw new Error("Finish the current dictation before importing a meeting.");
       active++; maximum = Math.max(maximum, active);
       const id = `meeting-${++sequence}`;
       meetings.set(id, { path: args.filePath, status: "running", released: false });

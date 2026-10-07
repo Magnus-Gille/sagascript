@@ -199,9 +199,15 @@ try {
   await meetingProgress.getByText(/No status response for/).waitFor();
   assert.equal(await meetingBar.locator(".progress-indicator").evaluate(node => getComputedStyle(node).animationPlayState), "paused",
     "a missing response must pause the activity animation");
+  const heldElapsed = await meetingProgress.locator(".elapsed").innerText();
   await page.evaluate(() => window.qa.releasePoll("/fixtures/meeting-one.wav"));
   await page.clock.runFor(1000);
   await meetingProgress.getByText("Status checked just now", { exact: true }).waitFor();
+  assert.equal(await meetingBar.locator(".progress-indicator").evaluate(node => getComputedStyle(node).animationPlayState), "running",
+    "successful polling resumes the activity animation");
+  const elapsedSeconds = text => text.replace("Elapsed: ", "").split(":").reduce((sum, value) => sum * 60 + Number(value), 0);
+  assert.ok(elapsedSeconds(await meetingProgress.locator(".elapsed").innerText()) >= elapsedSeconds(heldElapsed),
+    "delayed active snapshots must not move elapsed backwards");
   await page.evaluate(() => window.qa.meetingProgress("/fixtures/meeting-one.wav", "clustering", 145000, 1000));
   await page.clock.runFor(1000);
   await meetingProgress.getByText("This stage: 00:01", { exact: true }).waitFor();
@@ -211,7 +217,7 @@ try {
   await page.clock.resume();
   await page.evaluate(() => window.qa.failPoll("/fixtures/meeting-one.wav"));
   await page.getByRole("button", { name: "Retry status check", exact: true }).waitFor();
-  await meetingProgress.getByText("Status check failed — processing may still be running.", { exact: true }).waitFor();
+  await meetingProgress.locator(".status-check").filter({ hasText: "Status check failed — processing may still be running." }).waitFor();
   await waitStatus("meeting-two.wav", "queued");
   await meeting("/fixtures/meeting-one.wav");
   await page.getByRole("button", { name: "Retry status check", exact: true }).click();
@@ -280,8 +286,15 @@ try {
   await page.getByRole("button", { name: "Cancelling…", exact: true }).waitFor();
   await page.getByRole("heading", { name: "Cancelling meeting processing", exact: true }).waitFor();
   await waitStatus("meeting-after.wav", "queued");
+  const cancellationElapsed = page.locator('[role="tabpanel"]:visible .meeting-progress .elapsed');
+  const beforeCancellationTick = await cancellationElapsed.innerText();
+  await page.clock.runFor(2000);
+  assert.notEqual(await cancellationElapsed.innerText(), beforeCancellationTick, "elapsed continues until the cancelling worker exits");
   await meeting("/fixtures/meeting-cancel.wav", "cancelled");
   await waitStatus("meeting-cancel.wav", "cancelled");
+  const cancelledElapsed = await cancellationElapsed.innerText();
+  await page.clock.runFor(2000);
+  assert.equal(await cancellationElapsed.innerText(), cancelledElapsed, "cancelled worker durations freeze");
   await waitStatus("meeting-after.wav", "running");
   await meeting("/fixtures/meeting-after.wav");
   await waitStatus("meeting-after.wav", "completed");
@@ -344,6 +357,14 @@ try {
   await status("meeting-one.wav", "completed").click();
   await nameInput.scrollIntoViewIfNeeded();
   await page.screenshot({ path: outputPath("sagascript-242-meetings.png"), fullPage: true });
+  await page.getByRole("checkbox", { name: "Speaker diarization" }).check();
+  await page.evaluate(() => { window.qaFailMeetingStart = true; window.qa.drop(["/fixtures/start-fails.wav"]); });
+  await waitStatus("start-fails.wav", "failed");
+  await status("start-fails.wav", "failed").click();
+  await page.getByText("Finish the current dictation before importing a meeting.", { exact: true }).waitFor();
+  assert.equal(await page.locator('[role="tabpanel"]:visible .meeting-progress').count(), 0,
+    "a failed start has no native worker duration to present");
+  assert.deepEqual(errors, []);
   console.log("PASS: real Svelte UI queue, retained results, failure continuation, append, keyboard tabs, picker, serialized meetings, poll retry, cancellation, independent drafts, unique IDs; no browser errors.");
 } catch (error) {
   await writeFailureDiagnostics(error);
