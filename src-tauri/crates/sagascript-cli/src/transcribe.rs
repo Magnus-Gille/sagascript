@@ -243,6 +243,20 @@ pub(crate) fn prepare_diarized_plain_segments(
 }
 
 #[cfg(feature = "diarization")]
+fn coverage_segments_before_consolidation(segments: &[DiarizedSegment]) -> Vec<TranscriptSegment> {
+    segments
+        .iter()
+        .map(|segment| TranscriptSegment {
+            start: segment.start,
+            end: segment.end,
+            text: segment.text.clone(),
+            avg_logprob: None,
+            no_speech_prob: 0.0,
+        })
+        .collect()
+}
+
+#[cfg(feature = "diarization")]
 const MAX_MEETING_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, serde::Serialize, PartialEq, Eq)]
@@ -1743,6 +1757,7 @@ fn transcribe_file(
             .collect();
 
         let diarized = merge_with_transcript(&speaker_segments, &transcript);
+        let diagnostic_segments = coverage_segments_before_consolidation(&diarized);
         let plain_segments = prepare_diarized_plain_segments(&diarized, language, glossary);
         let mut consolidated = consolidate(&diarized);
         for segment in &mut consolidated {
@@ -1760,16 +1775,6 @@ fn transcribe_file(
             .into_iter()
             .map(|(_, correction)| correction)
             .collect::<Vec<_>>();
-        let diagnostic_segments: Vec<TranscriptSegment> = consolidated
-            .iter()
-            .map(|segment| TranscriptSegment {
-                start: segment.start,
-                end: segment.end,
-                text: segment.text.clone(),
-                avg_logprob: None,
-                no_speech_prob: 0.0,
-            })
-            .collect();
         let coverage = analyze_coverage_profile(&coverage_profile, &diagnostic_segments);
         let mut warnings = combined_warnings(&coverage, language, detected_language.as_ref());
         if let Some(diagnostics) = &language_regions {
@@ -3064,6 +3069,74 @@ mod tests {
         assert!(plain_segments
             .iter()
             .all(|segment| !contains_no_speech_marker(&segment.text)));
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn diarized_coverage_is_independent_of_speaker_consolidation() {
+        let audio = vec![0.05_f32; 11 * 16_000];
+        let profile = CoverageProfile::from_audio(&audio);
+        let same_speaker = vec![
+            DiarizedSegment {
+                start: 0.0,
+                end: 2.0,
+                speaker: "SPEAKER_0".to_string(),
+                text: "first".to_string(),
+            },
+            DiarizedSegment {
+                start: 9.0,
+                end: 11.0,
+                speaker: "SPEAKER_0".to_string(),
+                text: "second".to_string(),
+            },
+        ];
+        let alternating_speakers = vec![
+            DiarizedSegment {
+                speaker: "SPEAKER_0".to_string(),
+                ..same_speaker[0].clone()
+            },
+            DiarizedSegment {
+                speaker: "SPEAKER_1".to_string(),
+                ..same_speaker[1].clone()
+            },
+        ];
+        assert_eq!(
+            sagascript_core::diarization::merge::consolidate(&same_speaker).len(),
+            1
+        );
+        assert_eq!(
+            sagascript_core::diarization::merge::consolidate(&alternating_speakers).len(),
+            2
+        );
+
+        let coverage_before_consolidation = |segments: &[DiarizedSegment]| {
+            let diagnostic_segments = coverage_segments_before_consolidation(segments);
+            analyze_coverage_profile(&profile, &diagnostic_segments)
+        };
+
+        let same_speaker_coverage = coverage_before_consolidation(&same_speaker);
+        let alternating_speaker_coverage = coverage_before_consolidation(&alternating_speakers);
+
+        assert_eq!(
+            same_speaker_coverage.coverage_ratio,
+            alternating_speaker_coverage.coverage_ratio
+        );
+        assert_eq!(
+            same_speaker_coverage.uncovered_spans,
+            alternating_speaker_coverage.uncovered_spans
+        );
+        assert!(
+            (same_speaker_coverage.coverage_ratio - 4.0 / 11.0).abs() < 1e-6,
+            "coverage should count only the two 2-second transcript units"
+        );
+        assert_eq!(same_speaker_coverage.uncovered_spans.len(), 1);
+        let gap = &same_speaker_coverage.uncovered_spans[0];
+        assert!(gap.start <= 2.0 && gap.end >= 9.0);
+        assert!(gap.speech_seconds > 6.0);
+        assert_eq!(
+            same_speaker_coverage.warnings,
+            alternating_speaker_coverage.warnings
+        );
     }
 
     #[cfg(feature = "diarization")]
