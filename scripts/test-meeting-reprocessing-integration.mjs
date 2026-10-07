@@ -132,7 +132,7 @@ function createHarness(controls) {
     let meetingTranscript = controls.initialTranscript;
     let meetingJobId = "job-active";
     let meetingJobStatus = "running";
-    let meetingPhase = "Running";
+    let meetingPhase = controls.initialPhase ?? "Running";
     let meetingElapsedMs = 0, meetingPhaseElapsedMs = 0, meetingLastCheckedAgoMs = null;
     let meetingClock, meetingClockBaseAt = 0, meetingElapsedBase = 0, meetingPhaseElapsedBase = 0;
     let meetingLastCheckedAt = null, meetingTimingAvailable = false;
@@ -273,7 +273,7 @@ for (const [label, invalidate] of [
 }
 
 test("meeting timer interpolates native durations, survives missing polls, and resets for a new run", () => {
-  const controls = makeControls({ now: 100 });
+  const controls = makeControls({ now: 100, initialPhase: "analyzing" });
   const exercise = createHarness(controls);
   exercise.startMeetingClock();
   assert.equal(exercise.snapshot().meetingElapsedMs, 0);
@@ -288,6 +288,7 @@ test("meeting timer interpolates native durations, survives missing polls, and r
   assert.equal(exercise.snapshot().meetingLastCheckedAgoMs, 2000);
   exercise.acceptMeetingTiming({ status: "running", phase: "analyzing", elapsed_ms: 125000, phase_elapsed_ms: 65000 });
   assert.equal(exercise.snapshot().meetingElapsedMs, 127000, "delayed active snapshots cannot move the live elapsed clock backwards");
+  assert.equal(exercise.snapshot().meetingPhaseElapsedMs, 67000, "same-phase clocks cannot move backwards either");
   exercise.acceptMeetingTiming({ status: "completed", phase: "finalizing", elapsed_ms: 126000, phase_elapsed_ms: 1000 });
   assert.equal(exercise.snapshot().meetingElapsedMs, 126000, "terminal times use the exact native worker duration");
   exercise.stopMeetingClock();
