@@ -17,17 +17,25 @@ try {
   await page.getByRole("checkbox", { name: "Speaker diarization" }).check();
   await page.evaluate(() => window.qa.drop(["/fixtures/race-meeting.wav"]));
   await page.waitForFunction(() => window.qa.calls.some(c => c.cmd === "begin_meeting_file"));
-  await page.evaluate(() => { window.qa.finishMeeting("/fixtures/race-meeting.wav"); window.qa.prepareUpdate("completion-race"); });
+  await page.evaluate(() => window.qa.finishMeeting("/fixtures/race-meeting.wav"));
   await page.waitForFunction(() => typeof window.qaReleaseReview === "function");
+  await page.evaluate(() => window.qa.prepareUpdate("completion-race"));
   await page.waitForTimeout(100);
-  assert.equal(await page.evaluate(() => window.qa.calls.some(c => c.cmd === "complete_update_preparation")), false, "must wait for the terminal result");
+  const earlyCompletion = await page.evaluate(() => window.qa.calls.findLast(c =>
+    c.cmd === "complete_update_preparation" && c.args.nonce === "completion-race"));
+  assert.equal(earlyCompletion, undefined,
+    earlyCompletion
+      ? `must wait for the held review before acknowledging update (error: ${earlyCompletion.args.error ?? "none"})`
+      : "must wait for the held review before acknowledging update");
   await page.evaluate(() => window.qaReleaseReview());
-  await page.waitForFunction(() => window.qa.calls.some(c => c.cmd === "complete_update_preparation"));
+  await page.waitForFunction(() => window.qa.calls.some(c =>
+    c.cmd === "complete_update_preparation" && c.args.nonce === "completion-race"));
   const calls = await page.evaluate(() => window.qa.calls);
+  const completion = calls.findLast(c => c.cmd === "complete_update_preparation" && c.args.nonce === "completion-race");
+  assert.equal(completion?.args.error, null, "update preparation must succeed after the held review is released");
   const saved = calls.findLast(c => c.cmd === "save_update_recovery").args.payload;
   assert.equal(saved.meetings.length, 1);
   assert.equal(saved.meetings[0].review.transcript.source_sha256, "/fixtures/race-meeting.wav");
-  assert.equal(calls.findLast(c => c.cmd === "complete_update_preparation").args.error, null);
   await page.evaluate(() => window.qa.abortUpdate());
   // A completed auto-paste is useful in memory, but is not an unsaved draft.
   await page.evaluate(() => { window.qaNativePending = false; window.qa.dictationResult("already pasted"); });
