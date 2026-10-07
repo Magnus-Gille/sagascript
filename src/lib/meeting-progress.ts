@@ -11,6 +11,8 @@ export const meetingPhases = [
 
 export type MeetingProgressPhase = (typeof meetingPhases)[number];
 
+export type StatusCheckState = "healthy" | "waiting" | "stale" | "failed";
+
 const phaseLabels: Record<MeetingProgressPhase, string> = {
   preparing: "Preparing the recording",
   decoding: "Decoding audio",
@@ -35,6 +37,25 @@ export function phaseLabel(phase: string): string {
 
 export function phaseDetail(phase: string): string {
   return phaseDetails[phase as MeetingProgressPhase] ?? "Processing the meeting locally.";
+}
+
+export function statusCheckState(lastCheckedAgoMs: number | null, pollingFailed: boolean): StatusCheckState {
+  if (pollingFailed) return "failed";
+  if (lastCheckedAgoMs === null || !Number.isFinite(lastCheckedAgoMs)) return "waiting";
+  return lastCheckedAgoMs > 10_000 ? "stale" : "healthy";
+}
+
+export function statusCheckAnnouncement(state: StatusCheckState): string {
+  switch (state) {
+    case "healthy":
+      return "Status checks are up to date.";
+    case "waiting":
+      return "Waiting for the first status response; processing may still be running.";
+    case "stale":
+      return "No recent status response — processing may still be running.";
+    case "failed":
+      return "Status check failed — processing may still be running.";
+  }
 }
 
 export function statusTitle(status: MeetingJobStatus): string {
@@ -77,12 +98,16 @@ function formatResponseAge(milliseconds: number): string {
 }
 
 export function statusCheckMessage(lastCheckedAgoMs: number | null, pollingFailed: boolean): string {
-  if (pollingFailed) return "Status check failed — processing may still be running.";
-  if (lastCheckedAgoMs === null || !Number.isFinite(lastCheckedAgoMs)) {
-    return "No status response yet — processing may still be running.";
+  switch (statusCheckState(lastCheckedAgoMs, pollingFailed)) {
+    case "failed":
+      return "Status check failed — processing may still be running.";
+    case "waiting":
+      return "No status response yet — processing may still be running.";
+    case "stale":
+      return `No status response for ${formatResponseAge(lastCheckedAgoMs ?? 0)} — processing may still be running.`;
+    case "healthy":
+      return lastCheckedAgoMs !== null && lastCheckedAgoMs >= 1_000
+        ? `Status checked ${formatSecondsAgo(lastCheckedAgoMs)}`
+        : "Status checked just now";
   }
-  if (lastCheckedAgoMs > 10_000) {
-    return `No status response for ${formatResponseAge(lastCheckedAgoMs)} — processing may still be running.`;
-  }
-  return lastCheckedAgoMs < 1_000 ? "Status checked just now" : `Status checked ${formatSecondsAgo(lastCheckedAgoMs)}`;
 }

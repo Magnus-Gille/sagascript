@@ -2,10 +2,14 @@
   import type { MeetingJobStatus } from "./api";
   import {
     formatDuration,
+    meetingPhases,
     phaseDetail,
     phaseLabel,
+    statusCheckAnnouncement,
+    statusCheckState,
     statusCheckMessage,
     statusTitle,
+    type MeetingProgressPhase,
   } from "./meeting-progress";
 
   interface Props {
@@ -29,10 +33,8 @@
   const isTerminal = $derived(status === "completed" || status === "cancelled" || status === "failed");
   const isStale = $derived((lastCheckedAgoMs ?? elapsedMs) > 10_000);
   const animationPaused = $derived(status !== "running" || pollingFailed || isStale);
-  const phaseIsKnown = $derived(
-    phase === "preparing" || phase === "decoding" || phase === "loading_model"
-      || phase === "analyzing" || phase === "clustering" || phase === "finalizing",
-  );
+  const phaseIsKnown = $derived(meetingPhases.includes(phase as MeetingProgressPhase));
+  const checkState = $derived(statusCheckState(lastCheckedAgoMs, pollingFailed));
   const accessibleProgressText = $derived(
     status === "completed"
       ? "Meeting processing complete"
@@ -50,7 +52,9 @@
   <div class="progress-heading">
     <div>
       <h2>{statusTitle(status)}</h2>
-      <p class="phase-label">{phaseLabel(phase)}</p>
+      {#if !isTerminal}
+        <p class="phase-label">{phaseLabel(phase)}</p>
+      {/if}
     </div>
     <div class="elapsed">Elapsed: {formatDuration(elapsedMs)}</div>
   </div>
@@ -79,17 +83,18 @@
       <span class="status-note">The worker stopped before completion.</span>
     {:else if status === "failed"}
       <span class="status-note">The worker could not finish processing.</span>
-    {:else if phase === "analyzing"}
-      <span class="status-note">{phaseDetail(phase)}</span>
-    {:else if phaseIsKnown}
+    {:else if !isTerminal && phaseIsKnown}
       <span class="status-note">{phaseDetail(phase)}</span>
     {/if}
   </div>
 
   {#if !isTerminal}
-  <p class:warning={pollingFailed || isStale} class="status-check" role="status">
-    {statusCheckMessage(lastCheckedAgoMs, pollingFailed)}
-  </p>
+    <p class:warning={pollingFailed || isStale} class="status-check">
+      {statusCheckMessage(lastCheckedAgoMs, pollingFailed)}
+    </p>
+    <p class="status-check-announcement" aria-live="polite" aria-atomic="true">
+      {statusCheckAnnouncement(checkState)}
+    </p>
   {/if}
 </section>
 
@@ -193,6 +198,18 @@
 
   .status-check.warning {
     color: var(--warning, #e8bd72);
+  }
+
+  .status-check-announcement {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   @keyframes meeting-progress-sweep {

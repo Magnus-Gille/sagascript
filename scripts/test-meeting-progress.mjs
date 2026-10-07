@@ -9,6 +9,8 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const {
   formatDuration,
+  statusCheckAnnouncement,
+  statusCheckState,
   phaseDetail,
   phaseLabel,
   statusCheckMessage,
@@ -47,4 +49,15 @@ test("status feedback distinguishes recent checks, stale responses, and failed c
     "No status response for 10 seconds — processing may still be running.",
   );
   assert.equal(statusCheckMessage(0, true), "Status check failed — processing may still be running.");
+});
+
+test("status announcements change only when the polling state changes", () => {
+  assert.equal(statusCheckState(null, false), "waiting");
+  assert.equal(statusCheckState(2_000, false), "healthy");
+  assert.equal(statusCheckState(9_999, false), "healthy");
+  assert.equal(statusCheckState(10_001, false), "stale");
+  assert.equal(statusCheckState(0, true), "failed");
+  assert.equal(statusCheckAnnouncement("healthy"), "Status checks are up to date.");
+  assert.equal(statusCheckAnnouncement("stale"), "No recent status response — processing may still be running.");
+  assert.equal(statusCheckAnnouncement("failed"), "Status check failed — processing may still be running.");
 });
