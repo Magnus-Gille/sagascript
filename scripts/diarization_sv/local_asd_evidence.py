@@ -48,8 +48,10 @@ def sha256_tree(path: Path) -> str:
     digest = hashlib.sha256()
     files = sorted(child for child in path.rglob("*") if child.is_file() and not child.is_symlink())
     for child in files:
-        digest.update(child.relative_to(path).as_posix().encode("utf-8"))
-        digest.update(b"\0")
+        relative = child.relative_to(path).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(child.stat().st_size.to_bytes(8, "big"))
         with child.open("rb") as source:
             while chunk := source.read(1024 * 1024):
                 digest.update(chunk)
@@ -167,20 +169,19 @@ def apply_controls(video: np.ndarray, valid: np.ndarray, audio: np.ndarray, cont
     return controlled_video, controlled_audio
 
 
-def _add_import_paths(code_dir: Path) -> None:
+def _add_import_paths(code_dir: Path, dependency_dir: Path | None = None) -> None:
     code_text = str(code_dir)
     if code_text not in sys.path:
         sys.path.insert(0, code_text)
-    dependency_dir = code_dir.parent / "deps"
-    if dependency_dir.is_dir() and str(dependency_dir) not in sys.path:
+    if dependency_dir is not None and str(dependency_dir) not in sys.path:
         sys.path.insert(0, str(dependency_dir))
 
 
-def _load_network(code_dir: Path, weights: Path, threads: int):
+def _load_network(code_dir: Path, dependency_dir: Path | None, weights: Path, threads: int):
     import torch
     import torch.nn as nn
 
-    _add_import_paths(code_dir)
+    _add_import_paths(code_dir, dependency_dir)
     from loss import lossA, lossAV, lossV
     from model.talkNetModel import talkNetModel
 
@@ -289,6 +290,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     faces_path = args.faces.expanduser().resolve()
     audio_path = args.audio16kmono.expanduser().resolve()
     code_dir = args.code_dir.expanduser().resolve()
+    raw_dependency_dir = getattr(args, "dependency_dir", None)
+    dependency_dir = raw_dependency_dir.expanduser().resolve() if raw_dependency_dir is not None else None
     weights = args.weights.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     if output_dir.exists():
@@ -298,6 +301,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             raise InputError(f"{label} must be an existing file: {path}")
     if not code_dir.is_dir():
         raise InputError(f"code directory must exist: {code_dir}")
+    if dependency_dir is not None and not dependency_dir.is_dir():
+        raise InputError(f"dependency directory must exist: {dependency_dir}")
     controls = parse_controls(args.controls)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(mode=0o700)
@@ -307,10 +312,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     audio_hash_before = sha256_file(audio_path)
     weights_hash_before = sha256_file(weights)
     code_hash_before = sha256_tree(code_dir)
+    dependency_hash_before = sha256_tree(dependency_dir) if dependency_dir is not None else None
     video, valid = load_faces(faces_path)
     audio = load_audio(audio_path)
     controlled_video, controlled_audio = apply_controls(video, valid, audio, controls)
-    network, torch = _load_network(code_dir, weights, args.threads)
+    network, torch = _load_network(code_dir, dependency_dir, weights, args.threads)
     logits, probabilities, aligned_valid = infer_scores(
         controlled_video, valid, controlled_audio, network, torch, args.chunk_seconds
     )
@@ -318,13 +324,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     audio_hash_after = sha256_file(audio_path)
     weights_hash_after = sha256_file(weights)
     code_hash_after = sha256_tree(code_dir)
-    if (face_hash_before, audio_hash_before, weights_hash_before, code_hash_before) != (
+    dependency_hash_after = sha256_tree(dependency_dir) if dependency_dir is not None else None
+    if (face_hash_before, audio_hash_before, weights_hash_before, code_hash_before, dependency_hash_before) != (
         face_hash_after,
         audio_hash_after,
         weights_hash_after,
         code_hash_after,
+        dependency_hash_after,
     ):
-        raise InputError("faces, audio, weights, or code changed during inference")
+        raise InputError("faces, audio, weights, code, or dependencies changed during inference")
     if not np.isfinite(logits).all() or not np.isfinite(probabilities).all():
         raise InputError("scores must be finite")
     np.savez_compressed(
@@ -341,6 +349,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "code_dir": str(code_dir),
         "code_sha256_before": code_hash_before,
         "code_sha256_after": code_hash_after,
+        "dependency_dir": str(dependency_dir) if dependency_dir is not None else None,
+        "dependency_sha256_before": dependency_hash_before,
+        "dependency_sha256_after": dependency_hash_after,
         "weights": str(weights),
         "weights_sha256_before": weights_hash_before,
         "weights_sha256_after": weights_hash_after,
@@ -354,7 +365,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "chunk_seconds": args.chunk_seconds,
         "threads": args.threads,
         "face_rate_hz": FACE_RATE_HZ,
-        "face_temporal_provenance": "caller-supplied 25 Hz frames duplicated from original 16 Hz tracking",
+        "face_temporal_provenance": "declared input contract (not empirically verified): caller-supplied 25 Hz frames duplicated from original 16 Hz tracking",
         "audio_rate_hz": AUDIO_RATE_HZ,
         "mfcc": {
             "numcep": 13,
@@ -391,6 +402,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--faces", required=True, type=Path, help="NPZ with uint8 video and bool valid arrays")
     parser.add_argument("--audio16kmono", required=True, type=Path, help="16 kHz mono PCM WAV")
     parser.add_argument("--code-dir", required=True, type=Path, help="immutable TalkNet source directory")
+    parser.add_argument(
+        "--dependency-dir",
+        type=Path,
+        help="optional immutable directory containing explicit TalkNet dependencies",
+    )
     parser.add_argument("--weights", required=True, type=Path, help="strict weights-only TalkNet state dict")
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--chunk-seconds", type=parse_positive_float, default=4.0)

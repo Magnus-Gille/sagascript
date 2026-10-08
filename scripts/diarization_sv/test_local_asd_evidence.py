@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
+import json
 import tempfile
 import unittest
 import wave
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +18,83 @@ import local_asd_evidence as asd
 
 
 class LocalASDEvidenceTests(unittest.TestCase):
+    def test_source_tree_hash_frames_relative_paths_and_file_lengths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "nested").mkdir()
+            (root / "a.txt").write_bytes(b"abc")
+            (root / "nested" / "b.bin").write_bytes(b"\x00\x01")
+
+            expected = hashlib.sha256()
+            for relative, payload in (("a.txt", b"abc"), ("nested/b.bin", b"\x00\x01")):
+                path_bytes = relative.encode("utf-8")
+                expected.update(len(path_bytes).to_bytes(8, "big"))
+                expected.update(path_bytes)
+                expected.update(len(payload).to_bytes(8, "big"))
+                expected.update(payload)
+
+            self.assertEqual(asd.sha256_tree(root), expected.hexdigest())
+
+    def test_dependency_import_path_is_explicit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            code_dir = root / "talknet"
+            implicit_dependency_dir = root / "deps"
+            explicit_dependency_dir = root / "vendor"
+            code_dir.mkdir()
+            implicit_dependency_dir.mkdir()
+            explicit_dependency_dir.mkdir()
+            original = list(sys.path)
+            try:
+                asd._add_import_paths(code_dir)
+                self.assertNotIn(str(implicit_dependency_dir), sys.path)
+                asd._add_import_paths(code_dir, explicit_dependency_dir)
+                self.assertIn(str(explicit_dependency_dir), sys.path)
+            finally:
+                sys.path[:] = original
+
+    def test_configured_dependency_tree_is_hashed_in_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            faces_path = root / "faces.npz"
+            audio_path = root / "audio.wav"
+            code_dir = root / "talknet"
+            dependency_dir = root / "vendor"
+            weights = root / "weights.pt"
+            output_dir = root / "evidence"
+            code_dir.mkdir()
+            dependency_dir.mkdir()
+            (code_dir / "model.py").write_text("model", encoding="utf-8")
+            (dependency_dir / "dependency.py").write_text("dependency", encoding="utf-8")
+            for path in (faces_path, audio_path, weights):
+                path.write_bytes(b"input")
+            args = argparse.Namespace(
+                faces=faces_path,
+                audio16kmono=audio_path,
+                code_dir=code_dir,
+                dependency_dir=dependency_dir,
+                weights=weights,
+                output_dir=output_dir,
+                controls="",
+                chunk_seconds=4.0,
+                threads=2,
+            )
+            video = np.zeros((1, 1, 112, 112), dtype=np.uint8)
+            valid = np.asarray([[True]], dtype=bool)
+            audio = np.zeros(640, dtype=np.float32)
+            scores = np.zeros((1, 1), dtype=np.float32)
+            with mock.patch.object(asd, "load_faces", return_value=(video, valid)), \
+                    mock.patch.object(asd, "load_audio", return_value=audio), \
+                    mock.patch.object(asd, "_load_network", return_value=(object(), object())), \
+                    mock.patch.object(asd, "infer_scores", return_value=(scores, scores, valid)):
+                asd.run(args)
+
+            metadata = json.loads((output_dir / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["dependency_dir"], str(dependency_dir.resolve()))
+            self.assertEqual(metadata["dependency_sha256_before"], asd.sha256_tree(dependency_dir))
+            self.assertEqual(metadata["dependency_sha256_after"], metadata["dependency_sha256_before"])
+            self.assertIn("declared input contract", metadata["face_temporal_provenance"])
+
     def test_alignment_uses_25_hz_video_and_100_hz_mfcc_contract(self):
         self.assertEqual(asd.aligned_frame_count(101, 100 * 640), 100)
         self.assertEqual(asd.expected_mfcc_frames(1), 3)
@@ -106,6 +186,7 @@ class LocalASDEvidenceTests(unittest.TestCase):
                 faces=Path(temporary) / "missing.npz",
                 audio16kmono=Path(temporary) / "missing.wav",
                 code_dir=Path(temporary) / "missing-code",
+                dependency_dir=None,
                 weights=Path(temporary) / "missing.model",
                 output_dir=output,
                 controls="",
