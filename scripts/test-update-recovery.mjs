@@ -294,6 +294,86 @@ test("zero-length diagnostic evidence is retained while strict decoder and unkno
   assert.equal(recovery.parseUpdateRecoveryPayload(JSON.stringify(candidate)), null);
 });
 
+test("Rust-invalid diarization report values fail closed during recovery", () => {
+  const invalidReports = {
+    "unknown timestamp method": (report) => {
+      report.decoder = {
+        strategy: "greedy",
+        beam_size: 0,
+        temperature_fallback: false,
+        vad_enabled: false,
+        vad_threshold: 0.5,
+        vad_min_silence_duration_ms: 100,
+        vad_speech_pad_ms: 30,
+        vad_samples_overlap: 0.1,
+        timestamp_method: "unknown",
+      };
+    },
+    "support beyond word duration": (report) => {
+      report.attributions = [{
+        index: 0,
+        start: 1,
+        end: 2,
+        speaker: "speaker-1",
+        reason: "temporal_overlap",
+        support: [{ speaker: "speaker-1", overlap_seconds: 2.00000001 }],
+      }];
+    },
+    "whitespace activity speaker": (report) => {
+      report.activity = [{ start: 0, end: 1, speakers: ["speaker 1"] }];
+    },
+    "control build identity": (report) => {
+      report.build_version = "test\u0000version";
+    },
+    "control region speaker": (report) => {
+      report.regions = [{
+        index: 0,
+        start: 0,
+        end: 1,
+        track: 0,
+        speaker: "speaker\u0001",
+        embedding_status: "missing",
+        assigned_centroid_distance: null,
+        nearest_other_centroid_distance: null,
+        used_track_fallback: true,
+      }];
+    },
+    "whitespace attribution support speaker": (report) => {
+      report.attributions = [{
+        index: 0,
+        start: 1,
+        end: 2,
+        speaker: "speaker-1",
+        reason: "temporal_overlap",
+        support: [{ speaker: "speaker\t1", overlap_seconds: 0.5 }],
+      }];
+    },
+    "empty speaker hint": (report) => {
+      report.speaker_hint = {};
+    },
+    "force without a count": (report) => {
+      report.speaker_hint = { force: false };
+    },
+    "speaker hint outcome without hint": (report) => {
+      report.speaker_hint_outcome = { satisfied: true, delivered: 1 };
+    },
+  };
+
+  for (const [name, mutate] of Object.entries(invalidReports)) {
+    const payload = completePayload();
+    const report = structuredClone(diarizationReport);
+    mutate(report);
+    payload.meetings[0].review.transcript = {
+      ...transcript,
+      schema_version: 2,
+      source_sha256: report.source_sha256,
+      diarization: report,
+    };
+    assert.throws(() => recovery.createUpdateRecoveryPayload(payload), /Invalid updater recovery payload/, name);
+    assert.equal(recovery.parseUpdateRecoveryPayload(JSON.stringify(payload)), null, name);
+  }
+});
+
 test("meeting speaker hint outcome fields survive recovery with a report", () => {
   const payload = completePayload();
   payload.meetings[0].review.transcript = {

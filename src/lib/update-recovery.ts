@@ -92,6 +92,13 @@ function strictStringValue(value: unknown, maximum: number, allowEmpty = true): 
   return allowEmpty || value.length > 0 ? value : null;
 }
 
+function validDiarizationId(value: unknown): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && utf8ByteLength(value, 128) <= 128
+    && !/[\p{White_Space}\p{Cc}]/u.test(value);
+}
+
 function finiteNumber(value: unknown, minimum: number, maximum: number): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum
     ? value
@@ -170,8 +177,8 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
     "activity", "regions", "attributions",
   ])) return null;
   const sourceSha = strictStringValue(source.source_sha256, 64, false);
-  const buildRevision = strictStringValue(source.build_revision, UPDATE_RECOVERY_LIMITS.maxRevisionLength, false);
-  const buildVersion = strictStringValue(source.build_version, UPDATE_RECOVERY_LIMITS.maxRevisionLength, false);
+  const buildRevision = validDiarizationId(source.build_revision) ? source.build_revision : null;
+  const buildVersion = validDiarizationId(source.build_version) ? source.build_version : null;
   const duration = finiteNumber(source.duration_seconds, 0, 14_400);
   const activity = boundedArray(source.activity, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
   const regions = boundedArray(source.regions, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
@@ -229,6 +236,7 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
     const hintRecord = record(hint);
     if (
       !hintRecord
+      || normalizeSpeakerHint(hint) === null
       || !hasOnlyKeys(hintRecord, ["exact", "min", "max", "force"])
       || (hintRecord.exact !== undefined && !integerNumber(hintRecord.exact, 1, 1_000))
       || (hintRecord.min !== undefined && !integerNumber(hintRecord.min, 1, 1_000))
@@ -240,7 +248,8 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
   if (hintOutcome !== undefined && hintOutcome !== null) {
     const outcomeRecord = record(hintOutcome);
     if (
-      !outcomeRecord
+      (hint === undefined || hint === null)
+      || !outcomeRecord
       || !hasOnlyKeys(outcomeRecord, ["satisfied", "delivered"])
       || typeof outcomeRecord.satisfied !== "boolean"
       || !integerNumber(outcomeRecord.delivered, 0, 1_000_000)
@@ -270,7 +279,8 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
       || !integerNumber(decoderRecord.vad_min_silence_duration_ms, 0, 14_400_000)
       || !integerNumber(decoderRecord.vad_speech_pad_ms, 0, 14_400_000)
       || finiteNumber(decoderRecord.vad_samples_overlap, 0, 1) === null
-      || strictStringValue(decoderRecord.timestamp_method, UPDATE_RECOVERY_LIMITS.maxIdLength, false) === null
+      || decoderRecord.timestamp_method !== "source_mapped_segments"
+        && decoderRecord.timestamp_method !== "dtw_words_with_segment_fallback"
     ) return null;
   }
 
@@ -288,7 +298,7 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
       && span.speakers.length > 0
       && span.speakers.length <= UPDATE_RECOVERY_LIMITS.maxDiarizationSpeakers
       && new Set(speakers).size === speakers.length
-      && speakers.every((speaker) => strictStringValue(speaker, UPDATE_RECOVERY_LIMITS.maxIdLength, false) !== null);
+      && speakers.every((speaker) => validDiarizationId(speaker));
     if (valid) previousActivityEnd = finiteNumber(span!.end, 0, duration)!;
     return valid;
   });
@@ -308,7 +318,7 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
       && finiteNumber(region.start, 0, duration) !== null
       && finiteNumber(region.end, 0, duration) !== null
       && finiteNumber(region.start, 0, duration)! <= finiteNumber(region.end, 0, duration)!
-      && strictStringValue(region.speaker, UPDATE_RECOVERY_LIMITS.maxIdLength, false) !== null
+      && validDiarizationId(region.speaker)
       && (status === "usable" || status === "missing" || status === "degenerate")
       && typeof region.track === "number"
       && Number.isInteger(region.track)
@@ -343,17 +353,19 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
       && finiteNumber(attribution.start, 0, duration) !== null
       && finiteNumber(attribution.end, 0, duration) !== null
       && finiteNumber(attribution.start, 0, duration)! <= finiteNumber(attribution.end, 0, duration)!
-      && strictStringValue(attribution.speaker, UPDATE_RECOVERY_LIMITS.maxIdLength, false) !== null
+      && validDiarizationId(attribution.speaker)
       && ["temporal_overlap", "tied_overlap", "nearest_gap", "no_speaker_evidence", "invalid_timestamp"].includes(String(attribution.reason))
       && Array.isArray(attribution.support)
       && attribution.support.length <= maxSupportEntries
       && new Set(support.map((entry) => record(entry)?.speaker)).size === support.length
       && support.every((entry) => {
         const item = record(entry);
+        const overlapSeconds = item === null ? null : finiteNumber(item.overlap_seconds, 0, 14_400);
         return item !== null
           && hasOnlyKeys(item, ["speaker", "overlap_seconds"])
-          && strictStringValue(item.speaker, UPDATE_RECOVERY_LIMITS.maxIdLength, false) !== null
-          && finiteNumber(item.overlap_seconds, 0, 14_400) !== null;
+          && validDiarizationId(item.speaker)
+          && overlapSeconds !== null
+          && overlapSeconds <= finiteNumber(attribution.end, 0, duration)! - finiteNumber(attribution.start, 0, duration)! + 1e-9;
       })
       && (attribution.margin_seconds === undefined
         || attribution.margin_seconds === null
@@ -392,7 +404,7 @@ function normalizeSpeakerHint(value: unknown): Record<string, unknown> | null {
   if (!source) return null;
   if (
     !hasOnlyKeys(source, ["exact", "min", "max", "force"])
-    || (source.exact === undefined && source.min === undefined && source.max === undefined && source.force === undefined)
+    || (source.exact === undefined && source.min === undefined && source.max === undefined)
     || (source.exact !== undefined && !integerNumber(source.exact, 1, 1_000))
     || (source.min !== undefined && !integerNumber(source.min, 1, 1_000))
     || (source.max !== undefined && !integerNumber(source.max, 1, 1_000))
