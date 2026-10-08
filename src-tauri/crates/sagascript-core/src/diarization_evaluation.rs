@@ -14,7 +14,9 @@ use thiserror::Error;
 
 const MAX_TIME_SECONDS: f64 = 14_400.0;
 const MAX_TURNS: usize = 100_000;
+const MAX_UEM_REGIONS: usize = 100_000;
 const MAX_SPEAKERS: usize = 64;
+const MAX_ID_LENGTH: usize = 128;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SpeakerTurn {
@@ -40,6 +42,8 @@ pub enum EvaluationError {
     TooManyTurns { kind: &'static str },
     #[error("more than {MAX_SPEAKERS} distinct speaker IDs were supplied")]
     TooManySpeakers,
+    #[error("UEM contains more than {MAX_UEM_REGIONS} regions")]
+    TooManyUemRegions,
     #[error("invalid {kind} interval at index {index}: start={start}, end={end}")]
     InvalidInterval {
         kind: &'static str,
@@ -134,6 +138,9 @@ pub fn evaluate(
 ) -> Result<EvaluationReport, EvaluationError> {
     validate_turn_count(reference.len(), "reference")?;
     validate_turn_count(hypothesis.len(), "hypothesis")?;
+    if uem.len() > MAX_UEM_REGIONS {
+        return Err(EvaluationError::TooManyUemRegions);
+    }
     if !options.collar_seconds.is_finite()
         || options.collar_seconds < 0.0
         || options.collar_seconds > MAX_TIME_SECONDS
@@ -345,7 +352,11 @@ fn normalize_turns(
     for (index, turn) in turns.iter().enumerate() {
         validate_time(kind, index, turn.start, turn.end)?;
         if turn.speakers.is_empty()
-            || turn.speakers.iter().any(|speaker| speaker.is_empty())
+            || turn.speakers.iter().any(|speaker| {
+                speaker.is_empty()
+                    || speaker.len() > MAX_ID_LENGTH
+                    || speaker.chars().any(char::is_control)
+            })
             || turn.speakers.iter().collect::<BTreeSet<_>>().len() != turn.speakers.len()
         {
             return Err(EvaluationError::InvalidSpeakerList { kind, index });
@@ -378,6 +389,9 @@ fn normalize_turns(
 }
 
 fn normalize_uem(uem: &[ScoringRegion]) -> Result<Vec<ScoringRegion>, EvaluationError> {
+    if uem.len() > MAX_UEM_REGIONS {
+        return Err(EvaluationError::TooManyUemRegions);
+    }
     let mut normalized = uem.to_vec();
     for (index, region) in normalized.iter().enumerate() {
         validate_time("UEM", index, region.start, region.end)?;
@@ -422,12 +436,15 @@ fn subtract_collars(
         merged.push(exclusion);
     }
     let mut result = Vec::new();
+    let mut exclusion_index = 0;
     for region in uem {
         let mut cursor = region.start;
-        for exclusion in &merged {
-            if exclusion.end <= cursor {
-                continue;
-            }
+        while exclusion_index < merged.len() && merged[exclusion_index].end <= cursor {
+            exclusion_index += 1;
+        }
+        let mut current_exclusion = exclusion_index;
+        while current_exclusion < merged.len() {
+            let exclusion = &merged[current_exclusion];
             if exclusion.start >= region.end {
                 break;
             }
@@ -441,6 +458,10 @@ fn subtract_collars(
             if cursor >= region.end {
                 break;
             }
+            current_exclusion += 1;
+        }
+        if current_exclusion > exclusion_index {
+            exclusion_index = current_exclusion;
         }
         if cursor < region.end {
             result.push(ScoringRegion {
@@ -460,102 +481,140 @@ fn build_segments(
     ref_index: &BTreeMap<String, usize>,
     hyp_index: &BTreeMap<String, usize>,
 ) -> Vec<ActiveSegment> {
+    if scored_uem.is_empty() {
+        return Vec::new();
+    }
+    let reference_count = ref_index.len();
+    let mut events = Vec::new();
+    for (speaker, intervals) in reference {
+        let index = ref_index[speaker];
+        for interval in intervals {
+            events.push(Event {
+                time: interval.start,
+                speaker: index,
+                start: true,
+            });
+            events.push(Event {
+                time: interval.end,
+                speaker: index,
+                start: false,
+            });
+        }
+    }
+    for (speaker, intervals) in hypothesis {
+        let index = hyp_index[speaker];
+        for interval in intervals {
+            events.push(Event {
+                time: interval.start,
+                speaker: reference_count + index,
+                start: true,
+            });
+            events.push(Event {
+                time: interval.end,
+                speaker: reference_count + index,
+                start: false,
+            });
+        }
+    }
+    events.sort_by(|a, b| {
+        a.time
+            .total_cmp(&b.time)
+            .then(a.start.cmp(&b.start))
+            .then(a.speaker.cmp(&b.speaker))
+    });
+
     let mut segments = Vec::new();
+    let mut original_region_index = 0;
+    let mut event_index = 0;
+    let mut active_reference = vec![false; reference_count];
+    let mut active_hypothesis = vec![false; hyp_index.len()];
     for region in scored_uem {
-        let region_index = original_uem
-            .iter()
-            .position(|original| region.start >= original.start && region.end <= original.end)
-            .unwrap_or(0);
-        let mut events = Vec::new();
-        for (speaker, intervals) in reference {
-            let index = ref_index[speaker];
-            for interval in intervals {
-                if interval.end > region.start && interval.start < region.end {
-                    events.push(Event {
-                        time: interval.start.max(region.start),
-                        speaker: index,
-                        start: true,
-                    });
-                    events.push(Event {
-                        time: interval.end.min(region.end),
-                        speaker: index,
-                        start: false,
-                    });
-                }
-            }
+        while original_region_index + 1 < original_uem.len()
+            && region.start >= original_uem[original_region_index].end
+        {
+            original_region_index += 1;
         }
-        let reference_count = ref_index.len();
-        for (speaker, intervals) in hypothesis {
-            let index = hyp_index[speaker];
-            for interval in intervals {
-                if interval.end > region.start && interval.start < region.end {
-                    events.push(Event {
-                        time: interval.start.max(region.start),
-                        speaker: reference_count + index,
-                        start: true,
-                    });
-                    events.push(Event {
-                        time: interval.end.min(region.end),
-                        speaker: reference_count + index,
-                        start: false,
-                    });
-                }
-            }
+        let region_index = original_region_index;
+        while event_index < events.len() && events[event_index].time <= region.start {
+            apply_event(
+                events[event_index],
+                reference_count,
+                &mut active_reference,
+                &mut active_hypothesis,
+            );
+            event_index += 1;
         }
-        events.sort_by(|a, b| a.time.total_cmp(&b.time).then(a.start.cmp(&b.start)));
-        let mut active_reference = vec![false; ref_index.len()];
-        let mut active_hypothesis = vec![false; hyp_index.len()];
         let mut cursor = region.start;
-        let mut event_index = 0;
-        while event_index < events.len() {
+        while event_index < events.len() && events[event_index].time < region.end {
             let time = events[event_index].time;
             if time > cursor {
-                segments.push(ActiveSegment {
+                segments.push(active_segment(
                     region_index,
-                    start: cursor,
-                    end: time,
-                    reference: active_reference
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, active)| active.then_some(index))
-                        .collect(),
-                    hypothesis: active_hypothesis
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, active)| active.then_some(index))
-                        .collect(),
-                });
+                    cursor,
+                    time,
+                    &active_reference,
+                    &active_hypothesis,
+                ));
             }
             while event_index < events.len() && events[event_index].time == time {
-                let event = events[event_index];
-                if event.speaker < reference_count {
-                    active_reference[event.speaker] = event.start;
-                } else {
-                    active_hypothesis[event.speaker - reference_count] = event.start;
-                }
+                apply_event(
+                    events[event_index],
+                    reference_count,
+                    &mut active_reference,
+                    &mut active_hypothesis,
+                );
                 event_index += 1;
             }
             cursor = time;
         }
         if cursor < region.end {
-            segments.push(ActiveSegment {
+            segments.push(active_segment(
                 region_index,
-                start: cursor,
-                end: region.end,
-                reference: active_reference
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, active)| active.then_some(index))
-                    .collect(),
-                hypothesis: active_hypothesis
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, active)| active.then_some(index))
-                    .collect(),
-            });
+                cursor,
+                region.end,
+                &active_reference,
+                &active_hypothesis,
+            ));
         }
     }
     segments
+}
+
+fn apply_event(
+    event: Event,
+    reference_count: usize,
+    active_reference: &mut [bool],
+    active_hypothesis: &mut [bool],
+) {
+    if event.speaker < reference_count {
+        active_reference[event.speaker] = event.start;
+    } else {
+        active_hypothesis[event.speaker - reference_count] = event.start;
+    }
+}
+
+fn active_segment(
+    region_index: usize,
+    start: f64,
+    end: f64,
+    active_reference: &[bool],
+    active_hypothesis: &[bool],
+) -> ActiveSegment {
+    ActiveSegment {
+        region_index,
+        start,
+        end,
+        reference: active_reference
+            .iter()
+            .enumerate()
+            .filter_map(|(index, active)| active.then_some(index))
+            .collect(),
+        hypothesis: active_hypothesis
+            .iter()
+            .enumerate()
+            .filter_map(|(index, active)| active.then_some(index))
+            .collect(),
+    }
 }
 
 fn overlap_weights(
@@ -1000,5 +1059,59 @@ mod tests {
             })
             .collect();
         assert!(evaluate(&reference, &hypothesis, &uem(1.0), options(0.0),).is_ok());
+    }
+
+    #[test]
+    fn uem_bound_is_checked_before_interval_normalization() {
+        let regions: Vec<_> = (0..=MAX_UEM_REGIONS)
+            .map(|index| ScoringRegion {
+                start: index as f64 * 0.1,
+                end: index as f64 * 0.1 + 0.05,
+            })
+            .collect();
+        assert_eq!(
+            evaluate(&[turn(f64::NAN, 1.0, &["a"])], &[], &regions, options(0.0),),
+            Err(EvaluationError::TooManyUemRegions)
+        );
+    }
+
+    #[test]
+    fn speaker_ids_reject_controls_and_oversized_values() {
+        let oversized = "x".repeat(MAX_ID_LENGTH + 1);
+        for speaker in [oversized, "a\n".into()] {
+            assert!(matches!(
+                evaluate(
+                    &[turn(0.0, 1.0, &[speaker.as_str()])],
+                    &[],
+                    &uem(1.0),
+                    options(0.0),
+                ),
+                Err(EvaluationError::InvalidSpeakerList {
+                    kind: "reference",
+                    index: 0,
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn sparse_many_region_sweep_preserves_region_totals() {
+        let regions: Vec<_> = (0..512)
+            .map(|index| ScoringRegion {
+                start: index as f64 * 2.0,
+                end: index as f64 * 2.0 + 1.0,
+            })
+            .collect();
+        let report = evaluate(
+            &[turn(0.0, 1_024.0, &["a"])],
+            &[turn(0.0, 1_024.0, &["x"])],
+            &regions,
+            options(0.0),
+        )
+        .unwrap();
+        assert_eq!(report.per_region.len(), regions.len());
+        assert_eq!(report.duration_seconds, 512.0);
+        assert_eq!(report.reference_speaker_seconds, 512.0);
+        assert_eq!(report.der, Some(0.0));
     }
 }

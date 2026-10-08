@@ -127,13 +127,7 @@ impl ReferenceDocument {
                 return Err(ReferenceError::Invalid("duplicate window ID"));
             }
         }
-        let mut ordered_windows: Vec<_> = self.windows.iter().collect();
-        ordered_windows.sort_by(|left, right| {
-            left.start
-                .total_cmp(&right.start)
-                .then(left.end.total_cmp(&right.end))
-                .then(left.id.cmp(&right.id))
-        });
+        let ordered_windows = sorted_windows(&self.windows);
         for pair in ordered_windows.windows(2) {
             if pair[1].start < pair[0].end {
                 return Err(ReferenceError::Invalid("overlapping windows"));
@@ -183,23 +177,33 @@ impl ReferenceDocument {
             }
             validate_interval_review(index, interval)?;
         }
-        let verified: Vec<_> = self
+        let mut verified: Vec<_> = self
             .intervals
             .iter()
             .enumerate()
             .filter(|(_, interval)| interval.status == ReferenceStatus::Verified)
             .collect();
-        for left_index in 0..verified.len() {
-            let (left_original_index, left) = verified[left_index];
-            for (_, right) in verified.iter().skip(left_index + 1) {
-                if left.start < right.end
-                    && right.start < left.end
-                    && speaker_set(left) != speaker_set(right)
-                {
+        verified.sort_by(|(_, left), (_, right)| {
+            left.start
+                .total_cmp(&right.start)
+                .then(left.end.total_cmp(&right.end))
+                .then(left.speakers.cmp(&right.speakers))
+        });
+        let mut active_end = 0.0;
+        let mut active_index = None;
+        let mut active_speakers = None;
+        for (original_index, interval) in verified {
+            if interval.start < active_end {
+                if active_speakers.as_ref() != Some(&speaker_set(interval)) {
                     return Err(ReferenceError::IncompatibleVerifiedOverlap(
-                        left_original_index,
+                        active_index.expect("an active interval has an index"),
                     ));
                 }
+                active_end = active_end.max(interval.end);
+            } else {
+                active_end = interval.end;
+                active_index = Some(original_index);
+                active_speakers = Some(speaker_set(interval));
             }
         }
         Ok(())
@@ -308,6 +312,7 @@ impl ReferenceDocument {
             }
         }
         let mut selected = self.clone();
+        let ordered_windows = sorted_windows(&self.windows);
         selected
             .windows
             .retain(|window| window_ids.contains(&window.id));
@@ -316,8 +321,7 @@ impl ReferenceDocument {
             .iter()
             .filter_map(|interval| {
                 let resolved = interval.window_id.clone().or_else(|| {
-                    containing_window(interval, &self.windows.iter().collect::<Vec<_>>())
-                        .map(|window| window.id.clone())
+                    containing_window(interval, &ordered_windows).map(|window| window.id.clone())
                 });
                 resolved
                     .filter(|window_id| window_ids.contains(window_id))
@@ -559,10 +563,19 @@ fn containing_window<'a>(
     interval: &ReferenceInterval,
     windows: &[&'a ReferenceWindow],
 ) -> Option<&'a ReferenceWindow> {
-    windows
-        .iter()
-        .copied()
-        .find(|window| interval.start >= window.start && interval.end <= window.end)
+    let mut left = 0;
+    let mut right = windows.len();
+    while left < right {
+        let middle = left + (right - left) / 2;
+        if windows[middle].start <= interval.start {
+            left = middle + 1;
+        } else {
+            right = middle;
+        }
+    }
+    let candidate = left.checked_sub(1)?;
+    let window = windows[candidate];
+    (interval.end <= window.end).then_some(window)
 }
 
 fn subtract_regions(
@@ -572,28 +585,46 @@ fn subtract_regions(
     let base = merge_regions(base);
     let holes = merge_regions(holes);
     let mut output = Vec::new();
+    let mut hole_index = 0;
     for (start, end) in base {
         let mut cursor = start;
-        for (hole_start, hole_end) in &holes {
-            if *hole_end <= cursor {
-                continue;
-            }
-            if *hole_start >= end {
+        while hole_index < holes.len() && holes[hole_index].1 <= cursor {
+            hole_index += 1;
+        }
+        let mut current_hole = hole_index;
+        while current_hole < holes.len() {
+            let (hole_start, hole_end) = holes[current_hole];
+            if hole_start >= end {
                 break;
             }
-            if *hole_start > cursor {
-                output.push((cursor, (*hole_start).min(end)));
+            if hole_start > cursor {
+                output.push((cursor, hole_start.min(end)));
             }
-            cursor = cursor.max(*hole_end);
+            cursor = cursor.max(hole_end);
             if cursor >= end {
                 break;
             }
+            current_hole += 1;
+        }
+        if current_hole > hole_index {
+            hole_index = current_hole;
         }
         if cursor < end {
             output.push((cursor, end));
         }
     }
     output
+}
+
+fn sorted_windows(windows: &[ReferenceWindow]) -> Vec<&ReferenceWindow> {
+    let mut ordered: Vec<_> = windows.iter().collect();
+    ordered.sort_by(|left, right| {
+        left.start
+            .total_cmp(&right.start)
+            .then(left.end.total_cmp(&right.end))
+            .then(left.id.cmp(&right.id))
+    });
+    ordered
 }
 
 fn merge_regions(regions: impl IntoIterator<Item = (f64, f64)>) -> Vec<(f64, f64)> {
@@ -736,6 +767,65 @@ mod tests {
             incompatible.validate(),
             Err(ReferenceError::IncompatibleVerifiedOverlap(_))
         ));
+    }
+
+    #[test]
+    fn overlapping_equal_speaker_sets_allow_reordered_labels() {
+        let reference = document(vec![
+            verified(0.0, 2.0, &["alice", "bob"]),
+            verified(1.0, 3.0, &["bob", "alice"]),
+        ]);
+        assert!(reference.validate().is_ok());
+        assert_eq!(reference.verified_turns().unwrap()[0].end, 3.0);
+    }
+
+    #[test]
+    fn nested_different_speaker_overlap_is_rejected_by_sorted_sweep() {
+        let reference = document(vec![
+            verified(0.0, 5.0, &["alice"]),
+            verified(1.0, 2.0, &["alice"]),
+            verified(2.0, 4.0, &["bob"]),
+        ]);
+        assert!(matches!(
+            reference.validate(),
+            Err(ReferenceError::IncompatibleVerifiedOverlap(_))
+        ));
+    }
+
+    #[test]
+    fn region_subtraction_uses_sorted_holes_across_disjoint_base_regions() {
+        assert_eq!(
+            subtract_regions(
+                [(0.0, 1.0), (2.0, 3.0), (4.0, 5.0)],
+                [(0.5, 2.5), (4.5, 6.0)],
+            ),
+            vec![(0.0, 0.5), (2.5, 3.0), (4.0, 4.5)]
+        );
+    }
+
+    #[test]
+    fn inferred_window_lookup_handles_many_input_ordered_windows() {
+        let mut windows: Vec<_> = (0..128)
+            .map(|index| ReferenceWindow {
+                id: format!("w{index}"),
+                start: index as f64,
+                end: index as f64 + 0.75,
+            })
+            .collect();
+        windows.reverse();
+        let mut interval = verified(127.0, 127.5, &["alice"]);
+        interval.window_id = None;
+        let reference = ReferenceDocument {
+            source_sha256: "a".repeat(64),
+            duration_seconds: 128.0,
+            speakers: vec!["alice".into(), "bob".into()],
+            windows,
+            intervals: vec![interval],
+        };
+        let selected = reference
+            .for_split(&BTreeSet::from(["w127".into()]))
+            .unwrap();
+        assert_eq!(selected.intervals[0].window_id.as_deref(), Some("w127"));
     }
 
     #[test]
