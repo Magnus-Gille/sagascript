@@ -47,6 +47,81 @@ pub struct FrameActivations {
 }
 
 impl FrameActivations {
+    /// Measure binary activity support for one extracted region. Durations are
+    /// clipped to the available audio samples, so padded segmentation frames
+    /// never contribute support beyond the source waveform.
+    pub fn region_activity_support(
+        &self,
+        audio_samples: usize,
+        start: f64,
+        end: f64,
+        track: usize,
+    ) -> (f64, f64) {
+        let (start_sample, end_sample) = clipped_sample_bounds(audio_samples, start, end);
+        if start_sample >= end_sample || track >= MAX_SPEAKERS {
+            return (0.0, 0.0);
+        }
+        let mut active_samples = 0usize;
+        let mut overlap_samples = 0usize;
+        for (index, frame) in self.activity.iter().enumerate() {
+            let frame_start = frame_sample_boundary(index, self.frame_duration);
+            let frame_end = frame_sample_boundary(index + 1, self.frame_duration);
+            let clipped_start = frame_start.max(start_sample);
+            let clipped_end = frame_end.min(end_sample).min(audio_samples);
+            if clipped_start >= clipped_end || frame[track] < 0.5 {
+                continue;
+            }
+            let samples = clipped_end - clipped_start;
+            active_samples += samples;
+            if frame
+                .iter()
+                .enumerate()
+                .any(|(other, value)| other != track && *value >= 0.5)
+            {
+                overlap_samples += samples;
+            }
+        }
+        (
+            active_samples as f64 / 16_000.0,
+            overlap_samples as f64 / 16_000.0,
+        )
+    }
+
+    /// Collect only exclusive-speech samples from one raw region. Samples
+    /// from other raw regions are never included, and samples where another
+    /// segmentation track is active are excluded from the selected waveform.
+    pub fn exclusive_region_samples(
+        &self,
+        audio: &[f32],
+        start: f64,
+        end: f64,
+        track: usize,
+    ) -> Vec<f32> {
+        let (start_sample, end_sample) = clipped_sample_bounds(audio.len(), start, end);
+        if start_sample >= end_sample || track >= MAX_SPEAKERS {
+            return Vec::new();
+        }
+        let mut selected = Vec::new();
+        for (index, frame) in self.activity.iter().enumerate() {
+            if frame[track] < 0.5
+                || frame
+                    .iter()
+                    .enumerate()
+                    .any(|(other, value)| other != track && *value >= 0.5)
+            {
+                continue;
+            }
+            let frame_start = frame_sample_boundary(index, self.frame_duration);
+            let frame_end = frame_sample_boundary(index + 1, self.frame_duration);
+            let clipped_start = frame_start.max(start_sample);
+            let clipped_end = frame_end.min(end_sample).min(audio.len());
+            if clipped_start < clipped_end {
+                selected.extend_from_slice(&audio[clipped_start..clipped_end]);
+            }
+        }
+        selected
+    }
+
     /// Convert frame-level activity to speaker time segments.
     ///
     /// Returns `(start_sec, end_sec, speaker_idx)` tuples, one per contiguous
@@ -103,6 +178,19 @@ impl FrameActivations {
         segments.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         segments
     }
+}
+
+fn clipped_sample_bounds(audio_samples: usize, start: f64, end: f64) -> (usize, usize) {
+    let start_sample = (start.max(0.0) * 16_000.0).floor() as usize;
+    let end_sample = (end.max(0.0) * 16_000.0).floor() as usize;
+    (
+        start_sample.min(audio_samples),
+        end_sample.min(audio_samples),
+    )
+}
+
+fn frame_sample_boundary(frame: usize, frame_duration: f64) -> usize {
+    (frame as f64 * frame_duration * 16_000.0).round() as usize
 }
 
 /// Wraps the pyannote segmentation ONNX model for sliding-window inference.
@@ -454,6 +542,31 @@ mod tests {
         };
         let segs = fa.to_speaker_segments(0.3, 0.5);
         assert!(segs.is_empty(), "short segment should be filtered out");
+    }
+
+    #[test]
+    fn exclusive_region_samples_skip_overlap_and_report_support() {
+        let mut activity = vec![[0.0f32; MAX_SPEAKERS]; 4];
+        activity[0][0] = 1.0;
+        activity[1][0] = 1.0;
+        activity[1][2] = 1.0;
+        activity[2][0] = 1.0;
+        let frame_samples = (FRAME_DURATION_S * 16_000.0) as usize;
+        let mut audio = vec![0.0f32; frame_samples * activity.len()];
+        audio[..frame_samples].fill(1.0);
+        audio[frame_samples..frame_samples * 2].fill(2.0);
+        audio[frame_samples * 2..frame_samples * 3].fill(3.0);
+        let fa = FrameActivations {
+            activity,
+            frame_duration: FRAME_DURATION_S,
+        };
+        let end = 3.0 * FRAME_DURATION_S;
+        let (active, overlap) = fa.region_activity_support(audio.len(), 0.0, end, 0);
+        assert!((active - 3.0 * FRAME_DURATION_S).abs() < 1e-9);
+        assert!((overlap - FRAME_DURATION_S).abs() < 1e-9);
+        let selected = fa.exclusive_region_samples(&audio, 0.0, end, 0);
+        assert_eq!(selected.len(), frame_samples * 2);
+        assert!(selected.iter().all(|sample| *sample != 2.0));
     }
 
     #[test]

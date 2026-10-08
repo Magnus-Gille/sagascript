@@ -96,6 +96,12 @@ pub struct TranscribeArgs {
     #[arg(long)]
     pub diarize: bool,
 
+    /// Experimental: embed only same-region samples where one track is active
+    /// and all other diarization tracks are inactive.
+    #[cfg(feature = "diarization")]
+    #[arg(long, requires = "diarize")]
+    pub diarize_exclusive_speech_embeddings: bool,
+
     /// Emit the validated shared meeting transcript JSON document.
     /// Requires diarization and cannot be combined with legacy JSON outputs.
     #[cfg(feature = "diarization")]
@@ -688,6 +694,7 @@ fn transcribe_meeting_file_inner(
         fail_fast: true,
         clipboard: false,
         diarize: true,
+        diarize_exclusive_speech_embeddings: false,
         meeting_json: true,
         diarize_threshold: threshold,
         diarize_diagnostics: false,
@@ -1533,7 +1540,11 @@ fn transcribe_file(
     #[cfg(feature = "diarization")]
     let cached = if cache_policy.reads_existing_cache() {
         match (args.diarize_cache.as_deref(), cache_identity.as_ref()) {
-            (Some(path), Some(identity)) => match crate::diarization_cache::load(path, identity)? {
+            (Some(path), Some(identity)) => match crate::diarization_cache::load_with_analysis_policy(
+                path,
+                identity,
+                args.diarize_exclusive_speech_embeddings,
+            )? {
                 crate::diarization_cache::CacheLookup::Hit(cached) => {
                     eprintln!("Reusing diarization cache: {}", path.display());
                     Some(cached)
@@ -1759,6 +1770,7 @@ fn transcribe_file(
         let config = DiarizeConfig {
             threshold: args.diarize_threshold,
             speaker_hint,
+            exclusive_speech_embeddings: args.diarize_exclusive_speech_embeddings,
             ..DiarizeConfig::default()
         };
         eprintln!(
@@ -1808,7 +1820,7 @@ fn transcribe_file(
                 {
                     let cache_write_started = Instant::now();
                     let cache =
-                        crate::diarization_cache::DiarizationCache::new_with_coverage_segments(
+                        crate::diarization_cache::DiarizationCache::new_with_coverage_segments_and_policy(
                             identity,
                             analysis.clone(),
                             transcription.segments.clone(),
@@ -1816,6 +1828,7 @@ fn transcribe_file(
                             coverage_profile.clone(),
                             detected_language.clone(),
                             language_regions.clone(),
+                            config.exclusive_speech_embeddings,
                         );
                     match cache_policy {
                         CachePolicy::Normal => crate::diarization_cache::save(path, &cache)?,
@@ -3398,6 +3411,7 @@ mod tests {
             fail_fast: true,
             clipboard: false,
             diarize: true,
+            diarize_exclusive_speech_embeddings: false,
             meeting_json: false,
             diarize_threshold: threshold,
             diarize_diagnostics: false,
