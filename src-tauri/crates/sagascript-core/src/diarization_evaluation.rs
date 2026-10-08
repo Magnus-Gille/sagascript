@@ -639,7 +639,10 @@ fn jer_score(
         jer_sum += 1.0 - similarity;
         jer_count += 1;
     }
-    ((jer_count > 0).then_some(jer_sum / jer_count as f64), mapping)
+    (
+        (jer_count > 0).then_some(jer_sum / jer_count as f64),
+        mapping,
+    )
 }
 
 /// Return a reference index for each hypothesis index.  Zero-weight pairs are
@@ -892,7 +895,10 @@ mod tests {
         assert_eq!(report.miss_seconds, 2.0);
         assert_eq!(report.false_alarm_seconds, 1.0);
         assert_eq!(report.der, Some(0.75));
-        assert_eq!(report.overlap.duration_seconds + report.non_overlap.duration_seconds, 3.0);
+        assert_eq!(
+            report.overlap.duration_seconds + report.non_overlap.duration_seconds,
+            3.0
+        );
         assert_eq!(
             report.overlap.reference_speaker_seconds + report.non_overlap.reference_speaker_seconds,
             report.reference_speaker_seconds
