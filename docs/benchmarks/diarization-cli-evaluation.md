@@ -51,7 +51,8 @@ declared stratum appears in eval, and eval contains at least 90% human-identifie
 qualification report is a gate for the frozen sample; it is not a claim of full-film accuracy.
 Well-formed JSON with invalid qualification inputs produces an `invalid-input` report and
 a nonzero command exit. Uncomputed identities and coverage are null; file hashes identify
-the rejected inputs. JSON syntax and file-read errors use the normal CLI error stream.
+the rejected inputs. Invalid CLI flags, JSON syntax and file-read errors use the normal
+CLI error stream. `--minimum-coverage` must be finite and between 0.90 and 1.0.
 
 Transcript evaluation requires a canonical acoustic report and rejects edited transcripts,
 including the legacy top-level edit marker. Legacy meetings without such a report remain
