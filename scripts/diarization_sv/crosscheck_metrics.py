@@ -70,6 +70,12 @@ def independent_jer(ref, hyp, uem, duration):
     cm = r.astype(float) @ h.T.astype(float)
     return namespace['jer']({'test': rd}, {'test': hd}, {'test': cm})[1] / 100
 
+def has_original_reference_speech(ref, uem):
+    """Whether any reference speaker support survives in the original UEM."""
+    return any(max(start, uem_start) < min(end, uem_end)
+               for start, end, _ in ref
+               for uem_start, uem_end in uem)
+
 fixtures = [
     ('perfect', [(0,4,'a'),(4,8,'b')], [(0,4,'x'),(4,8,'y')], [(0,10)], 10),
     ('miss-overlap', [(1,5,'a'),(2,4,'b')], [(1,5,'x')], [(0,8)], 8),
@@ -85,6 +91,9 @@ fixtures = [
     # The reference turn is outside the UEM: raw false-alarm seconds remain
     # defined while normalized DER and native JER are intentionally null.
     ('zero-reference-speaker-time', [(8,9,'a')], [(1,3,'x')], [(0,8)], 8),
+    # The native collar removes this short reference turn from DER, while
+    # JER still scores its original-UEM support and remains a real number.
+    ('collar-erases-short-reference', [(4.0,4.1,'a')], [(4.0,4.1,'x')], [(0,8)], 8),
 ]
 receipts = []
 for name, ref, hyp, uem, duration in fixtures:
@@ -113,7 +122,7 @@ for name, ref, hyp, uem, duration in fixtures:
         # Native JER has no defined speaker-average when UEM contains no
         # reference speaker-time. Keep that semantic limit explicit instead
         # of comparing dscore's no-reference sentinel to native null.
-        normalized_jer = expected_jer if reference_seconds > 0 else None
+        normalized_jer = expected_jer if has_original_reference_speech(ref, uem) else None
         expected = {'der':normalized_der, 'reference_speaker_seconds':reference_seconds, 'miss_seconds':details['missed detection'], 'false_alarm_seconds':details['false alarm'], 'confusion_seconds':details['confusion'], 'jer':normalized_jer}
         differences = {}
         metric_passes = {}

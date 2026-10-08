@@ -45,5 +45,5 @@ def compare_metric(actual, expected, tolerance=1e-8):
             "reason": "metric values must be finite numbers or null",
         }, False
 
-    difference = abs(actual - expected)
-    return difference, difference < tolerance
+    difference = float(abs(actual - expected))
+    return difference, bool(difference < tolerance)
