@@ -108,8 +108,10 @@ impl DiarizationAnalysis {
                 ));
             }
         }
+        let mut embedding_indices = std::collections::BTreeSet::new();
         for (index, embedding) in &self.embeddings {
             if *index >= self.raw_segments.len()
+                || !embedding_indices.insert(*index)
                 || embedding.len() != embedding::EMBEDDING_DIM
                 || embedding.iter().any(|value| !value.is_finite())
             {
@@ -122,13 +124,17 @@ impl DiarizationAnalysis {
             if support.len() != self.raw_segments.len()
                 || support.iter().enumerate().any(|(index, item)| {
                     let (start, end, track) = self.raw_segments[index];
+                    let region_seconds = end - start;
                     item.start.to_bits() != start.to_bits()
                         || item.end.to_bits() != end.to_bits()
                         || item.track != track
+                        || !item.start.is_finite()
+                        || !item.end.is_finite()
                         || !item.active_speech_seconds.is_finite()
                         || !item.overlap_seconds.is_finite()
                         || item.active_speech_seconds < 0.0
                         || item.overlap_seconds < 0.0
+                        || item.active_speech_seconds > region_seconds + 1e-9
                         || item.overlap_seconds > item.active_speech_seconds + 1e-9
                 })
             {
@@ -139,6 +145,27 @@ impl DiarizationAnalysis {
         }
         Ok(())
     }
+}
+
+fn collect_region_activity_support(
+    frame_activations: &segmentation::FrameActivations,
+    audio_samples: usize,
+    raw_segments: &[(f64, f64, usize)],
+) -> Vec<RegionActivitySupport> {
+    raw_segments
+        .iter()
+        .map(|&(start, end, track)| {
+            let (active_speech_seconds, overlap_seconds) =
+                frame_activations.region_activity_support(audio_samples, start, end, track);
+            RegionActivitySupport {
+                start,
+                end,
+                track,
+                active_speech_seconds,
+                overlap_seconds,
+            }
+        })
+        .collect()
 }
 
 /// Phase-level timings for the threshold-independent diarization analysis.
@@ -250,7 +277,7 @@ pub fn analyze_with_control(
             DiarizationAnalysis {
                 raw_segments,
                 embeddings: Vec::new(),
-                region_activity_support: config.exclusive_speech_embeddings.then(Vec::new),
+                region_activity_support: Some(Vec::new()),
             },
             DiarizationTimings {
                 model_load_seconds,
@@ -264,20 +291,15 @@ pub fn analyze_with_control(
 
     // 3. Extract embeddings per segment
     let embeddings_started = Instant::now();
-    let (embeddings, region_activity_support) = if config.exclusive_speech_embeddings {
-        let mut support = Vec::with_capacity(raw_segments.len());
+    let region_activity_support = Some(collect_region_activity_support(
+        &frame_activations,
+        audio.len(),
+        &raw_segments,
+    ));
+    let embeddings = if config.exclusive_speech_embeddings {
         let mut embeddings = Vec::new();
         for (index, &(start, end, track)) in raw_segments.iter().enumerate() {
             check()?;
-            let (active_speech_seconds, overlap_seconds) =
-                frame_activations.region_activity_support(audio.len(), start, end, track);
-            support.push(RegionActivitySupport {
-                start,
-                end,
-                track,
-                active_speech_seconds,
-                overlap_seconds,
-            });
             let selected = frame_activations.exclusive_region_samples(audio, start, end, track);
             if selected.len() < embedding::MIN_SAMPLES {
                 eprintln!(
@@ -294,12 +316,9 @@ pub fn analyze_with_control(
                 );
             }
         }
-        (embeddings, Some(support))
+        embeddings
     } else {
-        (
-            embedder.extract_embeddings_with_control(audio, &raw_segments, check)?,
-            None,
-        )
+        embedder.extract_embeddings_with_control(audio, &raw_segments, check)?
     };
     let embeddings_seconds = embeddings_started.elapsed().as_secs_f64();
     check()?;
@@ -684,6 +703,63 @@ mod tests {
         let json = serde_json::to_value(&seg).unwrap();
         assert_eq!(json["speaker"], "SPEAKER_1");
         assert_eq!(json["text"], "test");
+    }
+
+    #[test]
+    fn region_activity_support_is_identical_for_both_extraction_policies() {
+        let mut activity = vec![[0.0f32; segmentation::MAX_SPEAKERS]; 4];
+        activity[0][0] = 1.0;
+        activity[1][0] = 1.0;
+        activity[1][1] = 1.0;
+        activity[2][0] = 1.0;
+        let frame_activations = segmentation::FrameActivations {
+            activity,
+            frame_duration: segmentation::FRAME_DURATION_S,
+        };
+        let raw_segments = vec![(0.0, 3.0 * segmentation::FRAME_DURATION_S, 0)];
+        let default_support = collect_region_activity_support(
+            &frame_activations,
+            4 * 270,
+            &raw_segments,
+        );
+        let exclusive_support = collect_region_activity_support(
+            &frame_activations,
+            4 * 270,
+            &raw_segments,
+        );
+        assert_eq!(default_support, exclusive_support);
+        assert_eq!(default_support[0].active_speech_seconds, 3.0 * segmentation::FRAME_DURATION_S);
+        assert_eq!(default_support[0].overlap_seconds, segmentation::FRAME_DURATION_S);
+    }
+
+    #[test]
+    fn cached_analysis_rejects_duplicate_embedding_indices_and_bad_support_bounds() {
+        let embedding = vec![0.0; embedding::EMBEDDING_DIM];
+        let duplicate = DiarizationAnalysis {
+            raw_segments: vec![(0.0, 1.0, 0)],
+            embeddings: vec![(0, embedding.clone()), (0, embedding)],
+            region_activity_support: Some(vec![RegionActivitySupport {
+                start: 0.0,
+                end: 1.0,
+                track: 0,
+                active_speech_seconds: 1.0,
+                overlap_seconds: 0.0,
+            }]),
+        };
+        assert!(duplicate.validate().is_err());
+
+        let oversized = DiarizationAnalysis {
+            raw_segments: vec![(0.0, 1.0, 0)],
+            embeddings: Vec::new(),
+            region_activity_support: Some(vec![RegionActivitySupport {
+                start: 0.0,
+                end: 1.0,
+                track: 0,
+                active_speech_seconds: 1.1,
+                overlap_seconds: 0.0,
+            }]),
+        };
+        assert!(oversized.validate().is_err());
     }
 
     #[test]

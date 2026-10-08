@@ -681,6 +681,13 @@ mod tests {
         let analysis: DiarizationAnalysis = serde_json::from_value(serde_json::json!({
             "raw_segments": [[frame_start, frame_end, 0]],
             "embeddings": [[0, embedding]],
+            "region_activity_support": [{
+                "start": frame_start,
+                "end": frame_end,
+                "track": 0,
+                "active_speech_seconds": 0.3,
+                "overlap_seconds": 0.1
+            }],
         }))
         .unwrap();
         let analysis_before = serde_json::to_value(&analysis).unwrap();
