@@ -112,8 +112,12 @@ impl DiarizationAnalysis {
                     embedding_status: status,
                     assigned_centroid_distance: assigned,
                     nearest_other_centroid_distance: other,
-                    active_speech_seconds: None,
-                    overlapping_speech_seconds: None,
+                    active_speech_seconds: self
+                        .region_activity_support()
+                        .and_then(|items| items.get(index).map(|item| item.active_speech_seconds)),
+                    overlapping_speech_seconds: self
+                        .region_activity_support()
+                        .and_then(|items| items.get(index).map(|item| item.overlap_seconds)),
                 }
             })
             .collect();
@@ -187,6 +191,7 @@ impl DiarizationAnalysis {
                 min_speaker_seconds: config.min_speaker_seconds,
                 absorb_max_distance: config.absorb_max_distance,
                 hint_merge_max_distance: config.hint_merge_max_distance,
+                exclusive_speech_embeddings: config.exclusive_speech_embeddings,
             },
             activity,
             regions,

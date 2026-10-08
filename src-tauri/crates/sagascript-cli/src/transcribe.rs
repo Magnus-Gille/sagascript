@@ -172,7 +172,8 @@ pub struct TranscribeArgs {
 
     /// Enable voice activity detection (Silero VAD) to skip non-speech regions,
     /// reducing silence hallucination and repetition loops. Downloads a small
-    /// model on first use. Overrides the `vad_enabled` setting.
+    /// model on first use. Overrides the `vad_enabled` setting. Diarized VAD
+    /// uses source-mapped segment timing instead of DTW word timing.
     #[arg(long)]
     pub vad: bool,
 
@@ -182,8 +183,9 @@ pub struct TranscribeArgs {
 
     /// Beam search width: 0 = greedy (fast), >=2 = beam search (more accurate,
     /// slower). Overrides the saved `beam_size` setting. When omitted, a saved
-    /// `beam_size` >=2 is used; otherwise file transcription defaults to 5
-    /// (pass --beam 0 to force greedy).
+    /// `beam_size` >=2 is used; otherwise ordinary file transcription defaults
+    /// to 5 and diarized transcription defaults to 0. Diarization accepts
+    /// 0 or 2–8; pass --beam 0 --no-vad for legacy greedy/no-VAD decoding.
     #[arg(long = "beam", value_name = "N")]
     pub beam_size: Option<u32>,
 
@@ -1540,20 +1542,22 @@ fn transcribe_file(
     #[cfg(feature = "diarization")]
     let cached = if cache_policy.reads_existing_cache() {
         match (args.diarize_cache.as_deref(), cache_identity.as_ref()) {
-            (Some(path), Some(identity)) => match crate::diarization_cache::load_with_analysis_policy(
-                path,
-                identity,
-                args.diarize_exclusive_speech_embeddings,
-            )? {
-                crate::diarization_cache::CacheLookup::Hit(cached) => {
-                    eprintln!("Reusing diarization cache: {}", path.display());
-                    Some(cached)
+            (Some(path), Some(identity)) => {
+                match crate::diarization_cache::load_with_analysis_policy(
+                    path,
+                    identity,
+                    args.diarize_exclusive_speech_embeddings,
+                )? {
+                    crate::diarization_cache::CacheLookup::Hit(cached) => {
+                        eprintln!("Reusing diarization cache: {}", path.display());
+                        Some(cached)
+                    }
+                    crate::diarization_cache::CacheLookup::Miss(reason) => {
+                        eprintln!("Diarization cache miss ({reason}); computing analysis.");
+                        None
+                    }
                 }
-                crate::diarization_cache::CacheLookup::Miss(reason) => {
-                    eprintln!("Diarization cache miss ({reason}); computing analysis.");
-                    None
-                }
-            },
+            }
             _ => None,
         }
     } else {

@@ -139,6 +139,8 @@ pub struct DiarizationParameters {
     pub min_speaker_seconds: f64,
     pub absorb_max_distance: f32,
     pub hint_merge_max_distance: f32,
+    #[serde(default)]
+    pub exclusive_speech_embeddings: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
