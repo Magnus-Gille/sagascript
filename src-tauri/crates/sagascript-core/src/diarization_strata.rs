@@ -815,9 +815,9 @@ mod tests {
         assert_eq!(report.score.miss_seconds, 2.0);
         assert_eq!(report.score.false_alarm_seconds, 0.0);
         assert_eq!(report.score.confusion_seconds, 0.0);
-        assert_eq!(report.speakers[0].scored_reference_seconds, 1.0);
-        assert_eq!(report.speakers[1].scored_reference_seconds, 1.0);
-        assert_eq!(report.speakers[2].scored_reference_seconds, 1.0);
+        assert_eq!(report.speakers[0].short_window_reference_seconds, 1.0);
+        assert_eq!(report.speakers[1].short_window_reference_seconds, 1.0);
+        assert_eq!(report.speakers[2].short_window_reference_seconds, 1.0);
     }
 
     #[test]
