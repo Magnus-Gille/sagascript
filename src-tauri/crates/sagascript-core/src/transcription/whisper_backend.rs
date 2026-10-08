@@ -313,8 +313,8 @@ impl Default for TranscribeOptions {
 
 /// One whisper output segment with timing and confidence metadata.
 ///
-/// `avg_logprob` is derived (whisper.cpp does not expose its internal
-/// segment-level value): the mean of per-token log-probabilities over the
+/// `avg_logprob` is a derived mean (whisper.cpp does not expose its internal
+/// segment-level diagnostic): it averages per-token log-probabilities over the
 /// segment's text tokens (special tokens excluded), matching whisper.cpp's
 /// own confidence examples. `None` when a segment has no scoreable tokens.
 /// Typical values: > -0.3 confident, -0.3..-0.8 shaky, < -0.8 suspect.
@@ -358,6 +358,22 @@ fn mean_logprob(plogs: &[f32]) -> Option<f32> {
         return None;
     }
     Some(plogs.iter().sum::<f32>() / plogs.len() as f32)
+}
+
+/// Derive the same text-token log-probability mean for every Whisper output
+/// path. The binding exposes token data, but not Whisper's internal segment
+/// confidence value; token IDs at or above EOT are special tokens and are
+/// excluded from this diagnostic.
+fn segment_mean_logprob(segment: &whisper_rs::WhisperSegment<'_>, token_eot: i32) -> Option<f32> {
+    let mut plogs = Vec::with_capacity(segment.n_tokens().max(0) as usize);
+    for token_index in 0..segment.n_tokens() {
+        if let Some(token) = segment.get_token(token_index) {
+            if token.token_id() < token_eot {
+                plogs.push(token.token_data().plog);
+            }
+        }
+    }
+    mean_logprob(&plogs)
 }
 
 /// Return whether a raw Whisper segment contains its exact no-speech marker.
@@ -1868,14 +1884,6 @@ impl WhisperBackend {
                     continue;
                 }
             };
-            let mut plogs = Vec::with_capacity(segment.n_tokens().max(0) as usize);
-            for token_index in 0..segment.n_tokens() {
-                if let Some(token) = segment.get_token(token_index) {
-                    if token.token_id() < token_eot {
-                        plogs.push(token.token_data().plog);
-                    }
-                }
-            }
             let raw_bounds = {
                 #[cfg(feature = "diarization")]
                 {
@@ -1908,7 +1916,7 @@ impl WhisperBackend {
                 start: start + offset_seconds,
                 end: end + offset_seconds,
                 text,
-                avg_logprob: mean_logprob(&plogs),
+                avg_logprob: segment_mean_logprob(&segment, token_eot),
                 no_speech_prob: segment.no_speech_probability(),
             });
         }
@@ -2143,6 +2151,13 @@ impl WhisperBackend {
         options: &TranscribeOptions,
     ) -> Result<DiarizationTranscription, DictationError> {
         let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
+        let token_eot = {
+            let guard = self.context.lock().unwrap();
+            guard
+                .as_ref()
+                .ok_or(DictationError::ModelNotLoaded)?
+                .token_eot()
+        };
 
         let n_threads = whisper_threads();
         let no_speech_thold = model.no_speech_threshold();
@@ -2227,7 +2242,7 @@ impl WhisperBackend {
                             start: segment.start_timestamp() as f64 / 100.0 + t_offset,
                             end: segment.end_timestamp() as f64 / 100.0 + t_offset,
                             text: text.clone(),
-                            avg_logprob: None,
+                            avg_logprob: segment_mean_logprob(&segment, token_eot),
                             no_speech_prob: segment.no_speech_probability(),
                         });
                         // Derive segment timing from DTW timestamps on first/last non-special
@@ -2264,7 +2279,7 @@ impl WhisperBackend {
                                 start: segment.start_timestamp() as f64 / 100.0 + t_offset,
                                 end: segment.end_timestamp() as f64 / 100.0 + t_offset,
                                 text,
-                                avg_logprob: None,
+                                avg_logprob: segment_mean_logprob(&segment, token_eot),
                                 no_speech_prob: segment.no_speech_probability(),
                             });
                         }
