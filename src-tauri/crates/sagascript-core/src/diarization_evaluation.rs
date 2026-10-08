@@ -75,6 +75,9 @@ pub struct RegionEvaluation {
 pub struct EvaluationReport {
     /// Total scored wall-clock time after UEM and collar subtraction.
     pub duration_seconds: f64,
+    /// Reference speaker-time denominator for DER, counting concurrent
+    /// reference speakers separately.
+    pub reference_speaker_seconds: f64,
     pub reference_speech_seconds: f64,
     pub hypothesis_speech_seconds: f64,
     pub miss_seconds: f64,
@@ -85,6 +88,11 @@ pub struct EvaluationReport {
     /// Mean reference-speaker Jaccard error. None when no reference speaker
     /// has speech time in the scored domain.
     pub jer: Option<f64>,
+    /// JER uses an independent IoU-optimal mapping.
+    pub jer_speaker_mapping: BTreeMap<String, String>,
+    /// JER deliberately uses zero collar, as in dscore; DER uses the
+    /// caller's requested collar independently.
+    pub jer_collar_seconds: f64,
     pub speaker_mapping: BTreeMap<String, String>,
     pub speech_precision: Option<f64>,
     pub speech_recall: Option<f64>,
@@ -186,6 +194,7 @@ pub fn evaluate(
 
     let mut report = EvaluationReport {
         duration_seconds: 0.0,
+        reference_speaker_seconds: 0.0,
         reference_speech_seconds: 0.0,
         hypothesis_speech_seconds: 0.0,
         miss_seconds: 0.0,
@@ -193,6 +202,8 @@ pub fn evaluate(
         confusion_seconds: 0.0,
         der: None,
         jer: None,
+        jer_speaker_mapping: BTreeMap::new(),
+        jer_collar_seconds: 0.0,
         speaker_mapping: mapping,
         speech_precision: None,
         speech_recall: None,
@@ -212,10 +223,6 @@ pub fn evaluate(
 
     let mut speech_intersection = 0.0;
     let mut overlap_intersection = 0.0;
-    let mut reference_by_speaker = vec![0.0; ref_ids.len()];
-    let mut hypothesis_by_reference = vec![0.0; ref_ids.len()];
-    let mut intersection_by_speaker = vec![0.0; ref_ids.len()];
-
     for segment in &segments {
         let duration = segment.end - segment.start;
         let n_reference = segment.reference.len();
@@ -231,6 +238,7 @@ pub fn evaluate(
         let confusion = (n_reference.min(n_hypothesis).saturating_sub(correct)) as f64 * duration;
 
         report.duration_seconds += duration;
+        report.reference_speaker_seconds += n_reference as f64 * duration;
         report.reference_speech_seconds += (n_reference > 0) as u8 as f64 * duration;
         report.hypothesis_speech_seconds += (n_hypothesis > 0) as u8 as f64 * duration;
         report.miss_seconds += miss;
@@ -241,22 +249,6 @@ pub fn evaluate(
         }
         if n_reference >= 2 && n_hypothesis >= 2 {
             overlap_intersection += duration;
-        }
-
-        for reference in &segment.reference {
-            reference_by_speaker[*reference] += duration;
-        }
-        for hyp in &segment.hypothesis {
-            if let Some(reference) = mapped_hyp[*hyp] {
-                hypothesis_by_reference[reference] += duration;
-            }
-        }
-        for hyp in &segment.hypothesis {
-            if let Some(reference) = mapped_hyp[*hyp] {
-                if segment.reference.contains(&reference) {
-                    intersection_by_speaker[reference] += duration;
-                }
-            }
         }
 
         let target = if n_reference >= 2 {
@@ -283,7 +275,7 @@ pub fn evaluate(
         report.miss_seconds,
         report.false_alarm_seconds,
         report.confusion_seconds,
-        report.reference_speech_seconds,
+        report.reference_speaker_seconds,
     );
     report.speech_precision = ratio(speech_intersection, report.hypothesis_speech_seconds);
     report.speech_recall = ratio(speech_intersection, report.reference_speech_seconds);
@@ -300,21 +292,17 @@ pub fn evaluate(
         finish_error_totals(&mut region.errors);
     }
 
-    let mut jer_sum = 0.0;
-    let mut jer_count = 0;
-    for (index, reference_duration) in reference_by_speaker.into_iter().enumerate() {
-        if reference_duration > 0.0 {
-            let union = reference_duration + hypothesis_by_reference[index]
-                - intersection_by_speaker[index];
-            jer_sum += if union > 0.0 {
-                1.0 - intersection_by_speaker[index] / union
-            } else {
-                0.0
-            };
-            jer_count += 1;
-        }
-    }
-    report.jer = (jer_count > 0).then_some(jer_sum / jer_count as f64);
+    let (jer, jer_speaker_mapping) = jer_score(
+        &uem,
+        &reference,
+        &hypothesis,
+        &ref_ids,
+        &hyp_ids,
+        &ref_index,
+        &hyp_index,
+    );
+    report.jer = jer;
+    report.jer_speaker_mapping = jer_speaker_mapping;
 
     Ok(report)
 }
@@ -587,6 +575,73 @@ fn overlap_weights(
     weights
 }
 
+fn jer_score(
+    uem: &[ScoringRegion],
+    reference: &BTreeMap<String, Vec<Interval>>,
+    hypothesis: &BTreeMap<String, Vec<Interval>>,
+    ref_ids: &[String],
+    hyp_ids: &[String],
+    ref_index: &BTreeMap<String, usize>,
+    hyp_index: &BTreeMap<String, usize>,
+) -> (Option<f64>, BTreeMap<String, String>) {
+    // JER is independent of DER's collar and mapping. Score the original UEM
+    // with zero collar, then maximize the sum of per-pair IoUs.
+    let segments = build_segments(uem, uem, reference, hypothesis, ref_index, hyp_index);
+    let mut reference_duration = vec![0.0; ref_ids.len()];
+    let mut hypothesis_duration = vec![0.0; hyp_ids.len()];
+    let mut intersections = vec![vec![0.0; hyp_ids.len()]; ref_ids.len()];
+    for segment in segments {
+        let duration = segment.end - segment.start;
+        for reference in &segment.reference {
+            reference_duration[*reference] += duration;
+        }
+        for hypothesis in &segment.hypothesis {
+            hypothesis_duration[*hypothesis] += duration;
+        }
+        for reference in &segment.reference {
+            for hypothesis in &segment.hypothesis {
+                intersections[*reference][*hypothesis] += duration;
+            }
+        }
+    }
+
+    let mut iou = vec![vec![0.0; hyp_ids.len()]; ref_ids.len()];
+    for reference in 0..ref_ids.len() {
+        for hypothesis in 0..hyp_ids.len() {
+            let union = reference_duration[reference] + hypothesis_duration[hypothesis]
+                - intersections[reference][hypothesis];
+            if union > 0.0 {
+                iou[reference][hypothesis] = intersections[reference][hypothesis] / union;
+            }
+        }
+    }
+    let assignment = maximum_assignment(&iou, hyp_ids.len());
+    let mut mapping = BTreeMap::new();
+    let mut assigned_hypothesis = vec![None; ref_ids.len()];
+    for (hypothesis, reference) in assignment.into_iter().enumerate() {
+        if let Some(reference) = reference {
+            if iou[reference][hypothesis] > 0.0 {
+                mapping.insert(hyp_ids[hypothesis].clone(), ref_ids[reference].clone());
+                assigned_hypothesis[reference] = Some(hypothesis);
+            }
+        }
+    }
+
+    let mut jer_sum = 0.0;
+    let mut jer_count = 0;
+    for reference in 0..ref_ids.len() {
+        if reference_duration[reference] <= 0.0 {
+            continue;
+        }
+        let similarity = assigned_hypothesis[reference]
+            .map(|hypothesis| iou[reference][hypothesis])
+            .unwrap_or(0.0);
+        jer_sum += 1.0 - similarity;
+        jer_count += 1;
+    }
+    ((jer_count > 0).then_some(jer_sum / jer_count as f64), mapping)
+}
+
 /// Return a reference index for each hypothesis index.  Zero-weight pairs are
 /// left for the caller to treat as unmatched.  The square Hungarian assignment
 /// gives a deterministic global optimum, including when windows have opposing
@@ -769,6 +824,8 @@ mod tests {
         .unwrap();
         assert_eq!(missed.miss_seconds, 1.0);
         assert_eq!(missed.false_alarm_seconds, 0.0);
+        assert_eq!(missed.reference_speaker_seconds, 2.0);
+        assert_eq!(missed.der, Some(0.5));
 
         let extra = evaluate(
             &[turn(0.0, 1.0, &["a"])],
@@ -816,7 +873,38 @@ mod tests {
         assert_eq!(report.overlap.duration_seconds, 1.0);
         assert_eq!(report.overlap.reference_speaker_seconds, 3.0);
         assert_eq!(report.miss_seconds, 1.0);
+        assert_eq!(report.reference_speaker_seconds, 3.0);
+        assert_eq!(report.der, Some(1.0 / 3.0));
         assert_eq!(report.overlap_recall, Some(1.0));
+    }
+
+    #[test]
+    fn overall_totals_match_overlap_and_non_overlap_with_silence_false_alarm() {
+        let report = evaluate(
+            &[turn(0.0, 2.0, &["a", "b"])],
+            &[turn(0.0, 1.0, &["x", "y"]), turn(2.0, 3.0, &["x"])],
+            &uem(3.0),
+            options(0.0),
+        )
+        .unwrap();
+        assert_eq!(report.duration_seconds, 3.0);
+        assert_eq!(report.reference_speaker_seconds, 4.0);
+        assert_eq!(report.miss_seconds, 2.0);
+        assert_eq!(report.false_alarm_seconds, 1.0);
+        assert_eq!(report.der, Some(0.75));
+        assert_eq!(report.overlap.duration_seconds + report.non_overlap.duration_seconds, 3.0);
+        assert_eq!(
+            report.overlap.reference_speaker_seconds + report.non_overlap.reference_speaker_seconds,
+            report.reference_speaker_seconds
+        );
+        assert_eq!(
+            report.overlap.miss_seconds + report.non_overlap.miss_seconds,
+            report.miss_seconds
+        );
+        assert_eq!(
+            report.overlap.false_alarm_seconds + report.non_overlap.false_alarm_seconds,
+            report.false_alarm_seconds
+        );
     }
 
     #[test]
@@ -863,6 +951,30 @@ mod tests {
         .unwrap();
         assert_eq!(report.speaker_mapping["x"], "a");
         assert_eq!(report.speaker_mapping["y"], "b");
+    }
+
+    #[test]
+    fn jer_uses_independent_iou_mapping_and_zero_collar() {
+        let reference = [
+            turn(0.0, 7.0, &["a"]),
+            turn(11.0, 14.0, &["a"]),
+            turn(7.0, 11.0, &["b"]),
+        ];
+        let hypothesis = [
+            turn(0.0, 6.0, &["x"]),
+            turn(7.0, 11.0, &["x"]),
+            turn(6.0, 7.0, &["y"]),
+        ];
+        let report = evaluate(&reference, &hypothesis, &uem(14.0), options(0.0)).unwrap();
+        assert_eq!(report.speaker_mapping["x"], "a");
+        assert_eq!(report.jer_speaker_mapping["x"], "b");
+        assert_eq!(report.jer_speaker_mapping["y"], "a");
+        assert_eq!(report.jer, Some(0.75));
+        assert_eq!(report.jer_collar_seconds, 0.0);
+
+        let collared = evaluate(&reference, &hypothesis, &uem(14.0), options(0.5)).unwrap();
+        assert_eq!(collared.jer, report.jer);
+        assert_eq!(collared.jer_speaker_mapping, report.jer_speaker_mapping);
     }
 
     #[test]
