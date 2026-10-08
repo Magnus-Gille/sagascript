@@ -11,8 +11,12 @@ use sagascript_core::transcription::TranscriptSegment;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const CACHE_SCHEMA_VERSION: u32 = 5;
+const CACHE_SCHEMA_VERSION: u32 = 6;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+const DEFAULT_DIARIZATION_BEAM_SIZE: u32 = 0;
+const DEFAULT_DIARIZATION_TEMPERATURE_FALLBACK: bool = true;
+const VAD_MODEL_ID: &str =
+    "ggml-silero-v5.1.2.bin@29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf;threshold=0.5;min_silence_ms=200;speech_pad_ms=50;samples_overlap=0.1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CacheIdentity {
@@ -21,6 +25,9 @@ pub(crate) struct CacheIdentity {
     language: String,
     model: String,
     prompt_sha256: String,
+    decoder_beam_size: u32,
+    temperature_fallback: bool,
+    vad_model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,6 +97,7 @@ pub(crate) enum CacheLookup {
 }
 
 impl CacheIdentity {
+    #[cfg(test)]
     pub(crate) fn for_input(
         input: &Path,
         language: &str,
@@ -111,12 +119,66 @@ impl CacheIdentity {
                 "Meeting source hash must be a lowercase SHA-256 digest".to_string(),
             ));
         }
+        Self::for_source_sha256_with_options(
+            source_sha256,
+            language,
+            model,
+            prompt,
+            DEFAULT_DIARIZATION_BEAM_SIZE,
+            DEFAULT_DIARIZATION_TEMPERATURE_FALLBACK,
+            false,
+        )
+    }
+
+    pub(crate) fn for_input_with_options(
+        input: &Path,
+        language: &str,
+        model: &str,
+        prompt: Option<&str>,
+        decoder_beam_size: u32,
+        temperature_fallback: bool,
+        vad_enabled: bool,
+    ) -> Result<Self, DictationError> {
+        let input_sha256 = sha256_file(input)?;
+        Self::for_source_sha256_with_options(
+            &input_sha256,
+            language,
+            model,
+            prompt,
+            decoder_beam_size,
+            temperature_fallback,
+            vad_enabled,
+        )
+    }
+
+    pub(crate) fn for_source_sha256_with_options(
+        source_sha256: &str,
+        language: &str,
+        model: &str,
+        prompt: Option<&str>,
+        decoder_beam_size: u32,
+        temperature_fallback: bool,
+        vad_enabled: bool,
+    ) -> Result<Self, DictationError> {
+        if !is_lowercase_sha256(source_sha256) {
+            return Err(DictationError::FileDecodeError(
+                "Meeting source hash must be a lowercase SHA-256 digest".to_string(),
+            ));
+        }
+        if decoder_beam_size == 1 || decoder_beam_size > 8 {
+            return Err(DictationError::SettingsError(
+                "diarization beam width must be 0 (greedy) or between 2 and 8".to_string(),
+            ));
+        }
         Ok(Self {
             schema_version: CACHE_SCHEMA_VERSION,
             input_sha256: source_sha256.to_string(),
             language: language.to_string(),
             model: model.to_string(),
             prompt_sha256: sha256_bytes(prompt.unwrap_or_default().as_bytes()),
+            decoder_beam_size,
+            temperature_fallback,
+            vad_model_id: vad_enabled.then(|| VAD_MODEL_ID.to_string()),
         })
     }
 }
@@ -495,14 +557,17 @@ mod tests {
         assert_eq!(
             fields,
             vec![
+                "decoder_beam_size".to_string(),
                 "input_sha256".to_string(),
                 "language".to_string(),
                 "model".to_string(),
                 "prompt_sha256".to_string(),
                 "schema_version".to_string(),
+                "temperature_fallback".to_string(),
+                "vad_model_id".to_string(),
             ]
         );
-        assert_eq!(object["schema_version"], serde_json::json!(5));
+        assert_eq!(object["schema_version"], serde_json::json!(6));
         assert!(!object.contains_key("threshold"));
 
         let _ = std::fs::remove_dir_all(dir);
@@ -615,13 +680,13 @@ mod tests {
                 .to_bits()
         );
         for index in 0..256 {
-            let before = analysis_before["embeddings"][0][1][index]
-                .as_f64()
-                .unwrap() as f32;
-            let after = analysis_after["embeddings"][0][1][index]
-                .as_f64()
-                .unwrap() as f32;
-            assert_eq!(before.to_bits(), after.to_bits(), "embedding component {index}");
+            let before = analysis_before["embeddings"][0][1][index].as_f64().unwrap() as f32;
+            let after = analysis_after["embeddings"][0][1][index].as_f64().unwrap() as f32;
+            assert_eq!(
+                before.to_bits(),
+                after.to_bits(),
+                "embedding component {index}"
+            );
         }
         assert_eq!(hit.transcript[0].0.to_bits(), transcript[0].0.to_bits());
         assert_eq!(hit.transcript[0].1.to_bits(), transcript[0].1.to_bits());
@@ -645,6 +710,69 @@ mod tests {
             CacheLookup::Hit(_)
         ));
 
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn decoder_and_vad_changes_miss_but_threshold_is_not_in_identity() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        let cache_path = dir.join("analysis.json");
+        std::fs::write(&input, b"audio").unwrap();
+        let baseline = CacheIdentity::for_input_with_options(
+            &input,
+            "sv",
+            "kb-whisper-large",
+            None,
+            0,
+            true,
+            false,
+        )
+        .unwrap();
+        write_minimal_cache(&cache_path, baseline.clone());
+        assert!(matches!(
+            load(&cache_path, &baseline).unwrap(),
+            CacheLookup::Hit(_)
+        ));
+
+        for changed in [
+            CacheIdentity::for_input_with_options(
+                &input,
+                "sv",
+                "kb-whisper-large",
+                None,
+                4,
+                true,
+                false,
+            )
+            .unwrap(),
+            CacheIdentity::for_input_with_options(
+                &input,
+                "sv",
+                "kb-whisper-large",
+                None,
+                0,
+                false,
+                false,
+            )
+            .unwrap(),
+            CacheIdentity::for_input_with_options(
+                &input,
+                "sv",
+                "kb-whisper-large",
+                None,
+                0,
+                true,
+                true,
+            )
+            .unwrap(),
+        ] {
+            assert!(matches!(
+                load(&cache_path, &changed).unwrap(),
+                CacheLookup::Miss(_)
+            ));
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -772,7 +900,10 @@ mod tests {
             panic!("expected cache hit");
         };
         assert_eq!(hit.transcript.len(), 1);
-        assert_eq!(hit.coverage_segments.as_ref().unwrap()[0].text, "coarse hej");
+        assert_eq!(
+            hit.coverage_segments.as_ref().unwrap()[0].text,
+            "coarse hej"
+        );
         assert_eq!(hit.detected_language.unwrap().language, "sv");
         let regions = hit.language_regions.unwrap();
         assert_eq!(regions.regions[0].language, "sv");
@@ -1089,11 +1220,7 @@ mod tests {
             "avg_logprob": null,
             "no_speech_prob": 0.0
         }]);
-        std::fs::write(
-            &cache_path,
-            serde_json::to_vec(&invalid_coverage).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&cache_path, serde_json::to_vec(&invalid_coverage).unwrap()).unwrap();
         assert!(load(&cache_path, &expected).is_err());
         assert!(load_for_rediarization(&cache_path, &expected).is_err());
 
