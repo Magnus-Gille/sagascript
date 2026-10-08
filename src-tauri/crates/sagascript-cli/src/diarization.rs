@@ -355,6 +355,7 @@ fn reference_qualify_report(
     expected_policy_version: Option<&str>,
     expected_split_sha256: Option<&str>,
 ) -> Result<(String, bool), DictationError> {
+    validate_minimum_coverage(minimum_coverage)?;
     let reference_file = read_input(reference_path)?;
     let manifest_file = read_input(manifest_path)?;
     let reference: Value =
@@ -387,6 +388,15 @@ fn reference_qualify_report(
         json_string(&serde_json::to_value(report).map_err(json_error)?)?,
         ready,
     ))
+}
+
+fn validate_minimum_coverage(value: f64) -> Result<(), DictationError> {
+    if !value.is_finite() || !(0.90..=1.0).contains(&value) {
+        return Err(cli_error(
+            "--minimum-coverage must be finite and between 0.90 and 1.0",
+        ));
+    }
+    Ok(())
 }
 
 fn invalid_qualification_report(
@@ -1593,6 +1603,42 @@ mod tests {
             },
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn minimum_coverage_is_validated_before_qualification_or_file_reads() {
+        for value in [0.5, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = reference_qualify_report(
+                Path::new("missing-reference.json"),
+                Path::new("missing-manifest.json"),
+                value,
+                None,
+                None,
+                None,
+            )
+            .unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("--minimum-coverage"), "{message}");
+            assert!(message.contains("between 0.90 and 1.0"), "{message}");
+        }
+
+        let (reference, manifest) = qualified_fixture();
+        let reference_file = write(&serde_json::to_string(&reference).unwrap());
+        let manifest_file = write(&serde_json::to_string(&manifest).unwrap());
+        for value in [0.9, 1.0] {
+            assert!(
+                reference_qualify_report(
+                    reference_file.path(),
+                    manifest_file.path(),
+                    value,
+                    None,
+                    None,
+                    None,
+                )
+                .is_ok(),
+                "valid minimum coverage {value} must be accepted"
+            );
+        }
     }
 
     #[test]
