@@ -29,6 +29,18 @@ export interface DiarizationDecoderEvidence {
   timestamp_method: string;
 }
 
+export interface SpeakerCountHint {
+  exact?: number;
+  min?: number;
+  max?: number;
+  force?: boolean;
+}
+
+export interface SpeakerHintOutcome {
+  satisfied: boolean;
+  delivered: number;
+}
+
 export interface DiarizationRegionEvidence {
   index: number;
   start: number;
@@ -63,6 +75,9 @@ export interface DiarizationReport {
   segmentation_model_sha256?: string | null;
   embedding_model_sha256?: string | null;
   decoder?: DiarizationDecoderEvidence | null;
+  diagnostics_included?: boolean;
+  speaker_hint?: SpeakerCountHint | null;
+  speaker_hint_outcome?: SpeakerHintOutcome | null;
   asr_segments: Array<{
     start: number;
     end: number;
@@ -70,7 +85,7 @@ export interface DiarizationReport {
     no_speech_prob?: number | null;
   }>;
   transcript_modified: boolean;
-  parameters: Record<string, number>;
+  parameters: Record<string, number | boolean>;
   activity: DiarizationActivitySpan[];
   regions: DiarizationRegionEvidence[];
   attributions: DiarizationAttributionEvidence[];
@@ -85,6 +100,9 @@ export interface MeetingTranscript {
   duration_seconds: number;
   segments: MeetingSegment[];
   speakers: MeetingSpeaker[];
+  speaker_hint?: SpeakerCountHint | null;
+  speaker_hint_satisfied?: boolean | null;
+  speaker_hint_delivered?: number | null;
   /** Original acoustic activity and provenance; edits never duplicate its text. */
   diarization?: DiarizationReport | null;
 }

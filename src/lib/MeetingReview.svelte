@@ -174,6 +174,8 @@
   );
   const acousticReport = $derived(transcript.diarization ?? null);
   const overlapSpans = $derived(acousticReport?.activity.filter((span) => span.speakers.length > 1) ?? []);
+  const renderedOverlapSpans = $derived(overlapSpans.slice(0, 100));
+  const omittedOverlapCount = $derived(Math.max(0, overlapSpans.length - renderedOverlapSpans.length));
   const overlapDuration = $derived(overlapSpans.reduce((total, span) => total + Math.max(0, span.end - span.start), 0));
   const fallbackRegionCount = $derived(acousticReport?.regions.filter((region) => region.used_track_fallback).length ?? 0);
   const attributionReasons = $derived.by(() => {
@@ -514,21 +516,28 @@
           ({overlapDuration.toFixed(2)} seconds). Transcript words remain shown once; this panel does not duplicate words for overlapping speakers.
         </p>
         <div class="acoustic-overlap-list" role="list" aria-label="Simultaneous speaker activity">
-          {#each overlapSpans as span (span.start + "-" + span.end + "-" + span.speakers.join(","))}
+          {#each renderedOverlapSpans as span (span.start + "-" + span.end + "-" + span.speakers.join(","))}
             <div class="acoustic-overlap-row" role="listitem">
               <span class="timestamp">{formatTimestamp(span.start)}–{formatTimestamp(span.end)}</span>
               <span>{span.speakers.map(displayLabel).join(", ")}</span>
             </div>
           {/each}
         </div>
+        {#if omittedOverlapCount > 0}
+          <p class="diagnostic-note">{omittedOverlapCount} additional overlap interval{omittedOverlapCount === 1 ? " was" : "s were"} omitted from this view.</p>
+        {/if}
       {:else}
         <p class="empty">No simultaneous speaker activity was recorded in the acoustic timeline.</p>
       {/if}
       <p class="diagnostic-note">
-        Diagnostic evidence only: activity, attribution reasons, decoder settings, and fallback counts are not calibrated speaker confidence.
-        {#if acousticReport.decoder} Decoder {acousticReport.decoder.strategy}, beam {acousticReport.decoder.beam_size}, VAD {acousticReport.decoder.vad_enabled ? "on" : "off"}.{/if}
+        Diagnostic evidence only: activity and any included attribution evidence are not calibrated speaker confidence.
+        {#if acousticReport.diagnostics_included === true}
+          {#if acousticReport.decoder} Decoder {acousticReport.decoder.strategy}, beam {acousticReport.decoder.beam_size}, VAD {acousticReport.decoder.vad_enabled ? "on" : "off"}.{/if}
+        {:else}
+          Additional diagnostic evidence was not included for this run.
+        {/if}
       </p>
-      {#if fallbackRegionCount > 0 || attributionReasons.length > 0}
+      {#if acousticReport.diagnostics_included === true && (fallbackRegionCount > 0 || attributionReasons.length > 0)}
         <div class="diagnostic-details" aria-label="Diarization diagnostic evidence">
           {#if fallbackRegionCount > 0}<span>{fallbackRegionCount} region{fallbackRegionCount === 1 ? "" : "s"} used track fallback.</span>{/if}
           {#if attributionReasons.length > 0}<span>Attribution reasons: {attributionReasons.map(([reason, count]) => `${reason} (${count})`).join(", ")}.</span>{/if}

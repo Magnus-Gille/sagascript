@@ -265,6 +265,10 @@ test("meeting review exposes explicit corrections, playback, and all export form
   assert.match(fileTranscriptionSource, /if \(!stillCurrent\)[\s\S]*detachMeetingAudio\(attachment\.token\)/);
   assert.doesNotMatch(settingsSource, /Leave meeting review and discard unapplied edits/);
   assert.match(reviewSource, /review\.original\.segments/);
+  assert.match(reviewSource, /overlapSpans\.slice\(0, 100\)/);
+  assert.match(reviewSource, /Additional diagnostic evidence was not included for this run/);
+  assert.match(reviewSource, /does not duplicate words/);
+  assert.doesNotMatch(reviewSource, /speaker confidence[^\n]*%/i);
   assert.doesNotMatch(reviewSource, /{@html/);
   assert.doesNotMatch(reviewSource, /localStorage|fetch\(|AudioContext|MediaRecorder/);
   assert.doesNotMatch(reviewSource, /\.play\(\)/, "editing and timestamp controls must not autoplay audio");
