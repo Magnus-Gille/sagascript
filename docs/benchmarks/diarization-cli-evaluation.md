@@ -1,40 +1,27 @@
-# Offline diarization evaluation CLI
+# Diarization reference qualification and evaluation
 
-The CLI provides bounded, offline inspection and scoring for native diarization
-artifacts. It never opens audio, loads a model, reads Sagascript settings, or
-writes an output file; results are written to stdout.
+The CLI keeps annotation qualification separate from model scoring. A reviewer first makes a
+blind pass over supplied windows and records `verified`, `unknown`, or `candidate` intervals with
+human evidence. When available, a second reviewer checks a random sample of at least 20% of the
+windows. The reference manifest freezes the source hash, policy identity, split identity, and
+window boundaries.
+
+Use `sagascript diarization reference-identity reference.json` to obtain the deterministic
+reference hash, then freeze that value in the manifest. Run:
 
 ```text
-sagascript diarization reference-validate REFERENCE.json
-sagascript diarization reference-export REFERENCE.json --format rttm
-sagascript diarization inspect REPORT.json
-sagascript diarization export-activity REPORT.json --format json
-sagascript diarization evaluate --reference REFERENCE.json --hypothesis REPORT.json
-sagascript diarization evaluate --reference REFERENCE.rttm --uem RECORDING.uem \
-  --hypothesis REPORT.json --collar 0.25 --layer acoustic
+sagascript diarization reference-qualify reference.json --manifest split.json --minimum-coverage 0.9
 ```
 
-Native reference JSON is validated by the core reference contract. Exported
-RTTM and UEM contain only verified reference intervals; validation does not
-declare a reference gold. RTTM input is accepted for measurement, but requires
-an explicit UEM so unreviewed time cannot become a scoring domain. RTTM and UEM
-must contain one recording ID, and their timestamps must be finite,
-non-negative, and within the reference duration.
+The machine-readable report includes readiness, failure codes, identities, and reviewed,
+verified, unknown, and candidate coverage by split, stratum, and speaker. A reference is eligible
+for quality adoption only when all windows are completely partitioned, unknown intervals have
+human reviewer, timestamp, and evidence, no candidate interval remains, every known speaker and
+declared stratum appears in eval, and eval contains at least 90% human-identified speech. A
+qualification report is a gate for the frozen sample; it is not a claim of full-film accuracy.
 
-The hypothesis may be a native `DiarizationReport` or a native
-`MeetingTranscript`. Acoustic scoring uses report activity. A meeting JSON may
-carry an embedded `diarization` report; otherwise the command reports that the
-acoustic report is missing and suggests `--layer transcript`. Transcript
-scoring uses immutable meeting segments and refuses corrected or modified
-transcripts. Legacy transcripts without the immutable provenance marker are
-reported as measurement-only.
-
-Every evaluation receipt is schema version 1 and includes the exact SHA-256 of
-the reference, hypothesis, and optional UEM files, the media source hash when
-available, build identity, layer, collar, core metrics, and explicit reasons
-why `quality_adoption_ready` is `false`. The receipt is a measurement artifact;
-the caller owns any later quality-adoption policy.
-
-Inputs are limited to 24 MiB and must be valid UTF-8 for text formats. Invalid
-JSON, malformed records, duplicate RTTM intervals, multiple recording IDs,
-overlapping UEM regions, and out-of-bounds timestamps fail before scoring.
+To score a frozen split, pass both `--manifest split.json` and `--split dev` or `--split eval` to
+`diarization evaluate`. The command rejects stale or unqualified manifests, selects only verified
+intervals in the requested frozen windows, and refuses an external `--uem` that could bypass the
+reference mask. Metric results remain measurement output; `quality_adoption_ready` stays false
+until the public regression suite and its target policy are established.

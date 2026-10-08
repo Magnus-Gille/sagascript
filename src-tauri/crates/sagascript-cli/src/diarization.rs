@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use sagascript_core::diarization_evaluation::{
     evaluate, EvaluationOptions, ScoringRegion, SpeakerTurn,
 };
+use sagascript_core::diarization_qualification::{qualify, reference_identity};
 use sagascript_core::diarization_reference::{ReferenceDocument, ReferenceStatus};
 use sagascript_core::diarization_report::DiarizationReport;
 use sagascript_core::error::DictationError;
@@ -41,6 +42,16 @@ pub enum DiarizationAction {
         #[arg(long, value_enum)]
         format: ReferenceFormat,
     },
+    /// Qualify a native reference against a frozen split manifest.
+    ReferenceQualify {
+        input: PathBuf,
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long, default_value_t = 0.9)]
+        minimum_coverage: f64,
+    },
+    /// Print the deterministic identity of a native reference.
+    ReferenceIdentity { input: PathBuf },
     /// Validate and inspect a native diarization report.
     Inspect { report: PathBuf },
     /// Export the report's acoustic activity without transcript text.
@@ -57,6 +68,12 @@ pub enum DiarizationAction {
         hypothesis: PathBuf,
         #[arg(long)]
         uem: Option<PathBuf>,
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+        #[arg(long, value_enum)]
+        split: Option<EvaluationSplit>,
+        #[arg(long, default_value_t = 0.9)]
+        minimum_coverage: f64,
         #[arg(long, default_value_t = 0.0)]
         collar: f64,
         #[arg(long, value_enum, default_value_t = EvaluationLayer::Acoustic)]
@@ -83,6 +100,12 @@ pub enum EvaluationLayer {
     Transcript,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum EvaluationSplit {
+    Dev,
+    Eval,
+}
+
 #[derive(Debug)]
 struct InputFile {
     bytes: Vec<u8>,
@@ -97,12 +120,14 @@ struct ParsedReference {
     recording_id: Option<String>,
     native: bool,
     duration_seconds: f64,
+    qualified: bool,
 }
 
 #[derive(Debug)]
 struct ParsedHypothesis {
     turns: Vec<SpeakerTurn>,
     source_sha256: String,
+    duration_seconds: f64,
     immutable_provenance: bool,
 }
 
@@ -118,6 +143,8 @@ struct EvaluationReceipt<'a> {
     layer: EvaluationLayer,
     collar_seconds: f64,
     metrics: sagascript_core::diarization_evaluation::EvaluationReport,
+    reference_qualification_ready: bool,
+    metric_targets_met: bool,
     quality_adoption_ready: bool,
     measurement_only: bool,
     reasons: Vec<String>,
@@ -127,15 +154,33 @@ pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
     let output = match args.action {
         DiarizationAction::ReferenceValidate { input } => reference_validate(&input)?,
         DiarizationAction::ReferenceExport { input, format } => reference_export(&input, format)?,
+        DiarizationAction::ReferenceQualify {
+            input,
+            manifest,
+            minimum_coverage,
+        } => reference_qualify(&input, &manifest, minimum_coverage)?,
+        DiarizationAction::ReferenceIdentity { input } => reference_identity_command(&input)?,
         DiarizationAction::Inspect { report } => inspect_report(&report)?,
         DiarizationAction::ExportActivity { report, format } => export_activity(&report, format)?,
         DiarizationAction::Evaluate {
             reference,
             hypothesis,
             uem,
+            manifest,
+            split,
+            minimum_coverage,
             collar,
             layer,
-        } => evaluate_files(&reference, &hypothesis, uem.as_deref(), collar, layer)?,
+        } => evaluate_files(
+            &reference,
+            &hypothesis,
+            uem.as_deref(),
+            manifest.as_deref(),
+            split,
+            minimum_coverage,
+            collar,
+            layer,
+        )?,
     };
     write_stdout(&output)
 }
@@ -181,6 +226,27 @@ fn reference_export(path: &Path, format: ReferenceFormat) -> Result<String, Dict
     }
 }
 
+fn reference_qualify(
+    reference_path: &Path,
+    manifest_path: &Path,
+    minimum_coverage: f64,
+) -> Result<String, DictationError> {
+    let reference_file = read_input(reference_path)?;
+    let manifest_file = read_input(manifest_path)?;
+    let reference: Value =
+        serde_json::from_str(utf8(&reference_file.bytes)?).map_err(json_error)?;
+    let manifest: Value = serde_json::from_str(utf8(&manifest_file.bytes)?).map_err(json_error)?;
+    let report = qualify(&reference, &manifest, minimum_coverage).map_err(core_error)?;
+    json_string(&serde_json::to_value(report).map_err(json_error)?)
+}
+
+fn reference_identity_command(path: &Path) -> Result<String, DictationError> {
+    let input = read_input(path)?;
+    let value: Value = serde_json::from_str(utf8(&input.bytes)?).map_err(json_error)?;
+    let identity = reference_identity(&value).map_err(core_error)?;
+    json_string(&json!({"reference_sha256": identity}))
+}
+
 fn inspect_report(path: &Path) -> Result<String, DictationError> {
     let input = read_input(path)?;
     let report = parse_report(&input.bytes)?;
@@ -199,25 +265,55 @@ fn export_activity(path: &Path, format: ActivityFormat) -> Result<String, Dictat
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn evaluate_files(
     reference_path: &Path,
     hypothesis_path: &Path,
     uem_path: Option<&Path>,
+    manifest_path: Option<&Path>,
+    split: Option<EvaluationSplit>,
+    minimum_coverage: f64,
     collar: f64,
     layer: EvaluationLayer,
 ) -> Result<String, DictationError> {
     if !collar.is_finite() || collar < 0.0 {
         return Err(cli_error("--collar must be finite and non-negative"));
     }
+    if manifest_path.is_some() != split.is_some() {
+        return Err(cli_error(
+            "--manifest and --split must be provided together",
+        ));
+    }
+    if manifest_path.is_some() && uem_path.is_some() {
+        return Err(cli_error(
+            "qualified split evaluation refuses an external --uem; use the frozen reference mask",
+        ));
+    }
     let reference_file = read_input(reference_path)?;
     let hypothesis_file = read_input(hypothesis_path)?;
-    let reference = parse_reference(&reference_file.bytes, uem_path.is_some())?;
+    let manifest_file = manifest_path.map(read_input).transpose()?;
+    let manifest = manifest_file
+        .as_ref()
+        .map(|file| serde_json::from_str::<Value>(utf8(&file.bytes)?).map_err(json_error))
+        .transpose()?;
+    let reference = parse_reference(
+        &reference_file.bytes,
+        uem_path.is_some(),
+        manifest.as_ref(),
+        split,
+        minimum_coverage,
+    )?;
     let hypothesis = parse_hypothesis(&hypothesis_file.bytes, layer)?;
 
     if let (Some(reference_hash), true) = (reference.source_sha256.as_deref(), reference.native) {
         if reference_hash != hypothesis.source_sha256 {
             return Err(cli_error(
                 "native reference and hypothesis source_sha256 do not match",
+            ));
+        }
+        if reference.duration_seconds != hypothesis.duration_seconds {
+            return Err(cli_error(
+                "native reference and hypothesis duration_seconds do not match",
             ));
         }
     }
@@ -274,31 +370,77 @@ fn evaluate_files(
         layer,
         collar_seconds: collar,
         metrics,
+        reference_qualification_ready: reference.qualified,
+        metric_targets_met: false,
         quality_adoption_ready: false,
         measurement_only,
-        reasons,
+        reasons: {
+            reasons.push("metric targets are not configured by this command".to_owned());
+            reasons
+        },
     };
     serde_json::to_string_pretty(&receipt).map_err(|error| cli_error(error.to_string()))
 }
 
-fn parse_reference(bytes: &[u8], has_uem: bool) -> Result<ParsedReference, DictationError> {
+fn parse_reference(
+    bytes: &[u8],
+    has_uem: bool,
+    manifest: Option<&Value>,
+    split: Option<EvaluationSplit>,
+    minimum_coverage: f64,
+) -> Result<ParsedReference, DictationError> {
     let text = utf8(bytes)?;
     if text.trim_start().starts_with('{') {
-        let document: ReferenceDocument = serde_json::from_str(text).map_err(json_error)?;
+        let value: Value = serde_json::from_str(text).map_err(json_error)?;
+        let mut document: ReferenceDocument =
+            serde_json::from_value(value.clone()).map_err(json_error)?;
         document.validate().map_err(core_error)?;
-        let turns = document.verified_turns().map_err(core_error)?;
-        let uem = (!has_uem)
-            .then(|| document.verified_uem())
-            .transpose()
-            .map_err(core_error)?;
+        if has_uem {
+            return Err(cli_error(
+                "native references provide their own verified UEM; external --uem is refused",
+            ));
+        }
+        let qualified = manifest.is_some();
+        let (turns, uem) = if let Some(manifest) = manifest {
+            let split = split.ok_or_else(|| cli_error("--split is required with --manifest"))?;
+            let report = qualify(&value, manifest, minimum_coverage).map_err(core_error)?;
+            if !report.ready_for_quality_adoption {
+                let codes = report
+                    .failures
+                    .iter()
+                    .map(|failure| failure.code.as_str())
+                    .collect::<Vec<_>>();
+                return Err(cli_error(format!(
+                    "reference qualification is not ready: {}",
+                    codes.join(", ")
+                )));
+            }
+            let window_ids = manifest_window_ids(manifest, split)?;
+            document = document.for_split(&window_ids).map_err(core_error)?;
+            (
+                document.verified_turns().map_err(core_error)?,
+                document.verified_uem().map_err(core_error)?,
+            )
+        } else {
+            (
+                document.verified_turns().map_err(core_error)?,
+                document.verified_uem().map_err(core_error)?,
+            )
+        };
         return Ok(ParsedReference {
             turns,
-            uem,
+            uem: Some(uem),
             source_sha256: Some(document.source_sha256),
             recording_id: None,
             native: true,
             duration_seconds: document.duration_seconds,
+            qualified,
         });
+    }
+    if manifest.is_some() || split.is_some() {
+        return Err(cli_error(
+            "--manifest/--split qualification requires a native reference, not RTTM",
+        ));
     }
     let (recording_id, turns, duration_seconds) = parse_rttm(text)?;
     Ok(ParsedReference {
@@ -307,8 +449,39 @@ fn parse_reference(bytes: &[u8], has_uem: bool) -> Result<ParsedReference, Dicta
         source_sha256: None,
         recording_id: Some(recording_id),
         native: false,
-        duration_seconds,
+        duration_seconds: if has_uem { 14_400.0 } else { duration_seconds },
+        qualified: false,
     })
+}
+
+fn manifest_window_ids(
+    manifest: &Value,
+    split: EvaluationSplit,
+) -> Result<BTreeSet<String>, DictationError> {
+    let split = match split {
+        EvaluationSplit::Dev => "dev",
+        EvaluationSplit::Eval => "eval",
+    };
+    let windows = manifest
+        .get("windows")
+        .and_then(Value::as_array)
+        .ok_or_else(|| cli_error("qualified manifest windows must be an array"))?;
+    let mut ids = BTreeSet::new();
+    for window in windows {
+        if window.get("split").and_then(Value::as_str) == Some(split) {
+            let id = window
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| cli_error("qualified manifest window id is required"))?;
+            ids.insert(id.to_owned());
+        }
+    }
+    if ids.is_empty() {
+        return Err(cli_error(format!(
+            "qualified manifest has no {split} windows"
+        )));
+    }
+    Ok(ids)
 }
 
 fn parse_hypothesis(
@@ -335,7 +508,8 @@ fn parse_hypothesis(
         return Ok(ParsedHypothesis {
             turns,
             source_sha256: report.source_sha256.clone(),
-            immutable_provenance: true,
+            duration_seconds: report.duration_seconds,
+            immutable_provenance: !report.transcript_modified,
         });
     }
 
@@ -344,7 +518,7 @@ fn parse_hypothesis(
     let transcript: MeetingTranscript =
         serde_json::from_value(transcript_value).map_err(json_error)?;
     transcript.validate().map_err(core_error)?;
-    if transcript_modified {
+    if transcript_modified && layer == EvaluationLayer::Transcript {
         return Err(cli_error(
             "corrected or modified meeting transcripts cannot be evaluated",
         ));
@@ -371,7 +545,8 @@ fn parse_hypothesis(
         return Ok(ParsedHypothesis {
             turns,
             source_sha256: transcript.source_sha256.clone(),
-            immutable_provenance: has_provenance,
+            duration_seconds: transcript.duration_seconds,
+            immutable_provenance: has_provenance && !transcript_modified,
         });
     }
     let turns = transcript
@@ -386,7 +561,8 @@ fn parse_hypothesis(
     Ok(ParsedHypothesis {
         turns,
         source_sha256: transcript.source_sha256,
-        immutable_provenance: has_provenance,
+        duration_seconds: transcript.duration_seconds,
+        immutable_provenance: has_provenance && !transcript_modified,
     })
 }
 
@@ -396,25 +572,23 @@ fn meeting_value_and_report(
     let mut transcript_value = value;
     let modified_value = transcript_value.get("transcript_modified");
     let has_provenance = modified_value.is_some();
-    let transcript_modified = transcript_value
-        .get("transcript_modified")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| cli_error("transcript_modified must be a boolean when present"))
-        .unwrap_or(false);
-    let report_value = transcript_value
-        .as_object_mut()
-        .and_then(|object| object.remove("diarization"));
+    let transcript_modified = match transcript_value.get("transcript_modified") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| cli_error("transcript_modified must be a boolean when present"))?,
+    };
+    let report_value = transcript_value.get("diarization").cloned();
     transcript_value
         .as_object_mut()
         .and_then(|object| object.remove("transcript_modified"));
-    let report_modified = report_value
-        .as_ref()
-        .and_then(|value| value.get("transcript_modified"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
     let report = report_value
         .map(|value| serde_json::from_value::<DiarizationReport>(value).map_err(json_error))
         .transpose()?;
+    let report_modified = report
+        .as_ref()
+        .map(|report| report.transcript_modified)
+        .unwrap_or(false);
     let report_present = report.is_some();
     Ok((
         transcript_value,
@@ -429,7 +603,24 @@ fn parse_reference_json(bytes: &[u8]) -> Result<ReferenceDocument, DictationErro
 }
 
 fn parse_report(bytes: &[u8]) -> Result<DiarizationReport, DictationError> {
-    serde_json::from_str(utf8(bytes)?).map_err(json_error)
+    let value: Value = serde_json::from_str(utf8(bytes)?).map_err(json_error)?;
+    if let Ok(report) = serde_json::from_value::<DiarizationReport>(value.clone()) {
+        report.validate().map_err(core_error)?;
+        return Ok(report);
+    }
+    let transcript: MeetingTranscript = serde_json::from_value(value).map_err(json_error)?;
+    let report = transcript
+        .diarization
+        .ok_or_else(|| cli_error("meeting transcript has no embedded diarization report"))?;
+    report.validate().map_err(core_error)?;
+    if report.source_sha256 != transcript.source_sha256
+        || report.duration_seconds != transcript.duration_seconds
+    {
+        return Err(cli_error(
+            "embedded diarization report source_sha256 or duration_seconds does not match meeting transcript",
+        ));
+    }
+    Ok(report)
 }
 
 fn parse_rttm(text: &str) -> Result<(String, Vec<SpeakerTurn>, f64), DictationError> {
@@ -675,6 +866,29 @@ mod tests {
     }
 
     #[test]
+    fn rttm_explicit_uem_can_include_trailing_silence_after_last_turn() {
+        let rttm = b"SPEAKER rec 1 0.000 1.000 <NA> <NA> A <NA> <NA>\n";
+        let reference = parse_reference(rttm, true, None, None, 0.9).unwrap();
+        assert_eq!(reference.duration_seconds, 14_400.0);
+        let uem = parse_uem("rec 1 0.000 3.000", Some("rec"), reference.duration_seconds).unwrap();
+        let hypothesis = vec![SpeakerTurn {
+            start: 2.0,
+            end: 3.0,
+            speakers: vec!["A".to_owned()],
+        }];
+        let report = evaluate(
+            &reference.turns,
+            &hypothesis,
+            &uem,
+            EvaluationOptions {
+                collar_seconds: 0.0,
+            },
+        )
+        .unwrap();
+        assert_eq!(report.false_alarm_seconds, 1.0);
+    }
+
+    #[test]
     fn malformed_rttm_and_multiple_ids_are_rejected() {
         assert!(parse_rttm("SPEAKER rec 1 0 nope <NA> <NA> A <NA> <NA>").is_err());
         assert!(parse_rttm(
@@ -783,12 +997,39 @@ mod tests {
             reference.path(),
             hypothesis.path(),
             None,
+            None,
+            None,
+            0.9,
             0.0,
             EvaluationLayer::Acoustic,
         )
         .unwrap_err()
         .to_string();
         assert!(error.contains("source_sha256"));
+    }
+
+    #[test]
+    fn native_duration_mismatch_is_rejected_before_scoring() {
+        let reference = write(
+            r#"{"source_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","duration_seconds":1.0,"speakers":["A"],"windows":[],"intervals":[{"start":0.0,"end":1.0,"speakers":["A"],"status":"candidate"}]}"#,
+        );
+        let mut hypothesis_value =
+            report_json("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        hypothesis_value["duration_seconds"] = 2.0.into();
+        let hypothesis = write(&serde_json::to_string(&hypothesis_value).unwrap());
+        let error = evaluate_files(
+            reference.path(),
+            hypothesis.path(),
+            None,
+            None,
+            None,
+            0.9,
+            0.0,
+            EvaluationLayer::Acoustic,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("duration_seconds"));
     }
 
     fn report_json(source_sha256: &str) -> Value {
@@ -803,5 +1044,119 @@ mod tests {
             "regions": [],
             "attributions": []
         })
+    }
+
+    fn qualified_fixture() -> (Value, Value) {
+        let reference = serde_json::json!({
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "duration_seconds": 2.0,
+            "speakers": ["A"],
+            "windows": [
+                {"id": "dev-1", "start": 0.0, "end": 1.0},
+                {"id": "eval-1", "start": 1.0, "end": 2.0}
+            ],
+            "intervals": [
+                {"start": 0.0, "end": 1.0, "speakers": ["A"], "status": "verified", "evidence": [{"kind": "human", "artifact": "dev"}], "reviewer": "reviewer", "reviewed_at": "2026-01-01T00:00:00Z"},
+                {"start": 1.0, "end": 2.0, "speakers": ["A"], "status": "verified", "evidence": [{"kind": "human", "artifact": "eval"}], "reviewer": "reviewer", "reviewed_at": "2026-01-01T00:00:00Z"}
+            ]
+        });
+        let hash = reference_identity(&reference).unwrap();
+        let manifest = serde_json::json!({
+            "reference_id": "fixture-reference-v1",
+            "reference_sha256": hash,
+            "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "policy": {"id": "human-review-v1", "version": "1", "frozen": true},
+            "split_id": "fixture-split-v1",
+            "frozen": true,
+            "windows": [
+                {"id": "dev-1", "start": 0.0, "end": 1.0, "split": "dev", "stratum": "ordinary"},
+                {"id": "eval-1", "start": 1.0, "end": 2.0, "split": "eval", "stratum": "ordinary"}
+            ]
+        });
+        (reference, manifest)
+    }
+
+    #[test]
+    fn reference_identity_and_qualification_commands_are_machine_readable() {
+        let (reference, manifest) = qualified_fixture();
+        let reference_file = write(&serde_json::to_string(&reference).unwrap());
+        let manifest_file = write(&serde_json::to_string(&manifest).unwrap());
+        let identity: Value =
+            serde_json::from_str(&reference_identity_command(reference_file.path()).unwrap())
+                .unwrap();
+        assert_eq!(identity["reference_sha256"], manifest["reference_sha256"]);
+        let report: Value = serde_json::from_str(
+            &reference_qualify(reference_file.path(), manifest_file.path(), 0.9).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["ready_for_quality_adoption"], true);
+        assert_eq!(report["status"], "gold");
+        assert_eq!(
+            report["coverage"]["by_split"]["eval"]["human_identified_speech_seconds"],
+            1.0
+        );
+    }
+
+    #[test]
+    fn qualified_split_selects_frozen_windows_and_refuses_external_uem() {
+        let (reference, manifest) = qualified_fixture();
+        let bytes = serde_json::to_vec(&reference).unwrap();
+        let parsed = parse_reference(
+            &bytes,
+            false,
+            Some(&manifest),
+            Some(EvaluationSplit::Eval),
+            0.9,
+        )
+        .unwrap();
+        assert_eq!(parsed.turns.len(), 1);
+        assert_eq!(parsed.turns[0].start, 1.0);
+        assert_eq!(
+            parsed.uem.unwrap(),
+            vec![ScoringRegion {
+                start: 1.0,
+                end: 2.0
+            }]
+        );
+        assert!(parse_reference(
+            &bytes,
+            true,
+            Some(&manifest),
+            Some(EvaluationSplit::Eval),
+            0.9,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn embedded_schema2_report_is_validated_and_acoustic_layer_survives_edits() {
+        let source = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let mut report = report_json(source);
+        report["transcript_modified"] = true.into();
+        let transcript = serde_json::json!({
+            "schema_version": 2,
+            "source_sha256": source,
+            "language": "en",
+            "model": "base.en",
+            "duration_seconds": 1.0,
+            "segments": [{"id": "seg-000001", "start": 0.0, "end": 1.0, "text": "hello", "speaker": "A"}],
+            "speakers": [{"id": "A", "label": "A"}],
+            "diarization": report
+        });
+        let bytes = serde_json::to_vec(&transcript).unwrap();
+        let acoustic = parse_hypothesis(&bytes, EvaluationLayer::Acoustic).unwrap();
+        assert_eq!(acoustic.turns.len(), 1);
+        assert!(!acoustic.immutable_provenance);
+        assert!(parse_hypothesis(&bytes, EvaluationLayer::Transcript).is_err());
+
+        let mut malformed = transcript;
+        malformed["transcript_modified"] = "yes".into();
+        assert!(parse_hypothesis(
+            &serde_json::to_vec(&malformed).unwrap(),
+            EvaluationLayer::Acoustic
+        )
+        .is_err());
+        let report = parse_report(&bytes).unwrap();
+        assert!(report.transcript_modified);
     }
 }
