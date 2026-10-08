@@ -19,7 +19,9 @@ use sagascript_core::diarization_evaluation::{
 };
 use sagascript_core::diarization_qualification::{qualify, reference_identity};
 use sagascript_core::diarization_reference::{ReferenceDocument, ReferenceStatus};
-use sagascript_core::diarization_report::DiarizationReport;
+use sagascript_core::diarization_report::{
+    DecoderEvidence, DiarizationParameters, DiarizationReport,
+};
 use sagascript_core::diarization_strata::{measure_strata, DiarizationStrataReport};
 use sagascript_core::error::DictationError;
 use sagascript_core::meeting::MeetingTranscript;
@@ -50,6 +52,12 @@ pub enum DiarizationAction {
         manifest: PathBuf,
         #[arg(long, default_value_t = 0.9)]
         minimum_coverage: f64,
+        #[arg(long)]
+        expected_policy_id: Option<String>,
+        #[arg(long)]
+        expected_policy_version: Option<String>,
+        #[arg(long)]
+        expected_split_sha256: Option<String>,
     },
     /// Print the deterministic identity of a native reference.
     ReferenceIdentity { input: PathBuf },
@@ -83,6 +91,12 @@ pub enum DiarizationAction {
         collar: f64,
         #[arg(long, value_enum, default_value_t = EvaluationLayer::Acoustic)]
         layer: EvaluationLayer,
+        #[arg(long)]
+        expected_policy_id: Option<String>,
+        #[arg(long)]
+        expected_policy_version: Option<String>,
+        #[arg(long)]
+        expected_split_sha256: Option<String>,
     },
 }
 
@@ -105,10 +119,46 @@ pub enum EvaluationLayer {
     Transcript,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
 pub enum EvaluationSplit {
     Dev,
     Eval,
+}
+
+impl EvaluationSplit {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Dev => "dev",
+            Self::Eval => "eval",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct HypothesisProducer {
+    build_version: String,
+    build_revision: String,
+    segmentation_model_sha256: Option<String>,
+    embedding_model_sha256: Option<String>,
+    decoder: Option<DecoderEvidence>,
+    parameters: DiarizationParameters,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct HypothesisProvenance {
+    status: &'static str,
+    self_declared: bool,
+    cryptographic_origin_verified: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct QualificationReceipt {
+    selected_split: String,
+    minimum_coverage: f64,
+    reference_identity: sagascript_core::diarization_qualification::IdentityReport,
+    frozen_policy_identity: sagascript_core::diarization_qualification::IdentityReport,
+    frozen_split_identity: sagascript_core::diarization_qualification::IdentityReport,
 }
 
 #[derive(Debug)]
@@ -126,6 +176,7 @@ struct ParsedReference {
     native: bool,
     duration_seconds: f64,
     qualified: bool,
+    qualification: Option<sagascript_core::diarization_qualification::QualificationReport>,
 }
 
 #[derive(Debug)]
@@ -133,7 +184,7 @@ struct ParsedHypothesis {
     turns: Vec<SpeakerTurn>,
     source_sha256: String,
     duration_seconds: f64,
-    immutable_provenance: bool,
+    producer: Option<HypothesisProducer>,
 }
 
 #[derive(Serialize)]
@@ -143,6 +194,14 @@ struct EvaluationReceipt<'a> {
     reference_file_sha256: &'a str,
     hypothesis_file_sha256: &'a str,
     uem_file_sha256: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manifest_file_sha256: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_split: Option<EvaluationSplit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minimum_coverage: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reference_qualification: Option<QualificationReceipt>,
     build_version: &'static str,
     build_revision: &'static str,
     layer: EvaluationLayer,
@@ -159,6 +218,9 @@ struct EvaluationReceipt<'a> {
     metric_targets_met: bool,
     quality_adoption_ready: bool,
     measurement_only: bool,
+    hypothesis_provenance: HypothesisProvenance,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hypothesis_producer: Option<HypothesisProducer>,
     reasons: Vec<String>,
 }
 
@@ -170,7 +232,24 @@ pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
             input,
             manifest,
             minimum_coverage,
-        } => reference_qualify(&input, &manifest, minimum_coverage)?,
+            expected_policy_id,
+            expected_policy_version,
+            expected_split_sha256,
+        } => {
+            let (output, ready) = reference_qualify_report(
+                &input,
+                &manifest,
+                minimum_coverage,
+                expected_policy_id.as_deref(),
+                expected_policy_version.as_deref(),
+                expected_split_sha256.as_deref(),
+            )?;
+            write_stdout(&output)?;
+            if !ready {
+                return Err(cli_error("reference qualification is not ready"));
+            }
+            return Ok(());
+        }
         DiarizationAction::ReferenceIdentity { input } => reference_identity_command(&input)?,
         DiarizationAction::Inspect { report } => inspect_report(&report)?,
         DiarizationAction::ExportActivity { report, format } => export_activity(&report, format)?,
@@ -185,7 +264,10 @@ pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
             maximum_confusion,
             collar,
             layer,
-        } => evaluate_files(
+            expected_policy_id,
+            expected_policy_version,
+            expected_split_sha256,
+        } => evaluate_files_with_expectations(
             &reference,
             &hypothesis,
             uem.as_deref(),
@@ -196,6 +278,9 @@ pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
             maximum_confusion,
             collar,
             layer,
+            expected_policy_id.as_deref(),
+            expected_policy_version.as_deref(),
+            expected_split_sha256.as_deref(),
         )?,
     };
     write_stdout(&output)
@@ -242,18 +327,97 @@ fn reference_export(path: &Path, format: ReferenceFormat) -> Result<String, Dict
     }
 }
 
+#[cfg(test)]
 fn reference_qualify(
     reference_path: &Path,
     manifest_path: &Path,
     minimum_coverage: f64,
 ) -> Result<String, DictationError> {
+    reference_qualify_report(
+        reference_path,
+        manifest_path,
+        minimum_coverage,
+        None,
+        None,
+        None,
+    )
+    .map(|(output, _)| output)
+}
+
+fn reference_qualify_report(
+    reference_path: &Path,
+    manifest_path: &Path,
+    minimum_coverage: f64,
+    expected_policy_id: Option<&str>,
+    expected_policy_version: Option<&str>,
+    expected_split_sha256: Option<&str>,
+) -> Result<(String, bool), DictationError> {
     let reference_file = read_input(reference_path)?;
     let manifest_file = read_input(manifest_path)?;
     let reference: Value =
         serde_json::from_str(utf8(&reference_file.bytes)?).map_err(json_error)?;
     let manifest: Value = serde_json::from_str(utf8(&manifest_file.bytes)?).map_err(json_error)?;
-    let report = qualify(&reference, &manifest, minimum_coverage).map_err(core_error)?;
-    json_string(&serde_json::to_value(report).map_err(json_error)?)
+    let mut report = qualify(&reference, &manifest, minimum_coverage).map_err(core_error)?;
+    apply_expected_qualification_gates(
+        &mut report,
+        expected_policy_id,
+        expected_policy_version,
+        expected_split_sha256,
+    );
+    let ready = report.ready_for_quality_adoption;
+    Ok((
+        json_string(&serde_json::to_value(report).map_err(json_error)?)?,
+        ready,
+    ))
+}
+
+fn apply_expected_qualification_gates(
+    report: &mut sagascript_core::diarization_qualification::QualificationReport,
+    expected_policy_id: Option<&str>,
+    expected_policy_version: Option<&str>,
+    expected_split_sha256: Option<&str>,
+) {
+    let policy = &report.frozen_policy_identity;
+    if let Some(expected) = expected_policy_id {
+        if policy.id.as_deref() != Some(expected) {
+            report.failures.push(
+                sagascript_core::diarization_qualification::QualificationFailure {
+                    code: "stale-policy".into(),
+                    detail: "reference policy identity differs from the expected frozen policy"
+                        .into(),
+                },
+            );
+        }
+    }
+    if let Some(expected) = expected_policy_version {
+        if policy.version.as_deref() != Some(expected) {
+            report.failures.push(
+                sagascript_core::diarization_qualification::QualificationFailure {
+                    code: "stale-policy".into(),
+                    detail: "reference policy version differs from the expected frozen policy"
+                        .into(),
+                },
+            );
+        }
+    }
+    if let Some(expected) = expected_split_sha256 {
+        if report.frozen_split_identity.sha256.as_deref() != Some(expected) {
+            report.failures.push(
+                sagascript_core::diarization_qualification::QualificationFailure {
+                    code: "stale-split".into(),
+                    detail:
+                        "split manifest identity differs from the expected canonical split SHA-256"
+                            .into(),
+                },
+            );
+        }
+    }
+    report.ready_for_quality_adoption = report.failures.is_empty();
+    report.status = if report.ready_for_quality_adoption {
+        "gold".into()
+    } else {
+        "not_ready".into()
+    };
 }
 
 fn reference_identity_command(path: &Path) -> Result<String, DictationError> {
@@ -282,6 +446,7 @@ fn export_activity(path: &Path, format: ActivityFormat) -> Result<String, Dictat
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn evaluate_files(
     reference_path: &Path,
     hypothesis_path: &Path,
@@ -293,6 +458,39 @@ fn evaluate_files(
     maximum_confusion: f64,
     collar: f64,
     layer: EvaluationLayer,
+) -> Result<String, DictationError> {
+    evaluate_files_with_expectations(
+        reference_path,
+        hypothesis_path,
+        uem_path,
+        manifest_path,
+        split,
+        minimum_coverage,
+        maximum_der,
+        maximum_confusion,
+        collar,
+        layer,
+        None,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_files_with_expectations(
+    reference_path: &Path,
+    hypothesis_path: &Path,
+    uem_path: Option<&Path>,
+    manifest_path: Option<&Path>,
+    split: Option<EvaluationSplit>,
+    minimum_coverage: f64,
+    maximum_der: f64,
+    maximum_confusion: f64,
+    collar: f64,
+    layer: EvaluationLayer,
+    expected_policy_id: Option<&str>,
+    expected_policy_version: Option<&str>,
+    expected_split_sha256: Option<&str>,
 ) -> Result<String, DictationError> {
     if !collar.is_finite() || collar < 0.0 {
         return Err(cli_error("--collar must be finite and non-negative"));
@@ -309,6 +507,15 @@ fn evaluate_files(
             "qualified split evaluation refuses an external --uem; use the frozen reference mask",
         ));
     }
+    if manifest_path.is_none()
+        && (expected_policy_id.is_some()
+            || expected_policy_version.is_some()
+            || expected_split_sha256.is_some())
+    {
+        return Err(cli_error(
+            "expected qualification identities require --manifest and --split",
+        ));
+    }
     let reference_file = read_input(reference_path)?;
     let hypothesis_file = read_input(hypothesis_path)?;
     let manifest_file = manifest_path.map(read_input).transpose()?;
@@ -316,12 +523,15 @@ fn evaluate_files(
         .as_ref()
         .map(|file| serde_json::from_str::<Value>(utf8(&file.bytes)?).map_err(json_error))
         .transpose()?;
-    let reference = parse_reference(
+    let reference = parse_reference_with_expectations(
         &reference_file.bytes,
         uem_path.is_some(),
         manifest.as_ref(),
         split,
         minimum_coverage,
+        expected_policy_id,
+        expected_policy_version,
+        expected_split_sha256,
     )?;
     let hypothesis = parse_hypothesis(&hypothesis_file.bytes, layer)?;
 
@@ -372,16 +582,16 @@ fn evaluate_files(
     let metric_targets_met = metric_targets_met(&metrics, maximum_der, maximum_confusion);
 
     let mut reasons = Vec::new();
-    let measurement_only =
-        !reference.native || !reference.qualified || !hypothesis.immutable_provenance;
+    let measurement_only = true;
     if !reference.native {
         reasons.push(
             "RTTM reference is recording-ID bound, not cryptographically source-bound".to_owned(),
         );
     }
-    if !hypothesis.immutable_provenance {
-        reasons.push("hypothesis lacks immutable provenance".to_owned());
-    }
+    reasons.push(
+        "hypothesis producer provenance is self-declared and not cryptographically verified"
+            .to_owned(),
+    );
     if !reference.qualified && reference.native {
         reasons.push("native reference was not qualified against a frozen manifest".to_owned());
     }
@@ -400,6 +610,21 @@ fn evaluate_files(
         reference_file_sha256: &reference_file.sha256,
         hypothesis_file_sha256: &hypothesis_file.sha256,
         uem_file_sha256: uem_file.as_ref().map(|file| file.sha256.as_str()),
+        manifest_file_sha256: manifest_file.as_ref().map(|file| file.sha256.as_str()),
+        selected_split: split,
+        minimum_coverage: manifest_file.as_ref().map(|_| minimum_coverage),
+        reference_qualification: reference.qualification.as_ref().map(|report| {
+            QualificationReceipt {
+                selected_split: split
+                    .expect("qualification identity requires a selected split")
+                    .as_str()
+                    .into(),
+                minimum_coverage,
+                reference_identity: report.reference_identity.clone(),
+                frozen_policy_identity: report.frozen_policy_identity.clone(),
+                frozen_split_identity: report.frozen_split_identity.clone(),
+            }
+        }),
         build_version: env!("CARGO_PKG_VERSION"),
         build_revision: crate::GIT_HASH,
         layer,
@@ -415,6 +640,12 @@ fn evaluate_files(
         metric_targets_met,
         quality_adoption_ready: false,
         measurement_only,
+        hypothesis_provenance: HypothesisProvenance {
+            status: "self_declared",
+            self_declared: true,
+            cryptographic_origin_verified: false,
+        },
+        hypothesis_producer: hypothesis.producer,
         reasons,
     };
     serde_json::to_string_pretty(&receipt).map_err(|error| cli_error(error.to_string()))
@@ -456,12 +687,36 @@ fn metric_targets_met(
         && confusion.is_some_and(|value| value <= maximum_confusion)
 }
 
+#[cfg(test)]
 fn parse_reference(
     bytes: &[u8],
     has_uem: bool,
     manifest: Option<&Value>,
     split: Option<EvaluationSplit>,
     minimum_coverage: f64,
+) -> Result<ParsedReference, DictationError> {
+    parse_reference_with_expectations(
+        bytes,
+        has_uem,
+        manifest,
+        split,
+        minimum_coverage,
+        None,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_reference_with_expectations(
+    bytes: &[u8],
+    has_uem: bool,
+    manifest: Option<&Value>,
+    split: Option<EvaluationSplit>,
+    minimum_coverage: f64,
+    expected_policy_id: Option<&str>,
+    expected_policy_version: Option<&str>,
+    expected_split_sha256: Option<&str>,
 ) -> Result<ParsedReference, DictationError> {
     let text = utf8(bytes)?;
     if text.trim_start().starts_with('{') {
@@ -475,9 +730,17 @@ fn parse_reference(
             ));
         }
         let qualified = manifest.is_some();
-        let (turns, uem) = if let Some(manifest) = manifest {
-            let split = split.ok_or_else(|| cli_error("--split is required with --manifest"))?;
-            let report = qualify(&value, manifest, minimum_coverage).map_err(core_error)?;
+        let qualification = if let Some(manifest) = manifest {
+            if split.is_none() {
+                return Err(cli_error("--split is required with --manifest"));
+            }
+            let mut report = qualify(&value, manifest, minimum_coverage).map_err(core_error)?;
+            apply_expected_qualification_gates(
+                &mut report,
+                expected_policy_id,
+                expected_policy_version,
+                expected_split_sha256,
+            );
             if !report.ready_for_quality_adoption {
                 let codes = report
                     .failures
@@ -489,6 +752,20 @@ fn parse_reference(
                     codes.join(", ")
                 )));
             }
+            Some(report)
+        } else {
+            if expected_policy_id.is_some()
+                || expected_policy_version.is_some()
+                || expected_split_sha256.is_some()
+            {
+                return Err(cli_error(
+                    "expected qualification identities require --manifest and --split",
+                ));
+            }
+            None
+        };
+        let (turns, uem) = if let Some(manifest) = manifest {
+            let split = split.expect("split checked with manifest");
             let window_ids = manifest_window_ids(manifest, split)?;
             document = document.for_split(&window_ids).map_err(core_error)?;
             (
@@ -509,6 +786,7 @@ fn parse_reference(
             native: true,
             duration_seconds: document.duration_seconds,
             qualified,
+            qualification,
         });
     }
     if manifest.is_some() || split.is_some() {
@@ -525,6 +803,7 @@ fn parse_reference(
         native: false,
         duration_seconds: if has_uem { 14_400.0 } else { duration_seconds },
         qualified: false,
+        qualification: None,
     })
 }
 
@@ -583,20 +862,14 @@ fn parse_hypothesis(
             turns,
             source_sha256: report.source_sha256.clone(),
             duration_seconds: report.duration_seconds,
-            immutable_provenance: !report.transcript_modified,
+            producer: Some(hypothesis_producer(&report)),
         });
     }
 
-    let (transcript_value, report, transcript_modified, has_provenance) =
-        meeting_value_and_report(value)?;
+    let (transcript_value, report, legacy_transcript_modified) = meeting_value_and_report(value)?;
     let transcript: MeetingTranscript =
         serde_json::from_value(transcript_value).map_err(json_error)?;
     transcript.validate().map_err(core_error)?;
-    if transcript_modified && layer == EvaluationLayer::Transcript {
-        return Err(cli_error(
-            "corrected or modified meeting transcripts cannot be evaluated",
-        ));
-    }
     if layer == EvaluationLayer::Acoustic {
         let report = report.as_ref().ok_or_else(|| {
             cli_error("hypothesis has no acoustic diarization report; use --layer transcript")
@@ -620,9 +893,18 @@ fn parse_hypothesis(
             turns,
             source_sha256: transcript.source_sha256.clone(),
             duration_seconds: transcript.duration_seconds,
-            immutable_provenance: has_provenance && !transcript_modified,
+            producer: Some(hypothesis_producer(report)),
         });
     }
+    if report
+        .as_ref()
+        .is_some_and(|report| report.transcript_modified)
+    {
+        return Err(cli_error(
+            "corrected or modified meeting transcripts cannot be evaluated",
+        ));
+    }
+    let _ = legacy_transcript_modified;
     let turns = transcript
         .segments
         .iter()
@@ -636,17 +918,27 @@ fn parse_hypothesis(
         turns,
         source_sha256: transcript.source_sha256,
         duration_seconds: transcript.duration_seconds,
-        immutable_provenance: has_provenance && !transcript_modified,
+        producer: report.as_ref().map(hypothesis_producer),
     })
+}
+
+fn hypothesis_producer(report: &DiarizationReport) -> HypothesisProducer {
+    HypothesisProducer {
+        build_version: report.build_version.clone(),
+        build_revision: report.build_revision.clone(),
+        segmentation_model_sha256: report.segmentation_model_sha256.clone(),
+        embedding_model_sha256: report.embedding_model_sha256.clone(),
+        decoder: report.decoder.clone(),
+        parameters: report.parameters.clone(),
+    }
 }
 
 fn meeting_value_and_report(
     value: Value,
-) -> Result<(Value, Option<DiarizationReport>, bool, bool), DictationError> {
+) -> Result<(Value, Option<DiarizationReport>, bool), DictationError> {
     let mut transcript_value = value;
     let modified_value = transcript_value.get("transcript_modified");
-    let has_provenance = modified_value.is_some();
-    let transcript_modified = match transcript_value.get("transcript_modified") {
+    let legacy_transcript_modified = match modified_value {
         None => false,
         Some(value) => value
             .as_bool()
@@ -659,17 +951,7 @@ fn meeting_value_and_report(
     let report = report_value
         .map(|value| serde_json::from_value::<DiarizationReport>(value).map_err(json_error))
         .transpose()?;
-    let report_modified = report
-        .as_ref()
-        .map(|report| report.transcript_modified)
-        .unwrap_or(false);
-    let report_present = report.is_some();
-    Ok((
-        transcript_value,
-        report,
-        transcript_modified || report_modified,
-        has_provenance || report_present,
-    ))
+    Ok((transcript_value, report, legacy_transcript_modified))
 }
 
 fn parse_reference_json(bytes: &[u8]) -> Result<ReferenceDocument, DictationError> {
@@ -1044,16 +1326,17 @@ mod tests {
         let bytes = serde_json::to_vec(&transcript).unwrap();
         assert!(parse_hypothesis(&bytes, EvaluationLayer::Acoustic).is_err());
         let parsed = parse_hypothesis(&bytes, EvaluationLayer::Transcript).unwrap();
-        assert!(!parsed.immutable_provenance);
+        assert!(parsed.producer.is_none());
         assert_eq!(parsed.turns.len(), 1);
 
         let mut corrected = transcript;
         corrected["transcript_modified"] = Value::Bool(true);
-        assert!(parse_hypothesis(
+        let legacy = parse_hypothesis(
             serde_json::to_string(&corrected).unwrap().as_bytes(),
-            EvaluationLayer::Transcript
+            EvaluationLayer::Transcript,
         )
-        .is_err());
+        .unwrap();
+        assert!(legacy.producer.is_none());
     }
 
     #[test]
@@ -1224,7 +1507,7 @@ mod tests {
         let bytes = serde_json::to_vec(&transcript).unwrap();
         let acoustic = parse_hypothesis(&bytes, EvaluationLayer::Acoustic).unwrap();
         assert_eq!(acoustic.turns.len(), 1);
-        assert!(!acoustic.immutable_provenance);
+        assert!(acoustic.producer.is_some());
         assert!(parse_hypothesis(&bytes, EvaluationLayer::Transcript).is_err());
 
         let mut malformed = transcript;
@@ -1322,7 +1605,31 @@ mod tests {
         assert_eq!(receipt["reference_qualification_ready"], true);
         assert_eq!(receipt["metric_targets_met"], true);
         assert_eq!(receipt["quality_adoption_ready"], false);
-        assert_eq!(receipt["measurement_only"], false);
+        assert_eq!(receipt["measurement_only"], true);
+        assert_eq!(receipt["selected_split"], "eval");
+        assert_eq!(receipt["minimum_coverage"], 0.9);
+        assert_eq!(
+            receipt["manifest_file_sha256"],
+            hex_digest(&std::fs::read(manifest_file.path()).unwrap())
+        );
+        let qualification = qualify(&reference, &manifest, 0.9).unwrap();
+        assert_eq!(
+            receipt["reference_qualification"]["reference_identity"]["sha256"],
+            qualification.reference_identity.sha256.unwrap()
+        );
+        assert_eq!(
+            receipt["reference_qualification"]["frozen_policy_identity"]["sha256"],
+            qualification.frozen_policy_identity.sha256.unwrap()
+        );
+        assert_eq!(
+            receipt["reference_qualification"]["frozen_split_identity"]["sha256"],
+            qualification.frozen_split_identity.sha256.unwrap()
+        );
+        assert_eq!(receipt["hypothesis_provenance"]["status"], "self_declared");
+        assert_eq!(
+            receipt["hypothesis_provenance"]["cryptographic_origin_verified"],
+            false
+        );
         assert_eq!(receipt["strata_collar_seconds"], 0.0);
         assert_eq!(
             receipt["strata"]["boundaries"][0]["starts"]["matched_count"],
@@ -1386,5 +1693,171 @@ mod tests {
         .unwrap();
         assert_eq!(receipt["observed_der"], Value::Null);
         assert_eq!(receipt["metric_targets_met"], false);
+    }
+
+    #[test]
+    fn receipt_copies_declared_native_producer_fields_without_attesting_them() {
+        let source = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let reference = write(&serde_json::to_string(&serde_json::json!({
+            "source_sha256": source,
+            "duration_seconds": 1.0,
+            "speakers": ["A"],
+            "windows": [],
+            "intervals": [{"start": 0.0, "end": 1.0, "speakers": ["A"], "status": "verified", "evidence": [{"kind": "human", "artifact": "note"}], "reviewer": "reviewer", "reviewed_at": "2026-01-01T00:00:00Z"}]
+        })).unwrap());
+        let mut hypothesis_value = report_json(source);
+        hypothesis_value["segmentation_model_sha256"] = Value::String("b".repeat(64));
+        hypothesis_value["embedding_model_sha256"] = Value::String("c".repeat(64));
+        hypothesis_value["decoder"] = serde_json::json!({
+            "strategy": "beam_search",
+            "beam_size": 2,
+            "temperature_fallback": true,
+            "vad_enabled": true,
+            "vad_threshold": 0.5,
+            "vad_min_silence_duration_ms": 100,
+            "vad_speech_pad_ms": 20,
+            "vad_samples_overlap": 0.1,
+            "timestamp_method": "source_mapped_segments"
+        });
+        let hypothesis = write(&serde_json::to_string(&hypothesis_value).unwrap());
+        let receipt: Value = serde_json::from_str(
+            &evaluate_files(
+                reference.path(),
+                hypothesis.path(),
+                None,
+                None,
+                None,
+                0.9,
+                0.1,
+                0.05,
+                0.0,
+                EvaluationLayer::Acoustic,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt["measurement_only"], true);
+        assert_eq!(receipt["hypothesis_producer"]["build_version"], "test");
+        assert_eq!(
+            receipt["hypothesis_producer"]["segmentation_model_sha256"],
+            "b".repeat(64)
+        );
+        assert_eq!(receipt["hypothesis_producer"]["decoder"]["beam_size"], 2);
+        assert_eq!(
+            receipt["hypothesis_producer"]["parameters"]["threshold"],
+            0.5
+        );
+    }
+
+    #[test]
+    fn expected_qualification_identity_mismatch_is_a_gate_before_scoring() {
+        let (reference, manifest) = qualified_fixture();
+        let reference_file = write(&serde_json::to_string(&reference).unwrap());
+        let manifest_file = write(&serde_json::to_string(&manifest).unwrap());
+        let (output, ready) = reference_qualify_report(
+            reference_file.path(),
+            manifest_file.path(),
+            0.9,
+            Some("wrong-policy"),
+            None,
+            None,
+        )
+        .unwrap();
+        let report: Value = serde_json::from_str(&output).unwrap();
+        assert!(!ready);
+        assert_eq!(report["status"], "not_ready");
+        assert!(report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure["code"] == "stale-policy"));
+
+        let mut hypothesis_value =
+            report_json("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        hypothesis_value["duration_seconds"] = 2.0.into();
+        hypothesis_value["activity"] = serde_json::json!([{
+            "start": 1.0,
+            "end": 2.0,
+            "speakers": ["A"]
+        }]);
+        let hypothesis = write(&serde_json::to_string(&hypothesis_value).unwrap());
+        let expected_split_sha = "0".repeat(64);
+        let error = evaluate_files_with_expectations(
+            reference_file.path(),
+            hypothesis.path(),
+            None,
+            Some(manifest_file.path()),
+            Some(EvaluationSplit::Eval),
+            0.9,
+            0.1,
+            0.05,
+            0.0,
+            EvaluationLayer::Acoustic,
+            None,
+            None,
+            Some(expected_split_sha.as_str()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("stale-split"));
+    }
+
+    #[test]
+    fn receipt_binds_selected_dev_or_eval_split_and_exact_manifest_bytes() {
+        let (reference, manifest) = qualified_fixture();
+        let reference_file = write(&serde_json::to_string(&reference).unwrap());
+        let compact_manifest = serde_json::to_string(&manifest).unwrap();
+        let pretty_manifest = serde_json::to_string_pretty(&manifest).unwrap();
+        let compact_file = write(&compact_manifest);
+        let pretty_file = write(&pretty_manifest);
+        let mut hypothesis_value =
+            report_json("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        hypothesis_value["duration_seconds"] = 2.0.into();
+        hypothesis_value["activity"] = serde_json::json!([{
+            "start": 1.0,
+            "end": 2.0,
+            "speakers": ["A"]
+        }]);
+        let hypothesis = write(&serde_json::to_string(&hypothesis_value).unwrap());
+
+        let dev: Value = serde_json::from_str(
+            &evaluate_files(
+                reference_file.path(),
+                hypothesis.path(),
+                None,
+                Some(compact_file.path()),
+                Some(EvaluationSplit::Dev),
+                0.9,
+                1.0,
+                1.0,
+                0.0,
+                EvaluationLayer::Acoustic,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let eval: Value = serde_json::from_str(
+            &evaluate_files(
+                reference_file.path(),
+                hypothesis.path(),
+                None,
+                Some(pretty_file.path()),
+                Some(EvaluationSplit::Eval),
+                0.9,
+                1.0,
+                1.0,
+                0.0,
+                EvaluationLayer::Acoustic,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dev["selected_split"], "dev");
+        assert_eq!(eval["selected_split"], "eval");
+        assert_ne!(dev["manifest_file_sha256"], eval["manifest_file_sha256"]);
+        assert_eq!(
+            dev["reference_qualification"]["frozen_split_identity"]["sha256"],
+            eval["reference_qualification"]["frozen_split_identity"]["sha256"]
+        );
     }
 }
