@@ -133,12 +133,29 @@ test("persisted recovery rejects lossily normalized proposal branches without mu
   }
 });
 
-test("persisted recovery accepts the canonical written payload and Rust null edit optionals", () => {
-  const payload = completePayload();
-  payload.meetings[0].review.review.batches[0].operations[0].text = null;
-  payload.meetings[0].review.review.batches[0].operations[0].speaker_id = null;
-  const serialized = recovery.serializeUpdateRecoveryPayload(payload);
-  assert.deepEqual(recovery.readPersistedUpdateRecoveryPayload(serialized), JSON.parse(serialized));
+test("persisted recovery accepts Rust edit operations with one optional field set", () => {
+  for (const [text, speakerId] of [["x", null], [null, "speaker-1"]]) {
+    const payload = completePayload();
+    payload.meetings[0].review.review.batches[0].operations[0].text = text;
+    payload.meetings[0].review.review.batches[0].operations[0].speaker_id = speakerId;
+    const serialized = recovery.serializeUpdateRecoveryPayload(payload);
+    assert.deepEqual(recovery.readPersistedUpdateRecoveryPayload(serialized), JSON.parse(serialized));
+  }
+});
+
+test("persisted recovery rejects edit operations with no replacement field without mutation", () => {
+  for (const corrupt of [
+    (operation) => { operation.text = null; operation.speaker_id = null; },
+    (operation) => { delete operation.text; delete operation.speaker_id; },
+  ]) {
+    const payload = completePayload();
+    corrupt(payload.meetings[0].review.review.batches[0].operations[0]);
+    const original = JSON.stringify(payload);
+    assert.throws(() => recovery.readPersistedUpdateRecoveryPayload(payload), /cannot be read without discarding data/i);
+    assert.equal(JSON.stringify(payload), original, "rejected object drafts remain untouched");
+    assert.throws(() => recovery.readPersistedUpdateRecoveryPayload(original), /cannot be read without discarding data/i);
+    assert.equal(original, JSON.stringify(payload), "the original serialized draft remains unchanged");
+  }
 });
 
 test("persisted recovery rejects dropped files, queues, and unknown fields without mutation", () => {

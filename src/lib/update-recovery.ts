@@ -482,6 +482,7 @@ function normalizeCorrection(value: unknown): CorrectionOperation | null {
       if (speakerId === null) return null;
       result.speaker_id = speakerId;
     }
+    if (!Object.hasOwn(result, "text") && !Object.hasOwn(result, "speaker_id")) return null;
     return result;
   }
   if (source.kind === "rename_speaker") {
