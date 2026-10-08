@@ -11,6 +11,28 @@ Evaluation receipts include uncollared short-reference-region and boundary measu
 `strata_collar_seconds: 0.0` distinguishes them from the requested global DER collar. See
 [the measurement definitions](diarization-strata.md).
 
+## Independent metric cross-check
+
+`scripts/diarization_sv/crosscheck_metrics.py` checks eleven synthetic cases at collars 0 and
+0.25 seconds, including silence false alarms, overlapping speakers, identity switches, UEM
+holes and a case where the DER and JER assignments differ. It calls only Sagascript's offline
+evaluation command, pyannote.metrics' DER scorer, and the inspected numeric JER function from
+[dscore](https://github.com/nryant/dscore/blob/e02f949ac6592279300a2c33d03daf9e0c12fd27/scorelib/metrics.py).
+It never runs an external diarization model. The dscore file must match its pinned SHA-256.
+
+In an environment with NumPy, SciPy and pyannote.metrics installed, run:
+
+```sh
+python scripts/diarization_sv/crosscheck_metrics.py --binary /path/to/sagascript \
+  --dscore-source /path/to/pinned/metrics.py --scratch /path/to/new/check-output
+```
+
+The native collar is a half-width around each reference boundary; pyannote.metrics uses the
+whole width, so the harness passes twice the native value to that scorer. JER uses original UEM
+without a collar and its own IoU-optimal assignment. Synthetic comparisons use a tolerance of
+1e-8 for fractions and seconds. Undefined metrics with zero reference speaker-time are kept
+as null by Sagascript, rather than being treated as a passing quality target.
+
 Use `sagascript diarization reference-identity reference.json` to obtain the deterministic
 reference hash, then freeze that value in the manifest. Run:
 
