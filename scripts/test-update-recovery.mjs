@@ -117,6 +117,49 @@ test("persisted recovery distinguishes absence from an unreadable acoustic draft
   assert.throws(() => recovery.readPersistedUpdateRecoveryPayload("not-json"), /cannot be read/);
 });
 
+test("persisted recovery rejects lossily normalized proposal branches without mutating the draft", () => {
+  for (const corrupt of [
+    (payload) => { payload.meetings[0].proposal.proposal.proposed.diarization = { ...diarizationReport, schema_version: 99 }; },
+    (payload) => { payload.meetings[0].proposal.proposal.previous.original.diarization = { ...diarizationReport, schema_version: 99 }; },
+    (payload) => { payload.meetings[0].proposal.candidate.diarization = { ...diarizationReport, schema_version: 99 }; },
+    (payload) => { payload.meetings[0].proposal.preview.candidate.original.diarization = { ...diarizationReport, schema_version: 99 }; },
+  ]) {
+    const payload = completePayload();
+    corrupt(payload);
+    const original = JSON.stringify(payload);
+    assert.throws(() => recovery.readPersistedUpdateRecoveryPayload(payload), /cannot be read without discarding data/i);
+    assert.equal(JSON.stringify(payload), original, "rejected object drafts remain untouched");
+    assert.throws(() => recovery.readPersistedUpdateRecoveryPayload(original), /cannot be read without discarding data/i);
+  }
+});
+
+test("persisted recovery accepts the canonical written payload and Rust null edit optionals", () => {
+  const payload = completePayload();
+  payload.meetings[0].review.review.batches[0].operations[0].text = null;
+  payload.meetings[0].review.review.batches[0].operations[0].speaker_id = null;
+  const serialized = recovery.serializeUpdateRecoveryPayload(payload);
+  assert.deepEqual(recovery.readPersistedUpdateRecoveryPayload(serialized), JSON.parse(serialized));
+});
+
+test("persisted recovery rejects dropped files, queues, and unknown fields without mutation", () => {
+  const cases = [
+    (payload) => { payload.files[0].text = 42; },
+    (payload) => { payload.meetings[0].unknown_recovery_field = true; },
+    (payload) => {
+      payload.files = Array.from({ length: recovery.UPDATE_RECOVERY_LIMITS.maxRecoveryEntries + 1 }, (_, index) => ({
+        job_id: `file-${index}`, path: `/tmp/${index}.wav`, text: "queued",
+      }));
+    },
+  ];
+  for (const corrupt of cases) {
+    const payload = completePayload();
+    corrupt(payload);
+    const original = JSON.stringify(payload);
+    assert.throws(() => recovery.readPersistedUpdateRecoveryPayload(payload), /cannot be read without discarding data/i);
+    assert.equal(JSON.stringify(payload), original, "lossy persisted inputs remain untouched");
+  }
+});
+
 test("meeting recovery preserves bounded acoustic diarization evidence", () => {
   const payload = completePayload();
   payload.meetings[0].review.transcript = {
@@ -182,6 +225,8 @@ test("Rust schema1 reports default omitted acoustic fields while rejecting expli
       asr_segments: [],
       transcript_modified: false,
     }, omitted.join(","));
+    const persisted = recovery.readPersistedUpdateRecoveryPayload(JSON.stringify(payload));
+    assert.deepEqual(persisted.meetings[0].review.transcript.diarization, parsed.meetings[0].review.transcript.diarization, `${omitted.join(",")} persisted`);
   }
 
   for (const [field, replacement] of [

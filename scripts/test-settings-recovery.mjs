@@ -50,3 +50,16 @@ test("recovered jobs cannot trigger automatic transcription or paste", () => {
   assert.doesNotMatch(recoveryBlock, /handleFileTranscription|startMeetingFileTranscription|paste/);
   assert.match(recoveryBlock, /status: "completed" as const/);
 });
+
+test("recovered-draft persistence rereads before any destructive write", () => {
+  const persistence = source.slice(source.indexOf("function persistRemainingRecoveredDrafts"), source.indexOf("function refreshRecoveredDraftsNotice"));
+  assert.match(persistence, /readPersistedUpdateRecoveryPayload\(await loadUpdateRecovery\(\)\)/);
+  assert.match(persistence, /readPersistedUpdateRecoveryPayload[\s\S]*clearUpdateRecovery/);
+});
+
+test("delivery cleanup retains unreadable recovery drafts without failing Copy or Save", () => {
+  const cleanup = source.slice(source.indexOf("async function clearDeliveredRecoveryDraft"), source.indexOf("onMount(()"));
+  assert.match(cleanup, /try \{/);
+  assert.match(cleanup, /recoveryReadError = `Update recovery draft was retained/);
+  assert.match(cleanup, /console\.warn\("Could not clear delivered update recovery draft"/);
+});

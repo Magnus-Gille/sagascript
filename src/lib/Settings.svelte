@@ -222,6 +222,10 @@
       meetings: meetingRecoveryEntries.filter((entry) => meetingIds.has(entry.job_id)),
     });
     recoveryWriteQueue = recoveryWriteQueue.catch(() => undefined).then(async () => {
+      // Re-read the durable snapshot before deleting or replacing it. A draft
+      // can become invalid after restore, and callbacks must leave those bytes
+      // available for repair instead of erasing them.
+      await readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
       if (!remaining.dictation && remaining.files.length === 0 && remaining.meetings.length === 0) {
         await clearUpdateRecovery();
       } else {
@@ -511,7 +515,14 @@
       if (remaining.files.length || remaining.meetings.length) await saveUpdateRecovery(remaining);
       else await clearUpdateRecovery();
     });
-    await recoveryWriteQueue;
+    try {
+      await recoveryWriteQueue;
+    } catch (error) {
+      // Delivery already succeeded. Preserve the unreadable snapshot and
+      // surface a concrete warning without turning Copy/Save into a failure.
+      console.warn("Could not clear delivered update recovery draft", error);
+      recoveryReadError = `Update recovery draft was retained after delivery. ${recoveryErrorText(error)}`;
+    }
   }
 
   onMount(() => {

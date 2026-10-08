@@ -645,6 +645,15 @@ function normalizePayload(value: unknown): UpdateRecoveryPayload | null {
   };
 }
 
+function isDiarizationReportRecord(value: UnknownRecord): boolean {
+  return Object.hasOwn(value, "activity")
+    && Object.hasOwn(value, "regions")
+    && Object.hasOwn(value, "attributions")
+    && Object.hasOwn(value, "parameters")
+    && Object.hasOwn(value, "build_revision")
+    && Object.hasOwn(value, "build_version");
+}
+
 function sameNormalizedValue(input: unknown, normalized: unknown): boolean {
   if (Object.is(input, normalized)) return true;
   if (Array.isArray(input) || Array.isArray(normalized)) {
@@ -666,17 +675,26 @@ function sameNormalizedValue(input: unknown, normalized: unknown): boolean {
       && inputRecord[key] === null
       && !Object.hasOwn(normalizedRecord, key));
   });
-  const normalizedKeys = Object.keys(normalizedRecord);
+  const normalizedKeys = Object.keys(normalizedRecord).filter((key) => {
+    if (Object.hasOwn(inputRecord, key)) return true;
+    // Rust omits these optional report fields when they carry their native
+    // defaults. The normalizer materializes those defaults for consumers.
+    if (!isDiarizationReportRecord(normalizedRecord)) return true;
+    return !((key === "asr_segments" && Array.isArray(normalizedRecord[key]) && normalizedRecord[key].length === 0)
+      || (key === "transcript_modified" && normalizedRecord[key] === false));
+  });
   return inputKeys.length === normalizedKeys.length
     && inputKeys.every((key) => Object.hasOwn(normalizedRecord, key)
       && sameNormalizedValue(inputRecord[key], normalizedRecord[key]));
 }
 
-function assertLosslessNormalization(input: unknown, normalized: UpdateRecoveryPayload): void {
+function assertLosslessNormalization(
+  input: unknown,
+  normalized: UpdateRecoveryPayload,
+  errorMessage = "Unsaved results exceed the updater recovery limits. Save or remove some results before updating.",
+): void {
   if (!sameNormalizedValue(input, normalized)) {
-    throw new RangeError(
-      "Unsaved results exceed the updater recovery limits. Save or remove some results before updating.",
-    );
+    throw new RangeError(errorMessage);
   }
 }
 
@@ -738,9 +756,23 @@ export function parseUpdateRecoveryPayload(input: string | unknown): UpdateRecov
 /** Persisted drafts must never be mistaken for an absent snapshot. */
 export function readPersistedUpdateRecoveryPayload(input: unknown): UpdateRecoveryPayload | null {
   if (input === null || input === undefined) return null;
-  const payload = parseUpdateRecoveryPayload(input);
-  if (payload === null) {
-    throw new TypeError("Persisted recovery drafts cannot be read by this version");
+  const errorMessage = "Persisted recovery drafts cannot be read without discarding data.";
+  let decoded: unknown = input;
+  if (typeof input === "string") {
+    if (input.length > UPDATE_RECOVERY_LIMITS.maxPayloadBytes
+      || utf8ByteLength(input, UPDATE_RECOVERY_LIMITS.maxPayloadBytes) > UPDATE_RECOVERY_LIMITS.maxPayloadBytes) {
+      throw new RangeError(errorMessage);
+    }
+    try {
+      decoded = JSON.parse(input);
+    } catch {
+      throw new TypeError(errorMessage);
+    }
   }
+  const payload = normalizePayload(decoded);
+  if (payload === null) {
+    throw new TypeError(errorMessage);
+  }
+  assertLosslessNormalization(decoded, payload, errorMessage);
   return payload;
 }

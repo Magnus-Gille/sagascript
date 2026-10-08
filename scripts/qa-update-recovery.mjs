@@ -147,6 +147,75 @@ try {
   }));
   assert.match(redictation.ack.error, /different unsaved dictation/i);
   assert.equal(redictation.saves, beforeRedictation);
+
+  // A successful native delivery must finish its pending/edited cleanup even
+  // when rereading another persisted recovery branch discovers an unknown
+  // field. The invalid bytes remain untouched and no clear/save is attempted.
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.evaluate(() => {
+    window.qaRecovery.meetings[0].unknown_recovery_field = "retained";
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Native result to copy";
+    window.qa.dictationResult("Native result to copy");
+  });
+  await page.locator("textarea.test-result").fill("Native result edited before copy");
+  const copyCallsBefore = await page.evaluate(() => window.qa.calls.length);
+  await page.getByRole("button", { name: "Copy result", exact: true }).click();
+  await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
+  const copyResult = await page.evaluate((start) => ({
+    pending: window.qaNativePending,
+    mutations: window.qa.calls.slice(start).filter(call => ["save_update_recovery", "clear_update_recovery"].includes(call.cmd)),
+    retained: window.qaRecovery.meetings[0].unknown_recovery_field,
+  }), copyCallsBefore);
+  assert.equal(copyResult.pending, false, "Copy acknowledges the native result despite retained recovery");
+  assert.deepEqual(copyResult.mutations, [], "Copy does not mutate unreadable recovery bytes");
+  assert.equal(copyResult.retained, "retained");
+  await page.getByRole("alert").filter({ hasText: "Update recovery draft was retained" }).waitFor();
+
+  // Save follows the same successful-delivery path and must retain the draft.
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.evaluate(() => {
+    window.qaRecovery.meetings[0].unknown_recovery_field = "retained-for-save";
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Native result to save";
+    window.qa.dictationResult("Native result to save");
+  });
+  await page.locator("textarea.test-result").fill("Native result edited before save");
+  const saveCallsBefore = await page.evaluate(() => window.qa.calls.length);
+  await page.getByRole("button", { name: /Save result/ }).click();
+  await page.getByText("Saved.", { exact: true }).waitFor();
+  const saveResult = await page.evaluate((start) => ({
+    pending: window.qaNativePending,
+    mutations: window.qa.calls.slice(start).filter(call => ["save_update_recovery", "clear_update_recovery"].includes(call.cmd)),
+    retained: window.qaRecovery.meetings[0].unknown_recovery_field,
+  }), saveCallsBefore);
+  assert.equal(saveResult.pending, false, "Save acknowledges the native result despite retained recovery");
+  assert.deepEqual(saveResult.mutations, [], "Save does not mutate unreadable recovery bytes");
+  assert.equal(saveResult.retained, "retained-for-save");
+  await page.getByRole("alert").filter({ hasText: "Update recovery draft was retained" }).waitFor();
+
+  // A proposal branch that becomes invalid after restore must block updater
+  // preparation while preserving the exact saved bytes.
+  await page.goto(url);
+  await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
+  const proposalInvalidSnapshot = await page.evaluate(() => {
+    window.qaRecovery.meetings[0].proposal = { proposal: { proposed: { invalid: true } } };
+    return JSON.stringify(window.qaRecovery);
+  });
+  await page.evaluate(() => window.qa.prepareUpdate("qa-invalid-proposal"));
+  await page.waitForFunction(() => window.qa.calls.some(call =>
+    call.cmd === "complete_update_preparation" && call.args.nonce === "qa-invalid-proposal"));
+  const invalidProposal = await page.evaluate(() => ({
+    ack: window.qa.calls.findLast(call => call.cmd === "complete_update_preparation").args,
+    mutations: window.qa.calls.filter(call => ["save_update_recovery", "clear_update_recovery"].includes(call.cmd)),
+    recovery: JSON.stringify(window.qaRecovery),
+  }));
+  assert.match(invalidProposal.ack.error, /cannot be read without discarding data/i);
+  assert.deepEqual(invalidProposal.mutations, [], "invalid proposal bytes cannot be overwritten or cleared");
+  assert.equal(invalidProposal.recovery, proposalInvalidSnapshot);
+
   corruptRecovery = true;
   await page.goto(url);
   await page.getByRole("alert").filter({ hasText: "Update blocked: unreadable recovery drafts were retained" }).waitFor();
