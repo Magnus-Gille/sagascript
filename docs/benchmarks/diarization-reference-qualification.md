@@ -13,6 +13,7 @@ Qualification uses a separate frozen manifest. It records the exact
 ```json
 {
   "reference_id": "sv-reference-v1",
+  "reference_sha256": "<sha256 of normalized reference JSON excluding summary>",
   "source_sha256": "…",
   "policy": {"id": "human-review-v1", "version": "1", "frozen": true},
   "split_id": "sv-split-v1",
@@ -42,10 +43,13 @@ verified speaker-time and verified time, unknown and candidate speech
 exclusions, and coverage by `train`/`dev`/`eval`, supplied stratum, and known
 speaker. Readiness is false for a source hash mismatch, stale policy or split,
 split leakage, zero verified intervals, missing frozen dev/eval separation, low
-eval coverage, a missing eval speaker, or a missing difficult/present eval
-stratum. Gold qualification requires at least 90% eval reviewed speech
+eval coverage, a missing eval speaker, a missing supplied eval stratum, or an
+incomplete/overlapping window partition. Gold qualification requires at least
+90% eval reviewed speech
 coverage after explicit unknown and candidate exclusions, every known voice in
-eval, and each difficult stratum represented.
+eval, every supplied stratum represented in eval, and complete disjoint window
+partitions. Candidate intervals prevent readiness; unknown intervals must carry
+human reviewer, timestamp, and evidence to count as reviewed.
 
 Human review starts with a blind first pass over the selected windows. A second
 reviewer checks a 20% sample when available; disagreements remain explicit and

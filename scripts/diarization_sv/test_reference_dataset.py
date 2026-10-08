@@ -51,22 +51,34 @@ def qualification_fixture():
     ]
     intervals = [
         verified(0, 4, ("A",), window_id="train-1"),
+        verified(4, 10, ("A",), window_id="train-1"),
         verified(10, 14, ("B",), window_id="dev-1"),
+        verified(14, 20, ("B",), window_id="dev-1"),
         verified(20, 24, ("A",), window_id="eval-1"),
         verified(24, 29.5, ("B",), window_id="eval-1"),
-        {"start": 29.5, "end": 30, "speakers": [], "status": "unknown", "window_id": "eval-1"},
+        {
+            "start": 29.5,
+            "end": 30,
+            "speakers": [],
+            "status": "unknown",
+            "window_id": "eval-1",
+            "evidence": [{"kind": "human_review", "artifact": "synthetic-note"}],
+            "reviewer": "reviewer-one",
+            "reviewed_at": REVIEWED_AT,
+        },
     ]
     value = reference(intervals, duration=30, windows=windows)
     split = {
         "reference_id": "synthetic-reference-v1",
+        "reference_sha256": dataset.reference_identity(dataset.validate_reference(value)),
         "source_sha256": SOURCE,
         "seed": "synthetic",
         "split_id": "synthetic-split-v1",
         "frozen": True,
         "policy": {"id": "human-review-v1", "version": "1", "frozen": True},
         "windows": [
-            {"id": "train-1", "start": 0.0, "end": 10.0, "split": "train", "stratum": "ordinary"},
-            {"id": "dev-1", "start": 10.0, "end": 20.0, "split": "dev", "stratum": "ordinary"},
+            {"id": "train-1", "start": 0.0, "end": 10.0, "split": "train", "stratum": "difficult"},
+            {"id": "dev-1", "start": 10.0, "end": 20.0, "split": "dev", "stratum": "difficult"},
             {"id": "eval-1", "start": 20.0, "end": 30.0, "split": "eval", "stratum": "difficult"},
         ],
     }
@@ -123,6 +135,7 @@ class ReferenceDatasetTests(unittest.TestCase):
             reference([{**verified(1, 2), "reviewer": None}]),
             reference([{**verified(1, 2), "evidence": []}]),
             reference([{**verified(1, 2), "reviewer": "model"}]),
+            reference([{"start": 1, "end": 2, "speakers": [], "status": "unknown", "reviewer": "assistant"}]),
             reference([{**verified(1, 2), "speakers": ["C"]}]),
             reference([{"start": 1, "end": 2, "speakers": ["A"], "status": "unknown"}]),
         ]
@@ -220,7 +233,7 @@ class ReferenceDatasetTests(unittest.TestCase):
         no_difficult_eval = dict(normalized, intervals=[item for item in normalized["intervals"] if item["start"] < 20])
         no_stratum_report = dataset.qualification_report(no_difficult_eval, split, expected_policy_id="human-review-v1")
         self.assertIn("missing-eval-stratum", {failure["code"] for failure in no_stratum_report["failures"]})
-        self.assertEqual(no_stratum_report["coverage"]["by_stratum"]["difficult"]["human_identified_speech_seconds"], 0.0)
+        self.assertEqual(no_stratum_report["coverage"]["by_stratum"]["difficult"]["human_identified_speech_seconds"], 20.0)
 
         stale = dataset.qualification_report(normalized, split, expected_source_sha256="b" * 64, expected_policy_id="old-policy")
         codes = {failure["code"] for failure in stale["failures"]}
@@ -230,6 +243,41 @@ class ReferenceDatasetTests(unittest.TestCase):
         leaked_split = dict(split, windows=[*split["windows"], dict(split["windows"][0], id="eval-1")])
         leaked = dataset.qualification_report(normalized, leaked_split, expected_policy_id="human-review-v1")
         self.assertIn("split-leak", {failure["code"] for failure in leaked["failures"]})
+
+    def test_qualification_binds_exact_reference_and_requires_all_present_strata(self):
+        normalized, split = qualification_fixture()
+        changed = dict(normalized, intervals=[*normalized["intervals"], verified(1, 2, ("A",), window_id="train-1")])
+        changed_report = dataset.qualification_report(changed, split, expected_policy_id="human-review-v1")
+        self.assertIn("reference-hash-mismatch", {failure["code"] for failure in changed_report["failures"]})
+
+        ordinary_dev_only = dict(split, windows=[dict(window, stratum="ordinary") if window["id"] == "dev-1" else window for window in split["windows"]])
+        ordinary_report = dataset.qualification_report(normalized, ordinary_dev_only, expected_policy_id="human-review-v1")
+        self.assertIn("missing-eval-stratum", {failure["code"] for failure in ordinary_report["failures"]})
+
+        for field in ("reference_id", "reference_sha256", "split_id"):
+            missing = dict(split)
+            missing.pop(field)
+            report = dataset.qualification_report(normalized, missing, expected_policy_id="human-review-v1")
+            self.assertFalse(report["ready_for_quality_adoption"])
+
+    def test_candidate_and_unreviewed_unknown_intervals_and_weak_threshold_cannot_qualify(self):
+        normalized, split = qualification_fixture()
+        candidate = dict(normalized, intervals=[*normalized["intervals"], {"start": 8, "end": 9, "speakers": [], "status": "candidate", "activity": "silence", "window_id": "train-1"}])
+        self.assertIn("candidate-unreviewed", {failure["code"] for failure in dataset.qualification_report(candidate, split, expected_policy_id="human-review-v1")["failures"]})
+        unknown = dict(normalized, intervals=[{**item, "reviewer": None, "reviewed_at": None, "evidence": []} if item["status"] == "unknown" else item for item in normalized["intervals"]])
+        self.assertIn("unknown-unreviewed", {failure["code"] for failure in dataset.qualification_report(unknown, split, expected_policy_id="human-review-v1")["failures"]})
+        for threshold in (0.0, 0.89, 1.01, float("nan")):
+            with self.assertRaises(dataset.ReferenceError):
+                dataset.qualification_report(normalized, split, expected_policy_id="human-review-v1", minimum_eval_coverage=threshold)
+
+    def test_qualification_requires_complete_disjoint_window_partitions(self):
+        normalized, split = qualification_fixture()
+        incomplete = dict(normalized, intervals=[item for item in normalized["intervals"] if not (item["start"] == 4 and item["end"] == 10)])
+        incomplete_report = dataset.qualification_report(incomplete, split, expected_policy_id="human-review-v1")
+        self.assertIn("incomplete-partition", {failure["code"] for failure in incomplete_report["failures"]})
+        overlap = dict(normalized, intervals=[*normalized["intervals"], verified(1, 2, ("A",), window_id="train-1")])
+        overlap_report = dataset.qualification_report(overlap, split, expected_policy_id="human-review-v1")
+        self.assertIn("overlapping-partition", {failure["code"] for failure in overlap_report["failures"]})
 
     def test_qualification_cli_writes_machine_readable_report_without_overwrite(self):
         normalized, split = qualification_fixture()

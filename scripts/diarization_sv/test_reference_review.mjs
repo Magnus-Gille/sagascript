@@ -74,21 +74,23 @@ assert.equal(api.replaceInterval(split.dataset, { start: 5, end: 7, speakers: ['
 const qualified = {
   source_sha256: 'a'.repeat(64), duration_seconds: 30, speakers: ['A', 'B'],
   windows: [
-    { id: 'train-1', start: 0, end: 10, stratum: 'ordinary' },
-    { id: 'dev-1', start: 10, end: 20, stratum: 'ordinary' },
+    { id: 'train-1', start: 0, end: 10 },
+    { id: 'dev-1', start: 10, end: 20 },
     { id: 'eval-1', start: 20, end: 30, stratum: 'difficult' }
   ],
   intervals: [
     { start: 0, end: 4, speakers: ['A'], status: 'verified', evidence: [], window_id: 'train-1' },
+    { start: 4, end: 10, speakers: ['A'], status: 'verified', evidence: [], window_id: 'train-1' },
     { start: 10, end: 14, speakers: ['B'], status: 'verified', evidence: [], window_id: 'dev-1' },
+    { start: 14, end: 20, speakers: ['B'], status: 'verified', evidence: [], window_id: 'dev-1' },
     { start: 20, end: 24, speakers: ['A'], status: 'verified', evidence: [], window_id: 'eval-1' },
     { start: 24, end: 29.5, speakers: ['B'], status: 'verified', evidence: [], window_id: 'eval-1' },
-    { start: 29.5, end: 30, speakers: [], status: 'unknown', evidence: [], window_id: 'eval-1' }
+    { start: 29.5, end: 30, speakers: [], status: 'unknown', evidence: [{ kind: 'human_review', artifact: 'synthetic-note' }], reviewer: 'Reviewer', reviewed_at: '2026-01-01T00:00:00Z', window_id: 'eval-1' }
   ]
 };
-const frozenSplit = { reference_id: 'synthetic-reference-v1', source_sha256: qualified.source_sha256, split_id: 'synthetic-split-v1', policy: { id: 'human-review-v1', version: '1', frozen: true }, frozen: true, windows: [
-  { id: 'train-1', start: 0, end: 10, split: 'train', stratum: 'ordinary' },
-  { id: 'dev-1', start: 10, end: 20, split: 'dev', stratum: 'ordinary' },
+const frozenSplit = { reference_id: 'synthetic-reference-v1', reference_sha256: 'b'.repeat(64), source_sha256: qualified.source_sha256, split_id: 'synthetic-split-v1', policy: { id: 'human-review-v1', version: '1', frozen: true }, frozen: true, windows: [
+  { id: 'train-1', start: 0, end: 10, split: 'train', stratum: 'difficult' },
+  { id: 'dev-1', start: 10, end: 20, split: 'dev', stratum: 'difficult' },
   { id: 'eval-1', start: 20, end: 30, split: 'eval', stratum: 'difficult' }
 ] };
 const qualification = api.qualificationReport(qualified, frozenSplit, { policyId: 'human-review-v1' });
@@ -98,4 +100,7 @@ assert.equal(qualification.coverage.by_speaker.A.eval_represented, true);
 assert.equal(api.qualificationReport({ ...qualified, intervals: [] }, frozenSplit, { policyId: 'human-review-v1' }).ready_for_quality_adoption, false, 'empty gold is rejected');
 assert.equal(api.qualificationReport(qualified, { ...frozenSplit, frozen: false }, { policyId: 'human-review-v1' }).ready_for_quality_adoption, false, 'unfrozen split is rejected');
 assert.equal(api.qualificationReport(qualified, frozenSplit, { policyId: 'old-policy' }).failures.some(({ code }) => code === 'stale-policy'), true, 'stale policy is rejected');
+assert.equal(api.qualificationReport(qualified, { ...frozenSplit, split_id: undefined }, { policyId: 'human-review-v1' }).failures.some(({ code }) => code === 'missing-split-id'), true, 'missing split identity is rejected');
+assert.equal(api.qualificationReport({ ...qualified, intervals: [...qualified.intervals, { start: 8, end: 9, speakers: [], status: 'candidate', activity: 'silence', window_id: 'train-1' }] }, frozenSplit, { policyId: 'human-review-v1' }).failures.some(({ code }) => code === 'candidate-unreviewed'), true, 'candidate silence is rejected');
+assert.equal(api.qualificationReport(qualified, frozenSplit, { policyId: 'human-review-v1', minimumEvalCoverage: 0.89 }).failures.some(({ code }) => code === 'invalid-coverage-threshold'), true, 'weak coverage threshold is rejected');
 console.log('reference review helpers: ok');

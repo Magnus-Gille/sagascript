@@ -47,6 +47,7 @@ EVIDENCE_KEYS = {"kind", "artifact"}
 POLICY_KEYS = {"id", "version", "frozen"}
 SPLIT_KEYS = {
     "reference_id",
+    "reference_sha256",
     "source_sha256",
     "policy",
     "seed",
@@ -62,6 +63,9 @@ SPLIT_WINDOW_KEYS = {"id", "start", "end", "split", "stratum"}
 
 class ReferenceError(ValueError):
     """A user-facing schema or consistency error."""
+
+
+HUMAN_REVIEWER_FORBIDDEN = {"model", "system", "automatic", "automated", "auto", "consensus", "assistant", "unknown", "bot"}
 
 
 def finite_number(value: Any) -> bool:
@@ -112,6 +116,13 @@ def validate_evidence(value: Any, *, required: bool) -> list[dict[str, Any]]:
             raise ReferenceError(f"evidence item {index} artifact must be a non-empty string")
         validated.append(item)
     return validated
+
+
+def human_reviewer(value: Any, label: str) -> str:
+    reviewer = nonempty_string(value, label)
+    if reviewer.strip().lower() in HUMAN_REVIEWER_FORBIDDEN:
+        raise ReferenceError(f"{label} must identify a human")
+    return reviewer
 
 
 def validate_policy(value: Any) -> dict[str, Any] | None:
@@ -233,12 +244,10 @@ def validate_reference(document: Any) -> dict[str, Any]:
         reviewer = raw.get("reviewer")
         reviewed_at = raw.get("reviewed_at")
         if status == "verified":
-            reviewer = nonempty_string(reviewer, f"verified interval {index} reviewer")
-            if reviewer.strip().lower() in {"model", "system", "automatic", "auto", "consensus", "assistant", "unknown"}:
-                raise ReferenceError(f"verified interval {index} reviewer must identify a human")
+            reviewer = human_reviewer(reviewer, f"verified interval {index} reviewer")
             reviewed_at = parse_review_timestamp(reviewed_at, f"verified interval {index} reviewed_at")
         elif reviewer is not None:
-            reviewer = nonempty_string(reviewer, f"interval {index} reviewer")
+            reviewer = human_reviewer(reviewer, f"interval {index} reviewer")
         if reviewed_at is not None and status != "verified":
             parse_review_timestamp(reviewed_at, f"interval {index} reviewed_at")
 
@@ -425,6 +434,13 @@ def ratio(value: str) -> float:
     return parsed
 
 
+def coverage_threshold(value: str) -> float:
+    parsed = ratio(value)
+    if not 0.90 <= parsed <= 1.0:
+        raise argparse.ArgumentTypeError("minimum eval coverage must be between 0.90 and 1.0")
+    return parsed
+
+
 def split_windows(reference: dict[str, Any], train: float, dev: float, evaluation: float, seed: str) -> dict[str, Any]:
     if not reference["windows"]:
         raise ReferenceError("split requires supplied windows")
@@ -463,6 +479,11 @@ def _canonical_json(value: Any) -> str:
 
 def _identity(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def reference_identity(reference: dict[str, Any]) -> str:
+    """Hash the normalized reference content, excluding its derived summary."""
+    return _identity({key: value for key, value in reference.items() if key != "summary"})
 
 
 def _union_seconds(intervals: Iterable[dict[str, Any]]) -> float:
@@ -504,15 +525,22 @@ def _validate_split_manifest(reference: dict[str, Any], split: Any) -> tuple[dic
         source_mismatch = ["source_sha256"]
     else:
         source_mismatch = []
-    if split.get("reference_id") is not None:
-        nonempty_identifier(split["reference_id"], "split reference_id")
+    if not isinstance(split.get("reference_id"), str) or not split["reference_id"] or any(char.isspace() for char in split["reference_id"]):
+        errors = ["missing-reference-id"]
+    else:
+        errors = []
+    if not isinstance(split.get("split_id"), str) or not split["split_id"] or any(char.isspace() for char in split["split_id"]):
+        errors.append("missing-split-id")
+    expected_reference_sha256 = reference_identity(reference)
+    if split.get("reference_sha256") != expected_reference_sha256:
+        errors.append("reference-hash-mismatch")
     validate_policy(split.get("policy"))
     assignments = split.get("windows")
     if not isinstance(assignments, list):
         raise ReferenceError("split windows must be a list")
     reference_windows = {window["id"]: window for window in reference["windows"]}
     assignment_map: dict[str, str] = {}
-    errors = list(source_mismatch)
+    errors.extend(source_mismatch)
     for index, raw in enumerate(assignments, start=1):
         if not isinstance(raw, dict) or set(raw) - SPLIT_WINDOW_KEYS:
             raise ReferenceError(f"split window {index} has unsupported keys")
@@ -555,6 +583,8 @@ def qualification_report(
     ``verified`` intervals count as speech; candidate and unknown regions remain
     explicit exclusions and can never promote themselves into gold labels.
     """
+    if not finite_number(minimum_eval_coverage) or not 0.90 <= minimum_eval_coverage <= 1.0:
+        raise ReferenceError("minimum_eval_coverage must be finite and between 0.90 and 1.0")
     if "summary" not in reference:
         reference = validate_reference(reference)
     assignment_map, split_errors = _validate_split_manifest(reference, split)
@@ -583,6 +613,10 @@ def qualification_report(
     if expected_source_sha256 is not None and expected_source_sha256 != reference["source_sha256"]:
         failures.append({"code": "source-hash-mismatch", "detail": "reference source hash differs from the expected source"})
     if split_errors:
+        if any(error in split_errors for error in ("missing-reference-id", "missing-split-id")):
+            failures.append({"code": "missing-identity", "detail": "reference_id and split_id are required"})
+        if "reference-hash-mismatch" in split_errors:
+            failures.append({"code": "reference-hash-mismatch", "detail": "manifest reference_sha256 does not match the normalized reference"})
         if "source_sha256" in split_errors:
             failures.append({"code": "source-hash-mismatch", "detail": "split source hash differs from the reference source"})
         if any(error in split_errors for error in ("duplicate-window", "missing-window", "unknown-window", "window-boundary-mismatch", "window-stratum-mismatch")):
@@ -602,6 +636,42 @@ def qualification_report(
     verified = [item for item in intervals if item["status"] == "verified"]
     if not verified:
         failures.append({"code": "zero-verified", "detail": "no human-verified intervals are available"})
+    if any(item["status"] == "candidate" for item in intervals):
+        failures.append({"code": "candidate-unreviewed", "detail": "candidate intervals, including candidate silence, prevent quality adoption"})
+    unreviewed_unknown = []
+    for item in intervals:
+        if item["status"] != "unknown":
+            continue
+        try:
+            human_reviewer(item.get("reviewer"), "unknown interval reviewer")
+            parse_review_timestamp(item.get("reviewed_at"), "unknown interval reviewed_at")
+            evidence = validate_evidence(item.get("evidence"), required=True)
+            if not evidence:
+                raise ReferenceError("unknown interval evidence is empty")
+        except ReferenceError:
+            unreviewed_unknown.append(item)
+    if unreviewed_unknown:
+        failures.append({"code": "unknown-unreviewed", "detail": "unknown intervals need human reviewer, timestamp, and evidence"})
+    for window in split.get("windows", []):
+        selected = sorted(
+            (item for item in intervals if item.get("window_id") == window["id"]),
+            key=lambda item: (item["start"], item["end"]),
+        )
+        cursor = window["start"]
+        overlap = False
+        incomplete = False
+        for item in selected:
+            if item["start"] < cursor:
+                overlap = True
+            if item["start"] > cursor:
+                incomplete = True
+            cursor = max(cursor, item["end"])
+        if cursor < window["end"] or not selected:
+            incomplete = True
+        if overlap:
+            failures.append({"code": "overlapping-partition", "detail": f"window {window['id']} has overlapping annotation intervals"})
+        if incomplete:
+            failures.append({"code": "incomplete-partition", "detail": f"window {window['id']} is not fully partitioned by annotation intervals"})
     if "dev" not in assignment_map.values() or "eval" not in assignment_map.values():
         failures.append({"code": "split-separation", "detail": "frozen dev and eval windows must both be present"})
     eval_metrics = _bucket_metrics(by_split["eval"])
@@ -610,16 +680,8 @@ def qualification_report(
     missing_speakers = [speaker for speaker, items in by_speaker.items() if not any(item in by_split["eval"] for item in items)]
     if missing_speakers:
         failures.append({"code": "missing-eval-speaker", "detail": "eval has no verified speech for: " + ", ".join(missing_speakers)})
-    # Every difficult stratum supplied by the reference must be represented in
-    # eval.  Other strata are required when they are actually present in eval;
-    # this permits a train/dev-only ordinary stratum without silently allowing a
-    # difficult eval slice to disappear.
-    strata = sorted({
-        window["stratum"]
-        for window in split.get("windows", [])
-        if window.get("stratum") is not None
-        and ("difficult" in window["stratum"].lower() or assignment_map.get(window["id"]) == "eval")
-    })
+    # Every supplied stratum must be represented in eval.
+    strata = sorted({window["stratum"] for window in split.get("windows", []) if window.get("stratum") is not None})
     missing_strata = [stratum for stratum in strata if not any(
         item in by_split["eval"] for item in by_stratum.get(stratum, [])
         if item["status"] == "verified" and item.get("activity", "speech") == "speech"
@@ -627,13 +689,12 @@ def qualification_report(
     if missing_strata:
         failures.append({"code": "missing-eval-stratum", "detail": "eval has no verified speech for: " + ", ".join(missing_strata)})
 
-    reference_identity_source = {key: value for key, value in reference.items() if key != "summary"}
     report = {
         "ready_for_quality_adoption": not failures,
         "status": "gold" if not failures else "not_ready",
         "reference_identity": {
             "id": split.get("reference_id"),
-            "sha256": _identity(reference_identity_source),
+            "sha256": reference_identity(reference),
         },
         "source_identity": {"sha256": reference["source_sha256"]},
         "frozen_policy_identity": {
@@ -650,6 +711,9 @@ def qualification_report(
             "requires_all_known_eval_speakers": True,
             "requires_all_present_eval_strata": True,
             "requires_frozen_dev_eval_windows": True,
+            "requires_complete_disjoint_window_partitions": True,
+            "requires_human_review_of_unknown_intervals": True,
+            "rejects_candidate_intervals": True,
         },
         "coverage": {
             "overall": _bucket_metrics(intervals),
@@ -700,7 +764,7 @@ def build_parser() -> argparse.ArgumentParser:
     qualify.add_argument("--output", required=True, type=Path)
     qualify.add_argument("--source-sha256")
     qualify.add_argument("--policy-id")
-    qualify.add_argument("--minimum-eval-coverage", type=ratio, default=0.90)
+    qualify.add_argument("--minimum-eval-coverage", type=coverage_threshold, default=0.90)
     return parser
 
 
