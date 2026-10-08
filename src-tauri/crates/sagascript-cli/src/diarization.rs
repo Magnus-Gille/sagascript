@@ -191,6 +191,9 @@ struct ParsedHypothesis {
 struct EvaluationReceipt<'a> {
     schema_version: u8,
     source_sha256: Option<&'a str>,
+    hypothesis_source_sha256: &'a str,
+    reference_recording_id: Option<&'a str>,
+    source_binding: &'static str,
     reference_file_sha256: &'a str,
     hypothesis_file_sha256: &'a str,
     uem_file_sha256: Option<&'a str>,
@@ -357,7 +360,19 @@ fn reference_qualify_report(
     let reference: Value =
         serde_json::from_str(utf8(&reference_file.bytes)?).map_err(json_error)?;
     let manifest: Value = serde_json::from_str(utf8(&manifest_file.bytes)?).map_err(json_error)?;
-    let mut report = qualify(&reference, &manifest, minimum_coverage).map_err(core_error)?;
+    let mut report = match qualify(&reference, &manifest, minimum_coverage) {
+        Ok(report) => report,
+        Err(error) => {
+            return Ok((
+                invalid_qualification_report(
+                    &reference_file.sha256,
+                    &manifest_file.sha256,
+                    error.to_string(),
+                )?,
+                false,
+            ));
+        }
+    };
     apply_expected_qualification_gates(
         &mut report,
         expected_policy_id,
@@ -369,6 +384,31 @@ fn reference_qualify_report(
         json_string(&serde_json::to_value(report).map_err(json_error)?)?,
         ready,
     ))
+}
+
+fn invalid_qualification_report(
+    reference_file_sha256: &str,
+    manifest_file_sha256: &str,
+    detail: String,
+) -> Result<String, DictationError> {
+    json_string(&json!({
+        "ready_for_quality_adoption": false,
+        "status": "invalid-input",
+        "failures": [{
+            "code": "invalid-qualification-input",
+            "detail": detail,
+        }],
+        "reference_identity": null,
+        "source_identity": null,
+        "frozen_policy_identity": null,
+        "frozen_split_identity": null,
+        "coverage": null,
+        "unknown_speech_excluded_seconds": null,
+        "candidate_speech_excluded_seconds": null,
+        "minimum_eval_reviewed_speech_coverage": null,
+        "reference_file_sha256": reference_file_sha256,
+        "manifest_file_sha256": manifest_file_sha256,
+    }))
 }
 
 fn apply_expected_qualification_gates(
@@ -552,7 +592,7 @@ fn evaluate_files_with_expectations(
         parse_uem(
             utf8(&file.bytes)?,
             reference.recording_id.as_deref(),
-            reference.duration_seconds,
+            hypothesis.duration_seconds,
         )?
     } else if let Some(uem) = reference.uem.clone() {
         uem
@@ -603,10 +643,14 @@ fn evaluate_files_with_expectations(
     reasons.push("quality adoption remains pending the frozen public regression suite and held-out decision gate".to_owned());
     let receipt = EvaluationReceipt {
         schema_version: 1,
-        source_sha256: reference
-            .source_sha256
-            .as_deref()
-            .or(Some(hypothesis.source_sha256.as_str())),
+        source_sha256: reference.source_sha256.as_deref(),
+        hypothesis_source_sha256: &hypothesis.source_sha256,
+        reference_recording_id: reference.recording_id.as_deref(),
+        source_binding: if reference.native {
+            "native_source_sha256"
+        } else {
+            "rttm_recording_id_and_uem"
+        },
         reference_file_sha256: &reference_file.sha256,
         hypothesis_file_sha256: &hypothesis_file.sha256,
         uem_file_sha256: uem_file.as_ref().map(|file| file.sha256.as_str()),
@@ -896,15 +940,14 @@ fn parse_hypothesis(
             producer: Some(hypothesis_producer(report)),
         });
     }
-    if report
-        .as_ref()
-        .is_some_and(|report| report.transcript_modified)
-    {
+    let report = report.as_ref().ok_or_else(|| {
+        cli_error("transcript evaluation requires a canonical acoustic diarization report")
+    })?;
+    if legacy_transcript_modified || report.transcript_modified {
         return Err(cli_error(
             "corrected or modified meeting transcripts cannot be evaluated",
         ));
     }
-    let _ = legacy_transcript_modified;
     let turns = transcript
         .segments
         .iter()
@@ -918,7 +961,7 @@ fn parse_hypothesis(
         turns,
         source_sha256: transcript.source_sha256,
         duration_seconds: transcript.duration_seconds,
-        producer: report.as_ref().map(hypothesis_producer),
+        producer: Some(hypothesis_producer(report)),
     })
 }
 
@@ -1245,6 +1288,33 @@ mod tests {
     }
 
     #[test]
+    fn rttm_uem_must_fit_hypothesis_duration() {
+        let reference = write("SPEAKER rec 1 0.000 1.000 <NA> <NA> A <NA> <NA>\n");
+        let hypothesis = write(
+            &serde_json::to_string(&report_json(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ))
+            .unwrap(),
+        );
+        let uem = write("rec 1 0.000 2.000\n");
+        let error = evaluate_files(
+            reference.path(),
+            hypothesis.path(),
+            Some(uem.path()),
+            None,
+            None,
+            0.9,
+            1.0,
+            1.0,
+            0.0,
+            EvaluationLayer::Acoustic,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("UEM interval out of bounds"));
+    }
+
+    #[test]
     fn malformed_rttm_and_multiple_ids_are_rejected() {
         assert!(parse_rttm("SPEAKER rec 1 0 nope <NA> <NA> A <NA> <NA>").is_err());
         assert!(parse_rttm(
@@ -1325,18 +1395,27 @@ mod tests {
         });
         let bytes = serde_json::to_vec(&transcript).unwrap();
         assert!(parse_hypothesis(&bytes, EvaluationLayer::Acoustic).is_err());
-        let parsed = parse_hypothesis(&bytes, EvaluationLayer::Transcript).unwrap();
-        assert!(parsed.producer.is_none());
+        assert!(parse_hypothesis(&bytes, EvaluationLayer::Transcript).is_err());
+
+        let mut canonical = transcript.clone();
+        canonical["schema_version"] = 2.into();
+        canonical["diarization"] =
+            report_json("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let parsed = parse_hypothesis(
+            &serde_json::to_vec(&canonical).unwrap(),
+            EvaluationLayer::Transcript,
+        )
+        .unwrap();
+        assert!(parsed.producer.is_some());
         assert_eq!(parsed.turns.len(), 1);
 
         let mut corrected = transcript;
         corrected["transcript_modified"] = Value::Bool(true);
-        let legacy = parse_hypothesis(
+        assert!(parse_hypothesis(
             serde_json::to_string(&corrected).unwrap().as_bytes(),
             EvaluationLayer::Transcript,
         )
-        .unwrap();
-        assert!(legacy.producer.is_none());
+        .is_err());
     }
 
     #[test]
@@ -1456,6 +1535,49 @@ mod tests {
             report["coverage"]["by_split"]["eval"]["human_identified_speech_seconds"],
             1.0
         );
+    }
+
+    #[test]
+    fn invalid_qualification_input_is_machine_readable_and_not_ready() {
+        let (reference, mut manifest) = qualified_fixture();
+        manifest["windows"] = Value::String("invalid".into());
+        let reference_file = write(&serde_json::to_string(&reference).unwrap());
+        let manifest_file = write(&serde_json::to_string(&manifest).unwrap());
+        let (output, ready) = reference_qualify_report(
+            reference_file.path(),
+            manifest_file.path(),
+            0.9,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let report: Value = serde_json::from_str(&output).unwrap();
+        assert!(!ready);
+        assert_eq!(report["status"], "invalid-input");
+        assert_eq!(report["ready_for_quality_adoption"], false);
+        assert_eq!(report["failures"][0]["code"], "invalid-qualification-input");
+        assert_eq!(report["reference_identity"], Value::Null);
+        assert_eq!(report["coverage"], Value::Null);
+        assert_eq!(
+            report["reference_file_sha256"],
+            hex_digest(&std::fs::read(reference_file.path()).unwrap())
+        );
+        assert_eq!(
+            report["manifest_file_sha256"],
+            hex_digest(&std::fs::read(manifest_file.path()).unwrap())
+        );
+        let result = run(DiarizationArgs {
+            action: DiarizationAction::ReferenceQualify {
+                input: reference_file.path().to_owned(),
+                manifest: manifest_file.path().to_owned(),
+                minimum_coverage: 0.9,
+                expected_policy_id: None,
+                expected_policy_version: None,
+                expected_split_sha256: None,
+            },
+        });
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1603,6 +1725,16 @@ mod tests {
         assert_eq!(receipt["maximum_confusion"], 0.456);
         assert_eq!(receipt["collar_seconds"], 0.25);
         assert_eq!(receipt["reference_qualification_ready"], true);
+        assert_eq!(
+            receipt["source_sha256"],
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(
+            receipt["hypothesis_source_sha256"],
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(receipt["reference_recording_id"], Value::Null);
+        assert_eq!(receipt["source_binding"], "native_source_sha256");
         assert_eq!(receipt["metric_targets_met"], true);
         assert_eq!(receipt["quality_adoption_ready"], false);
         assert_eq!(receipt["measurement_only"], true);
@@ -1635,6 +1767,34 @@ mod tests {
             receipt["strata"]["boundaries"][0]["starts"]["matched_count"],
             0 // The annotation starts exactly at the selected UEM edge.
         );
+    }
+
+    #[test]
+    fn rttm_receipt_separates_reference_recording_binding_from_hypothesis_hash() {
+        let source = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let reference = write("SPEAKER rec 1 0.000 1.000 <NA> <NA> A <NA> <NA>\n");
+        let uem = write("rec 1 0.000 1.000\n");
+        let hypothesis = write(&serde_json::to_string(&report_json(source)).unwrap());
+        let receipt: Value = serde_json::from_str(
+            &evaluate_files(
+                reference.path(),
+                hypothesis.path(),
+                Some(uem.path()),
+                None,
+                None,
+                0.9,
+                1.0,
+                1.0,
+                0.0,
+                EvaluationLayer::Acoustic,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt["source_sha256"], Value::Null);
+        assert_eq!(receipt["hypothesis_source_sha256"], source);
+        assert_eq!(receipt["reference_recording_id"], "rec");
+        assert_eq!(receipt["source_binding"], "rttm_recording_id_and_uem");
     }
 
     #[test]
