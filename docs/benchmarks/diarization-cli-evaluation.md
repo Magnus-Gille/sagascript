@@ -6,6 +6,11 @@ human evidence. When available, a second reviewer checks a random sample of at l
 windows. The reference manifest freezes the source hash, policy identity, split identity, and
 window boundaries.
 
+Evaluation receipts include uncollared short-reference-region and boundary measurements under
+`strata`. They reuse the global DER speaker mapping and original UEM; the explicit
+`strata_collar_seconds: 0.0` distinguishes them from the requested global DER collar. See
+[the measurement definitions](diarization-strata.md).
+
 Use `sagascript diarization reference-identity reference.json` to obtain the deterministic
 reference hash, then freeze that value in the manifest. Run:
 

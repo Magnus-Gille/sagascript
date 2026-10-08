@@ -20,6 +20,7 @@ use sagascript_core::diarization_evaluation::{
 use sagascript_core::diarization_qualification::{qualify, reference_identity};
 use sagascript_core::diarization_reference::{ReferenceDocument, ReferenceStatus};
 use sagascript_core::diarization_report::DiarizationReport;
+use sagascript_core::diarization_strata::{measure_strata, DiarizationStrataReport};
 use sagascript_core::error::DictationError;
 use sagascript_core::meeting::MeetingTranscript;
 
@@ -151,6 +152,9 @@ struct EvaluationReceipt<'a> {
     observed_der: Option<f64>,
     observed_confusion: Option<f64>,
     metrics: sagascript_core::diarization_evaluation::EvaluationReport,
+    /// Short-region and boundary visibility uses the original explicit UEM.
+    strata_collar_seconds: f64,
+    strata: DiarizationStrataReport,
     reference_qualification_ready: bool,
     metric_targets_met: bool,
     quality_adoption_ready: bool,
@@ -361,6 +365,9 @@ fn evaluate_files(
     )
     .map_err(core_error)?;
 
+    let strata =
+        measure_strata(&reference.turns, &hypothesis.turns, &uem, &metrics).map_err(core_error)?;
+
     let (observed_der, observed_confusion) = metric_fractions(&metrics);
     let metric_targets_met = metric_targets_met(&metrics, maximum_der, maximum_confusion);
 
@@ -402,6 +409,8 @@ fn evaluate_files(
         observed_der,
         observed_confusion,
         metrics,
+        strata_collar_seconds: 0.0,
+        strata,
         reference_qualification_ready: reference.qualified,
         metric_targets_met,
         quality_adoption_ready: false,
@@ -1314,6 +1323,11 @@ mod tests {
         assert_eq!(receipt["metric_targets_met"], true);
         assert_eq!(receipt["quality_adoption_ready"], false);
         assert_eq!(receipt["measurement_only"], false);
+        assert_eq!(receipt["strata_collar_seconds"], 0.0);
+        assert_eq!(
+            receipt["strata"]["boundaries"][0]["starts"]["matched_count"],
+            1
+        );
     }
 
     #[test]

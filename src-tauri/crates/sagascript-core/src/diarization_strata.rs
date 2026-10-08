@@ -74,7 +74,8 @@ pub struct SpeakerBoundaryStratum {
 }
 
 /// Source-region measurements are taken after same-speaker union and before UEM
-/// clipping.  `scored_reference_seconds` is the same speaker time after UEM.
+/// clipping. `short_window_reference_seconds` includes this speaker's
+/// activity inside the selected short-region windows, including overlap.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SpeakerStratum {
     pub speaker: String,
@@ -82,7 +83,7 @@ pub struct SpeakerStratum {
     pub source_region_seconds: f64,
     pub short_region_count: usize,
     pub short_region_seconds: f64,
-    pub scored_reference_seconds: f64,
+    pub short_window_reference_seconds: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -239,7 +240,7 @@ pub fn measure_strata(
                 source_region_seconds,
                 short_region_count,
                 short_region_seconds,
-                scored_reference_seconds: scored_reference_seconds[index],
+                short_window_reference_seconds: scored_reference_seconds[index],
             }
         })
         .collect();
@@ -792,7 +793,7 @@ mod tests {
         assert_eq!(report.speakers[0].short_region_count, 1);
         assert_eq!(report.speakers[0].short_region_seconds, 1.5);
         assert_eq!(report.speakers[2].speaker, "c");
-        assert_eq!(report.speakers[2].scored_reference_seconds, 0.5);
+        assert_eq!(report.speakers[2].short_window_reference_seconds, 0.5);
     }
 
     #[test]

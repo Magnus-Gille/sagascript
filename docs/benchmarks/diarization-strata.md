@@ -12,7 +12,12 @@ Reference turns are unioned separately for each speaker before any UEM
 clipping. A source region is one resulting contiguous interval. A region is
 short when its source length is strictly less than two seconds. The report
 includes source region count and duration, short count and duration, and the
-reference speaker time that remains after intersection with the explicit UEM.
+each speaker's activity inside the selected short-turn windows as
+`short_window_reference_seconds`. This can include a concurrent long speaker.
+Source intervals are the reference intervals supplied to the scorer: an
+annotation ending at a review-window or unknown boundary does not establish
+that a real utterance ended there. Genuine short-turn accuracy requires
+independently verified turn boundaries.
 
 ## Fixed-mapping score over short-turn windows
 
@@ -36,6 +41,12 @@ so the clipped scoring duration is separate from source short-region duration.
 `der` is reported only when the
 reference speaker-time denominator is positive; it is a measurement, not an
 acceptance decision.
+
+The native CLI exposes these measurements under `strata` with
+`strata_collar_seconds: 0.0`. They retain the original UEM even when the global
+DER mapping was selected with a nonzero collar; short intervals and original
+boundaries therefore remain visible. These strata scores use that same fixed
+mapping and must not be compared as if they used the global DER collar.
 
 ## Boundary errors
 
