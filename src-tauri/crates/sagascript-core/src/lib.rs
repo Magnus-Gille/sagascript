@@ -5,6 +5,7 @@
 
 pub mod audio;
 pub mod download;
+pub mod diarization_report;
 pub mod error;
 pub mod meeting;
 pub mod meeting_media;
