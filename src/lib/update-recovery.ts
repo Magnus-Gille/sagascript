@@ -176,7 +176,14 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
   const activity = boundedArray(source.activity, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
   const regions = boundedArray(source.regions, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
   const attributions = boundedArray(source.attributions, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
-  const asrSegments = boundedArray(source.asr_segments, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
+  const hasAsrSegments = Object.hasOwn(source, "asr_segments");
+  const hasTranscriptModified = Object.hasOwn(source, "transcript_modified");
+  const asrSegments = hasAsrSegments
+    ? boundedArray(source.asr_segments, UPDATE_RECOVERY_LIMITS.maxDiarizationItems)
+    : [];
+  const transcriptModified = hasTranscriptModified ? source.transcript_modified : false;
+  const asrSegmentsExceedLimit = Array.isArray(source.asr_segments)
+    && source.asr_segments.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems;
   const maxSupportEntries = 64;
   if (
     source.schema_version !== 1
@@ -188,12 +195,12 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
     || !Array.isArray(source.activity)
     || !Array.isArray(source.regions)
     || !Array.isArray(source.attributions)
-    || !Array.isArray(source.asr_segments)
+    || (hasAsrSegments && !Array.isArray(source.asr_segments))
     || source.activity.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
     || source.regions.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
     || source.attributions.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
-    || source.asr_segments.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
-    || typeof source.transcript_modified !== "boolean"
+    || asrSegmentsExceedLimit
+    || (hasTranscriptModified && typeof transcriptModified !== "boolean")
     || (source.diagnostics_included !== undefined && typeof source.diagnostics_included !== "boolean")
     || !record(source.parameters)
   ) return null;
@@ -375,9 +382,9 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
   });
   if (!validActivity || !validEvidence || !validAsr) return null;
 
-  // Return the original bounded object so newly added evidence fields are
-  // retained losslessly rather than silently discarded during recovery.
-  return source as DiarizationReport;
+  // Retain bounded evidence fields losslessly and apply the native defaults
+  // only when optional fields were omitted.
+  return { ...source, asr_segments: asrSegments, transcript_modified: transcriptModified } as DiarizationReport;
 }
 
 function normalizeSpeakerHint(value: unknown): Record<string, unknown> | null {

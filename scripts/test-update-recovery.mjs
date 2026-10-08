@@ -143,6 +143,47 @@ test("silent acoustic reports round trip with zero-duration ASR evidence", () =>
   }
 });
 
+test("Rust schema1 reports default omitted acoustic fields while rejecting explicit malformed values", () => {
+  for (const omitted of [
+    ["asr_segments", "transcript_modified"],
+    ["asr_segments"],
+    ["transcript_modified"],
+  ]) {
+    const report = structuredClone(diarizationReport);
+    for (const field of omitted) delete report[field];
+    const payload = completePayload();
+    payload.meetings[0].review.transcript = {
+      ...transcript,
+      schema_version: 2,
+      source_sha256: report.source_sha256,
+      diarization: report,
+    };
+
+    const parsed = recovery.parseUpdateRecoveryPayload(JSON.stringify(payload));
+    assert.deepEqual(parsed.meetings[0].review.transcript.diarization, {
+      ...report,
+      asr_segments: [],
+      transcript_modified: false,
+    }, omitted.join(","));
+  }
+
+  for (const [field, replacement] of [
+    ["asr_segments", null],
+    ["asr_segments", {}],
+    ["transcript_modified", null],
+    ["transcript_modified", 0],
+  ]) {
+    const payload = completePayload();
+    payload.meetings[0].review.transcript = {
+      ...transcript,
+      schema_version: 2,
+      source_sha256: diarizationReport.source_sha256,
+      diarization: { ...diarizationReport, [field]: replacement },
+    };
+    assert.equal(recovery.parseUpdateRecoveryPayload(JSON.stringify(payload)), null, `${field}=${replacement}`);
+  }
+});
+
 test("malformed acoustic spans remain invalid after allowing empty activity", () => {
   const payload = completePayload();
   payload.meetings[0].review.transcript = {
