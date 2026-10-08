@@ -124,6 +124,14 @@ class ReferenceDatasetTests(unittest.TestCase):
         with self.assertRaisesRegex(dataset.ReferenceError, "unsupported top-level"):
             dataset.validate_reference({**reference([]), "top_level_extra": True})
 
+    def test_evidence_artifact_control_characters_cannot_reach_native_export(self):
+        for artifact in ("line\nbreak", "nul\x00byte", "control\x85byte"):
+            with self.subTest(artifact=repr(artifact)):
+                with self.assertRaisesRegex(dataset.ReferenceError, "artifact"):
+                    dataset.validate_reference(reference([verified(0, 1, evidence=[{
+                        "kind": "human_review", "artifact": artifact,
+                    }])]))
+
     def test_candidate_is_never_exported_or_promoted(self):
         candidate = {
             "start": 1,

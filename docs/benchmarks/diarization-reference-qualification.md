@@ -41,14 +41,16 @@ Qualification uses a separate frozen manifest. It records the exact
 }
 ```
 
-Create deterministic assignments with `split`, then qualify without replacing
-an existing report:
+`split` proposes deterministic assignments. Complete the manifest with the reference hash,
+reference/split IDs, reviewed strata and policy identity shown above. Mark the policy and split
+frozen only after human review and the split decision; the proposal alone is not a frozen
+manifest. Qualify the completed manifest without replacing an existing report:
 
 ```sh
 python3 scripts/diarization_sv/reference_dataset.py split reference.json \
-  --output split.json --seed sv-reference-v1 --train 0.6 --dev 0.2 --eval 0.2
+  --output split-proposal.json --seed sv-reference-v1 --train 0.6 --dev 0.2 --eval 0.2
 python3 scripts/diarization_sv/reference_dataset.py qualify reference.json \
-  --split split.json --output qualification-report.json \
+  --split frozen-split.json --output qualification-report.json \
   --policy-id human-review-v1
 ```
 

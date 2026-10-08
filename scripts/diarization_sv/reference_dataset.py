@@ -112,8 +112,9 @@ def validate_evidence(value: Any, *, required: bool) -> list[dict[str, Any]]:
         if missing:
             raise ReferenceError(f"evidence item {index} is missing: {', '.join(sorted(missing))}")
         nonempty_identifier(item["kind"], f"evidence item {index} kind")
-        if not isinstance(item["artifact"], str) or not item["artifact"]:
-            raise ReferenceError(f"evidence item {index} artifact must be a non-empty string")
+        if (not isinstance(item["artifact"], str) or not item["artifact"]
+                or any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in item["artifact"])):
+            raise ReferenceError(f"evidence item {index} artifact must be a non-empty string without control characters")
         validated.append(item)
     return validated
 
