@@ -6,6 +6,7 @@ import type {
   MeetingSegment,
   MeetingSpeaker,
   MeetingTranscript,
+  DiarizationReport,
 } from "./meeting-types";
 import type {
   MeetingReprocessingProposal,
@@ -32,6 +33,8 @@ export const UPDATE_RECOVERY_LIMITS = Object.freeze({
   maxResolutions: 20_000,
   maxMigrationSteps: 20_000,
   maxDraftEntries: 50_000,
+  maxDiarizationItems: 500_000,
+  maxDiarizationSpeakers: 64,
 });
 
 export interface UpdateRecoveryDictation {
@@ -84,8 +87,28 @@ function numberValue(value: unknown, minimum: number, maximum: number, fallback 
   return Math.min(maximum, Math.max(minimum, value));
 }
 
+function strictStringValue(value: unknown, maximum: number, allowEmpty = true): string | null {
+  if (typeof value !== "string" || value.length > maximum) return null;
+  return allowEmpty || value.length > 0 ? value : null;
+}
+
+function finiteNumber(value: unknown, minimum: number, maximum: number): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum
+    ? value
+    : null;
+}
+
 function boundedArray(value: unknown, maximum: number): unknown[] {
   return Array.isArray(value) ? value.slice(0, maximum) : [];
+}
+
+function hasKeyDeep(value: unknown, key: string, depth = 0): boolean {
+  if (depth > 8) return false;
+  if (Array.isArray(value)) return value.slice(0, 1_000).some((item) => hasKeyDeep(item, key, depth + 1));
+  const source = record(value);
+  if (source === null) return false;
+  return Object.hasOwn(source, key)
+    || Object.values(source).some((item) => hasKeyDeep(item, key, depth + 1));
 }
 
 function normalizeRecord(value: unknown, maximumEntries: number): Record<string, string> {
@@ -124,6 +147,142 @@ function normalizeSegment(value: unknown): MeetingSegment | null {
   };
 }
 
+function normalizeDiarization(value: unknown): DiarizationReport | null {
+  const source = record(value);
+  if (!source) return null;
+  const sourceSha = strictStringValue(source.source_sha256, 64, false);
+  const buildRevision = strictStringValue(source.build_revision, UPDATE_RECOVERY_LIMITS.maxRevisionLength, false);
+  const buildVersion = strictStringValue(source.build_version, UPDATE_RECOVERY_LIMITS.maxRevisionLength, false);
+  const duration = finiteNumber(source.duration_seconds, 0, 14_400);
+  const activity = boundedArray(source.activity, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
+  const regions = boundedArray(source.regions, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
+  const attributions = boundedArray(source.attributions, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
+  const asrSegments = boundedArray(source.asr_segments, UPDATE_RECOVERY_LIMITS.maxDiarizationItems);
+  const maxSupportEntries = 64;
+  if (
+    source.schema_version !== 1
+    || sourceSha === null
+    || sourceSha.length !== 64
+    || buildRevision === null
+    || buildVersion === null
+    || duration === null
+    || !Array.isArray(source.activity)
+    || !Array.isArray(source.regions)
+    || !Array.isArray(source.attributions)
+    || !Array.isArray(source.asr_segments)
+    || source.activity.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
+    || source.regions.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
+    || source.attributions.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
+    || source.asr_segments.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
+    || typeof source.transcript_modified !== "boolean"
+    || !record(source.parameters)
+  ) return null;
+
+  const parameters = source.parameters as UnknownRecord;
+  if (
+    finiteNumber(parameters.threshold, 0, 2) === null
+    || finiteNumber(parameters.min_segment_seconds, 0, 14_400) === null
+    || finiteNumber(parameters.min_gap_seconds, 0, 14_400) === null
+    || finiteNumber(parameters.min_speaker_seconds, 0, 14_400) === null
+    || finiteNumber(parameters.absorb_max_distance, 0, 2) === null
+    || finiteNumber(parameters.hint_merge_max_distance, 0, 2) === null
+  ) return null;
+
+  const decoder = source.decoder;
+  if (decoder !== undefined && decoder !== null) {
+    const decoderRecord = record(decoder);
+    if (
+      !decoderRecord
+      || strictStringValue(decoderRecord.strategy, UPDATE_RECOVERY_LIMITS.maxIdLength, false) === null
+      || typeof decoderRecord.beam_size !== "number"
+      || !Number.isInteger(decoderRecord.beam_size)
+      || typeof decoderRecord.temperature_fallback !== "boolean"
+      || typeof decoderRecord.vad_enabled !== "boolean"
+      || decoderRecord.beam_size < 0
+      || decoderRecord.beam_size > 8
+      || finiteNumber(decoderRecord.vad_threshold, 0, 1) === null
+      || !Number.isInteger(decoderRecord.vad_min_silence_duration_ms)
+      || decoderRecord.vad_min_silence_duration_ms < 0
+      || !Number.isInteger(decoderRecord.vad_speech_pad_ms)
+      || decoderRecord.vad_speech_pad_ms < 0
+      || finiteNumber(decoderRecord.vad_samples_overlap, 0, 1) === null
+      || strictStringValue(decoderRecord.timestamp_method, UPDATE_RECOVERY_LIMITS.maxIdLength, false) === null
+    ) return null;
+  }
+
+  const validActivity = activity.every((item) => {
+    const span = record(item);
+    const speakers = span ? boundedArray(span.speakers, UPDATE_RECOVERY_LIMITS.maxDiarizationSpeakers) : [];
+    return span !== null
+      && finiteNumber(span.start, 0, duration) !== null
+      && finiteNumber(span.end, 0, duration) !== null
+      && finiteNumber(span.start, 0, duration)! < finiteNumber(span.end, 0, duration)!
+      && Array.isArray(span.speakers)
+      && span.speakers.length <= UPDATE_RECOVERY_LIMITS.maxDiarizationSpeakers
+      && speakers.every((speaker) => strictStringValue(speaker, UPDATE_RECOVERY_LIMITS.maxIdLength, false) !== null);
+  });
+  const validRegions = regions.every((item) => {
+    const region = record(item);
+    const status = region?.embedding_status;
+    return region !== null
+      && typeof region.index === "number"
+      && Number.isInteger(region.index)
+      && region.index >= 0
+      && finiteNumber(region.start, 0, duration) !== null
+      && finiteNumber(region.end, 0, duration) !== null
+      && finiteNumber(region.start, 0, duration)! < finiteNumber(region.end, 0, duration)!
+      && strictStringValue(region.speaker, UPDATE_RECOVERY_LIMITS.maxIdLength, false) !== null
+      && (status === "usable" || status === "missing" || status === "degenerate")
+      && typeof region.track === "number"
+      && Number.isInteger(region.track)
+      && region.track >= 0
+      && typeof region.used_track_fallback === "boolean";
+  });
+  const validAttributions = attributions.every((item) => {
+    const attribution = record(item);
+    const support = attribution && boundedArray(attribution.support, maxSupportEntries);
+    return attribution !== null
+      && typeof attribution.index === "number"
+      && Number.isInteger(attribution.index)
+      && attribution.index >= 0
+      && finiteNumber(attribution.start, 0, duration) !== null
+      && finiteNumber(attribution.end, 0, duration) !== null
+      && finiteNumber(attribution.start, 0, duration)! < finiteNumber(attribution.end, 0, duration)!
+      && strictStringValue(attribution.speaker, UPDATE_RECOVERY_LIMITS.maxIdLength, false) !== null
+      && ["temporal_overlap", "tied_overlap", "nearest_gap", "no_speaker_evidence", "invalid_timestamp"].includes(String(attribution.reason))
+      && Array.isArray(attribution.support)
+      && attribution.support.length <= maxSupportEntries
+      && support.every((entry) => {
+        const item = record(entry);
+        return item !== null
+          && strictStringValue(item.speaker, UPDATE_RECOVERY_LIMITS.maxIdLength, false) !== null
+          && finiteNumber(item.overlap_seconds, 0, 14_400) !== null;
+      });
+  });
+  const validEvidence = validRegions && validAttributions;
+  const validAsr = asrSegments.every((item) => {
+    const segment = record(item);
+    return segment !== null
+      && finiteNumber(segment.start, 0, duration) !== null
+      && finiteNumber(segment.end, 0, duration) !== null
+      && finiteNumber(segment.start, 0, duration)! < finiteNumber(segment.end, 0, duration)!
+      && (segment.avg_logprob === undefined
+        || segment.avg_logprob === null
+        || (typeof segment.avg_logprob === "number" && Number.isFinite(segment.avg_logprob)))
+      && (segment.no_speech_prob === undefined
+        || segment.no_speech_prob === null
+        || (typeof segment.no_speech_prob === "number"
+          && Number.isFinite(segment.no_speech_prob)
+          && segment.no_speech_prob >= 0
+          && segment.no_speech_prob <= 1));
+  });
+  if (!validActivity || !validEvidence || !validAsr) return null;
+
+  // Return the original bounded object so newly added evidence fields are
+  // retained losslessly rather than silently discarded during recovery.
+  return source as DiarizationReport;
+}
+
 function normalizeTranscript(value: unknown): MeetingTranscript | null {
   const source = record(value);
   if (!source) return null;
@@ -137,7 +296,11 @@ function normalizeTranscript(value: unknown): MeetingTranscript | null {
   const language = stringValue(source.language, UPDATE_RECOVERY_LIMITS.maxLanguageLength);
   const model = stringValue(source.model, UPDATE_RECOVERY_LIMITS.maxModelLength);
   if (sourceSha === null || language === null || model === null) return null;
-  return {
+  const diarization = source.diarization === undefined || source.diarization === null
+    ? source.diarization === null ? null : undefined
+    : normalizeDiarization(source.diarization);
+  if (source.diarization !== undefined && source.diarization !== null && diarization === null) return null;
+  const normalized: MeetingTranscript = {
     schema_version: integerValue(source.schema_version, 0, 100),
     source_sha256: sourceSha,
     language,
@@ -146,6 +309,8 @@ function normalizeTranscript(value: unknown): MeetingTranscript | null {
     segments,
     speakers,
   };
+  if (source.diarization !== undefined) normalized.diarization = diarization;
+  return normalized;
 }
 
 function normalizeCorrection(value: unknown): CorrectionOperation | null {
@@ -315,6 +480,10 @@ function normalizePayload(value: unknown): UpdateRecoveryPayload | null {
   const dictationSource = record(source.dictation);
   const dictationText = dictationSource === null ? null : stringValue(dictationSource.text, UPDATE_RECOVERY_LIMITS.maxTextLength);
   const dictation = dictationText === null ? null : { text: dictationText };
+  const rawMeetings = boundedArray(source.meetings, UPDATE_RECOVERY_LIMITS.maxRecoveryEntries);
+  if (rawMeetings.some((meeting) => hasKeyDeep(meeting, "diarization") && normalizeMeeting(meeting) === null)) {
+    return null;
+  }
   return {
     schema_version: UPDATE_RECOVERY_SCHEMA_VERSION,
     saved_at: savedAt,

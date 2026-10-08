@@ -78,6 +78,50 @@ function completePayload() {
   }, "2026-09-26T10:00:00.000Z");
 }
 
+const diarizationReport = {
+  schema_version: 1,
+  source_sha256: "a".repeat(64),
+  duration_seconds: 12.5,
+  build_revision: "test-revision",
+  build_version: "test-version",
+  decoder: null,
+  asr_segments: [],
+  transcript_modified: false,
+  parameters: {
+    threshold: 0.5,
+    min_segment_seconds: 0.1,
+    min_gap_seconds: 0.1,
+    min_speaker_seconds: 0.1,
+    absorb_max_distance: 0.5,
+    hint_merge_max_distance: 0.5,
+  },
+  activity: [{ start: 0, end: 1, speakers: ["speaker-1", "speaker-2"] }],
+  regions: [],
+  attributions: [],
+};
+
+test("meeting recovery preserves bounded acoustic diarization evidence", () => {
+  const payload = completePayload();
+  payload.meetings[0].review.transcript = {
+    ...transcript,
+    diarization: structuredClone(diarizationReport),
+  };
+  const serialized = recovery.serializeUpdateRecoveryPayload(payload);
+  const parsed = recovery.parseUpdateRecoveryPayload(serialized);
+  assert.deepEqual(parsed.meetings[0].review.transcript.diarization, diarizationReport);
+  assert.equal(parsed.meetings[0].review.transcript.diarization.activity[0].speakers.length, 2);
+});
+
+test("invalid acoustic evidence rejects recovery instead of dropping it", () => {
+  const payload = completePayload();
+  payload.meetings[0].review.transcript = {
+    ...transcript,
+    diarization: { ...diarizationReport, activity: [{ start: 0, end: 99_999, speakers: ["speaker-1"] }] },
+  };
+  assert.throws(() => recovery.createUpdateRecoveryPayload(payload), /Invalid updater recovery payload/);
+  assert.equal(recovery.parseUpdateRecoveryPayload(JSON.stringify(payload)), null);
+});
+
 test("payload round trips all unsaved result types", () => {
   const original = completePayload();
   const serialized = recovery.serializeUpdateRecoveryPayload(original);

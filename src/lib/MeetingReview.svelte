@@ -172,6 +172,17 @@
   const sortedSegments = $derived(
     [...transcript.segments].sort((a, b) => a.start - b.start || a.end - b.end || a.id.localeCompare(b.id)),
   );
+  const acousticReport = $derived(transcript.diarization ?? null);
+  const overlapSpans = $derived(acousticReport?.activity.filter((span) => span.speakers.length > 1) ?? []);
+  const overlapDuration = $derived(overlapSpans.reduce((total, span) => total + Math.max(0, span.end - span.start), 0));
+  const fallbackRegionCount = $derived(acousticReport?.regions.filter((region) => region.used_track_fallback).length ?? 0);
+  const attributionReasons = $derived.by(() => {
+    const counts = new Map<string, number>();
+    for (const attribution of acousticReport?.attributions ?? []) {
+      counts.set(attribution.reason, (counts.get(attribution.reason) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right));
+  });
   const activeSegments = $derived(audioUrl ? activeSegmentsAtTime(transcript.segments, playbackTime) : []);
   const activeIds = $derived(new Set(activeSegments.map((segment) => segment.id)));
 
@@ -488,6 +499,44 @@
   {/if}
   {#if actionNotice}<p class="success-note" role="status">{actionNotice}</p>{/if}
 
+  {#if acousticReport}
+    <section class="acoustic-panel" aria-labelledby={idPrefix + "acoustic-panel-title"}>
+      <div class="section-heading">
+        <div>
+          <h2 id={idPrefix + "acoustic-panel-title"}>Acoustic activity</h2>
+          <p>Original speaker activity from the recording, kept separate from reviewed transcript text.</p>
+        </div>
+        {#if acousticReport.transcript_modified}<span class="edited-badge">Transcript edited</span>{/if}
+      </div>
+      {#if overlapSpans.length > 0}
+        <p class="overlap-notice" role="status">
+          Simultaneous speaker activity appears in {overlapSpans.length} interval{overlapSpans.length === 1 ? "" : "s"}
+          ({overlapDuration.toFixed(2)} seconds). Transcript words remain shown once; this panel does not duplicate words for overlapping speakers.
+        </p>
+        <div class="acoustic-overlap-list" role="list" aria-label="Simultaneous speaker activity">
+          {#each overlapSpans as span (span.start + "-" + span.end + "-" + span.speakers.join(","))}
+            <div class="acoustic-overlap-row" role="listitem">
+              <span class="timestamp">{formatTimestamp(span.start)}–{formatTimestamp(span.end)}</span>
+              <span>{span.speakers.map(displayLabel).join(", ")}</span>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="empty">No simultaneous speaker activity was recorded in the acoustic timeline.</p>
+      {/if}
+      <p class="diagnostic-note">
+        Diagnostic evidence only: activity, attribution reasons, decoder settings, and fallback counts are not calibrated speaker confidence.
+        {#if acousticReport.decoder} Decoder {acousticReport.decoder.strategy}, beam {acousticReport.decoder.beam_size}, VAD {acousticReport.decoder.vad_enabled ? "on" : "off"}.{/if}
+      </p>
+      {#if fallbackRegionCount > 0 || attributionReasons.length > 0}
+        <div class="diagnostic-details" aria-label="Diarization diagnostic evidence">
+          {#if fallbackRegionCount > 0}<span>{fallbackRegionCount} region{fallbackRegionCount === 1 ? "" : "s"} used track fallback.</span>{/if}
+          {#if attributionReasons.length > 0}<span>Attribution reasons: {attributionReasons.map(([reason, count]) => `${reason} (${count})`).join(", ")}.</span>{/if}
+        </div>
+      {/if}
+    </section>
+  {/if}
+
   <section class="review-actions" aria-label="Review actions">
     <button type="button" class="primary" disabled={persistenceDisabled()} onclick={() => void saveReview()}>
       {pendingAction === "save" ? "Saving…" : "Save review"}
@@ -674,6 +723,7 @@
         <p>Choose a format explicitly. Each export uses the current reviewed text and speaker labels.</p>
       </div>
     </div>
+    {#if acousticReport}<p class="diagnostic-note export-limitation">Plain text and subtitle exports use transcript segments and cannot represent simultaneous acoustic activity. Review JSON retains the source report.</p>{/if}
     <div class="export-actions">
       {#each exportFormats as item (item.format)}
         <button type="button" class="secondary export-button" disabled={persistenceDisabled()} onclick={() => void exportReview(item.format)}>
@@ -695,10 +745,16 @@
   .privacy-note { max-width: 300px; color: var(--text-muted); font-size: 12px; text-align: right; }
   .error { display: grid; gap: 4px; margin-top: 16px; padding: 12px 14px; color: var(--text); background: rgba(255, 107, 107, 0.1); border: 1px solid var(--danger); border-radius: var(--radius); }
   .error span, .error small { color: #ffb0b0; }
-  .review-actions, .speaker-panel, .audio-panel, .transcript-panel, .export-panel { margin-top: 24px; }
+  .review-actions, .speaker-panel, .audio-panel, .acoustic-panel, .transcript-panel, .export-panel { margin-top: 24px; }
   .review-actions { align-items: center; flex-wrap: wrap; }
   .draft-note { margin-top: 8px; color: var(--text-muted); font-size: 12px; }
   .section-heading { margin-bottom: 12px; } .section-heading p { margin-top: 3px; }
+  .acoustic-panel { padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); }
+  .overlap-notice { margin: 0 0 10px; color: var(--text); font-size: 13px; line-height: 1.5; }
+  .acoustic-overlap-list { display: grid; gap: 6px; }
+  .acoustic-overlap-row { display: flex; align-items: baseline; gap: 12px; padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--bg); font-size: 13px; }
+  .diagnostic-note { margin: 10px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+  .diagnostic-details { display: grid; gap: 3px; margin-top: 8px; color: var(--text-muted); font-size: 12px; }
   .speaker-list, .conversation { display: grid; gap: 8px; }
   .speaker-row { align-items: center; justify-content: space-between; padding: 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); }
   .speaker-identity { display: flex; align-items: center; gap: 10px; min-width: 0; } .speaker-identity > div { min-width: 0; }
@@ -710,5 +766,6 @@
   .segment-heading { align-items: center; flex-wrap: wrap; } .timestamp { padding: 0; color: var(--accent); background: transparent; border: 0; font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; } .timestamp:disabled { cursor: default; opacity: 0.7; }
   .edited-badge { color: var(--accent); font-size: 11px; } .segment-card textarea { box-sizing: border-box; width: 100%; min-height: 54px; margin-top: 10px; padding: 8px 10px; resize: vertical; background: var(--bg-secondary); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); font: inherit; line-height: 1.5; } .segment-card textarea:focus { border-color: var(--accent); } .segment-card textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; } .segment-controls { align-items: end; flex-wrap: wrap; margin-top: 8px; } .segment-controls label { display: grid; gap: 3px; } .segment-controls select { min-width: 150px; }
   .export-actions { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; } .export-button { min-height: 40px; }
+  .export-limitation { margin-bottom: 10px; }
   @media (max-width: 600px) { .meeting-review { padding: 18px 14px 36px; } .review-header, .section-heading, .speaker-row { flex-direction: column; } .privacy-note { max-width: none; text-align: left; } .speaker-actions { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; width: 100%; } .speaker-actions > button, .merge-control { width: 100%; min-width: 0; } .export-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>
