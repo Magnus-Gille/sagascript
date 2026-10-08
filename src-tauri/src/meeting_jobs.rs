@@ -41,7 +41,7 @@ pub struct MeetingSnapshot {
 }
 
 enum JobOutput {
-    Import(MeetingTranscript),
+    Import(Box<MeetingTranscript>),
     #[cfg(feature = "diarization")]
     Reprocessing(Box<sagascript_cli::meeting_reprocessing::ReprocessingResult>),
 }
@@ -249,7 +249,7 @@ async fn begin_job(
                         &processing_backend,
                         &control,
                     )
-                    .map(JobOutput::Import)
+                    .map(|document| JobOutput::Import(Box::new(document)))
                     .map_err(|error| error.to_string())
                 }
             });
@@ -353,7 +353,7 @@ fn finish_snapshot(
         match result {
             Ok(JobOutput::Import(document)) => {
                 snapshot.status = JobStatus::Completed;
-                snapshot.transcript = Some(document);
+                snapshot.transcript = Some(*document);
             }
             #[cfg(feature = "diarization")]
             Ok(JobOutput::Reprocessing(result)) => {
