@@ -12,11 +12,45 @@ const page = await context.newPage();
 const errors = [];
 page.on("pageerror", (error) => errors.push(error.stack || error.message));
 const mock = await readFile(new URL("./fixtures/transcription-browser-mock.js", import.meta.url), "utf8");
+const diarization = {
+  schema_version: 1,
+  source_sha256: "a".repeat(64),
+  duration_seconds: 4,
+  build_revision: "fixture-revision",
+  build_version: "fixture-version",
+  diagnostics_included: false,
+  decoder: null,
+  asr_segments: [],
+  transcript_modified: true,
+  parameters: {
+    threshold: 0.5,
+    min_segment_seconds: 0.1,
+    min_gap_seconds: 0.1,
+    min_speaker_seconds: 0.1,
+    absorb_max_distance: 0.5,
+    hint_merge_max_distance: 0.5,
+  },
+  activity: [
+    { start: 0, end: 1, speakers: ["spk-1", "spk-2"] },
+    { start: 1, end: 2, speakers: ["spk-1", "spk-2", "spk-3"] },
+    { start: 2, end: 4, speakers: ["spk-3"] },
+  ],
+  regions: [{
+    index: 0, start: 1, end: 1, track: 0, speaker: "spk-1", embedding_status: "degenerate",
+    assigned_centroid_distance: null, nearest_other_centroid_distance: null,
+    used_track_fallback: true, active_speech_seconds: 0, overlapping_speech_seconds: 0,
+  }],
+  attributions: [{
+    index: 0, start: 1, end: 1, speaker: "spk-1", reason: "invalid_timestamp", support: [],
+    margin_seconds: null, gap_seconds: null,
+  }],
+};
 const transcript = {
-  schema_version: 1, source_sha256: "fixture-meeting-sha", language: "sv", model: "fixture",
+  schema_version: 2, source_sha256: diarization.source_sha256, language: "sv", model: "fixture",
   duration_seconds: 4,
   segments: [{ id: "seg-1", start: 0, end: 4, text: "Hej från mötet", speaker: "spk-1" }],
   speakers: [{ id: "spk-1", label: "Speaker 1" }],
+  diarization,
 };
 const review = {
   schema_version: 1, original: transcript, original_revision: "original", generation: 0,
@@ -60,6 +94,11 @@ try {
   assert.equal(await page.locator('[role="tabpanel"]:visible textarea.transcribe-result').inputValue(), "Återställd filtext");
   await page.screenshot({ path: join(outputDir, "sagascript-update-recovered-file.png"), fullPage: true });
   await page.getByRole("tab", { name: "recovered-meeting.wav completed" }).click();
+  await page.getByRole("heading", { name: "Acoustic activity" }).waitFor();
+  await page.getByText(/Simultaneous speaker activity appears in 2 intervals/).waitFor();
+  await page.getByText("Transcript edited", { exact: true }).waitFor();
+  await page.getByText(/does not duplicate words/).waitFor();
+  await page.getByText(/Additional diagnostic evidence was not included for this run\./).waitFor();
   const speakerDraft = page.getByRole("textbox", { name: "Rename Speaker 1" });
   assert.equal(await speakerDraft.inputValue(), "Anna");
   assert.equal(await page.locator('[role="tabpanel"]:visible .meeting-progress').count(), 0,

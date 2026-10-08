@@ -7,11 +7,18 @@ use sagascript_core::error::DictationError;
 use sagascript_core::transcription::diagnostics::{
     CoverageProfile, LanguageDetection, LanguageRegionDiagnostics,
 };
+use sagascript_core::transcription::TranscriptSegment;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const CACHE_SCHEMA_VERSION: u32 = 4;
+const CACHE_SCHEMA_VERSION: u32 = 6;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+#[cfg(test)]
+const DEFAULT_DIARIZATION_BEAM_SIZE: u32 = 0;
+#[cfg(test)]
+const DEFAULT_DIARIZATION_TEMPERATURE_FALLBACK: bool = true;
+const VAD_MODEL_ID: &str =
+    "ggml-silero-v5.1.2.bin@29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf;threshold=0.5;min_silence_ms=200;speech_pad_ms=50;samples_overlap=0.1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CacheIdentity {
@@ -20,6 +27,9 @@ pub(crate) struct CacheIdentity {
     language: String,
     model: String,
     prompt_sha256: String,
+    decoder_beam_size: u32,
+    temperature_fallback: bool,
+    vad_model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,6 +38,10 @@ pub(crate) struct AnalysisIdentity {
     embedding_sha256: String,
     min_segment: f64,
     min_gap: f64,
+    /// None means a legacy cache did not record the extraction policy and is
+    /// therefore never safe to reuse.
+    #[serde(default)]
+    exclusive_speech_embeddings: Option<bool>,
     // Retain unknown provenance only to detect it: never reuse an analysis
     // whose dependencies this binary does not understand.
     #[serde(
@@ -39,7 +53,7 @@ pub(crate) struct AnalysisIdentity {
 }
 
 impl AnalysisIdentity {
-    pub(crate) fn current() -> Self {
+    pub(crate) fn current_with_policy(exclusive_speech_embeddings: bool) -> Self {
         Self {
             segmentation_sha256: DiarizationModel::PyannoteSegmentation3
                 .download_integrity()
@@ -51,6 +65,7 @@ impl AnalysisIdentity {
                 .to_string(),
             min_segment: DiarizeConfig::default().min_segment,
             min_gap: DiarizeConfig::default().min_gap,
+            exclusive_speech_embeddings: Some(exclusive_speech_embeddings),
             unsupported: std::collections::BTreeMap::new(),
         }
     }
@@ -63,6 +78,7 @@ impl AnalysisIdentity {
             && self.min_segment >= 0.0
             && self.min_gap.is_finite()
             && self.min_gap >= 0.0
+            && self.exclusive_speech_embeddings.is_some()
     }
 }
 
@@ -73,6 +89,8 @@ pub(crate) struct DiarizationCache {
     pub(crate) analysis_identity: Option<AnalysisIdentity>,
     pub(crate) analysis: DiarizationAnalysis,
     pub(crate) transcript: Vec<(f64, f64, String)>,
+    #[serde(default)]
+    pub(crate) coverage_segments: Option<Vec<TranscriptSegment>>,
     #[serde(default)]
     pub(crate) coverage_profile: CoverageProfile,
     #[serde(default)]
@@ -87,6 +105,7 @@ pub(crate) enum CacheLookup {
 }
 
 impl CacheIdentity {
+    #[cfg(test)]
     pub(crate) fn for_input(
         input: &Path,
         language: &str,
@@ -97,6 +116,7 @@ impl CacheIdentity {
         Self::for_source_sha256(&input_sha256, language, model, prompt)
     }
 
+    #[cfg(test)]
     pub(crate) fn for_source_sha256(
         source_sha256: &str,
         language: &str,
@@ -108,17 +128,75 @@ impl CacheIdentity {
                 "Meeting source hash must be a lowercase SHA-256 digest".to_string(),
             ));
         }
+        Self::for_source_sha256_with_options(
+            source_sha256,
+            language,
+            model,
+            prompt,
+            DEFAULT_DIARIZATION_BEAM_SIZE,
+            DEFAULT_DIARIZATION_TEMPERATURE_FALLBACK,
+            false,
+        )
+    }
+
+    pub(crate) fn for_input_with_options(
+        input: &Path,
+        language: &str,
+        model: &str,
+        prompt: Option<&str>,
+        decoder_beam_size: u32,
+        temperature_fallback: bool,
+        vad_enabled: bool,
+    ) -> Result<Self, DictationError> {
+        let input_sha256 = sha256_file(input)?;
+        Self::for_source_sha256_with_options(
+            &input_sha256,
+            language,
+            model,
+            prompt,
+            decoder_beam_size,
+            temperature_fallback,
+            vad_enabled,
+        )
+    }
+
+    pub(crate) fn for_source_sha256_with_options(
+        source_sha256: &str,
+        language: &str,
+        model: &str,
+        prompt: Option<&str>,
+        decoder_beam_size: u32,
+        temperature_fallback: bool,
+        vad_enabled: bool,
+    ) -> Result<Self, DictationError> {
+        if !is_lowercase_sha256(source_sha256) {
+            return Err(DictationError::FileDecodeError(
+                "Meeting source hash must be a lowercase SHA-256 digest".to_string(),
+            ));
+        }
+        if decoder_beam_size == 1 || decoder_beam_size > 8 {
+            return Err(DictationError::SettingsError(
+                "diarization beam width must be 0 (greedy) or between 2 and 8".to_string(),
+            ));
+        }
         Ok(Self {
             schema_version: CACHE_SCHEMA_VERSION,
             input_sha256: source_sha256.to_string(),
             language: language.to_string(),
             model: model.to_string(),
             prompt_sha256: sha256_bytes(prompt.unwrap_or_default().as_bytes()),
+            decoder_beam_size,
+            temperature_fallback,
+            vad_model_id: vad_enabled.then(|| VAD_MODEL_ID.to_string()),
         })
     }
 }
 
 impl DiarizationCache {
+    /// Synthetic fixture constructor retained for crate tests and legacy test helpers.
+    /// Its coarse spans mirror the supplied transcript tuples; production cache writes use
+    /// `new_with_coverage_segments` with authentic Whisper segment bounds.
+    #[cfg(test)]
     pub(crate) fn new(
         identity: CacheIdentity,
         analysis: DiarizationAnalysis,
@@ -127,11 +205,68 @@ impl DiarizationCache {
         detected_language: Option<LanguageDetection>,
         language_regions: Option<LanguageRegionDiagnostics>,
     ) -> Self {
-        Self {
+        let coverage_segments = transcript
+            .iter()
+            .map(|(start, end, text)| TranscriptSegment {
+                start: *start,
+                end: *end,
+                text: text.clone(),
+                avg_logprob: None,
+                no_speech_prob: 0.0,
+            })
+            .collect();
+        Self::new_with_coverage_segments(
             identity,
-            analysis_identity: Some(AnalysisIdentity::current()),
             analysis,
             transcript,
+            coverage_segments,
+            coverage_profile,
+            detected_language,
+            language_regions,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_coverage_segments(
+        identity: CacheIdentity,
+        analysis: DiarizationAnalysis,
+        transcript: Vec<(f64, f64, String)>,
+        coverage_segments: Vec<TranscriptSegment>,
+        coverage_profile: CoverageProfile,
+        detected_language: Option<LanguageDetection>,
+        language_regions: Option<LanguageRegionDiagnostics>,
+    ) -> Self {
+        Self::new_with_coverage_segments_and_policy(
+            identity,
+            analysis,
+            transcript,
+            coverage_segments,
+            coverage_profile,
+            detected_language,
+            language_regions,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_coverage_segments_and_policy(
+        identity: CacheIdentity,
+        analysis: DiarizationAnalysis,
+        transcript: Vec<(f64, f64, String)>,
+        coverage_segments: Vec<TranscriptSegment>,
+        coverage_profile: CoverageProfile,
+        detected_language: Option<LanguageDetection>,
+        language_regions: Option<LanguageRegionDiagnostics>,
+        exclusive_speech_embeddings: bool,
+    ) -> Self {
+        Self {
+            identity,
+            analysis_identity: Some(AnalysisIdentity::current_with_policy(
+                exclusive_speech_embeddings,
+            )),
+            analysis,
+            transcript,
+            coverage_segments: Some(coverage_segments),
             coverage_profile,
             detected_language,
             language_regions,
@@ -139,21 +274,31 @@ impl DiarizationCache {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn load(path: &Path, expected: &CacheIdentity) -> Result<CacheLookup, DictationError> {
-    load_internal(path, expected, false)
+    load_with_analysis_policy(path, expected, false)
+}
+
+pub(crate) fn load_with_analysis_policy(
+    path: &Path,
+    expected: &CacheIdentity,
+    exclusive_speech_embeddings: bool,
+) -> Result<CacheLookup, DictationError> {
+    load_internal(path, expected, false, exclusive_speech_embeddings)
 }
 
 pub(crate) fn load_for_rediarization(
     path: &Path,
     expected: &CacheIdentity,
 ) -> Result<CacheLookup, DictationError> {
-    load_internal(path, expected, true)
+    load_internal(path, expected, true, false)
 }
 
 fn load_internal(
     path: &Path,
     expected: &CacheIdentity,
     allow_stale_analysis: bool,
+    exclusive_speech_embeddings: bool,
 ) -> Result<CacheLookup, DictationError> {
     if !path.exists() {
         return Ok(CacheLookup::Miss("not found"));
@@ -170,15 +315,25 @@ fn load_internal(
             "input, model, language, prompt, or schema changed",
         ));
     }
+    if cached.coverage_segments.is_none() {
+        return Ok(CacheLookup::Miss("coarse coverage segments are missing"));
+    }
     let Some(analysis_identity) = cached.analysis_identity.as_ref() else {
         return Ok(CacheLookup::Miss("analysis provenance is missing"));
     };
     if !analysis_identity.is_well_formed() {
         return Ok(CacheLookup::Miss("analysis provenance is malformed"));
     }
-    if !allow_stale_analysis && *analysis_identity != AnalysisIdentity::current() {
+    if !allow_stale_analysis
+        && *analysis_identity != AnalysisIdentity::current_with_policy(exclusive_speech_embeddings)
+    {
         return Ok(CacheLookup::Miss(
-            "analysis model, minimum segment, or minimum gap changed",
+            "analysis model, minimum segment, minimum gap, or extraction policy changed",
+        ));
+    }
+    if exclusive_speech_embeddings && cached.analysis.region_activity_support().is_none() {
+        return Ok(CacheLookup::Miss(
+            "exclusive-speech activity support is missing",
         ));
     }
     validate_cache_payload(&cached)?;
@@ -234,6 +389,19 @@ fn validate_cache_payload(cached: &DiarizationCache) -> Result<(), DictationErro
     }) {
         return Err(DictationError::DiarizationError(
             "Cached diarization contains invalid transcript timestamps".to_string(),
+        ));
+    }
+    if cached.coverage_segments.as_ref().is_some_and(|segments| {
+        segments.iter().any(|segment| {
+            !segment.start.is_finite()
+                || !segment.end.is_finite()
+                || segment.start < 0.0
+                || segment.end < segment.start
+                || segment.end > duration + 0.001
+        })
+    }) {
+        return Err(DictationError::DiarizationError(
+            "Cached diarization contains invalid coarse coverage timestamps".to_string(),
         ));
     }
     Ok(())
@@ -441,14 +609,17 @@ mod tests {
         assert_eq!(
             fields,
             vec![
+                "decoder_beam_size".to_string(),
                 "input_sha256".to_string(),
                 "language".to_string(),
                 "model".to_string(),
                 "prompt_sha256".to_string(),
                 "schema_version".to_string(),
+                "temperature_fallback".to_string(),
+                "vad_model_id".to_string(),
             ]
         );
-        assert_eq!(object["schema_version"], serde_json::json!(4));
+        assert_eq!(object["schema_version"], serde_json::json!(6));
         assert!(!object.contains_key("threshold"));
 
         let _ = std::fs::remove_dir_all(dir);
@@ -485,6 +656,104 @@ mod tests {
     }
 
     #[test]
+    fn cache_round_trip_preserves_analysis_and_word_timestamp_bits() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("synthetic.wav");
+        let cache_path = dir.join("analysis.json");
+        std::fs::write(&input, b"synthetic source bytes").unwrap();
+
+        // This is the frame arithmetic used by diarization segmentation, retained
+        // here to catch one-ULP JSON parser changes rather than decimal examples.
+        let frame_start = 7.0_f64 * (270.0_f64 / 16_000.0_f64);
+        let frame_end = 0.5_f64;
+        let word_end = frame_start + 0.01_f64;
+        let embedding_norm = (1..=256)
+            .map(|value| {
+                let value = value as f32;
+                value * value
+            })
+            .sum::<f32>()
+            .sqrt();
+        let embedding = (1..=256)
+            .map(|value| value as f32 / embedding_norm)
+            .collect::<Vec<_>>();
+        let analysis: DiarizationAnalysis = serde_json::from_value(serde_json::json!({
+            "raw_segments": [[frame_start, frame_end, 0]],
+            "embeddings": [[0, embedding]],
+            "region_activity_support": [{
+                "start": frame_start,
+                "end": frame_end,
+                "track": 0,
+                "active_speech_seconds": 0.3,
+                "overlap_seconds": 0.1
+            }],
+        }))
+        .unwrap();
+        let analysis_before = serde_json::to_value(&analysis).unwrap();
+        let transcript = vec![(frame_start, word_end, "word".to_string())];
+        let profile = CoverageProfile::from_audio(&vec![0.1_f32; 16_000]);
+        let expected = identity_for(&input, "sv", "kb-whisper-large", None);
+        save(
+            &cache_path,
+            &DiarizationCache::new_with_coverage_segments(
+                expected.clone(),
+                analysis,
+                transcript.clone(),
+                vec![TranscriptSegment {
+                    start: frame_start,
+                    end: word_end,
+                    text: "word".to_string(),
+                    avg_logprob: None,
+                    no_speech_prob: 0.0,
+                }],
+                profile,
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+
+        let CacheLookup::Hit(hit) = load(&cache_path, &expected).unwrap() else {
+            panic!("synthetic precision cache should hit");
+        };
+        let analysis_after = serde_json::to_value(&hit.analysis).unwrap();
+        assert_eq!(
+            analysis_before["raw_segments"][0][0]
+                .as_f64()
+                .unwrap()
+                .to_bits(),
+            analysis_after["raw_segments"][0][0]
+                .as_f64()
+                .unwrap()
+                .to_bits()
+        );
+        assert_eq!(
+            analysis_before["raw_segments"][0][1]
+                .as_f64()
+                .unwrap()
+                .to_bits(),
+            analysis_after["raw_segments"][0][1]
+                .as_f64()
+                .unwrap()
+                .to_bits()
+        );
+        for index in 0..256 {
+            let before = analysis_before["embeddings"][0][1][index].as_f64().unwrap() as f32;
+            let after = analysis_after["embeddings"][0][1][index].as_f64().unwrap() as f32;
+            assert_eq!(
+                before.to_bits(),
+                after.to_bits(),
+                "embedding component {index}"
+            );
+        }
+        assert_eq!(hit.transcript[0].0.to_bits(), transcript[0].0.to_bits());
+        assert_eq!(hit.transcript[0].1.to_bits(), transcript[0].1.to_bits());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn empty_and_missing_prompt_are_the_same_identity() {
         let dir = temp_dir();
         std::fs::create_dir_all(&dir).unwrap();
@@ -500,6 +769,69 @@ mod tests {
             CacheLookup::Hit(_)
         ));
 
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn decoder_and_vad_changes_miss_but_threshold_is_not_in_identity() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        let cache_path = dir.join("analysis.json");
+        std::fs::write(&input, b"audio").unwrap();
+        let baseline = CacheIdentity::for_input_with_options(
+            &input,
+            "sv",
+            "kb-whisper-large",
+            None,
+            0,
+            true,
+            false,
+        )
+        .unwrap();
+        write_minimal_cache(&cache_path, baseline.clone());
+        assert!(matches!(
+            load(&cache_path, &baseline).unwrap(),
+            CacheLookup::Hit(_)
+        ));
+
+        for changed in [
+            CacheIdentity::for_input_with_options(
+                &input,
+                "sv",
+                "kb-whisper-large",
+                None,
+                4,
+                true,
+                false,
+            )
+            .unwrap(),
+            CacheIdentity::for_input_with_options(
+                &input,
+                "sv",
+                "kb-whisper-large",
+                None,
+                0,
+                false,
+                false,
+            )
+            .unwrap(),
+            CacheIdentity::for_input_with_options(
+                &input,
+                "sv",
+                "kb-whisper-large",
+                None,
+                0,
+                true,
+                true,
+            )
+            .unwrap(),
+        ] {
+            assert!(matches!(
+                load(&cache_path, &changed).unwrap(),
+                CacheLookup::Miss(_)
+            ));
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -585,10 +917,17 @@ mod tests {
             serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#).unwrap();
         save(
             &cache_path,
-            &DiarizationCache::new(
+            &DiarizationCache::new_with_coverage_segments(
                 expected.clone(),
                 analysis,
                 vec![(0.0, 1.0, " hej".into())],
+                vec![TranscriptSegment {
+                    start: 0.0,
+                    end: 1.0,
+                    text: "coarse hej".into(),
+                    avg_logprob: None,
+                    no_speech_prob: 0.0,
+                }],
                 CoverageProfile::from_audio(&vec![0.1; 16_000]),
                 Some(LanguageDetection {
                     language: "sv".into(),
@@ -620,6 +959,10 @@ mod tests {
             panic!("expected cache hit");
         };
         assert_eq!(hit.transcript.len(), 1);
+        assert_eq!(
+            hit.coverage_segments.as_ref().unwrap()[0].text,
+            "coarse hej"
+        );
         assert_eq!(hit.detected_language.unwrap().language, "sv");
         let regions = hit.language_regions.unwrap();
         assert_eq!(regions.regions[0].language, "sv");
@@ -647,7 +990,7 @@ mod tests {
     }
 
     #[test]
-    fn prior_schema_is_a_cache_miss() {
+    fn schema4_json_without_coarse_field_is_a_normal_cache_miss() {
         let dir = temp_dir();
         std::fs::create_dir_all(&dir).unwrap();
         let input = dir.join("audio.m4a");
@@ -655,7 +998,7 @@ mod tests {
         let cache_path = dir.join("analysis.json");
         let expected = identity(&input);
         let mut old_identity = expected.clone();
-        old_identity.schema_version -= 1;
+        old_identity.schema_version = 4;
         let analysis: DiarizationAnalysis =
             serde_json::from_str(r#"{"raw_segments":[],"embeddings":[]}"#).unwrap();
         save(
@@ -673,6 +1016,10 @@ mod tests {
         let mut old_json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&cache_path).unwrap()).unwrap();
         old_json.as_object_mut().unwrap().remove("coverage_profile");
+        old_json
+            .as_object_mut()
+            .unwrap()
+            .remove("coverage_segments");
         old_json
             .as_object_mut()
             .unwrap()
@@ -695,6 +1042,33 @@ mod tests {
             load_for_rediarization(&cache_path, &old_identity).unwrap(),
             CacheLookup::Miss(_)
         ));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn current_schema_without_coarse_coverage_is_a_cache_miss() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        std::fs::write(&input, b"audio").unwrap();
+        let cache_path = dir.join("analysis.json");
+        let expected = identity(&input);
+        write_minimal_cache(&cache_path, expected.clone());
+
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("coverage_segments");
+        std::fs::write(&cache_path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        assert!(matches!(
+            load(&cache_path, &expected).unwrap(),
+            CacheLookup::Miss("coarse coverage segments are missing")
+        ));
+        assert!(matches!(
+            load_for_rediarization(&cache_path, &expected).unwrap(),
+            CacheLookup::Miss("coarse coverage segments are missing")
+        ));
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -723,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_analysis_identity_misses_normal_reuse_but_hits_rediarization() {
+    fn stale_analysis_identity_misses_normal_reuse_and_rediarization_without_policy() {
         let dir = temp_dir();
         std::fs::create_dir_all(&dir).unwrap();
         let input = dir.join("audio.m4a");
@@ -747,9 +1121,34 @@ mod tests {
         ));
         assert!(matches!(
             load_for_rediarization(&cache_path, &expected).unwrap(),
-            CacheLookup::Hit(_)
+            CacheLookup::Miss(_)
         ));
 
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn exclusive_speech_policy_changes_analysis_identity() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("audio.m4a");
+        let cache_path = dir.join("analysis.json");
+        std::fs::write(&input, b"audio").unwrap();
+        let expected = identity(&input);
+        write_minimal_cache(&cache_path, expected.clone());
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+        json["analysis_identity"]["exclusive_speech_embeddings"] = serde_json::json!(true);
+        json["analysis"]["region_activity_support"] = serde_json::json!([]);
+        std::fs::write(&cache_path, serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(matches!(
+            load_with_analysis_policy(&cache_path, &expected, false).unwrap(),
+            CacheLookup::Miss(_)
+        ));
+        assert!(matches!(
+            load_with_analysis_policy(&cache_path, &expected, true).unwrap(),
+            CacheLookup::Hit(_)
+        ));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -892,6 +1291,20 @@ mod tests {
             serde_json::to_vec(&invalid_transcript).unwrap(),
         )
         .unwrap();
+        assert!(load(&cache_path, &expected).is_err());
+        assert!(load_for_rediarization(&cache_path, &expected).is_err());
+
+        write_minimal_cache(&cache_path, expected.clone());
+        let mut invalid_coverage: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&cache_path).unwrap()).unwrap();
+        invalid_coverage["coverage_segments"] = serde_json::json!([{
+            "start": 0.8,
+            "end": 0.2,
+            "text": "malformed",
+            "avg_logprob": null,
+            "no_speech_prob": 0.0
+        }]);
+        std::fs::write(&cache_path, serde_json::to_vec(&invalid_coverage).unwrap()).unwrap();
         assert!(load(&cache_path, &expected).is_err());
         assert!(load_for_rediarization(&cache_path, &expected).is_err());
 

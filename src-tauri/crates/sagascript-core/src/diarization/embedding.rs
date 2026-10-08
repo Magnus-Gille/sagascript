@@ -13,7 +13,7 @@ use crate::diarization::fbank;
 use crate::error::DictationError;
 
 /// Minimum audio samples for a meaningful embedding (25ms = 400 samples)
-const MIN_SAMPLES: usize = fbank::N_FFT;
+pub const MIN_SAMPLES: usize = fbank::N_FFT;
 /// Embedding dimension
 pub const EMBEDDING_DIM: usize = 256;
 
@@ -84,6 +84,19 @@ impl Embedder {
         }
 
         Ok(Some(l2_normalize(embedding)))
+    }
+
+    /// Embed one already-selected region waveform while polling cancellation
+    /// at the same bounded points as ordinary segment extraction.
+    pub fn embed_region_with_control(
+        &mut self,
+        region_audio: &[f32],
+        check: &dyn Fn() -> Result<(), DictationError>,
+    ) -> Result<Option<[f32; EMBEDDING_DIM]>, DictationError> {
+        check()?;
+        let embedding = self.embed(region_audio)?;
+        check()?;
+        Ok(embedding)
     }
 
     /// Extract embeddings for a list of audio segments.

@@ -24,6 +24,7 @@ mod diarization_cache;
 #[cfg(feature = "record")]
 pub mod record;
 pub mod transcribe;
+pub mod diarization;
 
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -202,6 +203,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Validate, export, inspect, and score offline diarization artifacts.
+    #[command(long_about = "Validate, export, inspect, and score bounded native diarization artifacts offline. This command reads no audio or settings, loads no models, contacts no network service, and writes results only to stdout.")]
+    Diarization(diarization::DiarizationArgs),
+
     /// Benchmark cold and warm in-process live dictation inference
     #[command(
         long_about = "\
@@ -580,6 +585,7 @@ pub fn run(cli: Cli) {
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
 
     let result = match cli.command.unwrap() {
+        Command::Diarization(args) => diarization::run(args),
         Command::BenchmarkDictation(args) =>
             run_inference_command("benchmark-dictation", move || benchmark_dictation::run(args)),
         Command::Transcribe(args) =>

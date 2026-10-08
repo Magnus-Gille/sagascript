@@ -247,6 +247,57 @@ pub struct TranscribeOptions {
     pub parallel_chunks: usize,
 }
 
+/// Validate decoder settings before starting diarization inference.
+///
+/// The profiled diarization path uses DTW token alignment and therefore has a
+/// smaller, explicit decoder contract than ordinary file transcription. In
+/// particular, beam width one is not a distinct whisper.cpp strategy and
+/// widths above eight are outside the bounded CLI/backend contract.
+pub fn validate_diarization_options(options: &TranscribeOptions) -> Result<(), DictationError> {
+    if options.beam_size == 1 || options.beam_size > 8 {
+        return Err(DictationError::SettingsError(
+            "diarization beam width must be 0 (greedy) or between 2 and 8".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Effective diarization decoder settings, suitable for CLI provenance and
+/// cache diagnostics. VAD parameters are fixed by this backend version so a
+/// cache identity can include the actual inference contract rather than only a
+/// requested boolean flag.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct DiarizationDecoderConfig {
+    pub strategy: &'static str,
+    pub beam_size: u32,
+    pub temperature_fallback: bool,
+    pub vad_enabled: bool,
+    pub vad_threshold: f32,
+    pub vad_min_silence_duration_ms: i32,
+    pub vad_speech_pad_ms: i32,
+    pub vad_samples_overlap: f32,
+}
+
+pub fn effective_diarization_decoder_config(
+    options: &TranscribeOptions,
+) -> Result<DiarizationDecoderConfig, DictationError> {
+    validate_diarization_options(options)?;
+    Ok(DiarizationDecoderConfig {
+        strategy: if options.beam_size >= 2 {
+            "beam_search"
+        } else {
+            "greedy"
+        },
+        beam_size: options.beam_size,
+        temperature_fallback: options.temperature_fallback,
+        vad_enabled: options.vad_model_path.is_some(),
+        vad_threshold: 0.5,
+        vad_min_silence_duration_ms: 200,
+        vad_speech_pad_ms: 50,
+        vad_samples_overlap: 0.1,
+    })
+}
+
 impl Default for TranscribeOptions {
     fn default() -> Self {
         Self {
@@ -262,8 +313,8 @@ impl Default for TranscribeOptions {
 
 /// One whisper output segment with timing and confidence metadata.
 ///
-/// `avg_logprob` is derived (whisper.cpp does not expose its internal
-/// segment-level value): the mean of per-token log-probabilities over the
+/// `avg_logprob` is a derived mean (whisper.cpp does not expose its internal
+/// segment-level diagnostic): it averages per-token log-probabilities over the
 /// segment's text tokens (special tokens excluded), matching whisper.cpp's
 /// own confidence examples. `None` when a segment has no scoreable tokens.
 /// Typical values: > -0.3 confident, -0.3..-0.8 shaky, < -0.8 suspect.
@@ -289,6 +340,7 @@ pub struct TranscriptSegment {
 #[derive(Debug, Clone)]
 pub struct DiarizationTranscription {
     pub segments: Vec<(f64, f64, String)>,
+    pub coverage_segments: Vec<TranscriptSegment>,
     pub timings: DiarizationTranscriptionTimings,
 }
 
@@ -306,6 +358,22 @@ fn mean_logprob(plogs: &[f32]) -> Option<f32> {
         return None;
     }
     Some(plogs.iter().sum::<f32>() / plogs.len() as f32)
+}
+
+/// Derive the same text-token log-probability mean for every Whisper output
+/// path. The binding exposes token data, but not Whisper's internal segment
+/// confidence value; token IDs at or above EOT are special tokens and are
+/// excluded from this diagnostic.
+fn segment_mean_logprob(segment: &whisper_rs::WhisperSegment<'_>, token_eot: i32) -> Option<f32> {
+    let mut plogs = Vec::with_capacity(segment.n_tokens().max(0) as usize);
+    for token_index in 0..segment.n_tokens() {
+        if let Some(token) = segment.get_token(token_index) {
+            if token.token_id() < token_eot {
+                plogs.push(token.token_data().plog);
+            }
+        }
+    }
+    mean_logprob(&plogs)
 }
 
 /// Return whether a raw Whisper segment contains its exact no-speech marker.
@@ -646,16 +714,28 @@ mod decode_flags_tests {
 
     #[test]
     fn strips_leaked_timestamp_tokens() {
-        assert_eq!(strip_timestamp_tokens("<|0.00|> Hej där<|2.40|>"), " Hej där");
+        assert_eq!(
+            strip_timestamp_tokens("<|0.00|> Hej där<|2.40|>"),
+            " Hej där"
+        );
         assert_eq!(strip_timestamp_tokens("plain text"), "plain text");
-        assert_eq!(strip_timestamp_tokens("a <|unterminated"), "a <|unterminated");
+        assert_eq!(
+            strip_timestamp_tokens("a <|unterminated"),
+            "a <|unterminated"
+        );
     }
 
     #[test]
     fn real_timestamps_pass_through_sanitizer() {
-        assert_eq!(sanitize_segment_bounds(31.2, 44.8, 71.0, 30.0), (31.2, 44.8));
+        assert_eq!(
+            sanitize_segment_bounds(31.2, 44.8, 71.0, 30.0),
+            (31.2, 44.8)
+        );
         // Padded final window end is clamped to the audio duration.
-        assert_eq!(sanitize_segment_bounds(60.0, 90.0, 71.0, 58.0), (60.0, 71.0));
+        assert_eq!(
+            sanitize_segment_bounds(60.0, 90.0, 71.0, 58.0),
+            (60.0, 71.0)
+        );
     }
 }
 
@@ -1234,9 +1314,19 @@ impl WhisperBackend {
         self.transcribe_dictation(model, audio, language, options, timings)
     }
 
-    pub fn warmup_model(&self, model: WhisperModel, language: Language) -> Result<(), DictationError> {
+    pub fn warmup_model(
+        &self,
+        model: WhisperModel,
+        language: Language,
+    ) -> Result<(), DictationError> {
         let mut timings = DictationTimings::default();
-        self.transcribe_dictation(model, &[0.0; 1600], language, &TranscribeOptions::default(), &mut timings)?;
+        self.transcribe_dictation(
+            model,
+            &[0.0; 1600],
+            language,
+            &TranscribeOptions::default(),
+            &mut timings,
+        )?;
         Ok(())
     }
 
@@ -1794,14 +1884,6 @@ impl WhisperBackend {
                     continue;
                 }
             };
-            let mut plogs = Vec::with_capacity(segment.n_tokens().max(0) as usize);
-            for token_index in 0..segment.n_tokens() {
-                if let Some(token) = segment.get_token(token_index) {
-                    if token.token_id() < token_eot {
-                        plogs.push(token.token_data().plog);
-                    }
-                }
-            }
             let raw_bounds = {
                 #[cfg(feature = "diarization")]
                 {
@@ -1834,7 +1916,7 @@ impl WhisperBackend {
                 start: start + offset_seconds,
                 end: end + offset_seconds,
                 text,
-                avg_logprob: mean_logprob(&plogs),
+                avg_logprob: segment_mean_logprob(&segment, token_eot),
                 no_speech_prob: segment.no_speech_probability(),
             });
         }
@@ -1917,6 +1999,7 @@ impl WhisperBackend {
                 0.0,
                 prompt,
                 Granularity::Segment,
+                &TranscribeOptions::default(),
             )?
             .segments)
     }
@@ -1941,7 +2024,14 @@ impl WhisperBackend {
             return Err(DictationError::NoAudioCaptured);
         }
         Ok(self
-            .transcribe_chunk_timestamps_profiled(audio, language, 0.0, prompt, Granularity::Word)?
+            .transcribe_chunk_timestamps_profiled(
+                audio,
+                language,
+                0.0,
+                prompt,
+                Granularity::Word,
+                &TranscribeOptions::default(),
+            )?
             .segments)
     }
 
@@ -1972,22 +2062,54 @@ impl WhisperBackend {
         language: Language,
         prompt: Option<&str>,
     ) -> Result<DiarizationTranscription, DictationError> {
+        self.transcribe_sync_for_diarization_profiled_with_options(
+            audio,
+            language,
+            prompt,
+            &TranscribeOptions::default(),
+        )
+    }
+
+    /// Profiled diarization transcription with the effective decoder and VAD
+    /// options selected by the caller. The legacy profiled method above keeps
+    /// its greedy/no-VAD defaults for GUI and shared reprocessing callers.
+    #[cfg(feature = "diarization")]
+    pub fn transcribe_sync_for_diarization_profiled_with_options(
+        &self,
+        audio: &[f32],
+        language: Language,
+        prompt: Option<&str>,
+        options: &TranscribeOptions,
+    ) -> Result<DiarizationTranscription, DictationError> {
         if audio.is_empty() {
             return Err(DictationError::NoAudioCaptured);
         }
+        let decoder_config = effective_diarization_decoder_config(options)?;
         if self.loaded_context_profile() != Some(ContextProfile::TokenAlignment) {
             return Err(DictationError::TranscriptionFailed(
                 "Diarization transcription requires a token-alignment model context".to_string(),
             ));
         }
+        // whisper.cpp maps segment timestamps through its VAD mapping table,
+        // while DTW token timestamps remain in the compacted audio timeline.
+        // Use the mapped segment granularity for VAD runs so speaker merge
+        // never receives silently shifted word coordinates. The explicit
+        // fallback is surfaced in the CLI diagnostics and keeps timing valid.
+        let granularity = if decoder_config.vad_enabled {
+            warn!("VAD diarization uses mapped segment timestamps; DTW word timestamps are unavailable for compacted audio");
+            Granularity::Segment
+        } else {
+            Granularity::Word
+        };
         let mut words = self.transcribe_chunk_timestamps_profiled(
             audio,
             language,
             0.0,
             prompt,
-            Granularity::Word,
+            granularity,
+            options,
         )?;
-        if !words.segments.is_empty() {
+        if granularity == Granularity::Segment || !words.segments.is_empty() {
             return Ok(words);
         }
 
@@ -1998,8 +2120,10 @@ impl WhisperBackend {
             0.0,
             prompt,
             Granularity::Segment,
+            options,
         )?;
         words.segments = fallback.segments;
+        words.coverage_segments = fallback.coverage_segments;
         words.timings.whisper_inference_seconds += fallback.timings.whisper_inference_seconds;
         words.timings.word_timestamp_attribution_seconds +=
             fallback.timings.word_timestamp_attribution_seconds;
@@ -2024,17 +2148,38 @@ impl WhisperBackend {
         t_offset: f64,
         prompt: Option<&str>,
         granularity: Granularity,
+        options: &TranscribeOptions,
     ) -> Result<DiarizationTranscription, DictationError> {
         let model = self.loaded_model().ok_or(DictationError::ModelNotLoaded)?;
+        let token_eot = {
+            let guard = self.context.lock().unwrap();
+            guard
+                .as_ref()
+                .ok_or(DictationError::ModelNotLoaded)?
+                .token_eot()
+        };
 
         let n_threads = whisper_threads();
         let no_speech_thold = model.no_speech_threshold();
 
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        let decoder_config = effective_diarization_decoder_config(options)?;
+        let strategy = if decoder_config.beam_size >= 2 {
+            SamplingStrategy::BeamSearch {
+                beam_size: decoder_config.beam_size as i32,
+                patience: -1.0,
+            }
+        } else {
+            SamplingStrategy::Greedy { best_of: 1 }
+        };
+        let mut params = FullParams::new(strategy);
         params.set_language(language.whisper_code());
         params.set_n_threads(n_threads);
         params.set_temperature(0.0);
-        params.set_temperature_inc(0.2);
+        params.set_temperature_inc(if decoder_config.temperature_fallback {
+            0.2
+        } else {
+            0.0
+        });
         params.set_translate(false);
         let flags = DecodeFlags::for_path(DecodePath::WordTimestamps);
         params.set_no_timestamps(flags.no_timestamps);
@@ -2047,6 +2192,17 @@ impl WhisperBackend {
         params.set_suppress_blank(true);
         if let Some(p) = prompt {
             params.set_initial_prompt(p);
+        }
+        if let Some(vad_path) = &options.vad_model_path {
+            model::verify_vad_model(std::path::Path::new(vad_path))?;
+            params.set_vad_model_path(Some(vad_path.as_str()));
+            let mut vad = WhisperVadParams::new();
+            vad.set_threshold(decoder_config.vad_threshold);
+            vad.set_min_silence_duration(decoder_config.vad_min_silence_duration_ms);
+            vad.set_speech_pad(decoder_config.vad_speech_pad_ms);
+            vad.set_samples_overlap(decoder_config.vad_samples_overlap);
+            params.set_vad_params(vad);
+            params.enable_vad(true);
         }
 
         // Same real-abort wiring as the dictation path so a timed-out diarization
@@ -2065,40 +2221,68 @@ impl WhisperBackend {
             let n_segments = state.full_n_segments();
             let mut results = Vec::with_capacity(n_segments as usize);
 
-            match granularity {
+            let coverage_segments = match granularity {
                 Granularity::Segment => {
+                    let mut coverage_segments = Vec::with_capacity(n_segments as usize);
                     for i in 0..n_segments {
                         let Some(segment) = state.get_segment(i) else { continue };
                         let text = match segment.to_str() {
-                            Ok(s) => s,
-                            Err(e) => {
+                            Ok(text) => strip_timestamp_tokens(text).trim().to_string(),
+                            Err(error) => {
                                 warn!(
-                                    "Segment {i} failed UTF-8 conversion, dropping from transcript: {e}"
+                                    "Segment {i} failed UTF-8 conversion, dropping from transcript: {error}"
                                 );
                                 continue;
                             }
                         };
-                        let text = strip_timestamp_tokens(text).trim().to_string();
                         if text.is_empty() {
                             continue;
                         }
+                        coverage_segments.push(TranscriptSegment {
+                            start: segment.start_timestamp() as f64 / 100.0 + t_offset,
+                            end: segment.end_timestamp() as f64 / 100.0 + t_offset,
+                            text: text.clone(),
+                            avg_logprob: segment_mean_logprob(&segment, token_eot),
+                            no_speech_prob: segment.no_speech_probability(),
+                        });
                         // Derive segment timing from DTW timestamps on first/last non-special
                         // token. DTW timestamps are in centiseconds; -1 means not computed.
                         // Fall back to segment-level timestamps if DTW was not available.
-                        let (t0, t1) = dtw_segment_timestamps(&segment, t_offset).unwrap_or_else(|| {
+                        let (t0, t1) = if options.vad_model_path.is_some() {
+                            // WhisperSegment exposes the original-timeline
+                            // bounds when VAD is active. DTW token values are
+                            // in compacted coordinates and must not be used.
+                            (
+                                segment.start_timestamp() as f64 / 100.0 + t_offset,
+                                segment.end_timestamp() as f64 / 100.0 + t_offset,
+                            )
+                        } else {
+                            dtw_segment_timestamps(&segment, t_offset).unwrap_or_else(|| {
                             let t0 = segment.start_timestamp() as f64 / 100.0 + t_offset;
                             let t1 = segment.end_timestamp() as f64 / 100.0 + t_offset;
                             (t0, t1)
-                        });
+                            })
+                        };
                         results.push((t0, t1, text));
                     }
+                    coverage_segments
                 }
                 Granularity::Word => {
                     // Collect per-token timings for ALL segments first, then group
                     // in a single pass so cross-segment DTW inheritance is correct.
                     let mut segs: Vec<Vec<TokenTiming>> = Vec::with_capacity(n_segments as usize);
+                    let mut coverage_segments = Vec::with_capacity(n_segments as usize);
                     for i in 0..n_segments {
                         let Some(segment) = state.get_segment(i) else { continue };
+                        if let Some(text) = meaningful_whisper_segment_coverage_text(&segment, i) {
+                            coverage_segments.push(TranscriptSegment {
+                                start: segment.start_timestamp() as f64 / 100.0 + t_offset,
+                                end: segment.end_timestamp() as f64 / 100.0 + t_offset,
+                                text,
+                                avg_logprob: segment_mean_logprob(&segment, token_eot),
+                                no_speech_prob: segment.no_speech_probability(),
+                            });
+                        }
                         let n_tok = segment.n_tokens();
                         let mut token_timings = Vec::with_capacity(n_tok as usize);
                         for j in 0..n_tok {
@@ -2118,11 +2302,13 @@ impl WhisperBackend {
                     // words_from_segments returns empty if no valid DTW exists,
                     // which triggers the CLI fallback to segment-level timestamps.
                     results = words_from_segments(&segs);
+                    coverage_segments
                 }
-            }
+            };
 
             Ok(DiarizationTranscription {
                 segments: results,
+                coverage_segments,
                 timings: DiarizationTranscriptionTimings {
                     whisper_inference_seconds,
                     word_timestamp_attribution_seconds: attribution_started
@@ -2199,10 +2385,7 @@ mod warm_model_cache_tests {
 
     #[test]
     fn distinguishes_active_cached_and_missing_models() {
-        let swedish = key(
-            WhisperModel::KbWhisperBase,
-            ContextProfile::FlashAttention,
-        );
+        let swedish = key(WhisperModel::KbWhisperBase, ContextProfile::FlashAttention);
         let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
         assert_eq!(
             model_availability(Some(swedish), Some(english), swedish),
@@ -2216,10 +2399,7 @@ mod warm_model_cache_tests {
             model_availability(
                 Some(swedish),
                 Some(english),
-                key(
-                    WhisperModel::KbWhisperBase,
-                    ContextProfile::TokenAlignment,
-                ),
+                key(WhisperModel::KbWhisperBase, ContextProfile::TokenAlignment,),
             ),
             ModelAvailability::Missing
         );
@@ -2228,10 +2408,7 @@ mod warm_model_cache_tests {
     #[test]
     fn caches_two_base_models_within_budget() {
         assert!(can_cache_pair(
-            key(
-                WhisperModel::KbWhisperBase,
-                ContextProfile::FlashAttention,
-            ),
+            key(WhisperModel::KbWhisperBase, ContextProfile::FlashAttention,),
             key(WhisperModel::BaseEn, ContextProfile::FlashAttention),
         ));
     }
@@ -2275,10 +2452,7 @@ mod warm_model_cache_tests {
 
     #[test]
     fn cached_runtime_switch_preserves_both_warm_payloads() {
-        let swedish = key(
-            WhisperModel::KbWhisperBase,
-            ContextProfile::FlashAttention,
-        );
+        let swedish = key(WhisperModel::KbWhisperBase, ContextProfile::FlashAttention);
         let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
         let mut active_key = Some(swedish);
         let mut active_context = Some("swedish-context");
@@ -2308,10 +2482,7 @@ mod warm_model_cache_tests {
 
     #[test]
     fn cache_miss_leaves_active_and_secondary_unchanged() {
-        let swedish = key(
-            WhisperModel::KbWhisperBase,
-            ContextProfile::FlashAttention,
-        );
+        let swedish = key(WhisperModel::KbWhisperBase, ContextProfile::FlashAttention);
         let english = key(WhisperModel::BaseEn, ContextProfile::FlashAttention);
         let mut active_key = Some(swedish);
         let mut active_context = Some("swedish-context");
@@ -2323,10 +2494,7 @@ mod warm_model_cache_tests {
         });
 
         assert!(!activate_cached_runtime(
-            key(
-                WhisperModel::NbWhisperBase,
-                ContextProfile::FlashAttention,
-            ),
+            key(WhisperModel::NbWhisperBase, ContextProfile::FlashAttention,),
             &mut active_key,
             &mut active_context,
             &mut active_state,
@@ -2356,7 +2524,10 @@ fn clamped_progress_callback(
 /// the first real callback; it is never emitted twice.
 fn started_progress_callback<F>(
     on_progress: F,
-) -> (impl FnMut(i32) + Send + 'static, impl Fn() + Send + Sync + 'static)
+) -> (
+    impl FnMut(i32) + Send + 'static,
+    impl Fn() + Send + Sync + 'static,
+)
 where
     F: FnMut(i32) + Send + 'static,
 {
@@ -2461,6 +2632,54 @@ fn macos_perf_cores() -> Option<i32> {
         .parse::<i32>()
         .ok()
         .filter(|&n| n > 0)
+}
+
+/// Return meaningful text after stripping generated timestamp/special tokens.
+#[cfg(feature = "diarization")]
+fn meaningful_coverage_text(bytes: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let text = strip_timestamp_tokens(&text).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// Return meaningful text from a Whisper segment for coarse coverage diagnostics.
+///
+/// Coverage is diagnostic metadata, so invalid UTF-8 is replaced lossily. The
+/// user-facing diarized transcript remains strict and is handled separately.
+#[cfg(feature = "diarization")]
+fn meaningful_whisper_segment_coverage_text(
+    segment: &whisper_rs::WhisperSegment<'_>,
+    index: i32,
+) -> Option<String> {
+    let bytes = match segment.to_bytes() {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            warn!(
+                "Segment {index} text could not be read, dropping from coverage diagnostics: {error}"
+            );
+            return None;
+        }
+    };
+    meaningful_coverage_text(bytes)
+}
+
+#[cfg(all(test, feature = "diarization"))]
+mod coverage_text_tests {
+    use super::meaningful_coverage_text;
+
+    #[test]
+    fn lossy_replacement_is_retained_when_segment_has_meaningful_text() {
+        assert_eq!(
+            meaningful_coverage_text(b"\xff spoken text"),
+            Some("\u{FFFD} spoken text".to_string())
+        );
+    }
+
+    #[test]
+    fn timestamp_only_and_whitespace_segments_are_excluded() {
+        assert_eq!(meaningful_coverage_text(b" <|0.00|> <|1.20|> "), None);
+        assert_eq!(meaningful_coverage_text(b"   \t\n"), None);
+    }
 }
 
 /// Extract segment timing from per-token DTW timestamps.
@@ -2993,7 +3212,11 @@ mod segment_confidence_tests {
                     .is_empty());
                 assert!(matches!(
                     backend.transcribe_sync_with_options_segments(
-                        &audio, language, &TranscribeOptions::default(), |_| {}, None,
+                        &audio,
+                        language,
+                        &TranscribeOptions::default(),
+                        |_| {},
+                        None,
                     ),
                     Err(DictationError::ModelNotLoaded)
                 ));
@@ -3107,8 +3330,10 @@ mod segment_confidence_tests {
             &mut timings,
         );
 
-        assert!(matches!(result, Err(DictationError::TranscriptionFailed(ref message))
-            if message.contains("restart Sagascript")));
+        assert!(
+            matches!(result, Err(DictationError::TranscriptionFailed(ref message))
+            if message.contains("restart Sagascript"))
+        );
         assert!(timings.model_acquisition_started);
         assert!(!timings.inference_started);
         assert!(timings.model_ready_at.is_none());
@@ -3393,6 +3618,34 @@ mod segment_confidence_tests {
     }
 
     #[test]
+    fn diarization_decoder_config_preserves_explicit_beam_and_vad_contract() {
+        let options = TranscribeOptions {
+            beam_size: 4,
+            temperature_fallback: false,
+            vad_model_path: Some("/tmp/vad.bin".to_string()),
+            ..TranscribeOptions::default()
+        };
+        let config = effective_diarization_decoder_config(&options).unwrap();
+        assert_eq!(config.strategy, "beam_search");
+        assert_eq!(config.beam_size, 4);
+        assert!(!config.temperature_fallback);
+        assert!(config.vad_enabled);
+        assert_eq!(config.vad_min_silence_duration_ms, 200);
+        assert_eq!(config.vad_speech_pad_ms, 50);
+    }
+
+    #[test]
+    fn diarization_decoder_rejects_unsupported_beam_width_before_inference() {
+        for beam_size in [1, 9, u32::MAX] {
+            let options = TranscribeOptions {
+                beam_size,
+                ..TranscribeOptions::default()
+            };
+            assert!(validate_diarization_options(&options).is_err());
+        }
+    }
+
+    #[test]
     fn auto_parallelism_requires_long_beam_audio_and_bounded_model() {
         let long_audio = 10 * 60 * 16_000;
         assert_eq!(
@@ -3630,7 +3883,10 @@ mod warm_state_tests {
             Ok(())
         });
         assert!(!ran, "no inference may start after a sticky cancel");
-        assert_eq!(res.unwrap_err().to_string(), "Transcription failed: Cancelled");
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Transcription failed: Cancelled"
+        );
         assert!(backend.is_cancel_requested());
     }
 }

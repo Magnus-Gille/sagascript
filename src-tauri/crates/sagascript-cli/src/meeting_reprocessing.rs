@@ -8,8 +8,9 @@ use std::path::Path;
 use std::time::Instant;
 
 use sagascript_core::diarization::{
-    self, merge::merge_with_transcript, DiarizationAnalysis, DiarizeConfig, TimestampedSegment,
+    self, merge::merge_with_diagnostics, DiarizationAnalysis, DiarizeConfig, TimestampedSegment,
 };
+use sagascript_core::diarization_report::{AsrSegmentEvidence, DecoderEvidence};
 use sagascript_core::error::DictationError;
 use sagascript_core::meeting::MeetingTranscript;
 use sagascript_core::meeting_reprocess_plan::{
@@ -19,7 +20,7 @@ use sagascript_core::meeting_reprocess_proposal::MeetingReprocessingProposal;
 use sagascript_core::meeting_review::MeetingReview;
 use sagascript_core::settings::{Language, Settings, WhisperModel};
 use sagascript_core::speaker_hint::SpeakerCountHint;
-use sagascript_core::transcription::{Glossary, WhisperBackend};
+use sagascript_core::transcription::{Glossary, TranscribeOptions, WhisperBackend};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -58,6 +59,8 @@ pub struct ReprocessingResult {
 struct Prepared {
     context: ReprocessingContext,
     cache: Option<Box<DiarizationCache>>,
+    decoder: DecoderEvidence,
+    exclusive_speech_embeddings: bool,
 }
 
 /// Inspect source and cache provenance without decoding or loading a model.
@@ -232,13 +235,20 @@ fn execute_with_model_check(
     let config = DiarizeConfig {
         threshold: plan.threshold,
         speaker_hint: plan.speaker_hint,
+        exclusive_speech_embeddings: prepared.exclusive_speech_embeddings,
         ..DiarizeConfig::default()
     };
     let proposed = match plan.mode {
         ReprocessingMode::Full => {
             checkpoint(control, MeetingPhase::Preparing)?;
             let phase = Instant::now();
-            let transcript = backend.full(input, plan.threshold, plan.speaker_hint, cache_output, control)?;
+            let transcript = backend.full(
+                input,
+                plan.threshold,
+                plan.speaker_hint,
+                cache_output,
+                control,
+            )?;
             timings.full_pipeline_seconds = phase.elapsed().as_secs_f64();
             transcript
         }
@@ -260,26 +270,63 @@ fn execute_with_model_check(
             }
             checkpoint(control, MeetingPhase::Clustering)?;
             let phase = Instant::now();
-            let (speakers, hint_outcome) = diarization::cluster_with_outcome(&cached.analysis, &config)?;
+            let (speakers, hint_outcome) =
+                diarization::cluster_with_outcome(&cached.analysis, &config)?;
             let words = cached
                 .transcript
                 .into_iter()
                 .map(|(start, end, text)| TimestampedSegment { start, end, text })
                 .collect::<Vec<_>>();
-            let merged = merge_with_transcript(&speakers, &words);
+            let (merged, attributions) = merge_with_diagnostics(&speakers, &words);
             let plain = transcribe::prepare_diarized_plain_segments(
                 &merged,
                 input.language,
                 input.glossary,
             );
+            let duration = cached.coverage_profile.duration_seconds();
+            let include_diagnostics = input
+                .previous
+                .original
+                .diarization
+                .as_ref()
+                .is_some_and(|report| report.diagnostics_included);
+            let mut report = cached.analysis.report(
+                &speakers,
+                &config,
+                attributions,
+                include_diagnostics,
+                prepared.context.source_sha256.clone(),
+                duration,
+                crate::GIT_HASH.into(),
+                env!("CARGO_PKG_VERSION").into(),
+            )?;
+            report.decoder = Some(prepared.decoder.clone());
+            report.speaker_hint_outcome = hint_outcome;
+            if include_diagnostics {
+                report.asr_segments = cached
+                    .coverage_segments
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|segment| AsrSegmentEvidence {
+                        start: segment.start,
+                        end: segment.end,
+                        avg_logprob: segment.avg_logprob,
+                        no_speech_prob: Some(segment.no_speech_prob),
+                    })
+                    .collect();
+            }
             let transcript = transcribe::meeting_transcript_from_plain_segments(
                 prepared.context.source_sha256.clone(),
                 input.language,
                 input.model,
-                cached.coverage_profile.duration_seconds(),
+                duration,
                 &plain,
             )?
-            .with_speaker_hint_outcome(hint_outcome);
+            .with_speaker_hint(plan.speaker_hint)
+            .with_speaker_hint_outcome(hint_outcome)
+            .with_diarization(report)
+            .map_err(|error| failure(&format!("invalid selective acoustic report: {error}")))?;
             timings.clustering_seconds = phase.elapsed().as_secs_f64();
             transcript
         }
@@ -333,17 +380,63 @@ fn prepare(
     let prompt = input.glossary.decoder_prompt();
     let language = input.language.whisper_code().unwrap_or("auto");
     let model = transcribe::model_id_string(input.model);
+    let previous_report = input.previous.original.diarization.as_ref();
+    let options = if mode == ReprocessingMode::Full {
+        legacy_decoder_options()
+    } else {
+        let mut options = legacy_decoder_options();
+        if let Some(decoder) = previous_report.and_then(|report| report.decoder.as_ref()) {
+            options.beam_size = decoder.beam_size;
+            options.temperature_fallback = decoder.temperature_fallback;
+            options.vad_model_path = decoder.vad_enabled.then(|| {
+                sagascript_core::transcription::model::vad_model_path()
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        }
+        options
+    };
+    let decoder: DecoderEvidence =
+        sagascript_core::transcription::whisper_backend::effective_diarization_decoder_config(
+            &options,
+        )?
+        .into();
+    if mode != ReprocessingMode::Full
+        && previous_report
+            .and_then(|report| report.decoder.as_ref())
+            .is_some_and(|previous| previous != &decoder)
+    {
+        return Err(failure(
+            "saved decoder provenance is incompatible; explicitly plan full recomputation",
+        ));
+    }
+    let exclusive_speech_embeddings = mode != ReprocessingMode::Full
+        && previous_report.is_some_and(|report| report.parameters.exclusive_speech_embeddings);
     // Bind aliases as well as decoder terms: post-inference correction changes
     // must invalidate an already displayed plan too.
     let transcription_context_sha256 =
-        hash_json(&(1u32, language, model, input.glossary.render()))?;
-    let analysis_context_sha256 = hash_json(&(1u32, AnalysisIdentity::current()))?;
+        hash_json(&(2u32, language, model, input.glossary.render(), &decoder))?;
+    let analysis_context_sha256 = hash_json(&(
+        2u32,
+        AnalysisIdentity::current_with_policy(exclusive_speech_embeddings),
+    ))?;
     let (cache_sha256, cache) = if let Some(path) = input.cache {
         let before = transcribe::stable_file_sha256(path, control)?;
-        let identity =
-            CacheIdentity::for_source_sha256(&source_sha256, language, model, prompt.as_deref())?;
+        let identity = CacheIdentity::for_source_sha256_with_options(
+            &source_sha256,
+            language,
+            model,
+            prompt.as_deref(),
+            options.beam_size,
+            options.temperature_fallback,
+            options.vad_model_path.is_some(),
+        )?;
         let loaded = match mode {
-            ReprocessingMode::Recluster => diarization_cache::load(path, &identity)?,
+            ReprocessingMode::Recluster => diarization_cache::load_with_analysis_policy(
+                path,
+                &identity,
+                exclusive_speech_embeddings,
+            )?,
             ReprocessingMode::Rediarize => {
                 diarization_cache::load_for_rediarization(path, &identity)?
             }
@@ -374,7 +467,20 @@ fn prepare(
             cache_sha256,
         },
         cache,
+        decoder,
+        exclusive_speech_embeddings,
     })
+}
+
+fn legacy_decoder_options() -> TranscribeOptions {
+    TranscribeOptions {
+        prompt: None,
+        beam_size: 0,
+        temperature_fallback: true,
+        vad_model_path: None,
+        segment_timestamps: true,
+        parallel_chunks: 1,
+    }
 }
 
 fn hash_json(value: &impl Serialize) -> Result<String, DictationError> {

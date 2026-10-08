@@ -11,6 +11,87 @@ export interface MeetingSegment {
   speaker: string;
 }
 
+export interface DiarizationActivitySpan {
+  start: number;
+  end: number;
+  speakers: string[];
+}
+
+export interface DiarizationDecoderEvidence {
+  strategy: string;
+  beam_size: number;
+  temperature_fallback: boolean;
+  vad_enabled: boolean;
+  vad_threshold: number;
+  vad_min_silence_duration_ms: number;
+  vad_speech_pad_ms: number;
+  vad_samples_overlap: number;
+  timestamp_method: string;
+}
+
+export interface SpeakerCountHint {
+  exact?: number;
+  min?: number;
+  max?: number;
+  force?: boolean;
+}
+
+export interface SpeakerHintOutcome {
+  satisfied: boolean;
+  delivered: number;
+}
+
+export interface DiarizationRegionEvidence {
+  index: number;
+  start: number;
+  end: number;
+  track: number;
+  speaker: string;
+  embedding_status: "usable" | "missing" | "degenerate";
+  assigned_centroid_distance: number | null;
+  nearest_other_centroid_distance: number | null;
+  used_track_fallback: boolean;
+  active_speech_seconds?: number | null;
+  overlapping_speech_seconds?: number | null;
+}
+
+export interface DiarizationAttributionEvidence {
+  index: number;
+  start: number;
+  end: number;
+  speaker: string;
+  reason: "temporal_overlap" | "tied_overlap" | "nearest_gap" | "no_speaker_evidence" | "invalid_timestamp";
+  support: Array<{ speaker: string; overlap_seconds: number }>;
+  margin_seconds?: number | null;
+  gap_seconds?: number | null;
+}
+
+export interface DiarizationReport {
+  schema_version: number;
+  source_sha256: string;
+  duration_seconds: number;
+  build_revision: string;
+  build_version: string;
+  segmentation_model_sha256?: string | null;
+  embedding_model_sha256?: string | null;
+  decoder?: DiarizationDecoderEvidence | null;
+  diagnostics_included?: boolean;
+  speaker_hint?: SpeakerCountHint | null;
+  speaker_hint_outcome?: SpeakerHintOutcome | null;
+  asr_segments: Array<{
+    start: number;
+    end: number;
+    avg_logprob?: number | null;
+    no_speech_prob?: number | null;
+  }>;
+  transcript_modified: boolean;
+  parameters: Record<string, number | boolean>;
+  activity: DiarizationActivitySpan[];
+  regions: DiarizationRegionEvidence[];
+  attributions: DiarizationAttributionEvidence[];
+  [key: string]: unknown;
+}
+
 export interface MeetingTranscript {
   schema_version: number;
   source_sha256: string;
@@ -19,6 +100,11 @@ export interface MeetingTranscript {
   duration_seconds: number;
   segments: MeetingSegment[];
   speakers: MeetingSpeaker[];
+  speaker_hint?: SpeakerCountHint | null;
+  speaker_hint_satisfied?: boolean | null;
+  speaker_hint_delivered?: number | null;
+  /** Original acoustic activity and provenance; edits never duplicate its text. */
+  diarization?: DiarizationReport | null;
 }
 
 export type MeetingExportFormat = "plain" | "markdown" | "json" | "srt" | "vtt";

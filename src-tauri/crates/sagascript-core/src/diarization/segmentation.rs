@@ -47,6 +47,93 @@ pub struct FrameActivations {
 }
 
 impl FrameActivations {
+    /// Measure binary activity support for one extracted region. Durations are
+    /// clipped to the available audio samples, so padded segmentation frames
+    /// never contribute support beyond the source waveform.
+    pub fn region_activity_support(
+        &self,
+        audio_samples: usize,
+        start: f64,
+        end: f64,
+        track: usize,
+    ) -> (f64, f64) {
+        let (start_sample, end_sample) = clipped_sample_bounds(audio_samples, start, end);
+        if start_sample >= end_sample || track >= MAX_SPEAKERS {
+            return (0.0, 0.0);
+        }
+        let mut active_samples = 0usize;
+        let mut overlap_samples = 0usize;
+        for index in frame_range_for_samples(
+            self.activity.len(),
+            self.frame_duration,
+            start_sample,
+            end_sample,
+        ) {
+            let frame = &self.activity[index];
+            let frame_start = frame_sample_boundary(index, self.frame_duration);
+            let frame_end = frame_sample_boundary(index + 1, self.frame_duration);
+            let clipped_start = frame_start.max(start_sample);
+            let clipped_end = frame_end.min(end_sample).min(audio_samples);
+            if clipped_start >= clipped_end || frame[track] < 0.5 {
+                continue;
+            }
+            let samples = clipped_end - clipped_start;
+            active_samples += samples;
+            if frame
+                .iter()
+                .enumerate()
+                .any(|(other, value)| other != track && *value >= 0.5)
+            {
+                overlap_samples += samples;
+            }
+        }
+        (
+            active_samples as f64 / 16_000.0,
+            overlap_samples as f64 / 16_000.0,
+        )
+    }
+
+    /// Collect only exclusive-speech samples from one raw region. Samples
+    /// from other raw regions are never included, and samples where another
+    /// segmentation track is active are excluded from the selected waveform.
+    pub fn exclusive_region_samples(
+        &self,
+        audio: &[f32],
+        start: f64,
+        end: f64,
+        track: usize,
+    ) -> Vec<f32> {
+        let (start_sample, end_sample) = clipped_sample_bounds(audio.len(), start, end);
+        if start_sample >= end_sample || track >= MAX_SPEAKERS {
+            return Vec::new();
+        }
+        let mut selected = Vec::new();
+        for index in frame_range_for_samples(
+            self.activity.len(),
+            self.frame_duration,
+            start_sample,
+            end_sample,
+        ) {
+            let frame = &self.activity[index];
+            if frame[track] < 0.5
+                || frame
+                    .iter()
+                    .enumerate()
+                    .any(|(other, value)| other != track && *value >= 0.5)
+            {
+                continue;
+            }
+            let frame_start = frame_sample_boundary(index, self.frame_duration);
+            let frame_end = frame_sample_boundary(index + 1, self.frame_duration);
+            let clipped_start = frame_start.max(start_sample);
+            let clipped_end = frame_end.min(end_sample).min(audio.len());
+            if clipped_start < clipped_end {
+                selected.extend_from_slice(&audio[clipped_start..clipped_end]);
+            }
+        }
+        selected
+    }
+
     /// Convert frame-level activity to speaker time segments.
     ///
     /// Returns `(start_sec, end_sec, speaker_idx)` tuples, one per contiguous
@@ -103,6 +190,66 @@ impl FrameActivations {
         segments.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         segments
     }
+}
+
+fn clipped_sample_bounds(audio_samples: usize, start: f64, end: f64) -> (usize, usize) {
+    let start_sample = (start.max(0.0) * 16_000.0).floor() as usize;
+    let end_sample = (end.max(0.0) * 16_000.0).floor() as usize;
+    (
+        start_sample.min(audio_samples),
+        end_sample.min(audio_samples),
+    )
+}
+
+fn frame_sample_boundary(frame: usize, frame_duration: f64) -> usize {
+    (frame as f64 * frame_duration * 16_000.0).round() as usize
+}
+
+fn frame_range_for_samples(
+    frame_count: usize,
+    frame_duration: f64,
+    start_sample: usize,
+    end_sample: usize,
+) -> std::ops::Range<usize> {
+    if frame_count == 0
+        || start_sample >= end_sample
+        || !frame_duration.is_finite()
+        || frame_duration <= 0.0
+    {
+        return 0..0;
+    }
+
+    let first = lower_bound_frame_end(frame_count, frame_duration, start_sample);
+    let last = upper_bound_frame_start(frame_count, frame_duration, end_sample);
+    first.min(last)..last
+}
+
+fn lower_bound_frame_end(frame_count: usize, frame_duration: f64, sample: usize) -> usize {
+    let mut left = 0;
+    let mut right = frame_count;
+    while left < right {
+        let middle = left + (right - left) / 2;
+        if frame_sample_boundary(middle.saturating_add(1), frame_duration) <= sample {
+            left = middle + 1;
+        } else {
+            right = middle;
+        }
+    }
+    left
+}
+
+fn upper_bound_frame_start(frame_count: usize, frame_duration: f64, sample: usize) -> usize {
+    let mut left = 0;
+    let mut right = frame_count;
+    while left < right {
+        let middle = left + (right - left) / 2;
+        if frame_sample_boundary(middle, frame_duration) < sample {
+            left = middle + 1;
+        } else {
+            right = middle;
+        }
+    }
+    left
 }
 
 /// Wraps the pyannote segmentation ONNX model for sliding-window inference.
@@ -390,6 +537,77 @@ impl WindowStitcher {
 mod tests {
     use super::*;
 
+    fn naive_region_activity_support(
+        activity: &[[f32; MAX_SPEAKERS]],
+        frame_duration: f64,
+        audio_samples: usize,
+        start: f64,
+        end: f64,
+        track: usize,
+    ) -> (f64, f64) {
+        let (start_sample, end_sample) = clipped_sample_bounds(audio_samples, start, end);
+        if start_sample >= end_sample || track >= MAX_SPEAKERS {
+            return (0.0, 0.0);
+        }
+        let mut active_samples = 0usize;
+        let mut overlap_samples = 0usize;
+        for (index, frame) in activity.iter().enumerate() {
+            let frame_start = frame_sample_boundary(index, frame_duration);
+            let frame_end = frame_sample_boundary(index + 1, frame_duration);
+            let clipped_start = frame_start.max(start_sample);
+            let clipped_end = frame_end.min(end_sample).min(audio_samples);
+            if clipped_start >= clipped_end || frame[track] < 0.5 {
+                continue;
+            }
+            let samples = clipped_end - clipped_start;
+            active_samples += samples;
+            if frame
+                .iter()
+                .enumerate()
+                .any(|(other, value)| other != track && *value >= 0.5)
+            {
+                overlap_samples += samples;
+            }
+        }
+        (
+            active_samples as f64 / 16_000.0,
+            overlap_samples as f64 / 16_000.0,
+        )
+    }
+
+    fn naive_exclusive_region_samples(
+        activity: &[[f32; MAX_SPEAKERS]],
+        frame_duration: f64,
+        audio: &[f32],
+        start: f64,
+        end: f64,
+        track: usize,
+    ) -> Vec<f32> {
+        let (start_sample, end_sample) = clipped_sample_bounds(audio.len(), start, end);
+        if start_sample >= end_sample || track >= MAX_SPEAKERS {
+            return Vec::new();
+        }
+        let mut selected = Vec::new();
+        for (index, frame) in activity.iter().enumerate() {
+            if frame[track] < 0.5
+                || frame
+                    .iter()
+                    .enumerate()
+                    .any(|(other, value)| other != track && *value >= 0.5)
+            {
+                continue;
+            }
+            let frame_start = frame_sample_boundary(index, frame_duration);
+            let frame_end = frame_sample_boundary(index + 1, frame_duration);
+            let clipped_start = frame_start.max(start_sample);
+            let clipped_end = frame_end.min(end_sample).min(audio.len());
+            if clipped_start < clipped_end {
+                selected.extend_from_slice(&audio[clipped_start..clipped_end]);
+            }
+        }
+        selected
+    }
+
     #[test]
     fn powerset_has_correct_shape() {
         assert_eq!(POWERSET.len(), NUM_CLASSES);
@@ -454,6 +672,116 @@ mod tests {
         };
         let segs = fa.to_speaker_segments(0.3, 0.5);
         assert!(segs.is_empty(), "short segment should be filtered out");
+    }
+
+    #[test]
+    fn exclusive_region_samples_skip_overlap_and_report_support() {
+        let mut activity = vec![[0.0f32; MAX_SPEAKERS]; 4];
+        activity[0][0] = 1.0;
+        activity[1][0] = 1.0;
+        activity[1][2] = 1.0;
+        activity[2][0] = 1.0;
+        let frame_samples = (FRAME_DURATION_S * 16_000.0) as usize;
+        let mut audio = vec![0.0f32; frame_samples * activity.len()];
+        audio[..frame_samples].fill(1.0);
+        audio[frame_samples..frame_samples * 2].fill(2.0);
+        audio[frame_samples * 2..frame_samples * 3].fill(3.0);
+        let fa = FrameActivations {
+            activity,
+            frame_duration: FRAME_DURATION_S,
+        };
+        let end = 3.0 * FRAME_DURATION_S;
+        let (active, overlap) = fa.region_activity_support(audio.len(), 0.0, end, 0);
+        assert!((active - 3.0 * FRAME_DURATION_S).abs() < 1e-9);
+        assert!((overlap - FRAME_DURATION_S).abs() < 1e-9);
+        let selected = fa.exclusive_region_samples(&audio, 0.0, end, 0);
+        assert_eq!(selected.len(), frame_samples * 2);
+        assert!(selected.iter().all(|sample| *sample != 2.0));
+    }
+
+    #[test]
+    fn bounded_region_queries_match_naive_selection_for_clipped_fractional_regions() {
+        let mut activity = vec![[0.0f32; MAX_SPEAKERS]; 32];
+        for index in [0, 1, 3, 7, 12, 19, 28] {
+            activity[index][0] = 1.0;
+        }
+        for index in [3, 12, 19] {
+            activity[index][2] = 1.0;
+        }
+        let audio: Vec<f32> = (0..64).map(|sample| sample as f32).collect();
+        let regions = [
+            (-0.001, 0.00125, 0),
+            (0.000031, 0.00019, 0),
+            (0.0004, 0.0017, 2),
+            (0.01, 0.02, 0),
+            (0.0015, 0.0015, 0),
+        ];
+        for frame_duration in [FRAME_DURATION_S, 0.5 / 16_000.0] {
+            let activations = FrameActivations {
+                activity: activity.clone(),
+                frame_duration,
+            };
+            for (start, end, track) in regions {
+                assert_eq!(
+                    activations.region_activity_support(audio.len(), start, end, track),
+                    naive_region_activity_support(
+                        &activity,
+                        frame_duration,
+                        audio.len(),
+                        start,
+                        end,
+                        track,
+                    ),
+                    "support mismatch for duration={frame_duration}, region={start}..{end}"
+                );
+                assert_eq!(
+                    activations.exclusive_region_samples(&audio, start, end, track),
+                    naive_exclusive_region_samples(
+                        &activity,
+                        frame_duration,
+                        &audio,
+                        start,
+                        end,
+                        track,
+                    ),
+                    "sample mismatch for duration={frame_duration}, region={start}..{end}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_frame_duration_and_empty_activity_return_empty_ranges() {
+        assert_eq!(frame_range_for_samples(0, FRAME_DURATION_S, 0, 1), 0..0);
+        for frame_duration in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(frame_range_for_samples(100, frame_duration, 0, 1), 0..0);
+            let activations = FrameActivations {
+                activity: vec![[1.0; MAX_SPEAKERS]; 4],
+                frame_duration,
+            };
+            assert_eq!(
+                activations.region_activity_support(10, 0.0, 0.001, 0),
+                (0.0, 0.0)
+            );
+            assert!(activations
+                .exclusive_region_samples(&[1.0; 10], 0.0, 0.001, 0)
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn late_window_frame_range_is_bounded_for_large_activity() {
+        let frame_count = 100_000;
+        let start_frame = frame_count - 10;
+        let end_frame = frame_count - 7;
+        let range = frame_range_for_samples(
+            frame_count,
+            FRAME_DURATION_S,
+            frame_sample_boundary(start_frame, FRAME_DURATION_S),
+            frame_sample_boundary(end_frame, FRAME_DURATION_S),
+        );
+        assert_eq!(range, start_frame..end_frame);
+        assert!(range.len() <= 4);
     }
 
     #[test]

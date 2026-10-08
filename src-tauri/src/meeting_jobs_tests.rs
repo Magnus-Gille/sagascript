@@ -161,7 +161,7 @@ fn finish_snapshot_applies_cancel_timeout_and_errors_without_stale_data() {
     }
     finish_snapshot(
         &mut cancelled,
-        Ok(JobOutput::Import(document.clone())),
+        Ok(JobOutput::Import(Box::new(document.clone()))),
         true,
         false,
     );
@@ -178,7 +178,7 @@ fn finish_snapshot_applies_cancel_timeout_and_errors_without_stale_data() {
     }
     finish_snapshot(
         &mut timed_out,
-        Ok(JobOutput::Import(document.clone())),
+        Ok(JobOutput::Import(Box::new(document.clone()))),
         true,
         true,
     );
@@ -206,7 +206,7 @@ fn finish_snapshot_applies_cancel_timeout_and_errors_without_stale_data() {
     let mut completed = snapshot("completed", JobStatus::Running);
     finish_snapshot(
         &mut completed,
-        Ok(JobOutput::Import(document.clone())),
+        Ok(JobOutput::Import(Box::new(document.clone()))),
         false,
         false,
     );
