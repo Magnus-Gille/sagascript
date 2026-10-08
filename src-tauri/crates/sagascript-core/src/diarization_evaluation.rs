@@ -137,10 +137,11 @@ pub fn evaluate(
     let hypothesis = normalize_turns(hypothesis, "hypothesis")?;
     let uem = normalize_uem(uem)?;
 
-    let mut ids = BTreeSet::new();
-    ids.extend(reference.keys().cloned());
-    ids.extend(hypothesis.keys().cloned());
-    if ids.len() > MAX_SPEAKERS {
+    // Reference and hypothesis labels each form an independent assignment
+    // side.  A recording may therefore have up to 64 IDs on each side; IDs
+    // that happen to be spelled alike are compared by the mapping rather than
+    // consuming a shared validation budget.
+    if reference.len() > MAX_SPEAKERS || hypothesis.len() > MAX_SPEAKERS {
         return Err(EvaluationError::TooManySpeakers);
     }
 
@@ -862,5 +863,24 @@ mod tests {
         .unwrap();
         assert_eq!(report.speaker_mapping["x"], "a");
         assert_eq!(report.speaker_mapping["y"], "b");
+    }
+
+    #[test]
+    fn reference_and_hypothesis_each_allow_sixty_four_ids() {
+        let reference: Vec<_> = (0..64)
+            .map(|index| SpeakerTurn {
+                start: 0.0,
+                end: 1.0,
+                speakers: vec![format!("reference-{index}")],
+            })
+            .collect();
+        let hypothesis: Vec<_> = (0..64)
+            .map(|index| SpeakerTurn {
+                start: 0.0,
+                end: 1.0,
+                speakers: vec![format!("hypothesis-{index}")],
+            })
+            .collect();
+        assert!(evaluate(&reference, &hypothesis, &uem(1.0), options(0.0),).is_ok());
     }
 }
