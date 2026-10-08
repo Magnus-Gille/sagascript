@@ -150,6 +150,12 @@ pub struct DiarizationReport {
     pub build_revision: String,
     pub build_version: String,
     #[serde(default)]
+    pub diagnostics_included: bool,
+    #[serde(default)]
+    pub speaker_hint: Option<crate::speaker_hint::SpeakerCountHint>,
+    #[serde(default)]
+    pub speaker_hint_outcome: Option<crate::speaker_hint::SpeakerHintOutcome>,
+    #[serde(default)]
     pub segmentation_model_sha256: Option<String>,
     #[serde(default)]
     pub embedding_model_sha256: Option<String>,
@@ -198,6 +204,16 @@ impl DiarizationReport {
         }
         if !valid_id(&self.build_revision) || !valid_id(&self.build_version) {
             return Err(ReportError::Invalid("build identity"));
+        }
+        if let Some(hint) = self.speaker_hint {
+            hint.validate()
+                .map_err(|_| ReportError::Invalid("speaker hint"))?;
+            if hint.is_empty() {
+                return Err(ReportError::Invalid("speaker hint"));
+            }
+        }
+        if self.speaker_hint_outcome.is_some() && self.speaker_hint.is_none() {
+            return Err(ReportError::Invalid("speaker hint outcome"));
         }
         for hash in [
             &self.segmentation_model_sha256,

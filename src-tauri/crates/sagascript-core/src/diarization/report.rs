@@ -34,6 +34,7 @@ impl DiarizationAnalysis {
         speakers: &[SpeakerSegment],
         config: &DiarizeConfig,
         mut attributions: Vec<AttributionEvidence>,
+        include_diagnostics: bool,
         source_sha256: String,
         duration: f64,
         build_revision: String,
@@ -48,6 +49,7 @@ impl DiarizationAnalysis {
         let embeddings = self
             .embeddings
             .iter()
+            .filter(|_| include_diagnostics)
             .map(|(i, v)| (*i, v))
             .collect::<BTreeMap<_, _>>();
         let mut centroids = BTreeMap::<&str, Vec<f64>>::new();
@@ -69,6 +71,7 @@ impl DiarizationAnalysis {
         let regions = self
             .raw_segments
             .iter()
+            .filter(|_| include_diagnostics)
             .enumerate()
             .map(|(index, (start, end, track))| {
                 let speaker = &speakers[index].speaker;
@@ -114,6 +117,9 @@ impl DiarizationAnalysis {
                 }
             })
             .collect();
+        if !include_diagnostics {
+            attributions.clear();
+        }
         for word in &mut attributions {
             if !word.start.is_finite()
                 || !word.end.is_finite()
@@ -156,6 +162,9 @@ impl DiarizationAnalysis {
             duration_seconds: duration,
             build_revision,
             build_version,
+            diagnostics_included: include_diagnostics,
+            speaker_hint: config.speaker_hint,
+            speaker_hint_outcome: None,
             segmentation_model_sha256: Some(
                 super::model::DiarizationModel::PyannoteSegmentation3
                     .download_integrity()
@@ -216,12 +225,28 @@ mod tests {
                 &speakers,
                 &DiarizeConfig::default(),
                 Vec::new(),
+                true,
                 "a".repeat(64),
                 2.0,
                 "revision".into(),
                 "1.4.4".into(),
             )
             .unwrap();
+        let compact = analysis
+            .report(
+                &speakers,
+                &DiarizeConfig::default(),
+                Vec::new(),
+                false,
+                "a".repeat(64),
+                2.0,
+                "revision".into(),
+                "1.4.4".into(),
+            )
+            .unwrap();
+        assert_eq!(compact.activity, report.activity);
+        assert!(compact.regions.is_empty());
+        assert!(!compact.diagnostics_included);
         assert_eq!(report.regions.len(), 2);
         assert!(report
             .regions

@@ -430,7 +430,15 @@ fn validate_interval_review(
         let reviewer_kind = reviewer.trim().to_ascii_lowercase();
         if matches!(
             reviewer_kind.as_str(),
-            "model" | "system" | "automatic" | "auto" | "consensus" | "assistant" | "unknown"
+            "model"
+                | "system"
+                | "automatic"
+                | "automated"
+                | "auto"
+                | "consensus"
+                | "assistant"
+                | "unknown"
+                | "bot"
         ) {
             return Err(ReferenceError::Invalid("verified reviewer human identity"));
         }
@@ -507,14 +515,11 @@ fn validate_timestamp(value: &str) -> Result<(), ReferenceError> {
         Some(b'Z') if index + 1 == bytes.len() => Ok(()),
         Some(b'+') | Some(b'-') => {
             let remaining = &bytes[index + 1..];
-            if remaining.len() != 5 && remaining.len() != 6 {
+            if remaining.len() != 4 && remaining.len() != 5 {
                 return Err(ReferenceError::Invalid("reviewed_at ISO-8601 timezone"));
             }
-            let (hour_index, minute_index) = if remaining.len() == 5 {
-                if remaining[2] != b':' && !remaining[2].is_ascii_digit() {
-                    return Err(ReferenceError::Invalid("reviewed_at ISO-8601 timezone"));
-                }
-                (0, 3)
+            let (hour_index, minute_index) = if remaining.len() == 4 {
+                (0, 2)
             } else {
                 if remaining[2] != b':' {
                     return Err(ReferenceError::Invalid("reviewed_at ISO-8601 timezone"));
@@ -613,6 +618,22 @@ fn merge_regions(regions: impl IntoIterator<Item = (f64, f64)>) -> Vec<(f64, f64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_timezone_is_an_exact_iso_offset() {
+        for offset in ["Z", "+02:00", "-0500"] {
+            assert!(
+                validate_timestamp(&format!("2026-10-08T10:00:00{offset}")).is_ok(),
+                "{offset}"
+            );
+        }
+        for offset in ["+02000", "+02:000", "+2400", "+02:60", "+2:00"] {
+            assert!(
+                validate_timestamp(&format!("2026-10-08T10:00:00{offset}")).is_err(),
+                "{offset}"
+            );
+        }
+    }
 
     fn document(intervals: Vec<ReferenceInterval>) -> ReferenceDocument {
         ReferenceDocument {

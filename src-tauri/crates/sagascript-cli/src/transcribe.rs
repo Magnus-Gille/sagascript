@@ -113,6 +113,12 @@ pub struct TranscribeArgs {
           help = "Agglomerative clustering threshold for speaker diarization (0.0–2.0, default 0.34). Higher = fewer speakers.")]
     pub diarize_threshold: f32,
 
+    /// Include local region/word evidence, distances and ASR diagnostics in JSON.
+    /// These measurements are not calibrated speaker probabilities.
+    #[cfg(feature = "diarization")]
+    #[arg(long, requires = "diarize")]
+    pub diarize_diagnostics: bool,
+
     #[cfg(feature = "diarization")]
     #[command(flatten)]
     pub speaker_count: crate::speaker_args::SpeakerCountArgs,
@@ -684,6 +690,7 @@ fn transcribe_meeting_file_inner(
         diarize: true,
         meeting_json: true,
         diarize_threshold: threshold,
+        diarize_diagnostics: false,
         speaker_count: crate::speaker_args::SpeakerCountArgs {
             speakers: speaker_hint
                 .and_then(|hint| hint.exact)
@@ -1871,6 +1878,7 @@ fn transcribe_file(
             &speaker_segments,
             &config,
             attributions,
+            args.diarize_diagnostics,
             source_sha256.clone(),
             duration,
             crate::GIT_HASH.into(),
@@ -1882,8 +1890,10 @@ fn transcribe_file(
             )?
             .into(),
         );
+        report.speaker_hint_outcome = hint_outcome;
         report.asr_segments = coverage_segments
             .iter()
+            .filter(|_| args.diarize_diagnostics)
             .map(
                 |segment| sagascript_core::diarization_report::AsrSegmentEvidence {
                     start: segment.start,
@@ -3390,6 +3400,7 @@ mod tests {
             diarize: true,
             meeting_json: false,
             diarize_threshold: threshold,
+            diarize_diagnostics: false,
             speaker_count: crate::speaker_args::SpeakerCountArgs::default(),
             diarize_cache: Some(cache.clone()),
             prompt: Some("alpha".to_string()),
