@@ -74,6 +74,10 @@ pub enum DiarizationAction {
         split: Option<EvaluationSplit>,
         #[arg(long, default_value_t = 0.9)]
         minimum_coverage: f64,
+        #[arg(long, default_value_t = 0.10)]
+        maximum_der: f64,
+        #[arg(long, default_value_t = 0.05)]
+        maximum_confusion: f64,
         #[arg(long, default_value_t = 0.0)]
         collar: f64,
         #[arg(long, value_enum, default_value_t = EvaluationLayer::Acoustic)]
@@ -142,6 +146,10 @@ struct EvaluationReceipt<'a> {
     build_revision: &'static str,
     layer: EvaluationLayer,
     collar_seconds: f64,
+    maximum_der: f64,
+    maximum_confusion: f64,
+    observed_der: Option<f64>,
+    observed_confusion: Option<f64>,
     metrics: sagascript_core::diarization_evaluation::EvaluationReport,
     reference_qualification_ready: bool,
     metric_targets_met: bool,
@@ -169,6 +177,8 @@ pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
             manifest,
             split,
             minimum_coverage,
+            maximum_der,
+            maximum_confusion,
             collar,
             layer,
         } => evaluate_files(
@@ -178,6 +188,8 @@ pub fn run(args: DiarizationArgs) -> Result<(), DictationError> {
             manifest.as_deref(),
             split,
             minimum_coverage,
+            maximum_der,
+            maximum_confusion,
             collar,
             layer,
         )?,
@@ -273,12 +285,16 @@ fn evaluate_files(
     manifest_path: Option<&Path>,
     split: Option<EvaluationSplit>,
     minimum_coverage: f64,
+    maximum_der: f64,
+    maximum_confusion: f64,
     collar: f64,
     layer: EvaluationLayer,
 ) -> Result<String, DictationError> {
     if !collar.is_finite() || collar < 0.0 {
         return Err(cli_error("--collar must be finite and non-negative"));
     }
+    validate_metric_target(maximum_der, "--maximum-der")?;
+    validate_metric_target(maximum_confusion, "--maximum-confusion")?;
     if manifest_path.is_some() != split.is_some() {
         return Err(cli_error(
             "--manifest and --split must be provided together",
@@ -345,8 +361,12 @@ fn evaluate_files(
     )
     .map_err(core_error)?;
 
+    let (observed_der, observed_confusion) = metric_fractions(&metrics);
+    let metric_targets_met = metric_targets_met(&metrics, maximum_der, maximum_confusion);
+
     let mut reasons = Vec::new();
-    let measurement_only = !reference.native || !hypothesis.immutable_provenance;
+    let measurement_only =
+        !reference.native || !reference.qualified || !hypothesis.immutable_provenance;
     if !reference.native {
         reasons.push(
             "RTTM reference is recording-ID bound, not cryptographically source-bound".to_owned(),
@@ -355,7 +375,15 @@ fn evaluate_files(
     if !hypothesis.immutable_provenance {
         reasons.push("hypothesis lacks immutable provenance".to_owned());
     }
-    reasons.push("quality adoption integration is owned by the caller".to_owned());
+    if !reference.qualified && reference.native {
+        reasons.push("native reference was not qualified against a frozen manifest".to_owned());
+    }
+    if observed_der.is_none() {
+        reasons.push("metric targets cannot pass with zero reference speaker-time".to_owned());
+    } else if !metric_targets_met {
+        reasons.push("one or more configured metric targets were exceeded".to_owned());
+    }
+    reasons.push("quality adoption remains pending the frozen public regression suite and held-out decision gate".to_owned());
     let receipt = EvaluationReceipt {
         schema_version: 1,
         source_sha256: reference
@@ -369,17 +397,54 @@ fn evaluate_files(
         build_revision: crate::GIT_HASH,
         layer,
         collar_seconds: collar,
+        maximum_der,
+        maximum_confusion,
+        observed_der,
+        observed_confusion,
         metrics,
         reference_qualification_ready: reference.qualified,
-        metric_targets_met: false,
+        metric_targets_met,
         quality_adoption_ready: false,
         measurement_only,
-        reasons: {
-            reasons.push("metric targets are not configured by this command".to_owned());
-            reasons
-        },
+        reasons,
     };
     serde_json::to_string_pretty(&receipt).map_err(|error| cli_error(error.to_string()))
+}
+
+fn validate_metric_target(value: f64, flag: &str) -> Result<(), DictationError> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(cli_error(format!(
+            "{flag} must be finite and between 0 and 1"
+        )));
+    }
+    Ok(())
+}
+
+fn fraction(numerator: f64, denominator: f64) -> Option<f64> {
+    (denominator > 0.0).then_some(numerator / denominator)
+}
+
+fn metric_fractions(
+    metrics: &sagascript_core::diarization_evaluation::EvaluationReport,
+) -> (Option<f64>, Option<f64>) {
+    let reference_speaker_seconds =
+        metrics.overlap.reference_speaker_seconds + metrics.non_overlap.reference_speaker_seconds;
+    let der = fraction(
+        metrics.miss_seconds + metrics.false_alarm_seconds + metrics.confusion_seconds,
+        reference_speaker_seconds,
+    );
+    let confusion = fraction(metrics.confusion_seconds, reference_speaker_seconds);
+    (der, confusion)
+}
+
+fn metric_targets_met(
+    metrics: &sagascript_core::diarization_evaluation::EvaluationReport,
+    maximum_der: f64,
+    maximum_confusion: f64,
+) -> bool {
+    let (der, confusion) = metric_fractions(metrics);
+    der.is_some_and(|value| value <= maximum_der)
+        && confusion.is_some_and(|value| value <= maximum_confusion)
 }
 
 fn parse_reference(
@@ -1000,6 +1065,8 @@ mod tests {
             None,
             None,
             0.9,
+            0.1,
+            0.05,
             0.0,
             EvaluationLayer::Acoustic,
         )
@@ -1024,6 +1091,8 @@ mod tests {
             None,
             None,
             0.9,
+            0.1,
+            0.05,
             0.0,
             EvaluationLayer::Acoustic,
         )
@@ -1158,5 +1227,150 @@ mod tests {
         .is_err());
         let report = parse_report(&bytes).unwrap();
         assert!(report.transcript_modified);
+    }
+
+    #[test]
+    fn metric_targets_require_finite_unit_interval_limits() {
+        for value in [-0.01, 1.01, f64::NAN, f64::INFINITY] {
+            assert!(validate_metric_target(value, "--maximum-der").is_err());
+        }
+        assert!(validate_metric_target(0.0, "--maximum-der").is_ok());
+        assert!(validate_metric_target(1.0, "--maximum-confusion").is_ok());
+    }
+
+    #[test]
+    fn metric_target_fractions_use_reference_speaker_time() {
+        let reference = vec![
+            SpeakerTurn {
+                start: 0.0,
+                end: 1.0,
+                speakers: vec!["A".to_owned()],
+            },
+            SpeakerTurn {
+                start: 1.0,
+                end: 2.0,
+                speakers: vec!["B".to_owned()],
+            },
+        ];
+        let hypothesis = vec![SpeakerTurn {
+            start: 0.0,
+            end: 2.0,
+            speakers: vec!["X".to_owned()],
+        }];
+        let metrics = evaluate(
+            &reference,
+            &hypothesis,
+            &[ScoringRegion {
+                start: 0.0,
+                end: 2.0,
+            }],
+            EvaluationOptions {
+                collar_seconds: 0.0,
+            },
+        )
+        .unwrap();
+        let (der, confusion) = metric_fractions(&metrics);
+        assert_eq!(der, Some(0.5));
+        assert_eq!(confusion, Some(0.5));
+        assert!(!metric_targets_met(&metrics, 0.1, 0.05));
+        assert!(!metric_targets_met(&metrics, 1.0, 0.05));
+        assert!(metric_targets_met(&metrics, 0.5, 0.5));
+    }
+
+    #[test]
+    fn receipt_records_caller_limits_and_separates_qualification() {
+        let (reference, manifest) = qualified_fixture();
+        let mut hypothesis_value =
+            report_json("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        hypothesis_value["duration_seconds"] = 2.0.into();
+        hypothesis_value["activity"] = serde_json::json!([{
+            "start": 1.0,
+            "end": 2.0,
+            "speakers": ["A"]
+        }]);
+        let reference_file = write(&serde_json::to_string(&reference).unwrap());
+        let manifest_file = write(&serde_json::to_string(&manifest).unwrap());
+        let hypothesis_file = write(&serde_json::to_string(&hypothesis_value).unwrap());
+        let receipt: Value = serde_json::from_str(
+            &evaluate_files(
+                reference_file.path(),
+                hypothesis_file.path(),
+                None,
+                Some(manifest_file.path()),
+                Some(EvaluationSplit::Eval),
+                0.9,
+                0.123,
+                0.456,
+                0.25,
+                EvaluationLayer::Acoustic,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt["maximum_der"], 0.123);
+        assert_eq!(receipt["maximum_confusion"], 0.456);
+        assert_eq!(receipt["collar_seconds"], 0.25);
+        assert_eq!(receipt["reference_qualification_ready"], true);
+        assert_eq!(receipt["metric_targets_met"], true);
+        assert_eq!(receipt["quality_adoption_ready"], false);
+        assert_eq!(receipt["measurement_only"], false);
+    }
+
+    #[test]
+    fn unqualified_native_and_zero_reference_are_measurement_only_and_fail_targets() {
+        let source = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let reference = write(&serde_json::to_string(&serde_json::json!({
+            "source_sha256": source,
+            "duration_seconds": 1.0,
+            "speakers": ["A"],
+            "windows": [],
+            "intervals": [{"start": 0.0, "end": 1.0, "speakers": ["A"], "status": "verified", "evidence": [{"kind": "human", "artifact": "note"}], "reviewer": "reviewer", "reviewed_at": "2026-01-01T00:00:00Z"}]
+        })).unwrap());
+        let hypothesis = write(&serde_json::to_string(&report_json(source)).unwrap());
+        let receipt: Value = serde_json::from_str(
+            &evaluate_files(
+                reference.path(),
+                hypothesis.path(),
+                None,
+                None,
+                None,
+                0.9,
+                0.1,
+                0.05,
+                0.0,
+                EvaluationLayer::Acoustic,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt["reference_qualification_ready"], false);
+        assert_eq!(receipt["measurement_only"], true);
+        assert_eq!(receipt["metric_targets_met"], true);
+
+        let zero_reference = write(&serde_json::to_string(&serde_json::json!({
+            "source_sha256": source,
+            "duration_seconds": 1.0,
+            "speakers": ["A"],
+            "windows": [],
+            "intervals": [{"start": 0.0, "end": 1.0, "speakers": [], "activity": "silence", "status": "verified", "evidence": [{"kind": "human", "artifact": "note"}], "reviewer": "reviewer", "reviewed_at": "2026-01-01T00:00:00Z"}]
+        })).unwrap());
+        let receipt: Value = serde_json::from_str(
+            &evaluate_files(
+                zero_reference.path(),
+                hypothesis.path(),
+                None,
+                None,
+                None,
+                0.9,
+                0.1,
+                0.05,
+                0.0,
+                EvaluationLayer::Acoustic,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt["observed_der"], Value::Null);
+        assert_eq!(receipt["metric_targets_met"], false);
     }
 }

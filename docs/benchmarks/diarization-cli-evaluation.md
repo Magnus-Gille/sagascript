@@ -23,5 +23,9 @@ qualification report is a gate for the frozen sample; it is not a claim of full-
 To score a frozen split, pass both `--manifest split.json` and `--split dev` or `--split eval` to
 `diarization evaluate`. The command rejects stale or unqualified manifests, selects only verified
 intervals in the requested frozen windows, and refuses an external `--uem` that could bypass the
-reference mask. Metric results remain measurement output; `quality_adoption_ready` stays false
-until the public regression suite and its target policy are established.
+reference mask. The default metric targets are DER ≤ 0.10 and confusion ≤ 0.05, expressed as
+fractions of reference speaker-time; callers can bind exact alternatives with
+`--maximum-der` and `--maximum-confusion`. The receipt records the observed fractions, thresholds,
+and `--collar` value in seconds. A zero-reference-speaker evaluation cannot pass metric targets.
+Metric results remain measurement output; `quality_adoption_ready` stays false pending the frozen
+public regression suite and held-out decision gate.
