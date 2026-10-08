@@ -24,7 +24,13 @@ from typing import Any, Iterable
 
 SOURCE_HASH_RE = re.compile(r"[0-9a-f]{64}\Z")
 SPLITS = ("train", "dev", "eval")
-TOP_LEVEL_KEYS = {"source_sha256", "duration_seconds", "speakers", "windows", "intervals"}
+TOP_LEVEL_KEYS = {
+    "source_sha256",
+    "duration_seconds",
+    "speakers",
+    "windows",
+    "intervals",
+}
 INTERVAL_KEYS = {
     "start",
     "end",
@@ -38,6 +44,20 @@ INTERVAL_KEYS = {
 }
 WINDOW_KEYS = {"id", "start", "end"}
 EVIDENCE_KEYS = {"kind", "artifact"}
+POLICY_KEYS = {"id", "version", "frozen"}
+SPLIT_KEYS = {
+    "reference_id",
+    "source_sha256",
+    "policy",
+    "seed",
+    "ratios",
+    "windows",
+    "counts",
+    "split_id",
+    "frozen",
+    "policy_id",
+}
+SPLIT_WINDOW_KEYS = {"id", "start", "end", "split", "stratum"}
 
 
 class ReferenceError(ValueError):
@@ -92,6 +112,23 @@ def validate_evidence(value: Any, *, required: bool) -> list[dict[str, Any]]:
             raise ReferenceError(f"evidence item {index} artifact must be a non-empty string")
         validated.append(item)
     return validated
+
+
+def validate_policy(value: Any) -> dict[str, Any] | None:
+    """Validate policy metadata carried by a qualification manifest."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ReferenceError("policy must be an object when present")
+    unknown = set(value) - POLICY_KEYS
+    if unknown:
+        raise ReferenceError(f"unsupported policy keys: {', '.join(sorted(str(k) for k in unknown))}")
+    policy_id = nonempty_identifier(value.get("id"), "policy id")
+    version = nonempty_string(value.get("version"), "policy version")
+    frozen = value.get("frozen", False)
+    if not isinstance(frozen, bool):
+        raise ReferenceError("policy frozen must be a boolean")
+    return {"id": policy_id, "version": version, "frozen": frozen}
 
 
 def _interval_window(interval: dict[str, Any], windows: list[dict[str, Any]]) -> str | None:
@@ -405,7 +442,10 @@ def split_windows(reference: dict[str, Any], train: float, dev: float, evaluatio
     cursor = 0
     for split, count in zip(SPLITS, counts):
         for window in ranked[cursor : cursor + count]:
-            assignments.append({"id": window["id"], "start": window["start"], "end": window["end"], "split": split})
+            assignment = {"id": window["id"], "start": window["start"], "end": window["end"], "split": split}
+            if "stratum" in window:
+                assignment["stratum"] = window["stratum"]
+            assignments.append(assignment)
         cursor += count
     assignments.sort(key=lambda window: window["id"])
     return {
@@ -417,8 +457,224 @@ def split_windows(reference: dict[str, Any], train: float, dev: float, evaluatio
     }
 
 
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _identity(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _union_seconds(intervals: Iterable[dict[str, Any]]) -> float:
+    return sum(end - start for start, end in merge_regions((item["start"], item["end"]) for item in intervals))
+
+
+def _bucket_metrics(intervals: list[dict[str, Any]]) -> dict[str, Any]:
+    verified = [item for item in intervals if item["status"] == "verified"]
+    verified_speech = [item for item in verified if item.get("activity", "speech") == "speech"]
+    unknown = [item for item in intervals if item["status"] == "unknown"]
+    candidates = [item for item in intervals if item["status"] == "candidate" and item.get("activity", "speech") == "speech"]
+    reviewed = _union_seconds(verified)
+    human_speech = _union_seconds(verified_speech)
+    unknown_seconds = _union_seconds(unknown)
+    candidate_seconds = _union_seconds(candidates)
+    denominator = human_speech + unknown_seconds + candidate_seconds
+    return {
+        "reviewed_coverage_seconds": round(reviewed, 9),
+        "human_identified_speech_seconds": round(human_speech, 9),
+        "verified_time_seconds": round(reviewed, 9),
+        "verified_speaker_time_seconds": round(sum(
+            item["end"] - item["start"] for item in verified_speech for _ in item["speakers"]
+        ), 9),
+        "unknown_speech_excluded_seconds": round(unknown_seconds, 9),
+        "candidate_speech_excluded_seconds": round(candidate_seconds, 9),
+        "reviewed_speech_coverage_ratio": round(human_speech / denominator, 9) if denominator else 0.0,
+        "verified_interval_count": len(verified),
+    }
+
+
+def _validate_split_manifest(reference: dict[str, Any], split: Any) -> tuple[dict[str, str], list[str]]:
+    if not isinstance(split, dict):
+        raise ReferenceError("split manifest must be an object")
+    unknown = set(split) - SPLIT_KEYS
+    if unknown:
+        raise ReferenceError(f"unsupported split keys: {', '.join(sorted(str(k) for k in unknown))}")
+    if split.get("source_sha256") != reference["source_sha256"]:
+        # Keep this as a reportable quality failure; the structural checks below still run.
+        source_mismatch = ["source_sha256"]
+    else:
+        source_mismatch = []
+    if split.get("reference_id") is not None:
+        nonempty_identifier(split["reference_id"], "split reference_id")
+    validate_policy(split.get("policy"))
+    assignments = split.get("windows")
+    if not isinstance(assignments, list):
+        raise ReferenceError("split windows must be a list")
+    reference_windows = {window["id"]: window for window in reference["windows"]}
+    assignment_map: dict[str, str] = {}
+    errors = list(source_mismatch)
+    for index, raw in enumerate(assignments, start=1):
+        if not isinstance(raw, dict) or set(raw) - SPLIT_WINDOW_KEYS:
+            raise ReferenceError(f"split window {index} has unsupported keys")
+        window_id = nonempty_identifier(raw.get("id"), f"split window {index} id")
+        split_name = raw.get("split")
+        if split_name not in SPLITS:
+            raise ReferenceError(f"split window {index} split must be train, dev, or eval")
+        if raw.get("stratum") is not None:
+            nonempty_identifier(raw["stratum"], f"split window {index} stratum")
+        if window_id in assignment_map:
+            errors.append("duplicate-window")
+            continue
+        source_window = reference_windows.get(window_id)
+        if source_window is None:
+            errors.append("unknown-window")
+            continue
+        if raw.get("start") != source_window["start"] or raw.get("end") != source_window["end"]:
+            errors.append("window-boundary-mismatch")
+        assignment_map[window_id] = split_name
+    missing = set(reference_windows) - set(assignment_map)
+    if missing:
+        errors.append("missing-window")
+    if errors:
+        # The caller turns these stable markers into quality-gate failures.
+        return assignment_map, sorted(set(errors))
+    return assignment_map, []
+
+
+def qualification_report(
+    reference: dict[str, Any],
+    split: dict[str, Any],
+    *,
+    expected_source_sha256: str | None = None,
+    expected_policy_id: str | None = None,
+    minimum_eval_coverage: float = 0.90,
+) -> dict[str, Any]:
+    """Return a deterministic, machine-readable reference quality gate report.
+
+    This is deliberately a qualification gate, not an accuracy claim.  Only human
+    ``verified`` intervals count as speech; candidate and unknown regions remain
+    explicit exclusions and can never promote themselves into gold labels.
+    """
+    if "summary" not in reference:
+        reference = validate_reference(reference)
+    assignment_map, split_errors = _validate_split_manifest(reference, split)
+    intervals = reference["intervals"]
+    split_window_info = {window["id"]: window for window in split.get("windows", [])}
+    by_split: dict[str, list[dict[str, Any]]] = {name: [] for name in SPLITS}
+    by_stratum: dict[str, list[dict[str, Any]]] = {}
+    by_speaker: dict[str, list[dict[str, Any]]] = {speaker: [] for speaker in reference["speakers"]}
+    for window in split.get("windows", []):
+        if window.get("stratum") is not None:
+            by_stratum.setdefault(window["stratum"], [])
+    for item in intervals:
+        window_id = item.get("window_id")
+        split_name = assignment_map.get(window_id)
+        if split_name in by_split:
+            by_split[split_name].append(item)
+        window = split_window_info.get(window_id)
+        stratum = window.get("stratum") if window else None
+        if stratum is not None:
+            by_stratum.setdefault(stratum, []).append(item)
+        if item["status"] == "verified" and item.get("activity", "speech") == "speech":
+            for speaker in item["speakers"]:
+                by_speaker[speaker].append(item)
+
+    failures: list[dict[str, str]] = []
+    if expected_source_sha256 is not None and expected_source_sha256 != reference["source_sha256"]:
+        failures.append({"code": "source-hash-mismatch", "detail": "reference source hash differs from the expected source"})
+    if split_errors:
+        if "source_sha256" in split_errors:
+            failures.append({"code": "source-hash-mismatch", "detail": "split source hash differs from the reference source"})
+        if any(error in split_errors for error in ("duplicate-window", "missing-window", "unknown-window", "window-boundary-mismatch", "window-stratum-mismatch")):
+            failures.append({"code": "split-leak", "detail": "split assignments are not a one-to-one partition of frozen source windows"})
+
+    policy = split.get("policy")
+    if not policy or not policy.get("frozen"):
+        failures.append({"code": "stale-policy", "detail": "a frozen reference policy identity is required"})
+    elif expected_policy_id is not None and policy["id"] != expected_policy_id:
+        failures.append({"code": "stale-policy", "detail": "reference policy identity differs from the expected frozen policy"})
+    split_frozen = split.get("frozen") is True
+    if not split_frozen:
+        failures.append({"code": "stale-split", "detail": "split manifest must be marked frozen"})
+    if expected_policy_id is not None and split.get("policy_id") not in (None, expected_policy_id):
+        failures.append({"code": "stale-policy", "detail": "split policy identity differs from the expected frozen policy"})
+
+    verified = [item for item in intervals if item["status"] == "verified"]
+    if not verified:
+        failures.append({"code": "zero-verified", "detail": "no human-verified intervals are available"})
+    if "dev" not in assignment_map.values() or "eval" not in assignment_map.values():
+        failures.append({"code": "split-separation", "detail": "frozen dev and eval windows must both be present"})
+    eval_metrics = _bucket_metrics(by_split["eval"])
+    if eval_metrics["reviewed_speech_coverage_ratio"] < minimum_eval_coverage:
+        failures.append({"code": "low-eval-coverage", "detail": f"eval reviewed speech coverage is below {minimum_eval_coverage:.0%}"})
+    missing_speakers = [speaker for speaker, items in by_speaker.items() if not any(item in by_split["eval"] for item in items)]
+    if missing_speakers:
+        failures.append({"code": "missing-eval-speaker", "detail": "eval has no verified speech for: " + ", ".join(missing_speakers)})
+    # Every difficult stratum supplied by the reference must be represented in
+    # eval.  Other strata are required when they are actually present in eval;
+    # this permits a train/dev-only ordinary stratum without silently allowing a
+    # difficult eval slice to disappear.
+    strata = sorted({
+        window["stratum"]
+        for window in split.get("windows", [])
+        if window.get("stratum") is not None
+        and ("difficult" in window["stratum"].lower() or assignment_map.get(window["id"]) == "eval")
+    })
+    missing_strata = [stratum for stratum in strata if not any(
+        item in by_split["eval"] for item in by_stratum.get(stratum, [])
+        if item["status"] == "verified" and item.get("activity", "speech") == "speech"
+    )]
+    if missing_strata:
+        failures.append({"code": "missing-eval-stratum", "detail": "eval has no verified speech for: " + ", ".join(missing_strata)})
+
+    reference_identity_source = {key: value for key, value in reference.items() if key != "summary"}
+    report = {
+        "ready_for_quality_adoption": not failures,
+        "status": "gold" if not failures else "not_ready",
+        "reference_identity": {
+            "id": split.get("reference_id"),
+            "sha256": _identity(reference_identity_source),
+        },
+        "source_identity": {"sha256": reference["source_sha256"]},
+        "frozen_policy_identity": {
+            "id": policy.get("id") if policy else None,
+            "version": policy.get("version") if policy else None,
+            "sha256": _identity(policy) if policy else None,
+        },
+        "frozen_split_identity": {
+            "id": split.get("split_id"),
+            "sha256": _identity(split),
+        },
+        "criteria": {
+            "minimum_eval_reviewed_speech_coverage": minimum_eval_coverage,
+            "requires_all_known_eval_speakers": True,
+            "requires_all_present_eval_strata": True,
+            "requires_frozen_dev_eval_windows": True,
+        },
+        "coverage": {
+            "overall": _bucket_metrics(intervals),
+            "by_split": {name: _bucket_metrics(by_split[name]) for name in SPLITS},
+            "by_stratum": {name: _bucket_metrics(by_stratum[name]) for name in sorted(by_stratum)},
+            "by_speaker": {
+                speaker: {
+                    "human_identified_speech_seconds": round(_union_seconds(items), 9),
+                    "verified_speaker_time_seconds": round(sum(item["end"] - item["start"] for item in items), 9),
+                    "eval_represented": any(item in by_split["eval"] for item in items),
+                }
+                for speaker, items in by_speaker.items()
+            },
+        },
+        "exclusions": {
+            "unknown_speech_seconds": _bucket_metrics(intervals)["unknown_speech_excluded_seconds"],
+            "candidate_speech_seconds": _bucket_metrics(intervals)["candidate_speech_excluded_seconds"],
+        },
+        "failures": failures,
+    }
+    return report
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Validate and export conservative diarization references")
+    parser = argparse.ArgumentParser(description="Validate, qualify, and export conservative diarization references")
     sub = parser.add_subparsers(dest="command", required=True)
 
     validate = sub.add_parser("validate", help="validate a reference and print numeric summary")
@@ -437,6 +693,14 @@ def build_parser() -> argparse.ArgumentParser:
     split.add_argument("--train", "--train-ratio", required=True, dest="train", type=ratio)
     split.add_argument("--dev", "--dev-ratio", required=True, dest="dev", type=ratio)
     split.add_argument("--eval", "--eval-ratio", required=True, dest="evaluation", type=ratio)
+
+    qualify = sub.add_parser("qualify", help="write a machine-readable frozen reference qualification report")
+    qualify.add_argument("input", type=Path)
+    qualify.add_argument("--split", required=True, type=Path, help="frozen split manifest from the split command")
+    qualify.add_argument("--output", required=True, type=Path)
+    qualify.add_argument("--source-sha256")
+    qualify.add_argument("--policy-id")
+    qualify.add_argument("--minimum-eval-coverage", type=ratio, default=0.90)
     return parser
 
 
@@ -461,6 +725,22 @@ def main(argv: list[str] | None = None) -> int:
                 write_new(args.summary, json.dumps(summary, sort_keys=True, indent=2) + "\n")
             print(json.dumps(summary, sort_keys=True, indent=2))
             return 0
+        if args.command == "qualify":
+            split_path = args.split
+            try:
+                split_document = json.loads(split_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ReferenceError(f"cannot read split JSON: {split_path}") from exc
+            report = qualification_report(
+                reference,
+                split_document,
+                expected_source_sha256=args.source_sha256,
+                expected_policy_id=args.policy_id,
+                minimum_eval_coverage=args.minimum_eval_coverage,
+            )
+            write_new(args.output, json.dumps(report, sort_keys=True, indent=2) + "\n")
+            print(json.dumps(report, sort_keys=True, indent=2))
+            return 0 if report["ready_for_quality_adoption"] else 1
         split = split_windows(reference, args.train, args.dev, args.evaluation, args.seed)
         write_new(args.output, json.dumps(split, sort_keys=True, indent=2) + "\n")
         print(json.dumps({"valid": True, "window_count": len(split["windows"]), "counts": split["counts"]}, sort_keys=True))

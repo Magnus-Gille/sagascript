@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,7 +43,41 @@ def reference(intervals, *, duration=10, speakers=("A", "B"), windows=None):
     return value
 
 
+def qualification_fixture():
+    windows = [
+        {"id": "train-1", "start": 0, "end": 10},
+        {"id": "dev-1", "start": 10, "end": 20},
+        {"id": "eval-1", "start": 20, "end": 30},
+    ]
+    intervals = [
+        verified(0, 4, ("A",), window_id="train-1"),
+        verified(10, 14, ("B",), window_id="dev-1"),
+        verified(20, 24, ("A",), window_id="eval-1"),
+        verified(24, 29.5, ("B",), window_id="eval-1"),
+        {"start": 29.5, "end": 30, "speakers": [], "status": "unknown", "window_id": "eval-1"},
+    ]
+    value = reference(intervals, duration=30, windows=windows)
+    split = {
+        "reference_id": "synthetic-reference-v1",
+        "source_sha256": SOURCE,
+        "seed": "synthetic",
+        "split_id": "synthetic-split-v1",
+        "frozen": True,
+        "policy": {"id": "human-review-v1", "version": "1", "frozen": True},
+        "windows": [
+            {"id": "train-1", "start": 0.0, "end": 10.0, "split": "train", "stratum": "ordinary"},
+            {"id": "dev-1", "start": 10.0, "end": 20.0, "split": "dev", "stratum": "ordinary"},
+            {"id": "eval-1", "start": 20.0, "end": 30.0, "split": "eval", "stratum": "difficult"},
+        ],
+    }
+    return dataset.validate_reference(value), split
+
+
 class ReferenceDatasetTests(unittest.TestCase):
+    def test_schema_rejects_unknown_top_level_fields(self):
+        with self.assertRaisesRegex(dataset.ReferenceError, "unsupported top-level"):
+            dataset.validate_reference({**reference([]), "top_level_extra": True})
+
     def test_candidate_is_never_exported_or_promoted(self):
         candidate = {
             "start": 1,
@@ -156,6 +192,72 @@ class ReferenceDatasetTests(unittest.TestCase):
             self.assertEqual(uem_path.read_text(), "".join(uem))
             with self.assertRaises(dataset.ReferenceError):
                 dataset.write_new(rttm_path, "different\n")
+
+    def test_qualification_report_passes_only_a_frozen_balanced_fixture(self):
+        normalized, split = qualification_fixture()
+        report = dataset.qualification_report(normalized, split, expected_policy_id="human-review-v1")
+        self.assertTrue(report["ready_for_quality_adoption"])
+        self.assertEqual(report["status"], "gold")
+        self.assertEqual(report["coverage"]["by_split"]["eval"]["human_identified_speech_seconds"], 9.5)
+        self.assertEqual(report["coverage"]["by_split"]["eval"]["verified_speaker_time_seconds"], 9.5)
+        self.assertEqual(report["coverage"]["by_speaker"]["A"]["eval_represented"], True)
+        self.assertEqual(report["frozen_split_identity"]["id"], "synthetic-split-v1")
+
+    def test_qualification_rejects_empty_gold_low_coverage_bias_and_identity_leaks(self):
+        normalized, split = qualification_fixture()
+        empty = dict(normalized, intervals=[])
+        empty_report = dataset.qualification_report(empty, split, expected_policy_id="human-review-v1")
+        self.assertFalse(empty_report["ready_for_quality_adoption"])
+        self.assertIn("zero-verified", {failure["code"] for failure in empty_report["failures"]})
+
+        low_intervals = [item for item in normalized["intervals"] if item["start"] < 24]
+        low_intervals.append({"start": 24, "end": 30, "speakers": ["B"], "status": "candidate", "window_id": "eval-1"})
+        low = dict(normalized, intervals=low_intervals)
+        low_report = dataset.qualification_report(low, split, expected_policy_id="human-review-v1")
+        self.assertFalse(low_report["ready_for_quality_adoption"])
+        self.assertIn("low-eval-coverage", {failure["code"] for failure in low_report["failures"]})
+        self.assertIn("missing-eval-speaker", {failure["code"] for failure in low_report["failures"]})
+        no_difficult_eval = dict(normalized, intervals=[item for item in normalized["intervals"] if item["start"] < 20])
+        no_stratum_report = dataset.qualification_report(no_difficult_eval, split, expected_policy_id="human-review-v1")
+        self.assertIn("missing-eval-stratum", {failure["code"] for failure in no_stratum_report["failures"]})
+        self.assertEqual(no_stratum_report["coverage"]["by_stratum"]["difficult"]["human_identified_speech_seconds"], 0.0)
+
+        stale = dataset.qualification_report(normalized, split, expected_source_sha256="b" * 64, expected_policy_id="old-policy")
+        codes = {failure["code"] for failure in stale["failures"]}
+        self.assertIn("source-hash-mismatch", codes)
+        self.assertIn("stale-policy", codes)
+
+        leaked_split = dict(split, windows=[*split["windows"], dict(split["windows"][0], id="eval-1")])
+        leaked = dataset.qualification_report(normalized, leaked_split, expected_policy_id="human-review-v1")
+        self.assertIn("split-leak", {failure["code"] for failure in leaked["failures"]})
+
+    def test_qualification_cli_writes_machine_readable_report_without_overwrite(self):
+        normalized, split = qualification_fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference_path = root / "reference.json"
+            split_path = root / "qualification.json"
+            report_path = root / "report.json"
+            reference_path.write_text(json.dumps({key: value for key, value in normalized.items() if key != "summary"}))
+            split_path.write_text(json.dumps(split))
+            command = [
+                sys.executable,
+                str(Path(__file__).with_name("reference_dataset.py")),
+                "qualify",
+                str(reference_path),
+                "--split",
+                str(split_path),
+                "--output",
+                str(report_path),
+                "--policy-id",
+                "human-review-v1",
+            ]
+            result = subprocess.run(command, check=False, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(report_path.read_text())
+            self.assertTrue(report["ready_for_quality_adoption"])
+            second = subprocess.run(command, check=False, capture_output=True, text=True)
+            self.assertNotEqual(second.returncode, 0)
 
 
 if __name__ == "__main__":
