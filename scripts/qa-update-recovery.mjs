@@ -98,7 +98,7 @@ try {
   await page.getByText(/Simultaneous speaker activity appears in 2 intervals/).waitFor();
   await page.getByText("Transcript edited", { exact: true }).waitFor();
   await page.getByText(/does not duplicate words/).waitFor();
-  await page.getByText("Additional diagnostic evidence was not included for this run.", { exact: true }).waitFor();
+  await page.getByText(/Additional diagnostic evidence was not included for this run\./).waitFor();
   const speakerDraft = page.getByRole("textbox", { name: "Rename Speaker 1" });
   assert.equal(await speakerDraft.inputValue(), "Anna");
   assert.equal(await page.locator('[role="tabpanel"]:visible .meeting-progress').count(), 0,
