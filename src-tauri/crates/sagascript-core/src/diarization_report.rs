@@ -9,6 +9,10 @@ use thiserror::Error;
 const MAX_ITEMS: usize = 500_000;
 const MAX_DURATION: f64 = 14_400.0;
 
+/// Floor-clipped 16kHz sample counts can exceed floating-point interval length
+/// by less than one sample. This bound applies only to discrete activity support.
+pub const ACTIVITY_DURATION_TOLERANCE: f64 = 1.0 / 16_000.0 + 1e-9;
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ReportError {
     #[error("invalid diarization report {0}")]
@@ -318,7 +322,8 @@ impl DiarizationReport {
                 ]
                 .into_iter()
                 .flatten()
-                .any(|v| !v.is_finite() || v < 0.0 || v > region.end - region.start + 1e-6)
+                .any(|v| !v.is_finite() || v < 0.0
+                    || v > region.end - region.start + ACTIVITY_DURATION_TOLERANCE)
             {
                 return Err(ReportError::Invalid("region evidence"));
             }

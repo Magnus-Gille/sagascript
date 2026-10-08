@@ -134,7 +134,8 @@ impl DiarizationAnalysis {
                         || !item.overlap_seconds.is_finite()
                         || item.active_speech_seconds < 0.0
                         || item.overlap_seconds < 0.0
-                        || item.active_speech_seconds > region_seconds + 1e-9
+                        || item.active_speech_seconds > region_seconds
+                            + crate::diarization_report::ACTIVITY_DURATION_TOLERANCE
                         || item.overlap_seconds > item.active_speech_seconds + 1e-9
                 })
             {
@@ -730,6 +731,28 @@ mod tests {
         assert_eq!(default_support, exclusive_support);
         assert_eq!(default_support[0].active_speech_seconds, 3.0 * segmentation::FRAME_DURATION_S);
         assert_eq!(default_support[0].overlap_seconds, segmentation::FRAME_DURATION_S);
+    }
+
+    #[test]
+    fn fractional_region_support_accepts_only_one_sample_of_quantization() {
+        let frames = segmentation::FrameActivations {
+            activity: vec![[1.0, 0.0, 0.0]; 16_000],
+            frame_duration: 1.0 / 16_000.0,
+        };
+        let raw_segments = vec![(0.00006, 1.0, 0)];
+        let mut analysis = DiarizationAnalysis {
+            region_activity_support: Some(collect_region_activity_support(&frames, 16_000, &raw_segments)),
+            raw_segments,
+            embeddings: vec![],
+        };
+        assert_eq!(analysis.region_activity_support.as_ref().unwrap()[0].active_speech_seconds, 1.0);
+        analysis.validate().unwrap();
+        let config = DiarizeConfig::default();
+        let speakers = cluster(&analysis, &config).unwrap();
+        analysis.report(&speakers, &config, vec![], true, "a".repeat(64),
+            1.0, "synthetic-build".into(), "test".into()).unwrap().validate().unwrap();
+        analysis.region_activity_support.as_mut().unwrap()[0].active_speech_seconds = 1.00007;
+        assert!(analysis.validate().is_err());
     }
 
     #[test]

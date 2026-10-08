@@ -691,7 +691,7 @@ mod tests {
                 kind: "human_review".into(),
                 artifact: "local-note-1".into(),
             }],
-            reviewer: Some("Magnus".into()),
+            reviewer: Some("SyntheticReviewer".into()),
             reviewed_at: Some("2025-01-02T03:04:05Z".into()),
             window_id: Some("w1".into()),
         }

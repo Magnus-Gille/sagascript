@@ -1633,7 +1633,7 @@ mod tests {
         assert_eq!(receipt["strata_collar_seconds"], 0.0);
         assert_eq!(
             receipt["strata"]["boundaries"][0]["starts"]["matched_count"],
-            1
+            0 // The annotation starts exactly at the selected UEM edge.
         );
     }
 

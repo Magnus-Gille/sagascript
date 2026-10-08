@@ -13,7 +13,9 @@ use sha2::{Digest, Sha256};
 
 const CACHE_SCHEMA_VERSION: u32 = 6;
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+#[cfg(test)]
 const DEFAULT_DIARIZATION_BEAM_SIZE: u32 = 0;
+#[cfg(test)]
 const DEFAULT_DIARIZATION_TEMPERATURE_FALLBACK: bool = true;
 const VAD_MODEL_ID: &str =
     "ggml-silero-v5.1.2.bin@29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf;threshold=0.5;min_silence_ms=200;speech_pad_ms=50;samples_overlap=0.1";
@@ -51,10 +53,6 @@ pub(crate) struct AnalysisIdentity {
 }
 
 impl AnalysisIdentity {
-    pub(crate) fn current() -> Self {
-        Self::current_with_policy(false)
-    }
-
     pub(crate) fn current_with_policy(exclusive_speech_embeddings: bool) -> Self {
         Self {
             segmentation_sha256: DiarizationModel::PyannoteSegmentation3
@@ -118,6 +116,7 @@ impl CacheIdentity {
         Self::for_source_sha256(&input_sha256, language, model, prompt)
     }
 
+    #[cfg(test)]
     pub(crate) fn for_source_sha256(
         source_sha256: &str,
         language: &str,
@@ -275,6 +274,7 @@ impl DiarizationCache {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn load(path: &Path, expected: &CacheIdentity) -> Result<CacheLookup, DictationError> {
     load_with_analysis_policy(path, expected, false)
 }

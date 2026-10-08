@@ -313,7 +313,8 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
       && [region.active_speech_seconds, region.overlapping_speech_seconds]
         .every((seconds) => seconds === undefined || seconds === null
           || (typeof seconds === "number" && finiteNumber(seconds, 0, 14_400) !== null
-            && seconds <= finiteNumber(region.end, 0, duration)! - finiteNumber(region.start, 0, duration)! + 1e-6));
+            // Match Rust's discrete 16kHz activity duration quantization bound.
+            && seconds <= finiteNumber(region.end, 0, duration)! - finiteNumber(region.start, 0, duration)! + 1 / 16_000 + 1e-9));
   });
   const validRegionKeys = regions.every((item) => {
     const region = record(item);

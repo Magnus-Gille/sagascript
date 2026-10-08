@@ -155,6 +155,23 @@ test("malformed acoustic spans remain invalid after allowing empty activity", ()
   assert.equal(recovery.parseUpdateRecoveryPayload(JSON.stringify(payload)), null);
 });
 
+test("sample-quantized region support survives recovery within one 16kHz sample", () => {
+  const payload = completePayload();
+  const region = {
+    index: 0, start: 0.00006, end: 1, track: 0, speaker: "speaker-1",
+    embedding_status: "missing", used_track_fallback: true,
+    assigned_centroid_distance: null, nearest_other_centroid_distance: null,
+    active_speech_seconds: 1, overlapping_speech_seconds: 0,
+  };
+  payload.meetings[0].review.transcript = {
+    ...transcript, schema_version: 2, source_sha256: diarizationReport.source_sha256,
+    diarization: { ...diarizationReport, regions: [region] },
+  };
+  assert.deepEqual(recovery.createUpdateRecoveryPayload(payload).meetings[0].review.transcript.diarization.regions[0], region);
+  region.active_speech_seconds = 1.00007;
+  assert.throws(() => recovery.createUpdateRecoveryPayload(payload), /Invalid updater recovery payload/);
+});
+
 test("invalid acoustic evidence rejects recovery instead of dropping it", () => {
   const payload = completePayload();
   payload.meetings[0].review.transcript = {

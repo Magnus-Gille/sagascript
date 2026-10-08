@@ -191,6 +191,82 @@ fn assert_counts(backend: &CountingBackend, decode: usize, analyze: usize, full:
 }
 
 #[test]
+fn selective_reprocessing_preserves_explicit_decoder_policy_and_acoustic_report() {
+    let mut fixture = Fixture::new(true);
+    let options = sagascript_core::transcription::TranscribeOptions {
+        beam_size: 2,
+        temperature_fallback: true,
+        vad_model_path: Some("synthetic-vad-path".into()),
+        segment_timestamps: true,
+        ..Default::default()
+    };
+    let decoder: sagascript_core::diarization_report::DecoderEvidence =
+        sagascript_core::transcription::whisper_backend::effective_diarization_decoder_config(
+            &options,
+        )
+        .unwrap()
+        .into();
+    let analysis: DiarizationAnalysis =
+        serde_json::from_str(r#"{"raw_segments":[],"embeddings":[],"region_activity_support":[]}"#)
+            .unwrap();
+    let config = CoreDiarizeConfig {
+        exclusive_speech_embeddings: true,
+        ..Default::default()
+    };
+    let mut report = analysis
+        .report(
+            &[],
+            &config,
+            vec![],
+            true,
+            fixture.previous.original.source_sha256.clone(),
+            1.0,
+            "synthetic-previous-build".into(),
+            "test".into(),
+        )
+        .unwrap();
+    report.decoder = Some(decoder.clone());
+    fixture.previous = MeetingReview::new(
+        fixture
+            .previous
+            .original
+            .clone()
+            .with_diarization(report)
+            .unwrap(),
+    )
+    .unwrap();
+    let identity = CacheIdentity::for_source_sha256_with_options(
+        &fixture.previous.original.source_sha256,
+        "en",
+        "base",
+        None,
+        2,
+        true,
+        true,
+    )
+    .unwrap();
+    let mut cache: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&fixture.cache).unwrap()).unwrap();
+    cache["identity"] = serde_json::to_value(identity).unwrap();
+    cache["analysis_identity"]["exclusive_speech_embeddings"] = true.into();
+    cache["analysis"] = serde_json::to_value(analysis).unwrap();
+    std::fs::write(&fixture.cache, serde_json::to_vec(&cache).unwrap()).unwrap();
+    let input = fixture.input(Some(&fixture.cache));
+    let plan = plan_reprocessing(&input, ReprocessingMode::Recluster, 0.75, None).unwrap();
+    let mut backend = CountingBackend::default();
+    let result = execute_with(&plan, &plan.revision, &input, None, None, &mut backend).unwrap();
+    let proposed = &result.proposal.proposed;
+    assert_eq!(proposed.schema_version, 2);
+    let report = proposed.diarization.as_ref().unwrap();
+    assert_eq!(report.decoder.as_ref(), Some(&decoder));
+    assert!(report.parameters.exclusive_speech_embeddings);
+    assert!(report.diagnostics_included);
+    assert!(!report.transcript_modified);
+    assert_eq!(report.asr_segments.len(), 1);
+    assert_counts(&backend, 0, 0, 0);
+}
+
+#[test]
 fn work_modes_invoke_only_their_selected_backend_stages() {
     let fixture = Fixture::new(true);
     let input = fixture.input(Some(&fixture.cache));
@@ -251,20 +327,33 @@ fn speaker_hint_flows_through_plan_execution_and_persistence_in_every_mode() {
     let fixture = Fixture::new(true);
     let selective = fixture.input(Some(&fixture.cache));
     let full_input = fixture.input(None);
-    for mode in [ReprocessingMode::Recluster, ReprocessingMode::Rediarize, ReprocessingMode::Full] {
-        let input = if mode == ReprocessingMode::Full { &full_input } else { &selective };
+    for mode in [
+        ReprocessingMode::Recluster,
+        ReprocessingMode::Rediarize,
+        ReprocessingMode::Full,
+    ] {
+        let input = if mode == ReprocessingMode::Full {
+            &full_input
+        } else {
+            &selective
+        };
         let plan = plan_reprocessing_with_model_check(input, mode, 0.75, None, || true)
             .expect("plan")
             .with_speaker_hint(Some(hint))
             .expect("hinted plan");
         // The plan is persisted and re-read before execution, as the CLI does.
         let plan: ReprocessingPlan =
-            serde_json::from_str(&serde_json::to_string(&plan).expect("plan json")).expect("plan reads back");
+            serde_json::from_str(&serde_json::to_string(&plan).expect("plan json"))
+                .expect("plan reads back");
         assert_eq!(plan.speaker_hint, Some(hint));
         let mut backend = CountingBackend::default();
         let result = execute_with(&plan, &plan.revision, input, None, None, &mut backend)
             .expect("hinted execution");
-        assert_eq!(backend.last_full_hint, (mode == ReprocessingMode::Full).then_some(hint), "{mode:?}");
+        assert_eq!(
+            backend.last_full_hint,
+            (mode == ReprocessingMode::Full).then_some(hint),
+            "{mode:?}"
+        );
         let proposed = &result.proposal.proposed;
         assert_eq!(proposed.speaker_hint, Some(hint), "{mode:?}");
         if mode != ReprocessingMode::Full {
@@ -277,8 +366,11 @@ fn speaker_hint_flows_through_plan_execution_and_persistence_in_every_mode() {
                 .expect("proposal reads back");
         assert_eq!(&reread, &result.proposal);
         // A plan without a hint is unchanged in revision and in bytes.
-        let plain = plan_reprocessing_with_model_check(input, mode, 0.75, None, || true).expect("plain plan");
-        assert!(!serde_json::to_string(&plain).expect("json").contains("speaker_hint"));
+        let plain = plan_reprocessing_with_model_check(input, mode, 0.75, None, || true)
+            .expect("plain plan");
+        assert!(!serde_json::to_string(&plain)
+            .expect("json")
+            .contains("speaker_hint"));
         assert_ne!(plain.revision, plan.revision);
     }
 }

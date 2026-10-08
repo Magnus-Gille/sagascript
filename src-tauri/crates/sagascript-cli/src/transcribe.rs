@@ -172,7 +172,8 @@ pub struct TranscribeArgs {
 
     /// Enable voice activity detection (Silero VAD) to skip non-speech regions,
     /// reducing silence hallucination and repetition loops. Downloads a small
-    /// model on first use. Overrides the `vad_enabled` setting. Diarized VAD
+    /// model on first use. Overrides the `vad_enabled` setting. Diarized VAD is
+    /// opt-in even when the saved setting is enabled, and
     /// uses source-mapped segment timing instead of DTW word timing.
     #[arg(long)]
     pub vad: bool,
@@ -184,8 +185,8 @@ pub struct TranscribeArgs {
     /// Beam search width: 0 = greedy (fast), >=2 = beam search (more accurate,
     /// slower). Overrides the saved `beam_size` setting. When omitted, a saved
     /// `beam_size` >=2 is used; otherwise ordinary file transcription defaults
-    /// to 5 and diarized transcription defaults to 0. Diarization accepts
-    /// 0 or 2–8; pass --beam 0 --no-vad for legacy greedy/no-VAD decoding.
+    /// to 5. Diarized transcription always defaults to 0 regardless of saved
+    /// settings and accepts explicit values of 0 or 2–8.
     #[arg(long = "beam", value_name = "N")]
     pub beam_size: Option<u32>,
 
@@ -2716,31 +2717,19 @@ fn parse_diarize_threshold(s: &str) -> Result<f32, String> {
 }
 
 /// Resolve the diarization decoder independently from ordinary file defaults.
-/// Explicit CLI values win; persisted settings apply when omitted, while the
-/// diarization fallback remains greedy/no-VAD instead of inheriting file beam 5.
+/// Explicit CLI values win. Omitted flags preserve the legacy greedy/no-VAD,
+/// temperature-fallback decoding regardless of ordinary file settings.
 #[cfg(feature = "diarization")]
 fn resolve_diarization_options(
     args: &TranscribeArgs,
-    stored: &Settings,
+    _stored: &Settings,
 ) -> Result<TranscribeOptions, DictationError> {
-    let beam_size = args.beam_size.unwrap_or({
-        if stored.beam_size == 0 || stored.beam_size >= 2 {
-            stored.beam_size
-        } else {
-            0
-        }
-    });
-    let vad_enabled = if args.no_vad {
-        false
-    } else if args.vad {
-        true
-    } else {
-        stored.vad_enabled
-    };
+    let beam_size = args.beam_size.unwrap_or(0);
+    let vad_enabled = args.vad && !args.no_vad;
     let options = TranscribeOptions {
         prompt: None,
         beam_size,
-        temperature_fallback: stored.temperature_fallback,
+        temperature_fallback: true,
         vad_model_path: vad_enabled.then(|| model::vad_model_path().to_string_lossy().into_owned()),
         segment_timestamps: true,
         parallel_chunks: 1,
@@ -4290,18 +4279,31 @@ mod diarize_threshold_tests {
         let stored = Settings {
             beam_size: 5,
             vad_enabled: true,
+            temperature_fallback: false,
             ..Settings::default()
         };
         let defaulted = TestCli::try_parse_from(["sagascript", "f.wav", "--diarize"]).unwrap();
         let options = resolve_diarization_options(&defaulted.args, &stored).unwrap();
-        assert_eq!(options.beam_size, 5);
-        assert!(options.vad_model_path.is_some());
+        assert_eq!(options.beam_size, 0);
+        assert!(options.vad_model_path.is_none());
+        assert!(options.temperature_fallback);
 
         let no_vad =
             TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--no-vad"]).unwrap();
         let options = resolve_diarization_options(&no_vad.args, &stored).unwrap();
-        assert_eq!(options.beam_size, 5);
+        assert_eq!(options.beam_size, 0);
         assert!(options.vad_model_path.is_none());
+
+        let invalid_saved = Settings { beam_size: 99, ..stored };
+        let options = resolve_diarization_options(&defaulted.args, &invalid_saved).unwrap();
+        assert_eq!(options.beam_size, 0);
+        let explicit = TestCli::try_parse_from([
+            "sagascript", "f.wav", "--diarize", "--beam", "2", "--vad",
+        ]).unwrap();
+        let options = resolve_diarization_options(&explicit.args, &invalid_saved).unwrap();
+        assert_eq!(options.beam_size, 2);
+        assert!(options.vad_model_path.is_some());
+        assert!(options.temperature_fallback);
     }
 
     #[test]

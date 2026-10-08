@@ -31,10 +31,16 @@ per-region/per-word arrays. Detailed evidence does not copy transcript text or r
 `--diarize-exclusive-speech-embeddings` enables the experimental extraction policy and invalidates
 both analysis and transcript cache entries. It is off by default.
 
-Diarized decoding uses greedy search (`--beam 0`) unless beam search is explicitly selected or a
-compatible saved beam setting applies. Beam 1 is rejected; supported beam search sizes are 2–8.
+Diarized decoding preserves greedy search, no VAD, and temperature fallback when flags are
+omitted, regardless of saved ordinary-file settings. Beam search and VAD require explicit
+`--beam` and `--vad` choices. Beam 1 is rejected; supported beam search sizes are 2–8.
 VAD is now effective. Diarized VAD results use source-mapped segment timestamps, which are coarser
 than word DTW timestamps; compare text changes separately from speaker assignment changes.
+
+Selective meeting reprocessing reuses the original effective decoder and extraction policy.
+It rebuilds the acoustic report from the validated cache, retaining ASR diagnostics and recording
+the new clustering configuration. Incompatible decoder or analysis provenance requires an explicit
+full recomputation; full mode uses the current legacy diarization defaults and reruns all inference.
 
 Freeze an independently reviewed reference and its split before selecting settings:
 
@@ -52,6 +58,14 @@ Only after a calibration decision is frozen should the same configuration be app
 Candidate and unknown intervals never become truth. Qualification requires human evidence and
 rejects stale identities, split leakage, incomplete partitions and insufficient reviewed coverage.
 An explicit external UEM cannot override the qualified native reference mask.
+
+Qualification prints its structured result and exits nonzero when it is not ready. Automation
+can bind an expected policy ID/version and canonical split hash with `--expected-policy-id`,
+`--expected-policy-version`, and `--expected-split-sha256`. Evaluation receipts bind the exact
+manifest bytes, selected dev/eval split, minimum coverage, and canonical qualification identities.
+They also copy the declared hypothesis producer version, revision, model hashes and configuration.
+Those declarations are editable JSON: all current receipts remain `measurement_only` with
+self-declared provenance, even when reference qualification and numeric targets pass.
 
 RTTM comparisons require `--uem regions.uem`. Those measurements lack the native reference
 qualification contract. UEM should include verified silence to expose false speech; a historical
