@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import copy
 import subprocess
 import sys
 import tempfile
@@ -86,6 +87,39 @@ def qualification_fixture():
 
 
 class ReferenceDatasetTests(unittest.TestCase):
+    def test_native_export_preserves_truth_and_original_review_metadata(self):
+        value = reference([{
+            "start": 1, "end": 3, "speakers": ["A"], "status": "candidate",
+            "evidence": [{"kind": "visual", "artifact": "synthetic-evidence.json",
+                          "quality_tier": "silver-visual-only", "human_watched": False}],
+        }])
+        normalized = dataset.validate_reference(value)
+        original = copy.deepcopy(normalized)
+        native = dataset.native_reference(normalized)
+        self.assertNotIn("summary", native)
+        self.assertEqual(native["intervals"][0]["status"], "candidate")
+        self.assertEqual(native["intervals"][0]["evidence"],
+                         [{"kind": "visual", "artifact": "synthetic-evidence.json"}])
+        self.assertEqual(normalized, original)
+        self.assertEqual(dataset.reference_identity(normalized), dataset.reference_identity(native))
+
+    def test_native_export_command_emits_importable_reference_without_promoting_candidates(self):
+        value = reference([{
+            "start": 1, "end": 3, "speakers": ["A"], "status": "candidate",
+            "evidence": [{"kind": "audio_model", "artifact": "synthetic-evidence.json",
+                          "quality_tier": "candidate-only"}],
+        }])
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "review.json"
+            source.write_text(json.dumps(value))
+            result = subprocess.run([sys.executable, str(Path(dataset.__file__)),
+                                     "export-native", str(source)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            native = json.loads(result.stdout)
+            self.assertEqual(native, dataset.native_reference(dataset.validate_reference(value)))
+            self.assertEqual(json.loads(source.read_text()), value)
+            self.assertEqual(native["intervals"][0]["status"], "candidate")
+
     def test_schema_rejects_unknown_top_level_fields(self):
         with self.assertRaisesRegex(dataset.ReferenceError, "unsupported top-level"):
             dataset.validate_reference({**reference([]), "top_level_extra": True})

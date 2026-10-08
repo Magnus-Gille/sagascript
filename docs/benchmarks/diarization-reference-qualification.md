@@ -1,5 +1,20 @@
 # Diarization reference qualification
 
+The audiovisual review file can retain richer evidence annotations. Before freezing a split,
+export its validated truth fields to the strict CLI format:
+
+```sh
+python scripts/diarization_sv/reference_dataset.py export-native review.json > reference.json
+sagascript diarization reference-validate reference.json
+sagascript diarization reference-identity reference.json
+```
+
+Use a new output path and preserve `review.json` with its evidence artifacts. The export keeps
+source, windows, intervals, speaker IDs, review provenance and candidate/unknown status, but
+omits the derived summary and extra audiovisual evidence annotations. Native reference identity
+binds those exported fields; review-only metadata is retained in the original and does not turn
+an automated proposal into truth. Freeze the manifest after this export and human review.
+
 The reference JSON remains a small annotation document with `source_sha256`,
 `duration_seconds`, known `speakers`, optional non-overlapping `windows`, and
 `intervals`. Candidate and unknown intervals are annotation context. Only an
@@ -13,7 +28,7 @@ Qualification uses a separate frozen manifest. It records the exact
 ```json
 {
   "reference_id": "sv-reference-v1",
-  "reference_sha256": "<sha256 of normalized reference JSON excluding summary>",
+  "reference_sha256": "<sha256 of normalized native truth fields>",
   "source_sha256": "…",
   "policy": {"id": "human-review-v1", "version": "1", "frozen": true},
   "split_id": "sv-split-v1",
@@ -33,7 +48,7 @@ an existing report:
 python3 scripts/diarization_sv/reference_dataset.py split reference.json \
   --output split.json --seed sv-reference-v1 --train 0.6 --dev 0.2 --eval 0.2
 python3 scripts/diarization_sv/reference_dataset.py qualify reference.json \
-  --split qualification.json --output qualification-report.json \
+  --split split.json --output qualification-report.json \
   --policy-id human-review-v1
 ```
 
@@ -57,4 +72,5 @@ are resolved by a named human. Reviewers should report sampled coverage and
 uncertainty, rather than claiming full-film accuracy from a partial review.
 Keep silence in UEM, retain unknown holes, and represent overlap as one
 multi-speaker interval (exported as one RTTM turn per speaker). Candidate
-intervals are never exported, and all exports and reports refuse overwrite.
+intervals are never exported to RTTM. File-writing commands refuse overwrite;
+`export-native` writes JSON to stdout.

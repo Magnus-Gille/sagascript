@@ -481,9 +481,28 @@ def _identity(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def native_reference(reference: dict[str, Any]) -> dict[str, Any]:
+    """Export validated truth fields; keep richer review metadata in the original.
+
+    The CLI deliberately accepts only kind/artifact for an evidence item. Extra
+    audiovisual annotation fields are useful to the reviewer but are not truth
+    or part of the frozen native reference identity. Never mutate the reviewed
+    input or promote its candidate/unknown intervals.
+    """
+    native = {key: value for key, value in reference.items() if key != "summary"}
+    native["intervals"] = [
+        {**item, "evidence": [
+            {key: evidence[key] for key in ("kind", "artifact")}
+            for evidence in item.get("evidence", [])
+        ]}
+        for item in reference["intervals"]
+    ]
+    return native
+
+
 def reference_identity(reference: dict[str, Any]) -> str:
-    """Hash the normalized reference content, excluding its derived summary."""
-    return _identity({key: value for key, value in reference.items() if key != "summary"})
+    """Hash the normalized native truth fields, excluding review-only metadata."""
+    return _identity(native_reference(reference))
 
 
 def _union_seconds(intervals: Iterable[dict[str, Any]]) -> float:
@@ -744,6 +763,9 @@ def build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate", help="validate a reference and print numeric summary")
     validate.add_argument("input", type=Path)
 
+    native = sub.add_parser("export-native", help="print strict CLI reference JSON; preserve the original review file")
+    native.add_argument("input", type=Path)
+
     export = sub.add_parser("export", help="export verified intervals as RTTM and UEM")
     export.add_argument("input", type=Path)
     export.add_argument("--rttm", required=True, type=Path)
@@ -775,6 +797,9 @@ def main(argv: list[str] | None = None) -> int:
         reference = read_reference(args.input)
         if args.command == "validate":
             print(json.dumps(reference["summary"], sort_keys=True, indent=2))
+            return 0
+        if args.command == "export-native":
+            print(json.dumps(native_reference(reference), sort_keys=True, indent=2))
             return 0
         if args.command == "export":
             rttm, uem, summary = export_intervals(reference)
