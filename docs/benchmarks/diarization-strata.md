@@ -52,11 +52,16 @@ mapping and must not be compared as if they used the global DER collar.
 
 For every reference speaker and for starts and ends independently, boundaries
 are matched one-to-one with the nearest same-type hypothesis boundary from a
-hypothesis speaker mapped to that reference speaker. Matching cannot cross an
-explicit UEM region. The signed error is `hypothesis_time - reference_time`;
-positive starts are late and positive ends are late. The report includes the
-signed errors, matched count, unmatched reference count, and unmatched
-hypothesis count.
+hypothesis speaker mapped to that reference speaker. Matching processes
+reference boundaries in sorted time order and greedily takes the nearest
+currently unused hypothesis boundary; this is deterministic nearest-greedy
+matching, not a global optimal assignment. Matching cannot cross an explicit
+UEM region. Boundaries exactly equal to a UEM start or end are excluded for
+both reference and hypothesis intervals, since an annotation edge at the
+scoring boundary cannot establish a real utterance boundary. The signed error
+is `hypothesis_time - reference_time`; positive starts are late and positive
+ends are late. The report includes the signed errors, matched count, unmatched
+reference count, and unmatched hypothesis count.
 
 Source boundaries outside the UEM are discarded. A UEM clip edge or an
 unknown-region hole never creates a synthetic boundary. Output speakers,

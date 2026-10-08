@@ -620,11 +620,9 @@ fn add_boundary_points(
 
 fn boundary_region(time: f64, uem: &[ScoringRegion]) -> Option<usize> {
     let right = lower_bound_by_start(uem, time);
-    if right < uem.len() && uem[right].start == time {
-        return Some(right);
-    }
     let candidate = right.checked_sub(1)?;
-    (time <= uem[candidate].end).then_some(candidate)
+    let region = uem.get(candidate)?;
+    (region.start < time && time < region.end).then_some(candidate)
 }
 
 fn lower_bound_by_start(uem: &[ScoringRegion], time: f64) -> usize {
@@ -837,6 +835,31 @@ mod tests {
         assert!((boundaries.ends.signed_errors_seconds[0] + 0.2).abs() < 1e-9);
         assert_eq!(boundaries.starts.unmatched_reference, 0);
         assert_eq!(boundaries.ends.unmatched_hypothesis, 1);
+    }
+
+    #[test]
+    fn boundary_annotations_at_uem_edges_are_excluded_but_internal_edges_match() {
+        let reference = [turn(0.5, 1.0, &["a"]), turn(1.5, 2.5, &["a"])];
+        let hypothesis = [turn(0.5, 1.1, &["x"]), turn(1.4, 2.5, &["x"])];
+        let uem = [uem(0.5, 2.5)];
+        let report = measure_strata(
+            &reference,
+            &hypothesis,
+            &uem,
+            &evaluation(&reference, &hypothesis, &uem),
+        )
+        .unwrap();
+        let boundaries = &report.boundaries[0];
+        assert_eq!(boundaries.starts.signed_errors_seconds.len(), 1);
+        assert!((boundaries.starts.signed_errors_seconds[0] + 0.1).abs() < 1e-9);
+        assert_eq!(boundaries.ends.signed_errors_seconds.len(), 1);
+        assert!((boundaries.ends.signed_errors_seconds[0] - 0.1).abs() < 1e-9);
+        assert_eq!(boundaries.starts.matched_count, 1);
+        assert_eq!(boundaries.ends.matched_count, 1);
+        assert_eq!(boundaries.starts.unmatched_reference, 0);
+        assert_eq!(boundaries.starts.unmatched_hypothesis, 0);
+        assert_eq!(boundaries.ends.unmatched_reference, 0);
+        assert_eq!(boundaries.ends.unmatched_hypothesis, 0);
     }
 
     #[test]
