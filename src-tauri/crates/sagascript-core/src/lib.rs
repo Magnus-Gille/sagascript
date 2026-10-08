@@ -5,6 +5,7 @@
 
 pub mod audio;
 pub mod diarization_evaluation;
+pub mod diarization_reference;
 pub mod download;
 pub mod diarization_report;
 pub mod error;
