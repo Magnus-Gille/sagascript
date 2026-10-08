@@ -91,6 +91,9 @@ jobs:
       - name: Test offline dictation evaluation tooling
         run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
 
+      - name: Test diarization reference contracts
+        run: python -m unittest discover -s scripts/diarization_sv -p 'test_reference_dataset.py'
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -115,6 +118,7 @@ jobs:
         run: |
           npm run test:frontend
           node scripts/test-generate-updater-manifest.mjs
+          node --test scripts/diarization_sv/test_reference_review.mjs
 
       - name: Install browser regression runtime
         run: npx playwright install chromium
@@ -156,6 +160,10 @@ jobs:
       - name: Cargo test (sagascript-cli)
         working-directory: src-tauri
         run: cargo test -p sagascript-cli
+
+      - name: Cargo test (sagascript-cli, no features)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-cli --no-default-features
 
       - name: Cargo clippy (sagascript-core, no features)
         working-directory: src-tauri
