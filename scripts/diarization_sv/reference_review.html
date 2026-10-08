@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sagascript speaker reference review</title>
+<style>
+:root{color-scheme:dark;--bg:#101316;--panel:#191e23;--line:#303941;--muted:#a8b2ba;--accent:#78c7ff;--good:#82d39b;--warn:#ffd479;--danger:#ff9d9d}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#eef3f6;font:14px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1180px;margin:auto;padding:24px}h1{font-size:1.45rem;margin:0 0 4px}h2{font-size:1rem;margin:0 0 10px}p{margin:4px 0;color:var(--muted)}button,input,select{font:inherit}button{border:1px solid #4b5c67;background:#25313a;color:#f5f8fa;border-radius:5px;padding:7px 10px;cursor:pointer}button:hover,button:focus-visible{border-color:var(--accent)}button:disabled{opacity:.45;cursor:not-allowed}label{display:block;color:var(--muted);font-size:.85rem}input[type=file]{max-width:100%}input[type=number],input[type=text],select{background:#0d1114;color:#f5f8fa;border:1px solid var(--line);border-radius:4px;padding:6px;width:100%}input[type=range]{width:100%}.top,.grid{display:grid;gap:14px}.top{grid-template-columns:1fr 1fr;margin:18px 0}.grid{grid-template-columns:255px 1fr 290px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;min-width:0}.stack>*+*{margin-top:10px}.file-row{display:grid;gap:5px}.meta{font-size:.84rem;color:var(--muted);overflow-wrap:anywhere}.notice{min-height:1.5em;color:var(--warn)}video{display:block;width:100%;max-height:390px;background:#000;border-radius:5px}.video-controls{display:grid;grid-template-columns:auto auto 1fr auto;gap:8px;align-items:center;margin-top:9px}.time{font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}.range-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.range-grid label{display:grid;gap:4px}.range-actions{display:flex;gap:8px;align-items:end}.list{display:grid;gap:6px;max-height:360px;overflow:auto}.list button{display:flex;justify-content:space-between;gap:8px;text-align:left;width:100%;background:#14191d}.list button.selected{border-color:var(--accent);box-shadow:0 0 0 1px #26759d inset}.tag{font-size:.72rem;color:var(--muted);border:1px solid var(--line);padding:1px 4px;border-radius:3px;white-space:nowrap}.verified{color:var(--good)}.candidate{color:var(--warn)}.unknown{color:var(--muted)}.speaker-grid{display:flex;flex-wrap:wrap;gap:6px}.speaker-grid label{border:1px solid var(--line);border-radius:4px;padding:5px 7px;color:#eef3f6}.speaker-grid input{margin-right:4px}.split{display:grid;grid-template-columns:1fr 1fr;gap:8px}.coverage{display:grid;grid-template-columns:1fr 1fr;gap:8px}.coverage strong{display:block;font-size:1.15rem}.small{font-size:.8rem;color:var(--muted)}.actions{display:flex;flex-wrap:wrap;gap:8px}.danger{color:var(--danger)}.verify-box{border:1px solid #806d3e;border-radius:5px;padding:9px;background:#29251a}.verify-box label{color:#f6e4ab}.evidence{border-top:1px solid var(--line);padding-top:10px}.evidence canvas{display:block;width:100%;height:190px;background:#0d1114;border:1px solid var(--line);border-radius:4px;cursor:crosshair}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}@media(max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid>.player{grid-column:1/-1}}@media(max-width:600px){main{padding:12px}.top,.grid{grid-template-columns:1fr}.grid>.player{grid-column:auto}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Speaker reference review</h1>
+    <p>Listen and watch locally. Speaker IDs stay anonymous; review decisions are exported only when you choose.</p>
+  </header>
+  <section class="top" aria-label="Local files">
+    <div class="panel file-row"><label for="dataset-file">Reference JSON</label><input id="dataset-file" type="file" accept="application/json,.json"><div id="dataset-meta" class="meta">No reference loaded.</div></div>
+    <div class="panel file-row"><label for="video-file">Source video (optional when using a same-origin URL)</label><input id="video-file" type="file" accept="video/*"><div id="video-meta" class="meta">No video loaded.</div></div>
+  </section>
+  <div id="notice" class="notice" role="status" aria-live="polite"></div>
+  <section class="grid">
+    <aside class="panel stack" aria-label="Windows and intervals">
+      <div><h2>Windows</h2><div id="windows" class="list"></div></div>
+      <div><h2>Intervals</h2><label><input id="show-candidates" type="checkbox"> Reveal candidate suggestions</label><div id="intervals" class="list"></div></div>
+    </aside>
+    <section class="panel player stack" aria-label="Player and time range">
+      <video id="video" controls preload="metadata"></video>
+      <div class="video-controls"><button id="play" type="button">Play</button><button id="seek-back" type="button">−5 s</button><input id="scrub" type="range" min="0" max="0" step="0.01" value="0" aria-label="Seek source timeline"><span id="current-time" class="time">0:00</span></div>
+      <div class="split"><label>Playback speed<select id="speed"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option></select></label><label>Clip offset (seconds)<input id="offset" type="number" min="0" step="0.01" value="0"></label></div>
+      <div class="range-grid"><label>Range start<input id="range-start" type="number" min="0" step="0.01" value="0"></label><label>Range end<input id="range-end" type="number" min="0" step="0.01" value="0"></label></div>
+      <div class="range-actions"><button id="play-range" type="button">Play range</button><button id="loop" type="button" aria-pressed="false">Loop range: off</button><span id="range-label" class="time">No range</span></div>
+      <div class="small">Source timeline: <span id="duration-label">unknown duration</span>. Video position is adjusted by the clip offset.</div>
+      <div class="evidence"><h2>Machine evidence</h2><div id="evidence-note" class="small">No evidence loaded.</div><canvas id="evidence-canvas" width="900" height="190" aria-label="Machine evidence scores; not verified labels"></canvas><div class="small">Machine evidence; not verified labels. Scores are signals, not probability truth. Identity tracks appear only when candidate suggestions are revealed.</div></div>
+    </section>
+    <section class="panel stack" aria-label="Review interval">
+      <h2>Interval editor</h2>
+      <div id="selected-label" class="meta">Choose an interval or add one.</div>
+      <div class="range-grid"><label>Start<input id="edit-start" type="number" min="0" step="0.01"></label><label>End<input id="edit-end" type="number" min="0" step="0.01"></label></div>
+      <fieldset><legend>Speakers</legend><div id="speakers" class="speaker-grid"></div></fieldset>
+      <label>Activity<select id="activity"><option value="speech">Speech</option><option value="silence">Silence</option></select></label>
+      <label>Uncertain outcome<select id="outcome"><option value="candidate">Candidate</option><option value="unknown">Unknown</option></select></label>
+      <div class="actions"><button id="new-interval" type="button">Add interval</button><button id="save-interval" type="button" disabled>Save edits</button></div>
+      <div class="verify-box stack"><label for="reviewer">Reviewer name (required to verify)</label><input id="reviewer" type="text" autocomplete="name"><label><input id="confirmation" type="checkbox"> I listened to audio and watched video for this interval</label><button id="verify" type="button" disabled>Verify interval</button></div>
+      <div class="coverage"><div><span class="small">Verified coverage</span><strong id="verified-coverage" class="verified">0:00</strong></div><div><span class="small">Candidate coverage</span><strong id="candidate-coverage" class="candidate">0:00</strong></div></div>
+      <button id="export" type="button" disabled>Export reviewed JSON</button>
+    </section>
+  </section>
+</main>
+<script>
+(function () {
+  'use strict';
+  const VERIFY_CONFIRMATION = 'I listened to audio and watched video for this interval';
+  const state = { dataset: null, evidence: null, selected: -1, windowId: null, queryVideo: false, videoUrl: '', videoOffset: 0, loop: false, rangePlayback: false };
+  const $ = (id) => document.getElementById(id);
+  const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  function intervalValid(interval, duration) { return interval && finite(interval.start) && finite(interval.end) && interval.start >= 0 && interval.end > interval.start && (!finite(duration) || interval.end <= duration); }
+  const INTERVAL_FIELDS = new Set(['start', 'end', 'speakers', 'status', 'evidence', 'activity', 'reviewer', 'reviewed_at', 'window_id']);
+  function humanReviewerName(value) { const name = typeof value === 'string' ? value.trim() : ''; return Boolean(name) && !/^(model|system|assistant|auto(?:mated)?|bot)$/i.test(name); }
+  function validateDataset(raw) {
+    const errors = [];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) errors.push('Dataset must be an object.');
+    if (!raw || typeof raw.source_sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(raw.source_sha256)) errors.push('source_sha256 must be a 64-character hexadecimal hash.');
+    if (!raw || !finite(raw.duration_seconds) || raw.duration_seconds <= 0) errors.push('duration_seconds must be a positive finite number.');
+    if (!raw || !Array.isArray(raw.speakers) || raw.speakers.some((speaker) => typeof speaker !== 'string' || !speaker.trim()) || new Set(raw.speakers).size !== raw.speakers.length) errors.push('speakers must contain distinct non-empty strings.');
+    if (!raw || !Array.isArray(raw.windows)) errors.push('windows must be an array.');
+    if (!raw || !Array.isArray(raw.intervals)) errors.push('intervals must be an array.');
+    if (raw && Array.isArray(raw.windows)) { const ids = new Set(); const ordered = [...raw.windows].sort((a, b) => a.start - b.start); raw.windows.forEach((w, i) => { if (typeof w.id !== 'string' || !w.id || ids.has(w.id)) errors.push('Window IDs must be unique non-empty strings.'); ids.add(w.id); if (!intervalValid(w, raw.duration_seconds)) errors.push('Invalid window at index ' + i + '.'); }); ordered.slice(1).forEach((w, i) => { if (w.start < ordered[i].end) errors.push('Windows must not overlap.'); }); }
+    if (raw && Array.isArray(raw.intervals)) raw.intervals.forEach((item, i) => {
+      const keys = item && typeof item === 'object' ? Object.keys(item) : [];
+      const window = item && item.window_id != null && Array.isArray(raw.windows) ? raw.windows.find((candidate) => candidate.id === item.window_id) : null;
+      const speakers = item && Array.isArray(item.speakers) ? item.speakers : null;
+      const validActivity = item?.activity == null || item.activity === 'speech' || item.activity === 'silence';
+      const validSpeakers = speakers && speakers.every((speaker) => typeof speaker === 'string' && raw.speakers.includes(speaker)) && new Set(speakers).size === speakers.length;
+      const silent = item?.activity === 'silence';
+      const speech = item?.activity === 'speech' || item?.activity == null;
+      const statusConsistent = item?.status === 'unknown' ? speakers?.length === 0 : silent ? speakers?.length === 0 : speech && Boolean(speakers?.length);
+      const humanEvidence = Array.isArray(item?.evidence) && item.evidence.some((evidence) => evidence?.kind === 'human_audio_video' && evidence.artifact === 'local-source' && evidence.human_listened === true && evidence.human_watched === true);
+      const verifiedFields = item?.status !== 'verified' || (humanReviewerName(item.reviewer) && typeof item.reviewed_at === 'string' && Number.isFinite(Date.parse(item.reviewed_at)) && humanEvidence);
+      if (!item || keys.some((key) => !INTERVAL_FIELDS.has(key)) || !intervalValid(item, raw.duration_seconds) || (item.window_id != null && (!window || item.start < window.start || item.end > window.end)) || !validActivity || !validSpeakers || !Array.isArray(item.evidence) || !statusConsistent || !verifiedFields) errors.push('Invalid interval at index ' + i + '.');
+      if (!item || !['candidate', 'verified', 'unknown'].includes(item.status)) errors.push('Invalid status at interval ' + i + '.');
+    });
+    return { ok: errors.length === 0, errors };
+  }
+  function safeSameOriginUrl(value) {
+    if (!value || typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return null;
+    try { const url = new URL(value, location.href); return url.origin === location.origin && (url.protocol === 'http:' || url.protocol === 'https:') ? url : null; } catch (_) { return null; }
+  }
+  function unionSeconds(intervals, status) {
+    const ranges = intervals.filter((item) => item.status === status && finite(item.start) && finite(item.end) && item.end > item.start).map((item) => [item.start, item.end]).sort((a, b) => a[0] - b[0]);
+    let total = 0, start = null, end = null;
+    ranges.forEach(([a, b]) => { if (start === null) { start = a; end = b; } else if (a <= end) end = Math.max(end, b); else { total += end - start; start = a; end = b; } });
+    return start === null ? 0 : total + end - start;
+  }
+  function coverageSummary(dataset) { return { verified: unionSeconds(dataset.intervals, 'verified'), candidate: unionSeconds(dataset.intervals, 'candidate') }; }
+  function findContainingWindow(windows, start, end) { const matches = (Array.isArray(windows) ? windows : []).filter((window) => finite(start) && finite(end) && start >= window.start && end <= window.end); return matches.length === 1 ? matches[0] : null; }
+  function createInterval({ start, end, speakers = [], activity = 'speech', status = 'candidate' }) { return { start, end, speakers: [...speakers], status: status === 'unknown' ? 'unknown' : 'candidate', evidence: [], ...(activity === 'silence' ? { activity: 'silence' } : {}) }; }
+  function editInterval(interval, changes) { const edited = { ...clone(interval), start: changes.start, end: changes.end, speakers: [...changes.speakers], activity: changes.activity === 'silence' ? 'silence' : 'speech', status: changes.status === 'unknown' ? 'unknown' : 'candidate' }; delete edited.reviewer; delete edited.reviewed_at; return edited; }
+  function verifyInterval(interval, reviewer, confirmation, reviewedAt) { const name = typeof reviewer === 'string' ? reviewer.trim() : ''; if (!humanReviewerName(name) || confirmation !== VERIFY_CONFIRMATION || interval.status === 'unknown') return null; return { ...clone(interval), status: 'verified', reviewer: name, reviewed_at: reviewedAt || new Date().toISOString(), evidence: [...(Array.isArray(interval.evidence) ? clone(interval.evidence) : []), { kind: 'human_audio_video', artifact: 'local-source', human_listened: true, human_watched: true }] }; }
+  function overlaps(a, b) { return a.start < b.end && b.start < a.end; }
+  function splitAround(interval, start, end) { const parts = []; if (interval.start < start) parts.push({ ...clone(interval), end: start }); if (end < interval.end) parts.push({ ...clone(interval), start: end }); return parts; }
+  function replaceInterval(dataset, replacement, selectedIndex = -1) {
+    if (!dataset || !Array.isArray(dataset.intervals) || !intervalValid(replacement, dataset.duration_seconds)) return { ok: false, error: 'Invalid replacement interval.' };
+    if (dataset.intervals.some((item, index) => index !== selectedIndex && item.status === 'verified' && overlaps(item, replacement))) return { ok: false, error: 'The range overlaps an existing verified interval.' };
+    const result = clone(dataset); result.intervals = [];
+    dataset.intervals.forEach((item, index) => { if (index === selectedIndex) return; if (overlaps(item, replacement) && (item.status === 'candidate' || item.status === 'unknown')) result.intervals.push(...splitAround(item, replacement.start, replacement.end)); else result.intervals.push(clone(item)); });
+    result.intervals.push(clone(replacement)); result.intervals.sort((a, b) => a.start - b.start); return { ok: true, dataset: result };
+  }
+  function validateEvidence(raw) {
+    const errors = [];
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.windows) || raw.windows.length === 0) return { ok: false, errors: ['Evidence must contain a non-empty windows array.'] };
+    const ids = new Set();
+    raw.windows.forEach((window, index) => {
+      const series = [window?.waveform, window?.vad, window?.asd?.[0], window?.asd?.[1], window?.ui?.[0], window?.ui?.[1]];
+      const visual = window?.visual_unavailable;
+      const n = Array.isArray(window?.waveform) ? window.waveform.length : -1;
+      if (typeof window?.id !== 'string' || !window.id || ids.has(window.id)) errors.push('Evidence window IDs must be unique non-empty strings.');
+      ids.add(window?.id);
+      if (!finite(window?.start) || !finite(window?.end) || window.start < 0 || window.end <= window.start || !finite(window?.frame_hz) || window.frame_hz <= 0) errors.push('Invalid evidence window timing or frame rate at index ' + index + '.');
+      if (n <= 0 || !Array.isArray(window?.waveform) || !Array.isArray(window?.vad) || !Array.isArray(window?.asd) || window.asd.length !== 2 || !Array.isArray(window?.ui) || window.ui.length !== 2 || (visual != null && (!Array.isArray(visual) || visual.length !== 2))) errors.push('Invalid evidence arrays at index ' + index + '.');
+      if (series.some((values) => !Array.isArray(values) || values.length !== n || values.some((value) => !finite(value) || value < 0 || value > 1))) errors.push('Evidence series must be finite, 0..1, and equal length at index ' + index + '.');
+      if (visual && visual.some((values) => !Array.isArray(values) || values.length !== n || values.some((value) => value !== 0 && value !== 1))) errors.push('Visual-unavailable masks must be 0/1 and equal length at index ' + index + '.');
+    });
+    return { ok: errors.length === 0, errors };
+  }
+  function normalizeEvidence(raw) { const check = validateEvidence(raw); if (!check.ok) return null; const normalized = clone(raw); normalized.windows.forEach((window) => { if (!window.visual_unavailable) window.visual_unavailable = [Array(window.waveform.length).fill(0), Array(window.waveform.length).fill(0)]; }); return normalized; }
+  function fmtPrecise(seconds) { if (!finite(seconds)) return '—'; const rounded = Math.max(0, Math.round(seconds * 100) / 100); const minutes = Math.floor(rounded / 60); const remainder = (rounded - minutes * 60).toFixed(2); return minutes + ':' + remainder.padStart(5, '0'); }
+  globalThis.ReferenceReview = { VERIFY_CONFIRMATION, validateDataset, safeSameOriginUrl, coverageSummary, findContainingWindow, createInterval, editInterval, verifyInterval, replaceInterval, validateEvidence, normalizeEvidence, intervalValid, fmtPrecise };
+  if (typeof document === 'undefined') return;
+
+  function fmt(seconds) { if (!finite(seconds)) return '—'; const sign = seconds < 0 ? '-' : ''; const whole = Math.max(0, Math.floor(Math.abs(seconds))); return sign + Math.floor(whole / 60) + ':' + String(whole % 60).padStart(2, '0'); }
+  function note(message, isError) { $('notice').textContent = message || ''; $('notice').style.color = isError ? 'var(--danger)' : ''; }
+  function evidenceWindow() { return state.evidence?.windows.find((item) => item.id === state.windowId) || null; }
+  function renderEvidence() {
+    const canvas = $('evidence-canvas'), ctx = canvas.getContext('2d'), evidence = evidenceWindow();
+    if (!ctx) return;
+    const width = canvas.clientWidth || 900, height = 190, dpr = window.devicePixelRatio || 1; canvas.width = width * dpr; canvas.height = height * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, width, height);
+    if (!evidence) { $('evidence-note').textContent = state.evidence ? 'No evidence for the selected window.' : 'No evidence loaded.'; return; }
+    const reveal = $('show-candidates').checked, rows = [{ label: 'Amplitude', data: evidence.waveform, color: '#78c7ff' }, { label: 'VAD score', data: evidence.vad, color: '#82d39b' }, { label: 'ASD A score' + (reveal ? '' : ' (hidden)'), data: reveal ? evidence.asd[0] : null, color: '#ffd479' }, { label: 'ASD B score' + (reveal ? '' : ' (hidden)'), data: reveal ? evidence.asd[1] : null, color: '#ffb86b' }, { label: 'UI A score' + (reveal ? '' : ' (hidden)'), data: reveal ? evidence.ui[0] : null, color: '#c7a8ff' }, { label: 'UI B score' + (reveal ? '' : ' (hidden)'), data: reveal ? evidence.ui[1] : null, color: '#f49ac2' }];
+    const left = 105, top = 8, rowHeight = 27, plotWidth = Math.max(20, width - left - 8), n = evidence.waveform.length;
+    ctx.font = '11px system-ui'; ctx.lineWidth = 1; rows.forEach((row, rowIndex) => { const y = top + rowIndex * rowHeight; ctx.fillStyle = '#a8b2ba'; ctx.fillText(row.label, 4, y + 14); ctx.strokeStyle = '#303941'; ctx.beginPath(); ctx.moveTo(left, y + rowHeight - 5); ctx.lineTo(left + plotWidth, y + rowHeight - 5); ctx.stroke(); if (!row.data) return; ctx.strokeStyle = row.color; ctx.beginPath(); row.data.forEach((value, index) => { const x = left + (index / Math.max(1, n - 1)) * plotWidth, py = y + rowHeight - 6 - value * (rowHeight - 9); if (index === 0) ctx.moveTo(x, py); else ctx.lineTo(x, py); }); ctx.stroke(); });
+    const masks = evidence.visual_unavailable?.[0] || [], masksB = evidence.visual_unavailable?.[1] || []; ctx.fillStyle = 'rgba(180,190,200,.16)'; masks.forEach((value, index) => { if (value || masksB[index]) { const x = left + (index / Math.max(1, n)) * plotWidth; ctx.fillRect(x, top, Math.max(1, plotWidth / n), rows.length * rowHeight); } });
+    ctx.fillStyle = '#a8b2ba'; ctx.fillText(fmt(evidence.start) + '–' + fmt(evidence.end) + ' · ' + evidence.frame_hz + ' Hz', left, height - 4); $('evidence-note').textContent = 'Window ' + evidence.id + ' · gray bands mark visual unavailable · machine evidence; not verified labels.';
+  }
+  function setRange(start, end) { const duration = state.dataset?.duration_seconds || 0; $('range-start').value = Math.max(0, Math.min(start, duration)); $('range-end').value = Math.max(0, Math.min(end, duration)); updateRangeLabel(); }
+  function updateRangeLabel() { const start = Number($('range-start').value), end = Number($('range-end').value); $('range-label').textContent = finite(start) && finite(end) && end > start ? fmtPrecise(start) + '–' + fmtPrecise(end) : 'No range'; }
+  function sourceTime() { return (Number($('video').currentTime) || 0) + state.videoOffset; }
+  function seek(seconds) { if (!finite(seconds)) return; const duration = state.dataset?.duration_seconds || 0; const value = Math.max(0, Math.min(seconds, duration)); const videoTime = Math.max(0, value - state.videoOffset); $('video').currentTime = videoTime; $('scrub').value = value; $('current-time').textContent = fmt(value); }
+  function currentWindow() { return state.dataset?.windows.find((item) => item.id === state.windowId) || null; }
+  function intervalInWindow(item, window) { return Boolean(window && (item.window_id === window.id || (item.window_id == null && item.start >= window.start && item.end <= window.end))); }
+  function selectWindow(windowId) { const window = state.dataset?.windows.find((item) => item.id === windowId); if (!window) return; state.windowId = window.id; setRange(window.start, window.end); seek(window.start); clearEditor(); renderWindows(); renderIntervals(); renderEvidence(); note('Reviewing window ' + window.id + '.'); }
+  function renderWindows() { const host = $('windows'); host.replaceChildren(); (state.dataset?.windows || []).forEach((item, index) => { const button = document.createElement('button'); button.type = 'button'; button.className = item.id === state.windowId ? 'selected' : ''; button.textContent = (item.id || 'Window ' + (index + 1)) + '  ' + fmt(item.start) + '–' + fmt(item.end); button.addEventListener('click', () => selectWindow(item.id)); host.append(button); }); }
+  function renderIntervals() { const host = $('intervals'); host.replaceChildren(); const intervals = state.dataset?.intervals || []; const window = currentWindow(); intervals.forEach((item, index) => { if (!intervalInWindow(item, window) || item.status === 'candidate' && !$('show-candidates').checked) return; const button = document.createElement('button'); button.type = 'button'; button.className = index === state.selected ? 'selected' : ''; const name = item.speakers?.length ? item.speakers.join(', ') : (item.activity === 'silence' ? 'Silence' : 'Unassigned'); const status = document.createElement('span'); status.className = 'tag ' + item.status; status.textContent = item.status; button.append(document.createTextNode('Interval ' + (index + 1) + ' · ' + fmtPrecise(item.start) + '–' + fmtPrecise(item.end) + ' ' + name + ' '), status); button.addEventListener('click', () => selectInterval(index)); host.append(button); }); }
+  function renderSpeakers(selected) { const host = $('speakers'); host.replaceChildren(); (state.dataset?.speakers || []).forEach((speaker) => { const label = document.createElement('label'); const box = document.createElement('input'); box.type = 'checkbox'; box.value = speaker; box.checked = selected?.includes(speaker) || false; label.append(box, document.createTextNode(speaker)); host.append(label); }); }
+  function selectInterval(index) { const item = state.dataset.intervals[index]; if (!item) return; const window = item.window_id ? state.dataset.windows.find((candidate) => candidate.id === item.window_id) : findContainingWindow(state.dataset.windows, item.start, item.end); if (window && window.id !== state.windowId) { state.windowId = window.id; renderWindows(); } state.selected = index; $('selected-label').textContent = 'Interval ' + (index + 1) + ' · ' + fmtPrecise(item.start) + '–' + fmtPrecise(item.end) + ' · ' + item.status; $('edit-start').value = item.start; $('edit-end').value = item.end; $('activity').value = item.activity === 'silence' ? 'silence' : 'speech'; $('outcome').value = item.status === 'unknown' ? 'unknown' : 'candidate'; $('reviewer').value = item.reviewer || ''; $('confirmation').checked = false; renderSpeakers(item.speakers || []); setRange(item.start, item.end); seek(item.start); $('save-interval').disabled = false; $('verify').disabled = false; renderIntervals(); renderEvidence(); }
+  function clearEditor() { state.selected = -1; $('selected-label').textContent = 'New interval'; $('edit-start').value = $('range-start').value; $('edit-end').value = $('range-end').value; $('activity').value = 'speech'; $('outcome').value = 'candidate'; $('reviewer').value = ''; $('confirmation').checked = false; renderSpeakers([]); $('save-interval').disabled = true; $('verify').disabled = true; }
+  function editorValues() { return { start: Number($('edit-start').value), end: Number($('edit-end').value), speakers: [...$('speakers').querySelectorAll('input:checked')].map((box) => box.value), activity: $('activity').value, status: $('outcome').value }; }
+  function editorConsistent(values) { return values.status === 'unknown' ? values.speakers.length === 0 : values.activity === 'silence' ? values.speakers.length === 0 : values.speakers.length > 0; }
+  function commitReplacement(replacement, selectedIndex, successMessage) { const result = replaceInterval(state.dataset, replacement, selectedIndex); if (!result.ok) return note(result.error, true); state.dataset = result.dataset; state.selected = state.dataset.intervals.findIndex((item) => item.start === replacement.start && item.end === replacement.end && item.status === replacement.status && item.window_id === replacement.window_id); renderWindows(); renderIntervals(); selectInterval(state.selected); note(successMessage); updateCoverage(); }
+  function saveInterval() { if (state.selected < 0 || !state.dataset) return; const values = editorValues(); const current = state.dataset.intervals[state.selected]; const window = current.window_id != null ? state.dataset.windows.find((candidate) => candidate.id === current.window_id) : currentWindow(); if (!intervalValid(values, state.dataset.duration_seconds) || !editorConsistent(values) || !window || values.start < window.start || values.end > window.end) return note('Use valid speakers/activity and a range inside the source and its window.', true); commitReplacement(editInterval(current, values), state.selected, 'Saved as ' + values.status + '. Verify again if needed.'); }
+  function addInterval() { if (!state.dataset) return; const values = editorValues(); const containing = findContainingWindow(state.dataset.windows, values.start, values.end); if (!intervalValid(values, state.dataset.duration_seconds) || !editorConsistent(values)) return note('Use valid speakers/activity and a range inside the source.', true); if (!containing) return note('A new interval must fit exactly one window.', true); const item = createInterval(values); item.window_id = containing.id; commitReplacement(item, -1, 'Added as a candidate.'); }
+  function verifySelected() { if (state.selected < 0 || !state.dataset) return; const values = editorValues(); const current = state.dataset.intervals[state.selected]; const window = current.window_id != null ? state.dataset.windows.find((candidate) => candidate.id === current.window_id) : findContainingWindow(state.dataset.windows, values.start, values.end); if (!$('confirmation').checked || !$('reviewer').value.trim()) return note('Verification needs a reviewer name and the listening confirmation.', true); if (!intervalValid(values, state.dataset.duration_seconds) || !editorConsistent(values) || !window || values.start < window.start || values.end > window.end || values.status === 'unknown') return note('Verify a valid speech interval inside its window.', true); const draft = editInterval(current, values); if (draft.window_id == null) draft.window_id = window.id; const verified = verifyInterval(draft, $('reviewer').value, VERIFY_CONFIRMATION); if (!verified) return note('That reviewer name cannot be used for human verification.', true); commitReplacement(verified, state.selected, 'Interval marked verified at ' + verified.reviewed_at + '.'); }
+  function updateCoverage() { if (!state.dataset) return; const result = coverageSummary(state.dataset); $('verified-coverage').textContent = fmt(result.verified); $('candidate-coverage').textContent = fmt(result.candidate); $('export').disabled = false; }
+  function loadDataset(raw, name) { const check = validateDataset(raw); if (!check.ok) return note(check.errors.join(' '), true); state.dataset = raw; state.selected = -1; state.windowId = raw.windows[0]?.id || null; $('dataset-meta').textContent = name + ' · ' + raw.intervals.length + ' intervals · ' + raw.speakers.length + ' speakers'; $('duration-label').textContent = fmt(raw.duration_seconds); $('scrub').max = raw.duration_seconds; renderWindows(); if (state.windowId) selectWindow(state.windowId); else clearEditor(); updateCoverage(); note('Reference loaded. Candidate suggestions are hidden until revealed.'); }
+  async function readDatasetFile(file) { try { loadDataset(JSON.parse(await file.text()), file.name); } catch (_) { note('Could not read valid JSON from that file.', true); } }
+  async function loadQueryDataset(path) { const url = safeSameOriginUrl(path); if (!url) return note('Dataset URL must be a relative same-origin HTTP(S) path.', true); try { const response = await fetch(url, { credentials: 'same-origin' }); if (!response.ok) throw new Error('HTTP ' + response.status); loadDataset(await response.json(), url.pathname); } catch (_) { note('Could not load the same-origin dataset URL.', true); } }
+  async function loadQueryEvidence(path) { const url = safeSameOriginUrl(path); if (!url) return note('Evidence URL must be a relative same-origin HTTP(S) path.', true); try { const response = await fetch(url, { credentials: 'same-origin' }); if (!response.ok) throw new Error('HTTP ' + response.status); const normalized = normalizeEvidence(await response.json()); if (!normalized) throw new Error('invalid evidence'); state.evidence = normalized; renderEvidence(); } catch (_) { note('Could not load valid same-origin evidence.', true); } }
+  function loadVideoUrl(url, name) { if (!url) return; $('video').src = url; state.queryVideo = true; $('video-meta').textContent = name; }
+  $('dataset-file').addEventListener('change', (event) => { const file = event.target.files[0]; if (file) readDatasetFile(file); });
+  $('video-file').addEventListener('change', (event) => { const file = event.target.files[0]; if (!file) return; if (state.videoUrl) URL.revokeObjectURL(state.videoUrl); state.videoUrl = URL.createObjectURL(file); state.queryVideo = false; loadVideoUrl(state.videoUrl, file.name); });
+  $('video').addEventListener('loadedmetadata', () => note('Video ready. Use the source timeline controls to review the selected range.'));
+  $('video').addEventListener('timeupdate', () => { const time = sourceTime(); $('scrub').value = Math.max(0, Math.min(time, Number($('scrub').max) || 0)); $('current-time').textContent = fmtPrecise(time); const end = Number($('range-end').value), start = Number($('range-start').value); if (state.rangePlayback && end > start && time >= end) { if (state.loop) { seek(start); $('video').play(); } else { state.rangePlayback = false; $('video').pause(); seek(end); } } });
+  $('video').addEventListener('ended', () => { if (state.loop) { seek(Number($('range-start').value)); $('video').play(); } });
+  $('play').addEventListener('click', () => { if ($('video').paused) $('video').play(); else $('video').pause(); });
+  $('seek-back').addEventListener('click', () => seek(sourceTime() - 5));
+  $('scrub').addEventListener('input', () => seek(Number($('scrub').value)));
+  $('speed').addEventListener('change', () => { $('video').playbackRate = Number($('speed').value); });
+  $('offset').addEventListener('input', () => { state.videoOffset = Math.max(0, Number($('offset').value) || 0); seek(sourceTime()); });
+  ['range-start', 'range-end'].forEach((id) => $(id).addEventListener('input', updateRangeLabel));
+  $('play-range').addEventListener('click', () => { const start = Number($('range-start').value), end = Number($('range-end').value); if (!(end > start)) return note('Choose a valid range first.', true); state.rangePlayback = true; seek(start); $('video').play(); });
+  $('loop').addEventListener('click', () => { state.loop = !state.loop; $('loop').textContent = 'Loop range: ' + (state.loop ? 'on' : 'off'); $('loop').setAttribute('aria-pressed', String(state.loop)); });
+  $('show-candidates').addEventListener('change', () => { renderIntervals(); renderEvidence(); });
+  $('evidence-canvas').addEventListener('click', (event) => { const evidence = evidenceWindow(); if (!evidence) return; const rect = event.currentTarget.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); seek(evidence.start + ratio * (evidence.end - evidence.start)); });
+  $('new-interval').addEventListener('click', addInterval); $('save-interval').addEventListener('click', saveInterval); $('verify').addEventListener('click', verifySelected);
+  $('export').addEventListener('click', () => { if (!state.dataset) return; const blob = new Blob([JSON.stringify(state.dataset, null, 2) + '\n'], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'speaker-reference-reviewed.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 0); });
+  $('offset').value = new URLSearchParams(location.search).get('offset') || '0'; state.videoOffset = Math.max(0, Number($('offset').value) || 0);
+  const query = new URLSearchParams(location.search); if (query.get('dataset')) loadQueryDataset(query.get('dataset')); if (query.get('evidence')) loadQueryEvidence(query.get('evidence')); if (query.get('video')) { const url = safeSameOriginUrl(query.get('video')); if (url) loadVideoUrl(url.href, url.pathname); else note('Video URL must be a relative same-origin HTTP(S) path.', true); }
+}());
+</script>
+</body>
+</html>
