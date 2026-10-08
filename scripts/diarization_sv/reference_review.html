@@ -60,32 +60,36 @@
   const INTERVAL_FIELDS = new Set(['start', 'end', 'speakers', 'status', 'evidence', 'activity', 'reviewer', 'reviewed_at', 'window_id']);
   function humanReviewerName(value) { const name = typeof value === 'string' ? value.trim() : ''; return Boolean(name) && !/^(model|system|automatic|automated|auto|consensus|assistant|unknown|bot)$/i.test(name); }
   function reviewTimestamp(value) { return typeof value === 'string' && /(?:Z|[+-]\d\d:\d\d)$/.test(value) && Number.isFinite(Date.parse(value)); }
-  function usableEvidence(value) { return value && typeof value === 'object' && !Array.isArray(value) && typeof value.kind === 'string' && /^\S+$/.test(value.kind) && typeof value.artifact === 'string' && Boolean(value.artifact) && !/[\u0000-\u001f\u007f-\u009f]/.test(value.artifact); }
+  function utf8ByteLength(value) { try { return encodeURIComponent(value).replace(/%[0-9a-f]{2}/gi, 'x').length; } catch (_) { return Infinity; } }
+  function usableIdentifier(value) { return typeof value === 'string' && Boolean(value) && utf8ByteLength(value) <= 128 && !/\s/u.test(value) && !/[\u0000-\u001f\u007f-\u009f]/.test(value); }
+  function usableEvidence(value) { return value && typeof value === 'object' && !Array.isArray(value) && usableIdentifier(value.kind) && typeof value.artifact === 'string' && Boolean(value.artifact) && !/[\u0000-\u001f\u007f-\u009f]/.test(value.artifact); }
   function validateDataset(raw) {
     const errors = [];
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) errors.push('Dataset must be an object.');
     if (raw && typeof raw === 'object' && !Array.isArray(raw) && Object.keys(raw).some((key) => !TOP_LEVEL_FIELDS.has(key))) errors.push('Dataset contains unsupported top-level fields.');
     if (!raw || typeof raw.source_sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(raw.source_sha256)) errors.push('source_sha256 must be 64 lowercase hexadecimal characters.');
     if (!raw || !finite(raw.duration_seconds) || raw.duration_seconds <= 0) errors.push('duration_seconds must be a positive finite number.');
-    if (!raw || !Array.isArray(raw.speakers) || raw.speakers.some((speaker) => typeof speaker !== 'string' || !/^\S+$/.test(speaker)) || new Set(raw.speakers).size !== raw.speakers.length) errors.push('speakers must contain distinct non-empty identifiers.');
+    if (!raw || !Array.isArray(raw.speakers) || raw.speakers.some((speaker) => !usableIdentifier(speaker)) || new Set(raw.speakers).size !== raw.speakers.length) errors.push('speakers must contain distinct non-empty identifiers.');
     if (!raw || (raw.windows != null && !Array.isArray(raw.windows))) errors.push('windows must be an array when present.');
     if (!raw || !Array.isArray(raw.intervals)) errors.push('intervals must be an array.');
     const windows = raw && Array.isArray(raw.windows) ? raw.windows : [];
-    if (raw && Array.isArray(raw.windows)) { const ids = new Set(); const ordered = [...raw.windows].sort((a, b) => a.start - b.start); raw.windows.forEach((w, i) => { if (typeof w?.id !== 'string' || !w.id || ids.has(w.id)) errors.push('Window IDs must be unique non-empty strings.'); ids.add(w?.id); if (!intervalValid(w, raw.duration_seconds)) errors.push('Invalid window at index ' + i + '.'); }); ordered.slice(1).forEach((w, i) => { if (w.start < ordered[i].end) errors.push('Windows must not overlap.'); }); }
+    if (raw && Array.isArray(raw.windows)) { const ids = new Set(); const ordered = [...raw.windows].sort((a, b) => a.start - b.start); raw.windows.forEach((w, i) => { if (!usableIdentifier(w?.id) || ids.has(w.id)) errors.push('Window IDs must be unique non-empty strings.'); ids.add(w?.id); if (!intervalValid(w, raw.duration_seconds)) errors.push('Invalid window at index ' + i + '.'); }); ordered.slice(1).forEach((w, i) => { if (w.start < ordered[i].end) errors.push('Windows must not overlap.'); }); }
     if (raw && Array.isArray(raw.intervals)) raw.intervals.forEach((item, i) => {
       const keys = item && typeof item === 'object' ? Object.keys(item) : [];
       const window = item && item.window_id != null ? windows.find((candidate) => candidate.id === item.window_id) : null;
       const speakers = item && Array.isArray(item.speakers) ? item.speakers : null;
       const validActivity = item?.activity == null || item.activity === 'speech' || item.activity === 'silence';
-      const validSpeakers = speakers && speakers.every((speaker) => typeof speaker === 'string' && /^\S+$/.test(speaker) && raw.speakers.includes(speaker)) && new Set(speakers).size === speakers.length;
+      const validSpeakers = speakers && speakers.every((speaker) => usableIdentifier(speaker) && raw.speakers.includes(speaker)) && new Set(speakers).size === speakers.length;
       const silent = item?.activity === 'silence';
       const speech = item?.activity === 'speech' || item?.activity == null;
       const statusConsistent = item?.status === 'unknown' ? speakers?.length === 0 : silent ? speakers?.length === 0 : speech && Boolean(speakers?.length);
       const evidence = Array.isArray(item?.evidence) ? item.evidence : [];
       const validEvidence = item?.evidence == null || (Array.isArray(item.evidence) && evidence.every(usableEvidence));
       const humanEvidence = evidence.some((entry) => entry.artifact === 'local-source' && (entry.kind === 'human_review' || entry.kind === 'human_audio_video'));
+      const reviewerValid = item?.reviewer == null || (typeof item.reviewer === 'string' && item.reviewer.trim().length > 0);
+      const reviewedAtValid = item?.reviewed_at == null || reviewTimestamp(item.reviewed_at);
       const verifiedFields = item?.status !== 'verified' || (humanReviewerName(item.reviewer) && reviewTimestamp(item.reviewed_at) && humanEvidence);
-      if (!item || keys.some((key) => !INTERVAL_FIELDS.has(key)) || !intervalValid(item, raw.duration_seconds) || (item.window_id != null && (!window || item.start < window.start || item.end > window.end)) || !validActivity || !validSpeakers || !validEvidence || !statusConsistent || !verifiedFields) errors.push('Invalid interval at index ' + i + '.');
+      if (!item || keys.some((key) => !INTERVAL_FIELDS.has(key)) || !intervalValid(item, raw.duration_seconds) || (item.window_id != null && (!usableIdentifier(item.window_id) || !window || item.start < window.start || item.end > window.end)) || !validActivity || !validSpeakers || !validEvidence || !statusConsistent || !reviewerValid || !reviewedAtValid || !verifiedFields) errors.push('Invalid interval at index ' + i + '.');
       if (!item || !['candidate', 'verified', 'unknown'].includes(item.status)) errors.push('Invalid status at interval ' + i + '.');
     });
     if (raw && Array.isArray(raw.intervals)) {

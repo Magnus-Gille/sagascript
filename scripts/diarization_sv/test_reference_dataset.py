@@ -104,6 +104,16 @@ class ReferenceDatasetTests(unittest.TestCase):
         self.assertEqual(normalized, original)
         self.assertEqual(dataset.reference_identity(normalized), dataset.reference_identity(native))
 
+    def test_native_export_normalizes_missing_or_null_evidence_to_empty_list(self):
+        for evidence in (None, "missing"):
+            with self.subTest(evidence=evidence):
+                interval = {"start": 1, "end": 3, "speakers": ["A"], "status": "candidate"}
+                if evidence != "missing":
+                    interval["evidence"] = evidence
+                normalized = dataset.validate_reference(reference([interval]))
+                native = dataset.native_reference(normalized)
+                self.assertEqual(native["intervals"][0]["evidence"], [])
+
     def test_native_export_command_emits_importable_reference_without_promoting_candidates(self):
         value = reference([{
             "start": 1, "end": 3, "speakers": ["A"], "status": "candidate",
@@ -253,7 +263,6 @@ fs.writeFileSync(process.argv[3], JSON.stringify(input) + '\n');
             reference([{**verified(1, 2), "reviewer": None}]),
             reference([{**verified(1, 2), "evidence": []}]),
             reference([{**verified(1, 2), "reviewer": "model"}]),
-            reference([{"start": 1, "end": 2, "speakers": [], "status": "unknown", "reviewer": "assistant"}]),
             reference([{**verified(1, 2), "speakers": ["C"]}]),
             reference([{"start": 1, "end": 2, "speakers": ["A"], "status": "unknown"}]),
         ]
@@ -261,6 +270,30 @@ fs.writeFileSync(process.argv[3], JSON.stringify(input) + '\n');
             with self.subTest(document=document):
                 with self.assertRaises(dataset.ReferenceError):
                     dataset.validate_reference(document)
+
+    def test_identifier_bounds_controls_and_candidate_machine_reviewer_match_native(self):
+        overlong = "å" * 65
+        bad_documents = [
+            reference([{"start": 1, "end": 2, "speakers": [overlong], "status": "candidate"}], speakers=(overlong,)),
+            reference([], windows=[{"id": overlong, "start": 0, "end": 10}]),
+            reference([{"start": 1, "end": 2, "speakers": ["A"], "status": "candidate",
+                        "evidence": [{"kind": overlong, "artifact": "note"}]}]),
+            reference([{"start": 1, "end": 2, "speakers": ["A\x00"], "status": "candidate"}], speakers=("A\x00",)),
+            reference([{"start": 1, "end": 2, "speakers": ["A\x85"], "status": "candidate"}], speakers=("A\x85",)),
+        ]
+        for document in bad_documents:
+            with self.subTest(document=document):
+                with self.assertRaises(dataset.ReferenceError):
+                    dataset.validate_reference(document)
+
+        candidate = {"start": 1, "end": 2, "speakers": ["A"], "status": "candidate", "reviewer": "model"}
+        normalized = dataset.validate_reference(reference([candidate]))
+        self.assertEqual(normalized["intervals"][0]["reviewer"], "model")
+        unknown = dataset.validate_reference(reference([{"start": 1, "end": 2, "speakers": [], "status": "unknown", "reviewer": "assistant"}]))
+        self.assertEqual(unknown["intervals"][0]["reviewer"], "assistant")
+        artifact = "x" * 129
+        verified_with_long_artifact = verified(0, 1, evidence=[{"kind": "human", "artifact": artifact}])
+        self.assertEqual(dataset.validate_reference(reference([verified_with_long_artifact]))["intervals"][0]["evidence"][0]["artifact"], artifact)
 
     def test_incompatible_verified_singleton_overlap_is_rejected(self):
         with self.assertRaisesRegex(dataset.ReferenceError, "incompatible"):

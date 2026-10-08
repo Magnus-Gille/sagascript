@@ -66,6 +66,7 @@ class ReferenceError(ValueError):
 
 
 HUMAN_REVIEWER_FORBIDDEN = {"model", "system", "automatic", "automated", "auto", "consensus", "assistant", "unknown", "bot"}
+MAX_IDENTIFIER_BYTES = 128
 
 
 def finite_number(value: Any) -> bool:
@@ -73,7 +74,17 @@ def finite_number(value: Any) -> bool:
 
 
 def nonempty_identifier(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not value or any(char.isspace() for char in value):
+    if not isinstance(value, str) or not value:
+        raise ReferenceError(f"{label} must be a non-empty identifier without whitespace")
+    try:
+        byte_length = len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise ReferenceError(f"{label} must be valid UTF-8") from exc
+    if (
+        byte_length > MAX_IDENTIFIER_BYTES
+        or any(char.isspace() for char in value)
+        or any(ord(char) < 0x20 or 0x7F <= ord(char) <= 0x9F for char in value)
+    ):
         raise ReferenceError(f"{label} must be a non-empty identifier without whitespace")
     return value
 
@@ -124,6 +135,11 @@ def human_reviewer(value: Any, label: str) -> str:
     if reviewer.strip().lower() in HUMAN_REVIEWER_FORBIDDEN:
         raise ReferenceError(f"{label} must identify a human")
     return reviewer
+
+
+def review_string(value: Any, label: str) -> str:
+    """Validate optional candidate/unknown reviewer text without human gating."""
+    return nonempty_string(value, label)
 
 
 def validate_policy(value: Any) -> dict[str, Any] | None:
@@ -248,7 +264,7 @@ def validate_reference(document: Any) -> dict[str, Any]:
             reviewer = human_reviewer(reviewer, f"verified interval {index} reviewer")
             reviewed_at = parse_review_timestamp(reviewed_at, f"verified interval {index} reviewed_at")
         elif reviewer is not None:
-            reviewer = human_reviewer(reviewer, f"interval {index} reviewer")
+            reviewer = review_string(reviewer, f"interval {index} reviewer")
         if reviewed_at is not None and status != "verified":
             parse_review_timestamp(reviewed_at, f"interval {index} reviewed_at")
 
@@ -495,8 +511,9 @@ def native_reference(reference: dict[str, Any]) -> dict[str, Any]:
 
     The CLI deliberately accepts only kind/artifact for an evidence item. Extra
     audiovisual annotation fields are useful to the reviewer but are not truth
-    or part of the frozen native reference identity. Never mutate the reviewed
-    input or promote its candidate/unknown intervals.
+    or part of the frozen native reference identity. Missing or null evidence
+    is normalized to the native empty list. Never mutate the reviewed input or
+    promote its candidate/unknown intervals.
     """
     native = {key: value for key, value in reference.items() if key != "summary"}
     native["intervals"] = [
