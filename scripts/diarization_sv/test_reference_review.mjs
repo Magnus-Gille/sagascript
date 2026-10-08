@@ -57,7 +57,13 @@ assert.equal(api.validateDataset({ ...canonicalSource, intervals: [verified] }).
 assert.equal(api.validateDataset({ ...canonicalSource, intervals: [{ ...verified, evidence: [{ kind: 'human_audio_video', artifact: 'local-source' }] }] }).ok, true, 'legacy native human evidence remains importable after export-native stripping');
 assert.equal(api.validateDataset({ ...canonicalSource, intervals: [{ ...verified, evidence: [...verified.evidence, { kind: 'review_note', artifact: 'x'.repeat(129) }] }] }).ok, true, 'review artifacts retain their existing no-length-bound contract');
 assert.equal(api.validateDataset({ ...canonicalSource, intervals: [{ ...verified, evidence: [{ kind: 'human_review', score: 0.8 }] }] }).ok, false, 'evidence needs both kind and artifact');
-assert.equal(api.verifyInterval({ ...canonicalSource.intervals[0], status: 'unknown', speakers: [] }, 'Reviewer', api.VERIFY_CONFIRMATION), null, 'unknown intervals cannot be verified');
+const reviewedUnknown = api.verifyInterval({ ...canonicalSource.intervals[0], status: 'unknown', speakers: [], evidence: [] }, 'Reviewer', api.VERIFY_CONFIRMATION, '2026-01-01T00:00:00.000Z');
+assert.equal(reviewedUnknown.status, 'unknown', 'human review of an unknown interval does not invent speaker truth');
+assert.equal(reviewedUnknown.speakers.length, 0, 'human review of an unknown interval keeps speakers unidentified');
+assert.equal(reviewedUnknown.reviewer, 'Reviewer');
+assert.equal(reviewedUnknown.reviewed_at, '2026-01-01T00:00:00.000Z');
+assert.equal(JSON.stringify(reviewedUnknown.evidence.at(-1)), JSON.stringify({ kind: 'human_review', artifact: 'local-source' }));
+assert.equal(api.validateDataset({ ...canonicalSource, intervals: [reviewedUnknown] }).ok, true, 'reviewed unknown remains importable');
 assert.equal(api.verifyInterval(canonicalSource.intervals[0], 'system', api.VERIFY_CONFIRMATION), null, 'nonhuman reviewer names cannot verify');
 assert.equal(api.validateDataset({ ...canonicalSource, intervals: [{ ...verified, reviewer: 'assistant' }] }).ok, false, 'nonhuman imported verification is rejected');
 assert.equal(JSON.stringify(verified.evidence.slice(0, -1)), JSON.stringify(canonicalSource.intervals[0].evidence));
@@ -65,6 +71,7 @@ const edited = api.editInterval(verified, { start: 3, end: 6, speakers: ['S2'], 
 assert.equal(edited.status, 'candidate', 'ordinary edits cannot retain verified state');
 assert.equal('reviewed_at' in edited, false, 'ordinary edits clear stale review time');
 assert.equal('reviewer' in edited, false, 'ordinary edits clear stale reviewer');
+assert.equal(edited.evidence.some(({ kind }) => kind === 'human_review'), false, 'demotion clears stale human review evidence');
 assert.equal(edited.window_id, 'w1');
 assert.equal(source.top_level_extra[0], 'keep');
 assert.equal(JSON.stringify(api.coverageSummary({ intervals: [verified, { start: 4, end: 8, status: 'candidate' }] })), JSON.stringify({ verified: 3, candidate: 4 }));

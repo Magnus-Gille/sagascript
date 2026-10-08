@@ -114,6 +114,41 @@ class ReferenceDatasetTests(unittest.TestCase):
                 native = dataset.native_reference(normalized)
                 self.assertEqual(native["intervals"][0]["evidence"], [])
 
+    def test_explicit_null_activity_is_effective_speech_and_keeps_native_identity(self):
+        value = reference([{
+            "start": 1, "end": 3, "speakers": ["A"], "status": "candidate",
+            "activity": None,
+        }])
+        normalized = dataset.validate_reference(value)
+        self.assertIn("activity", normalized["intervals"][0])
+        self.assertIsNone(normalized["intervals"][0]["activity"])
+        self.assertEqual(normalized["summary"]["activity_counts"]["speech"], 1)
+        self.assertIsNone(dataset.native_reference(normalized)["intervals"][0]["activity"])
+        with self.assertRaisesRegex(dataset.ReferenceError, "speech interval"):
+            dataset.validate_reference(reference([{
+                "start": 1, "end": 3, "speakers": [], "status": "candidate",
+                "activity": None,
+            }]))
+        cli = os.environ.get("SAGASCRIPT_REFERENCE_CLI")
+        if cli:
+            with tempfile.TemporaryDirectory() as temporary:
+                native_path = Path(temporary) / "native.json"
+                native_path.write_text(json.dumps(dataset.native_reference(normalized)))
+                validate_result = subprocess.run(
+                    [cli, "diarization", "reference-validate", str(native_path)],
+                    check=False, capture_output=True, text=True,
+                )
+                self.assertEqual(validate_result.returncode, 0, validate_result.stderr)
+                identity_result = subprocess.run(
+                    [cli, "diarization", "reference-identity", str(native_path)],
+                    check=False, capture_output=True, text=True,
+                )
+                self.assertEqual(identity_result.returncode, 0, identity_result.stderr)
+                self.assertEqual(
+                    json.loads(identity_result.stdout)["reference_sha256"],
+                    dataset.reference_identity(normalized),
+                )
+
     def test_native_export_command_emits_importable_reference_without_promoting_candidates(self):
         value = reference([{
             "start": 1, "end": 3, "speakers": ["A"], "status": "candidate",
