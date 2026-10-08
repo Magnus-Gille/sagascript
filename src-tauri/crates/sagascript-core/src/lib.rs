@@ -9,6 +9,7 @@ pub mod diarization_reference;
 pub mod diarization_qualification;
 pub mod download;
 pub mod diarization_report;
+pub mod diarization_strata;
 pub mod error;
 pub mod meeting;
 pub mod meeting_media;
