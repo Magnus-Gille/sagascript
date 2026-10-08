@@ -114,6 +114,47 @@ test("meeting recovery preserves bounded acoustic diarization evidence", () => {
   assert.equal(parsed.meetings[0].review.transcript.diarization.activity[0].speakers.length, 2);
 });
 
+test("silent acoustic reports round trip with zero-duration ASR evidence", () => {
+  const report = {
+    ...diarizationReport,
+    activity: [],
+    asr_segments: [{ start: 1, end: 1, avg_logprob: null, no_speech_prob: 1 }],
+  };
+  const payload = completePayload();
+  payload.meetings[0].review.transcript = {
+    ...transcript,
+    schema_version: 2,
+    source_sha256: report.source_sha256,
+    diarization: report,
+  };
+
+  const parsed = recovery.parseUpdateRecoveryPayload(
+    recovery.serializeUpdateRecoveryPayload(recovery.createUpdateRecoveryPayload(payload)),
+  );
+  assert.deepEqual(parsed.meetings[0].review.transcript.diarization, report);
+
+  for (const asr of [
+    { start: 2, end: 1, avg_logprob: null, no_speech_prob: 1 },
+    { start: Number.NaN, end: 1, avg_logprob: null, no_speech_prob: 1 },
+  ]) {
+    const invalid = structuredClone(payload);
+    invalid.meetings[0].review.transcript.diarization.asr_segments = [asr];
+    assert.throws(() => recovery.createUpdateRecoveryPayload(invalid), /Invalid updater recovery payload/);
+  }
+});
+
+test("malformed acoustic spans remain invalid after allowing empty activity", () => {
+  const payload = completePayload();
+  payload.meetings[0].review.transcript = {
+    ...transcript,
+    schema_version: 2,
+    source_sha256: diarizationReport.source_sha256,
+    diarization: { ...diarizationReport, activity: [{ start: 1, end: 1, speakers: ["speaker-1"] }] },
+  };
+  assert.throws(() => recovery.createUpdateRecoveryPayload(payload), /Invalid updater recovery payload/);
+  assert.equal(recovery.parseUpdateRecoveryPayload(JSON.stringify(payload)), null);
+});
+
 test("invalid acoustic evidence rejects recovery instead of dropping it", () => {
   const payload = completePayload();
   payload.meetings[0].review.transcript = {

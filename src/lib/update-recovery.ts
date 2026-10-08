@@ -193,7 +193,6 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
     || source.regions.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
     || source.attributions.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
     || source.asr_segments.length > UPDATE_RECOVERY_LIMITS.maxDiarizationItems
-    || source.activity.length === 0
     || typeof source.transcript_modified !== "boolean"
     || (source.diagnostics_included !== undefined && typeof source.diagnostics_included !== "boolean")
     || !record(source.parameters)
@@ -362,7 +361,7 @@ function normalizeDiarization(value: unknown): DiarizationReport | null {
       && hasOnlyKeys(segment, ["start", "end", "avg_logprob", "no_speech_prob"])
       && finiteNumber(segment.start, 0, duration) !== null
       && finiteNumber(segment.end, 0, duration) !== null
-      && finiteNumber(segment.start, 0, duration)! < finiteNumber(segment.end, 0, duration)!
+      && finiteNumber(segment.start, 0, duration)! <= finiteNumber(segment.end, 0, duration)!
       && (segment.avg_logprob === undefined
         || segment.avg_logprob === null
         || (typeof segment.avg_logprob === "number" && Number.isFinite(segment.avg_logprob)))
