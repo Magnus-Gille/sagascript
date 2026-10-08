@@ -734,3 +734,13 @@ export function parseUpdateRecoveryPayload(input: string | unknown): UpdateRecov
   }
   return normalizePayload(input);
 }
+
+/** Persisted drafts must never be mistaken for an absent snapshot. */
+export function readPersistedUpdateRecoveryPayload(input: unknown): UpdateRecoveryPayload | null {
+  if (input === null || input === undefined) return null;
+  const payload = parseUpdateRecoveryPayload(input);
+  if (payload === null) {
+    throw new TypeError("Persisted recovery drafts cannot be read by this version");
+  }
+  return payload;
+}

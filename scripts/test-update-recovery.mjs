@@ -100,6 +100,23 @@ const diarizationReport = {
   attributions: [],
 };
 
+test("persisted recovery distinguishes absence from an unreadable acoustic draft", () => {
+  assert.equal(recovery.readPersistedUpdateRecoveryPayload(null), null);
+  assert.equal(recovery.readPersistedUpdateRecoveryPayload(undefined), null);
+  const payload = completePayload();
+  assert.deepEqual(recovery.readPersistedUpdateRecoveryPayload(payload), payload);
+  assert.deepEqual(recovery.readPersistedUpdateRecoveryPayload(JSON.stringify(payload)), payload);
+  payload.meetings[0].review.transcript = {
+    ...transcript, schema_version: 2, source_sha256: diarizationReport.source_sha256,
+    diarization: { ...diarizationReport, schema_version: 99 },
+  };
+  const original = JSON.stringify(payload);
+  assert.throws(() => recovery.readPersistedUpdateRecoveryPayload(payload), /cannot be read/);
+  assert.throws(() => recovery.readPersistedUpdateRecoveryPayload(original), /cannot be read/);
+  assert.equal(JSON.stringify(payload), original, "rejected drafts remain untouched for recovery");
+  assert.throws(() => recovery.readPersistedUpdateRecoveryPayload("not-json"), /cannot be read/);
+});
+
 test("meeting recovery preserves bounded acoustic diarization evidence", () => {
   const payload = completePayload();
   payload.meetings[0].review.transcript = {

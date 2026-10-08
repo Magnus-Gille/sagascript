@@ -13,7 +13,7 @@ Evaluation receipts include uncollared short-reference-region and boundary measu
 
 ## Independent metric cross-check
 
-`scripts/diarization_sv/crosscheck_metrics.py` checks eleven synthetic cases at collars 0 and
+`scripts/diarization_sv/crosscheck_metrics.py` checks thirteen synthetic cases at collars 0 and
 0.25 seconds, including silence false alarms, overlapping speakers, identity switches, UEM
 holes and a case where the DER and JER assignments differ. It calls only Sagascript's offline
 evaluation command, pyannote.metrics' DER scorer, and the inspected numeric JER function from
@@ -32,6 +32,9 @@ whole width, so the harness passes twice the native value to that scorer. JER us
 without a collar and its own IoU-optimal assignment. Synthetic comparisons use a tolerance of
 1e-8 for fractions and seconds. Undefined metrics with zero reference speaker-time are kept
 as null by Sagascript, rather than being treated as a passing quality target.
+The zero-reference and collar-erased-reference cases check that DER can be null while
+JER remains defined on the original UEM. Linux CI runs these checks and all reference/evidence
+contract tests with the built batch CLI, including cross-language reference identity parity.
 
 Use `sagascript diarization reference-identity reference.json` to obtain the deterministic
 reference hash, then freeze that value in the manifest. Run:
@@ -46,6 +49,21 @@ for quality adoption only when all windows are completely partitioned, unknown i
 human reviewer, timestamp, and evidence, no candidate interval remains, every known speaker and
 declared stratum appears in eval, and eval contains at least 90% human-identified speech. A
 qualification report is a gate for the frozen sample; it is not a claim of full-film accuracy.
+Well-formed JSON with invalid qualification inputs produces an `invalid-input` report and
+a nonzero command exit. Uncomputed identities and coverage are null; file hashes identify
+the rejected inputs. JSON syntax and file-read errors use the normal CLI error stream.
+
+Transcript evaluation requires a canonical acoustic report and rejects edited transcripts,
+including the legacy top-level edit marker. Legacy meetings without such a report remain
+importable, but lack durable edit provenance for transcript scoring. Acoustic evaluation
+can still use preserved activity after transcript corrections.
+
+For native references, the source hash and exact decoded-audio duration must match the
+hypothesis. Use the decoded duration recorded by Sagascript; container duration can differ.
+For RTTM, `reference_recording_id` binds the reference to its UEM only. The receipt keeps
+`source_sha256` null, records `hypothesis_source_sha256` separately, and labels the binding
+as `rttm_recording_id_and_uem`; it does not establish source identity between the two files.
+RTTM scoring regions must fit within the hypothesis duration.
 
 To score a frozen split, pass both `--manifest split.json` and `--split dev` or `--split eval` to
 `diarization evaluate`. The command rejects stale or unqualified manifests, selects only verified

@@ -154,6 +154,22 @@ try {
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "complete_update_preparation" && call.args.nonce === "qa-unreadable"));
   const rejected = await page.evaluate(() => window.qa.calls.findLast(call => call.cmd === "complete_update_preparation").args);
   assert.match(rejected.error, /Synthetic recovery read failure/);
+  corruptRecovery = false;
+  recovery.meetings[0].review.transcript.diarization.schema_version = 99;
+  const unreadableSnapshot = JSON.stringify(recovery);
+  await page.goto(url);
+  await page.getByRole("alert").filter({ hasText: "Update blocked: unreadable recovery drafts were retained" }).waitFor();
+  await page.evaluate(() => window.qa.prepareUpdate("qa-invalid-acoustic-report"));
+  await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "complete_update_preparation" && call.args.nonce === "qa-invalid-acoustic-report"));
+  const invalidDraft = await page.evaluate(() => ({
+    ack: window.qa.calls.findLast(call => call.cmd === "complete_update_preparation").args,
+    mutations: window.qa.calls.filter(call => ["save_update_recovery", "clear_update_recovery"].includes(call.cmd)),
+    recovery: JSON.stringify(window.qaRecovery),
+  }));
+  assert.match(invalidDraft.ack.error, /cannot be read/);
+  assert.deepEqual(invalidDraft.mutations, [], "invalid persisted drafts cannot be overwritten or cleared");
+  assert.equal(invalidDraft.recovery, unreadableSnapshot);
+  await page.screenshot({ path: join(outputDir, "sagascript-update-unreadable-acoustic-drafts.png"), fullPage: true });
   assert.deepEqual(errors, []);
   console.log("PASS: recovered dictation/file/meeting visible, meeting draft restored, update snapshot acknowledged; no page errors.");
 } catch (error) {

@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 const source = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
 
 test("Settings restores every persisted result as a completed, reviewable job", () => {
-  assert.match(source, /parseUpdateRecoveryPayload\(await loadUpdateRecovery\(\)\)/);
+  assert.match(source, /readPersistedUpdateRecoveryPayload\(await loadUpdateRecovery\(\)\)/);
   assert.match(source, /status: "completed" as const/);
   assert.match(source, /initialRecoveryFile=\{fileRecoveryEntries\.find/);
   assert.match(source, /initialRecoveryMeeting=\{meetingRecoveryEntries\.find/);

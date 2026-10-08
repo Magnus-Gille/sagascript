@@ -9,7 +9,7 @@
   import { rememberTranscription, type RecentTranscription } from "./recent-transcriptions";
   import {
     createUpdateRecoveryPayload,
-    parseUpdateRecoveryPayload,
+    readPersistedUpdateRecoveryPayload,
     serializeUpdateRecoveryPayload,
     type UpdateRecoveryFile,
     type UpdateRecoveryMeeting,
@@ -298,7 +298,7 @@
     const existingFileIds = new Set(fileJobs.map((job) => job.id));
     const existingMeetingIds = new Set(savedReviewIds);
     try {
-      const persisted = parseUpdateRecoveryPayload(await loadUpdateRecovery());
+      const persisted = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
       recoveryReadError = "";
       if (!persisted) return;
 
@@ -422,7 +422,7 @@
       });
       // A result event can arrive before recovery is hydrated (or replace an
       // older recovered draft). Never overwrite a distinct persisted result.
-      const previous = parseUpdateRecoveryPayload(await loadUpdateRecovery());
+      const previous = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
       const editedRecoveredDraft = recoveredDictationActive
         && previous?.dictation?.text === recoveredDictationText;
       if (previous?.dictation?.text.trim() && previous.dictation.text !== payload.dictation?.text
@@ -505,7 +505,7 @@
 
   async function clearDeliveredRecoveryDraft(text: string): Promise<void> {
     recoveryWriteQueue = recoveryWriteQueue.catch(() => undefined).then(async () => {
-      const previous = parseUpdateRecoveryPayload(await loadUpdateRecovery());
+      const previous = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
       if (previous?.dictation?.text !== text) return;
       const remaining = { ...previous, dictation: null };
       if (remaining.files.length || remaining.meetings.length) await saveUpdateRecovery(remaining);

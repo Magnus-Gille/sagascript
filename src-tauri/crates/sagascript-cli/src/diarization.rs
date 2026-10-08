@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use sagascript_core::diarization_evaluation::{
     evaluate, EvaluationOptions, ScoringRegion, SpeakerTurn,
 };
-use sagascript_core::diarization_qualification::{qualify, reference_identity};
+use sagascript_core::diarization_qualification::{qualify, reference_identity, QualificationError};
 use sagascript_core::diarization_reference::{ReferenceDocument, ReferenceStatus};
 use sagascript_core::diarization_report::{
     DecoderEvidence, DiarizationParameters, DiarizationReport,
@@ -362,6 +362,9 @@ fn reference_qualify_report(
     let manifest: Value = serde_json::from_str(utf8(&manifest_file.bytes)?).map_err(json_error)?;
     let mut report = match qualify(&reference, &manifest, minimum_coverage) {
         Ok(report) => report,
+        Err(QualificationError::Serialization) => {
+            return Err(core_error(QualificationError::Serialization));
+        }
         Err(error) => {
             return Ok((
                 invalid_qualification_report(
@@ -1408,6 +1411,18 @@ mod tests {
         .unwrap();
         assert!(parsed.producer.is_some());
         assert_eq!(parsed.turns.len(), 1);
+
+        canonical["transcript_modified"] = true.into();
+        assert!(parse_hypothesis(
+            &serde_json::to_vec(&canonical).unwrap(),
+            EvaluationLayer::Transcript
+        )
+        .is_err());
+        assert!(parse_hypothesis(
+            &serde_json::to_vec(&canonical).unwrap(),
+            EvaluationLayer::Acoustic
+        )
+        .is_ok());
 
         let mut corrected = transcript;
         corrected["transcript_modified"] = Value::Bool(true);
