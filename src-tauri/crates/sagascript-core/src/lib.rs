@@ -4,6 +4,7 @@
 //! entry points and integrations on top.
 
 pub mod audio;
+pub mod diarization_evaluation;
 pub mod download;
 pub mod diarization_report;
 pub mod error;
