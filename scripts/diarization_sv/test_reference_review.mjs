@@ -24,7 +24,7 @@ assert.equal(api.fmtPrecise(Infinity), '—', 'non-finite timestamp is guarded')
 const source = {
   source_sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', duration_seconds: 20, speakers: ['S1', 'S2'],
   windows: [{ id: 'w1', start: 0, end: 20 }],
-  intervals: [{ start: 2, end: 5, speakers: ['S1'], status: 'candidate', evidence: [{ kind: 'grid', score: 0.8 }], window_id: 'w1' }],
+  intervals: [{ start: 2, end: 5, speakers: ['S1'], status: 'candidate', evidence: [{ kind: 'grid', artifact: 'synthetic-grid.json', score: 0.8 }], window_id: 'w1' }],
   top_level_extra: ['keep']
 };
 assert.equal(api.validateDataset(source).ok, false, 'unknown top-level fields are rejected like the Python validator');
@@ -44,8 +44,10 @@ assert.equal(api.verifyInterval(canonicalSource.intervals[0], 'Reviewer', 'I lis
 const verified = api.verifyInterval(canonicalSource.intervals[0], 'Reviewer', api.VERIFY_CONFIRMATION, '2026-01-01T00:00:00.000Z');
 assert.equal(verified.status, 'verified');
 assert.equal(verified.reviewed_at, '2026-01-01T00:00:00.000Z');
-assert.equal(verified.evidence.at(-1).kind, 'human_audio_video');
+assert.equal(JSON.stringify(verified.evidence.at(-1)), JSON.stringify({ kind: 'human_review', artifact: 'local-source' }));
 assert.equal(api.validateDataset({ ...canonicalSource, intervals: [verified] }).ok, true, 'verified export remains canonical-compatible');
+assert.equal(api.validateDataset({ ...canonicalSource, intervals: [{ ...verified, evidence: [{ kind: 'human_audio_video', artifact: 'local-source' }] }] }).ok, true, 'legacy native human evidence remains importable after export-native stripping');
+assert.equal(api.validateDataset({ ...canonicalSource, intervals: [{ ...verified, evidence: [{ kind: 'human_review', score: 0.8 }] }] }).ok, false, 'evidence needs both kind and artifact');
 assert.equal(api.verifyInterval({ ...canonicalSource.intervals[0], status: 'unknown', speakers: [] }, 'Reviewer', api.VERIFY_CONFIRMATION), null, 'unknown intervals cannot be verified');
 assert.equal(api.verifyInterval(canonicalSource.intervals[0], 'system', api.VERIFY_CONFIRMATION), null, 'nonhuman reviewer names cannot verify');
 assert.equal(api.validateDataset({ ...canonicalSource, intervals: [{ ...verified, reviewer: 'assistant' }] }).ok, false, 'nonhuman imported verification is rejected');
@@ -58,7 +60,7 @@ assert.equal(edited.window_id, 'w1');
 assert.equal(source.top_level_extra[0], 'keep');
 assert.equal(JSON.stringify(api.coverageSummary({ intervals: [verified, { start: 4, end: 8, status: 'candidate' }] })), JSON.stringify({ verified: 3, candidate: 4 }));
 
-const masked = { ...canonicalSource, windows: [{ id: 'w1', start: 0, end: 10 }], intervals: [{ start: 0, end: 10, speakers: [], status: 'unknown', evidence: [{ kind: 'mask', score: 0.4 }], window_id: 'w1' }] };
+const masked = { ...canonicalSource, windows: [{ id: 'w1', start: 0, end: 10 }], intervals: [{ start: 0, end: 10, speakers: [], status: 'unknown', evidence: [{ kind: 'mask', artifact: 'synthetic-mask.json', score: 0.4 }], window_id: 'w1' }] };
 const humanSubrange = api.verifyInterval({ start: 4, end: 6, speakers: ['S1'], status: 'candidate', evidence: [], window_id: 'w1' }, 'Reviewer', api.VERIFY_CONFIRMATION, '2026-01-01T00:00:00.000Z');
 const split = api.replaceInterval(masked, humanSubrange);
 assert.equal(split.ok, true, 'verified replacement inside unknown mask succeeds');
@@ -94,7 +96,9 @@ const frozenSplit = { reference_id: 'synthetic-reference-v1', reference_sha256: 
   { id: 'eval-1', start: 20, end: 30, split: 'eval', stratum: 'difficult' }
 ] };
 const qualification = api.qualificationReport(qualified, frozenSplit, { policyId: 'human-review-v1' });
-assert.equal(qualification.ready_for_quality_adoption, true, 'balanced frozen reference qualifies');
+assert.equal(qualification.review_complete, true, 'balanced frozen reference completes the local review preview');
+assert.equal(qualification.ready_for_quality_adoption, false, 'local review preview never claims quality adoption readiness');
+assert.equal(qualification.status, 'review_preview', 'local qualification is explicitly a preview');
 assert.equal(qualification.coverage.by_split.eval.human_identified_speech_seconds, 9.5);
 assert.equal(qualification.coverage.by_speaker.A.eval_represented, true);
 assert.equal(api.qualificationReport({ ...qualified, intervals: [] }, frozenSplit, { policyId: 'human-review-v1' }).ready_for_quality_adoption, false, 'empty gold is rejected');

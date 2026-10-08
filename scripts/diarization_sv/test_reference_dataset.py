@@ -2,6 +2,7 @@
 
 import json
 import copy
+import os
 import subprocess
 import sys
 import tempfile
@@ -150,11 +151,86 @@ class ReferenceDatasetTests(unittest.TestCase):
         unknown = {"start": 4, "end": 6, "speakers": [], "status": "unknown"}
         normalized = dataset.validate_reference(reference([verified(0, 10), unknown]))
         rttm, uem, summary = dataset.export_intervals(normalized)
-        self.assertEqual(len(rttm), 1)
+        self.assertEqual(len(rttm), 2)
+        self.assertIn(" 0.000000000 4.000000000", rttm[0])
+        self.assertIn(" 6.000000000 4.000000000", rttm[1])
         self.assertEqual(len(uem), 2)
         self.assertIn(" 0.000000000 4.000000000", uem[0])
         self.assertIn(" 6.000000000 10.000000000", uem[1])
         self.assertEqual(summary["scored_seconds"], 8.0)
+
+    def test_candidate_hole_is_removed_from_scored_uem_and_rttm(self):
+        candidate = {"start": 4, "end": 6, "speakers": ["B"], "status": "candidate"}
+        normalized = dataset.validate_reference(reference([verified(0, 10), candidate]))
+        rttm, uem, summary = dataset.export_intervals(normalized)
+        self.assertEqual(len(rttm), 2)
+        self.assertIn(" 0.000000000 4.000000000", rttm[0])
+        self.assertIn(" 6.000000000 4.000000000", rttm[1])
+        self.assertEqual(len(uem), 2)
+        self.assertIn(" 0.000000000 4.000000000", uem[0])
+        self.assertIn(" 6.000000000 10.000000000", uem[1])
+        self.assertEqual(summary["scored_seconds"], 8.0)
+
+    def test_cross_tool_js_verify_python_native_and_optional_cli(self):
+        value = reference([{
+            "start": 0, "end": 3, "speakers": ["A"], "status": "candidate",
+            "evidence": [{"kind": "audio_model", "artifact": "synthetic-model.json"}],
+        }], duration=3, speakers=("A",))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_path = root / "review.json"
+            reviewed_path = root / "reviewed.json"
+            native_path = root / "native.json"
+            source_path.write_text(json.dumps(value))
+            node_script = r"""
+import fs from 'node:fs';
+import vm from 'node:vm';
+const html = fs.readFileSync(process.argv[1], 'utf8');
+const script = html.match(/<script>([\s\S]*)<\/script>/)[1];
+const context = { console, globalThis: {} };
+vm.runInNewContext(script, context);
+const api = context.globalThis.ReferenceReview;
+const input = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const verified = api.verifyInterval(input.intervals[0], 'reviewer-one', api.VERIFY_CONFIRMATION, '2026-01-01T00:00:00Z');
+if (!verified || verified.evidence.at(-1)?.kind !== 'human_review' || Object.keys(verified.evidence.at(-1)).length !== 2) process.exit(2);
+input.intervals = [verified];
+fs.writeFileSync(process.argv[3], JSON.stringify(input) + '\n');
+"""
+            node_result = subprocess.run(
+                ["node", "--input-type=module", "-e", node_script,
+                 str(Path(__file__).with_name("reference_review.html")), str(source_path), str(reviewed_path)],
+                check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(node_result.returncode, 0, node_result.stderr)
+            reviewed = dataset.validate_reference(json.loads(reviewed_path.read_text()))
+            self.assertEqual(reviewed["intervals"][0]["evidence"][-1], {"kind": "human_review", "artifact": "local-source"})
+            native_result = subprocess.run(
+                [sys.executable, str(Path(dataset.__file__)), "export-native", str(reviewed_path)],
+                check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(native_result.returncode, 0, native_result.stderr)
+            native = json.loads(native_result.stdout)
+            native_path.write_text(json.dumps(native))
+            self.assertEqual(native, dataset.native_reference(reviewed))
+            self.assertEqual(dataset.reference_identity(reviewed), dataset.reference_identity(dataset.validate_reference(native)))
+
+            cli = os.environ.get("SAGASCRIPT_REFERENCE_CLI")
+            if cli:
+                validate_result = subprocess.run(
+                    [cli, "diarization", "reference-validate", str(native_path)],
+                    check=False, capture_output=True, text=True,
+                )
+                self.assertEqual(validate_result.returncode, 0, validate_result.stderr)
+                self.assertEqual(json.loads(validate_result.stdout)["status"], "valid")
+                identity_result = subprocess.run(
+                    [cli, "diarization", "reference-identity", str(native_path)],
+                    check=False, capture_output=True, text=True,
+                )
+                self.assertEqual(identity_result.returncode, 0, identity_result.stderr)
+                self.assertEqual(
+                    json.loads(identity_result.stdout)["reference_sha256"],
+                    dataset.reference_identity(dataset.validate_reference(native)),
+                )
 
     def test_explicit_simultaneous_speech_exports_two_rttm_entries(self):
         normalized = dataset.validate_reference(reference([verified(1, 3, ("A", "B"))]))

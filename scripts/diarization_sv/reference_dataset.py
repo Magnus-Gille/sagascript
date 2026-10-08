@@ -347,18 +347,26 @@ def export_intervals(reference: dict[str, Any]) -> tuple[list[str], list[str], d
         else:
             coalesced.append(dict(item))
 
-    rttm_lines: list[str] = []
-    for item in sorted(coalesced, key=lambda value: (value["start"], value["end"], tuple(value["speakers"]))):
-        duration = item["end"] - item["start"]
-        for speaker in item["speakers"]:
-            rttm_lines.append(
-                f"SPEAKER {reference['source_sha256']} 1 {item['start']:.9f} {duration:.9f} <NA> <NA> {speaker} <NA> <NA>"
-            )
-
+    holes = [
+        (item["start"], item["end"])
+        for item in intervals
+        if item["status"] in {"candidate", "unknown"}
+    ]
     scored = subtract_regions(
         ((item["start"], item["end"]) for item in verified),
-        ((item["start"], item["end"]) for item in intervals if item["status"] == "unknown"),
+        holes,
     )
+    rttm_lines: list[str] = []
+    for item in sorted(coalesced, key=lambda value: (value["start"], value["end"], tuple(value["speakers"]))):
+        for start, end in subtract_regions(
+            [(item["start"], item["end"])],
+            holes,
+        ):
+            duration = end - start
+            for speaker in item["speakers"]:
+                rttm_lines.append(
+                    f"SPEAKER {reference['source_sha256']} 1 {start:.9f} {duration:.9f} <NA> <NA> {speaker} <NA> <NA>"
+                )
     uem_lines = [
         f"{reference['source_sha256']} 1 {start:.9f} {end:.9f}" for start, end in scored
     ]
