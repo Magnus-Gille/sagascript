@@ -45,6 +45,24 @@ test("recovery callbacks are wired to clear entries after explicit result action
   assert.match(source, /testResultRecoveryPending = false/);
 });
 
+test("recovery cleanup removes only explicitly delivered durable drafts", () => {
+  const persistence = source.slice(source.indexOf("function enqueueRecoveryCleanup"), source.indexOf("function persistRemainingRecoveredDrafts"));
+  assert.match(persistence, /fileJobIds/);
+  assert.match(persistence, /meetingJobIds/);
+  assert.match(persistence, /dictationTexts/);
+  assert.doesNotMatch(persistence, /createUpdateRecoveryPayload\(\{/);
+  assert.match(source, /persistRemainingRecoveredDrafts\(\{ fileJobIds: \[jobId\] \}\)/);
+  assert.match(source, /persistRemainingRecoveredDrafts\(\{ meetingJobIds: \[jobId\] \}\)/);
+  assert.match(source, /persistRemainingRecoveredDrafts\(\{ dictationTexts/);
+  assert.match(source, /const originalRecoveredDictationText = recoveredDictationText/);
+});
+
+test("recovery cleanup warnings identify the durable file and repair path", () => {
+  assert.match(source, /update-recovery\.json/);
+  assert.match(source, /Application Support/);
+  assert.match(source, /repair update-recovery\.json/);
+});
+
 test("recovered jobs cannot trigger automatic transcription or paste", () => {
   const recoveryBlock = source.slice(source.indexOf("async function restoreUpdateRecovery"), source.indexOf("async function discardRecoveredDrafts"));
   assert.doesNotMatch(recoveryBlock, /handleFileTranscription|startMeetingFileTranscription|paste/);
@@ -52,7 +70,7 @@ test("recovered jobs cannot trigger automatic transcription or paste", () => {
 });
 
 test("recovered-draft persistence rereads before any destructive write", () => {
-  const persistence = source.slice(source.indexOf("function persistRemainingRecoveredDrafts"), source.indexOf("function refreshRecoveredDraftsNotice"));
+  const persistence = source.slice(source.indexOf("function enqueueRecoveryCleanup"), source.indexOf("function refreshRecoveredDraftsNotice"));
   assert.match(persistence, /readPersistedUpdateRecoveryPayload\(await loadUpdateRecovery\(\)\)/);
   assert.match(persistence, /readPersistedUpdateRecoveryPayload[\s\S]*clearUpdateRecovery/);
 });
@@ -60,6 +78,6 @@ test("recovered-draft persistence rereads before any destructive write", () => {
 test("delivery cleanup retains unreadable recovery drafts without failing Copy or Save", () => {
   const cleanup = source.slice(source.indexOf("async function clearDeliveredRecoveryDraft"), source.indexOf("onMount(()"));
   assert.match(cleanup, /try \{/);
-  assert.match(cleanup, /recoveryReadError = `Update recovery draft was retained/);
+  assert.match(cleanup, /recoveryCleanupError\(error\)/);
   assert.match(cleanup, /console\.warn\("Could not clear delivered update recovery draft"/);
 });

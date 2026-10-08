@@ -78,6 +78,91 @@ await page.route(url, (route) => route.fulfill({ contentType: "text/html",
 
 try {
   await page.goto(url);
+  await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
+  await page.getByRole("tab", { name: "recovered.wav completed" }).waitFor();
+  await page.getByRole("tab", { name: "recovered-meeting.wav completed" }).waitFor();
+
+  // D1: a newer native result must not make delivery of a recovered file
+  // reconstruct the durable snapshot from potentially stale in-memory state.
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "New unsaved dictation";
+    window.qa.dictationResult("New unsaved dictation");
+  });
+  await page.getByRole("tab", { name: "recovered.wav completed" }).click();
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "save_update_recovery"));
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation.text), "Återställd diktering");
+
+  // D1 also covers meetings independently: saving a recovered meeting after
+  // a newer native result retains the recovered dictation branch.
+  nativeFirst = false;
+  const savedMeetingDraft = recovery.meetings[0].editor_draft;
+  recovery.meetings[0].editor_draft = { labels: {}, mergeTargets: {}, texts: {}, speakers: {} };
+  await page.goto(url);
+  await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
+  await page.getByRole("tab", { name: "recovered-meeting.wav completed" }).waitFor();
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "New unsaved dictation";
+    window.qa.dictationResult("New unsaved dictation");
+  });
+  await page.getByRole("tab", { name: "recovered-meeting.wav completed" }).click();
+  await page.waitForFunction(() => {
+    const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent?.trim() === "Save review");
+    return button instanceof HTMLButtonElement && !button.disabled;
+  });
+  await page.getByRole("button", { name: "Save review", exact: true }).click();
+  await page.getByText("Review saved.", { exact: true }).waitFor();
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "save_update_recovery"));
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation.text), "Återställd diktering");
+  recovery.meetings[0].editor_draft = savedMeetingDraft;
+
+  // D2: cleanup must not synchronously serialize an unrelated in-memory edit.
+  // The editor permits this value, while the recovery normalizer correctly
+  // bounds it; delivery still removes only the copied file entry.
+  nativeFirst = false;
+  await page.goto(url);
+  await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
+  await page.getByRole("tab", { name: "recovered.wav completed" }).waitFor();
+  await page.getByRole("tab", { name: "recovered-meeting.wav completed" }).click();
+  const oversizedSpeakerLabel = "x".repeat(500_001);
+  const speakerInput = page.getByRole("textbox", { name: "Rename Speaker 1" });
+  await speakerInput.fill(oversizedSpeakerLabel);
+  await page.getByRole("tab", { name: "recovered.wav completed" }).click();
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "save_update_recovery"));
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation.text), "Återställd diktering");
+
+  // Reload a clean valid restore before the remaining preparation and
+  // corruption cases; each corruption below must happen after hydration.
+  nativeFirst = false;
+  await page.goto(url);
+  // If an existing native result wins the restore race, the persisted
+  // dictation is intentionally skipped; delivering a restored file still
+  // removes only that file and retains the skipped dictation.
+  await page.waitForFunction(() => window.qa?.calls.some((call) => call.cmd === "load_update_recovery"));
+  await page.waitForTimeout(50);
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Existing native result";
+    window.qa.dictationResult("Existing native result");
+  });
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.locator("textarea.test-result").waitFor();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Existing native result");
+  await page.getByRole("button", { name: "Transcribe", exact: true }).click();
+  await page.getByRole("tab", { name: "recovered.wav completed" }).waitFor();
+  await page.getByRole("tab", { name: "recovered.wav completed" }).click();
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "save_update_recovery"));
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation.text), "Återställd diktering");
+
+  nativeFirst = false;
+  await page.goto(url);
   await page.waitForFunction(() => window.qa?.calls.some((call) => call.cmd === "load_update_recovery"));
   await page.evaluate(() => window.qa.prepareUpdate("qa-early-nonce"));
   await page.waitForFunction(() => window.qa.calls.some((call) =>
@@ -151,7 +236,9 @@ try {
   // A successful native delivery must finish its pending/edited cleanup even
   // when rereading another persisted recovery branch discovers an unknown
   // field. The invalid bytes remain untouched and no clear/save is attempted.
+  nativeFirst = false;
   await page.goto(url);
+  await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
   await page.evaluate(() => {
     window.qaRecovery.meetings[0].unknown_recovery_field = "retained";
@@ -174,7 +261,9 @@ try {
   await page.getByRole("alert").filter({ hasText: "Update recovery draft was retained" }).waitFor();
 
   // Save follows the same successful-delivery path and must retain the draft.
+  nativeFirst = false;
   await page.goto(url);
+  await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
   await page.evaluate(() => {
     window.qaRecovery.meetings[0].unknown_recovery_field = "retained-for-save";
@@ -198,6 +287,7 @@ try {
 
   // A proposal branch that becomes invalid after restore must block updater
   // preparation while preserving the exact saved bytes.
+  nativeFirst = false;
   await page.goto(url);
   await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
   const proposalInvalidSnapshot = await page.evaluate(() => {
@@ -216,6 +306,9 @@ try {
   assert.deepEqual(invalidProposal.mutations, [], "invalid proposal bytes cannot be overwritten or cleared");
   assert.equal(invalidProposal.recovery, proposalInvalidSnapshot);
 
+  nativeFirst = false;
+  await page.goto(url);
+  await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
   corruptRecovery = true;
   await page.goto(url);
   await page.getByRole("alert").filter({ hasText: "Update blocked: unreadable recovery drafts were retained" }).waitFor();

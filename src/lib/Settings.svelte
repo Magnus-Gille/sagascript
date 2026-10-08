@@ -212,30 +212,61 @@
   let recoveryReadError: string = $state("");
   let recoveryWriteQueue: Promise<void> = Promise.resolve();
   let recoveryRestore: Promise<void> = Promise.resolve();
+  let recoveryCleanupWarning = false;
 
-  function persistRemainingRecoveredDrafts(): void {
-    const fileIds = new Set(recoveredFileIds);
-    const meetingIds = new Set(recoveredMeetingIds);
-    const remaining = createUpdateRecoveryPayload({
-      dictation: recoveredDictationActive && testResult.trim() ? { text: testResult } : null,
-      files: fileRecoveryEntries.filter((entry) => fileIds.has(entry.job_id)),
-      meetings: meetingRecoveryEntries.filter((entry) => meetingIds.has(entry.job_id)),
-    });
-    recoveryWriteQueue = recoveryWriteQueue.catch(() => undefined).then(async () => {
-      // Re-read the durable snapshot before deleting or replacing it. A draft
-      // can become invalid after restore, and callbacks must leave those bytes
-      // available for repair instead of erasing them.
-      await readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
+  type RecoveryCleanup = {
+    fileJobIds?: readonly string[];
+    meetingJobIds?: readonly string[];
+    dictationTexts?: readonly string[];
+  };
+
+  function clearRecoveryCleanupWarning(): void {
+    if (!recoveryCleanupWarning) return;
+    recoveryCleanupWarning = false;
+    recoveryReadError = "";
+  }
+
+  function recoveryCleanupError(error: unknown): string {
+    const detail = recoveryErrorText(error).replace(/[.]$/, "");
+    return `Update recovery draft was retained after delivery. ${detail}. Back up or repair update-recovery.json in Sagascript's Application Support directory before retrying the update.`;
+  }
+
+  function enqueueRecoveryCleanup(removals: RecoveryCleanup): Promise<void> {
+    const fileJobIds = new Set(removals.fileJobIds ?? []);
+    const meetingJobIds = new Set(removals.meetingJobIds ?? []);
+    const dictationTexts = new Set(removals.dictationTexts ?? []);
+    const next = recoveryWriteQueue.catch(() => undefined).then(async () => {
+      const previous = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
+      if (!previous) {
+        clearRecoveryCleanupWarning();
+        return;
+      }
+      const remaining = {
+        ...previous,
+        dictation: previous.dictation && dictationTexts.has(previous.dictation.text)
+          ? null
+          : previous.dictation,
+        files: previous.files.filter((entry) => !fileJobIds.has(entry.job_id)),
+        meetings: previous.meetings.filter((entry) => !meetingJobIds.has(entry.job_id)),
+      };
       if (!remaining.dictation && remaining.files.length === 0 && remaining.meetings.length === 0) {
         await clearUpdateRecovery();
       } else {
         serializeUpdateRecoveryPayload(remaining);
         await saveUpdateRecovery(remaining);
       }
+      clearRecoveryCleanupWarning();
     });
-    void recoveryWriteQueue.catch((error) => {
-      settingsError = `Could not update recovered drafts: ${recoveryErrorText(error)}`;
+    recoveryWriteQueue = next.catch((error) => {
+      recoveryCleanupWarning = true;
+      recoveryReadError = recoveryCleanupError(error);
     });
+    void recoveryWriteQueue;
+    return recoveryWriteQueue;
+  }
+
+  function persistRemainingRecoveredDrafts(removals: RecoveryCleanup): void {
+    void enqueueRecoveryCleanup(removals);
   }
 
   function refreshRecoveredDraftsNotice(): void {
@@ -256,7 +287,7 @@
     if (recoveredFileIds.includes(jobId)) {
       recoveredFileIds = recoveredFileIds.filter((id) => id !== jobId);
       refreshRecoveredDraftsNotice();
-      persistRemainingRecoveredDrafts();
+      persistRemainingRecoveredDrafts({ fileJobIds: [jobId] });
     }
   }
 
@@ -281,7 +312,7 @@
     if (recoveredMeetingIds.includes(jobId)) {
       recoveredMeetingIds = recoveredMeetingIds.filter((id) => id !== jobId);
       refreshRecoveredDraftsNotice();
-      persistRemainingRecoveredDrafts();
+      persistRemainingRecoveredDrafts({ meetingJobIds: [jobId] });
     }
   }
 
@@ -368,6 +399,8 @@
     try {
       await recoveryWriteQueue.catch(() => undefined);
       await clearUpdateRecovery();
+      recoveryCleanupWarning = false;
+      recoveryReadError = "";
     } catch (error) {
       settingsError = `Could not discard recovered drafts: ${recoveryErrorText(error)}`;
       return;
@@ -480,6 +513,8 @@
   }
 
   async function markTestResultDelivered(text: string): Promise<boolean> {
+    const wasRecovered = recoveredDictationActive;
+    const originalRecoveredDictationText = recoveredDictationText;
     const nativePending = await getUpdateResultPending("live-dictation");
     const nativeText = nativePending ? await getLastTranscription() : null;
     const matchesNative = nativePending && (nativeText === text
@@ -488,12 +523,14 @@
       ? await acknowledgeUpdateResult(nativeText) : false;
     if (!recoveredDictationActive) await clearDeliveredRecoveryDraft(text);
     if (testResult !== text) return false; // a newer result arrived during Copy/Save
-    const wasRecovered = recoveredDictationActive;
     testResultRecoveryPending = false;
     testResultEdited = false;
     recoveredDictationActive = false;
     refreshRecoveredDraftsNotice();
-    if (wasRecovered) persistRemainingRecoveredDrafts();
+    if (wasRecovered) {
+      const dictationTexts = [originalRecoveredDictationText, text].filter((value): value is string => value !== null);
+      persistRemainingRecoveredDrafts({ dictationTexts });
+    }
     const currentNative = nativePending && !deliveredNative && await getUpdateResultPending("live-dictation")
       ? await getLastTranscription() : null;
     if (currentNative?.trim()) {
@@ -508,20 +545,13 @@
   }
 
   async function clearDeliveredRecoveryDraft(text: string): Promise<void> {
-    recoveryWriteQueue = recoveryWriteQueue.catch(() => undefined).then(async () => {
-      const previous = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
-      if (previous?.dictation?.text !== text) return;
-      const remaining = { ...previous, dictation: null };
-      if (remaining.files.length || remaining.meetings.length) await saveUpdateRecovery(remaining);
-      else await clearUpdateRecovery();
-    });
     try {
-      await recoveryWriteQueue;
+      await enqueueRecoveryCleanup({ dictationTexts: [text] });
     } catch (error) {
       // Delivery already succeeded. Preserve the unreadable snapshot and
       // surface a concrete warning without turning Copy/Save into a failure.
       console.warn("Could not clear delivered update recovery draft", error);
-      recoveryReadError = `Update recovery draft was retained after delivery. ${recoveryErrorText(error)}`;
+      recoveryReadError = recoveryCleanupError(error);
     }
   }
 
