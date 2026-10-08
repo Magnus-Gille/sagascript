@@ -3,6 +3,8 @@
 /// Assigns a speaker label to each transcript segment based on time overlap
 /// with the diarization output.
 use crate::diarization::{DiarizedSegment, SpeakerSegment, TimestampedSegment};
+use crate::diarization_report::{AttributionEvidence, AttributionReason, SpeakerSupport};
+use std::collections::BTreeMap;
 
 /// Assign speakers to transcript segments by maximum time overlap.
 ///
@@ -13,10 +15,24 @@ pub fn merge_with_transcript(
     speakers: &[SpeakerSegment],
     transcript: &[TimestampedSegment],
 ) -> Vec<DiarizedSegment> {
-    transcript
+    merge_with_diagnostics(speakers, transcript).0
+}
+
+/// Assign text once, preserving diagnostic support for competing speakers.
+/// Multiple regions for one identity count through their union, not their
+/// largest single region or the sum of duplicate activity.
+pub fn merge_with_diagnostics(
+    speakers: &[SpeakerSegment],
+    transcript: &[TimestampedSegment],
+) -> (Vec<DiarizedSegment>, Vec<AttributionEvidence>) {
+    let mut diagnostics = Vec::with_capacity(transcript.len());
+    let merged = transcript
         .iter()
-        .map(|seg| {
-            let speaker = assign_speaker(speakers, seg.start, seg.end);
+        .enumerate()
+        .map(|(index, seg)| {
+            let evidence = attribution(speakers, index, seg.start, seg.end);
+            let speaker = evidence.speaker.clone();
+            diagnostics.push(evidence);
             DiarizedSegment {
                 start: seg.start,
                 end: seg.end,
@@ -24,49 +40,90 @@ pub fn merge_with_transcript(
                 text: seg.text.clone(),
             }
         })
-        .collect()
+        .collect();
+    (merged, diagnostics)
 }
 
 /// Find the speaker label with maximum overlap for a time window `[start, end]`.
 /// Falls back to nearest speaker if no overlap exists.
-fn assign_speaker(speakers: &[SpeakerSegment], start: f64, end: f64) -> String {
-    if speakers.is_empty() {
-        return "SPEAKER_0".to_string();
-    }
-
-    // Accumulate overlap per speaker label
-    let mut best_speaker: Option<&str> = None;
-    let mut best_overlap = 0.0f64;
-
+fn attribution(
+    speakers: &[SpeakerSegment],
+    index: usize,
+    start: f64,
+    end: f64,
+) -> AttributionEvidence {
+    let mut support_regions = BTreeMap::<&str, Vec<(f64, f64)>>::new();
+    let mut first_seen = BTreeMap::new();
     for seg in speakers {
         let overlap_start = start.max(seg.start);
         let overlap_end = end.min(seg.end);
-        let overlap = (overlap_end - overlap_start).max(0.0);
-
-        if overlap > best_overlap {
-            best_overlap = overlap;
-            best_speaker = Some(&seg.speaker);
+        if overlap_end > overlap_start {
+            let ordinal = first_seen.len();
+            first_seen.entry(seg.speaker.as_str()).or_insert(ordinal);
+            support_regions
+                .entry(&seg.speaker)
+                .or_default()
+                .push((overlap_start, overlap_end));
         }
     }
-
-    if let Some(spk) = best_speaker {
-        return spk.to_string();
-    }
-
-    // No overlap — find nearest speaker by minimum gap
-    let nearest = speakers
+    let mut support = support_regions
+        .into_iter()
+        .map(|(speaker, mut regions)| {
+            regions.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+            let mut total = 0.0;
+            let mut last = regions[0];
+            for region in regions.into_iter().skip(1) {
+                if region.0 <= last.1 {
+                    last.1 = last.1.max(region.1);
+                } else {
+                    total += last.1 - last.0;
+                    last = region;
+                }
+            }
+            total += last.1 - last.0;
+            SpeakerSupport {
+                speaker: speaker.into(),
+                overlap_seconds: total,
+            }
+        })
+        .collect::<Vec<_>>();
+    support.sort_by(|a, b| {
+        b.overlap_seconds
+            .total_cmp(&a.overlap_seconds)
+            .then_with(|| first_seen[a.speaker.as_str()].cmp(&first_seen[b.speaker.as_str()]))
+    });
+    let mut evidence = AttributionEvidence {
+        index,
+        start,
+        end,
+        speaker: "SPEAKER_0".into(),
+        reason: AttributionReason::NoSpeakerEvidence,
+        support,
+        margin_seconds: None,
+        gap_seconds: None,
+    };
+    if let Some(best) = evidence.support.first() {
+        evidence.speaker = best.speaker.clone();
+        let runner_up = evidence.support.get(1).map_or(0.0, |s| s.overlap_seconds);
+        let margin = (best.overlap_seconds - runner_up).max(0.0);
+        evidence.margin_seconds = Some(margin);
+        evidence.reason = if evidence.support.len() > 1 && margin <= 1e-9 {
+            AttributionReason::TiedOverlap
+        } else {
+            AttributionReason::TemporalOverlap
+        };
+    } else if let Some(nearest) = speakers
         .iter()
-        .min_by(|a, b| {
-            let gap_a = gap_to_segment(a, start, end);
-            let gap_b = gap_to_segment(b, start, end);
-            gap_a
-                .partial_cmp(&gap_b)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-    nearest
-        .map(|s| s.speaker.clone())
-        .unwrap_or_else(|| "SPEAKER_0".to_string())
+        .min_by(|a, b| gap_to_segment(a, start, end).total_cmp(&gap_to_segment(b, start, end)))
+    {
+        evidence.speaker = nearest.speaker.clone();
+        evidence.reason = AttributionReason::NearestGap;
+        evidence.gap_seconds = Some(gap_to_segment(nearest, start, end));
+    }
+    if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
+        evidence.reason = AttributionReason::InvalidTimestamp;
+    }
+    evidence
 }
 
 /// Compute the time gap between a speaker segment and the query interval `[start, end]`.
@@ -138,15 +195,23 @@ mod tests {
     // -- merge_with_transcript --
 
     #[test]
+    fn attribution_uses_total_union_support_per_speaker() {
+        let speakers = vec![spk(0.0, 0.7, "a"), spk(1.3, 2.0, "a"), spk(0.5, 1.5, "b")];
+        let output = merge_with_transcript(&speakers, &[seg(0.0, 2.0, "word")]);
+        assert_eq!(output[0].speaker, "a");
+    }
+
+    #[test]
+    fn duplicate_same_speaker_activity_does_not_inflate_support() {
+        let speakers = vec![spk(0.0, 0.8, "a"), spk(0.0, 0.8, "a"), spk(0.0, 1.2, "b")];
+        let output = merge_with_transcript(&speakers, &[seg(0.0, 2.0, "word")]);
+        assert_eq!(output[0].speaker, "b");
+    }
+
+    #[test]
     fn perfect_alignment() {
-        let speakers = vec![
-            spk(0.0, 2.0, "SPEAKER_0"),
-            spk(2.0, 4.0, "SPEAKER_1"),
-        ];
-        let transcript = vec![
-            seg(0.0, 2.0, "Hello"),
-            seg(2.0, 4.0, "World"),
-        ];
+        let speakers = vec![spk(0.0, 2.0, "SPEAKER_0"), spk(2.0, 4.0, "SPEAKER_1")];
+        let transcript = vec![seg(0.0, 2.0, "Hello"), seg(2.0, 4.0, "World")];
         let result = merge_with_transcript(&speakers, &transcript);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].speaker, "SPEAKER_0");
@@ -159,10 +224,7 @@ mod tests {
     fn majority_overlap_wins() {
         // Transcript segment [1.0, 3.0] overlaps SPEAKER_0 by 1s, SPEAKER_1 by 1s — tie, first wins
         // But [0.5, 2.5]: overlaps SPEAKER_0 by 1.5s and SPEAKER_1 by 0.5s → SPEAKER_0 wins
-        let speakers = vec![
-            spk(0.0, 2.0, "SPEAKER_0"),
-            spk(2.0, 4.0, "SPEAKER_1"),
-        ];
+        let speakers = vec![spk(0.0, 2.0, "SPEAKER_0"), spk(2.0, 4.0, "SPEAKER_1")];
         let transcript = vec![seg(0.5, 2.5, "test")];
         let result = merge_with_transcript(&speakers, &transcript);
         assert_eq!(result[0].speaker, "SPEAKER_0", "SPEAKER_0 has more overlap");
@@ -170,10 +232,7 @@ mod tests {
 
     #[test]
     fn word_granularity_preserves_turns_that_coarse_segment_collapses() {
-        let speakers = vec![
-            spk(0.0, 6.0, "SPEAKER_0"),
-            spk(6.0, 10.0, "SPEAKER_1"),
-        ];
+        let speakers = vec![spk(0.0, 6.0, "SPEAKER_0"), spk(6.0, 10.0, "SPEAKER_1")];
 
         // The GUI's former segment-level path attributed this entire Whisper
         // segment to SPEAKER_0 because it has the larger total overlap.
@@ -199,10 +258,7 @@ mod tests {
     #[test]
     fn no_overlap_uses_nearest() {
         // Transcript segment [5.0, 6.0], speakers end at 4.0
-        let speakers = vec![
-            spk(0.0, 2.0, "SPEAKER_0"),
-            spk(2.0, 4.0, "SPEAKER_1"),
-        ];
+        let speakers = vec![spk(0.0, 2.0, "SPEAKER_0"), spk(2.0, 4.0, "SPEAKER_1")];
         let transcript = vec![seg(5.0, 6.0, "later")];
         let result = merge_with_transcript(&speakers, &transcript);
         // Nearest is SPEAKER_1 (gap = 1.0 vs SPEAKER_0 gap = 3.0)

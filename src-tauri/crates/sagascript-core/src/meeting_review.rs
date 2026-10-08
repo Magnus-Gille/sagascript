@@ -549,6 +549,7 @@ fn apply_operation(
             if let Some(speaker_id) = speaker_id {
                 segment.speaker = speaker_id.clone();
             }
+            next.mark_transcript_modified();
             next.validate().map_err(MeetingReviewError::Transcript)?;
             Ok(next)
         }

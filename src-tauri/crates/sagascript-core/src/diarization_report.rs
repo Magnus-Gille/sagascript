@@ -46,6 +46,56 @@ pub struct RegionEvidence {
     pub nearest_other_centroid_distance: Option<f64>,
     /// Missing embeddings use stitched-track fallback, not an independent voice match.
     pub used_track_fallback: bool,
+    #[serde(default)]
+    pub active_speech_seconds: Option<f64>,
+    #[serde(default)]
+    pub overlapping_speech_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecoderEvidence {
+    pub strategy: String,
+    pub beam_size: u32,
+    pub temperature_fallback: bool,
+    pub vad_enabled: bool,
+    pub vad_threshold: f32,
+    pub vad_min_silence_duration_ms: i32,
+    pub vad_speech_pad_ms: i32,
+    pub vad_samples_overlap: f32,
+    /// VAD uses source-mapped segments; compacted DTW is not source word timing.
+    pub timestamp_method: String,
+}
+
+impl From<crate::transcription::whisper_backend::DiarizationDecoderConfig> for DecoderEvidence {
+    fn from(value: crate::transcription::whisper_backend::DiarizationDecoderConfig) -> Self {
+        Self {
+            strategy: value.strategy.into(),
+            beam_size: value.beam_size,
+            temperature_fallback: value.temperature_fallback,
+            vad_enabled: value.vad_enabled,
+            vad_threshold: value.vad_threshold,
+            vad_min_silence_duration_ms: value.vad_min_silence_duration_ms,
+            vad_speech_pad_ms: value.vad_speech_pad_ms,
+            vad_samples_overlap: value.vad_samples_overlap,
+            timestamp_method: if value.vad_enabled {
+                "source_mapped_segments"
+            } else {
+                "dtw_words_with_segment_fallback"
+            }
+            .into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AsrSegmentEvidence {
+    pub start: f64,
+    pub end: f64,
+    /// Values supplied by Whisper, unrelated to speaker identity confidence.
+    pub avg_logprob: Option<f32>,
+    pub no_speech_prob: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -99,6 +149,17 @@ pub struct DiarizationReport {
     pub duration_seconds: f64,
     pub build_revision: String,
     pub build_version: String,
+    #[serde(default)]
+    pub segmentation_model_sha256: Option<String>,
+    #[serde(default)]
+    pub embedding_model_sha256: Option<String>,
+    #[serde(default)]
+    pub decoder: Option<DecoderEvidence>,
+    #[serde(default)]
+    pub asr_segments: Vec<AsrSegmentEvidence>,
+    /// The acoustic timeline remains original when users edit/merge transcript labels.
+    #[serde(default)]
+    pub transcript_modified: bool,
     pub parameters: DiarizationParameters,
     pub activity: Vec<ActivitySpan>,
     pub regions: Vec<RegionEvidence>,
@@ -138,6 +199,44 @@ impl DiarizationReport {
         if !valid_id(&self.build_revision) || !valid_id(&self.build_version) {
             return Err(ReportError::Invalid("build identity"));
         }
+        for hash in [
+            &self.segmentation_model_sha256,
+            &self.embedding_model_sha256,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if hash.len() != 64
+                || !hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(ReportError::Invalid("model identity"));
+            }
+        }
+        if let Some(decoder) = &self.decoder {
+            let expected_strategy = if decoder.beam_size >= 2 {
+                "beam_search"
+            } else {
+                "greedy"
+            };
+            if decoder.beam_size == 1
+                || decoder.beam_size > 8
+                || decoder.strategy != expected_strategy
+                || !decoder.vad_threshold.is_finite()
+                || !(0.0..=1.0).contains(&decoder.vad_threshold)
+                || !decoder.vad_samples_overlap.is_finite()
+                || !(0.0..=1.0).contains(&decoder.vad_samples_overlap)
+                || decoder.vad_min_silence_duration_ms < 0
+                || decoder.vad_speech_pad_ms < 0
+                || !matches!(
+                    decoder.timestamp_method.as_str(),
+                    "source_mapped_segments" | "dtw_words_with_segment_fallback"
+                )
+            {
+                return Err(ReportError::Invalid("decoder evidence"));
+            }
+        }
         let p = &self.parameters;
         if [
             p.threshold,
@@ -160,6 +259,7 @@ impl DiarizationReport {
             self.activity.len(),
             self.regions.len(),
             self.attributions.len(),
+            self.asr_segments.len(),
         ]
         .iter()
         .any(|n| *n > MAX_ITEMS)
@@ -194,8 +294,25 @@ impl DiarizationReport {
                 .any(|v| !v.is_finite() || !(0.0..=2.0).contains(&v))
                 || region.used_track_fallback
                     != (region.embedding_status != EmbeddingStatus::Usable)
+                || [
+                    region.active_speech_seconds,
+                    region.overlapping_speech_seconds,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|v| !v.is_finite() || v < 0.0 || v > region.end - region.start + 1e-6)
             {
                 return Err(ReportError::Invalid("region evidence"));
+            }
+        }
+        for segment in &self.asr_segments {
+            if !bounds(segment.start, segment.end, self.duration_seconds)
+                || segment.avg_logprob.is_some_and(|v| !v.is_finite())
+                || segment
+                    .no_speech_prob
+                    .is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+            {
+                return Err(ReportError::Invalid("ASR evidence"));
             }
         }
         for (index, word) in self.attributions.iter().enumerate() {

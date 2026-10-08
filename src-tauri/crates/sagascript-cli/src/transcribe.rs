@@ -1466,7 +1466,7 @@ fn transcribe_file(
 
     let file_started = Instant::now();
     #[cfg(feature = "diarization")]
-    let meeting_source_sha256 = if args.meeting_json {
+    let meeting_source_sha256 = if args.diarize {
         meeting_checkpoint(control, MeetingPhase::Preparing)?;
         let source_sha256 = stable_file_sha256(file, control)?;
         meeting_checkpoint(control, MeetingPhase::Preparing)?;
@@ -1722,7 +1722,7 @@ fn transcribe_file(
         }
         use sagascript_core::diarization::{
             cluster_with_outcome,
-            merge::{consolidate, merge_with_transcript},
+            merge::{consolidate, merge_with_diagnostics},
             DiarizationTimings, DiarizeConfig, TimestampedSegment,
         };
         use sagascript_core::transcription::DiarizationTranscriptionTimings;
@@ -1865,7 +1865,38 @@ fn transcribe_file(
             .map(|(start, end, text)| TimestampedSegment { start, end, text })
             .collect();
 
-        let diarized = merge_with_transcript(&speaker_segments, &transcript);
+        let (diarized, attributions) = merge_with_diagnostics(&speaker_segments, &transcript);
+        let source_sha256 = meeting_source_sha256.expect("diarized output records its source hash");
+        let mut report = analysis.report(
+            &speaker_segments,
+            &config,
+            attributions,
+            source_sha256.clone(),
+            duration,
+            crate::GIT_HASH.into(),
+            env!("CARGO_PKG_VERSION").into(),
+        )?;
+        report.decoder = Some(
+            sagascript_core::transcription::whisper_backend::effective_diarization_decoder_config(
+                effective_options,
+            )?
+            .into(),
+        );
+        report.asr_segments = coverage_segments
+            .iter()
+            .map(
+                |segment| sagascript_core::diarization_report::AsrSegmentEvidence {
+                    start: segment.start,
+                    end: segment.end,
+                    avg_logprob: segment.avg_logprob,
+                    no_speech_prob: Some(segment.no_speech_prob),
+                },
+            )
+            .collect();
+        report
+            .validate()
+            .map_err(|error| DictationError::DiarizationError(error.to_string()))?;
+        verify_meeting_source_unchanged(file, &source_sha256, control)?;
         let plain_segments = prepare_diarized_plain_segments(&diarized, language, glossary);
         let mut consolidated = consolidate(&diarized);
         for segment in &mut consolidated {
@@ -1915,6 +1946,7 @@ fn transcribe_file(
             "language_regions": language_regions.as_ref().map(|diagnostics| &diagnostics.regions),
             "warnings": warnings,
             "vocabulary_corrections": glossary_corrections,
+            "diarization": report,
         });
         performance.json_assembly_seconds = json_assembly_started.elapsed().as_secs_f64();
         performance.total_seconds = file_started.elapsed().as_secs_f64();
@@ -1928,8 +1960,6 @@ fn transcribe_file(
         );
         if args.meeting_json {
             meeting_checkpoint(control, MeetingPhase::Finalizing)?;
-            let source_sha256 = meeting_source_sha256.expect("meeting JSON records source hash");
-            verify_meeting_source_unchanged(file, &source_sha256, control)?;
             let meeting = meeting_transcript_from_plain_segments(
                 source_sha256,
                 language,
@@ -1938,7 +1968,9 @@ fn transcribe_file(
                 &plain_segments,
             )?
             .with_speaker_hint(speaker_hint)
-            .with_speaker_hint_outcome(hint_outcome);
+            .with_speaker_hint_outcome(hint_outcome)
+            .with_diarization(report)
+            .map_err(|error| DictationError::DiarizationError(error.to_string()))?;
             let json = serde_json::to_value(&meeting).map_err(|_| {
                 DictationError::TranscriptionFailed(
                     "Diarized meeting transcript serialization failed".to_string(),

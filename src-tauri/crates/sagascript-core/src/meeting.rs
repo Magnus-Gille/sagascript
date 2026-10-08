@@ -5,9 +5,11 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::diarization_report::DiarizationReport;
 use crate::speaker_hint::{SpeakerCountHint, SpeakerHintOutcome};
 
 const SCHEMA_VERSION: u32 = 1;
+const ACTIVITY_SCHEMA_VERSION: u32 = 2;
 const MAX_DURATION_SECONDS: f64 = 14_400.0;
 const MAX_SEGMENTS: usize = 100_000;
 const MAX_SPEAKERS: usize = 64;
@@ -96,6 +98,9 @@ pub struct MeetingTranscript {
     pub speaker_hint_satisfied: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker_hint_delivered: Option<usize>,
+    /// Original machine acoustic activity and provenance, independent of edited text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diarization: Option<DiarizationReport>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -114,6 +119,8 @@ struct MeetingTranscriptWire {
     speaker_hint_satisfied: Option<bool>,
     #[serde(default)]
     speaker_hint_delivered: Option<usize>,
+    #[serde(default)]
+    diarization: Option<DiarizationReport>,
 }
 
 impl<'de> Deserialize<'de> for MeetingTranscript {
@@ -133,6 +140,7 @@ impl<'de> Deserialize<'de> for MeetingTranscript {
             speaker_hint: wire.speaker_hint,
             speaker_hint_satisfied: wire.speaker_hint_satisfied,
             speaker_hint_delivered: wire.speaker_hint_delivered,
+            diarization: wire.diarization,
         };
         document.validate().map_err(serde::de::Error::custom)?;
         Ok(document)
@@ -189,6 +197,7 @@ impl MeetingTranscript {
             speaker_hint: None,
             speaker_hint_satisfied: None,
             speaker_hint_delivered: None,
+            diarization: None,
         };
         document.validate()?;
         Ok(document)
@@ -207,9 +216,42 @@ impl MeetingTranscript {
         self
     }
 
+    pub fn with_diarization(mut self, report: DiarizationReport) -> Result<Self, MeetingError> {
+        self.schema_version = ACTIVITY_SCHEMA_VERSION;
+        self.diarization = Some(report);
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Human changes never relabel the original acoustic evidence.
+    pub fn mark_transcript_modified(&mut self) {
+        if let Some(report) = &mut self.diarization {
+            report.transcript_modified = true;
+        }
+    }
+
+    pub fn has_acoustic_overlap(&self) -> bool {
+        self.diarization
+            .as_ref()
+            .is_some_and(|report| report.activity.iter().any(|span| span.speakers.len() > 1))
+    }
+
     pub fn validate(&self) -> Result<(), MeetingError> {
-        if self.schema_version != SCHEMA_VERSION {
+        if ![SCHEMA_VERSION, ACTIVITY_SCHEMA_VERSION].contains(&self.schema_version) {
             return Err(MeetingError::UnsupportedSchema(self.schema_version));
+        }
+        if (self.schema_version == ACTIVITY_SCHEMA_VERSION) != self.diarization.is_some() {
+            return Err(MeetingError::InvalidField("diarization schema"));
+        }
+        if let Some(report) = &self.diarization {
+            report
+                .validate()
+                .map_err(|_| MeetingError::InvalidField("diarization"))?;
+            if report.source_sha256 != self.source_sha256
+                || report.duration_seconds != self.duration_seconds
+            {
+                return Err(MeetingError::InvalidField("diarization source"));
+            }
         }
         if !is_sha256(&self.source_sha256) {
             return Err(MeetingError::InvalidField("source_sha256"));
@@ -334,6 +376,7 @@ impl MeetingTranscript {
             }
         }
         next.speakers.retain(|speaker| speaker.id != from_id);
+        next.mark_transcript_modified();
         next.validate()?;
         Ok(next)
     }
@@ -588,13 +631,27 @@ mod tests {
     #[test]
     fn hint_outcome_round_trips_and_must_accompany_a_hint() {
         use crate::speaker_hint::SpeakerHintOutcome;
-        let outcome = Some(SpeakerHintOutcome { satisfied: false, delivered: 3 });
-        let doc = document().with_speaker_hint(Some(SpeakerCountHint::exact(2))).with_speaker_hint_outcome(outcome);
+        let outcome = Some(SpeakerHintOutcome {
+            satisfied: false,
+            delivered: 3,
+        });
+        let doc = document()
+            .with_speaker_hint(Some(SpeakerCountHint::exact(2)))
+            .with_speaker_hint_outcome(outcome);
         let json = serde_json::to_string(&doc).unwrap();
-        assert!(json.contains(r#""speaker_hint_satisfied":false"#) && json.contains(r#""speaker_hint_delivered":3"#));
-        assert_eq!(serde_json::from_str::<MeetingTranscript>(&json).unwrap(), doc);
+        assert!(
+            json.contains(r#""speaker_hint_satisfied":false"#)
+                && json.contains(r#""speaker_hint_delivered":3"#)
+        );
+        assert_eq!(
+            serde_json::from_str::<MeetingTranscript>(&json).unwrap(),
+            doc
+        );
         // An outcome without a hint is not a valid document.
-        assert!(document().with_speaker_hint_outcome(outcome).validate().is_err());
+        assert!(document()
+            .with_speaker_hint_outcome(outcome)
+            .validate()
+            .is_err());
     }
 
     #[test]
@@ -602,12 +659,18 @@ mod tests {
         let plain = document();
         let json = serde_json::to_string(&plain).unwrap();
         assert!(!json.contains("speaker_hint"), "absent without a hint");
-        assert_eq!(serde_json::from_str::<MeetingTranscript>(&json).unwrap(), plain);
+        assert_eq!(
+            serde_json::from_str::<MeetingTranscript>(&json).unwrap(),
+            plain
+        );
 
         let hinted = document().with_speaker_hint(Some(SpeakerCountHint::exact(2)));
         let json = serde_json::to_string(&hinted).unwrap();
         assert!(json.contains(r#""speaker_hint":{"exact":2}"#));
-        assert_eq!(serde_json::from_str::<MeetingTranscript>(&json).unwrap(), hinted);
+        assert_eq!(
+            serde_json::from_str::<MeetingTranscript>(&json).unwrap(),
+            hinted
+        );
 
         let invalid = document().with_speaker_hint(Some(SpeakerCountHint::exact(0)));
         assert!(invalid.validate().is_err());
@@ -852,6 +915,54 @@ mod tests {
         assert!(serde_json::from_str::<MeetingTranscript>(&unknown).is_err());
         let unsupported = json.replacen("\"schema_version\":1", "\"schema_version\":2", 1);
         assert!(serde_json::from_str::<MeetingTranscript>(&unsupported).is_err());
+    }
+
+    #[test]
+    fn acoustic_overlap_survives_json_and_transcript_merges_without_duplicated_words() {
+        let doc = document();
+        let report: DiarizationReport = serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "source_sha256": doc.source_sha256,
+            "duration_seconds": doc.duration_seconds, "build_revision": "test", "build_version": "test",
+            "parameters": {"threshold": 0.34, "min_segment_seconds": 0.5,
+                "min_gap_seconds": 0.1, "min_speaker_seconds": 1.0,
+                "absorb_max_distance": 0.34, "hint_merge_max_distance": 0.34},
+            "activity": [{"start": 0.0, "end": 1.0, "speakers": ["a", "b"]}],
+            "regions": [], "attributions": []
+        })).unwrap();
+        let original = doc.with_diarization(report).unwrap();
+        assert_eq!(original.schema_version, 2);
+        assert!(original.has_acoustic_overlap());
+        let roundtrip: MeetingTranscript =
+            serde_json::from_str(&original.to_json().unwrap()).unwrap();
+        assert_eq!(roundtrip, original);
+        let merged = original.merge_speakers("b", "a").unwrap();
+        assert_eq!(merged.segments.len(), original.segments.len());
+        assert_eq!(
+            merged.diarization.as_ref().unwrap().activity,
+            original.diarization.as_ref().unwrap().activity
+        );
+        assert!(merged.diarization.as_ref().unwrap().transcript_modified);
+        assert!(
+            !original
+                .rename_speaker("a", "New name")
+                .unwrap()
+                .diarization
+                .unwrap()
+                .transcript_modified
+        );
+        let mut wrong_source = original.clone();
+        wrong_source.diarization.as_mut().unwrap().source_sha256 = "f".repeat(64);
+        assert!(wrong_source.validate().is_err());
+        let mut wrong_duration = original.clone();
+        wrong_duration
+            .diarization
+            .as_mut()
+            .unwrap()
+            .duration_seconds += 1.0;
+        assert!(wrong_duration.validate().is_err());
+        let mut wrong_schema = original;
+        wrong_schema.schema_version = 1;
+        assert!(wrong_schema.validate().is_err());
     }
 
     #[test]
