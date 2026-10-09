@@ -17,6 +17,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sagascript_core::audio::decoder::SUPPORTED_EXTENSIONS;
 #[cfg(feature = "diarization")]
 use sagascript_core::diarization::DiarizedSegment;
+#[cfg(feature = "diarization")]
+use sagascript_core::diarization_report::DecoderEvidence;
 use sagascript_core::error::DictationError;
 #[cfg(feature = "diarization")]
 use sagascript_core::meeting::{MeetingSegmentInput, MeetingSpeaker, MeetingTranscript};
@@ -1335,12 +1337,19 @@ fn progress_event(
     })
 }
 
-#[cfg(feature = "diarization")]
-fn meeting_progress_event(phase: &str, elapsed_ms: u128) -> serde_json::Value {
-    // Meeting phases are not part of the plain transcription three-step
-    // grouping. They expose boundaries only; no overall or time-derived
-    // percentage is honest here.
-    progress_event(phase, None, None, None, elapsed_ms)
+fn progress_event_with_decoder(
+    phase: &str,
+    percent: Option<u8>,
+    step: Option<u8>,
+    steps_total: Option<u8>,
+    elapsed_ms: u128,
+    decoder: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut event = progress_event(phase, percent, step, steps_total, elapsed_ms);
+    if let Some(decoder) = decoder {
+        event["decoder"] = decoder.clone();
+    }
+    event
 }
 
 fn emit_progress(enabled: bool, started: Instant, phase: &str, percent: Option<u8>) {
@@ -1358,12 +1367,46 @@ fn emit_progress(enabled: bool, started: Instant, phase: &str, percent: Option<u
     }
 }
 
-#[cfg(feature = "diarization")]
-fn emit_meeting_progress(enabled: bool, started: Instant, phase: &str) {
+fn emit_progress_with_decoder(
+    enabled: bool,
+    started: Instant,
+    phase: &str,
+    percent: Option<u8>,
+    decoder: Option<&serde_json::Value>,
+) {
     if enabled {
         eprintln!(
             "{}",
-            meeting_progress_event(phase, started.elapsed().as_millis())
+            progress_event_with_decoder(
+                phase,
+                percent,
+                progress_step(phase),
+                Some(3),
+                started.elapsed().as_millis(),
+                decoder,
+            )
+        );
+    }
+}
+
+#[cfg(feature = "diarization")]
+fn emit_meeting_progress(
+    enabled: bool,
+    started: Instant,
+    phase: &str,
+    decoder: Option<&serde_json::Value>,
+) {
+    if enabled {
+        eprintln!(
+            "{}",
+            progress_event_with_decoder(
+                phase,
+                None,
+                None,
+                None,
+                started.elapsed().as_millis(),
+                decoder,
+            )
         );
     }
 }
@@ -1499,6 +1542,17 @@ fn transcribe_file(
         .then(|| resolve_diarization_options(args, stored))
         .transpose()?;
     #[cfg(feature = "diarization")]
+    let diarization_decoder_evidence = diarization_options
+        .as_ref()
+        .map(effective_diarization_decoder_evidence)
+        .transpose()?;
+    #[cfg(feature = "diarization")]
+    let diarization_decoder_progress = diarization_decoder_evidence
+        .as_ref()
+        .map(|decoder| serde_json::to_value(decoder).expect("decoder evidence serializes"));
+    #[cfg(not(feature = "diarization"))]
+    let diarization_decoder_progress: Option<serde_json::Value> = None;
+    #[cfg(feature = "diarization")]
     if args
         .diarize_cache
         .as_deref()
@@ -1607,13 +1661,25 @@ fn transcribe_file(
             pb
         });
         let on_decode = |pct: u8| {
-            emit_progress(args.progress_json, file_started, "decoding", Some(pct));
+            emit_progress_with_decoder(
+                args.progress_json,
+                file_started,
+                "decoding",
+                Some(pct),
+                diarization_decoder_progress.as_ref(),
+            );
             if let Some(pb) = &decode_bar {
                 pb.set_position(pct as u64);
             }
         };
         let on_resample = |pct: u8| {
-            emit_progress(args.progress_json, file_started, "resampling", Some(pct));
+            emit_progress_with_decoder(
+                args.progress_json,
+                file_started,
+                "resampling",
+                Some(pct),
+                diarization_decoder_progress.as_ref(),
+            );
             if let Some(pb) = &decode_bar {
                 if pct == 0 {
                     pb.set_style(
@@ -1693,11 +1759,23 @@ fn transcribe_file(
             let context_profile = ContextProfile::for_diarization(args.diarize);
             #[cfg(not(feature = "diarization"))]
             let context_profile = ContextProfile::FlashAttention;
-            emit_progress(args.progress_json, file_started, "loading", None);
+            emit_progress_with_decoder(
+                args.progress_json,
+                file_started,
+                "loading",
+                None,
+                diarization_decoder_progress.as_ref(),
+            );
             let model_load_seconds =
                 ensure_model_loaded(backend, model, context_profile, model_loaded)?;
             crate::cancel::check()?;
-            emit_progress(args.progress_json, file_started, "language_detection", None);
+            emit_progress_with_decoder(
+                args.progress_json,
+                file_started,
+                "language_detection",
+                None,
+                diarization_decoder_progress.as_ref(),
+            );
             let language_detection_started = Instant::now();
             let audio = audio.as_deref().expect("cache misses decode audio");
             let detected_language = match detect_file_language(backend, audio, model) {
@@ -1785,7 +1863,12 @@ fn transcribe_file(
             effective_options.vad_model_path.is_some()
         );
 
-        emit_meeting_progress(args.progress_json, file_started, "analyzing");
+        emit_meeting_progress(
+            args.progress_json,
+            file_started,
+            "analyzing",
+            diarization_decoder_progress.as_ref(),
+        );
         let (analysis, raw_segments, coverage_segments, diarization_timings, transcription_timings) =
             if let Some(cached) = cached {
                 performance.cache_hit = true;
@@ -1864,7 +1947,12 @@ fn transcribe_file(
             transcription_timings.word_timestamp_attribution_seconds;
 
         let clustering_started = Instant::now();
-        emit_meeting_progress(args.progress_json, file_started, "clustering");
+        emit_meeting_progress(
+            args.progress_json,
+            file_started,
+            "clustering",
+            diarization_decoder_progress.as_ref(),
+        );
         meeting_checkpoint(control, MeetingPhase::Clustering)?;
         let (speaker_segments, hint_outcome) = cluster_with_outcome(&analysis, &config)?;
         meeting_checkpoint(control, MeetingPhase::Clustering)?;
@@ -1883,7 +1971,12 @@ fn transcribe_file(
             }
         }
 
-        emit_meeting_progress(args.progress_json, file_started, "finalizing");
+        emit_meeting_progress(
+            args.progress_json,
+            file_started,
+            "finalizing",
+            diarization_decoder_progress.as_ref(),
+        );
         let merge_diagnostics_started = Instant::now();
         let transcript: Vec<TimestampedSegment> = raw_segments
             .into_iter()
@@ -1903,10 +1996,9 @@ fn transcribe_file(
             env!("CARGO_PKG_VERSION").into(),
         )?;
         report.decoder = Some(
-            sagascript_core::transcription::whisper_backend::effective_diarization_decoder_config(
-                effective_options,
-            )?
-            .into(),
+            diarization_decoder_evidence
+                .clone()
+                .expect("diarized runs resolve decoder evidence before inference"),
         );
         report.speaker_hint_outcome = hint_outcome;
         report.asr_segments = coverage_segments
@@ -2005,14 +2097,24 @@ fn transcribe_file(
                 )
             })?;
             meeting_checkpoint(control, MeetingPhase::Finalizing)?;
-            emit_meeting_progress(args.progress_json, file_started, "completed");
+            emit_meeting_progress(
+                args.progress_json,
+                file_started,
+                "completed",
+                diarization_decoder_progress.as_ref(),
+            );
             return Ok(FileTranscription {
                 json,
                 plain,
                 meeting: Some(meeting),
             });
         }
-        emit_meeting_progress(args.progress_json, file_started, "completed");
+        emit_meeting_progress(
+            args.progress_json,
+            file_started,
+            "completed",
+            diarization_decoder_progress.as_ref(),
+        );
         return Ok(FileTranscription {
             json,
             plain,
@@ -2738,6 +2840,18 @@ fn resolve_diarization_options(
     Ok(options)
 }
 
+#[cfg(feature = "diarization")]
+fn effective_diarization_decoder_evidence(
+    options: &TranscribeOptions,
+) -> Result<DecoderEvidence, DictationError> {
+    Ok(
+        sagascript_core::transcription::whisper_backend::effective_diarization_decoder_config(
+            options,
+        )?
+        .into(),
+    )
+}
+
 fn parse_parallel_chunks(s: &str) -> Result<usize, String> {
     let value = s
         .parse::<usize>()
@@ -2989,13 +3103,73 @@ mod tests {
     #[cfg(feature = "diarization")]
     #[test]
     fn meeting_progress_event_is_indeterminate_and_elapsed() {
-        let event = meeting_progress_event("analyzing", 42);
+        let event = progress_event_with_decoder("analyzing", None, None, None, 42, None);
         assert_eq!(event["event"], "transcription_progress");
         assert_eq!(event["phase"], "analyzing");
         assert!(event["percent"].is_null());
         assert!(event["step"].is_null());
         assert!(event["steps_total"].is_null());
         assert_eq!(event["elapsed_ms"], 42);
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn diarized_progress_decoder_matches_final_evidence_for_default_beam_and_vad() {
+        for (beam_size, vad_model_path) in [(0, None), (4, None), (0, Some("synthetic-vad"))] {
+            let options = TranscribeOptions {
+                beam_size,
+                vad_model_path: vad_model_path.map(str::to_owned),
+                segment_timestamps: true,
+                ..Default::default()
+            };
+            let evidence = effective_diarization_decoder_evidence(&options).unwrap();
+            let expected = serde_json::to_value(&evidence).unwrap();
+            let event =
+                progress_event_with_decoder("analyzing", None, None, None, 42, Some(&expected));
+
+            assert_eq!(event["decoder"], expected);
+            assert_eq!(event["decoder"]["beam_size"], beam_size);
+            assert_eq!(event["decoder"]["vad_enabled"], vad_model_path.is_some());
+            assert!(!serde_json::to_string(&event)
+                .unwrap()
+                .contains("synthetic-vad"));
+        }
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn diarized_progress_decoder_is_present_for_cached_and_uncached_phases() {
+        let options = TranscribeOptions {
+            beam_size: 4,
+            vad_model_path: Some("synthetic-vad".into()),
+            segment_timestamps: true,
+            ..Default::default()
+        };
+        let evidence = effective_diarization_decoder_evidence(&options).unwrap();
+        let expected = serde_json::to_value(evidence).unwrap();
+        for phase in [
+            "decoding",
+            "resampling",
+            "loading",
+            "language_detection",
+            "analyzing",
+            "clustering",
+            "finalizing",
+            "completed",
+        ] {
+            let event = progress_event_with_decoder(phase, None, None, None, 42, Some(&expected));
+            assert_eq!(event["decoder"], expected, "phase={phase}");
+        }
+    }
+
+    #[cfg(feature = "diarization")]
+    #[test]
+    fn ordinary_progress_event_is_unchanged_without_decoder_snapshot() {
+        let ordinary = progress_event("transcribing", Some(50), Some(3), Some(3), 42);
+        let through_snapshot_helper =
+            progress_event_with_decoder("transcribing", Some(50), Some(3), Some(3), 42, None);
+        assert_eq!(through_snapshot_helper, ordinary);
+        assert!(through_snapshot_helper.get("decoder").is_none());
     }
 
     #[cfg(feature = "diarization")]
