@@ -1549,7 +1549,7 @@ fn transcribe_file(
     #[cfg(feature = "diarization")]
     let diarization_decoder_progress = diarization_decoder_evidence
         .as_ref()
-        .map(|decoder| serde_json::to_value(decoder).expect("decoder evidence serializes"));
+        .map(|decoder| decoder_progress_value(decoder, args.meeting_json));
     #[cfg(not(feature = "diarization"))]
     let diarization_decoder_progress: Option<serde_json::Value> = None;
     #[cfg(feature = "diarization")]
@@ -2841,6 +2841,18 @@ fn resolve_diarization_options(
 }
 
 #[cfg(feature = "diarization")]
+fn decoder_progress_value(decoder: &DecoderEvidence, meeting_json: bool) -> serde_json::Value {
+    if meeting_json {
+        // Native meeting JSON serializes typed f32 fields directly. Match that
+        // wire representation without changing the legacy JSON report format.
+        let native = serde_json::to_string(decoder).expect("decoder evidence serializes");
+        serde_json::from_str(&native).expect("serialized decoder evidence is valid JSON")
+    } else {
+        serde_json::to_value(decoder).expect("decoder evidence serializes")
+    }
+}
+
+#[cfg(feature = "diarization")]
 fn effective_diarization_decoder_evidence(
     options: &TranscribeOptions,
 ) -> Result<DecoderEvidence, DictationError> {
@@ -3114,7 +3126,7 @@ mod tests {
 
     #[cfg(feature = "diarization")]
     #[test]
-    fn diarized_progress_decoder_matches_final_evidence_for_default_beam_and_vad() {
+    fn resolved_decoder_evidence_can_be_attached_to_progress() {
         for (beam_size, vad_model_path) in [(0, None), (4, None), (0, Some("synthetic-vad"))] {
             let options = TranscribeOptions {
                 beam_size,
@@ -3138,7 +3150,7 @@ mod tests {
 
     #[cfg(feature = "diarization")]
     #[test]
-    fn diarized_progress_decoder_is_present_for_cached_and_uncached_phases() {
+    fn progress_helper_carries_decoder_for_each_phase_name() {
         let options = TranscribeOptions {
             beam_size: 4,
             vad_model_path: Some("synthetic-vad".into()),
@@ -3163,6 +3175,27 @@ mod tests {
     }
 
     #[cfg(feature = "diarization")]
+    #[test]
+    fn progress_decoder_matches_each_output_serializers_float_representation() {
+        let evidence = effective_diarization_decoder_evidence(&TranscribeOptions {
+            beam_size: 0,
+            segment_timestamps: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let native = decoder_progress_value(&evidence, true);
+        let legacy = decoder_progress_value(&evidence, false);
+        let native_report: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&evidence).unwrap()).unwrap();
+        assert_eq!(native, native_report);
+        assert_eq!(native["vad_samples_overlap"], serde_json::json!(0.1));
+        assert_eq!(legacy, serde_json::to_value(&evidence).unwrap());
+        assert_eq!(
+            serde_json::from_value::<DecoderEvidence>(native).unwrap(),
+            serde_json::from_value::<DecoderEvidence>(legacy).unwrap()
+        );
+    }
+
     #[test]
     fn ordinary_progress_event_is_unchanged_without_decoder_snapshot() {
         let ordinary = progress_event("transcribing", Some(50), Some(3), Some(3), 42);
