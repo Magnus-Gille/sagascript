@@ -74,7 +74,12 @@ test("all durable recovery mutations share one queue through their acknowledgeme
 test("dictation recovery replacement is restricted to the current editor lineage", () => {
   assert.match(source, /let dictationEditorLineage = 0/);
   assert.match(source, /let nativeEditorOrigin: \{ text: string; lineage: number \} \| null = null/);
-  assert.match(source, /lastPersistedDictation: \{ text: string; lineage: number \}/);
+  assert.match(source, /lastPersistedDictation: \{ text: string; lineage: number; revision: number \}/);
+  assert.match(source, /recoveryPersistenceRevision = 0/);
+  assert.match(source, /persistedRevision: lastPersistedDictation\?\.lineage === lineage/);
+  assert.match(source, /dictationPersistenceRevision/);
+  assert.match(source, /previous\.dictation\.text === removals\.dictationText/);
+  assert.match(source, /lastPersistedDictation\.revision === removals\.dictationPersistenceRevision/);
   assert.match(source, /lastPersistedDictation\.lineage === payloadLineage/);
   assert.match(source, /dictationEditorLineage\+\+/);
   assert.match(source, /const delivery = captureDictationDelivery\(text\)/);
@@ -89,7 +94,7 @@ test("delivery cleanup runs before stale-editor handling and captures native ori
   assert.match(source, /wasEdited: testResultEdited/);
   assert.match(source, /nativeSourceText: nativeEditorOrigin\?\.lineage === lineage \? nativeEditorOrigin.text : null/);
   assert.match(source, /const cleanupTexts = \[persistedText, recoveredText, text\]/);
-  assert.match(source, /await clearDeliveredRecoveryDraft\(cleanupTexts, lineage\);\s*if \(testResult !== text/);
+  assert.match(source, /await clearDeliveredRecoveryDraft\(cleanupTexts, lineage, text, persistedRevision\);\s*if \(testResult !== text/);
   assert.doesNotMatch(source, /lineage === dictationEditorLineage && !wasRecovered/);
   assert.match(source, /nativeEditorOrigin\?\.lineage === dictationEditorLineage/);
   assert.match(source, /const nativeEditorOwnsResult = nativeEditorOrigin\?\.lineage === dictationEditorLineage/);

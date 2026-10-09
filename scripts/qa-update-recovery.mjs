@@ -400,6 +400,38 @@ try {
   await runHeldPreparationDelivery({ action: "Copy result", actionName: "Copy", nonce: "qa-copy-held-preparation", gate: "copy-transcription" });
   await runHeldPreparationDelivery({ action: "Save result…", actionName: "Save", nonce: "qa-save-held-preparation", gate: "save-transcription" });
 
+  // Q4: Copy captures an edited recovered draft while preparation later saves
+  // the editor after it was reverted. Cleanup of the captured alias must not
+  // remove the newer persisted text from that same editor lineage.
+  recovery.dictation = { text: "Alias D" };
+  recovery.files = [];
+  recovery.meetings = [];
+  initialNativeDictation = "Earlier native result";
+  recoveryDelayMs = 0;
+  nativeDelayMs = 0;
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Alias D");
+  await page.locator("textarea.test-result").fill("Alias D edited");
+  await page.evaluate(() => window.qa.blockGate("copy-transcription"));
+  await page.getByRole("button", { name: "Copy result", exact: true }).click();
+  await page.waitForFunction(() => window.qa.gateStarted("copy-transcription"));
+  await page.locator("textarea.test-result").fill("Alias D");
+  await page.evaluate(() => window.qa.blockGate("complete-preparation"));
+  await page.evaluate(() => window.qa.prepareUpdate("qa-alias-revision"));
+  await page.waitForFunction(() => window.qa.gateStarted("complete-preparation"));
+  await page.waitForFunction(() => window.qa.calls.some((call) =>
+    call.cmd === "save_update_recovery" && call.args.payload.dictation?.text === "Alias D"));
+  const aliasPendingCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "get_update_result_pending").length);
+  await page.evaluate(() => window.qa.releaseGate("copy-transcription"));
+  await page.waitForFunction((before) => window.qa.calls.filter((call) => call.cmd === "get_update_result_pending").length > before, aliasPendingCount);
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+  await page.evaluate(() => window.qa.releaseGate("complete-preparation"));
+  assert.equal((await waitForPreparation("qa-alias-revision")).error, null);
+  await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
+  await page.waitForFunction(() => window.qaRecovery?.dictation?.text === "Alias D");
+  assert.equal(await page.locator("textarea.test-result").inputValue(), "Alias D");
+
   // F1: a recovered edit must remain distinct from a pending native result
   // even after Discard clears the live recovered flag. Copy, Save, and retry
   // preparation must leave the hidden native result pending.

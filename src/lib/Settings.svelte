@@ -215,13 +215,16 @@
   let recoveryRestore: Promise<void> = Promise.resolve();
   let recoveryCleanupWarning = false;
   let dictationEditorLineage = 0;
-  let lastPersistedDictation: { text: string; lineage: number } | null = null;
+  let recoveryPersistenceRevision = 0;
+  let lastPersistedDictation: { text: string; lineage: number; revision: number } | null = null;
 
   type RecoveryCleanup = {
     fileJobIds?: readonly string[];
     meetingJobIds?: readonly string[];
     dictationTexts?: readonly string[];
     dictationLineage?: number;
+    dictationText?: string;
+    dictationPersistenceRevision?: number;
   };
 
   type DictationDelivery = {
@@ -232,6 +235,7 @@
     nativeSourceText: string | null;
     recoveredText: string | null;
     persistedText: string | null;
+    persistedRevision: number | null;
   };
 
   function clearRecoveryCleanupWarning(): void {
@@ -266,7 +270,9 @@
         && dictationTexts.has(previous.dictation.text)
         && (removals.dictationLineage === undefined
           || (lastPersistedDictation?.lineage === removals.dictationLineage
-            && lastPersistedDictation.text === previous.dictation.text)),
+            && lastPersistedDictation.text === previous.dictation.text
+            && (previous.dictation.text === removals.dictationText
+              || lastPersistedDictation.revision === removals.dictationPersistenceRevision))),
       );
       const remaining = {
         ...previous,
@@ -376,7 +382,12 @@
         recoveredDictationText = recoveredDictation.text;
         recoveredDictationActive = true;
         nativeEditorOrigin = null;
-        lastPersistedDictation = { text: recoveredDictation.text, lineage: dictationEditorLineage };
+        recoveryPersistenceRevision++;
+        lastPersistedDictation = {
+          text: recoveredDictation.text,
+          lineage: dictationEditorLineage,
+          revision: recoveryPersistenceRevision,
+        };
       }
 
       const filesToRestore = persisted.files.filter((entry) => !existingFileIds.has(entry.job_id));
@@ -512,9 +523,16 @@
         // Validate the exact serialized size before handing the payload to Rust.
         serializeUpdateRecoveryPayload(payload);
         await saveUpdateRecovery(payload);
-        lastPersistedDictation = payload.dictation
-          ? { text: payload.dictation.text, lineage: payloadLineage }
-          : null;
+        if (payload.dictation) {
+          recoveryPersistenceRevision++;
+          lastPersistedDictation = {
+            text: payload.dictation.text,
+            lineage: payloadLineage,
+            revision: recoveryPersistenceRevision,
+          };
+        } else {
+          lastPersistedDictation = null;
+        }
         await completeUpdatePreparation(nonce, null);
       });
     } catch (error) {
@@ -573,11 +591,12 @@
       nativeSourceText: nativeEditorOrigin?.lineage === lineage ? nativeEditorOrigin.text : null,
       recoveredText: recoveredDictationText,
       persistedText: lastPersistedDictation?.lineage === lineage ? lastPersistedDictation.text : null,
+      persistedRevision: lastPersistedDictation?.lineage === lineage ? lastPersistedDictation.revision : null,
     };
   }
 
   async function markTestResultDelivered(delivery: DictationDelivery): Promise<boolean> {
-    const { text, lineage, wasRecovered, wasEdited, nativeSourceText, recoveredText, persistedText } = delivery;
+    const { text, lineage, wasRecovered, wasEdited, nativeSourceText, recoveredText, persistedText, persistedRevision } = delivery;
     const nativePending = await getUpdateResultPending("live-dictation");
     const nativeText = nativePending ? await getLastTranscription() : null;
     const matchesNative = lineage === dictationEditorLineage && nativePending && (nativeText === text
@@ -585,7 +604,7 @@
     const deliveredNative = matchesNative && nativeText !== null
       ? await acknowledgeUpdateResult(nativeText) : false;
     const cleanupTexts = [persistedText, recoveredText, text].filter((value): value is string => value !== null);
-    await clearDeliveredRecoveryDraft(cleanupTexts, lineage);
+    await clearDeliveredRecoveryDraft(cleanupTexts, lineage, text, persistedRevision);
     if (testResult !== text || dictationEditorLineage !== lineage) return false; // a newer result arrived during Copy/Save
     testResultRecoveryPending = false;
     testResultEdited = false;
@@ -606,9 +625,19 @@
     return false;
   }
 
-  async function clearDeliveredRecoveryDraft(texts: readonly string[], lineage: number): Promise<void> {
+  async function clearDeliveredRecoveryDraft(
+    texts: readonly string[],
+    lineage: number,
+    deliveredText: string,
+    persistedRevision: number | null,
+  ): Promise<void> {
     try {
-      await enqueueRecoveryCleanup({ dictationTexts: texts, dictationLineage: lineage });
+      await enqueueRecoveryCleanup({
+        dictationTexts: texts,
+        dictationLineage: lineage,
+        dictationText: deliveredText,
+        dictationPersistenceRevision: persistedRevision ?? undefined,
+      });
     } catch (error) {
       // Delivery already succeeded. Preserve the unreadable snapshot and
       // surface a concrete warning without turning Copy/Save into a failure.
