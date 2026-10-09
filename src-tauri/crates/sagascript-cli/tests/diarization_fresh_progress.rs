@@ -1,7 +1,9 @@
 //! Fresh diarization progress provenance regression.
 //!
 //! This test intentionally runs only when explicitly requested because it needs a real audio
-//! fixture and locally installed Whisper, Silero VAD, and diarization models. It does not use a
+//! public fixture and locally installed Whisper, Silero VAD, and diarization models. Before
+//! starting the CLI it verifies the pinned VAD artifact, refusing a missing/corrupt file.
+//! Cargo offline mode alone does not constrain the spawned CLI. The test does not use a
 //! cache, so it exercises the decode, model loading, language detection, analysis, clustering,
 //! and finalization phases.
 //!
@@ -17,6 +19,7 @@
 
 #[cfg(feature = "diarization")]
 mod fresh_progress {
+    use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
 
@@ -37,7 +40,7 @@ mod fresh_progress {
 
     // Keep ordinary OS paths for provisioned local models and the Windows loader;
     // exclude provider/application credentials. Only settings are redirected.
-    const ORDINARY_OS_ENV: [&str; 13] = [
+    const ORDINARY_OS_ENV: [&str; 14] = [
         "HOME",
         "USER",
         "LOGNAME",
@@ -51,6 +54,7 @@ mod fresh_progress {
         "USERPROFILE",
         "APPDATA",
         "LOCALAPPDATA",
+        "XDG_DATA_HOME",
     ];
 
     #[test]
@@ -59,13 +63,12 @@ mod fresh_progress {
         let fixture = required_path("SAGASCRIPT_PROGRESS_TEST_FILE");
         let model = optional_nonempty("SAGASCRIPT_PROGRESS_TEST_MODEL", "tiny.en");
         let language = optional_nonempty("SAGASCRIPT_PROGRESS_TEST_LANGUAGE", "en");
-        let source_before = std::fs::read(&fixture).unwrap_or_else(|error| {
-            panic!(
-                "cannot read SAGASCRIPT_PROGRESS_TEST_FILE {}: {error}",
-                fixture.display()
-            )
-        });
+        let source_before = std::fs::read(&fixture)
+            .unwrap_or_else(|error| panic!("cannot read SAGASCRIPT_PROGRESS_TEST_FILE: {error}"));
         let source_sha256 = sha256_hex(&source_before);
+        let vad = sagascript_core::transcription::model::vad_model_path();
+        sagascript_core::transcription::model::verify_vad_model(&vad)
+            .expect("fresh regression requires the pinned local VAD model before CLI start");
 
         let root = tempdir().expect("create isolated settings directory");
         let settings = root.path().join("settings.json");
@@ -158,17 +161,23 @@ mod fresh_progress {
         source_before: &[u8],
         fixture: &Path,
     ) {
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let output_summary = format!(
+            "status={} stdout_bytes={} stdout_sha256={} stderr_bytes={} stderr_sha256={}",
+            output.status,
+            output.stdout.len(),
+            sha256_hex(&output.stdout),
+            output.stderr.len(),
+            sha256_hex(&output.stderr)
+        );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             output.status.success(),
-            "{} fresh run failed for model {model}: status={}\nstdout={stdout}\nstderr={stderr}",
-            output_kind.flag(),
-            output.status
+            "{} fresh run failed for model {model}: {output_summary}",
+            output_kind.flag()
         );
         let report: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
             panic!(
-                "{} fresh run emitted invalid JSON: {error}\nstdout={stdout}\nstderr={stderr}",
+                "{} fresh run emitted invalid JSON: {error}; {output_summary}",
                 output_kind.flag()
             )
         });
@@ -177,7 +186,7 @@ mod fresh_progress {
             .and_then(|value| value.get("decoder"))
             .unwrap_or_else(|| {
                 panic!(
-                    "{} fresh report has no diarization.decoder: {stdout}",
+                    "{} fresh report has no diarization.decoder; {output_summary}",
                     output_kind.flag()
                 )
             });
@@ -195,8 +204,26 @@ mod fresh_progress {
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
             .filter(|event| event.get("event") == Some(&json!("transcription_progress")))
             .collect();
+        let expected_keys: BTreeSet<&str> = [
+            "event",
+            "phase",
+            "step",
+            "steps_total",
+            "percent",
+            "elapsed_ms",
+            "decoder",
+        ]
+        .into_iter()
+        .collect();
         let mut phases = Vec::new();
         for event in &progress_events {
+            let keys: BTreeSet<&str> = event
+                .as_object()
+                .expect("progress object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(keys, expected_keys, "unexpected progress field names");
             let phase = event
                 .get("phase")
                 .and_then(Value::as_str)
@@ -204,37 +231,48 @@ mod fresh_progress {
             if phases.last().copied() != Some(phase) {
                 phases.push(phase);
             }
-            assert_eq!(
-                event.get("decoder"),
-                Some(final_decoder),
-                "{} fresh progress decoder differs from final report at {phase}; stderr={stderr}",
+            assert!(
+                event.get("decoder") == Some(final_decoder),
+                "{} fresh progress decoder differs from final report at {phase}; {output_summary}",
                 output_kind.flag()
             );
+            if matches!(
+                phase,
+                "analyzing" | "clustering" | "finalizing" | "completed"
+            ) {
+                assert!(
+                    event["percent"].is_null()
+                        && event["step"].is_null()
+                        && event["steps_total"].is_null(),
+                    "meeting phase invented overall completion"
+                );
+            }
         }
         assert_eq!(
             phases,
             REQUIRED_PHASES,
-            "{} fresh progress phases; stderr={stderr}",
+            "{} fresh progress phases; {output_summary}",
             output_kind.flag()
         );
         assert!(
             progress_events.len() >= REQUIRED_PHASES.len(),
-            "{} fresh run emitted too few progress events; stderr={stderr}",
+            "{} fresh run emitted too few progress events; {output_summary}",
             output_kind.flag()
         );
 
-        let decoder_text = serde_json::to_string(final_decoder).expect("decoder serializes");
-        for forbidden in ["model", "path", "eta"] {
+        for key in final_decoder.as_object().expect("decoder object").keys() {
+            let key = key.to_ascii_lowercase();
             assert!(
-                !decoder_text.to_ascii_lowercase().contains(forbidden),
-                "{} decoder contains forbidden {forbidden:?}: {decoder_text}",
-                output_kind.flag()
+                !["model", "path", "eta"].contains(&key.as_str())
+                    && !key.ends_with("_path")
+                    && !key.starts_with("eta_"),
+                "decoder contains forbidden field {key:?}"
             );
         }
 
         let source_after = std::fs::read(fixture).expect("fixture remains readable");
-        assert_eq!(
-            source_after, source_before,
+        assert!(
+            source_after == source_before,
             "fixture bytes changed during run"
         );
         assert_eq!(sha256_hex(&source_after), source_sha256);

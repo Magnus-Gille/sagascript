@@ -129,7 +129,7 @@ cache, then changed beam
 word/timing payload hash. Changing only threshold or an ordinary speaker-count
 hint then hit the cache and retained the raw payload hash. VAD changed both text
 and timing despite the same whitespace-token count. All decoder, result-performance
-and cache identities agreed. The already-present Silero VAD model matched its pinned hash.
+and cache identities agreed. The Silero VAD model matched its pinned hash.
 Those elapsed times were collected under concurrent host workloads and are not a fair
 performance ablation. These checks support propagation and cache contracts; they
 do not recommend a decoder or satisfy the human-reference quality gate.
