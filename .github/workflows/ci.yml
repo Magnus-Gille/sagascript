@@ -426,6 +426,40 @@ jobs:
         working-directory: src-tauri
         run: cargo test -p sagascript-cli --no-default-features
 
+      - name: Build batch CLI for evaluation contracts
+        working-directory: src-tauri
+        run: cargo build -p sagascript-cli --no-default-features
+
+      - name: Install offline diarization evaluation test dependencies
+        run: python -m pip install -r scripts/diarization_sv/requirements-evaluation.txt
+
+      - name: Test diarization reference and evidence contracts with native identity parity
+        env:
+          SAGASCRIPT_REFERENCE_CLI: ${{ github.workspace }}/src-tauri/target/debug/sagascript
+        run: |
+          test -x "$SAGASCRIPT_REFERENCE_CLI"
+          python -m unittest discover -s scripts/diarization_sv -p 'test_*.py'
+
+      - name: Cross-check native DER and JER against independent scorers
+        run: |
+          curl --fail --location --retry 2 \
+            https://raw.githubusercontent.com/nryant/dscore/e02f949ac6592279300a2c33d03daf9e0c12fd27/scorelib/metrics.py \
+            --output "$RUNNER_TEMP/dscore-metrics.py"
+          # The cross-check verifies the pinned source SHA-256 before loading
+          # only its numeric JER function. No Perl runner or model inference.
+          python scripts/diarization_sv/crosscheck_metrics.py \
+            --binary "$GITHUB_WORKSPACE/src-tauri/target/debug/sagascript" \
+            --scratch "$RUNNER_TEMP/diarization-metric-crosscheck" \
+            --dscore-source "$RUNNER_TEMP/dscore-metrics.py"
+
+      - name: Upload diarization metric receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diarization-metric-crosscheck
+          path: ${{ runner.temp }}/diarization-metric-crosscheck
+          if-no-files-found: ignore
+
       # Run core's own tests on Linux too — cargo does not run dependency
       # crates' tests, so without these steps core is only compile-checked
       # here (its tests would run on macOS/Windows only).

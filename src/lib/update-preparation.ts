@@ -1,3 +1,11 @@
+/** A bounded delivery drain expired; other errors retain their original cause. */
+export class UpdatePreparationTimeoutError extends Error {
+  constructor() {
+    super('Could not finish preparing transcription results. Retry the update after the current work finishes.');
+    this.name = 'UpdatePreparationTimeoutError';
+  }
+}
+
 /** Drain frontend result delivery before a native updater can restart the app. */
 export async function drainUpdateWork({
   busy, settle, failure = () => null, timeoutMs = 20_000, pollMs = 25,
@@ -13,7 +21,7 @@ export async function drainUpdateWork({
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       expired = true;
-      reject(new Error('Could not finish preparing transcription results. Retry the update after the current work finishes.'));
+      reject(new UpdatePreparationTimeoutError());
     }, timeoutMs);
   });
   const drain = async () => {

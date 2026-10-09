@@ -4,7 +4,7 @@ import ts from 'typescript';
 import { readFile } from 'node:fs/promises';
 const source = await readFile(new URL('../src/lib/update-preparation.ts', import.meta.url), 'utf8');
 const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
-const { drainUpdateWork } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
+const { drainUpdateWork, UpdatePreparationTimeoutError } = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
 const deferred = () => { let resolve; const promise = new Promise(r => resolve = r); return { promise, resolve }; };
 
 test('waits for terminal result delivery and rendering before snapshot', async () => {
@@ -31,4 +31,15 @@ test('blocked handoff and failed initialization fail closed', async () => {
   await assert.rejects(drainUpdateWork({ busy: () => true, settle: async () => {}, timeoutMs: 10, pollMs: 1 }), /finish/);
   await assert.rejects(drainUpdateWork({ busy: () => false, settle: () => new Promise(() => {}), timeoutMs: 10 }), /finish/);
   await assert.rejects(drainUpdateWork({ busy: () => false, settle: async () => { throw new Error('review failed'); } }), /review failed/);
+});
+
+test('a drain deadline is distinguishable from cancellation or rendering failure', async () => {
+  await assert.rejects(drainUpdateWork({ busy: () => true, settle: async () => {}, timeoutMs: 10, pollMs: 1 }),
+    (error) => error instanceof UpdatePreparationTimeoutError && /finish preparing/.test(error.message));
+  const renderError = new Error('rendering failed');
+  await assert.rejects(drainUpdateWork({ busy: () => false, settle: async () => { throw renderError; } }),
+    (error) => error === renderError);
+  const cancellation = 'Update preparation expired.';
+  await assert.rejects(drainUpdateWork({ busy: () => true, settle: async () => {}, failure: () => cancellation }),
+    (error) => !(error instanceof UpdatePreparationTimeoutError) && error.message === cancellation);
 });

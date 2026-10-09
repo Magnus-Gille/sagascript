@@ -1,10 +1,12 @@
 """Offline independent metric checks. Does not invoke any diarization model."""
 import argparse, ast, hashlib, importlib.metadata, json, os, subprocess
+from math import isfinite
 from pathlib import Path
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 from pyannote.core import Annotation, Segment, Timeline
 from pyannote.metrics.diarization import DiarizationErrorRate
+from crosscheck_metric_compare import MISSING, compare_metric
 
 p = argparse.ArgumentParser()
 p.add_argument('--binary', type=Path, required=True)
@@ -68,6 +70,12 @@ def independent_jer(ref, hyp, uem, duration):
     cm = r.astype(float) @ h.T.astype(float)
     return namespace['jer']({'test': rd}, {'test': hd}, {'test': cm})[1] / 100
 
+def has_original_reference_speech(ref, uem):
+    """Whether any reference speaker support survives in the original UEM."""
+    return any(max(start, uem_start) < min(end, uem_end)
+               for start, end, _ in ref
+               for uem_start, uem_end in uem)
+
 fixtures = [
     ('perfect', [(0,4,'a'),(4,8,'b')], [(0,4,'x'),(4,8,'y')], [(0,10)], 10),
     ('miss-overlap', [(1,5,'a'),(2,4,'b')], [(1,5,'x')], [(0,8)], 8),
@@ -80,6 +88,12 @@ fixtures = [
     ('boundary-shift', [(1,3,'a'),(4,6,'b')], [(1.2,3.2,'x'),(3.8,5.8,'y')], [(0,8)], 8),
     ('no-hypothesis', [(1,3,'a'),(2,4,'b')], [], [(0,8)], 8),
     ('iou-mapping', [(0,1,'a'),(1,17,'b'),(17,20,'a'),(20,25,'b')], [(0,10,'x'),(10,17,'y'),(25,34,'x'),(34,41,'y')], [(0,42)], 42),
+    # The reference turn is outside the UEM: raw false-alarm seconds remain
+    # defined while normalized DER and native JER are intentionally null.
+    ('zero-reference-speaker-time', [(8,9,'a')], [(1,3,'x')], [(0,8)], 8),
+    # The native collar removes this short reference turn from DER, while
+    # JER still scores its original-UEM support and remains a real number.
+    ('collar-erases-short-reference', [(4.0,4.1,'a')], [(4.0,4.1,'x')], [(0,8)], 8),
 ]
 receipts = []
 for name, ref, hyp, uem, duration in fixtures:
@@ -101,10 +115,21 @@ for name, ref, hyp, uem, duration in fixtures:
         native = json.loads(raw)
         (case/f'native-{collar}.json').write_text(raw)
         details = DiarizationErrorRate(collar=2*collar, skip_overlap=False)(annotation(ref),annotation(hyp),uem=Timeline([Segment(s,e) for s,e in uem]), detailed=True)
-        expected = {'der':details['diarization error rate'], 'reference_speaker_seconds':details['total'], 'miss_seconds':details['missed detection'], 'false_alarm_seconds':details['false alarm'], 'confusion_seconds':details['confusion'], 'jer':expected_jer}
-        differences = {key: abs(native['metrics'].get(key, float('inf')) - value) for key,value in expected.items()}
-        receipts.append({'case':name,'collar_seconds':collar,'expected':expected,'differences':differences,'pass':all(d < 1e-8 for d in differences.values())})
-result = {'binary_version':version,'binary_sha256':hashlib.sha256(a.binary.read_bytes()).hexdigest(),'dscore_revision':'e02f949ac6592279300a2c33d03daf9e0c12fd27','dscore_source_sha256':hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'pyannote_metrics_version':importlib.metadata.version('pyannote.metrics'),'jer_domain':'original UEM, 1ms grid','der_domain':'explicit UEM with native half-width collar; pyannote collar=2*half-width','checks':receipts,'passed':all(item['pass'] for item in receipts)}
+        reference_seconds = details['total']
+        normalized_der = details['diarization error rate'] if reference_seconds > 0 else None
+        if normalized_der is not None and not isfinite(normalized_der):
+            normalized_der = None
+        # Native JER has no defined speaker-average when UEM contains no
+        # reference speaker-time. Keep that semantic limit explicit instead
+        # of comparing dscore's no-reference sentinel to native null.
+        normalized_jer = expected_jer if has_original_reference_speech(ref, uem) else None
+        expected = {'der':normalized_der, 'reference_speaker_seconds':reference_seconds, 'miss_seconds':details['missed detection'], 'false_alarm_seconds':details['false alarm'], 'confusion_seconds':details['confusion'], 'jer':normalized_jer}
+        differences = {}
+        metric_passes = {}
+        for key, value in expected.items():
+            differences[key], metric_passes[key] = compare_metric(native['metrics'].get(key, MISSING), value)
+        receipts.append({'case':name,'collar_seconds':collar,'expected':expected,'differences':differences,'metric_passes':metric_passes,'pass':all(metric_passes.values())})
+result = {'binary_version':version,'binary_sha256':hashlib.sha256(a.binary.read_bytes()).hexdigest(),'dscore_revision':'e02f949ac6592279300a2c33d03daf9e0c12fd27','dscore_source_sha256':hashlib.sha256(SOURCE.read_bytes()).hexdigest(),'pyannote_metrics_version':importlib.metadata.version('pyannote.metrics'),'jer_domain':'independent JER on original UEM with a 1ms grid and IoU-optimal assignment; undefined only when no reference speaker support intersects original UEM','der_domain':'independent DER on explicit UEM with native half-width collar; pyannote uses collar=2*half-width; undefined DER remains null when reference speaker-time is zero','checks':receipts,'passed':all(item['pass'] for item in receipts)}
 (out/'receipt.json').write_text(json.dumps(result,indent=2)+'\n')
 print(json.dumps({'passed':result['passed'],'checks':len(receipts),'failures':[{'case':r['case'],'collar':r['collar_seconds'],'differences':r['differences']} for r in receipts if not r['pass']]}))
 raise SystemExit(0 if result['passed'] else 1)

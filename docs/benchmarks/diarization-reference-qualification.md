@@ -20,6 +20,9 @@ The reference JSON remains a small annotation document with `source_sha256`,
 `intervals`. Candidate and unknown intervals are annotation context. Only an
 interval with a named human reviewer, review timestamp, and reviewer evidence
 can become `verified`; model output or consensus is never gold by itself.
+The review UI can record the same explicit human review metadata on an `unknown`
+interval without assigning speakers; it remains `unknown`, is excluded from RTTM
+and scored UEM, and must satisfy that metadata requirement before qualification.
 
 Qualification uses a separate frozen manifest. It records the exact
 `reference_id`, source hash, frozen policy `{id, version, frozen: true}`,

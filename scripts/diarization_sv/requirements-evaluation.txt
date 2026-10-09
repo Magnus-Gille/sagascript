@@ -1,0 +1,9 @@
+# Offline reference, evidence-contract and independent metric regression tests.
+# These tests do not run diarization models or download model weights.
+numpy==1.26.4
+scipy==1.14.1
+soundfile==0.13.1
+python_speech_features==0.6
+pyannote.core==5.0.0
+pyannote.database==5.1.3
+pyannote.metrics==3.2.1

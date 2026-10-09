@@ -266,6 +266,111 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_mark_invalid_timestamps_and_nearest_fallback_in_order() {
+        let speakers = vec![spk(0.0, 2.0, "SPEAKER_0"), spk(2.0, 4.0, "SPEAKER_1")];
+        let transcript = vec![
+            seg(3.0, 2.0, "invalid"),
+            seg(5.0, 6.0, "later"),
+            seg(1.0, 3.0, "tie"),
+        ];
+        let (merged, diagnostics) = merge_with_diagnostics(&speakers, &transcript);
+
+        assert_eq!(
+            merged
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            ["invalid", "later", "tie"]
+        );
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|item| item.index)
+                .collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert_eq!(diagnostics[0].reason, AttributionReason::InvalidTimestamp);
+        assert_eq!(diagnostics[1].reason, AttributionReason::NearestGap);
+        assert_eq!(diagnostics[1].speaker, "SPEAKER_1");
+        assert_eq!(diagnostics[2].reason, AttributionReason::TiedOverlap);
+        assert_eq!(diagnostics[2].speaker, "SPEAKER_0");
+    }
+
+    #[test]
+    fn short_backchannel_turn_gets_its_own_assignment() {
+        let speakers = vec![
+            spk(0.0, 1.2, "SPEAKER_0"),
+            spk(1.2, 1.35, "SPEAKER_1"),
+            spk(1.35, 3.0, "SPEAKER_0"),
+        ];
+        let transcript = vec![
+            seg(0.4, 0.8, "main"),
+            seg(1.2, 1.35, "mm"),
+            seg(1.5, 2.0, "continues"),
+        ];
+        let (merged, diagnostics) = merge_with_diagnostics(&speakers, &transcript);
+
+        assert_eq!(merged.len(), transcript.len());
+        assert_eq!(
+            merged
+                .iter()
+                .map(|item| item.speaker.as_str())
+                .collect::<Vec<_>>(),
+            ["SPEAKER_0", "SPEAKER_1", "SPEAKER_0"]
+        );
+        assert!(diagnostics
+            .iter()
+            .all(|item| item.reason == AttributionReason::TemporalOverlap));
+        assert_eq!(
+            merged
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            ["main", "mm", "continues"]
+        );
+    }
+
+    #[test]
+    fn rapid_switches_assign_each_token_once_without_reordering() {
+        let speakers = vec![
+            spk(0.0, 0.5, "SPEAKER_0"),
+            spk(0.5, 0.55, "SPEAKER_1"),
+            spk(0.55, 1.0, "SPEAKER_0"),
+            spk(1.0, 1.1, "SPEAKER_2"),
+        ];
+        let transcript = vec![
+            seg(0.0, 0.5, "one"),
+            seg(0.5, 0.55, "two"),
+            seg(0.55, 1.0, "three"),
+            seg(1.0, 1.1, "four"),
+        ];
+        let (merged, diagnostics) = merge_with_diagnostics(&speakers, &transcript);
+
+        assert_eq!(merged.len(), transcript.len());
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|item| item.index)
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3]
+        );
+        assert_eq!(
+            merged
+                .iter()
+                .map(|item| item.speaker.as_str())
+                .collect::<Vec<_>>(),
+            ["SPEAKER_0", "SPEAKER_1", "SPEAKER_0", "SPEAKER_2"]
+        );
+        assert_eq!(
+            merged
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            ["one", "two", "three", "four"]
+        );
+    }
+
+    #[test]
     fn empty_transcript_returns_empty() {
         let speakers = vec![spk(0.0, 2.0, "SPEAKER_0")];
         let result = merge_with_transcript(&speakers, &[]);

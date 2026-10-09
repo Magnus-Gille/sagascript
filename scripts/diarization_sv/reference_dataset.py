@@ -73,6 +73,11 @@ def finite_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def effective_activity(interval: dict[str, Any]) -> str:
+    """Match Rust's ReferenceActivity::Speech default, including explicit null."""
+    return interval.get("activity") or "speech"
+
+
 def nonempty_identifier(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise ReferenceError(f"{label} must be a non-empty identifier without whitespace")
@@ -251,10 +256,11 @@ def validate_reference(document: Any) -> dict[str, Any]:
             normalized_speakers.append(speaker_id)
         if status == "unknown" and normalized_speakers:
             raise ReferenceError(f"unknown interval {index} must have no speakers")
+        effective = activity or "speech"
         if status in {"candidate", "verified"}:
-            if activity == "speech" and not normalized_speakers:
+            if effective == "speech" and not normalized_speakers:
                 raise ReferenceError(f"{status} speech interval {index} must name at least one speaker")
-            if activity == "silence" and normalized_speakers:
+            if effective == "silence" and normalized_speakers:
                 raise ReferenceError(f"{status} silence interval {index} must have no speakers")
 
         evidence = validate_evidence(raw.get("evidence"), required=status == "verified")
@@ -357,7 +363,7 @@ def export_intervals(reference: dict[str, Any]) -> tuple[list[str], list[str], d
             and coalesced[-1].get("window_id", "__whole__") == item.get("window_id", "__whole__")
             and coalesced[-1]["end"] == item["start"]
             and coalesced[-1]["speakers"] == item["speakers"]
-            and coalesced[-1].get("activity", "speech") == item.get("activity", "speech")
+            and effective_activity(coalesced[-1]) == effective_activity(item)
         ):
             coalesced[-1]["end"] = item["end"]
         else:
@@ -409,7 +415,7 @@ def summarize(intervals: list[dict[str, Any]], source_sha256: str, duration: flo
         seconds[item["status"]] += item["end"] - item["start"]
         activity = item.get("activity")
         if activity is None and item["status"] != "unknown":
-            activity = "speech"
+            activity = effective_activity(item)
         if activity in activity_counts:
             activity_counts[activity] += 1
             activity_seconds[activity] += item["end"] - item["start"]
@@ -537,9 +543,9 @@ def _union_seconds(intervals: Iterable[dict[str, Any]]) -> float:
 
 def _bucket_metrics(intervals: list[dict[str, Any]]) -> dict[str, Any]:
     verified = [item for item in intervals if item["status"] == "verified"]
-    verified_speech = [item for item in verified if item.get("activity", "speech") == "speech"]
+    verified_speech = [item for item in verified if effective_activity(item) == "speech"]
     unknown = [item for item in intervals if item["status"] == "unknown"]
-    candidates = [item for item in intervals if item["status"] == "candidate" and item.get("activity", "speech") == "speech"]
+    candidates = [item for item in intervals if item["status"] == "candidate" and effective_activity(item) == "speech"]
     reviewed = _union_seconds(verified)
     human_speech = _union_seconds(verified_speech)
     unknown_seconds = _union_seconds(unknown)
@@ -650,7 +656,7 @@ def qualification_report(
         stratum = window.get("stratum") if window else None
         if stratum is not None:
             by_stratum.setdefault(stratum, []).append(item)
-        if item["status"] == "verified" and item.get("activity", "speech") == "speech":
+        if item["status"] == "verified" and effective_activity(item) == "speech":
             for speaker in item["speakers"]:
                 by_speaker[speaker].append(item)
 
@@ -729,7 +735,7 @@ def qualification_report(
     strata = sorted({window["stratum"] for window in split.get("windows", []) if window.get("stratum") is not None})
     missing_strata = [stratum for stratum in strata if not any(
         item in by_split["eval"] for item in by_stratum.get(stratum, [])
-        if item["status"] == "verified" and item.get("activity", "speech") == "speech"
+        if item["status"] == "verified" and effective_activity(item) == "speech"
     )]
     if missing_strata:
         failures.append({"code": "missing-eval-stratum", "detail": "eval has no verified speech for: " + ", ".join(missing_strata)})

@@ -6,6 +6,18 @@ mockConvertFileSrc("macos");
 const pending = new Map();
 const meetings = new Map();
 const calls = [];
+function waitForRecoveryGate(kind) {
+  const gate = window.qaRecoveryGates?.[kind];
+  if (!gate?.blocked) return Promise.resolve();
+  gate.started = true;
+  return new Promise(resolve => { gate.resolve = resolve; });
+}
+function waitForQaGate(kind) {
+  const gate = window.qaGates?.[kind];
+  if (!gate?.blocked) return Promise.resolve();
+  gate.started = true;
+  return new Promise(resolve => { gate.resolve = resolve; });
+}
 let active = 0;
 const profileModels = { swedish: "auto", english: "base.en" };
 let pianissimoDownloaded = false;
@@ -15,6 +27,17 @@ let holdPianissimoDownload = false;
 let releasePianissimoDownload = null;
 let maximum = 0;
 let sequence = 0;
+let strictPreparationNonce = false;
+let activePreparationNonce = null;
+const expiredPreparationNonces = new Set();
+if (window.qaInitialRecoveryGate) {
+  window.qaRecoveryGates ??= {};
+  window.qaRecoveryGates[window.qaInitialRecoveryGate] = { blocked: true, started: false, resolve: null };
+}
+if (window.qaInitialNativeGate) {
+  window.qaGates ??= {};
+  window.qaGates["last-transcription"] = { blocked: true, started: false, resolve: null };
+}
 function transcript(path) {
   return { schema_version: 1, source_sha256: path, language: "en", model: "fixture", duration_seconds: 4,
     segments: [{ id: "seg-1", start: 0, end: 4, text: `Meeting ${path}`, speaker: "spk-1" }],
@@ -78,9 +101,50 @@ function reprocessingResult(task) {
 }
 window.qa = {
   calls,
-  prepareUpdate: (nonce) => emit("update-preparing", nonce),
-  abortUpdate: () => emit("update-aborted", "Synthetic install failure"),
+  prepareUpdate: (nonce) => {
+    if (strictPreparationNonce) activePreparationNonce = nonce;
+    return emit("update-preparing", nonce);
+  },
+  abortUpdate: () => {
+    if (strictPreparationNonce && activePreparationNonce !== null) {
+      expiredPreparationNonces.add(activePreparationNonce);
+      activePreparationNonce = null;
+    }
+    return emit("update-aborted", "Synthetic install failure");
+  },
+  strictPreparationNonces: (enabled) => {
+    strictPreparationNonce = Boolean(enabled);
+    activePreparationNonce = null;
+    expiredPreparationNonces.clear();
+  },
+  activePreparationNonce: () => activePreparationNonce,
   dictationResult: (text) => emit("transcription-result", text),
+  dictationError: (text) => emit("error", text),
+  blockRecovery: (kind) => {
+    window.qaRecoveryGates ??= {};
+    window.qaRecoveryGates[kind] = { blocked: true, started: false, resolve: null };
+  },
+  releaseRecovery: (kind) => {
+    const gate = window.qaRecoveryGates?.[kind];
+    if (!gate) return;
+    gate.blocked = false;
+    gate.resolve?.();
+    gate.resolve = null;
+  },
+  recoveryGateStarted: (kind) => Boolean(window.qaRecoveryGates?.[kind]?.started),
+  blockGate: (kind) => {
+    window.qaGates ??= {};
+    window.qaGates[kind] = { blocked: true, started: false, resolve: null };
+  },
+  releaseGate: (kind) => {
+    const gate = window.qaGates?.[kind];
+    if (!gate) return;
+    gate.blocked = false;
+    gate.resolve?.();
+    gate.resolve = null;
+  },
+  gateStarted: (kind) => Boolean(window.qaGates?.[kind]?.started),
+  setSaveResult: (result) => { window.qaSaveResult = result; },
   holdNextPianissimoDownload: () => { holdPianissimoDownload = true; },
   releasePianissimo: () => { releasePianissimoDownload?.(); },
   setPianissimoSize: (mb) => { pianissimoSizeMb = mb; },
@@ -129,21 +193,39 @@ mockIPC(async (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
     case "load_update_recovery":
+      await waitForRecoveryGate("load");
       if (window.qaRecoveryDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaRecoveryDelayMs));
       if (window.qaRecoveryLoadError) throw new Error("Synthetic recovery read failure");
       return window.qaRecovery ?? null;
-    case "save_update_recovery": window.qaRecovery = args.payload; return null;
-    case "clear_update_recovery": window.qaRecovery = null; return null;
-    case "complete_update_preparation": return null;
+    case "save_update_recovery":
+      await waitForRecoveryGate("save");
+      window.qaRecovery = args.payload;
+      return null;
+    case "clear_update_recovery":
+      await waitForRecoveryGate("clear");
+      window.qaRecovery = null;
+      return null;
+    case "complete_update_preparation":
+      await waitForQaGate(`complete-preparation:${args.nonce}`);
+      await waitForQaGate("complete-preparation");
+      if (strictPreparationNonce && (args.nonce !== activePreparationNonce || expiredPreparationNonces.has(args.nonce))) {
+        throw new Error("Synthetic expired update preparation nonce");
+      }
+      if (strictPreparationNonce) activePreparationNonce = null;
+      return null;
     case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
     case "get_last_transcription":
+      await waitForQaGate("last-transcription");
       if (window.qaLastNativeDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaLastNativeDelayMs));
       return window.qaLastNativeDictation ?? null;
-    case "get_update_result_pending": return window.qaNativePending ?? false;
+    case "get_update_result_pending": {
+      return window.qaNativePending ?? false;
+    }
     case "set_update_result_pending":
       if (args.resultId === "live-dictation") window.qaNativePending = args.pending;
       return null;
     case "acknowledge_update_result":
+      await waitForQaGate("acknowledge");
       if (window.qaNativePending && window.qaLastNativeDictation === args.expectedText) {
         window.qaNativePending = false;
         return true;
@@ -215,8 +297,12 @@ mockIPC(async (cmd, args = {}) => {
     // Deliberately keep the native result pending: Stop is a request, not a
     // terminal status, and finish() may still produce authoritative success.
     case "cancel_file_transcription": return false; // completion won the Stop race in this scenario
-    case "save_transcription_text": return true;
-    case "copy_transcription_text": return null;
+    case "save_transcription_text":
+      await waitForQaGate("save-transcription");
+      return window.qaSaveResult ?? true;
+    case "copy_transcription_text":
+      await waitForQaGate("copy-transcription");
+      return null;
     case "begin_meeting_file": {
       if (window.qaFailMeetingStart) throw new Error("Finish the current dictation before importing a meeting.");
       active++; maximum = Math.max(maximum, active);
