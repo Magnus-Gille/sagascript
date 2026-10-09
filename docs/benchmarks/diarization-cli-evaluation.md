@@ -7,14 +7,16 @@ windows. The reference manifest freezes the source hash, policy identity, split 
 window boundaries.
 
 For diarized `transcribe --progress-json`, each per-file progress event includes an additive
-`decoder` object with the effective beam, temperature-fallback, VAD, and timestamp-method fields
-used by the final report, including the selected output format's numeric representation.
+`decoder` object with the effective strategy, beam, temperature-fallback, VAD, and timestamp
+method. It equals `diarization.decoder` exactly in `--json` and `--meeting-json` output;
+other diarized outputs use the `--json` numeric representation.
 It accompanies each phase that occurs: fresh runs include decode/resample and model phases;
 cache-hit runs emit analyzing, clustering, finalizing, and completed only. Ordinary
 transcription progress keeps its existing event shape. Progress is stage-local metadata;
 decode/resample percentages do not imply an overall percentage or ETA. The outer batch
 cancellation event is emitted outside per-file processing and does not carry the snapshot.
-Earlier per-file events retain it.
+Earlier per-file events retain it. Existing early `step` fields describe the ordinary
+three-step grouping and do not represent overall diarization completion.
 
 Evaluation receipts include uncollared short-reference-region and boundary measurements under
 `strata`. They reuse the global DER speaker mapping and original UEM; the explicit
@@ -119,13 +121,15 @@ not fresh-inference latency or quality evidence. Process startup and external co
 load are included in wall time. Darwin peak RSS is a process
 high-water statistic, not an estimate of incremental diagnostic allocation.
 
+These measurements predate the progress decoder snapshot.
+
 A separate five-run functional check of that same accepted revision reused a cloned
 cache, then changed beam
 0→2 and VAD off→on. Each decoder change caused a miss and changed the raw cached
 word/timing payload hash. Changing only threshold or an ordinary speaker-count
 hint then hit the cache and retained the raw payload hash. VAD changed both text
 and timing despite the same whitespace-token count. All decoder, result-performance
-and cache identities agreed. Local models were already present and checksum-verified.
-Those elapsed times were collected under concurrent compilation and are not a fair
+and cache identities agreed. The already-present Silero VAD model matched its pinned hash.
+Those elapsed times were collected under concurrent host workloads and are not a fair
 performance ablation. These checks support propagation and cache contracts; they
 do not recommend a decoder or satisfy the human-reference quality gate.

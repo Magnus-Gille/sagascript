@@ -48,7 +48,8 @@ use sagascript_core::transcription::{
 #[derive(Args)]
 pub struct TranscribeArgs {
     /// Emit JSON progress events on stderr even without a terminal. Percent is
-    /// local to the named stage; stdout remains the transcript output.
+    /// local to the named stage; stdout remains the transcript output. Diarized
+    /// events include the effective decoder settings.
     #[arg(long)]
     pub progress_json: bool,
     /// Audio/video files or directories to transcribe. Directories include

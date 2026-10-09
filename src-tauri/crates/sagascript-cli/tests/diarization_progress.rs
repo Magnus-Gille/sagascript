@@ -2,7 +2,9 @@
 //!
 //! The fixture is deliberately a serialized cache rather than audio: a valid hit must skip
 //! decoding, Whisper, VAD, and the diarization models while still exercising the CLI output
-//! paths that users consume.
+//! paths that users consume. Settings are isolated with the supported override; model
+//! directory discovery retains the ordinary OS profile. A valid cache hit bypasses model
+//! presence checks and loading, rather than requiring a provisioned model directory.
 
 #![cfg(feature = "diarization")]
 
