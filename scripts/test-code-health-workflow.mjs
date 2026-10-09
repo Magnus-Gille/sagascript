@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   assertCleanCheckout,
+  createMetadataTransport,
+  firstAttemptRunContext,
   KNIP_ARGS,
+  paginate,
   parseProducerOptions,
+  prepareSwiftCoverageInputs,
+  restJson,
   runSwiftCoverageSteps,
   safeFailureDiagnostic,
   workflowRunContext,
@@ -15,9 +21,23 @@ import { createObjective } from "./lib/code-health-producer.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = readFileSync(join(root, ".github/workflows/code-health.yml"), "utf8");
+const producerSource = readFileSync(join(root, "scripts/code-health-produce.mjs"), "utf8");
 const config = JSON.parse(readFileSync(join(root, "docs/code-health-producer-v1.json"), "utf8"));
 const tooling = JSON.parse(readFileSync(join(root, "tooling/code-health/package.json"), "utf8"));
 const toolingLock = JSON.parse(readFileSync(join(root, "tooling/code-health/package-lock.json"), "utf8"));
+
+test("workflow-level first-attempt failure cannot be replaced by a successful rerun", () => {
+  const run = { id: 42, head_sha: "a".repeat(40), run_attempt: 2, event: "push", head_branch: "main", status: "completed", conclusion: "success" };
+  const first = firstAttemptRunContext(run, url => {
+    assert.match(url, /\/runs\/42\/attempts\/1$/);
+    return { ...run, run_attempt: 1, conclusion: "startup_failure" };
+  });
+  assert.deepEqual(first, { status: "completed", conclusion: "startup_failure" });
+  const missing = () => { throw Object.assign(new Error("missing"), { status: 404 }); };
+  assert.deepEqual(firstAttemptRunContext(run, missing), { status: null, conclusion: null });
+  assert.deepEqual(firstAttemptRunContext({ ...run, run_attempt: 1, conclusion: "failure" }, missing), { status: "completed", conclusion: "failure" });
+  assert.throws(() => firstAttemptRunContext(run, () => ({ ...run })), /identity does not match/);
+});
 
 test("producer modes separate weekly static collection from CI-only snapshots", () => {
   assert.deepEqual(parseProducerOptions(["--mode", "static", "--output-dir", "/tmp/report"]).mode, "static");
@@ -108,6 +128,26 @@ test("Swift runs coverage tests before querying the generated codecov report", (
   }), /outside task-local scratch/);
 });
 
+test("Swift coverage preparation places only the shared tracked vector fixture at the package sibling path", () => {
+  assert.match(producerSource, /sharedFixturePath: join\(REPO_ROOT, "src-tauri\/engine-host\/test-vectors\/context-biasing\.json"\)/);
+  const rootPath = mkdtempSync(join(tmpdir(), "sagascript-swift-input-test-"));
+  try {
+    const sourcePackageRoot = join(rootPath, "source-package");
+    const tempRoot = join(rootPath, "task-temp");
+    const packageRoot = join(tempRoot, "swift-package");
+    const fixturePath = join(rootPath, "context-biasing.json");
+    mkdirSync(join(sourcePackageRoot, "Tests/EngineHostCoreTests"), { recursive: true });
+    writeFileSync(join(sourcePackageRoot, "Tests/EngineHostCoreTests/ContextBiasingTests.swift"), "fixture consumer");
+    writeFileSync(fixturePath, '{"fixture":"shared"}\n');
+    const copiedFixture = prepareSwiftCoverageInputs({ sourcePackageRoot, packageRoot, tempRoot, sharedFixturePath: fixturePath });
+    assert.equal(copiedFixture, join(tempRoot, "test-vectors/context-biasing.json"));
+    assert.equal(readFileSync(copiedFixture, "utf8"), '{"fixture":"shared"}\n');
+    assert.equal(readFileSync(join(packageRoot, "Tests/EngineHostCoreTests/ContextBiasingTests.swift"), "utf8"), "fixture consumer");
+  } finally {
+    rmSync(rootPath, { recursive: true, force: true });
+  }
+});
+
 test("failed tool diagnostics retain test names and errors without URLs or source excerpts", () => {
   const output = safeFailureDiagnostic(
     "thread 'engine::tests::recording_failure' panicked at file:///private/var/task/file.rs:10\nfailures:\n    engine::tests::recording_failure\ntest result: FAILED. 0 passed; 1 failed\ntranscript contents must never appear\nlet source_excerpt = \"private value\";\n",
@@ -135,9 +175,15 @@ test("workflow collection schedule and manual dispatch are explicit and informat
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /actions: read\s*\n\s*contents: read/);
   assert.match(workflow, /- name: Initialize collection status artifact[\s\S]*?workflow-setup-not-completed/);
-  assert.match(workflow, /- name: Test code-health contracts and workflow\s*\n\s*run: npm run test:code-health/);
+  assert.match(workflow, /- name: Finalize workflow phase and collection budgets[\s\S]*?preupload_elapsed_seconds[\s\S]*?metadata_over_budget/);
+  assert.match(workflow, /collector_failures[\s\S]*?status=partial[\s\S]*?phase_elapsed_seconds/);
+  assert.match(workflow, /CONFORMANCE_OUTCOME: \$\{\{ steps\.conformance\.outcome \}\}/);
+  assert.match(workflow, /timeout-minutes: 3[\s\S]*?name: code-health-v1/);
+  assert.match(workflow, /- name: Test code-health contracts and workflow\s*\n\s*id: conformance\s*\n\s*run: npm run test:code-health/);
   assert.match(workflow, /if: always\(\)[\s\S]*?uses: actions\/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9[\s\S]*?name: code-health-v1[\s\S]*?if-no-files-found: error[\s\S]*?retention-days: 30/);
   assert.doesNotMatch(workflow, /secrets\.(?!github_token)|HEIMDALL|MUNIN/i);
+  assert.match(producerSource, /local_or_ci: workflowContext \? "github-actions" : "local"/);
+  assert.doesNotMatch(producerSource, /local_or_ci: includeCi/);
 
   const staticStep = workflow.match(/- name: Collect static measurements([\s\S]*?)(?=\n      - name:)/)?.[1];
   const ciStep = workflow.match(/- name: Collect daily CI cohort([\s\S]*?)(?=\n      - name:)/)?.[1];
@@ -149,6 +195,44 @@ test("workflow collection schedule and manual dispatch are explicit and informat
   assert.match(staticStep, /rm -f "\$report_dir\/workflow-status\.json"/);
   assert.match(staticStep, /collector-exit/);
   assert.match(ciStep, /collector-exit/);
+});
+
+test("GitHub metadata requests share an injectable monotonic deadline across pagination", () => {
+  let now = 0;
+  const requests = [];
+  const request = createMetadataTransport((url, timeoutMs) => {
+    requests.push({ url, timeoutMs });
+    now += 8;
+    const page = Number(new URL(url).searchParams.get("page"));
+    return { total_count: 101, entries: Array.from({ length: page === 1 ? 100 : 1 }, (_, index) => index) };
+  }, { budgetMs: 30, now: () => now });
+  const result = paginate("https://api.github.com/repos/acme/app/runs", "entries", 200, request);
+  assert.equal(result.length, 101);
+  assert.deepEqual(requests.map(item => item.timeoutMs), [30, 22]);
+  request("https://api.github.com/next?page=3");
+  request("https://api.github.com/next?page=4");
+  assert.throws(() => request("https://api.github.com/next?page=5"), /30-second budget/);
+  assert.deepEqual(requests.map(item => item.timeoutMs), [30, 22, 14, 6]);
+});
+
+test("GitHub REST transport sends credentials only on stdin, rejects redirects, and has no redirect following", () => {
+  const previous = process.env.GH_TOKEN;
+  process.env.GH_TOKEN = "test-token-value-not-a-real-credential";
+  let captured;
+  try {
+    assert.throws(() => restJson("https://api.github.com/repos/acme/app", 1250, (_command, args, options) => {
+      captured = { args, input: options.input };
+      return { error: null, status: 0, stdout: '{"message":"redirect"}\n__HTTP_STATUS__302' };
+    }), /HTTP 302/);
+  } finally {
+    if (previous === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = previous;
+  }
+  assert.ok(captured);
+  assert.ok(!captured.args.includes("--location"));
+  assert.equal(captured.args[captured.args.indexOf("--max-time") + 1], "1.25");
+  assert.ok(!captured.args.includes("test-token-value-not-a-real-credential"));
+  assert.ok(captured.input.includes("Authorization: Bearer test-token-value-not-a-real-credential"));
 });
 
 test("workflow analyzer installs match the producer's declared exact versions", () => {

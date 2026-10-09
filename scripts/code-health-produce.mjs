@@ -324,6 +324,20 @@ export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand } = {}
   return codecovPath;
 }
 
+export function prepareSwiftCoverageInputs({ sourcePackageRoot, packageRoot, tempRoot, sharedFixturePath } = {}) {
+  if ([sourcePackageRoot, packageRoot, tempRoot, sharedFixturePath].some(value => typeof value !== "string" || value.length === 0)) {
+    throw new TypeError("Swift coverage source input is malformed");
+  }
+  cpSync(sourcePackageRoot, packageRoot, {
+    recursive: true,
+    filter: path => !path.split(sep).some(part => [".build", "recordings", "transcripts"].includes(part)),
+  });
+  const fixtureDestination = join(tempRoot, "test-vectors", "context-biasing.json");
+  mkdirSync(dirname(fixtureDestination), { recursive: true });
+  cpSync(sharedFixturePath, fixtureDestination);
+  return fixtureDestination;
+}
+
 function collectSwiftCoverage(tempRoot) {
   const sourcePackageRoot = join(REPO_ROOT, "src-tauri/engine-host/coreml");
   const packageRoot = join(tempRoot, "swift-package");
@@ -332,9 +346,11 @@ function collectSwiftCoverage(tempRoot) {
     const versionOutput = toolVersion("swift", ["--version"]);
     const swiftVersion = /Apple Swift version\s+([0-9.]+)/.exec(versionOutput)?.[1];
     if (!swiftVersion) throw new Error("could not parse the active Swift compiler version");
-    cpSync(sourcePackageRoot, packageRoot, {
-      recursive: true,
-      filter: path => !path.split(sep).some(part => [".build", "recordings", "transcripts"].includes(part)),
+    prepareSwiftCoverageInputs({
+      sourcePackageRoot,
+      packageRoot,
+      tempRoot,
+      sharedFixturePath: join(REPO_ROOT, "src-tauri/engine-host/test-vectors/context-biasing.json"),
     });
     const versionText = JSON.parse(readFileSync(join(REPO_ROOT, "src-tauri/tauri.conf.json"), "utf8")).version;
     const buildInfo = [
@@ -452,9 +468,27 @@ function collectKnip(tempRoot, knipPath) {
   }
 }
 
-function restJson(url) {
+const CI_METADATA_BUDGET_MS = 30_000;
+
+export function createMetadataTransport(transport, { budgetMs = CI_METADATA_BUDGET_MS, now = () => performance.now() } = {}) {
+  if (typeof transport !== "function" || typeof now !== "function" || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+    throw new TypeError("CI metadata transport configuration is malformed");
+  }
+  const deadline = now() + budgetMs;
+  const remainingMs = () => {
+    const remaining = deadline - now();
+    if (remaining <= 0) throw new Error("GitHub Actions metadata phase exceeded its 30-second budget");
+    return remaining;
+  };
+  const request = url => transport(url, remainingMs());
+  request.remainingMs = remainingMs;
+  return request;
+}
+
+export function restJson(url, timeoutMs = CI_METADATA_BUDGET_MS, spawn = spawnSync) {
   const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
   if (!token) throw new Error("CI artifact collection requires the scoped GH_TOKEN environment value");
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("GitHub Actions metadata phase exceeded its 30-second budget");
   const curlConfig = [
     `url = "${url}"`,
     'header = "Accept: application/vnd.github+json"',
@@ -462,8 +496,8 @@ function restJson(url) {
     `header = "Authorization: Bearer ${token}"`,
     "",
   ].join("\n");
-  const response = spawnSync("curl", [
-    "--config", "-", "--silent", "--show-error", "--location", "--max-time", "60",
+  const response = spawn("curl", [
+    "--config", "-", "--silent", "--show-error", "--max-time", String(timeoutMs / 1000),
     "--write-out", "\n__HTTP_STATUS__%{http_code}",
   ], { input: curlConfig, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, windowsHide: true });
   if (response.error || response.status !== 0) throw new Error("GitHub Actions API request failed");
@@ -482,13 +516,13 @@ function restJson(url) {
   return value;
 }
 
-function paginate(url, collectionKey, maxItems) {
+export function paginate(url, collectionKey, maxItems, request = restJson) {
   let page = 1;
   let expectedTotal = null;
   const all = [];
   while (true) {
     const separator = url.includes("?") ? "&" : "?";
-    const body = restJson(`${url}${separator}per_page=100&page=${page}`);
+    const body = request(`${url}${separator}per_page=100&page=${page}`);
     if (!Number.isSafeInteger(body.total_count) || !Array.isArray(body[collectionKey])) {
       throw new Error(`GitHub Actions API ${collectionKey} inventory is malformed`);
     }
@@ -512,8 +546,26 @@ function ciWindow(observedAt) {
   };
 }
 
+export function firstAttemptRunContext(apiRun, request) {
+  try {
+    const first = request(`https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/runs/${apiRun.id}/attempts/1`);
+    if (first.id !== apiRun.id || first.run_attempt !== 1 || first.head_sha !== apiRun.head_sha
+      || first.event !== apiRun.event || first.head_branch !== apiRun.head_branch) {
+      throw new Error("GitHub Actions attempt-1 workflow identity does not match its enumerated run");
+    }
+    return { status: first.status ?? null, conclusion: first.conclusion ?? null };
+  } catch (error) {
+    if (error?.status !== 404) throw error;
+    // The enumerated result is first-attempt evidence only if no rerun exists.
+    return apiRun.run_attempt === 1
+      ? { status: apiRun.status ?? null, conclusion: apiRun.conclusion ?? null }
+      : { status: null, conclusion: null };
+  }
+}
+
 function collectCi(observedAt) {
   const scopeName = "ci-release";
+  const metadataStarted = performance.now();
   const latestWorkflow = readFileSync(join(REPO_ROOT, config.ci.workflow));
   const currentWorkflowDigest = sha256(latestWorkflow);
   const expectedJobIds = config.ci.expected_job_ids;
@@ -525,7 +577,8 @@ function collectCi(observedAt) {
     const { windowStart, windowEnd } = ciWindow(observedAt);
     const dateFilter = `${windowStart.slice(0, 10)}..${windowEnd.slice(0, 10)}`;
     const runsUrl = `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/workflows/ci.yml/runs?branch=main&event=push&created=${encodeURIComponent(dateFilter)}`;
-    const apiRuns = paginate(runsUrl, "workflow_runs", config.ci.limits.maximum_runs);
+    const request = createMetadataTransport((url, remainingMs) => restJson(url, remainingMs));
+    const apiRuns = paginate(runsUrl, "workflow_runs", config.ci.limits.maximum_runs, request);
     const normalizedInputs = [];
     const runEvidence = {};
     for (const apiRun of apiRuns) {
@@ -534,17 +587,19 @@ function collectCi(observedAt) {
         throw new Error("GitHub Actions workflow run inventory contains a malformed identity or timestamp");
       }
       const sha = apiRun.head_sha;
-      const historicalWorkflow = command("git", ["show", `${sha}:${config.ci.workflow}`]);
+      const historicalWorkflow = command("git", ["show", `${sha}:${config.ci.workflow}`], { timeout: request.remainingMs() });
       const historicalDigest = sha256(historicalWorkflow);
       if (historicalDigest !== currentWorkflowDigest) {
         throw new Error("CI workflow configuration changed inside the 28-day cohort");
       }
+      const firstAttempt = firstAttemptRunContext(apiRun, request);
       let attempt1Jobs = [];
       try {
         attempt1Jobs = paginate(
           `https://api.github.com/repos/${config.repository.owner}/${config.repository.name}/actions/runs/${apiRun.id}/attempts/1/jobs`,
           "jobs",
           config.ci.limits.maximum_jobs_per_run,
+          request,
         );
       } catch (error) {
         if (error?.status !== 404) throw error;
@@ -558,6 +613,10 @@ function collectCi(observedAt) {
         run_attempt: apiRun.run_attempt,
         event: apiRun.event,
         head_branch: apiRun.head_branch,
+        status: firstAttempt.status,
+        conclusion: firstAttempt.conclusion,
+        latest_status: apiRun.status ?? null,
+        latest_conclusion: apiRun.conclusion ?? null,
         created_at: apiRun.created_at,
         workflow_path: config.ci.workflow,
         workflow_config_digest: historicalDigest,
@@ -581,6 +640,15 @@ function collectCi(observedAt) {
       workflowPath: config.ci.workflow,
       repoRoot: REPO_ROOT,
     });
+    const rawWorkflowRuns = normalizedInputs.map(run => ({
+      id: run.id,
+      status: run.status ?? null,
+      conclusion: run.conclusion ?? null,
+      attempt: 1,
+      latest_attempt: run.run_attempt,
+      latest_status: run.latest_status,
+      latest_conclusion: run.latest_conclusion,
+    }));
     const payload = buildCiFirstAttemptPayload({
       normalizedRuns: cohort.runs,
       windowStart,
@@ -596,6 +664,7 @@ function collectCi(observedAt) {
       workflow_config_digest: currentWorkflowDigest,
       filter: { branch: "main", event: "push", window_start: windowStart, window_end: windowEnd },
       api_total_count: apiRuns.length,
+      workflow_runs: rawWorkflowRuns,
       included_run_ids: cohort.runs.map(run => Number(run.run_ref.match(/ci-run-(\d+)-attempt-1/)[1])).sort((a, b) => a - b),
       excluded_runs: cohort.excluded_runs,
     }, payload.run_inventory_ref);
@@ -641,9 +710,15 @@ function collectCi(observedAt) {
     addEvidenceFile("evidence/ci-attempt1-timings.json", {
       source: "scripts/ci-run-timings.mjs and scripts/ci-cohort-timings.mjs",
       attempt_policy: "attempt 1 only",
+      metadata_elapsed_seconds: Number(((performance.now() - metadataStarted) / 1000).toFixed(3)),
+      metadata_budget_seconds: CI_METADATA_BUDGET_MS / 1000,
+      metadata_over_budget: performance.now() - metadataStarted > CI_METADATA_BUDGET_MS,
       per_run: timingRunSummaries,
       cohorts: timingCohorts,
     });
+    if (cohort.incomplete_runs.length) {
+      return { unavailable: true, reason: "incomplete-input", incomplete_runs: cohort.incomplete_runs };
+    }
     void workflowRef;
     return {
       payload,
@@ -654,7 +729,13 @@ function collectCi(observedAt) {
       workflowRef,
     };
   });
-  if (result.status === "measured") setMeasured(scopeName, "ci_first_attempt", result.value);
+  if (result.status === "measured" && result.value.unavailable) {
+    const collector = collectionStatus.collectors["ci-first-attempt"];
+    collector.status = "failed";
+    collector.error = "workflow failure has unresolved attempt-1 jobs";
+    setFailure(scopeName, "ci_first_attempt", result.value.reason);
+  }
+  else if (result.status === "measured") setMeasured(scopeName, "ci_first_attempt", result.value);
   else setFailure(scopeName, "ci_first_attempt", "incomplete-input");
 }
 
@@ -786,7 +867,12 @@ function main() {
       elapsed_seconds: elapsedSeconds,
       elapsed_definition: "measurement and evidence collection phase through tool/API aggregation; excludes final serialization/upload",
       measured: true,
-      local_or_ci: includeCi ? "github-actions" : "local",
+      local_or_ci: workflowContext ? "github-actions" : "local",
+      cold_static_budget_seconds: 900,
+      cold_static_over_budget: !ciOnly && elapsedSeconds > 900,
+      metadata_budget_seconds: CI_METADATA_BUDGET_MS / 1000,
+      metadata_elapsed_seconds: evidenceFiles["evidence/ci-attempt1-timings.json"]?.metadata_elapsed_seconds ?? null,
+      metadata_over_budget: evidenceFiles["evidence/ci-attempt1-timings.json"]?.metadata_over_budget ?? false,
     });
     addEvidenceFile("evidence/collection-status.json", collectionStatus);
     evidenceRefs[runRef] ??= { kind: "artifact-file", path: "evidence/collection-overhead.json" };

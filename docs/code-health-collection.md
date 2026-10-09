@@ -24,6 +24,16 @@ The CI producer classifies provider `startup_failure` and `timed_out` conclusion
 separate evidence establishes an infrastructure cause; the original provider conclusion remains
 in the timing evidence.
 
+The daily CI metadata phase shares one monotonic 30-second deadline across run/job pagination and
+historical workflow reads. Requests use only their remaining time, do not follow redirects, and fail
+closed on 3xx responses. Raw workflow status and conclusion stay in the evidence inventory. A
+completed failed run whose attempt-1 jobs leave the overall result unknown makes the CI metric
+unavailable as `incomplete-input`; the producer does not infer a failed job or include that run in a
+reliability denominator. Collector elapsed times and the workflow finalizer record phase and
+pre-upload duration, compare metadata against 30 seconds and cold static collection against 900
+seconds, and retain completed evidence when a duration exceeds its budget. Artifact upload has a
+three-minute step limit; total duration through GitHub artifact receipt remains unknown.
+
 Each run uploads the `code-health-v1` artifact with 30-day retention, including setup or collection
 failures. A setup failure retains a small `workflow-status.json` marker. A completed collection
 contains the closed six-key manifest, evidence index, objective snapshots, scope registry, and
@@ -33,6 +43,11 @@ lifecycle scripts disabled, then installs analyzers under `$RUNNER_TEMP`. Knip's
 and lockfile live under `tooling/code-health/`. Exact versions are checked against
 `docs/code-health-producer-v1.json` before measurements are accepted. Swift's compiler version is
 recorded from the runner because Xcode supplies Swift.
+
+Swift coverage prepares a temporary copy of the Core ML package and the single tracked shared
+`engine-host/test-vectors/context-biasing.json` fixture at the sibling path expected by its test
+source. This keeps isolated collector inputs complete without copying unrelated engine-host
+contents.
 
 The CI-only job receives only the run-scoped, read-only `actions` and `contents` permissions needed
 to enumerate workflow runs and inspect commit history. The static PR path does not expose

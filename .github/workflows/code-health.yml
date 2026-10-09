@@ -30,9 +30,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$REPORT_DIR"
-          printf '%s\n' '{"status":"not-collected","reason":"workflow-setup-not-completed"}' > "$REPORT_DIR/workflow-status.json"
+          date +%s > "$RUNNER_TEMP/code-health-workflow-started-at"
+          printf '%s\n' '{"status":"not-collected","phase":"setup","reason":"workflow-setup-not-completed"}' > "$REPORT_DIR/workflow-status.json"
 
       - name: Checkout source and cohort history
+        id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -59,14 +61,17 @@ jobs:
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
 
       - name: Install Node.js
+        id: setup_node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
 
       - name: Test code-health contracts and workflow
+        id: conformance
         run: npm run test:code-health
 
       - name: Install pinned Rust toolchain and isolated analyzers
+        id: rust_tools
         if: ${{ steps.mode.outputs.mode == 'static' }}
         env:
           TOOL_ROOT: ${{ runner.temp }}/code-health-tools
@@ -81,14 +86,17 @@ jobs:
           echo "$TOOL_ROOT/bin" >> "$GITHUB_PATH"
 
       - name: Install project graph from the checked-in lockfile
+        id: app_deps
         if: ${{ steps.mode.outputs.mode == 'static' }}
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Install isolated Knip analyzer
+        id: knip
         if: ${{ steps.mode.outputs.mode == 'static' }}
         run: npm ci --prefix tooling/code-health --ignore-scripts --no-audit --no-fund
 
       - name: Collect static measurements
+        id: static_collect
         if: ${{ steps.mode.outputs.mode == 'static' }}
         env:
           RUNNER_TEMP: ${{ runner.temp }}
@@ -106,6 +114,7 @@ jobs:
           fi
 
       - name: Collect daily CI cohort
+        id: ci_collect
         if: ${{ steps.mode.outputs.mode == 'ci-only' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -122,8 +131,91 @@ jobs:
             exit "$status"
           fi
 
+      - name: Finalize workflow phase and collection budgets
+        if: always()
+        env:
+          REPORT_DIR: ${{ runner.temp }}/code-health-report
+          MODE: ${{ steps.mode.outputs.mode }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          MODE_OUTCOME: ${{ steps.mode.outcome }}
+          NODE_OUTCOME: ${{ steps.setup_node.outcome }}
+          CONFORMANCE_OUTCOME: ${{ steps.conformance.outcome }}
+          RUST_TOOLS_OUTCOME: ${{ steps.rust_tools.outcome }}
+          APP_DEPS_OUTCOME: ${{ steps.app_deps.outcome }}
+          KNIP_OUTCOME: ${{ steps.knip.outcome }}
+          STATIC_OUTCOME: ${{ steps.static_collect.outcome }}
+          CI_OUTCOME: ${{ steps.ci_collect.outcome }}
+        run: |
+          set -euo pipefail
+          started=$(cat "$RUNNER_TEMP/code-health-workflow-started-at")
+          now=$(date +%s)
+          elapsed=$((now - started))
+          phase=complete
+          failed=false
+          for item in \
+            "checkout:$CHECKOUT_OUTCOME" \
+            "mode:$MODE_OUTCOME" \
+            "setup-node:$NODE_OUTCOME" \
+            "conformance:$CONFORMANCE_OUTCOME" \
+            "rust-tool-install:$RUST_TOOLS_OUTCOME" \
+            "project-dependency-install:$APP_DEPS_OUTCOME" \
+            "knip-install:$KNIP_OUTCOME" \
+            "static-collector:$STATIC_OUTCOME" \
+            "ci-collector:$CI_OUTCOME"; do
+            item_phase=${item%%:*}
+            item_outcome=${item#*:}
+            if [[ "$item_outcome" == failure || "$item_outcome" == cancelled || "$item_outcome" == timed_out ]]; then
+              phase=$item_phase
+              failed=true
+              break
+            fi
+          done
+          budget=0
+          case "$MODE" in
+            static) budget=900 ;;
+            ci-only) budget=30 ;;
+          esac
+          preupload_over_budget=false
+          if (( budget > 0 && elapsed > budget )); then preupload_over_budget=true; fi
+          metadata_elapsed=null
+          metadata_over_budget=false
+          status=completed
+          reason=null
+          phase_elapsed=null
+          if [[ "$failed" == true ]]; then
+            status=failed
+            reason="\"$phase\""
+          elif [[ "$MODE" == conformance ]]; then
+            status=not-collected
+            reason='"pull-request-conformance-only"'
+          fi
+          if [[ -f "$REPORT_DIR/evidence/ci-attempt1-timings.json" ]]; then
+            metadata_elapsed=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("metadata_elapsed_seconds", "null"))' "$REPORT_DIR/evidence/ci-attempt1-timings.json")
+            if [[ "$metadata_elapsed" != null ]] && python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) > 30 else 1)' "$metadata_elapsed"; then metadata_over_budget=true; fi
+          fi
+          collector_failures=""
+          if [[ -f "$REPORT_DIR/evidence/collection-status.json" ]]; then
+            collector_failures=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(n for n,v in d.get("collectors",{}).items() if v.get("status")=="failed"))' "$REPORT_DIR/evidence/collection-status.json")
+            phase_elapsed=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); xs=[v.get("elapsed_seconds") for v in d.get("collectors",{}).values() if v.get("status")=="failed" and isinstance(v.get("elapsed_seconds"),(int,float))]; print(xs[0] if xs else "null")' "$REPORT_DIR/evidence/collection-status.json")
+          fi
+          if [[ "$failed" != true && "$MODE" != conformance && -n "$collector_failures" ]]; then
+            status=partial
+            reason='"collector-failure"'
+            if [[ "$MODE" == ci-only ]]; then phase=ci-metadata; else phase=analyzer; fi
+          fi
+          over_budget=false
+          if [[ "$preupload_over_budget" == true || "$metadata_over_budget" == true ]]; then over_budget=true; fi
+          if [[ "$over_budget" == true && "$status" == completed ]]; then
+            status=partial
+            reason='"collection-budget-exceeded"'
+          fi
+          printf '{"status":"%s","phase":"%s","reason":%s,"phase_elapsed_seconds":%s,"preupload_elapsed_seconds":%s,"preupload_budget_seconds":%s,"preupload_over_budget":%s,"metadata_elapsed_seconds":%s,"metadata_budget_seconds":30,"metadata_over_budget":%s,"over_budget":%s}\n' \
+            "$status" "$phase" "$reason" "$phase_elapsed" "$elapsed" "$budget" "$preupload_over_budget" "$metadata_elapsed" "$metadata_over_budget" "$over_budget" \
+            > "$REPORT_DIR/workflow-status.json"
+
       - name: Upload sanitized code-health report
         if: always()
+        timeout-minutes: 3
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: code-health-v1

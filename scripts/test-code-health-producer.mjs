@@ -242,6 +242,33 @@ test("CI gaps stay unknown and unproven startup or timeout conclusions stay fail
   }), /malformed identity/);
 });
 
+test("failed workflow with mixed known and unknown jobs is retained but makes the CI slot incomplete", () => {
+  const normalized = normalizeCiCohort({
+    runs: [{
+      id: 91,
+      head_sha: "e".repeat(40),
+      run_attempt: 1,
+      event: "push",
+      head_branch: "main",
+      created_at: at(500),
+      status: "completed",
+      conclusion: "failure",
+      workflow_config_digest: digest,
+      attempt1_jobs: [{ id: 9101, name: "scope", status: "completed", conclusion: "success" }],
+    }],
+    expectedJobIds: expectedJobs,
+    windowStart: "2026-09-11T00:00:00Z",
+    windowEnd: "2026-10-09T00:00:00Z",
+    workflowConfigDigest: digest,
+    repoRoot: "/workspace/sagascript",
+  });
+  assert.deepEqual(normalized.runs[0].jobs.map(job => job.conclusion), ["success", "unknown"]);
+  assert.equal(normalized.runs[0].overall_conclusion, "unknown");
+  assert.deepEqual(normalized.incomplete_runs, [{ id: 91, status: "completed", conclusion: "failure" }]);
+  assert.equal(normalized.timing_runs[0].status, "completed");
+  assert.equal(normalized.timing_runs[0].conclusion, "failure");
+});
+
 test("CI workflow job inventory and pagination reject incomplete or duplicate evidence", () => {
   const workflow = `name: CI\njobs:\n  # Stable IDs are the cohort slots.\n  scope:\n    runs-on: ubuntu-latest\n  test-macos:\n    needs: scope\non:\n  push:\n`;
   assert.deepEqual(parseWorkflowJobIds(workflow), ["scope", "test-macos"]);

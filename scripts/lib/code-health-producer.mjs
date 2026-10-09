@@ -379,6 +379,7 @@ export function normalizeCiCohort({
   const normalizedRuns = [];
   const excludedRuns = [];
   const timingRuns = [];
+  const incompleteRuns = [];
   for (const run of [...runs].sort((a, b) => Number(a.id) - Number(b.id))) {
     if (!run || !Number.isSafeInteger(run.id) || run.id < 1 || !FULL_SHA.test(run.head_sha)
       || !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1
@@ -422,6 +423,13 @@ export function normalizeCiCohort({
       jobs,
       overall_conclusion: runConclusion(jobs),
     };
+    const workflowStatus = typeof run.status === "string" ? run.status : null;
+    const workflowConclusion = typeof run.conclusion === "string" ? run.conclusion : null;
+    if (workflowStatus === "completed"
+      && ["failure", "startup_failure", "timed_out"].includes(workflowConclusion)
+      && normalized.overall_conclusion === "unknown") {
+      incompleteRuns.push({ id: run.id, status: workflowStatus, conclusion: workflowConclusion });
+    }
     normalizedRuns.push(normalized);
     timingRuns.push({
       databaseId: run.id,
@@ -429,8 +437,8 @@ export function normalizeCiCohort({
       workflowName: "CI",
       event: "push",
       attempt: 1,
-      status: jobs.every(job => !["pending", "unknown"].includes(job.conclusion)) ? "completed" : "in_progress",
-      conclusion: normalized.overall_conclusion,
+      status: workflowStatus ?? (jobs.every(job => !["pending", "unknown"].includes(job.conclusion)) ? "completed" : "in_progress"),
+      conclusion: workflowConclusion ?? normalized.overall_conclusion,
       createdAt: normalized.created_at,
       jobs: attemptJobs.map(job => ({
         databaseId: job.id,
@@ -450,7 +458,7 @@ export function normalizeCiCohort({
       })),
     });
   }
-  return { runs: normalizedRuns, excluded_runs: excludedRuns, timing_runs: timingRuns };
+  return { runs: normalizedRuns, excluded_runs: excludedRuns, timing_runs: timingRuns, incomplete_runs: incompleteRuns };
 }
 
 export function buildCiFirstAttemptPayload({
