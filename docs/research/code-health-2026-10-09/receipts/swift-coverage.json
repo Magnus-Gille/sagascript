@@ -1,0 +1,517 @@
+{
+  "schema_version": 1,
+  "source_revision": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
+  "raw_bytes": 192379,
+  "raw_sha256": "a6abda96abaad71336b370eb633b680838ca0ec8cdae660a62d767b8d7bb77f3",
+  "original_totals": {
+    "branches": {
+      "count": 0,
+      "covered": 0,
+      "notcovered": 0,
+      "percent": 0
+    },
+    "functions": {
+      "count": 338,
+      "covered": 229,
+      "percent": 67.75147928994083
+    },
+    "instantiations": {
+      "count": 349,
+      "covered": 239,
+      "percent": 68.48137535816619
+    },
+    "lines": {
+      "count": 2454,
+      "covered": 1463,
+      "percent": 59.61695191524042
+    },
+    "mcdc": {
+      "count": 0,
+      "covered": 0,
+      "notcovered": 0,
+      "percent": 0
+    },
+    "regions": {
+      "count": 1089,
+      "covered": 627,
+      "notcovered": 462,
+      "percent": 57.57575757575758
+    }
+  },
+  "files": [
+    {
+      "path": "src-tauri/engine-host/coreml/.build/out/Intermediates.noindex/sagascript-engine-host.build/Debug/EngineHostCoreTests-p.build/DerivedSources/test_entry_point.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 3,
+          "covered": 2,
+          "percent": 66.66666666666666
+        },
+        "instantiations": {
+          "count": 3,
+          "covered": 2,
+          "percent": 66.66666666666666
+        },
+        "lines": {
+          "count": 28,
+          "covered": 16,
+          "percent": 57.14285714285714
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 15,
+          "covered": 8,
+          "notcovered": 7,
+          "percent": 53.333333333333336
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/CompiledModelCache.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 10,
+          "covered": 10,
+          "percent": 100
+        },
+        "instantiations": {
+          "count": 10,
+          "covered": 10,
+          "percent": 100
+        },
+        "lines": {
+          "count": 92,
+          "covered": 85,
+          "percent": 92.3913043478261
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 48,
+          "covered": 39,
+          "notcovered": 9,
+          "percent": 81.25
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/ContextBiasing.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 54,
+          "covered": 49,
+          "percent": 90.74074074074075
+        },
+        "instantiations": {
+          "count": 54,
+          "covered": 49,
+          "percent": 90.74074074074075
+        },
+        "lines": {
+          "count": 223,
+          "covered": 204,
+          "percent": 91.4798206278027
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 136,
+          "covered": 125,
+          "notcovered": 11,
+          "percent": 91.91176470588235
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/CoreMLEngine.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 51,
+          "covered": 4,
+          "percent": 7.8431372549019605
+        },
+        "instantiations": {
+          "count": 51,
+          "covered": 4,
+          "percent": 7.8431372549019605
+        },
+        "lines": {
+          "count": 553,
+          "covered": 7,
+          "percent": 1.2658227848101267
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 205,
+          "covered": 4,
+          "notcovered": 201,
+          "percent": 1.951219512195122
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/EngineTypes.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 12,
+          "covered": 11,
+          "percent": 91.66666666666666
+        },
+        "instantiations": {
+          "count": 12,
+          "covered": 11,
+          "percent": 91.66666666666666
+        },
+        "lines": {
+          "count": 79,
+          "covered": 78,
+          "percent": 98.73417721518987
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 14,
+          "covered": 12,
+          "notcovered": 2,
+          "percent": 85.71428571428571
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/FloatTensor.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 24,
+          "covered": 16,
+          "percent": 66.66666666666666
+        },
+        "instantiations": {
+          "count": 24,
+          "covered": 16,
+          "percent": 66.66666666666666
+        },
+        "lines": {
+          "count": 147,
+          "covered": 111,
+          "percent": 75.51020408163265
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 107,
+          "covered": 77,
+          "notcovered": 30,
+          "percent": 71.96261682242991
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/ProtocolServer.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 57,
+          "covered": 50,
+          "percent": 87.71929824561403
+        },
+        "instantiations": {
+          "count": 57,
+          "covered": 50,
+          "percent": 87.71929824561403
+        },
+        "lines": {
+          "count": 420,
+          "covered": 371,
+          "percent": 88.33333333333333
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 172,
+          "covered": 132,
+          "notcovered": 40,
+          "percent": 76.74418604651163
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/SHA256.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 4,
+          "covered": 0,
+          "percent": 0
+        },
+        "instantiations": {
+          "count": 4,
+          "covered": 0,
+          "percent": 0
+        },
+        "lines": {
+          "count": 16,
+          "covered": 0,
+          "percent": 0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 8,
+          "covered": 0,
+          "notcovered": 8,
+          "percent": 0
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/TdtDecoder.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 46,
+          "covered": 10,
+          "percent": 21.73913043478261
+        },
+        "instantiations": {
+          "count": 46,
+          "covered": 10,
+          "percent": 21.73913043478261
+        },
+        "lines": {
+          "count": 371,
+          "covered": 68,
+          "percent": 18.328840970350406
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 178,
+          "covered": 31,
+          "notcovered": 147,
+          "percent": 17.415730337078653
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/CompiledModelCacheTests.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 23,
+          "covered": 23,
+          "percent": 100
+        },
+        "instantiations": {
+          "count": 28,
+          "covered": 27,
+          "percent": 96.42857142857143
+        },
+        "lines": {
+          "count": 164,
+          "covered": 163,
+          "percent": 99.39024390243902
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 75,
+          "covered": 74,
+          "notcovered": 1,
+          "percent": 98.66666666666667
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/ContextBiasingTests.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 13,
+          "covered": 13,
+          "percent": 100
+        },
+        "instantiations": {
+          "count": 13,
+          "covered": 13,
+          "percent": 100
+        },
+        "lines": {
+          "count": 127,
+          "covered": 127,
+          "percent": 100
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 45,
+          "covered": 45,
+          "notcovered": 0,
+          "percent": 100
+        }
+      }
+    },
+    {
+      "path": "src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/ProtocolServerTests.swift",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 41,
+          "covered": 41,
+          "percent": 100
+        },
+        "instantiations": {
+          "count": 47,
+          "covered": 47,
+          "percent": 100
+        },
+        "lines": {
+          "count": 234,
+          "covered": 233,
+          "percent": 99.57264957264957
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 86,
+          "covered": 80,
+          "notcovered": 6,
+          "percent": 93.02325581395348
+        }
+      }
+    }
+  ],
+  "status": "measured",
+  "source_only_totals": {
+    "lines": {
+      "count": 1901,
+      "covered": 924,
+      "percent": 48.60599684376644
+    },
+    "functions": {
+      "count": 258,
+      "covered": 150,
+      "percent": 58.13953488372093
+    },
+    "regions": {
+      "count": 868,
+      "covered": 420,
+      "percent": 48.38709677419355
+    }
+  }
+}
