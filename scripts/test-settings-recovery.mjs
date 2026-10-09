@@ -96,8 +96,8 @@ test("delivery cleanup runs before stale-editor handling and captures native ori
   assert.match(source, /const cleanupTexts = \[persistedText, recoveredText, text\]/);
   assert.match(source, /await clearDeliveredRecoveryDraft\(cleanupTexts, lineage, text, persistedRevision\);\s*if \(testResult !== text/);
   assert.doesNotMatch(source, /lineage === dictationEditorLineage && !wasRecovered/);
-  assert.match(source, /nativeEditorOrigin\?\.lineage === dictationEditorLineage/);
-  assert.match(source, /const nativeEditorOwnsResult = nativeEditorOrigin\?\.lineage === dictationEditorLineage/);
+  assert.match(source, /nativeEditorOrigin\?\.lineage === payloadLineage/);
+  assert.match(source, /const nativeEditorOwnsResult = nativeEditorOrigin\?\.lineage === payloadLineage/);
   assert.match(source, /!testResult\.trim\(\) && !nativeEditorOwnsResult/);
   assert.match(source, /const payloadLineage = dictationEditorLineage/);
   assert.match(source, /lastPersistedDictation\.lineage === payloadLineage/);
@@ -120,4 +120,34 @@ test("delivery cleanup retains unreadable recovery drafts without failing Copy o
   assert.match(cleanup, /try \{/);
   assert.match(cleanup, /recoveryCleanupError\(error\)/);
   assert.match(cleanup, /console\.warn\("Could not clear delivered update recovery draft"/);
+});
+
+test("update preparation fences every stale nonce continuation", () => {
+  const preparation = source.slice(source.indexOf("async function prepareForUpdate"), source.indexOf("async function copyTestResult"));
+  assert.match(source, /let activePreparationNonce: string \| null = null/);
+  assert.match(source, /function isActivePreparation\(nonce: string\): boolean/);
+  assert.match(preparation, /await recoveryRestore;[\s\S]*isActivePreparation\(nonce\)/);
+  assert.match(preparation, /failure: \(\) => isActivePreparation\(nonce\)/);
+  assert.match(preparation, /await drainUpdateWork\([\s\S]*isActivePreparation\(nonce\)/);
+  assert.match(preparation, /enqueueRecoveryMutation\(async \(\) => \{\s*if \(!isActivePreparation\(nonce\)\) return;/);
+  assert.match(preparation, /const nativeResultPending = await getUpdateResultPending\("live-dictation"\)/);
+  assert.match(preparation, /const payloadLineage = dictationEditorLineage;[\s\S]*await loadUpdateRecovery\(\)/);
+  assert.match(preparation, /await saveUpdateRecovery\(payload\);[\s\S]*if \(payload\.dictation\)/);
+  assert.match(preparation, /if \(!isActivePreparation\(nonce\)\) return;\s*await completeUpdatePreparation\(nonce, null\)/);
+  assert.match(preparation, /catch \(error\) \{\s*if \(!isActivePreparation\(nonce\)\) return;/);
+  assert.match(source, /activePreparationNonce = nonce;/);
+  assert.match(source, /activePreparationNonce = null;\s*updatePreparing = false;/);
+});
+
+test("native event drains before queued editor capture and recovery load", () => {
+  const preparation = source.slice(source.indexOf("async function prepareForUpdate"), source.indexOf("async function copyTestResult"));
+  const queued = preparation.slice(preparation.indexOf("enqueueRecoveryMutation"));
+  assert.match(preparation.slice(0, preparation.indexOf("enqueueRecoveryMutation")), /const stableNativeDictation = await getLastTranscription\(\)/);
+  assert.match(preparation.slice(0, preparation.indexOf("enqueueRecoveryMutation")), /const initialNativeResultPending = await getUpdateResultPending\("live-dictation"\)/);
+  assert.match(queued, /const nativeEditorOwnsResult = nativeEditorOrigin\?\.lineage === payloadLineage/);
+  assert.match(queued, /const nativeResultPending = await getUpdateResultPending\("live-dictation"\)/);
+  assert.match(queued, /nativeEditorOrigin\.text === stableNativeDictation/);
+  assert.match(queued, /const payloadLineage = dictationEditorLineage/);
+  assert.match(queued, /const payload = createUpdateRecoveryPayload/);
+  assert.match(queued, /const previous = readPersistedUpdateRecoveryPayload\(await loadUpdateRecovery\(\)/);
 });

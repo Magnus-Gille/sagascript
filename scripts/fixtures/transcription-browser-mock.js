@@ -27,6 +27,13 @@ let holdPianissimoDownload = false;
 let releasePianissimoDownload = null;
 let maximum = 0;
 let sequence = 0;
+let strictPreparationNonce = false;
+let activePreparationNonce = null;
+const expiredPreparationNonces = new Set();
+if (window.qaInitialRecoveryGate) {
+  window.qaRecoveryGates ??= {};
+  window.qaRecoveryGates[window.qaInitialRecoveryGate] = { blocked: true, started: false, resolve: null };
+}
 function transcript(path) {
   return { schema_version: 1, source_sha256: path, language: "en", model: "fixture", duration_seconds: 4,
     segments: [{ id: "seg-1", start: 0, end: 4, text: `Meeting ${path}`, speaker: "spk-1" }],
@@ -90,8 +97,23 @@ function reprocessingResult(task) {
 }
 window.qa = {
   calls,
-  prepareUpdate: (nonce) => emit("update-preparing", nonce),
-  abortUpdate: () => emit("update-aborted", "Synthetic install failure"),
+  prepareUpdate: (nonce) => {
+    if (strictPreparationNonce) activePreparationNonce = nonce;
+    return emit("update-preparing", nonce);
+  },
+  abortUpdate: () => {
+    if (strictPreparationNonce && activePreparationNonce !== null) {
+      expiredPreparationNonces.add(activePreparationNonce);
+      activePreparationNonce = null;
+    }
+    return emit("update-aborted", "Synthetic install failure");
+  },
+  strictPreparationNonces: (enabled) => {
+    strictPreparationNonce = Boolean(enabled);
+    activePreparationNonce = null;
+    expiredPreparationNonces.clear();
+  },
+  activePreparationNonce: () => activePreparationNonce,
   dictationResult: (text) => emit("transcription-result", text),
   blockRecovery: (kind) => {
     window.qaRecoveryGates ??= {};
@@ -179,13 +201,20 @@ mockIPC(async (cmd, args = {}) => {
       window.qaRecovery = null;
       return null;
     case "complete_update_preparation":
+      await waitForQaGate(`complete-preparation:${args.nonce}`);
       await waitForQaGate("complete-preparation");
+      if (strictPreparationNonce && (args.nonce !== activePreparationNonce || expiredPreparationNonces.has(args.nonce))) {
+        throw new Error("Synthetic expired update preparation nonce");
+      }
+      if (strictPreparationNonce) activePreparationNonce = null;
       return null;
     case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
     case "get_last_transcription":
       if (window.qaLastNativeDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaLastNativeDelayMs));
       return window.qaLastNativeDictation ?? null;
-    case "get_update_result_pending": return window.qaNativePending ?? false;
+    case "get_update_result_pending": {
+      return window.qaNativePending ?? false;
+    }
     case "set_update_result_pending":
       if (args.resultId === "live-dictation") window.qaNativePending = args.pending;
       return null;

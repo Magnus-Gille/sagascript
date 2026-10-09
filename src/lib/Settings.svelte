@@ -198,6 +198,7 @@
   let testResultRecoveryPending: boolean = $state(false);
   let testResultEdited: boolean = $state(false);
   let updatePreparing: boolean = $state(false);
+  let activePreparationNonce: string | null = null;
   let liveDictationRevision = 0;
   let observedNativeDictation: string | null = null;
   let nativeEditorOrigin: { text: string; lineage: number } | null = null;
@@ -471,36 +472,54 @@
     selectedFileId = fileJobs[0]?.id ?? null;
   }
 
+  function isActivePreparation(nonce: string): boolean {
+    return activePreparationNonce === nonce;
+  }
+
   async function prepareForUpdate(nonce: string): Promise<void> {
     try {
       await recoveryRestore;
+      if (!isActivePreparation(nonce)) return;
       await tick();
+      if (!isActivePreparation(nonce)) return;
       await Promise.all(fileJobs.map(async (job) => {
         const component = fileComponents[job.id];
         if (!component) throw new Error("A transcription result is still opening. Retry the update.");
         await component.prepareUpdateRecovery();
       }));
-      // The updater holds the native exclusive lease here. Its last result is
-      // stable, but the result event/command response may still be in transit.
-      const lastNativeDictation = await getLastTranscription();
-      const nativeResultPending = await getUpdateResultPending("live-dictation");
-      const nativeEditorOwnsResult = nativeEditorOrigin?.lineage === dictationEditorLineage
-        && nativeEditorOrigin.text === lastNativeDictation;
-      const editedNativeResult = testResultEdited && !recoveredDictationActive
-        && nativeEditorOwnsResult;
-      if (nativeResultPending && lastNativeDictation?.trim()
-        && ((!testResult.trim() && !nativeEditorOwnsResult)
-          || (testResult.trim() && testResult !== lastNativeDictation && !editedNativeResult))) {
-        throw new Error("A different unsaved dictation is already open. Copy or save both results before retrying the update.");
-      }
+      if (!isActivePreparation(nonce)) return;
+      // The updater holds the native exclusive lease here. Capture the stable
+      // native snapshot before draining any result event that is still in
+      // transit, but defer the conflict decision until after the drain.
+      const stableNativeDictation = await getLastTranscription();
+      if (!isActivePreparation(nonce)) return;
+      const initialNativeResultPending = await getUpdateResultPending("live-dictation");
+      if (!isActivePreparation(nonce)) return;
       await drainUpdateWork({
-        busy: () => testTranscribing || Boolean(nativeResultPending && lastNativeDictation?.trim()
-          && observedNativeDictation !== lastNativeDictation),
+        busy: () => testTranscribing || Boolean(initialNativeResultPending && stableNativeDictation?.trim()
+          && observedNativeDictation !== stableNativeDictation),
+        failure: () => isActivePreparation(nonce) ? null : "Update preparation expired.",
         settle: tick,
       });
+      if (!isActivePreparation(nonce)) return;
       await tick();
+      if (!isActivePreparation(nonce)) return;
       await enqueueRecoveryMutation(async () => {
+        if (!isActivePreparation(nonce)) return;
+        // Refresh the pending flag and capture the editor only after earlier
+        // recovery mutations finish. The exclusive lease keeps native text stable.
+        const nativeResultPending = await getUpdateResultPending("live-dictation");
+        if (!isActivePreparation(nonce)) return;
         const payloadLineage = dictationEditorLineage;
+        const nativeEditorOwnsResult = nativeEditorOrigin?.lineage === payloadLineage
+          && nativeEditorOrigin.text === stableNativeDictation;
+        const editedNativeResult = testResultEdited && !recoveredDictationActive
+          && nativeEditorOwnsResult;
+        if (nativeResultPending && stableNativeDictation?.trim()
+          && ((!testResult.trim() && !nativeEditorOwnsResult)
+            || (testResult.trim() && testResult !== stableNativeDictation && !editedNativeResult))) {
+          throw new Error("A different unsaved dictation is already open. Copy or save both results before retrying the update.");
+        }
         const payload = createUpdateRecoveryPayload({
           dictation: testResultRecoveryPending && (nativeResultPending || recoveredDictationActive || testResultEdited)
             && testResult.trim() ? { text: testResult } : null,
@@ -511,6 +530,7 @@
         // older recovered draft). Replace persisted bytes only when they are
         // the session's last successful save in this same editor lineage.
         const previous = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
+        if (!isActivePreparation(nonce)) return;
         const ownsPersistedDictation = Boolean(
           previous?.dictation?.text.trim()
           && lastPersistedDictation?.text === previous.dictation.text
@@ -533,13 +553,16 @@
         } else {
           lastPersistedDictation = null;
         }
+        if (!isActivePreparation(nonce)) return;
         await completeUpdatePreparation(nonce, null);
       });
     } catch (error) {
+      if (!isActivePreparation(nonce)) return;
       const message = recoveryErrorText(error);
       updatePreparing = false;
       try {
         await enqueueRecoveryMutation(async () => {
+          if (!isActivePreparation(nonce)) return;
           await completeUpdatePreparation(nonce, message);
         });
       } catch (ackError) {
@@ -1074,6 +1097,7 @@
           ? payload.nonce
           : null;
       if (nonce && !disposed) {
+        activePreparationNonce = nonce;
         updatePreparing = true;
         void prepareForUpdate(nonce);
       }
@@ -1082,7 +1106,10 @@
       if (disposed) stop();
       else recoveryStop = stop;
     }).catch((error) => console.warn("Could not listen for update preparation", error));
-    listen("update-aborted", () => { updatePreparing = false; }).then((stop) => {
+    listen("update-aborted", () => {
+      activePreparationNonce = null;
+      updatePreparing = false;
+    }).then((stop) => {
       if (disposed) stop();
       else recoveryAbortStop = stop;
     }).catch((error) => console.warn("Could not listen for update abort", error));
@@ -1203,6 +1230,7 @@
     })();
     return () => {
       disposed = true;
+      activePreparationNonce = null;
       recoveryStop?.();
       recoveryAbortStop?.();
     };

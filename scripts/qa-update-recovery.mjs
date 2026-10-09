@@ -71,12 +71,13 @@ if (process.env.QA_ONLY === "file") recovery.meetings = [];
 if (process.env.QA_ONLY === "meeting") recovery.files = [];
 const url = process.env.QA_URL || "http://127.0.0.1:5243/?tab=transcribe";
 let corruptRecovery = false;
+let initialRecoveryGate = null;
 let nativeFirst = false;
 let initialNativeDictation = "Earlier native result";
 let recoveryDelayMs = 300;
 let nativeDelayMs = 650;
 await page.route(url, (route) => route.fulfill({ contentType: "text/html",
-  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryLoadError=${corruptRecovery};window.qaRecoveryDelayMs=${nativeFirst ? 650 : recoveryDelayMs};window.qaLastNativeDictation=${JSON.stringify(initialNativeDictation)};window.qaLastNativeDelayMs=${nativeFirst ? 0 : nativeDelayMs};</script><script type="module">${mock}</script></body></html>`,
+  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryLoadError=${corruptRecovery};window.qaRecoveryDelayMs=${nativeFirst ? 650 : recoveryDelayMs};window.qaLastNativeDictation=${JSON.stringify(initialNativeDictation)};window.qaLastNativeDelayMs=${nativeFirst ? 0 : nativeDelayMs};window.qaInitialRecoveryGate=${JSON.stringify(initialRecoveryGate)};</script><script type="module">${mock}</script></body></html>`,
 }));
 
 try {
@@ -103,9 +104,10 @@ try {
   await page.evaluate(() => window.qa.abortUpdate());
   await page.getByRole("button", { name: "Discard recovered drafts" }).click();
   await page.evaluate(() => window.qa.releaseRecovery("load"));
-  const queuedDiscard = await waitForPreparation("qa-queued-discard");
   await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "clear_update_recovery"));
-  assert.equal(queuedDiscard.error, null);
+  assert.equal(await page.evaluate(() => window.qa.calls.some((call) =>
+    call.cmd === "complete_update_preparation" && call.args.nonce === "qa-queued-discard")), false,
+    "an aborted preparation must not acknowledge after its recovery read resolves");
   assert.equal(await page.evaluate(() => window.qaRecovery), null,
     "discard must remain durable after a prepare read was already in flight");
 
@@ -126,10 +128,11 @@ try {
   await page.getByRole("button", { name: "Copy", exact: true }).click();
   await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
   await page.evaluate(() => window.qa.releaseRecovery("save"));
-  const queuedCopy = await waitForPreparation("qa-queued-copy");
-  assert.equal(queuedCopy.error, null);
   await page.waitForFunction(() => window.qaRecovery?.files?.length === 0
     && window.qaRecovery?.meetings?.[0]?.editor_draft?.texts?.["seg-1"] === "New unsaved meeting snapshot");
+  assert.equal(await page.evaluate(() => window.qa.calls.some((call) =>
+    call.cmd === "complete_update_preparation" && call.args.nonce === "qa-queued-copy")), false,
+    "an aborted preparation must not acknowledge after its save resolves");
 
   // Q2a: an edited native result remains in the same editor lineage across
   // abort/retry, so retry may replace the bytes persisted by the first prepare.
@@ -432,6 +435,36 @@ try {
   await page.waitForFunction(() => window.qaRecovery?.dictation?.text === "Alias D");
   assert.equal(await page.locator("textarea.test-result").inputValue(), "Alias D");
 
+  // F1: start with a genuinely empty editor, then release the pending native
+  // result after preparation reads the pending flag. The old guard reports a
+  // conflict before the in-transit event can hydrate the editor.
+  recovery.dictation = null;
+  recovery.files = [];
+  recovery.meetings = [];
+  initialNativeDictation = null;
+  recoveryDelayMs = 0;
+  nativeDelayMs = 0;
+  await page.goto(url);
+  await page.locator(".tabs .tab").first().waitFor();
+  await page.locator(".tabs .tab").first().click();
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "get_last_transcription"));
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+  assert.equal(await page.locator("textarea.test-result").inputValue(), "", "the in-transit test must begin with an empty editor");
+  const initialPendingCalls = await page.evaluate(() => window.qa.calls.filter((call) =>
+    call.cmd === "get_update_result_pending").length);
+  await page.evaluate(() => {
+    window.qaLastNativeDictation = "Arriving F1 N";
+    window.qaNativePending = true;
+    window.qa.prepareUpdate("qa-f1-in-transit");
+  });
+  await page.waitForFunction((before) => window.qa.calls.filter((call) =>
+    call.cmd === "get_update_result_pending").length > before, initialPendingCalls);
+  await page.evaluate(() => window.qa.dictationResult("Arriving F1 N"));
+  const inTransit = await waitForPreparation("qa-f1-in-transit");
+  assert.equal(inTransit.error, null, "an in-transit native result should be persisted after drain");
+  assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "Arriving F1 N");
+  assert.equal(await page.locator("textarea.test-result").inputValue(), "Arriving F1 N");
+
   // F1: a recovered edit must remain distinct from a pending native result
   // even after Discard clears the live recovered flag. Copy, Save, and retry
   // preparation must leave the hidden native result pending.
@@ -561,6 +594,7 @@ try {
   await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
   await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "F3 E");
   await page.evaluate(() => {
+    window.qa.strictPreparationNonces(true);
     window.qa.blockRecovery("save");
     window.qa.prepareUpdate("qa-f3-E");
   });
@@ -571,16 +605,129 @@ try {
     window.qaLastNativeDictation = "F3 N";
     return window.qa.dictationResult("F3 N");
   });
-  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
   await page.evaluate(() => window.qa.releaseRecovery("save"));
-  assert.equal((await waitForPreparation("qa-f3-E")).error, null);
+  await page.waitForFunction(() => window.qaRecovery?.dictation?.text === "F3 E");
   assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F3 E");
+  assert.equal(await page.evaluate(() => window.qa.calls.some((call) =>
+    call.cmd === "complete_update_preparation" && call.args.nonce === "qa-f3-E")), false,
+  "an expired preparation must skip its stale acknowledgement");
   const f3SaveCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
   await page.evaluate(() => window.qa.prepareUpdate("qa-f3-N"));
   const f3Retry = await waitForPreparation("qa-f3-N");
   assert.match(f3Retry.error, /different unsaved dictation/i);
   assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F3 E");
   assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length, f3SaveCount), f3SaveCount);
+  await page.evaluate(() => window.qa.strictPreparationNonces(false));
+
+  // F2: a successful save from an expired attempt keeps its captured
+  // lineage/revision, while a retry stays locked through its held ACK.
+  recovery.dictation = null;
+  recovery.files = [];
+  recovery.meetings = [];
+  initialNativeDictation = null;
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.evaluate(() => {
+    window.qa.strictPreparationNonces(true);
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "F2 E";
+    window.qa.dictationResult("F2 E");
+  });
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "F2 E");
+  await page.evaluate(() => {
+    window.qa.blockRecovery("save");
+    window.qa.prepareUpdate("qa-f2-first");
+  });
+  await page.waitForFunction(() => window.qa.recoveryGateStarted("save"));
+  await page.evaluate(() => {
+    window.qa.blockGate("complete-preparation");
+    window.qa.abortUpdate();
+    window.qa.prepareUpdate("qa-f2-retry");
+  });
+  await page.evaluate(() => window.qa.releaseRecovery("save"));
+  await page.waitForFunction(() => window.qa.gateStarted("complete-preparation"));
+  assert.equal(await page.evaluate(() => window.qa.calls.some((call) =>
+    call.cmd === "complete_update_preparation" && call.args.nonce === "qa-f2-first")), false,
+  "the expired attempt must not acknowledge after its save");
+  assert.equal(await page.locator("textarea.test-result").isDisabled(), true);
+  assert.equal(await page.getByRole("button", { name: "Start recording", exact: true }).isDisabled(), true);
+  await page.evaluate(() => window.qa.releaseGate("complete-preparation"));
+  assert.equal((await waitForPreparation("qa-f2-retry")).error, null);
+  assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F2 E");
+  await page.evaluate(() => window.qa.strictPreparationNonces(false));
+
+  // F2b: an ACK already in flight may reject after abort. Its catch must not
+  // unlock a newer preparation while that retry is still awaiting its own ACK.
+  recovery.dictation = null;
+  recovery.files = [];
+  recovery.meetings = [];
+  initialNativeDictation = null;
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.evaluate(() => {
+    window.qa.strictPreparationNonces(true);
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "F2b E";
+    window.qa.dictationResult("F2b E");
+    window.qa.blockGate("complete-preparation:qa-f2b-expired");
+    window.qa.prepareUpdate("qa-f2b-expired");
+  });
+  await page.waitForFunction(() => window.qa.gateStarted("complete-preparation:qa-f2b-expired"));
+  await page.evaluate(() => {
+    window.qa.abortUpdate();
+    window.qa.blockGate("complete-preparation:qa-f2b-current");
+    window.qa.prepareUpdate("qa-f2b-current");
+    window.qa.releaseGate("complete-preparation:qa-f2b-expired");
+  });
+  await page.waitForFunction(() => window.qa.gateStarted("complete-preparation:qa-f2b-current"));
+  assert.equal(await page.locator("textarea.test-result").isDisabled(), true,
+    "an expired ACK rejection must not unlock the active retry editor");
+  assert.equal(await page.getByRole("button", { name: "Start recording", exact: true }).isDisabled(), true,
+    "an expired ACK rejection must not unlock native recording during the retry");
+  assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F2b E");
+  await page.screenshot({ path: join(outputDir, "sagascript-update-active-retry.png"), fullPage: true });
+  await page.evaluate(() => window.qa.releaseGate("complete-preparation:qa-f2b-current"));
+  assert.equal((await waitForPreparation("qa-f2b-current")).error, null);
+  await page.waitForFunction(() => window.qa.activePreparationNonce() === null);
+  await page.evaluate(() => window.qa.strictPreparationNonces(false));
+
+  // F3: aborting while recovery hydration is held must expire the attempt
+  // before it can capture a later native result. The retry owns the only save
+  // and acknowledgement after the explicit hydration gate is released.
+  recovery.dictation = null;
+  recovery.files = [];
+  recovery.meetings = [];
+  initialNativeDictation = null;
+  initialRecoveryGate = "load";
+  await page.goto(url);
+  await page.waitForFunction(() => window.qa.recoveryGateStarted("load"));
+  await page.locator(".tabs .tab").first().waitFor();
+  await page.locator(".tabs .tab").first().click();
+  await page.evaluate(() => window.qa.strictPreparationNonces(true));
+  await page.evaluate(() => window.qa.prepareUpdate("qa-f3-before-capture"));
+  await page.evaluate(() => window.qa.abortUpdate());
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "F3 retry N";
+    window.qa.dictationResult("F3 retry N");
+    window.qa.blockGate("complete-preparation");
+    window.qa.prepareUpdate("qa-f3-retry");
+  });
+  await page.evaluate(() => window.qa.releaseRecovery("load"));
+  await page.waitForFunction(() => window.qa.gateStarted("complete-preparation"));
+  const f3PreCapture = await page.evaluate(() => ({
+    saves: window.qa.calls.filter((call) => call.cmd === "save_update_recovery"),
+    staleAcks: window.qa.calls.filter((call) => call.cmd === "complete_update_preparation" && call.args.nonce === "qa-f3-before-capture"),
+  }));
+  assert.equal(f3PreCapture.staleAcks.length, 0, "expired pre-capture attempt must not acknowledge");
+  assert.equal(f3PreCapture.saves.length, 1, "only the active retry may save");
+  assert.equal(f3PreCapture.saves[0].args.payload.dictation.text, "F3 retry N");
+  assert.equal(await page.locator("textarea.test-result").isDisabled(), true);
+  await page.evaluate(() => window.qa.releaseGate("complete-preparation"));
+  assert.equal((await waitForPreparation("qa-f3-retry")).error, null);
+  assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F3 retry N");
+  initialRecoveryGate = null;
+  await page.evaluate(() => window.qa.strictPreparationNonces(false));
 
   recoveryDelayMs = 300;
   nativeDelayMs = 650;
@@ -710,7 +857,12 @@ try {
   assert.equal(saved.args.payload.meetings.length, 1);
   assert.equal(saved.args.payload.dictation.text, "Återställd diktering");
   const saveCount = await page.evaluate(() => window.qa.calls.filter(call => call.cmd === "save_update_recovery").length);
-  await page.evaluate(() => { window.qaNativePending = true; window.qaLastNativeDictation = "New unsaved dictation"; window.qa.prepareUpdate("qa-conflicting-native-result"); });
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "New unsaved dictation";
+    window.qa.dictationResult("New unsaved dictation");
+    window.qa.prepareUpdate("qa-conflicting-native-result");
+  });
   await page.waitForFunction(() => window.qa.calls.some(call => call.cmd === "complete_update_preparation" && call.args.nonce === "qa-conflicting-native-result"));
   const collision = await page.evaluate(() => ({
     ack: window.qa.calls.findLast(call => call.cmd === "complete_update_preparation").args,
