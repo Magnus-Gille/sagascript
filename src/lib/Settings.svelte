@@ -390,7 +390,7 @@
       }
     } catch (error) {
       console.warn("Could not restore update recovery drafts", error);
-      recoveryReadError = `Update blocked: unreadable recovery drafts were retained. ${recoveryErrorText(error)}. Back up or repair update-recovery.json in Sagascript's Application Support directory before retrying.`;
+      recoveryReadError = `Update blocked: unreadable recovery drafts were retained. ${recoveryErrorText(error).replace(/[.]$/, "")}. Back up or repair update-recovery.json in Sagascript's Application Support directory before retrying.`;
       throw error;
     }
   }
