@@ -3,7 +3,7 @@
   "generated_at": "2026-10-09",
   "repository": "Magnus-Gille/sagascript",
   "base_commit": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
-  "working_tree_head": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
+  "inventory_source_revision": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
   "scope": {
     "included": [
       "Rust/Tauri",

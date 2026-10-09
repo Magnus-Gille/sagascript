@@ -109,7 +109,7 @@ const evidence = {
   generated_at: "2026-10-09",
   repository: "Magnus-Gille/sagascript",
   base_commit: base,
-  working_tree_head: git("rev-parse", "HEAD"),
+  inventory_source_revision: base,
   scope: {
     included: ["Rust/Tauri", "Svelte/TypeScript", "Swift CoreML engine host"],
     excluded: ["audio/private recordings", "runtime refactors", "CI gate adoption", "dead-code deletion", "signing/release/deploy"],
