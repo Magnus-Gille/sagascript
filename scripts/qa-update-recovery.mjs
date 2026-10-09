@@ -73,8 +73,10 @@ const url = process.env.QA_URL || "http://127.0.0.1:5243/?tab=transcribe";
 let corruptRecovery = false;
 let nativeFirst = false;
 let initialNativeDictation = "Earlier native result";
+let recoveryDelayMs = 300;
+let nativeDelayMs = 650;
 await page.route(url, (route) => route.fulfill({ contentType: "text/html",
-  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryLoadError=${corruptRecovery};window.qaRecoveryDelayMs=${nativeFirst ? 650 : 300};window.qaLastNativeDictation=${JSON.stringify(initialNativeDictation)};window.qaLastNativeDelayMs=${nativeFirst ? 0 : 650};</script><script type="module">${mock}</script></body></html>`,
+  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryLoadError=${corruptRecovery};window.qaRecoveryDelayMs=${nativeFirst ? 650 : recoveryDelayMs};window.qaLastNativeDictation=${JSON.stringify(initialNativeDictation)};window.qaLastNativeDelayMs=${nativeFirst ? 0 : nativeDelayMs};</script><script type="module">${mock}</script></body></html>`,
 }));
 
 try {
@@ -360,6 +362,8 @@ try {
     recovery.files = [];
     recovery.meetings = [];
     initialNativeDictation = "Earlier native result";
+    recoveryDelayMs = 0;
+    nativeDelayMs = 0;
     await page.goto(url);
     await page.getByRole("button", { name: "Dictate", exact: true }).click();
     await page.waitForFunction((expected) => document.querySelector("textarea.test-result")?.value === expected, `Queued ${actionName} D`);
@@ -367,20 +371,23 @@ try {
       window.qa.blockGate("complete-preparation");
       window.qa.blockGate(deliveryGate);
     }, gate);
-    const saveCountBefore = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
     await page.getByRole("button", { name: action, exact: true }).click();
     await page.waitForFunction((deliveryGate) => window.qa.gateStarted(deliveryGate), gate);
     await page.evaluate((expectedNonce) => window.qa.prepareUpdate(expectedNonce), nonce);
     await page.waitForFunction(() => window.qa.gateStarted("complete-preparation"));
+    const heldLoadCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "load_update_recovery").length);
+    const heldSaveCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
     await page.evaluate((deliveryGate) => window.qa.releaseGate(deliveryGate), gate);
     await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "save_update_recovery"));
-    await page.waitForTimeout(50);
-    const held = await page.evaluate((before) => ({
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    const held = await page.evaluate(() => ({
       saves: window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length,
+      loads: window.qa.calls.filter((call) => call.cmd === "load_update_recovery").length,
       clears: window.qa.calls.filter((call) => call.cmd === "clear_update_recovery").length,
       recovery: window.qaRecovery,
-    }), saveCountBefore);
-    assert.equal(held.saves, saveCountBefore + 1, `${actionName} cleanup must wait behind preparation acknowledgement`);
+    }));
+    assert.equal(held.loads, heldLoadCount, `${actionName} cleanup must not load recovery before preparation acknowledgement`);
+    assert.equal(held.saves, heldSaveCount, `${actionName} cleanup must not save recovery before preparation acknowledgement`);
     assert.equal(held.clears, 0, `${actionName} must not clear recovery before preparation acknowledgement`);
     assert.equal(held.recovery?.dictation?.text, `Queued ${actionName} D`);
     await page.evaluate(() => window.qa.releaseGate("complete-preparation"));
@@ -391,6 +398,8 @@ try {
 
   await runHeldPreparationDelivery({ action: "Copy result", actionName: "Copy", nonce: "qa-copy-held-preparation", gate: "copy-transcription" });
   await runHeldPreparationDelivery({ action: "Save result…", actionName: "Save", nonce: "qa-save-held-preparation", gate: "save-transcription" });
+  recoveryDelayMs = 300;
+  nativeDelayMs = 650;
 
   recovery.dictation = initialRecoveryDictation;
   recovery.files = initialRecoveryFiles;
