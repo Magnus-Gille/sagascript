@@ -1,0 +1,67 @@
+{
+  "cohorts": [
+    {
+      "workflowName": "CI",
+      "event": "push",
+      "attempt": 1,
+      "ledger": [
+        {
+          "id": 37291285757,
+          "attempt": 1,
+          "headSha": "dbf1f008f5a6395cce7adc5ab7a6b4f1892424a9",
+          "status": "completed",
+          "conclusion": "failure",
+          "createdAt": "2026-10-05T09:37:36Z",
+          "eligible": false,
+          "incomplete": false,
+          "reason": "unsuccessful",
+          "elapsedSeconds": 517,
+          "initialWaitSeconds": 4,
+          "wallSeconds": 513,
+          "runnerSeconds": 1748
+        }
+      ],
+      "counts": {
+        "total": 1,
+        "eligible": 0,
+        "incomplete": 0,
+        "success": 0,
+        "inProgress": 0,
+        "noConclusion": 0,
+        "outcomes": {
+          "failure": 1
+        }
+      },
+      "elapsedSeconds": {
+        "n": 0,
+        "p50": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "initialWaitSeconds": {
+        "n": 0,
+        "p50": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "wallSeconds": {
+        "n": 0,
+        "p50": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "runnerSeconds": {
+        "n": 0,
+        "p50": null,
+        "p90": null,
+        "min": null,
+        "max": null
+      },
+      "jobs": [],
+      "steps": []
+    }
+  ]
+}

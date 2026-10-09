@@ -1,0 +1,2743 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-09",
+  "repository": "Magnus-Gille/sagascript",
+  "base_commit": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
+  "working_tree_head": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
+  "scope": {
+    "included": [
+      "Rust/Tauri",
+      "Svelte/TypeScript",
+      "Swift CoreML engine host"
+    ],
+    "excluded": [
+      "audio/private recordings",
+      "runtime refactors",
+      "CI gate adoption",
+      "dead-code deletion",
+      "signing/release/deploy"
+    ]
+  },
+  "inventory": {
+    "rust": [
+      {
+        "path": "src-tauri/build.rs",
+        "language": "rust",
+        "lines": 92,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/build.rs",
+        "language": "rust",
+        "lines": 89,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/benchmark_config.rs",
+        "language": "rust",
+        "lines": 158,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/benchmark_dictation.rs",
+        "language": "rust",
+        "lines": 899,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/benchmark_quality.rs",
+        "language": "rust",
+        "lines": 242,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/cancel.rs",
+        "language": "rust",
+        "lines": 205,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/config.rs",
+        "language": "rust",
+        "lines": 1691,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/diarization_cache.rs",
+        "language": "rust",
+        "lines": 1465,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/diarization.rs",
+        "language": "rust",
+        "lines": 1863,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/engine.rs",
+        "language": "rust",
+        "lines": 651,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/glossary.rs",
+        "language": "rust",
+        "lines": 468,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/latency.rs",
+        "language": "rust",
+        "lines": 980,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/latency/percentile.rs",
+        "language": "rust",
+        "lines": 61,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/lib.rs",
+        "language": "rust",
+        "lines": 1520,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/main.rs",
+        "language": "rust",
+        "lines": 28,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/meeting_proposal.rs",
+        "language": "rust",
+        "lines": 513,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/meeting_reprocessing_cli.rs",
+        "language": "rust",
+        "lines": 515,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/meeting_reprocessing_tests.rs",
+        "language": "rust",
+        "lines": 527,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/meeting_reprocessing.rs",
+        "language": "rust",
+        "lines": 529,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/meeting.rs",
+        "language": "rust",
+        "lines": 955,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/models.rs",
+        "language": "rust",
+        "lines": 545,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/open.rs",
+        "language": "rust",
+        "lines": 167,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/record.rs",
+        "language": "rust",
+        "lines": 533,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/speaker_args.rs",
+        "language": "rust",
+        "lines": 125,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/src/transcribe.rs",
+        "language": "rust",
+        "lines": 4470,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/tests/latency_budget_cli.rs",
+        "language": "rust",
+        "lines": 440,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/tests/latency_limits.rs",
+        "language": "rust",
+        "lines": 410,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/tests/latency_owner_regressions.rs",
+        "language": "rust",
+        "lines": 119,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-cli/tests/latency_report.rs",
+        "language": "rust",
+        "lines": 280,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/examples/diarize_eval.rs",
+        "language": "rust",
+        "lines": 46,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/audio/capture.rs",
+        "language": "rust",
+        "lines": 691,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/audio/decoder.rs",
+        "language": "rust",
+        "lines": 1492,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/audio/mod.rs",
+        "language": "rust",
+        "lines": 13,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/audio/resample.rs",
+        "language": "rust",
+        "lines": 341,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/audio/speech.rs",
+        "language": "rust",
+        "lines": 195,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/audio/wav.rs",
+        "language": "rust",
+        "lines": 160,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs",
+        "language": "rust",
+        "lines": 1117,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization_qualification.rs",
+        "language": "rust",
+        "lines": 1188,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization_reference.rs",
+        "language": "rust",
+        "lines": 866,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization_report.rs",
+        "language": "rust",
+        "lines": 475,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization_strata.rs",
+        "language": "rust",
+        "lines": 894,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization/clustering.rs",
+        "language": "rust",
+        "lines": 861,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization/embedding.rs",
+        "language": "rust",
+        "lines": 277,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization/fbank.rs",
+        "language": "rust",
+        "lines": 268,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization/merge.rs",
+        "language": "rust",
+        "lines": 363,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization/mod.rs",
+        "language": "rust",
+        "lines": 1157,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization/model.rs",
+        "language": "rust",
+        "lines": 255,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization/report.rs",
+        "language": "rust",
+        "lines": 266,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/diarization/segmentation.rs",
+        "language": "rust",
+        "lines": 1033,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/download.rs",
+        "language": "rust",
+        "lines": 2192,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/error.rs",
+        "language": "rust",
+        "lines": 159,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/lib.rs",
+        "language": "rust",
+        "lines": 26,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/meeting_media.rs",
+        "language": "rust",
+        "lines": 289,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/meeting_reprocess_matching.rs",
+        "language": "rust",
+        "lines": 349,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/meeting_reprocess_plan.rs",
+        "language": "rust",
+        "lines": 502,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/meeting_reprocess_proposal.rs",
+        "language": "rust",
+        "lines": 636,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/meeting_reprocess.rs",
+        "language": "rust",
+        "lines": 591,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/meeting_review.rs",
+        "language": "rust",
+        "lines": 1093,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/meeting.rs",
+        "language": "rust",
+        "lines": 1003,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/settings/hotkey.rs",
+        "language": "rust",
+        "lines": 688,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/settings/manager.rs",
+        "language": "rust",
+        "lines": 3652,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/settings/mod.rs",
+        "language": "rust",
+        "lines": 6,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/settings/store.rs",
+        "language": "rust",
+        "lines": 2175,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/speaker_hint.rs",
+        "language": "rust",
+        "lines": 145,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/chunk_merge.rs",
+        "language": "rust",
+        "lines": 509,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/chunking.rs",
+        "language": "rust",
+        "lines": 260,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/dev_overrides.rs",
+        "language": "rust",
+        "lines": 82,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/diagnostics.rs",
+        "language": "rust",
+        "lines": 884,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/engine_host/client.rs",
+        "language": "rust",
+        "lines": 1275,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/engine_host/mod.rs",
+        "language": "rust",
+        "lines": 84,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/engine_host/pipeline.rs",
+        "language": "rust",
+        "lines": 339,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/engine_host/process.rs",
+        "language": "rust",
+        "lines": 557,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/gap_redecode.rs",
+        "language": "rust",
+        "lines": 499,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/glossary_suggestions.rs",
+        "language": "rust",
+        "lines": 621,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/glossary.rs",
+        "language": "rust",
+        "lines": 492,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/live_dictation.rs",
+        "language": "rust",
+        "lines": 274,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/metal_preflight.rs",
+        "language": "rust",
+        "lines": 81,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/mod.rs",
+        "language": "rust",
+        "lines": 31,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/model.rs",
+        "language": "rust",
+        "lines": 650,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/native_log.rs",
+        "language": "rust",
+        "lines": 153,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/pianissimo_backend.rs",
+        "language": "rust",
+        "lines": 1097,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/pianissimo_model.rs",
+        "language": "rust",
+        "lines": 1510,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/postprocess.rs",
+        "language": "rust",
+        "lines": 320,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/src/transcription/whisper_backend.rs",
+        "language": "rust",
+        "lines": 3892,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/tests/chunk_merge_golden.rs",
+        "language": "rust",
+        "lines": 132,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/tests/engine_host.rs",
+        "language": "rust",
+        "lines": 1204,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/tests/longform_deletions.rs",
+        "language": "rust",
+        "lines": 86,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/tests/pianissimo_adapter.rs",
+        "language": "rust",
+        "lines": 301,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/tests/support/fake_engine_host.rs",
+        "language": "rust",
+        "lines": 437,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-core/tests/windows_dictation.rs",
+        "language": "rust",
+        "lines": 204,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-engine-protocol/src/lib.rs",
+        "language": "rust",
+        "lines": 542,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/crates/sagascript-engine-protocol/src/tests.rs",
+        "language": "rust",
+        "lines": 273,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/ort/build.rs",
+        "language": "rust",
+        "lines": 60,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/ort/src/boost.rs",
+        "language": "rust",
+        "lines": 487,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/ort/src/main.rs",
+        "language": "rust",
+        "lines": 97,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/ort/src/ort_engine.rs",
+        "language": "rust",
+        "lines": 614,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/ort/src/pcm.rs",
+        "language": "rust",
+        "lines": 88,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/ort/src/server.rs",
+        "language": "rust",
+        "lines": 531,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/ort/src/server/tests.rs",
+        "language": "rust",
+        "lines": 429,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/ort/src/tdt.rs",
+        "language": "rust",
+        "lines": 319,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/ort/src/vocab.rs",
+        "language": "rust",
+        "lines": 104,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/app_controller.rs",
+        "language": "rust",
+        "lines": 1573,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/commands.rs",
+        "language": "rust",
+        "lines": 3290,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/events.rs",
+        "language": "rust",
+        "lines": 86,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/focus_diag.rs",
+        "language": "rust",
+        "lines": 122,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/hotkey/configuration.rs",
+        "language": "rust",
+        "lines": 108,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/hotkey/health.rs",
+        "language": "rust",
+        "lines": 323,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/hotkey/macos_bare.rs",
+        "language": "rust",
+        "lines": 172,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/hotkey/mod.rs",
+        "language": "rust",
+        "lines": 20,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/hotkey/registration.rs",
+        "language": "rust",
+        "lines": 115,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/hotkey/service.rs",
+        "language": "rust",
+        "lines": 100,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/logging/log_events.rs",
+        "language": "rust",
+        "lines": 57,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/logging/mod.rs",
+        "language": "rust",
+        "lines": 4,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/logging/service.rs",
+        "language": "rust",
+        "lines": 480,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/main.rs",
+        "language": "rust",
+        "lines": 3727,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/meeting_jobs_tests.rs",
+        "language": "rust",
+        "lines": 346,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/meeting_jobs.rs",
+        "language": "rust",
+        "lines": 527,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/meeting_media_range.rs",
+        "language": "rust",
+        "lines": 129,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/meeting_media.rs",
+        "language": "rust",
+        "lines": 448,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/meeting_reprocessing_commands.rs",
+        "language": "rust",
+        "lines": 249,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/meeting_review_commands.rs",
+        "language": "rust",
+        "lines": 198,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/overlay.rs",
+        "language": "rust",
+        "lines": 253,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/paste/completion.rs",
+        "language": "rust",
+        "lines": 135,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/paste/macos_clipboard.rs",
+        "language": "rust",
+        "lines": 256,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/paste/mod.rs",
+        "language": "rust",
+        "lines": 3,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/paste/service.rs",
+        "language": "rust",
+        "lines": 378,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/paste/windows_clipboard_tests.rs",
+        "language": "rust",
+        "lines": 785,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/paste/windows_clipboard.rs",
+        "language": "rust",
+        "lines": 457,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/plain_file_jobs.rs",
+        "language": "rust",
+        "lines": 262,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/platform/linux.rs",
+        "language": "rust",
+        "lines": 26,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/platform/macos.rs",
+        "language": "rust",
+        "lines": 615,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/platform/mod.rs",
+        "language": "rust",
+        "lines": 8,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/platform/windows.rs",
+        "language": "rust",
+        "lines": 19,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/update_activity.rs",
+        "language": "rust",
+        "lines": 251,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/update_recovery.rs",
+        "language": "rust",
+        "lines": 658,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/src/updates.rs",
+        "language": "rust",
+        "lines": 145,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      }
+    ],
+    "frontend": {
+      "svelte": [
+        {
+          "path": "src/lib/Settings.svelte",
+          "language": "svelte",
+          "lines": 3336,
+          "functions": 252,
+          "branches": 543,
+          "template_blocks": 65
+        },
+        {
+          "path": "src/lib/FileTranscription.svelte",
+          "language": "svelte",
+          "lines": 945,
+          "functions": 88,
+          "branches": 221,
+          "template_blocks": 15
+        },
+        {
+          "path": "src/lib/MeetingReprocessing.svelte",
+          "language": "svelte",
+          "lines": 636,
+          "functions": 62,
+          "branches": 109,
+          "template_blocks": 36
+        },
+        {
+          "path": "src/lib/MeetingReview.svelte",
+          "language": "svelte",
+          "lines": 780,
+          "functions": 77,
+          "branches": 115,
+          "template_blocks": 30
+        },
+        {
+          "path": "src/lib/Onboarding.svelte",
+          "language": "svelte",
+          "lines": 1084,
+          "functions": 40,
+          "branches": 73,
+          "template_blocks": 24
+        },
+        {
+          "path": "src/lib/MeetingProgress.svelte",
+          "language": "svelte",
+          "lines": 229,
+          "functions": 0,
+          "branches": 11,
+          "template_blocks": 7
+        },
+        {
+          "path": "src/lib/TranscriptionStages.svelte",
+          "language": "svelte",
+          "lines": 52,
+          "functions": 0,
+          "branches": 16,
+          "template_blocks": 2
+        },
+        {
+          "path": "src/App.svelte",
+          "language": "svelte",
+          "lines": 88,
+          "functions": 2,
+          "branches": 3,
+          "template_blocks": 3
+        },
+        {
+          "path": "src/lib/Overlay.svelte",
+          "language": "svelte",
+          "lines": 141,
+          "functions": 13,
+          "branches": 5,
+          "template_blocks": 0
+        }
+      ],
+      "typescript": [
+        {
+          "path": "src/lib/update-recovery.ts",
+          "language": "typescript",
+          "lines": 724,
+          "functions": 59,
+          "branches": 352,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/transcribe-stages.ts",
+          "language": "typescript",
+          "lines": 96,
+          "functions": 8,
+          "branches": 44,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/overlay-state.ts",
+          "language": "typescript",
+          "lines": 125,
+          "functions": 6,
+          "branches": 31,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-types.ts",
+          "language": "typescript",
+          "lines": 245,
+          "functions": 8,
+          "branches": 28,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/transcribe-ui-state.ts",
+          "language": "typescript",
+          "lines": 142,
+          "functions": 10,
+          "branches": 28,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-progress.ts",
+          "language": "typescript",
+          "lines": 113,
+          "functions": 10,
+          "branches": 26,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-job-client.ts",
+          "language": "typescript",
+          "lines": 39,
+          "functions": 1,
+          "branches": 6,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/api.ts",
+          "language": "typescript",
+          "lines": 512,
+          "functions": 81,
+          "branches": 5,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/update-preparation.ts",
+          "language": "typescript",
+          "lines": 37,
+          "functions": 6,
+          "branches": 5,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/dictation-ui-state.ts",
+          "language": "typescript",
+          "lines": 23,
+          "functions": 2,
+          "branches": 4,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-playback.ts",
+          "language": "typescript",
+          "lines": 16,
+          "functions": 4,
+          "branches": 4,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/transcription-queue.ts",
+          "language": "typescript",
+          "lines": 55,
+          "functions": 9,
+          "branches": 4,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-reprocessing-api.ts",
+          "language": "typescript",
+          "lines": 43,
+          "functions": 7,
+          "branches": 0,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-reprocessing-types.ts",
+          "language": "typescript",
+          "lines": 62,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/recent-transcriptions.ts",
+          "language": "typescript",
+          "lines": 13,
+          "functions": 2,
+          "branches": 0,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/main.ts",
+          "language": "typescript",
+          "lines": 8,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/vite-env.d.ts",
+          "language": "typescript",
+          "lines": 2,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0
+        }
+      ]
+    },
+    "swift": [
+      {
+        "path": "src-tauri/engine-host/coreml/Package.swift",
+        "language": "swift",
+        "lines": 28,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/CompiledModelCache.swift",
+        "language": "swift",
+        "lines": 125,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/ContextBiasing.swift",
+        "language": "swift",
+        "lines": 273,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/CoreMLEngine.swift",
+        "language": "swift",
+        "lines": 609,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/EngineTypes.swift",
+        "language": "swift",
+        "lines": 162,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/FloatTensor.swift",
+        "language": "swift",
+        "lines": 181,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/ProtocolServer.swift",
+        "language": "swift",
+        "lines": 428,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/SHA256.swift",
+        "language": "swift",
+        "lines": 23,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/TdtDecoder.swift",
+        "language": "swift",
+        "lines": 439,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Sources/sagascript-engine-host/main.swift",
+        "language": "swift",
+        "lines": 74,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/CompiledModelCacheTests.swift",
+        "language": "swift",
+        "lines": 180,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/ContextBiasingTests.swift",
+        "language": "swift",
+        "lines": 151,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      },
+      {
+        "path": "src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/ProtocolServerTests.swift",
+        "language": "swift",
+        "lines": 261,
+        "functions": 0,
+        "branches": 0,
+        "template_blocks": 0,
+        "parser": "not_run"
+      }
+    ]
+  },
+  "churn": {
+    "window_start": "2026-09-09",
+    "window_end": "2026-10-10",
+    "paths": {
+      "src-tauri/crates/sagascript-cli/Cargo.toml": {
+        "commits": 4,
+        "additions": 15,
+        "deletions": 6
+      },
+      "src-tauri/crates/sagascript-cli/src/diarization.rs": {
+        "commits": 1,
+        "additions": 1863,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-cli/src/diarization_cache.rs": {
+        "commits": 1,
+        "additions": 426,
+        "deletions": 13
+      },
+      "src-tauri/crates/sagascript-cli/src/lib.rs": {
+        "commits": 7,
+        "additions": 130,
+        "deletions": 13
+      },
+      "src-tauri/crates/sagascript-cli/src/meeting_reprocessing.rs": {
+        "commits": 2,
+        "additions": 128,
+        "deletions": 15
+      },
+      "src-tauri/crates/sagascript-cli/src/meeting_reprocessing_tests.rs": {
+        "commits": 2,
+        "additions": 143,
+        "deletions": 6
+      },
+      "src-tauri/crates/sagascript-cli/src/transcribe.rs": {
+        "commits": 14,
+        "additions": 1513,
+        "deletions": 294
+      },
+      "src-tauri/crates/sagascript-core/Cargo.toml": {
+        "commits": 4,
+        "additions": 20,
+        "deletions": 1
+      },
+      "src-tauri/crates/sagascript-core/src/diarization/embedding.rs": {
+        "commits": 1,
+        "additions": 14,
+        "deletions": 1
+      },
+      "src-tauri/crates/sagascript-core/src/diarization/merge.rs": {
+        "commits": 1,
+        "additions": 112,
+        "deletions": 56
+      },
+      "src-tauri/crates/sagascript-core/src/diarization/mod.rs": {
+        "commits": 3,
+        "additions": 716,
+        "deletions": 51
+      },
+      "src-tauri/crates/sagascript-core/src/diarization/report.rs": {
+        "commits": 1,
+        "additions": 266,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/diarization/segmentation.rs": {
+        "commits": 1,
+        "additions": 328,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs": {
+        "commits": 1,
+        "additions": 1117,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/diarization_qualification.rs": {
+        "commits": 1,
+        "additions": 1188,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/diarization_reference.rs": {
+        "commits": 1,
+        "additions": 866,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/diarization_report.rs": {
+        "commits": 1,
+        "additions": 475,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/diarization_strata.rs": {
+        "commits": 1,
+        "additions": 894,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/lib.rs": {
+        "commits": 2,
+        "additions": 6,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/meeting.rs": {
+        "commits": 2,
+        "additions": 203,
+        "deletions": 8
+      },
+      "src-tauri/crates/sagascript-core/src/meeting_review.rs": {
+        "commits": 1,
+        "additions": 1,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/whisper_backend.rs": {
+        "commits": 9,
+        "additions": 694,
+        "deletions": 92
+      },
+      "src-tauri/src/meeting_jobs.rs": {
+        "commits": 3,
+        "additions": 51,
+        "deletions": 5
+      },
+      "src-tauri/src/meeting_jobs_tests.rs": {
+        "commits": 2,
+        "additions": 38,
+        "deletions": 3
+      },
+      "src/lib/MeetingReview.svelte": {
+        "commits": 3,
+        "additions": 226,
+        "deletions": 19
+      },
+      "src/lib/meeting-types.ts": {
+        "commits": 1,
+        "additions": 86,
+        "deletions": 0
+      },
+      "src/lib/update-recovery.ts": {
+        "commits": 2,
+        "additions": 726,
+        "deletions": 2
+      },
+      "src-tauri/Cargo.lock": {
+        "commits": 12,
+        "additions": 240,
+        "deletions": 28
+      },
+      "src-tauri/Cargo.toml": {
+        "commits": 9,
+        "additions": 16,
+        "deletions": 8
+      },
+      "src-tauri/engine-host/ort/Cargo.lock": {
+        "commits": 4,
+        "additions": 392,
+        "deletions": 6
+      },
+      "src-tauri/engine-host/ort/Cargo.toml": {
+        "commits": 4,
+        "additions": 43,
+        "deletions": 3
+      },
+      "src-tauri/tauri.conf.json": {
+        "commits": 8,
+        "additions": 8,
+        "deletions": 8
+      },
+      "src/lib/FileTranscription.svelte": {
+        "commits": 5,
+        "additions": 873,
+        "deletions": 18
+      },
+      "src/lib/MeetingProgress.svelte": {
+        "commits": 1,
+        "additions": 229,
+        "deletions": 0
+      },
+      "src/lib/api.ts": {
+        "commits": 9,
+        "additions": 138,
+        "deletions": 7
+      },
+      "src/lib/meeting-progress.ts": {
+        "commits": 1,
+        "additions": 113,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/download.rs": {
+        "commits": 2,
+        "additions": 1341,
+        "deletions": 71
+      },
+      "src-tauri/crates/sagascript-core/src/audio/decoder.rs": {
+        "commits": 4,
+        "additions": 1077,
+        "deletions": 132
+      },
+      "src-tauri/crates/sagascript-core/src/audio/resample.rs": {
+        "commits": 3,
+        "additions": 135,
+        "deletions": 4
+      },
+      "src-tauri/crates/sagascript-core/src/settings/store.rs": {
+        "commits": 4,
+        "additions": 623,
+        "deletions": 21
+      },
+      "src-tauri/crates/sagascript-cli/src/meeting_reprocessing_cli.rs": {
+        "commits": 3,
+        "additions": 59,
+        "deletions": 24
+      },
+      "src-tauri/crates/sagascript-cli/src/speaker_args.rs": {
+        "commits": 1,
+        "additions": 125,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/examples/diarize_eval.rs": {
+        "commits": 2,
+        "additions": 48,
+        "deletions": 2
+      },
+      "src-tauri/crates/sagascript-core/src/diarization/clustering.rs": {
+        "commits": 2,
+        "additions": 567,
+        "deletions": 6
+      },
+      "src-tauri/crates/sagascript-core/src/diarization/testdata/no_hint_golden_segments.json": {
+        "commits": 1,
+        "additions": 1,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/meeting_reprocess_plan.rs": {
+        "commits": 1,
+        "additions": 56,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/speaker_hint.rs": {
+        "commits": 1,
+        "additions": 145,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/tests/engine_host.rs": {
+        "commits": 4,
+        "additions": 1213,
+        "deletions": 9
+      },
+      "src-tauri/crates/sagascript-core/tests/support/fake_engine_host.rs": {
+        "commits": 2,
+        "additions": 439,
+        "deletions": 2
+      },
+      "src/lib/MeetingReprocessing.svelte": {
+        "commits": 3,
+        "additions": 14,
+        "deletions": 12
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/engine_host/client.rs": {
+        "commits": 4,
+        "additions": 1280,
+        "deletions": 5
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/engine_host/mod.rs": {
+        "commits": 3,
+        "additions": 86,
+        "deletions": 2
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/engine_host/pipeline.rs": {
+        "commits": 2,
+        "additions": 340,
+        "deletions": 1
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/pianissimo_backend.rs": {
+        "commits": 9,
+        "additions": 1666,
+        "deletions": 569
+      },
+      "src-tauri/crates/sagascript-engine-protocol/src/lib.rs": {
+        "commits": 2,
+        "additions": 542,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-engine-protocol/src/tests.rs": {
+        "commits": 2,
+        "additions": 273,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/ContextBiasing.swift": {
+        "commits": 1,
+        "additions": 273,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/CoreMLEngine.swift": {
+        "commits": 2,
+        "additions": 615,
+        "deletions": 6
+      },
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/EngineTypes.swift": {
+        "commits": 2,
+        "additions": 164,
+        "deletions": 2
+      },
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/FloatTensor.swift": {
+        "commits": 2,
+        "additions": 182,
+        "deletions": 1
+      },
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/ProtocolServer.swift": {
+        "commits": 2,
+        "additions": 429,
+        "deletions": 1
+      },
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/TdtDecoder.swift": {
+        "commits": 2,
+        "additions": 449,
+        "deletions": 10
+      },
+      "src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/ContextBiasingTests.swift": {
+        "commits": 1,
+        "additions": 151,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/ort/src/boost.rs": {
+        "commits": 1,
+        "additions": 487,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/ort/src/main.rs": {
+        "commits": 2,
+        "additions": 97,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/ort/src/ort_engine.rs": {
+        "commits": 2,
+        "additions": 617,
+        "deletions": 3
+      },
+      "src-tauri/engine-host/ort/src/server.rs": {
+        "commits": 2,
+        "additions": 534,
+        "deletions": 3
+      },
+      "src-tauri/engine-host/ort/src/server/tests.rs": {
+        "commits": 2,
+        "additions": 429,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/ort/src/tdt.rs": {
+        "commits": 2,
+        "additions": 321,
+        "deletions": 2
+      },
+      "src-tauri/engine-host/test-vectors/context-biasing.json": {
+        "commits": 1,
+        "additions": 2330,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-cli/src/config.rs": {
+        "commits": 5,
+        "additions": 611,
+        "deletions": 124
+      },
+      "src-tauri/crates/sagascript-core/src/settings/manager.rs": {
+        "commits": 6,
+        "additions": 1499,
+        "deletions": 64
+      },
+      "src-tauri/src/commands.rs": {
+        "commits": 16,
+        "additions": 878,
+        "deletions": 309
+      },
+      "src-tauri/src/hotkey/configuration.rs": {
+        "commits": 1,
+        "additions": 16,
+        "deletions": 5
+      },
+      "src/lib/Settings.svelte": {
+        "commits": 31,
+        "additions": 1912,
+        "deletions": 1240
+      },
+      "src-tauri/src/main.rs": {
+        "commits": 12,
+        "additions": 1021,
+        "deletions": 167
+      },
+      "src-tauri/src/overlay.rs": {
+        "commits": 3,
+        "additions": 157,
+        "deletions": 25
+      },
+      "src-tauri/src/focus_diag.rs": {
+        "commits": 2,
+        "additions": 123,
+        "deletions": 1
+      },
+      "src-tauri/src/logging/service.rs": {
+        "commits": 3,
+        "additions": 84,
+        "deletions": 1
+      },
+      "src-tauri/src/paste/service.rs": {
+        "commits": 1,
+        "additions": 79,
+        "deletions": 79
+      },
+      "src/lib/hotkey.js": {
+        "commits": 1,
+        "additions": 14,
+        "deletions": 0
+      },
+      "src-tauri/src/platform/macos.rs": {
+        "commits": 4,
+        "additions": 483,
+        "deletions": 13
+      },
+      "src-tauri/src/logging/mod.rs": {
+        "commits": 1,
+        "additions": 1,
+        "deletions": 1
+      },
+      "src-tauri/crates/sagascript-cli/src/cancel.rs": {
+        "commits": 1,
+        "additions": 205,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/gap_redecode.rs": {
+        "commits": 2,
+        "additions": 499,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/tests/pianissimo_adapter.rs": {
+        "commits": 3,
+        "additions": 301,
+        "deletions": 0
+      },
+      "src-tauri/src/plain_file_jobs.rs": {
+        "commits": 6,
+        "additions": 267,
+        "deletions": 5
+      },
+      "src-tauri/src/events.rs": {
+        "commits": 4,
+        "additions": 23,
+        "deletions": 8
+      },
+      "src/lib/Overlay.svelte": {
+        "commits": 1,
+        "additions": 51,
+        "deletions": 17
+      },
+      "src/lib/overlay-state.ts": {
+        "commits": 1,
+        "additions": 125,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/mod.rs": {
+        "commits": 5,
+        "additions": 15,
+        "deletions": 6
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/native_log.rs": {
+        "commits": 1,
+        "additions": 153,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-cli/src/models.rs": {
+        "commits": 6,
+        "additions": 447,
+        "deletions": 111
+      },
+      "src-tauri/crates/sagascript-cli/src/engine.rs": {
+        "commits": 2,
+        "additions": 655,
+        "deletions": 4
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/live_dictation.rs": {
+        "commits": 2,
+        "additions": 274,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/pianissimo_model.rs": {
+        "commits": 6,
+        "additions": 1725,
+        "deletions": 215
+      },
+      "src-tauri/engine-host/ort/build.rs": {
+        "commits": 1,
+        "additions": 60,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/ort/src/pcm.rs": {
+        "commits": 1,
+        "additions": 88,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/ort/src/vocab.rs": {
+        "commits": 1,
+        "additions": 104,
+        "deletions": 0
+      },
+      "src-tauri/build.rs": {
+        "commits": 1,
+        "additions": 14,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-cli/src/benchmark_config.rs": {
+        "commits": 1,
+        "additions": 1,
+        "deletions": 1
+      },
+      "src-tauri/crates/sagascript-cli/src/glossary.rs": {
+        "commits": 1,
+        "additions": 90,
+        "deletions": 76
+      },
+      "src-tauri/crates/sagascript-cli/src/open.rs": {
+        "commits": 1,
+        "additions": 49,
+        "deletions": 9
+      },
+      "src-tauri/crates/sagascript-cli/src/record.rs": {
+        "commits": 1,
+        "additions": 362,
+        "deletions": 80
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/chunk_merge.rs": {
+        "commits": 1,
+        "additions": 509,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/dev_overrides.rs": {
+        "commits": 1,
+        "additions": 82,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/src/transcription/engine_host/process.rs": {
+        "commits": 1,
+        "additions": 557,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/tests/chunk_merge_golden.rs": {
+        "commits": 1,
+        "additions": 132,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/tests/fixtures/chunk_merge/README.md": {
+        "commits": 1,
+        "additions": 25,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/tests/fixtures/chunk_merge/real_fleurs_sv_5min.json": {
+        "commits": 1,
+        "additions": 1,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/tests/fixtures/chunk_merge/synthetic.json": {
+        "commits": 1,
+        "additions": 1,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-core/tests/longform_deletions.rs": {
+        "commits": 1,
+        "additions": 86,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-engine-protocol/Cargo.toml": {
+        "commits": 1,
+        "additions": 14,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/coreml/NOTICE": {
+        "commits": 1,
+        "additions": 10,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/coreml/Package.swift": {
+        "commits": 1,
+        "additions": 28,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/CompiledModelCache.swift": {
+        "commits": 1,
+        "additions": 125,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/SHA256.swift": {
+        "commits": 1,
+        "additions": 23,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/coreml/Sources/sagascript-engine-host/main.swift": {
+        "commits": 1,
+        "additions": 74,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/CompiledModelCacheTests.swift": {
+        "commits": 1,
+        "additions": 180,
+        "deletions": 0
+      },
+      "src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/ProtocolServerTests.swift": {
+        "commits": 1,
+        "additions": 261,
+        "deletions": 0
+      },
+      "src-tauri/resources/pianissimo_worker.py": {
+        "commits": 4,
+        "additions": 420,
+        "deletions": 420
+      },
+      "src-tauri/resources/test_pianissimo_worker.py": {
+        "commits": 3,
+        "additions": 104,
+        "deletions": 104
+      },
+      "src-tauri/src/app_controller.rs": {
+        "commits": 1,
+        "additions": 80,
+        "deletions": 3
+      },
+      "src-tauri/src/update_activity.rs": {
+        "commits": 1,
+        "additions": 251,
+        "deletions": 0
+      },
+      "src-tauri/src/update_recovery.rs": {
+        "commits": 1,
+        "additions": 658,
+        "deletions": 0
+      },
+      "src-tauri/src/updates.rs": {
+        "commits": 1,
+        "additions": 44,
+        "deletions": 1
+      },
+      "src/lib/Onboarding.svelte": {
+        "commits": 2,
+        "additions": 45,
+        "deletions": 8
+      },
+      "src/lib/TranscriptionStages.svelte": {
+        "commits": 2,
+        "additions": 53,
+        "deletions": 1
+      },
+      "src/lib/update-preparation.ts": {
+        "commits": 1,
+        "additions": 37,
+        "deletions": 0
+      },
+      "src-tauri/crates/sagascript-cli/src/meeting_proposal.rs": {
+        "commits": 1,
+        "additions": 1,
+        "deletions": 5
+      },
+      "src/lib/recent-transcriptions.ts": {
+        "commits": 1,
+        "additions": 13,
+        "deletions": 0
+      },
+      "src/lib/transcribe-stages.ts": {
+        "commits": 1,
+        "additions": 96,
+        "deletions": 0
+      },
+      "src/lib/transcribe-ui-state.ts": {
+        "commits": 7,
+        "additions": 187,
+        "deletions": 45
+      },
+      "src/lib/transcription-queue.ts": {
+        "commits": 1,
+        "additions": 55,
+        "deletions": 0
+      }
+    }
+  },
+  "static_metrics": {
+    "rust_complexity": {
+      "analyzer": "rust-code-analysis-cli 0.0.25",
+      "status": "pass",
+      "maintenance": "locked crossbeam-channel 0.5.6 is yanked; no lockfile mutation",
+      "files": [
+        {
+          "path": "src-tauri/crates/sagascript-cli/src/transcribe.rs",
+          "cyclomatic_max": 94,
+          "cognitive_max": 85,
+          "lines": 4470
+        },
+        {
+          "path": "src-tauri/crates/sagascript-cli/src/diarization.rs",
+          "cyclomatic_max": 34,
+          "cognitive_max": 30,
+          "lines": 1863
+        },
+        {
+          "path": "src-tauri/crates/sagascript-core/src/download.rs",
+          "cyclomatic_max": 27,
+          "cognitive_max": 21,
+          "lines": 2192
+        },
+        {
+          "path": "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs",
+          "cyclomatic_max": 23,
+          "cognitive_max": 36,
+          "lines": 1117
+        },
+        {
+          "path": "src-tauri/crates/sagascript-core/src/transcription/whisper_backend.rs",
+          "cyclomatic_max": 15,
+          "cognitive_max": 38,
+          "lines": 3892
+        }
+      ],
+      "top_function": {
+        "path": "src-tauri/crates/sagascript-cli/src/transcribe.rs",
+        "name": "transcribe_file",
+        "start_line": 1468,
+        "end_line": 2193,
+        "cyclomatic": 94,
+        "cognitive": 85,
+        "sloc": 726
+      }
+    },
+    "svelte_parser": {
+      "analyzer": "svelte/compiler 5.56.4 + TypeScript 5.9.3",
+      "status": "pass",
+      "candidates": [
+        {
+          "path": "src/lib/Settings.svelte",
+          "language": "svelte",
+          "lines": 3336,
+          "functions": 252,
+          "branches": 543,
+          "template_blocks": 65
+        },
+        {
+          "path": "src/lib/FileTranscription.svelte",
+          "language": "svelte",
+          "lines": 945,
+          "functions": 88,
+          "branches": 221,
+          "template_blocks": 15
+        },
+        {
+          "path": "src/lib/MeetingReprocessing.svelte",
+          "language": "svelte",
+          "lines": 636,
+          "functions": 62,
+          "branches": 109,
+          "template_blocks": 36
+        },
+        {
+          "path": "src/lib/MeetingReview.svelte",
+          "language": "svelte",
+          "lines": 780,
+          "functions": 77,
+          "branches": 115,
+          "template_blocks": 30
+        },
+        {
+          "path": "src/lib/Onboarding.svelte",
+          "language": "svelte",
+          "lines": 1084,
+          "functions": 40,
+          "branches": 73,
+          "template_blocks": 24
+        },
+        {
+          "path": "src/lib/MeetingProgress.svelte",
+          "language": "svelte",
+          "lines": 229,
+          "functions": 0,
+          "branches": 11,
+          "template_blocks": 7
+        },
+        {
+          "path": "src/lib/TranscriptionStages.svelte",
+          "language": "svelte",
+          "lines": 52,
+          "functions": 0,
+          "branches": 16,
+          "template_blocks": 2
+        },
+        {
+          "path": "src/App.svelte",
+          "language": "svelte",
+          "lines": 88,
+          "functions": 2,
+          "branches": 3,
+          "template_blocks": 3
+        },
+        {
+          "path": "src/lib/Overlay.svelte",
+          "language": "svelte",
+          "lines": 141,
+          "functions": 13,
+          "branches": 5,
+          "template_blocks": 0
+        }
+      ]
+    },
+    "typescript_parser": {
+      "analyzer": "TypeScript 5.9.3",
+      "status": "pass",
+      "candidates": [
+        {
+          "path": "src/lib/update-recovery.ts",
+          "language": "typescript",
+          "lines": 724,
+          "functions": 59,
+          "branches": 352,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/transcribe-stages.ts",
+          "language": "typescript",
+          "lines": 96,
+          "functions": 8,
+          "branches": 44,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/overlay-state.ts",
+          "language": "typescript",
+          "lines": 125,
+          "functions": 6,
+          "branches": 31,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-types.ts",
+          "language": "typescript",
+          "lines": 245,
+          "functions": 8,
+          "branches": 28,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/transcribe-ui-state.ts",
+          "language": "typescript",
+          "lines": 142,
+          "functions": 10,
+          "branches": 28,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-progress.ts",
+          "language": "typescript",
+          "lines": 113,
+          "functions": 10,
+          "branches": 26,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-job-client.ts",
+          "language": "typescript",
+          "lines": 39,
+          "functions": 1,
+          "branches": 6,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/api.ts",
+          "language": "typescript",
+          "lines": 512,
+          "functions": 81,
+          "branches": 5,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/update-preparation.ts",
+          "language": "typescript",
+          "lines": 37,
+          "functions": 6,
+          "branches": 5,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/dictation-ui-state.ts",
+          "language": "typescript",
+          "lines": 23,
+          "functions": 2,
+          "branches": 4,
+          "template_blocks": 0
+        }
+      ]
+    },
+    "swift_complexity": {
+      "analyzer": "Swift parser unavailable; SwiftPM compiler/tests are separate",
+      "status": "unsupported",
+      "candidates": [
+        {
+          "path": "src-tauri/engine-host/coreml/Package.swift",
+          "lines": 28,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/BuildInfo.swift",
+          "lines": 8,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/CompiledModelCache.swift",
+          "lines": 125,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/ContextBiasing.swift",
+          "lines": 273,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/CoreMLEngine.swift",
+          "lines": 609,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/EngineTypes.swift",
+          "lines": 162,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/FloatTensor.swift",
+          "lines": 181,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/ProtocolServer.swift",
+          "lines": 428,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/SHA256.swift",
+          "lines": 23,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/TdtDecoder.swift",
+          "lines": 439,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        }
+      ]
+    }
+  },
+  "coverage": {
+    "cargo_llvm_cov": {
+      "tool": "cargo-llvm-cov 0.9.1",
+      "status": "pass",
+      "core": {
+        "tests": 612,
+        "lines": 89.56401144144925,
+        "functions": 85.77235772357723,
+        "regions": 89.95614389108619,
+        "wall_seconds": 81.21
+      },
+      "cli": {
+        "tests": 235,
+        "lines": 71.46126185027786,
+        "functions": 70.59538274605103,
+        "regions": 72.28639020317283,
+        "wall_seconds": 8.09,
+        "status": "mixed-attempt-profiles-not-baseline",
+        "limitation": "--no-clean retained profiles from the failed and corrected CLI attempts; do not use this percentage as a clean baseline"
+      },
+      "selected_files": {
+        "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs": 98.80239520958084,
+        "src-tauri/crates/sagascript-core/src/download.rs": 95.92252803261978,
+        "src-tauri/crates/sagascript-core/src/transcription/whisper_backend.rs": 66.35897435897435,
+        "src-tauri/crates/sagascript-cli/src/diarization.rs": 85.48168249660787,
+        "src-tauri/crates/sagascript-cli/src/transcribe.rs": 54.68831849135674
+      },
+      "branch_coverage": "not_measured; zero branch records do not mean 0% coverage"
+    },
+    "rust_selected_test_run": {
+      "command": "CARGO_BUILD_JOBS=2 cargo test -p sagascript-core --no-default-features",
+      "passed": 612,
+      "failed": 0,
+      "ignored": 1,
+      "status": "pass"
+    },
+    "swift_selected_test_run": {
+      "command": "swift test --package-path src-tauri/engine-host/coreml --jobs 2",
+      "passed": 27,
+      "failed": 0,
+      "status": "pass",
+      "prerequisite": "scripts/build-engine-host.sh generates ignored BuildInfo.swift"
+    },
+    "frontend": {
+      "status": "not_measured",
+      "parser_trial": "passed",
+      "note": "AST parsing is not execution coverage"
+    },
+    "swift": {
+      "status": "measured",
+      "source_only_totals": {
+        "lines": {
+          "count": 1901,
+          "covered": 924,
+          "percent": 48.60599684376644
+        },
+        "functions": {
+          "count": 258,
+          "covered": 150,
+          "percent": 58.13953488372093
+        },
+        "regions": {
+          "count": 868,
+          "covered": 420,
+          "percent": 48.38709677419355
+        }
+      },
+      "included": "exported Sources/EngineHostCore files only; test/generated files excluded",
+      "original_test_bundle_totals": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 338,
+          "covered": 229,
+          "percent": 67.75147928994083
+        },
+        "instantiations": {
+          "count": 349,
+          "covered": 239,
+          "percent": 68.48137535816619
+        },
+        "lines": {
+          "count": 2454,
+          "covered": 1463,
+          "percent": 59.61695191524042
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 1089,
+          "covered": 627,
+          "notcovered": 462,
+          "percent": 57.57575757575758
+        }
+      },
+      "branch_coverage": "not_measured"
+    }
+  },
+  "tool_trials": [
+    {
+      "tool": "cargo-llvm-cov",
+      "status": "pass",
+      "evidence": "0.9.1 core and CLI JSON summaries exported; CLI correction prebuilt fake host"
+    },
+    {
+      "tool": "rust-code-analysis-cli",
+      "status": "pass",
+      "evidence": "0.0.25 function metrics exported; yanked dependency warning recorded"
+    },
+    {
+      "tool": "svelte/compiler",
+      "status": "pass",
+      "evidence": "AST parse succeeded for selected Svelte modules"
+    },
+    {
+      "tool": "knip",
+      "status": "pass_with_validation_limits",
+      "evidence": "5.46.0 JSON report; default graph includes entrypoint false positives"
+    },
+    {
+      "tool": "swift test",
+      "status": "pass_after_correction",
+      "evidence": "BuildInfo.swift generated by existing build script; 27 tests passed"
+    }
+  ],
+  "unused_candidates": {
+    "analyzer": "Knip 5.46.0",
+    "status": "pass_with_validation_limits",
+    "candidates": [
+      {
+        "path": "package.json",
+        "name": "@tauri-apps/plugin-autostart",
+        "verdict": "unknown",
+        "reason": "no frontend import; native/plugin registration ownership not proven"
+      },
+      {
+        "path": "package.json",
+        "name": "tslib",
+        "verdict": "unknown",
+        "reason": "no direct import; build/peer usage not proven"
+      },
+      {
+        "path": "src/lib/api.ts",
+        "name": "setWhisperModel",
+        "verdict": "unknown",
+        "reason": "default Knip graph does not model all CLI/GUI entrypoints"
+      },
+      {
+        "path": "src/lib/update-recovery.ts",
+        "name": "UPDATE_RECOVERY_LIMITS",
+        "verdict": "false_positive",
+        "reason": "used internally and imported by tests"
+      },
+      {
+        "path": "src/lib/transcribe-ui-state.ts",
+        "name": "transcribeBaseName",
+        "verdict": "false_positive",
+        "reason": "imported by dedicated test script"
+      }
+    ]
+  },
+  "ci_reliability": {
+    "status": "bounded20run_sample",
+    "workflow": "ci.yml",
+    "branch": "main",
+    "event": "push",
+    "first_attempt_success": 19,
+    "first_attempt_failure": 1,
+    "eligible_completed": 20,
+    "example_run_id": "37291285757",
+    "receipts": "receipts/ci-runs.json and ci-first-attempts.json",
+    "timing_tools": "existing ci-run-timings.mjs and ci-cohort-timings.mjs both exercised on preserved first-attempt fixture"
+  },
+  "measurement_provenance": {
+    "source_revision": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
+    "recorded_at": "2026-10-09",
+    "kind": "archived one-time analyzer measurements; assembler does not rerun analyzers",
+    "receipts_directory": "receipts/"
+  }
+}

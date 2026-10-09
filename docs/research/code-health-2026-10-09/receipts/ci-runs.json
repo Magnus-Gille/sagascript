@@ -1,0 +1,229 @@
+{
+  "repository": "Magnus-Gille/sagascript",
+  "fetched_at": "2026-10-09T08:21:14.004157+00:00",
+  "endpoint": "repos/Magnus-Gille/sagascript/actions/workflows/ci.yml/runs?branch=main&per_page=20",
+  "total_count": 187,
+  "scope": "latest20 main CI runs; latest attempt state, not first-attempt claim",
+  "runs": [
+    {
+      "id": 37787177452,
+      "head_sha": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-08T13:47:37Z",
+      "updated_at": "2026-10-08T14:06:33Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37787177452"
+    },
+    {
+      "id": 37681679895,
+      "head_sha": "aab4fa37dd3ad7727ab39a5b1df80ffd01ff67b4",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-07T20:23:52Z",
+      "updated_at": "2026-10-07T20:43:53Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37681679895"
+    },
+    {
+      "id": 37291285757,
+      "head_sha": "dbf1f008f5a6395cce7adc5ab7a6b4f1892424a9",
+      "run_attempt": 2,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-05T09:37:36Z",
+      "updated_at": "2026-10-05T09:53:40Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37291285757"
+    },
+    {
+      "id": 37289029281,
+      "head_sha": "8f7a2bc26f35ee5fcfe784d239a7a5aab700e7e5",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-05T09:17:12Z",
+      "updated_at": "2026-10-05T09:25:17Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37289029281"
+    },
+    {
+      "id": 37283179124,
+      "head_sha": "9af7a3f594a2b7d0402ef838a5f5643fff7ecbf8",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-05T08:22:02Z",
+      "updated_at": "2026-10-05T08:31:38Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37283179124"
+    },
+    {
+      "id": 37182711372,
+      "head_sha": "08d0a0c505292b8beeb57c2ccc1fe456f3959e86",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-04T06:24:28Z",
+      "updated_at": "2026-10-04T06:31:39Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37182711372"
+    },
+    {
+      "id": 37153658430,
+      "head_sha": "59f366b957be2e3f46a42ca727cbe0f4d163b6b5",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-03T21:01:53Z",
+      "updated_at": "2026-10-03T21:09:33Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37153658430"
+    },
+    {
+      "id": 37138806903,
+      "head_sha": "e85a42f1a56f1bb6d495577841490241420fa0b1",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-03T16:58:27Z",
+      "updated_at": "2026-10-03T17:14:10Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37138806903"
+    },
+    {
+      "id": 37133132264,
+      "head_sha": "6b7befc710ee892d66f424d29fc853156cc78c96",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-03T15:24:30Z",
+      "updated_at": "2026-10-03T15:40:27Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37133132264"
+    },
+    {
+      "id": 37043984465,
+      "head_sha": "ecfacfc9b64cca5c057bbbbaec665d100c541981",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-02T17:55:28Z",
+      "updated_at": "2026-10-02T18:08:26Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37043984465"
+    },
+    {
+      "id": 37028712288,
+      "head_sha": "25ee15b77620ad277dbc1c37608a4f58f8079d31",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-02T15:41:07Z",
+      "updated_at": "2026-10-02T15:57:17Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37028712288"
+    },
+    {
+      "id": 37014366726,
+      "head_sha": "b40fe4bd3de79688e91b6138e9307a43ed5cad4d",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-02T13:38:47Z",
+      "updated_at": "2026-10-02T13:45:00Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37014366726"
+    },
+    {
+      "id": 37013087550,
+      "head_sha": "4bc6632b223a4cfa431ef9f5bb12e009d2500fce",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-02T13:27:16Z",
+      "updated_at": "2026-10-02T13:35:00Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37013087550"
+    },
+    {
+      "id": 37012161396,
+      "head_sha": "5d753d28b132b6bdfaa5717657ae38d63b840dd7",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-02T13:18:51Z",
+      "updated_at": "2026-10-02T13:27:02Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37012161396"
+    },
+    {
+      "id": 37003654802,
+      "head_sha": "1daec730593b8ede047b05d18d0d41f8ccbdedf7",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-02T11:54:58Z",
+      "updated_at": "2026-10-02T12:02:47Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/37003654802"
+    },
+    {
+      "id": 36999442137,
+      "head_sha": "be885dcdd50f316da9a5c9bf104ff0a5b2c5cced",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-02T11:09:23Z",
+      "updated_at": "2026-10-02T11:17:05Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/36999442137"
+    },
+    {
+      "id": 36994671583,
+      "head_sha": "585c0111da0175b0b1bca2f427f2edaf8581986a",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-02T10:17:41Z",
+      "updated_at": "2026-10-02T10:34:16Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/36994671583"
+    },
+    {
+      "id": 36922394752,
+      "head_sha": "7e2ef0e1ecfa2d2bd8c0edebc130754e93218a22",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-01T20:33:04Z",
+      "updated_at": "2026-10-01T20:48:18Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/36922394752"
+    },
+    {
+      "id": 36876924649,
+      "head_sha": "926b4920acb532e3dbcf82710765b5a5ca811e75",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-01T14:30:52Z",
+      "updated_at": "2026-10-01T14:40:53Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/36876924649"
+    },
+    {
+      "id": 36863593067,
+      "head_sha": "2e7e73b7bbfdbd504ee3f410a626349727d0c531",
+      "run_attempt": 1,
+      "event": "push",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-01T12:42:43Z",
+      "updated_at": "2026-10-01T12:59:43Z",
+      "html_url": "https://github.com/Magnus-Gille/sagascript/actions/runs/36863593067"
+    }
+  ]
+}

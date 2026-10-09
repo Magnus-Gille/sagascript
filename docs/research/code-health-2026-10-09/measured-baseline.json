@@ -1,0 +1,487 @@
+{
+  "static_metrics": {
+    "rust_complexity": {
+      "analyzer": "rust-code-analysis-cli 0.0.25",
+      "status": "pass",
+      "maintenance": "locked crossbeam-channel 0.5.6 is yanked; no lockfile mutation",
+      "files": [
+        {
+          "path": "src-tauri/crates/sagascript-cli/src/transcribe.rs",
+          "cyclomatic_max": 94,
+          "cognitive_max": 85,
+          "lines": 4470
+        },
+        {
+          "path": "src-tauri/crates/sagascript-cli/src/diarization.rs",
+          "cyclomatic_max": 34,
+          "cognitive_max": 30,
+          "lines": 1863
+        },
+        {
+          "path": "src-tauri/crates/sagascript-core/src/download.rs",
+          "cyclomatic_max": 27,
+          "cognitive_max": 21,
+          "lines": 2192
+        },
+        {
+          "path": "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs",
+          "cyclomatic_max": 23,
+          "cognitive_max": 36,
+          "lines": 1117
+        },
+        {
+          "path": "src-tauri/crates/sagascript-core/src/transcription/whisper_backend.rs",
+          "cyclomatic_max": 15,
+          "cognitive_max": 38,
+          "lines": 3892
+        }
+      ],
+      "top_function": {
+        "path": "src-tauri/crates/sagascript-cli/src/transcribe.rs",
+        "name": "transcribe_file",
+        "start_line": 1468,
+        "end_line": 2193,
+        "cyclomatic": 94,
+        "cognitive": 85,
+        "sloc": 726
+      }
+    },
+    "svelte_parser": {
+      "analyzer": "svelte/compiler 5.56.4 + TypeScript 5.9.3",
+      "status": "pass",
+      "candidates": [
+        {
+          "path": "src/lib/Settings.svelte",
+          "language": "svelte",
+          "lines": 3336,
+          "functions": 252,
+          "branches": 543,
+          "template_blocks": 65
+        },
+        {
+          "path": "src/lib/FileTranscription.svelte",
+          "language": "svelte",
+          "lines": 945,
+          "functions": 88,
+          "branches": 221,
+          "template_blocks": 15
+        },
+        {
+          "path": "src/lib/MeetingReprocessing.svelte",
+          "language": "svelte",
+          "lines": 636,
+          "functions": 62,
+          "branches": 109,
+          "template_blocks": 36
+        },
+        {
+          "path": "src/lib/MeetingReview.svelte",
+          "language": "svelte",
+          "lines": 780,
+          "functions": 77,
+          "branches": 115,
+          "template_blocks": 30
+        },
+        {
+          "path": "src/lib/Onboarding.svelte",
+          "language": "svelte",
+          "lines": 1084,
+          "functions": 40,
+          "branches": 73,
+          "template_blocks": 24
+        },
+        {
+          "path": "src/lib/MeetingProgress.svelte",
+          "language": "svelte",
+          "lines": 229,
+          "functions": 0,
+          "branches": 11,
+          "template_blocks": 7
+        },
+        {
+          "path": "src/lib/TranscriptionStages.svelte",
+          "language": "svelte",
+          "lines": 52,
+          "functions": 0,
+          "branches": 16,
+          "template_blocks": 2
+        },
+        {
+          "path": "src/App.svelte",
+          "language": "svelte",
+          "lines": 88,
+          "functions": 2,
+          "branches": 3,
+          "template_blocks": 3
+        },
+        {
+          "path": "src/lib/Overlay.svelte",
+          "language": "svelte",
+          "lines": 141,
+          "functions": 13,
+          "branches": 5,
+          "template_blocks": 0
+        }
+      ]
+    },
+    "typescript_parser": {
+      "analyzer": "TypeScript 5.9.3",
+      "status": "pass",
+      "candidates": [
+        {
+          "path": "src/lib/update-recovery.ts",
+          "language": "typescript",
+          "lines": 724,
+          "functions": 59,
+          "branches": 352,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/transcribe-stages.ts",
+          "language": "typescript",
+          "lines": 96,
+          "functions": 8,
+          "branches": 44,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/overlay-state.ts",
+          "language": "typescript",
+          "lines": 125,
+          "functions": 6,
+          "branches": 31,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-types.ts",
+          "language": "typescript",
+          "lines": 245,
+          "functions": 8,
+          "branches": 28,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/transcribe-ui-state.ts",
+          "language": "typescript",
+          "lines": 142,
+          "functions": 10,
+          "branches": 28,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-progress.ts",
+          "language": "typescript",
+          "lines": 113,
+          "functions": 10,
+          "branches": 26,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/meeting-job-client.ts",
+          "language": "typescript",
+          "lines": 39,
+          "functions": 1,
+          "branches": 6,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/api.ts",
+          "language": "typescript",
+          "lines": 512,
+          "functions": 81,
+          "branches": 5,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/update-preparation.ts",
+          "language": "typescript",
+          "lines": 37,
+          "functions": 6,
+          "branches": 5,
+          "template_blocks": 0
+        },
+        {
+          "path": "src/lib/dictation-ui-state.ts",
+          "language": "typescript",
+          "lines": 23,
+          "functions": 2,
+          "branches": 4,
+          "template_blocks": 0
+        }
+      ]
+    },
+    "swift_complexity": {
+      "analyzer": "Swift parser unavailable; SwiftPM compiler/tests are separate",
+      "status": "unsupported",
+      "candidates": [
+        {
+          "path": "src-tauri/engine-host/coreml/Package.swift",
+          "lines": 28,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/BuildInfo.swift",
+          "lines": 8,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/CompiledModelCache.swift",
+          "lines": 125,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/ContextBiasing.swift",
+          "lines": 273,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/CoreMLEngine.swift",
+          "lines": 609,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/EngineTypes.swift",
+          "lines": 162,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/FloatTensor.swift",
+          "lines": 181,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/ProtocolServer.swift",
+          "lines": 428,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/SHA256.swift",
+          "lines": 23,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        },
+        {
+          "path": "src-tauri/engine-host/coreml/Sources/EngineHostCore/TdtDecoder.swift",
+          "lines": 439,
+          "functions": 0,
+          "branches": 0,
+          "template_blocks": 0,
+          "parser": "not_run"
+        }
+      ]
+    }
+  },
+  "coverage": {
+    "cargo_llvm_cov": {
+      "tool": "cargo-llvm-cov 0.9.1",
+      "status": "pass",
+      "core": {
+        "tests": 612,
+        "lines": 89.56401144144925,
+        "functions": 85.77235772357723,
+        "regions": 89.95614389108619,
+        "wall_seconds": 81.21
+      },
+      "cli": {
+        "tests": 235,
+        "lines": 71.46126185027786,
+        "functions": 70.59538274605103,
+        "regions": 72.28639020317283,
+        "wall_seconds": 8.09,
+        "status": "mixed-attempt-profiles-not-baseline",
+        "limitation": "--no-clean retained profiles from the failed and corrected CLI attempts; do not use this percentage as a clean baseline"
+      },
+      "selected_files": {
+        "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs": 98.80239520958084,
+        "src-tauri/crates/sagascript-core/src/download.rs": 95.92252803261978,
+        "src-tauri/crates/sagascript-core/src/transcription/whisper_backend.rs": 66.35897435897435,
+        "src-tauri/crates/sagascript-cli/src/diarization.rs": 85.48168249660787,
+        "src-tauri/crates/sagascript-cli/src/transcribe.rs": 54.68831849135674
+      },
+      "branch_coverage": "not_measured; zero branch records do not mean 0% coverage"
+    },
+    "rust_selected_test_run": {
+      "command": "CARGO_BUILD_JOBS=2 cargo test -p sagascript-core --no-default-features",
+      "passed": 612,
+      "failed": 0,
+      "ignored": 1,
+      "status": "pass"
+    },
+    "swift_selected_test_run": {
+      "command": "swift test --package-path src-tauri/engine-host/coreml --jobs 2",
+      "passed": 27,
+      "failed": 0,
+      "status": "pass",
+      "prerequisite": "scripts/build-engine-host.sh generates ignored BuildInfo.swift"
+    },
+    "frontend": {
+      "status": "not_measured",
+      "parser_trial": "passed",
+      "note": "AST parsing is not execution coverage"
+    },
+    "swift": {
+      "status": "measured",
+      "source_only_totals": {
+        "lines": {
+          "count": 1901,
+          "covered": 924,
+          "percent": 48.60599684376644
+        },
+        "functions": {
+          "count": 258,
+          "covered": 150,
+          "percent": 58.13953488372093
+        },
+        "regions": {
+          "count": 868,
+          "covered": 420,
+          "percent": 48.38709677419355
+        }
+      },
+      "included": "exported Sources/EngineHostCore files only; test/generated files excluded",
+      "original_test_bundle_totals": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "functions": {
+          "count": 338,
+          "covered": 229,
+          "percent": 67.75147928994083
+        },
+        "instantiations": {
+          "count": 349,
+          "covered": 239,
+          "percent": 68.48137535816619
+        },
+        "lines": {
+          "count": 2454,
+          "covered": 1463,
+          "percent": 59.61695191524042
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0
+        },
+        "regions": {
+          "count": 1089,
+          "covered": 627,
+          "notcovered": 462,
+          "percent": 57.57575757575758
+        }
+      },
+      "branch_coverage": "not_measured"
+    }
+  },
+  "tool_trials": [
+    {
+      "tool": "cargo-llvm-cov",
+      "status": "pass",
+      "evidence": "0.9.1 core and CLI JSON summaries exported; CLI correction prebuilt fake host"
+    },
+    {
+      "tool": "rust-code-analysis-cli",
+      "status": "pass",
+      "evidence": "0.0.25 function metrics exported; yanked dependency warning recorded"
+    },
+    {
+      "tool": "svelte/compiler",
+      "status": "pass",
+      "evidence": "AST parse succeeded for selected Svelte modules"
+    },
+    {
+      "tool": "knip",
+      "status": "pass_with_validation_limits",
+      "evidence": "5.46.0 JSON report; default graph includes entrypoint false positives"
+    },
+    {
+      "tool": "swift test",
+      "status": "pass_after_correction",
+      "evidence": "BuildInfo.swift generated by existing build script; 27 tests passed"
+    }
+  ],
+  "unused_candidates": {
+    "analyzer": "Knip 5.46.0",
+    "status": "pass_with_validation_limits",
+    "candidates": [
+      {
+        "path": "package.json",
+        "name": "@tauri-apps/plugin-autostart",
+        "verdict": "unknown",
+        "reason": "no frontend import; native/plugin registration ownership not proven"
+      },
+      {
+        "path": "package.json",
+        "name": "tslib",
+        "verdict": "unknown",
+        "reason": "no direct import; build/peer usage not proven"
+      },
+      {
+        "path": "src/lib/api.ts",
+        "name": "setWhisperModel",
+        "verdict": "unknown",
+        "reason": "default Knip graph does not model all CLI/GUI entrypoints"
+      },
+      {
+        "path": "src/lib/update-recovery.ts",
+        "name": "UPDATE_RECOVERY_LIMITS",
+        "verdict": "false_positive",
+        "reason": "used internally and imported by tests"
+      },
+      {
+        "path": "src/lib/transcribe-ui-state.ts",
+        "name": "transcribeBaseName",
+        "verdict": "false_positive",
+        "reason": "imported by dedicated test script"
+      }
+    ]
+  },
+  "ci_reliability": {
+    "status": "bounded20run_sample",
+    "workflow": "ci.yml",
+    "branch": "main",
+    "event": "push",
+    "first_attempt_success": 19,
+    "first_attempt_failure": 1,
+    "eligible_completed": 20,
+    "example_run_id": "37291285757",
+    "receipts": "receipts/ci-runs.json and ci-first-attempts.json",
+    "timing_tools": "existing ci-run-timings.mjs and ci-cohort-timings.mjs both exercised on preserved first-attempt fixture"
+  },
+  "measurement_provenance": {
+    "source_revision": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
+    "recorded_at": "2026-10-09",
+    "kind": "archived one-time analyzer measurements; assembler does not rerun analyzers",
+    "receipts_directory": "receipts/"
+  }
+}

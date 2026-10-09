@@ -1,0 +1,1602 @@
+{
+  "schema_version": 1,
+  "source_revision": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
+  "raw_bytes": 22934,
+  "raw_sha256": "902fc3786a34b52b37d926821f2a1f4e23d093d2d059d3de0c4b1badff678b9c",
+  "original_totals": {
+    "branches": {
+      "count": 0,
+      "covered": 0,
+      "notcovered": 0,
+      "percent": 0
+    },
+    "functions": {
+      "count": 2460,
+      "covered": 2110,
+      "percent": 85.77235772357723
+    },
+    "instantiations": {
+      "count": 4754,
+      "covered": 2451,
+      "percent": 51.55658392932268
+    },
+    "lines": {
+      "count": 23074,
+      "covered": 20666,
+      "percent": 89.56401144144925
+    },
+    "mcdc": {
+      "count": 0,
+      "covered": 0,
+      "notcovered": 0,
+      "percent": 0
+    },
+    "regions": {
+      "count": 37167,
+      "covered": 33434,
+      "notcovered": 3733,
+      "percent": 89.95614389108619
+    }
+  },
+  "files": [
+    {
+      "path": "src-tauri/crates/sagascript-core/src/audio/decoder.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 151,
+          "covered": 130,
+          "percent": 86.09271523178808
+        },
+        "instantiations": {
+          "count": 247,
+          "covered": 158,
+          "percent": 63.96761133603239
+        },
+        "lines": {
+          "count": 1086,
+          "covered": 1011,
+          "percent": 93.0939226519337
+        },
+        "regions": {
+          "count": 2023,
+          "covered": 1901,
+          "notcovered": 122,
+          "percent": 93.9693524468611
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/audio/resample.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 47,
+          "covered": 41,
+          "percent": 87.2340425531915
+        },
+        "instantiations": {
+          "count": 61,
+          "covered": 41,
+          "percent": 67.21311475409836
+        },
+        "lines": {
+          "count": 251,
+          "covered": 238,
+          "percent": 94.82071713147411
+        },
+        "regions": {
+          "count": 486,
+          "covered": 453,
+          "notcovered": 33,
+          "percent": 93.20987654320987
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/audio/speech.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 20,
+          "covered": 20,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 23,
+          "covered": 23,
+          "percent": 100.0
+        },
+        "lines": {
+          "count": 130,
+          "covered": 130,
+          "percent": 100.0
+        },
+        "regions": {
+          "count": 222,
+          "covered": 222,
+          "notcovered": 0,
+          "percent": 100.0
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/audio/wav.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 10,
+          "covered": 10,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 12,
+          "covered": 10,
+          "percent": 83.33333333333334
+        },
+        "lines": {
+          "count": 99,
+          "covered": 99,
+          "percent": 100.0
+        },
+        "regions": {
+          "count": 234,
+          "covered": 234,
+          "notcovered": 0,
+          "percent": 100.0
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 56,
+          "covered": 56,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 89,
+          "covered": 56,
+          "percent": 62.92134831460674
+        },
+        "lines": {
+          "count": 835,
+          "covered": 825,
+          "percent": 98.80239520958084
+        },
+        "regions": {
+          "count": 1174,
+          "covered": 1154,
+          "notcovered": 20,
+          "percent": 98.29642248722317
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/diarization_qualification.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 99,
+          "covered": 85,
+          "percent": 85.85858585858585
+        },
+        "instantiations": {
+          "count": 185,
+          "covered": 86,
+          "percent": 46.48648648648649
+        },
+        "lines": {
+          "count": 994,
+          "covered": 910,
+          "percent": 91.54929577464789
+        },
+        "regions": {
+          "count": 1661,
+          "covered": 1481,
+          "notcovered": 180,
+          "percent": 89.16315472606864
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/diarization_reference.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 60,
+          "covered": 58,
+          "percent": 96.66666666666667
+        },
+        "instantiations": {
+          "count": 118,
+          "covered": 67,
+          "percent": 56.77966101694915
+        },
+        "lines": {
+          "count": 661,
+          "covered": 619,
+          "percent": 93.64599092284418
+        },
+        "regions": {
+          "count": 1059,
+          "covered": 978,
+          "notcovered": 81,
+          "percent": 92.3512747875354
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/diarization_report.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 27,
+          "covered": 16,
+          "percent": 59.259259259259245
+        },
+        "instantiations": {
+          "count": 50,
+          "covered": 16,
+          "percent": 32.0
+        },
+        "lines": {
+          "count": 285,
+          "covered": 159,
+          "percent": 55.78947368421052
+        },
+        "regions": {
+          "count": 410,
+          "covered": 245,
+          "notcovered": 165,
+          "percent": 59.7560975609756
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/diarization_strata.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 49,
+          "covered": 48,
+          "percent": 97.95918367346938
+        },
+        "instantiations": {
+          "count": 88,
+          "covered": 48,
+          "percent": 54.54545454545454
+        },
+        "lines": {
+          "count": 690,
+          "covered": 663,
+          "percent": 96.08695652173913
+        },
+        "regions": {
+          "count": 1084,
+          "covered": 1049,
+          "notcovered": 35,
+          "percent": 96.77121771217713
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/download.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 201,
+          "covered": 181,
+          "percent": 90.04975124378109
+        },
+        "instantiations": {
+          "count": 512,
+          "covered": 241,
+          "percent": 47.0703125
+        },
+        "lines": {
+          "count": 1962,
+          "covered": 1882,
+          "percent": 95.92252803261978
+        },
+        "regions": {
+          "count": 2389,
+          "covered": 2284,
+          "notcovered": 105,
+          "percent": 95.60485558811219
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/error.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 11,
+          "covered": 11,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 12,
+          "covered": 11,
+          "percent": 91.66666666666666
+        },
+        "lines": {
+          "count": 67,
+          "covered": 67,
+          "percent": 100.0
+        },
+        "regions": {
+          "count": 130,
+          "covered": 130,
+          "notcovered": 0,
+          "percent": 100.0
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/meeting.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 70,
+          "covered": 67,
+          "percent": 95.71428571428572
+        },
+        "instantiations": {
+          "count": 128,
+          "covered": 73,
+          "percent": 57.03125
+        },
+        "lines": {
+          "count": 713,
+          "covered": 696,
+          "percent": 97.61570827489481
+        },
+        "regions": {
+          "count": 1161,
+          "covered": 1126,
+          "notcovered": 35,
+          "percent": 96.98535745047373
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/meeting_media.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 23,
+          "covered": 21,
+          "percent": 91.30434782608695
+        },
+        "instantiations": {
+          "count": 35,
+          "covered": 22,
+          "percent": 62.857142857142854
+        },
+        "lines": {
+          "count": 202,
+          "covered": 183,
+          "percent": 90.5940594059406
+        },
+        "regions": {
+          "count": 375,
+          "covered": 344,
+          "notcovered": 31,
+          "percent": 91.73333333333333
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/meeting_reprocess.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 26,
+          "covered": 26,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 39,
+          "covered": 26,
+          "percent": 66.66666666666666
+        },
+        "lines": {
+          "count": 433,
+          "covered": 430,
+          "percent": 99.30715935334872
+        },
+        "regions": {
+          "count": 730,
+          "covered": 715,
+          "notcovered": 15,
+          "percent": 97.94520547945207
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/meeting_reprocess_matching.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 25,
+          "covered": 25,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 34,
+          "covered": 25,
+          "percent": 73.52941176470588
+        },
+        "lines": {
+          "count": 247,
+          "covered": 243,
+          "percent": 98.38056680161942
+        },
+        "regions": {
+          "count": 428,
+          "covered": 420,
+          "notcovered": 8,
+          "percent": 98.13084112149532
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/meeting_reprocess_plan.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 25,
+          "covered": 25,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 39,
+          "covered": 26,
+          "percent": 66.66666666666666
+        },
+        "lines": {
+          "count": 284,
+          "covered": 282,
+          "percent": 99.29577464788733
+        },
+        "regions": {
+          "count": 434,
+          "covered": 420,
+          "notcovered": 14,
+          "percent": 96.7741935483871
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/meeting_reprocess_proposal.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 38,
+          "covered": 36,
+          "percent": 94.73684210526316
+        },
+        "instantiations": {
+          "count": 61,
+          "covered": 37,
+          "percent": 60.65573770491803
+        },
+        "lines": {
+          "count": 442,
+          "covered": 434,
+          "percent": 98.19004524886876
+        },
+        "regions": {
+          "count": 692,
+          "covered": 662,
+          "notcovered": 30,
+          "percent": 95.66473988439307
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/meeting_review.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 54,
+          "covered": 52,
+          "percent": 96.29629629629629
+        },
+        "instantiations": {
+          "count": 106,
+          "covered": 61,
+          "percent": 57.54716981132076
+        },
+        "lines": {
+          "count": 765,
+          "covered": 733,
+          "percent": 95.81699346405229
+        },
+        "regions": {
+          "count": 1254,
+          "covered": 1175,
+          "notcovered": 79,
+          "percent": 93.70015948963317
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/settings/hotkey.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 27,
+          "covered": 27,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 40,
+          "covered": 27,
+          "percent": 67.5
+        },
+        "lines": {
+          "count": 311,
+          "covered": 280,
+          "percent": 90.03215434083602
+        },
+        "regions": {
+          "count": 505,
+          "covered": 473,
+          "notcovered": 32,
+          "percent": 93.66336633663366
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/settings/manager.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 246,
+          "covered": 233,
+          "percent": 94.71544715447155
+        },
+        "instantiations": {
+          "count": 383,
+          "covered": 236,
+          "percent": 61.61879895561357
+        },
+        "lines": {
+          "count": 2580,
+          "covered": 2483,
+          "percent": 96.24031007751938
+        },
+        "regions": {
+          "count": 4240,
+          "covered": 4096,
+          "notcovered": 144,
+          "percent": 96.60377358490567
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/settings/store.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 203,
+          "covered": 158,
+          "percent": 77.83251231527095
+        },
+        "instantiations": {
+          "count": 445,
+          "covered": 218,
+          "percent": 48.98876404494382
+        },
+        "lines": {
+          "count": 1550,
+          "covered": 1384,
+          "percent": 89.29032258064517
+        },
+        "regions": {
+          "count": 2677,
+          "covered": 2436,
+          "notcovered": 241,
+          "percent": 90.99738513261114
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/speaker_hint.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 13,
+          "covered": 13,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 23,
+          "covered": 13,
+          "percent": 56.52173913043478
+        },
+        "lines": {
+          "count": 81,
+          "covered": 81,
+          "percent": 100.0
+        },
+        "regions": {
+          "count": 180,
+          "covered": 180,
+          "notcovered": 0,
+          "percent": 100.0
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/chunk_merge.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 41,
+          "covered": 41,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 68,
+          "covered": 63,
+          "percent": 92.64705882352942
+        },
+        "lines": {
+          "count": 356,
+          "covered": 353,
+          "percent": 99.15730337078652
+        },
+        "regions": {
+          "count": 638,
+          "covered": 629,
+          "notcovered": 9,
+          "percent": 98.58934169278997
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/chunking.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 18,
+          "covered": 18,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 24,
+          "covered": 18,
+          "percent": 75.0
+        },
+        "lines": {
+          "count": 199,
+          "covered": 196,
+          "percent": 98.49246231155779
+        },
+        "regions": {
+          "count": 324,
+          "covered": 321,
+          "notcovered": 3,
+          "percent": 99.07407407407408
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/dev_overrides.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 11,
+          "covered": 8,
+          "percent": 72.72727272727273
+        },
+        "instantiations": {
+          "count": 16,
+          "covered": 8,
+          "percent": 50.0
+        },
+        "lines": {
+          "count": 39,
+          "covered": 34,
+          "percent": 87.17948717948718
+        },
+        "regions": {
+          "count": 86,
+          "covered": 75,
+          "notcovered": 11,
+          "percent": 87.20930232558139
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/diagnostics.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 59,
+          "covered": 56,
+          "percent": 94.91525423728814
+        },
+        "instantiations": {
+          "count": 99,
+          "covered": 56,
+          "percent": 56.56565656565656
+        },
+        "lines": {
+          "count": 612,
+          "covered": 595,
+          "percent": 97.22222222222221
+        },
+        "regions": {
+          "count": 884,
+          "covered": 857,
+          "notcovered": 27,
+          "percent": 96.94570135746606
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/engine_host/client.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 84,
+          "covered": 71,
+          "percent": 84.52380952380952
+        },
+        "instantiations": {
+          "count": 169,
+          "covered": 75,
+          "percent": 44.37869822485207
+        },
+        "lines": {
+          "count": 806,
+          "covered": 705,
+          "percent": 87.46898263027295
+        },
+        "regions": {
+          "count": 1305,
+          "covered": 1128,
+          "notcovered": 177,
+          "percent": 86.4367816091954
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/engine_host/mod.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 2,
+          "covered": 2,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 4,
+          "covered": 2,
+          "percent": 50.0
+        },
+        "lines": {
+          "count": 8,
+          "covered": 6,
+          "percent": 75.0
+        },
+        "regions": {
+          "count": 10,
+          "covered": 7,
+          "notcovered": 3,
+          "percent": 70.0
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/engine_host/pipeline.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 15,
+          "covered": 15,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 30,
+          "covered": 15,
+          "percent": 50.0
+        },
+        "lines": {
+          "count": 225,
+          "covered": 216,
+          "percent": 96.0
+        },
+        "regions": {
+          "count": 336,
+          "covered": 317,
+          "notcovered": 19,
+          "percent": 94.34523809523807
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/engine_host/process.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 32,
+          "covered": 28,
+          "percent": 87.5
+        },
+        "instantiations": {
+          "count": 67,
+          "covered": 47,
+          "percent": 70.1492537313433
+        },
+        "lines": {
+          "count": 359,
+          "covered": 289,
+          "percent": 80.50139275766016
+        },
+        "regions": {
+          "count": 639,
+          "covered": 536,
+          "notcovered": 103,
+          "percent": 83.8810641627543
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/gap_redecode.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 58,
+          "covered": 56,
+          "percent": 96.55172413793105
+        },
+        "instantiations": {
+          "count": 193,
+          "covered": 118,
+          "percent": 61.13989637305699
+        },
+        "lines": {
+          "count": 371,
+          "covered": 355,
+          "percent": 95.68733153638814
+        },
+        "regions": {
+          "count": 685,
+          "covered": 667,
+          "notcovered": 18,
+          "percent": 97.37226277372262
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/glossary.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 53,
+          "covered": 51,
+          "percent": 96.22641509433963
+        },
+        "instantiations": {
+          "count": 93,
+          "covered": 51,
+          "percent": 54.83870967741935
+        },
+        "lines": {
+          "count": 371,
+          "covered": 365,
+          "percent": 98.38274932614556
+        },
+        "regions": {
+          "count": 669,
+          "covered": 653,
+          "notcovered": 16,
+          "percent": 97.60837070254111
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/glossary_suggestions.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 44,
+          "covered": 42,
+          "percent": 95.45454545454545
+        },
+        "instantiations": {
+          "count": 65,
+          "covered": 42,
+          "percent": 64.61538461538461
+        },
+        "lines": {
+          "count": 478,
+          "covered": 474,
+          "percent": 99.16317991631799
+        },
+        "regions": {
+          "count": 678,
+          "covered": 669,
+          "notcovered": 9,
+          "percent": 98.67256637168141
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/live_dictation.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 15,
+          "covered": 14,
+          "percent": 93.33333333333333
+        },
+        "instantiations": {
+          "count": 26,
+          "covered": 17,
+          "percent": 65.38461538461539
+        },
+        "lines": {
+          "count": 179,
+          "covered": 154,
+          "percent": 86.03351955307262
+        },
+        "regions": {
+          "count": 248,
+          "covered": 217,
+          "notcovered": 31,
+          "percent": 87.5
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/metal_preflight.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 9,
+          "covered": 5,
+          "percent": 55.55555555555556
+        },
+        "instantiations": {
+          "count": 18,
+          "covered": 6,
+          "percent": 33.33333333333333
+        },
+        "lines": {
+          "count": 35,
+          "covered": 25,
+          "percent": 71.42857142857143
+        },
+        "regions": {
+          "count": 56,
+          "covered": 43,
+          "notcovered": 13,
+          "percent": 76.78571428571429
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/model.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 43,
+          "covered": 18,
+          "percent": 41.86046511627907
+        },
+        "instantiations": {
+          "count": 75,
+          "covered": 18,
+          "percent": 24.0
+        },
+        "lines": {
+          "count": 401,
+          "covered": 201,
+          "percent": 50.12468827930174
+        },
+        "regions": {
+          "count": 613,
+          "covered": 335,
+          "notcovered": 278,
+          "percent": 54.64926590538336
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/native_log.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 14,
+          "covered": 8,
+          "percent": 57.14285714285714
+        },
+        "instantiations": {
+          "count": 23,
+          "covered": 10,
+          "percent": 43.47826086956522
+        },
+        "lines": {
+          "count": 83,
+          "covered": 50,
+          "percent": 60.24096385542169
+        },
+        "regions": {
+          "count": 140,
+          "covered": 90,
+          "notcovered": 50,
+          "percent": 64.28571428571429
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/pianissimo_backend.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 127,
+          "covered": 78,
+          "percent": 61.417322834645674
+        },
+        "instantiations": {
+          "count": 283,
+          "covered": 115,
+          "percent": 40.63604240282685
+        },
+        "lines": {
+          "count": 737,
+          "covered": 512,
+          "percent": 69.4708276797829
+        },
+        "regions": {
+          "count": 1303,
+          "covered": 947,
+          "notcovered": 356,
+          "percent": 72.67843438219495
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/pianissimo_model.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 150,
+          "covered": 114,
+          "percent": 76.0
+        },
+        "instantiations": {
+          "count": 246,
+          "covered": 115,
+          "percent": 46.7479674796748
+        },
+        "lines": {
+          "count": 1001,
+          "covered": 815,
+          "percent": 81.41858141858141
+        },
+        "regions": {
+          "count": 2093,
+          "covered": 1761,
+          "notcovered": 332,
+          "percent": 84.13760152890588
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/postprocess.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 19,
+          "covered": 19,
+          "percent": 100.0
+        },
+        "instantiations": {
+          "count": 27,
+          "covered": 19,
+          "percent": 70.37037037037037
+        },
+        "lines": {
+          "count": 196,
+          "covered": 195,
+          "percent": 99.48979591836735
+        },
+        "regions": {
+          "count": 328,
+          "covered": 327,
+          "notcovered": 1,
+          "percent": 99.6951219512195
+        }
+      }
+    },
+    {
+      "path": "src-tauri/crates/sagascript-core/src/transcription/whisper_backend.rs",
+      "summary": {
+        "branches": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "mcdc": {
+          "count": 0,
+          "covered": 0,
+          "notcovered": 0,
+          "percent": 0.0
+        },
+        "functions": {
+          "count": 185,
+          "covered": 127,
+          "percent": 68.64864864864865
+        },
+        "instantiations": {
+          "count": 498,
+          "covered": 135,
+          "percent": 27.10843373493976
+        },
+        "lines": {
+          "count": 1950,
+          "covered": 1294,
+          "percent": 66.35897435897435
+        },
+        "regions": {
+          "count": 2584,
+          "covered": 1677,
+          "notcovered": 907,
+          "percent": 64.89938080495357
+        }
+      }
+    }
+  ],
+  "status": "measured"
+}
