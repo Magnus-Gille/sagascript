@@ -351,6 +351,47 @@ try {
   assert.equal(await page.evaluate(() => window.qaNativePending), true);
   assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "acknowledge_update_result").length, acknowledgeCallsBeforeL4), acknowledgeCallsBeforeL4);
 
+  // Q3g: Copy and Save started before preparation must queue their durable
+  // delivery cleanup behind the held preparation acknowledgement. The
+  // preparation snapshot remains durable until that acknowledgement releases,
+  // then the queued delivery cleanup completes without dropping the action.
+  const runHeldPreparationDelivery = async ({ action, actionName, nonce, gate }) => {
+    recovery.dictation = { text: `Queued ${actionName} D` };
+    recovery.files = [];
+    recovery.meetings = [];
+    initialNativeDictation = "Earlier native result";
+    await page.goto(url);
+    await page.getByRole("button", { name: "Dictate", exact: true }).click();
+    await page.waitForFunction((expected) => document.querySelector("textarea.test-result")?.value === expected, `Queued ${actionName} D`);
+    await page.evaluate((deliveryGate) => {
+      window.qa.blockGate("complete-preparation");
+      window.qa.blockGate(deliveryGate);
+    }, gate);
+    const saveCountBefore = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await page.waitForFunction((deliveryGate) => window.qa.gateStarted(deliveryGate), gate);
+    await page.evaluate((expectedNonce) => window.qa.prepareUpdate(expectedNonce), nonce);
+    await page.waitForFunction(() => window.qa.gateStarted("complete-preparation"));
+    await page.evaluate((deliveryGate) => window.qa.releaseGate(deliveryGate), gate);
+    await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "save_update_recovery"));
+    await page.waitForTimeout(50);
+    const held = await page.evaluate((before) => ({
+      saves: window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length,
+      clears: window.qa.calls.filter((call) => call.cmd === "clear_update_recovery").length,
+      recovery: window.qaRecovery,
+    }), saveCountBefore);
+    assert.equal(held.saves, saveCountBefore + 1, `${actionName} cleanup must wait behind preparation acknowledgement`);
+    assert.equal(held.clears, 0, `${actionName} must not clear recovery before preparation acknowledgement`);
+    assert.equal(held.recovery?.dictation?.text, `Queued ${actionName} D`);
+    await page.evaluate(() => window.qa.releaseGate("complete-preparation"));
+    assert.equal((await waitForPreparation(nonce)).error, null);
+    await page.waitForFunction(() => window.qaRecovery === null);
+    await page.getByText(actionName === "Copy" ? "Copied to clipboard." : "Saved.", { exact: true }).waitFor();
+  };
+
+  await runHeldPreparationDelivery({ action: "Copy result", actionName: "Copy", nonce: "qa-copy-held-preparation", gate: "copy-transcription" });
+  await runHeldPreparationDelivery({ action: "Save result…", actionName: "Save", nonce: "qa-save-held-preparation", gate: "save-transcription" });
+
   recovery.dictation = initialRecoveryDictation;
   recovery.files = initialRecoveryFiles;
   recovery.meetings = initialRecoveryMeetings;

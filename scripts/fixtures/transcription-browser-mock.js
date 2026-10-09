@@ -178,7 +178,9 @@ mockIPC(async (cmd, args = {}) => {
       await waitForRecoveryGate("clear");
       window.qaRecovery = null;
       return null;
-    case "complete_update_preparation": return null;
+    case "complete_update_preparation":
+      await waitForQaGate("complete-preparation");
+      return null;
     case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
     case "get_last_transcription":
       if (window.qaLastNativeDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaLastNativeDelayMs));
