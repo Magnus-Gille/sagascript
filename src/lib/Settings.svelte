@@ -200,6 +200,7 @@
   let updatePreparing: boolean = $state(false);
   let liveDictationRevision = 0;
   let observedNativeDictation: string | null = null;
+  let nativeEditorOrigin: { text: string; lineage: number } | null = null;
   let fileComponents: Record<string, { prepareUpdateRecovery(): Promise<void> } | undefined> = $state({});
 
   let fileRecoveryEntries = $state<UpdateRecoveryFile[]>([]);
@@ -374,6 +375,7 @@
         testResultEdited = false;
         recoveredDictationText = recoveredDictation.text;
         recoveredDictationActive = true;
+        nativeEditorOrigin = null;
         lastPersistedDictation = { text: recoveredDictation.text, lineage: dictationEditorLineage };
       }
 
@@ -471,10 +473,13 @@
       // stable, but the result event/command response may still be in transit.
       const lastNativeDictation = await getLastTranscription();
       const nativeResultPending = await getUpdateResultPending("live-dictation");
+      const nativeEditorOwnsResult = nativeEditorOrigin?.lineage === dictationEditorLineage
+        && nativeEditorOrigin.text === lastNativeDictation;
       const editedNativeResult = testResultEdited && !recoveredDictationActive
-        && observedNativeDictation === lastNativeDictation;
-      if (nativeResultPending && lastNativeDictation?.trim() && testResult.trim()
-        && testResult !== lastNativeDictation && !editedNativeResult) {
+        && nativeEditorOwnsResult;
+      if (nativeResultPending && lastNativeDictation?.trim()
+        && ((!testResult.trim() && !nativeEditorOwnsResult)
+          || (testResult.trim() && testResult !== lastNativeDictation && !editedNativeResult))) {
         throw new Error("A different unsaved dictation is already open. Copy or save both results before retrying the update.");
       }
       await drainUpdateWork({
@@ -484,6 +489,7 @@
       });
       await tick();
       await enqueueRecoveryMutation(async () => {
+        const payloadLineage = dictationEditorLineage;
         const payload = createUpdateRecoveryPayload({
           dictation: testResultRecoveryPending && (nativeResultPending || recoveredDictationActive || testResultEdited)
             && testResult.trim() ? { text: testResult } : null,
@@ -497,7 +503,7 @@
         const ownsPersistedDictation = Boolean(
           previous?.dictation?.text.trim()
           && lastPersistedDictation?.text === previous.dictation.text
-          && lastPersistedDictation.lineage === dictationEditorLineage,
+          && lastPersistedDictation.lineage === payloadLineage,
         );
         if (previous?.dictation?.text.trim() && previous.dictation.text !== payload.dictation?.text
           && !ownsPersistedDictation) {
@@ -507,7 +513,7 @@
         serializeUpdateRecoveryPayload(payload);
         await saveUpdateRecovery(payload);
         lastPersistedDictation = payload.dictation
-          ? { text: payload.dictation.text, lineage: dictationEditorLineage }
+          ? { text: payload.dictation.text, lineage: payloadLineage }
           : null;
         await completeUpdatePreparation(nonce, null);
       });
@@ -564,7 +570,7 @@
       lineage,
       wasRecovered: recoveredDictationActive,
       wasEdited: testResultEdited,
-      nativeSourceText: observedNativeDictation,
+      nativeSourceText: nativeEditorOrigin?.lineage === lineage ? nativeEditorOrigin.text : null,
       recoveredText: recoveredDictationText,
       persistedText: lastPersistedDictation?.lineage === lineage ? lastPersistedDictation.text : null,
     };
@@ -574,8 +580,8 @@
     const { text, lineage, wasRecovered, wasEdited, nativeSourceText, recoveredText, persistedText } = delivery;
     const nativePending = await getUpdateResultPending("live-dictation");
     const nativeText = nativePending ? await getLastTranscription() : null;
-    const matchesNative = lineage === dictationEditorLineage && !wasRecovered && nativePending && (nativeText === text
-      || (wasEdited && nativeSourceText === nativeText));
+    const matchesNative = lineage === dictationEditorLineage && nativePending && (nativeText === text
+      || (wasEdited && nativeSourceText !== null && nativeSourceText === nativeText));
     const deliveredNative = matchesNative && nativeText !== null
       ? await acknowledgeUpdateResult(nativeText) : false;
     const cleanupTexts = [persistedText, recoveredText, text].filter((value): value is string => value !== null);
@@ -593,6 +599,7 @@
       dictationEditorLineage++;
       testResult = currentNative;
       testResultRecoveryPending = true;
+      nativeEditorOrigin = { text: currentNative, lineage: dictationEditorLineage };
       observedNativeDictation = currentNative;
       return true;
     }
@@ -629,6 +636,7 @@
       testResultEdited = false;
       recoveredDictationActive = false;
       observedNativeDictation = event.payload;
+      nativeEditorOrigin = { text: event.payload, lineage: dictationEditorLineage };
       testResult = event.payload;
       testError = "";
     }).then(remember);
@@ -655,6 +663,7 @@
           observedNativeDictation = text;
           liveDictationRevision++;
           dictationEditorLineage++;
+          nativeEditorOrigin = { text, lineage: dictationEditorLineage };
           testResultRecoveryPending = true;
           recoveredDictationActive = false;
           testResult = text;
@@ -1721,6 +1730,7 @@
       try {
         const text = await stopAndTranscribe();
         observedNativeDictation = text;
+        nativeEditorOrigin = { text, lineage: dictationEditorLineage };
         testResultRecoveryPending = true;
         testResult = testResult ? testResult + " " + text : text;
       } catch (e: any) {

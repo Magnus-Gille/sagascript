@@ -377,8 +377,9 @@ try {
     await page.waitForFunction(() => window.qa.gateStarted("complete-preparation"));
     const heldLoadCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "load_update_recovery").length);
     const heldSaveCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
+    const heldPendingCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "get_update_result_pending").length);
     await page.evaluate((deliveryGate) => window.qa.releaseGate(deliveryGate), gate);
-    await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "save_update_recovery"));
+    await page.waitForFunction((before) => window.qa.calls.filter((call) => call.cmd === "get_update_result_pending").length > before, heldPendingCount);
     await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
     const held = await page.evaluate(() => ({
       saves: window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length,
@@ -398,6 +399,157 @@ try {
 
   await runHeldPreparationDelivery({ action: "Copy result", actionName: "Copy", nonce: "qa-copy-held-preparation", gate: "copy-transcription" });
   await runHeldPreparationDelivery({ action: "Save result…", actionName: "Save", nonce: "qa-save-held-preparation", gate: "save-transcription" });
+
+  // F1: a recovered edit must remain distinct from a pending native result
+  // even after Discard clears the live recovered flag. Copy, Save, and retry
+  // preparation must leave the hidden native result pending.
+  const runRecoveredHiddenNativeConflict = async ({ action, actionName, nonce, prepare }) => {
+    recovery.dictation = { text: "Recovered F1 D" };
+    recovery.files = [];
+    recovery.meetings = [];
+    initialNativeDictation = "Hidden F1 N";
+    recoveryDelayMs = 0;
+    nativeDelayMs = 0;
+    await page.goto(url);
+    await page.getByRole("button", { name: "Dictate", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Recovered F1 D");
+    await page.evaluate(() => {
+      window.qaNativePending = true;
+      window.qaLastNativeDictation = "Hidden F1 N";
+    });
+    await page.locator("textarea.test-result").fill("Recovered F1 D edited");
+    await page.getByRole("button", { name: "Discard recovered drafts" }).click();
+    await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "clear_update_recovery"));
+    const acknowledgeCallsBefore = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "acknowledge_update_result").length);
+    const saveCallsBefore = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
+    if (prepare) {
+      await page.evaluate((expectedNonce) => window.qa.prepareUpdate(expectedNonce), nonce);
+      const prepared = await waitForPreparation(nonce);
+      assert.match(prepared.error, /different unsaved dictation/i);
+      assert.equal(await page.evaluate(() => window.qaNativePending), true);
+      assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "acknowledge_update_result").length, acknowledgeCallsBefore), acknowledgeCallsBefore);
+      assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length, saveCallsBefore), saveCallsBefore);
+      return;
+    }
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await page.locator(".result-actions [role=\"status\"]").waitFor();
+    assert.equal(await page.evaluate(() => window.qaNativePending), true);
+    assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "acknowledge_update_result").length, acknowledgeCallsBefore), acknowledgeCallsBefore);
+  };
+
+  await runRecoveredHiddenNativeConflict({ action: "Copy result", actionName: "Copy", nonce: "qa-f1-prepare", prepare: false });
+  await runRecoveredHiddenNativeConflict({ action: "Save result…", actionName: "Save", nonce: "qa-f1-save", prepare: false });
+  await runRecoveredHiddenNativeConflict({ action: "", actionName: "Prepare", nonce: "qa-f1-prepare", prepare: true });
+
+  // F1b: Discarding an unedited recovered draft leaves the hidden native
+  // result protected; preparation must conflict rather than save an empty
+  // payload over it. Whitespace edits of a genuine native origin remain
+  // covered by the same-lineage ownership case below.
+  recovery.dictation = { text: "Recovered F1b D" };
+  recovery.files = [];
+  recovery.meetings = [];
+  initialNativeDictation = "Hidden F1b N";
+  recoveryDelayMs = 0;
+  nativeDelayMs = 0;
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Recovered F1b D");
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Hidden F1b N";
+  });
+  await page.getByRole("button", { name: "Discard recovered drafts" }).click();
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "clear_update_recovery"));
+  const f1bSaveCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
+  await page.evaluate(() => window.qa.prepareUpdate("qa-f1b-empty"));
+  const f1bPrepared = await waitForPreparation("qa-f1b-empty");
+  assert.match(f1bPrepared.error, /different unsaved dictation/i);
+  assert.equal(await page.evaluate(() => window.qaNativePending), true);
+  assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length, f1bSaveCount), f1bSaveCount);
+
+  // F2: identical recovered/native text is one deliverable and is ACKed once;
+  // an edited recovered result remains distinct from another native result.
+  const runRecoveredNativeIdentity = async ({ action, actionName }) => {
+    recovery.dictation = { text: "Recovered F2 D" };
+    recovery.files = [];
+    recovery.meetings = [];
+    initialNativeDictation = "Recovered F2 D";
+    recoveryDelayMs = 0;
+    nativeDelayMs = 0;
+    await page.goto(url);
+    await page.getByRole("button", { name: "Dictate", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Recovered F2 D");
+    await page.evaluate(() => {
+      window.qaNativePending = true;
+      window.qaLastNativeDictation = "Recovered F2 D";
+    });
+    const acknowledgeCallsBefore = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "acknowledge_update_result").length);
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await page.getByText(actionName === "Copy" ? "Copied to clipboard." : "Saved.", { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.qaNativePending), false);
+    assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "acknowledge_update_result").length, acknowledgeCallsBefore), acknowledgeCallsBefore + 1);
+    assert.equal(await page.evaluate(() => window.qaRecovery), null);
+  };
+
+  await runRecoveredNativeIdentity({ action: "Copy result", actionName: "Copy" });
+  await runRecoveredNativeIdentity({ action: "Save result…", actionName: "Save" });
+  recovery.dictation = { text: "Recovered F2 altered" };
+  initialNativeDictation = "Hidden F2 N";
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Recovered F2 altered");
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Hidden F2 N";
+  });
+  await page.locator("textarea.test-result").fill("Recovered F2 altered again");
+  const acknowledgeCallsBeforeF2Altered = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "acknowledge_update_result").length);
+  await page.getByRole("button", { name: "Copy result", exact: true }).click();
+  await page.locator(".result-actions [role=\"status\"]").waitFor();
+  assert.equal(await page.evaluate(() => window.qaNativePending), true);
+  assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "acknowledge_update_result").length, acknowledgeCallsBeforeF2Altered), acknowledgeCallsBeforeF2Altered);
+
+  // F3: the payload and editor lineage belong to the prepare request even if
+  // abort/new-native events arrive while its durable save is held.
+  recovery.dictation = null;
+  recovery.files = [];
+  recovery.meetings = [];
+  initialNativeDictation = "Earlier native result";
+  recoveryDelayMs = 0;
+  nativeDelayMs = 0;
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "get_last_transcription"));
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "F3 E";
+    return window.qa.dictationResult("F3 E");
+  });
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "F3 E");
+  await page.evaluate(() => {
+    window.qa.blockRecovery("save");
+    window.qa.prepareUpdate("qa-f3-E");
+  });
+  await page.waitForFunction(() => window.qa.recoveryGateStarted("save"));
+  await page.evaluate(() => {
+    window.qa.abortUpdate();
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "F3 N";
+    return window.qa.dictationResult("F3 N");
+  });
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+  await page.evaluate(() => window.qa.releaseRecovery("save"));
+  assert.equal((await waitForPreparation("qa-f3-E")).error, null);
+  assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F3 E");
+  const f3SaveCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
+  await page.evaluate(() => window.qa.prepareUpdate("qa-f3-N"));
+  const f3Retry = await waitForPreparation("qa-f3-N");
+  assert.match(f3Retry.error, /different unsaved dictation/i);
+  assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F3 E");
+  assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length, f3SaveCount), f3SaveCount);
+
   recoveryDelayMs = 300;
   nativeDelayMs = 650;
 
