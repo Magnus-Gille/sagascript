@@ -34,6 +34,10 @@ if (window.qaInitialRecoveryGate) {
   window.qaRecoveryGates ??= {};
   window.qaRecoveryGates[window.qaInitialRecoveryGate] = { blocked: true, started: false, resolve: null };
 }
+if (window.qaInitialNativeGate) {
+  window.qaGates ??= {};
+  window.qaGates["last-transcription"] = { blocked: true, started: false, resolve: null };
+}
 function transcript(path) {
   return { schema_version: 1, source_sha256: path, language: "en", model: "fixture", duration_seconds: 4,
     segments: [{ id: "seg-1", start: 0, end: 4, text: `Meeting ${path}`, speaker: "spk-1" }],
@@ -115,6 +119,7 @@ window.qa = {
   },
   activePreparationNonce: () => activePreparationNonce,
   dictationResult: (text) => emit("transcription-result", text),
+  dictationError: (text) => emit("error", text),
   blockRecovery: (kind) => {
     window.qaRecoveryGates ??= {};
     window.qaRecoveryGates[kind] = { blocked: true, started: false, resolve: null };
@@ -210,6 +215,7 @@ mockIPC(async (cmd, args = {}) => {
       return null;
     case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
     case "get_last_transcription":
+      await waitForQaGate("last-transcription");
       if (window.qaLastNativeDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaLastNativeDelayMs));
       return window.qaLastNativeDictation ?? null;
     case "get_update_result_pending": {

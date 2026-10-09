@@ -72,12 +72,13 @@ if (process.env.QA_ONLY === "meeting") recovery.files = [];
 const url = process.env.QA_URL || "http://127.0.0.1:5243/?tab=transcribe";
 let corruptRecovery = false;
 let initialRecoveryGate = null;
+let initialNativeGate = false;
 let nativeFirst = false;
 let initialNativeDictation = "Earlier native result";
 let recoveryDelayMs = 300;
 let nativeDelayMs = 650;
 await page.route(url, (route) => route.fulfill({ contentType: "text/html",
-  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryLoadError=${corruptRecovery};window.qaRecoveryDelayMs=${nativeFirst ? 650 : recoveryDelayMs};window.qaLastNativeDictation=${JSON.stringify(initialNativeDictation)};window.qaLastNativeDelayMs=${nativeFirst ? 0 : nativeDelayMs};window.qaInitialRecoveryGate=${JSON.stringify(initialRecoveryGate)};</script><script type="module">${mock}</script></body></html>`,
+  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryLoadError=${corruptRecovery};window.qaRecoveryDelayMs=${nativeFirst ? 650 : recoveryDelayMs};window.qaLastNativeDictation=${JSON.stringify(initialNativeDictation)};window.qaLastNativeDelayMs=${nativeFirst ? 0 : nativeDelayMs};window.qaInitialRecoveryGate=${JSON.stringify(initialRecoveryGate)};window.qaInitialNativeGate=${JSON.stringify(initialNativeGate)};</script><script type="module">${mock}</script></body></html>`,
 }));
 
 try {
@@ -435,6 +436,39 @@ try {
   await page.waitForFunction(() => window.qaRecovery?.dictation?.text === "Alias D");
   assert.equal(await page.locator("textarea.test-result").inputValue(), "Alias D");
 
+  // B1: a missed native event plus an error during startup hydration leaves
+  // observed delivery unset. After the bounded drain, report the actual hidden
+  // result conflict; retain D and allow delivery of D to reveal pending N.
+  recovery.dictation = { text: "B1 recovered D" };
+  recovery.files = [];
+  recovery.meetings = [];
+  initialNativeDictation = "B1 hidden N";
+  initialNativeGate = true;
+  recoveryDelayMs = 0;
+  nativeDelayMs = 0;
+  await page.goto(url);
+  await page.waitForFunction(() => window.qa.gateStarted("last-transcription"));
+  await page.evaluate(async () => {
+    await window.qa.dictationError("Synthetic hydration revision change");
+    window.qa.releaseGate("last-transcription");
+  });
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  assert.equal(await page.locator("textarea.test-result").inputValue(), "B1 recovered D");
+  const b1SaveCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
+  await page.evaluate(() => { window.qaNativePending = true; return window.qa.prepareUpdate("qa-b1-missed-delivery"); });
+  const missedDelivery = await waitForPreparation("qa-b1-missed-delivery");
+  assert.match(missedDelivery.error, /different unsaved dictation is already open/i,
+    "a completed but unobserved result needs a conflict action, not advice to wait for work");
+  assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "B1 recovered D");
+  assert.equal(await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length), b1SaveCount);
+  await page.getByRole("button", { name: "Copy result", exact: true }).click();
+  await page.getByText("Copied result. Another unsaved dictation is now shown.", { exact: true }).waitFor();
+  assert.equal(await page.locator("textarea.test-result").inputValue(), "B1 hidden N");
+  assert.equal(await page.evaluate(() => window.qaNativePending), true,
+    "delivery of recovered D must leave distinct native N pending");
+  initialNativeGate = false;
+
   // F1: start with a genuinely empty editor, then release the pending native
   // result after preparation reads the pending flag. The old guard reports a
   // conflict before the in-transit event can hydrate the editor.
@@ -608,12 +642,13 @@ try {
   await page.evaluate(() => window.qa.releaseRecovery("save"));
   await page.waitForFunction(() => window.qaRecovery?.dictation?.text === "F3 E");
   assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F3 E");
-  assert.equal(await page.evaluate(() => window.qa.calls.some((call) =>
-    call.cmd === "complete_update_preparation" && call.args.nonce === "qa-f3-E")), false,
-  "an expired preparation must skip its stale acknowledgement");
+
   const f3SaveCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
   await page.evaluate(() => window.qa.prepareUpdate("qa-f3-N"));
   const f3Retry = await waitForPreparation("qa-f3-N");
+  assert.equal(await page.evaluate(() => window.qa.calls.some((call) =>
+    call.cmd === "complete_update_preparation" && call.args.nonce === "qa-f3-E")), false,
+  "an expired preparation must skip its stale acknowledgement");
   assert.match(f3Retry.error, /different unsaved dictation/i);
   assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F3 E");
   assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length, f3SaveCount), f3SaveCount);
@@ -641,9 +676,10 @@ try {
   await page.waitForFunction(() => window.qa.recoveryGateStarted("save"));
   await page.evaluate(() => {
     window.qa.blockGate("complete-preparation");
-    window.qa.abortUpdate();
-    window.qa.prepareUpdate("qa-f2-retry");
+    return window.qa.abortUpdate();
   });
+  await page.locator("textarea.test-result").fill("F2 edited retry");
+  await page.evaluate(() => window.qa.prepareUpdate("qa-f2-retry"));
   await page.evaluate(() => window.qa.releaseRecovery("save"));
   await page.waitForFunction(() => window.qa.gateStarted("complete-preparation"));
   assert.equal(await page.evaluate(() => window.qa.calls.some((call) =>
@@ -653,7 +689,7 @@ try {
   assert.equal(await page.getByRole("button", { name: "Start recording", exact: true }).isDisabled(), true);
   await page.evaluate(() => window.qa.releaseGate("complete-preparation"));
   assert.equal((await waitForPreparation("qa-f2-retry")).error, null);
-  assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F2 E");
+  assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "F2 edited retry");
   await page.evaluate(() => window.qa.strictPreparationNonces(false));
 
   // F2b: an ACK already in flight may reject after abort. Its catch must not
@@ -868,12 +904,13 @@ try {
     ack: window.qa.calls.findLast(call => call.cmd === "complete_update_preparation").args,
     saves: window.qa.calls.filter(call => call.cmd === "save_update_recovery").length,
   }));
-  assert.match(collision.ack.error, /different unsaved dictation/i);
+  assert.match(collision.ack.error, /already in update recovery/i);
   assert.equal(collision.saves, saveCount, "a second pending result must never replace the recovered draft");
   await page.getByRole("button", { name: "Dictate", exact: true }).click();
   await page.getByRole("button", { name: "Copy result" }).click();
-  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "New unsaved dictation");
-  assert.equal(await page.evaluate(() => window.qaNativePending), true, "copying the recovered draft must leave the other native result pending");
+  await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.qaNativePending), false, "copying the displayed native result must finish its acknowledgement");
+  assert.equal(await page.evaluate(() => window.qaRecovery?.dictation?.text), "Återställd diktering", "native delivery must preserve the distinct recovered draft");
   nativeFirst = true;
   await page.goto(url);
   await page.getByRole("button", { name: "Dictate", exact: true }).click();

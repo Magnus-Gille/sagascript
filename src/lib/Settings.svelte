@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { drainUpdateWork } from "./update-preparation";
+  import { drainUpdateWork, UpdatePreparationTimeoutError } from "./update-preparation";
   import FileTranscription from "./FileTranscription.svelte";
   import {
     createFileJobs, nextQueuedFile, updateFileJob, fileJobName,
@@ -495,12 +495,22 @@
       if (!isActivePreparation(nonce)) return;
       const initialNativeResultPending = await getUpdateResultPending("live-dictation");
       if (!isActivePreparation(nonce)) return;
-      await drainUpdateWork({
-        busy: () => testTranscribing || Boolean(initialNativeResultPending && stableNativeDictation?.trim()
-          && observedNativeDictation !== stableNativeDictation),
-        failure: () => isActivePreparation(nonce) ? null : "Update preparation expired.",
-        settle: tick,
-      });
+      try {
+        await drainUpdateWork({
+          busy: () => testTranscribing || Boolean(initialNativeResultPending && stableNativeDictation?.trim()
+            && observedNativeDictation !== stableNativeDictation),
+          failure: () => isActivePreparation(nonce) ? null : "Update preparation expired.",
+          settle: tick,
+        });
+      } catch (error) {
+        // A completed native result whose event was missed needs the actual
+        // conflict decision below, not advice to wait for already-finished work.
+        // Rendering failures, cancellation and ongoing transcription still fail.
+        const missedNativeResult = error instanceof UpdatePreparationTimeoutError
+          && !testTranscribing && initialNativeResultPending && stableNativeDictation?.trim()
+          && observedNativeDictation !== stableNativeDictation;
+        if (!missedNativeResult) throw error;
+      }
       if (!isActivePreparation(nonce)) return;
       await tick();
       if (!isActivePreparation(nonce)) return;
