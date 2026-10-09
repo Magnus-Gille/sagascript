@@ -72,8 +72,9 @@ if (process.env.QA_ONLY === "meeting") recovery.files = [];
 const url = process.env.QA_URL || "http://127.0.0.1:5243/?tab=transcribe";
 let corruptRecovery = false;
 let nativeFirst = false;
+let initialNativeDictation = "Earlier native result";
 await page.route(url, (route) => route.fulfill({ contentType: "text/html",
-  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryLoadError=${corruptRecovery};window.qaRecoveryDelayMs=${nativeFirst ? 650 : 300};window.qaLastNativeDictation="Earlier native result";window.qaLastNativeDelayMs=${nativeFirst ? 0 : 650};</script><script type="module">${mock}</script></body></html>`,
+  body: `<html><head><meta charset="utf-8"><title>Recovery QA</title><link rel="stylesheet" href="/src/app.css"></head><body><div id="app"></div><script>window.qaRecovery=${JSON.stringify(recovery)};window.qaRecoveryLoadError=${corruptRecovery};window.qaRecoveryDelayMs=${nativeFirst ? 650 : 300};window.qaLastNativeDictation=${JSON.stringify(initialNativeDictation)};window.qaLastNativeDelayMs=${nativeFirst ? 0 : 650};</script><script type="module">${mock}</script></body></html>`,
 }));
 
 try {
@@ -224,7 +225,135 @@ try {
   const controlRetry = await waitForPreparation("qa-control-retry");
   assert.match(controlRetry.error, /different unsaved dictation/i);
   assert.equal(await page.evaluate(() => window.qaRecovery.dictation.text), "Control D1 edited");
+
+  // Q3a: a recovered delivery held across a newer native replacement must
+  // remove only the captured recovered draft, then leave the replacement N
+  // visible and retryable.
+  recovery.files = [];
+  recovery.meetings = [];
+  recovery.dictation = { text: "Recovered D" };
+  initialNativeDictation = "Earlier native result";
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Recovered D");
+  await page.evaluate(() => window.qa.blockGate("copy-transcription"));
+  await page.getByRole("button", { name: "Copy result", exact: true }).click();
+  await page.waitForFunction(() => window.qa.gateStarted("copy-transcription"));
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Native N";
+    window.qa.dictationResult("Native N");
+  });
+  await page.evaluate(() => window.qa.releaseGate("copy-transcription"));
+  await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
+  await page.waitForFunction(() => window.qaRecovery === null);
+  assert.equal(await page.locator("textarea.test-result").inputValue(), "Native N");
+  assert.equal(await page.evaluate(() => window.qaNativePending), true);
+  await page.evaluate(() => window.qa.prepareUpdate("qa-copy-native-next"));
+  assert.equal((await waitForPreparation("qa-copy-native-next")).error, null);
+
+  // Q3b: Save uses the same captured delivery context and actual save IPC.
+  recovery.dictation = { text: "Recovered Save D" };
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Recovered Save D");
+  await page.evaluate(() => window.qa.blockGate("save-transcription"));
+  await page.getByRole("button", { name: "Save result…", exact: true }).click();
+  await page.waitForFunction(() => window.qa.gateStarted("save-transcription"));
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Native Save N";
+    window.qa.dictationResult("Native Save N");
+  });
+  await page.evaluate(() => window.qa.releaseGate("save-transcription"));
+  await page.getByText("Saved.", { exact: true }).waitFor();
+  await page.waitForFunction(() => window.qaRecovery === null);
+  assert.equal(await page.locator("textarea.test-result").inputValue(), "Native Save N");
+  assert.equal(await page.evaluate(() => window.qaNativePending), true);
+  await page.evaluate(() => window.qa.prepareUpdate("qa-save-native-next"));
+  assert.equal((await waitForPreparation("qa-save-native-next")).error, null);
+
+  // Q3c: cancelling Save never acknowledges or cleans the captured drafts.
+  recovery.dictation = { text: "Cancelled D" };
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Cancelled D");
+  await page.evaluate(() => {
+    window.qa.setSaveResult(false);
+    window.qa.blockGate("save-transcription");
+  });
+  await page.getByRole("button", { name: "Save result…", exact: true }).click();
+  await page.waitForFunction(() => window.qa.gateStarted("save-transcription"));
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Native Cancel N";
+    window.qa.dictationResult("Native Cancel N");
+  });
+  await page.evaluate(() => window.qa.releaseGate("save-transcription"));
+  await page.getByText("Save cancelled — nothing was written.", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation.text), "Cancelled D");
+  assert.equal(await page.evaluate(() => window.qaNativePending), true);
+  assert.equal(await page.locator("textarea.test-result").inputValue(), "Native Cancel N");
+
+  // Q3d: discard remains disabled for the entire active preparation, so no
+  // clear can occur before the preparation acknowledgement.
+  recovery.dictation = { text: "Active Prepare D" };
+  await page.goto(url);
+  await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
+  await page.evaluate(() => {
+    window.qa.blockRecovery("load");
+    window.qa.prepareUpdate("qa-discard-disabled");
+  });
+  await page.waitForFunction(() => window.qa.recoveryGateStarted("load"));
+  const discardButton = page.getByRole("button", { name: "Discard recovered drafts" });
+  assert.equal(await discardButton.isDisabled(), true);
+  assert.equal(await page.evaluate(() => window.qa.calls.some((call) => call.cmd === "clear_update_recovery")), false);
+  await page.evaluate(() => window.qa.releaseRecovery("load"));
+  assert.equal((await waitForPreparation("qa-discard-disabled")).error, null);
+  assert.equal(await page.evaluate(() => window.qa.calls.some((call) => call.cmd === "clear_update_recovery")), false);
+  await page.evaluate(() => window.qa.abortUpdate());
+
+  // Q3e: clearing an owned same-lineage edit to whitespace may save null;
+  // another persisted draft still remains protected by the conflict guard.
+  recovery.dictation = { text: "Owned E" };
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Owned E");
+  await page.locator("textarea.test-result").fill("Owned E edited");
+  await page.evaluate(() => window.qa.prepareUpdate("qa-owned-first"));
+  assert.equal((await waitForPreparation("qa-owned-first")).error, null);
+  await page.evaluate(() => window.qa.abortUpdate());
+  await page.locator("textarea.test-result").fill("   ");
+  await page.evaluate(() => window.qa.prepareUpdate("qa-owned-empty"));
+  assert.equal((await waitForPreparation("qa-owned-empty")).error, null);
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation), null);
+
+  // Q3f: a held recovered Copy must not acknowledge a hidden native result
+  // after Discard changes the live recovered flag while the action is away.
+  recovery.dictation = { text: "Recovered Edited D" };
+  initialNativeDictation = "Native L4 N";
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Recovered Edited D");
+  await page.locator("textarea.test-result").fill("Recovered Edited D changed");
+  await page.evaluate(() => window.qa.blockGate("copy-transcription"));
+  await page.getByRole("button", { name: "Copy result", exact: true }).click();
+  await page.waitForFunction(() => window.qa.gateStarted("copy-transcription"));
+  await page.getByRole("button", { name: "Discard recovered drafts" }).click();
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "clear_update_recovery"));
+  const acknowledgeCallsBeforeL4 = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "acknowledge_update_result").length);
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Native L4 N";
+    window.qa.releaseGate("copy-transcription");
+  });
+  await page.getByText("Copied result. Another unsaved dictation is now shown.", { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.qaNativePending), true);
+  assert.equal(await page.evaluate((before) => window.qa.calls.filter((call) => call.cmd === "acknowledge_update_result").length, acknowledgeCallsBeforeL4), acknowledgeCallsBeforeL4);
+
   recovery.dictation = initialRecoveryDictation;
+  recovery.files = initialRecoveryFiles;
+  recovery.meetings = initialRecoveryMeetings;
   await page.goto(url);
   await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
   await page.getByRole("tab", { name: "recovered.wav completed" }).waitFor();

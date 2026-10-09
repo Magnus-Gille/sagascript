@@ -53,7 +53,7 @@ test("recovery cleanup removes only explicitly delivered durable drafts", () => 
   assert.doesNotMatch(persistence, /createUpdateRecoveryPayload\(\{/);
   assert.match(source, /persistRemainingRecoveredDrafts\(\{ fileJobIds: \[jobId\] \}\)/);
   assert.match(source, /persistRemainingRecoveredDrafts\(\{ meetingJobIds: \[jobId\] \}\)/);
-  assert.match(source, /persistRemainingRecoveredDrafts\(\{ dictationTexts/);
+  assert.match(source, /const cleanupTexts = \[persistedText, recoveredText, text\]/);
   assert.match(source, /recoveredText: recoveredDictationText/);
 });
 
@@ -78,6 +78,18 @@ test("dictation recovery replacement is restricted to the current editor lineage
   assert.match(source, /dictationEditorLineage\+\+/);
   assert.match(source, /const delivery = captureDictationDelivery\(text\)/);
   assert.match(source, /persistedText: lastPersistedDictation\?\.lineage === lineage/);
+  assert.match(source, /const ownsPersistedDictation = Boolean/);
+  assert.match(source, /previous\.dictation\.text !== payload\.dictation\?\.text/);
+});
+
+test("delivery cleanup runs before stale-editor handling and captures native origin", () => {
+  assert.match(source, /wasEdited: boolean/);
+  assert.match(source, /nativeSourceText: string \| null/);
+  assert.match(source, /wasEdited: testResultEdited/);
+  assert.match(source, /nativeSourceText: observedNativeDictation/);
+  assert.match(source, /const cleanupTexts = \[persistedText, recoveredText, text\]/);
+  assert.match(source, /await clearDeliveredRecoveryDraft\(cleanupTexts, lineage\);\s*if \(testResult !== text/);
+  assert.match(source, /lineage === dictationEditorLineage && !wasRecovered/);
 });
 
 test("recovered jobs cannot trigger automatic transcription or paste", () => {

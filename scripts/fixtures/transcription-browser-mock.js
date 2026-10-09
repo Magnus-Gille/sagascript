@@ -12,6 +12,12 @@ function waitForRecoveryGate(kind) {
   gate.started = true;
   return new Promise(resolve => { gate.resolve = resolve; });
 }
+function waitForQaGate(kind) {
+  const gate = window.qaGates?.[kind];
+  if (!gate?.blocked) return Promise.resolve();
+  gate.started = true;
+  return new Promise(resolve => { gate.resolve = resolve; });
+}
 let active = 0;
 const profileModels = { swedish: "auto", english: "base.en" };
 let pianissimoDownloaded = false;
@@ -99,6 +105,19 @@ window.qa = {
     gate.resolve = null;
   },
   recoveryGateStarted: (kind) => Boolean(window.qaRecoveryGates?.[kind]?.started),
+  blockGate: (kind) => {
+    window.qaGates ??= {};
+    window.qaGates[kind] = { blocked: true, started: false, resolve: null };
+  },
+  releaseGate: (kind) => {
+    const gate = window.qaGates?.[kind];
+    if (!gate) return;
+    gate.blocked = false;
+    gate.resolve?.();
+    gate.resolve = null;
+  },
+  gateStarted: (kind) => Boolean(window.qaGates?.[kind]?.started),
+  setSaveResult: (result) => { window.qaSaveResult = result; },
   holdNextPianissimoDownload: () => { holdPianissimoDownload = true; },
   releasePianissimo: () => { releasePianissimoDownload?.(); },
   setPianissimoSize: (mb) => { pianissimoSizeMb = mb; },
@@ -169,6 +188,7 @@ mockIPC(async (cmd, args = {}) => {
       if (args.resultId === "live-dictation") window.qaNativePending = args.pending;
       return null;
     case "acknowledge_update_result":
+      await waitForQaGate("acknowledge");
       if (window.qaNativePending && window.qaLastNativeDictation === args.expectedText) {
         window.qaNativePending = false;
         return true;
@@ -240,8 +260,12 @@ mockIPC(async (cmd, args = {}) => {
     // Deliberately keep the native result pending: Stop is a request, not a
     // terminal status, and finish() may still produce authoritative success.
     case "cancel_file_transcription": return false; // completion won the Stop race in this scenario
-    case "save_transcription_text": return true;
-    case "copy_transcription_text": return null;
+    case "save_transcription_text":
+      await waitForQaGate("save-transcription");
+      return window.qaSaveResult ?? true;
+    case "copy_transcription_text":
+      await waitForQaGate("copy-transcription");
+      return null;
     case "begin_meeting_file": {
       if (window.qaFailMeetingStart) throw new Error("Finish the current dictation before importing a meeting.");
       active++; maximum = Math.max(maximum, active);

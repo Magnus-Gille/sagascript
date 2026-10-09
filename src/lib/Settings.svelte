@@ -227,6 +227,8 @@
     text: string;
     lineage: number;
     wasRecovered: boolean;
+    wasEdited: boolean;
+    nativeSourceText: string | null;
     recoveredText: string | null;
     persistedText: string | null;
   };
@@ -492,15 +494,13 @@
         // older recovered draft). Replace persisted bytes only when they are
         // the session's last successful save in this same editor lineage.
         const previous = readPersistedUpdateRecoveryPayload(await loadUpdateRecovery());
-        const canReplacePersistedDictation = Boolean(
+        const ownsPersistedDictation = Boolean(
           previous?.dictation?.text.trim()
-          && previous.dictation.text !== payload.dictation?.text
-          && payload.dictation?.text
           && lastPersistedDictation?.text === previous.dictation.text
           && lastPersistedDictation.lineage === dictationEditorLineage,
         );
         if (previous?.dictation?.text.trim() && previous.dictation.text !== payload.dictation?.text
-          && !canReplacePersistedDictation) {
+          && !ownsPersistedDictation) {
           throw new Error("A different unsaved dictation is already in update recovery. Copy or save both results before retrying the update.");
         }
         // Validate the exact serialized size before handing the payload to Rust.
@@ -563,32 +563,28 @@
       text,
       lineage,
       wasRecovered: recoveredDictationActive,
+      wasEdited: testResultEdited,
+      nativeSourceText: observedNativeDictation,
       recoveredText: recoveredDictationText,
       persistedText: lastPersistedDictation?.lineage === lineage ? lastPersistedDictation.text : null,
     };
   }
 
   async function markTestResultDelivered(delivery: DictationDelivery): Promise<boolean> {
-    const { text, lineage, wasRecovered, recoveredText, persistedText } = delivery;
+    const { text, lineage, wasRecovered, wasEdited, nativeSourceText, recoveredText, persistedText } = delivery;
     const nativePending = await getUpdateResultPending("live-dictation");
     const nativeText = nativePending ? await getLastTranscription() : null;
-    const matchesNative = lineage === dictationEditorLineage && nativePending && (nativeText === text
-      || (testResultEdited && !recoveredDictationActive && observedNativeDictation === nativeText));
+    const matchesNative = lineage === dictationEditorLineage && !wasRecovered && nativePending && (nativeText === text
+      || (wasEdited && nativeSourceText === nativeText));
     const deliveredNative = matchesNative && nativeText !== null
       ? await acknowledgeUpdateResult(nativeText) : false;
-    if (!wasRecovered) {
-      const cleanupTexts = [persistedText, text].filter((value): value is string => value !== null);
-      await clearDeliveredRecoveryDraft(cleanupTexts, lineage);
-    }
+    const cleanupTexts = [persistedText, recoveredText, text].filter((value): value is string => value !== null);
+    await clearDeliveredRecoveryDraft(cleanupTexts, lineage);
     if (testResult !== text || dictationEditorLineage !== lineage) return false; // a newer result arrived during Copy/Save
     testResultRecoveryPending = false;
     testResultEdited = false;
     recoveredDictationActive = false;
     refreshRecoveredDraftsNotice();
-    if (wasRecovered) {
-      const dictationTexts = [persistedText, recoveredText, text].filter((value): value is string => value !== null);
-      persistRemainingRecoveredDrafts({ dictationTexts, dictationLineage: lineage });
-    }
     const currentNative = nativePending && !deliveredNative && await getUpdateResultPending("live-dictation")
       ? await getLastTranscription() : null;
     if (currentNative?.trim()) {
