@@ -171,7 +171,7 @@ test("CI cohort uses attempt 1 despite a successful retry and preserves job outc
   assert.equal(timings.cohorts[0].ledger[0].attempt, 1);
 });
 
-test("CI gaps remain unknown, startup failures remain infrastructure outcomes, and malformed inventory fails", () => {
+test("CI gaps stay unknown and unproven startup or timeout conclusions stay failures with raw evidence", () => {
   const base = {
     id: 8,
     head_sha: "d".repeat(40),
@@ -180,7 +180,10 @@ test("CI gaps remain unknown, startup failures remain infrastructure outcomes, a
     head_branch: "main",
     created_at: at(400),
     workflow_config_digest: digest,
-    attempt1_jobs: [{ id: 2001, name: "scope", status: "completed", conclusion: "startup_failure", steps: [] }],
+    attempt1_jobs: [
+      { id: 2001, name: "scope", status: "completed", conclusion: "startup_failure", steps: [] },
+      { id: 2002, name: "test-macos", status: "completed", conclusion: "timed_out", steps: [] },
+    ],
   };
   const normalized = normalizeCiCohort({
     runs: [base],
@@ -190,8 +193,18 @@ test("CI gaps remain unknown, startup failures remain infrastructure outcomes, a
     workflowConfigDigest: digest,
     repoRoot: "/workspace/sagascript",
   });
-  assert.deepEqual(normalized.runs[0].jobs.map(job => job.conclusion), ["infra_failure", "unknown"]);
-  assert.equal(normalized.runs[0].overall_conclusion, "infra_failure");
+  assert.deepEqual(normalized.runs[0].jobs.map(job => job.conclusion), ["failure", "failure"]);
+  assert.equal(normalized.runs[0].overall_conclusion, "failure");
+  assert.deepEqual(normalized.timing_runs[0].jobs.map(job => job.conclusion), ["startup_failure", "timed_out"]);
+  const missingJob = normalizeCiCohort({
+    runs: [{ ...base, attempt1_jobs: [{ id: 2001, name: "scope", status: "completed", conclusion: "startup_failure" }] }],
+    expectedJobIds: expectedJobs,
+    windowStart: "2026-09-11T00:00:00Z",
+    windowEnd: "2026-10-09T00:00:00Z",
+    workflowConfigDigest: digest,
+    repoRoot: "/workspace/sagascript",
+  });
+  assert.deepEqual(missingJob.runs[0].jobs.map(job => job.conclusion), ["failure", "unknown"]);
   assert.throws(() => normalizeCiCohort({
     runs: [{ ...base, created_at: "not-a-date" }],
     expectedJobIds: expectedJobs,
@@ -207,7 +220,7 @@ test("CI gaps remain unknown, startup failures remain infrastructure outcomes, a
     workflowConfigDigest: digest,
   }), /configuration changed/);
   assert.throws(() => normalizeCiCohort({
-    runs: [{ ...base, attempt1_jobs: [...base.attempt1_jobs, { id: 2002, name: "new-job", status: "completed", conclusion: "success" }] }],
+    runs: [{ ...base, attempt1_jobs: [...base.attempt1_jobs, { id: 2003, name: "new-job", status: "completed", conclusion: "success" }] }],
     expectedJobIds: expectedJobs,
     windowStart: "2026-09-11T00:00:00Z",
     windowEnd: "2026-10-09T00:00:00Z",

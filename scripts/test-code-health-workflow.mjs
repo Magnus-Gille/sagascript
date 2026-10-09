@@ -3,7 +3,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { assertCleanCheckout, KNIP_ARGS, parseProducerOptions, workflowRunContext } from "./code-health-produce.mjs";
+import {
+  assertCleanCheckout,
+  KNIP_ARGS,
+  parseProducerOptions,
+  runSwiftCoverageSteps,
+  safeFailureDiagnostic,
+  workflowRunContext,
+} from "./code-health-produce.mjs";
 import { createObjective } from "./lib/code-health-producer.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -64,11 +71,66 @@ test("Knip candidates do not make the producer command fail", () => {
   assert.match(config.unused_candidates.command, /--no-exit-code$/);
 });
 
+test("Swift runs coverage tests before querying the generated codecov report", () => {
+  const calls = [];
+  const scratchPath = "/tmp/swift-task/scratch";
+  const reportPath = `${scratchPath}/codecov/default/codecov.json`;
+  const actual = runSwiftCoverageSteps({
+    scratchPath,
+    tempRoot: "/tmp/swift-task",
+    runCommand: (args, options) => {
+      calls.push({ args, options });
+      return args.includes("--show-codecov-path") ? `${reportPath}\n` : "test run completed\n";
+    },
+  });
+  assert.deepEqual(calls.map(call => call.args), [
+    ["test", "--enable-code-coverage", "--jobs", "2", "--scratch-path", scratchPath],
+    ["test", "--show-codecov-path", "--scratch-path", scratchPath],
+  ]);
+  assert.deepEqual(calls.map(call => call.options.env.TMPDIR), ["/tmp/swift-task", "/tmp/swift-task"]);
+  assert.equal(actual, reportPath);
+
+  const failedCalls = [];
+  assert.throws(() => runSwiftCoverageSteps({
+    scratchPath,
+    tempRoot: "/tmp/swift-task",
+    runCommand: args => {
+      failedCalls.push(args);
+      throw new Error("swift test failed");
+    },
+  }), /swift test failed/);
+  assert.equal(failedCalls.length, 1);
+  assert.ok(!failedCalls[0].includes("--show-codecov-path"));
+  assert.throws(() => runSwiftCoverageSteps({
+    scratchPath,
+    tempRoot: "/tmp/swift-task",
+    runCommand: args => args.includes("--show-codecov-path") ? "/tmp/outside/coverage.json" : "",
+  }), /outside task-local scratch/);
+});
+
+test("failed tool diagnostics retain test names and errors without URLs or source excerpts", () => {
+  const output = safeFailureDiagnostic(
+    "thread 'engine::tests::recording_failure' panicked at file:///private/var/task/file.rs:10\nfailures:\n    engine::tests::recording_failure\ntest result: FAILED. 0 passed; 1 failed\ntranscript contents must never appear\nlet source_excerpt = \"private value\";\n",
+    "TypeError: TypeScript getDefaultLibFilePath is unavailable at file:///Users/runner/private.ts\n",
+  );
+  assert.match(output, /engine::tests::recording_failure/);
+  assert.match(output, /FAILED\. 0 passed; 1 failed/);
+  assert.match(output, /TypeError: TypeScript getDefaultLibFilePath is unavailable/);
+  assert.doesNotMatch(output, /file:\/\//i);
+  assert.doesNotMatch(output, /\/private\/|\/Users\//);
+  assert.doesNotMatch(output, /transcript contents|private value|source_excerpt/);
+  assert.ok(output.length <= 6000);
+});
+
 test("workflow collection schedule and manual dispatch are explicit and informational", () => {
   assert.match(workflow, /pull_request:\s*\n\s*branches: \[main\]/);
   assert.match(workflow, /- cron: "17 5 \* \* \*"[^\n]*Daily first-attempt CI cohort/);
   assert.match(workflow, /- cron: "29 5 \* \* 1"[^\n]*Weekly static measurements/);
-  assert.match(workflow, /workflow_dispatch:[\s\S]*?type: choice[\s\S]*?options:\s*\n\s*- static\s*\n\s*- ci-only/);
+  assert.match(workflow, /workflow_dispatch:\s*\n\npermissions:/);
+  assert.match(workflow, /pull_request\) mode=conformance/);
+  assert.match(workflow, /workflow_dispatch\) mode=static/);
+  assert.match(workflow, /steps\.mode\.outputs\.mode == 'static'/);
+  assert.doesNotMatch(workflow, /INPUT_MODE|inputs\.mode/);
   assert.match(workflow, /github\.event_name != 'workflow_dispatch' \|\| github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /actions: read\s*\n\s*contents: read/);
@@ -110,4 +172,7 @@ test("workflow analyzer installs match the producer's declared exact versions", 
   assert.equal(toolingLock.packages[""].devDependencies.knip, config.tools.knip);
   assert.equal(toolingLock.packages["node_modules/knip"].version, config.tools.knip);
   assert.match(toolingLock.packages["node_modules/knip"].integrity, /^sha512-[A-Za-z0-9+/]+=*$/);
+  assert.equal(tooling.devDependencies.typescript, config.tools.typescript);
+  assert.equal(toolingLock.packages[""].devDependencies.typescript, config.tools.typescript);
+  assert.equal(toolingLock.packages["node_modules/typescript"].version, config.tools.typescript);
 });

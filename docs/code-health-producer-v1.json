@@ -10,6 +10,7 @@
     "rust_code_analysis_cli": "0.0.25",
     "cargo_llvm_cov": "0.9.1",
     "knip": "5.46.0",
+    "typescript": "5.7.3",
     "swift": "runner-provided",
     "github_actions_rest_api": "2022-11-28"
   },
@@ -45,7 +46,7 @@
     },
     "swift": {
       "package": "src-tauri/engine-host/coreml",
-      "command": "swift test --enable-code-coverage --jobs 2 --show-codecov-path",
+      "command": "swift test --enable-code-coverage --jobs 2 --scratch-path <task-temporary-directory>; swift test --show-codecov-path --scratch-path <task-temporary-directory>",
       "source_root": "src-tauri/engine-host/coreml/Sources/EngineHostCore/",
       "exclude": ["BuildInfo.swift"],
       "inventory": "source-only-exported",

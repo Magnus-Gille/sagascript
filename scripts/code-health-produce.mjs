@@ -74,20 +74,58 @@ function command(commandName, args, options = {}) {
   });
   if (result.error) throw new Error(`${commandName} could not run (${result.error.code ?? "spawn-error"})`);
   if (result.status !== 0) {
-    const diagnostic = safeDiagnostic(result.stderr || result.stdout || `exit ${result.status}`);
+    const diagnostic = safeFailureDiagnostic(result.stdout, result.stderr) || `exit ${result.status}`;
     throw new Error(`${commandName} failed (${result.status ?? result.signal ?? "unknown"}): ${diagnostic}`);
   }
   return result.stdout;
 }
 
-function safeDiagnostic(value) {
+function safeDiagnostic(value, maximumLength = 1600) {
   return String(value)
+    .replace(/file:\/\/[^\s"'<>]+/gi, "<file-url>")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "<url>")
     .replaceAll(REPO_ROOT, "<repo>")
     .replace(/\/(?:Users|private|var|tmp|Applications|opt|Library|System|Volumes|home|usr)\/[A-Za-z0-9._/-]+/g, "<local-path>")
     .replace(/(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/g, "<redacted-token>")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(-1600);
+    .slice(-maximumLength);
+}
+
+export function safeFailureDiagnostic(stdout, stderr) {
+  const lines = [];
+  let collectingFailures = false;
+  for (const [stream, value] of [["stdout", stdout], ["stderr", stderr]]) {
+    if (typeof value !== "string") continue;
+    for (const rawLine of value.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) {
+        collectingFailures = false;
+        continue;
+      }
+      const panic = /^thread '([^']+)' panicked\b/.exec(line);
+      const section = /^---- (.+?) (?:stdout|stderr) ----$/.exec(line);
+      const swiftFailure = /^(?:✘|X) Test (.+?)(?: recorded an issue| failed)/.exec(line);
+      if (panic) lines.push(`${stream} test-failed: ${panic[1]}`);
+      else if (section) lines.push(`${stream} test-failed: ${section[1]}`);
+      else if (swiftFailure) lines.push(`${stream} test-failed: ${swiftFailure[1]}`);
+      else if (/^failures:$/.test(line)) {
+        lines.push(`${stream} failures:`);
+        collectingFailures = true;
+      } else if (collectingFailures && /^(?:[A-Za-z0-9_.-]+::)+[A-Za-z0-9_.-]+$/.test(line)) {
+        lines.push(`${stream} failed-test: ${line}`);
+      } else if (/^(?:test result: FAILED|Executed \d+ tests?, with \d+ failures?)/i.test(line)) {
+        lines.push(`${stream} ${line}`);
+      } else if (/^(?:error(?:\[[A-Z0-9]+\])?:|fatal error:|TypeError:|ReferenceError:|SyntaxError:)/i.test(line)) {
+        lines.push(`${stream} ${safeDiagnostic(line).slice(0, 400)}`);
+      } else if (/\b(?:ENOENT|EACCES|EPERM|PermissionDenied|Operation not permitted|Permission denied)\b/i.test(line)) {
+        lines.push(`${stream} ${safeDiagnostic(line).slice(0, 400)}`);
+      }
+      if (lines.length >= 80) break;
+    }
+    if (lines.length >= 80) break;
+  }
+  return lines.join(" | ").slice(-6000);
 }
 
 function git(args) {
@@ -139,7 +177,7 @@ function recordCollector(name, actualVersion, work) {
       status: "failed",
       actual_tool_version: actualVersion,
       elapsed_seconds: Number(((performance.now() - start) / 1000).toFixed(3)),
-      error: safeDiagnostic(error?.message ?? error),
+      error: safeDiagnostic(error?.message ?? error, 6000),
     };
     return { status: "failed", error };
   }
@@ -272,6 +310,20 @@ function collectRustCoverage(tempRoot, cargoVersion, llvmCovVersion, rustVersion
   else setFailure(scopeName, "coverage");
 }
 
+export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand } = {}) {
+  if (typeof scratchPath !== "string" || typeof tempRoot !== "string" || typeof runCommand !== "function") {
+    throw new TypeError("Swift coverage command input is malformed");
+  }
+  const options = { env: { TMPDIR: tempRoot } };
+  runCommand(["test", "--enable-code-coverage", "--jobs", "2", "--scratch-path", scratchPath], options);
+  const output = runCommand(["test", "--show-codecov-path", "--scratch-path", scratchPath], options);
+  const codecovPath = output.trim().split(/\r?\n/).at(-1);
+  if (!codecovPath || !resolve(codecovPath).startsWith(resolve(scratchPath) + sep)) {
+    throw new Error("Swift reported a coverage path outside task-local scratch space");
+  }
+  return codecovPath;
+}
+
 function collectSwiftCoverage(tempRoot) {
   const sourcePackageRoot = join(REPO_ROOT, "src-tauri/engine-host/coreml");
   const packageRoot = join(tempRoot, "swift-package");
@@ -296,13 +348,11 @@ function collectSwiftCoverage(tempRoot) {
       "",
     ].join("\n");
     writeFileSync(join(packageRoot, "Sources/EngineHostCore/BuildInfo.swift"), buildInfo);
-    const codecovPath = command("swift", [
-      "test", "--enable-code-coverage", "--jobs", "2", "--show-codecov-path",
-      "--scratch-path", scratchPath,
-    ], { cwd: packageRoot, env: { TMPDIR: tempRoot } }).trim().split(/\r?\n/).at(-1);
-    if (!codecovPath || !resolve(codecovPath).startsWith(resolve(scratchPath) + sep)) {
-      throw new Error("Swift reported a coverage path outside task-local scratch space");
-    }
+    const codecovPath = runSwiftCoverageSteps({
+      scratchPath,
+      tempRoot,
+      runCommand: (args, options) => command("swift", args, { cwd: packageRoot, ...options }),
+    });
     const raw = JSON.parse(readFileSync(codecovPath, "utf8"));
     const packagePrefix = resolve(packageRoot) + sep;
     for (const datum of raw.data ?? []) {
@@ -344,7 +394,7 @@ function collectSwiftCoverage(tempRoot) {
       excluded_refs: excludedRefs,
       profile_ref: profileRef,
       tool: { name: "swift", version: swiftVersion },
-      command: "swift test --enable-code-coverage --jobs 2 --show-codecov-path --scratch-path <task-temporary-directory>",
+      command: "swift test --enable-code-coverage --jobs 2 --scratch-path <task-temporary-directory>; swift test --show-codecov-path --scratch-path <task-temporary-directory>",
     };
   });
   if (result.status === "measured") setMeasured("swift-coreml", "coverage", result.value);
@@ -352,13 +402,13 @@ function collectSwiftCoverage(tempRoot) {
 }
 
 function collectKnip(tempRoot, knipPath) {
-  const versionResult = recordCollector("unused-candidates", "5.46.0", () => {
+  const versionResult = recordCollector("unused-candidates", config.tools.knip, () => {
     const version = toolVersion(knipPath, ["--version"]);
-    installPinnedToolVersion(version, "5.46.0", "knip");
+    installPinnedToolVersion(version, config.tools.knip, "knip");
     const output = command(knipPath, KNIP_ARGS, {
       env: { ...process.env, NO_COLOR: "1" },
     });
-    return { report: JSON.parse(output), version: "5.46.0" };
+    return { report: JSON.parse(output), version: config.tools.knip };
   });
   if (versionResult.status !== "measured") {
     setFailure("typescript", "unused_candidates");
@@ -368,7 +418,7 @@ function collectKnip(tempRoot, knipPath) {
   for (const language of ["typescript", "svelte"]) {
     const scopeName = language;
     const inventory = gitTracked("src/", language === "svelte" ? [".svelte"] : [".ts", ".tsx"]);
-    const parsed = recordCollector(`unused-candidates-${scopeName}`, "knip 5.46.0", () => {
+    const parsed = recordCollector(`unused-candidates-${scopeName}`, `knip ${config.tools.knip}`, () => {
       const candidates = parseKnipCandidates(versionResult.value.report, { repoRoot: REPO_ROOT, language });
       const scopedCandidates = candidates.filter(candidate => inventory.includes(candidate.path));
       const candidatesPath = `evidence/knip-candidates-${scopeName}.json`;

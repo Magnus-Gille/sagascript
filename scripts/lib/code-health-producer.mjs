@@ -343,7 +343,8 @@ function conclusionForJob(job) {
   switch (job.conclusion) {
     case "success": return "success";
     case "failure": return "failure";
-    case "startup_failure": return "infra_failure";
+    case "startup_failure": return "failure";
+    case "timed_out": return "failure";
     case "cancelled": return "cancelled";
     case "skipped": return "skipped";
     default: return "unknown";

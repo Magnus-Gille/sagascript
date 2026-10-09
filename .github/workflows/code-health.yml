@@ -7,15 +7,6 @@ on:
     - cron: "17 5 * * *" # Daily first-attempt CI cohort, 05:17 UTC.
     - cron: "29 5 * * 1" # Weekly static measurements, Monday 05:29 UTC.
   workflow_dispatch:
-    inputs:
-      mode:
-        description: Collection mode
-        required: true
-        type: choice
-        options:
-          - static
-          - ci-only
-        default: static
 
 permissions:
   contents: read
@@ -52,11 +43,10 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_SCHEDULE: ${{ github.event.schedule }}
-          INPUT_MODE: ${{ inputs.mode }}
         run: |
           case "$EVENT_NAME" in
-            pull_request) mode=static ;;
-            workflow_dispatch) mode="$INPUT_MODE" ;;
+            pull_request) mode=conformance ;;
+            workflow_dispatch) mode=static ;;
             schedule)
               case "$EVENT_SCHEDULE" in
                 '17 5 * * *') mode=ci-only ;;

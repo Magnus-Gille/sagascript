@@ -6,20 +6,23 @@ Existing CI and release workflows remain authoritative for application validatio
 
 The collection modes are intentionally separate:
 
-- Pull requests to `main` run the static collector without a GitHub API token. Their report is
-  useful for review and never becomes the main-branch CI reliability cohort.
+- Pull requests to `main` run the dependency-free synthetic conformance suite only. Static
+  measurements are not collected per commit.
 - A weekly Monday schedule runs Rust complexity, Rust and Swift coverage, and unqualified Knip
   candidate collection. Unsupported tools and scopes remain visible in each snapshot.
 - A daily schedule reads the previous 28 days of first-attempt `CI` push runs on `main`. It skips
   static analyzers; static metric slots stay `unknown` with `not-collected`, not copied from a
   previous artifact or represented as zero.
-- Manual dispatch offers the same two modes and runs only from `main`.
+- Manual dispatch runs static collection and is limited to `main`.
 
-Every run requires a clean checkout, including no untracked files, and checks the checked-out SHA,
-workspace path, repository identity, run ID, and attempt against GitHub's run environment before
-collecting. Static GitHub reports use that run ID and attempt even though they do not call the
-GitHub API; local reports use a local collection reference. Knip's `--no-exit-code` keeps findings
-as report data while preserving nonzero exits for runtime errors.
+Every collector run requires a clean checkout, including no untracked files, and checks the
+checked-out SHA, workspace path, repository identity, run ID, and attempt against GitHub's run
+environment before collecting. Static GitHub reports use that run ID and attempt even though they
+do not call the GitHub API; local reports use a local collection reference. Knip's
+`--no-exit-code` keeps findings as report data while preserving nonzero exits for runtime errors.
+The CI producer classifies provider `startup_failure` and `timed_out` conclusions as failures unless
+separate evidence establishes an infrastructure cause; the original provider conclusion remains
+in the timing evidence.
 
 Each run uploads the `code-health-v1` artifact with 30-day retention, including setup or collection
 failures. A setup failure retains a small `workflow-status.json` marker. A completed collection
