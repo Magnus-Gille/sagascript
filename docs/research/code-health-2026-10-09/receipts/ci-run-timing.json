@@ -1,0 +1,1034 @@
+{
+  "id": 37291285757,
+  "headSha": "dbf1f008f5a6395cce7adc5ab7a6b4f1892424a9",
+  "wallSeconds": 513,
+  "runnerSeconds": 1748,
+  "jobs": [
+    {
+      "id": 111702017684,
+      "name": "scope",
+      "status": "completed",
+      "conclusion": "success",
+      "durationSeconds": 7,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 2,
+          "name": "Checkout scope policy",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 2
+        },
+        {
+          "number": 3,
+          "name": "Classify changed paths",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 6,
+          "name": "Post Checkout scope policy",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 7,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        }
+      ]
+    },
+    {
+      "id": 111702081478,
+      "name": "test-linux",
+      "status": "completed",
+      "conclusion": "success",
+      "durationSeconds": 207,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 2,
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 3,
+          "name": "Select evaluation Python runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 4,
+          "name": "Test offline dictation evaluation tooling",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 2
+        },
+        {
+          "number": 5,
+          "name": "Install Tauri system dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 45
+        },
+        {
+          "number": 6,
+          "name": "Install Rust",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 9
+        },
+        {
+          "number": 7,
+          "name": "Install Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 5
+        },
+        {
+          "number": 8,
+          "name": "Cache Rust dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 12
+        },
+        {
+          "number": 9,
+          "name": "Install npm dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 2
+        },
+        {
+          "number": 10,
+          "name": "Build frontend",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 3
+        },
+        {
+          "number": 11,
+          "name": "Cargo check (GUI app)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 9
+        },
+        {
+          "number": 12,
+          "name": "Cargo clippy (GUI app)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 8
+        },
+        {
+          "number": 13,
+          "name": "Cargo check (headless CLI, with record)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 4
+        },
+        {
+          "number": 14,
+          "name": "Cargo check (headless CLI, batch-only)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 3
+        },
+        {
+          "number": 15,
+          "name": "Cargo clippy (headless CLI, batch-only)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 4
+        },
+        {
+          "number": 16,
+          "name": "Cargo test (headless CLI, batch-only)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 15
+        },
+        {
+          "number": 17,
+          "name": "Cargo test (sagascript-core, no features)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 39
+        },
+        {
+          "number": 18,
+          "name": "Cargo test (sagascript-core, with record)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 41
+        },
+        {
+          "number": 19,
+          "name": "Assert batch-only CLI has no ALSA/cpal dependency",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 35,
+          "name": "Post Cache Rust dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 36,
+          "name": "Post Install Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 37,
+          "name": "Post Select evaluation Python runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 38,
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 39,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        }
+      ]
+    },
+    {
+      "id": 111702081613,
+      "name": "test-macos",
+      "status": "completed",
+      "conclusion": "failure",
+      "durationSeconds": 376,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 2
+        },
+        {
+          "number": 2,
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 2
+        },
+        {
+          "number": 3,
+          "name": "Select evaluation Python runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 4,
+          "name": "Test offline dictation evaluation tooling",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 2
+        },
+        {
+          "number": 5,
+          "name": "Install Rust",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 8
+        },
+        {
+          "number": 6,
+          "name": "Install Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 8
+        },
+        {
+          "number": 7,
+          "name": "Cache Rust dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 32
+        },
+        {
+          "number": 8,
+          "name": "Install npm dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 2
+        },
+        {
+          "number": 9,
+          "name": "Test frontend lifecycle helpers",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 18
+        },
+        {
+          "number": 10,
+          "name": "Install browser regression runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 10
+        },
+        {
+          "number": 11,
+          "name": "Test transcription result tabs in browser",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 25
+        },
+        {
+          "number": 12,
+          "name": "Upload browser regression diagnostics",
+          "status": "completed",
+          "conclusion": "skipped",
+          "durationSeconds": 0
+        },
+        {
+          "number": 13,
+          "name": "Build frontend",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 4
+        },
+        {
+          "number": 14,
+          "name": "Cargo check",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 16
+        },
+        {
+          "number": 15,
+          "name": "Cargo test",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 25
+        },
+        {
+          "number": 16,
+          "name": "Cargo clippy",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 13
+        },
+        {
+          "number": 17,
+          "name": "Cargo test (sagascript-core, no features)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 53
+        },
+        {
+          "number": 18,
+          "name": "Cargo test (sagascript-cli)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 22
+        },
+        {
+          "number": 19,
+          "name": "Cargo clippy (sagascript-core, no features)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 6
+        },
+        {
+          "number": 20,
+          "name": "Cargo clippy (sagascript-cli)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 7
+        },
+        {
+          "number": 21,
+          "name": "Cargo check (sagascript-core, diarization)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 3
+        },
+        {
+          "number": 22,
+          "name": "Cargo test (sagascript-core, diarization)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 57
+        },
+        {
+          "number": 23,
+          "name": "Cargo clippy (sagascript-core, diarization)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 6
+        },
+        {
+          "number": 24,
+          "name": "Svelte check",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 5
+        },
+        {
+          "number": 25,
+          "name": "Build Core ML engine host and check its revision",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 19
+        },
+        {
+          "number": 26,
+          "name": "Swift test (Core ML engine host)",
+          "status": "completed",
+          "conclusion": "failure",
+          "durationSeconds": 24
+        },
+        {
+          "number": 49,
+          "name": "Post Cache Rust dependencies",
+          "status": "completed",
+          "conclusion": "skipped",
+          "durationSeconds": 0
+        },
+        {
+          "number": 50,
+          "name": "Post Install Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "durationSeconds": 0
+        },
+        {
+          "number": 51,
+          "name": "Post Select evaluation Python runtime",
+          "status": "completed",
+          "conclusion": "skipped",
+          "durationSeconds": 0
+        },
+        {
+          "number": 52,
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 53,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 3
+        }
+      ]
+    },
+    {
+      "id": 111702081615,
+      "name": "build-windows",
+      "status": "completed",
+      "conclusion": "success",
+      "durationSeconds": 495,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 2,
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 5
+        },
+        {
+          "number": 3,
+          "name": "Install Rust",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 21
+        },
+        {
+          "number": 4,
+          "name": "Install Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 10
+        },
+        {
+          "number": 5,
+          "name": "Cache Rust dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 23
+        },
+        {
+          "number": 6,
+          "name": "Cache downloaded models",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 7,
+          "name": "Install npm dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 4
+        },
+        {
+          "number": 8,
+          "name": "Build frontend",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 5
+        },
+        {
+          "number": 9,
+          "name": "Build native release binary (no installer)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 369
+        },
+        {
+          "number": 10,
+          "name": "Verify native release binary",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 11,
+          "name": "Smoke test — help and version",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 12,
+          "name": "Smoke test — config management",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 13,
+          "name": "Smoke test — model listing and formats",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 14,
+          "name": "Smoke test — shell completions",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 15,
+          "name": "Smoke test — download model and transcribe",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 5
+        },
+        {
+          "number": 16,
+          "name": "Smoke test — transcribe with JSON output",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 42
+        },
+        {
+          "number": 29,
+          "name": "Post Cache downloaded models",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 30,
+          "name": "Post Cache Rust dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 31,
+          "name": "Post Install Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 32,
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 3
+        },
+        {
+          "number": 33,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        }
+      ]
+    },
+    {
+      "id": 111702081642,
+      "name": "test-windows",
+      "status": "completed",
+      "conclusion": "success",
+      "durationSeconds": 316,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 2,
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 5
+        },
+        {
+          "number": 3,
+          "name": "Select evaluation Python runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 4,
+          "name": "Test offline dictation evaluation tooling",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 6
+        },
+        {
+          "number": 5,
+          "name": "Install Rust",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 24
+        },
+        {
+          "number": 6,
+          "name": "Install Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 10
+        },
+        {
+          "number": 7,
+          "name": "Cache Rust dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 58
+        },
+        {
+          "number": 8,
+          "name": "Test Windows build identity gates",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 13
+        },
+        {
+          "number": 9,
+          "name": "Install npm dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 3
+        },
+        {
+          "number": 10,
+          "name": "Build frontend",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 5
+        },
+        {
+          "number": 11,
+          "name": "Cargo check",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 61
+        },
+        {
+          "number": 12,
+          "name": "Cargo test",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 26
+        },
+        {
+          "number": 13,
+          "name": "Cargo clippy",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 13
+        },
+        {
+          "number": 14,
+          "name": "Cargo test (sagascript-core, no features)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 43
+        },
+        {
+          "number": 15,
+          "name": "Cargo test (sagascript-cli)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 29
+        },
+        {
+          "number": 16,
+          "name": "Cargo clippy (sagascript-core, no features)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 5
+        },
+        {
+          "number": 17,
+          "name": "Cargo clippy (sagascript-cli)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 8
+        },
+        {
+          "number": 31,
+          "name": "Post Cache Rust dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 32,
+          "name": "Post Install Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 33,
+          "name": "Post Select evaluation Python runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 34,
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 2
+        },
+        {
+          "number": 35,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        }
+      ]
+    },
+    {
+      "id": 111702081651,
+      "name": "build-macos",
+      "status": "completed",
+      "conclusion": "success",
+      "durationSeconds": 337,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 2
+        },
+        {
+          "number": 2,
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 2
+        },
+        {
+          "number": 3,
+          "name": "Select evaluation Python runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 4,
+          "name": "Install Rust",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 8
+        },
+        {
+          "number": 5,
+          "name": "Install Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 12
+        },
+        {
+          "number": 6,
+          "name": "Cache Rust dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 25
+        },
+        {
+          "number": 7,
+          "name": "Cache downloaded models",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 3
+        },
+        {
+          "number": 8,
+          "name": "Install npm dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 3
+        },
+        {
+          "number": 9,
+          "name": "Build frontend",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 3
+        },
+        {
+          "number": 10,
+          "name": "Build native release binary (no installer)",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 249
+        },
+        {
+          "number": 11,
+          "name": "Verify native release binary",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 12,
+          "name": "Smoke test — help and version",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 13,
+          "name": "Smoke test — config management",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 14,
+          "name": "Smoke test — model listing and formats",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 15,
+          "name": "Smoke test — shell completions",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 16,
+          "name": "Smoke test — download model and transcribe",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 15
+        },
+        {
+          "number": 17,
+          "name": "Smoke test — transcribe with JSON output",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 6
+        },
+        {
+          "number": 30,
+          "name": "Post Cache downloaded models",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 31,
+          "name": "Post Cache Rust dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 32,
+          "name": "Post Install Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 33,
+          "name": "Post Select evaluation Python runtime",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 34,
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        },
+        {
+          "number": 35,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 1
+        }
+      ]
+    },
+    {
+      "id": 111703324942,
+      "name": "check-linux",
+      "status": "completed",
+      "conclusion": "success",
+      "durationSeconds": 3,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 2,
+          "name": "Assert Linux CI lane passed",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 3,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        }
+      ]
+    },
+    {
+      "id": 111704330446,
+      "name": "check-macos",
+      "status": "completed",
+      "conclusion": "failure",
+      "durationSeconds": 3,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 2,
+          "name": "Assert macOS CI lanes passed",
+          "status": "completed",
+          "conclusion": "failure",
+          "durationSeconds": 0
+        },
+        {
+          "number": 3,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        }
+      ]
+    },
+    {
+      "id": 111704999046,
+      "name": "check-windows",
+      "status": "completed",
+      "conclusion": "success",
+      "durationSeconds": 4,
+      "steps": [
+        {
+          "number": 1,
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 2,
+          "name": "Assert Windows CI lanes passed",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        },
+        {
+          "number": 3,
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "durationSeconds": 0
+        }
+      ]
+    }
+  ]
+}

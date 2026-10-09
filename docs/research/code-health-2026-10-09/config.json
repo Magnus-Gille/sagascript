@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "repository": "Magnus-Gille/sagascript",
+  "base_commit": "24cbf972ddd92ca488331d0d65ee1e313dd87d95",
+  "parallelism": {
+    "rust_build_jobs": 2,
+    "reason": "bounded trial while another exploration ran concurrently"
+  },
+  "targets": {
+    "rust": [
+      "src-tauri/crates/sagascript-cli/src/transcribe.rs",
+      "src-tauri/crates/sagascript-core/src/transcription/whisper_backend.rs",
+      "src-tauri/crates/sagascript-cli/src/diarization.rs",
+      "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs",
+      "src-tauri/crates/sagascript-core/src/download.rs"
+    ],
+    "frontend": [
+      "src/lib/Settings.svelte",
+      "src/lib/FileTranscription.svelte",
+      "src/lib/MeetingReview.svelte",
+      "src/lib/update-recovery.ts"
+    ],
+    "swift": [
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/CoreMLEngine.swift",
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/ProtocolServer.swift",
+      "src-tauri/engine-host/coreml/Sources/EngineHostCore/ContextBiasing.swift"
+    ]
+  },
+  "commands": {
+    "inventory": "node scripts/code-health-exploration.mjs",
+    "rust_tests": "CARGO_BUILD_JOBS=2 cargo test -p sagascript-core --no-default-features",
+    "rust_core_coverage": "CARGO_BUILD_JOBS=2 cargo llvm-cov -p sagascript-core --no-default-features --lib --tests --json --summary-only --output-path coverage-core.json",
+    "rust_cli_coverage": "CARGO_BUILD_JOBS=2 cargo llvm-cov -p sagascript-cli --no-default-features --lib --tests --no-clean --json --summary-only --output-path coverage-cli.json",
+    "rust_complexity": "rust-code-analysis-cli -p <selected-rust-file> -m -F -O json -o <output-directory> -j 2",
+    "swift_prerequisite": "./scripts/build-engine-host.sh",
+    "swift_tests": "swift test --package-path src-tauri/engine-host/coreml --jobs 2",
+    "swift_coverage": "swift test --enable-code-coverage --package-path src-tauri/engine-host/coreml --jobs 2",
+    "svelte_parser": "node --input-type=module -e \"import('svelte/compiler')\"",
+    "knip": "knip --reporter json --no-progress --no-config-hints"
+  },
+  "tooling": {
+    "cargo_llvm_cov": "0.9.1",
+    "rust_code_analysis_cli": "0.0.25",
+    "svelte_compiler": "5.56.4",
+    "typescript": "5.9.3",
+    "knip": "5.46.0",
+    "maintenance_note": "rust-code-analysis-cli lock includes yanked crossbeam-channel 0.5.6; no lockfile mutation made"
+  },
+  "safety": {
+    "private_inputs": false,
+    "audio_recordings": false,
+    "credentials_or_env_files": false,
+    "runtime_changes": false,
+    "ci_gate_changes": false,
+    "publication": false
+  },
+  "environment": {
+    "os": "Darwin",
+    "osVersion": "27.0.1",
+    "arch": "arm64",
+    "node": "v26.11.0",
+    "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+    "swift": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.0.0"
+  }
+}
