@@ -1,0 +1,1328 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grimnir.gille.ai/contracts/code-health-objective/v1/schema.json",
+  "title": "Code Health Objective v1",
+  "description": "Reference-only, repository-scoped objective snapshot with five bounded code-health metrics.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "snapshot_id",
+    "supersedes_ref",
+    "correction_ref",
+    "repository",
+    "commit",
+    "observed_at",
+    "metrics"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "1.0"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "supersedes_ref": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "correction_ref": {
+      "oneOf": [
+        { "$ref": "#/$defs/refId" },
+        { "type": "null" }
+      ]
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "name"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ownerOrName"
+        },
+        "name": {
+          "$ref": "#/$defs/ownerOrName"
+        }
+      }
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$",
+      "minLength": 40,
+      "maxLength": 40
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complex_functions",
+        "unused_candidates",
+        "coverage",
+        "ci_first_attempt",
+        "confirmed_regressions"
+      ],
+      "properties": {
+        "complex_functions": {
+          "$ref": "#/$defs/complexFunctionsMetric"
+        },
+        "unused_candidates": {
+          "$ref": "#/$defs/unusedCandidatesMetric"
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverageMetric"
+        },
+        "ci_first_attempt": {
+          "$ref": "#/$defs/ciFirstAttemptMetric"
+        },
+        "confirmed_regressions": {
+          "$ref": "#/$defs/confirmedRegressionsMetric"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "refId": {
+      "type": "string",
+      "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$",
+      "minLength": 40,
+      "maxLength": 40
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        }
+      }
+    },
+    "ownerOrName": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "featureRefs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "maxItems": 30,
+      "uniqueItems": true
+    },
+    "refList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "minItems": 1,
+      "maxItems": 1000,
+      "uniqueItems": true
+    },
+    "complexFunctions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "threshold",
+        "eligible_functions",
+        "above_threshold_functions"
+      ],
+      "properties": {
+        "algorithm": {
+          "enum": [
+            "cyclomatic-complexity-v1",
+            "cognitive-complexity-v1"
+          ]
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "eligible_functions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "above_threshold_functions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "unusedCandidates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "graph_status",
+        "candidate_count",
+        "validated_count",
+        "false_positive_count",
+        "uncertain_count",
+        "owner_validation_refs",
+        "graph_qualification_ref"
+      ],
+      "properties": {
+        "graph_status": {
+          "enum": [
+            "qualified",
+            "unqualified"
+          ]
+        },
+        "candidate_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "validated_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "false_positive_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uncertain_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "owner_validation_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/refId"
+          },
+          "maxItems": 1000,
+          "uniqueItems": true
+        },
+        "graph_qualification_ref": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/refId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_refs",
+        "measure",
+        "covered",
+        "eligible",
+        "emitted_source_files",
+        "eligible_source_files",
+        "includes_inline_tests",
+        "clean_profiles",
+        "source_inventory"
+      ],
+      "properties": {
+        "profile_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "minItems": 1,
+          "maxItems": 1,
+          "uniqueItems": true
+        },
+        "measure": {
+          "enum": [
+            "lines",
+            "branches",
+            "functions"
+          ]
+        },
+        "covered": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "eligible": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "emitted_source_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "eligible_source_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "includes_inline_tests": {
+          "type": "boolean"
+        },
+        "clean_profiles": {
+          "const": true
+        },
+        "source_inventory": {
+          "enum": [
+            "complete-declared-inventory",
+            "exported-only"
+          ]
+        }
+      }
+    },
+    "ciJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_ref",
+        "conclusion"
+      ],
+      "properties": {
+        "job_ref": {
+          "type": "string",
+          "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "conclusion": {
+          "enum": [
+            "success",
+            "failure",
+            "infra_failure",
+            "cancelled",
+            "skipped",
+            "pending",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "ciRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_ref",
+        "commit",
+        "created_at",
+        "attempt",
+        "latest_attempt",
+        "jobs",
+        "overall_conclusion"
+      ],
+      "properties": {
+        "run_ref": {
+          "type": "string",
+          "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$",
+          "minLength": 40,
+          "maxLength": 40
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "attempt": {
+          "const": 1
+        },
+        "latest_attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "jobs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ciJob"
+          },
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "overall_conclusion": {
+          "enum": [
+            "success",
+            "failure",
+            "infra_failure",
+            "cancelled",
+            "skipped",
+            "pending",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "ciFirstAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "branch",
+        "event",
+        "workflow_ref",
+        "workflow_config_digest",
+        "expected_job_refs",
+        "window_start",
+        "window_end",
+        "runs",
+        "expected_run_count",
+        "run_inventory_ref"
+      ],
+      "properties": {
+        "branch": {
+          "const": "main"
+        },
+        "event": {
+          "const": "push"
+        },
+        "workflow_ref": {
+          "type": "string",
+          "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "workflow_config_digest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "algorithm",
+            "value"
+          ],
+          "properties": {
+            "algorithm": {
+              "const": "sha256"
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          }
+        },
+        "expected_job_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "minItems": 1,
+          "maxItems": 50,
+          "uniqueItems": true
+        },
+        "window_start": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "window_end": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ciRun"
+          },
+          "minItems": 0,
+          "maxItems": 1000
+        },
+        "expected_run_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        },
+        "run_inventory_ref": {
+          "$ref": "#/$defs/refId"
+        }
+      }
+    },
+    "releaseWindow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release_ref",
+        "published",
+        "published_at",
+        "window_end",
+        "observed_window"
+      ],
+      "properties": {
+        "release_ref": {
+          "type": "string",
+          "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "published": {
+          "const": true
+        },
+        "observed_window": {
+          "const": "complete"
+        },
+        "published_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "window_end": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "regression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release_ref",
+        "introduction_commit",
+        "known_good_release_ref",
+        "issue_ref",
+        "supporting_evidence_ref",
+        "confirmation_ref",
+        "confirmation_role",
+        "severity",
+        "first_observed_at"
+      ],
+      "properties": {
+        "release_ref": {
+          "type": "string",
+          "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "introduction_commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$",
+          "minLength": 40,
+          "maxLength": 40
+        },
+        "known_good_release_ref": {
+          "type": "string",
+          "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "issue_ref": {
+          "type": "string",
+          "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "confirmation_ref": {
+          "type": "string",
+          "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "confirmation_role": {
+          "const": "owning-maintainer"
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "major",
+            "minor"
+          ]
+        },
+        "first_observed_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "supporting_evidence_ref": {
+          "$ref": "#/$defs/refId"
+        }
+      }
+    },
+    "confirmedRegressions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "as_of",
+        "cohort_start",
+        "cohort_end",
+        "cohort_policy",
+        "window_closed",
+        "survey_complete",
+        "eligible_releases",
+        "releases",
+        "regressions"
+      ],
+      "properties": {
+        "window_closed": {
+          "const": true
+        },
+        "survey_complete": {
+          "const": true
+        },
+        "eligible_releases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "releases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/releaseWindow"
+          },
+          "maxItems": 500
+        },
+        "regressions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/regression"
+          },
+          "maxItems": 2000
+        },
+        "as_of": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "cohort_start": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "cohort_end": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "cohort_policy": {
+          "const": "published-in-cohort"
+        }
+      }
+    },
+    "complexFunctionsMetric": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observed_at",
+            "source",
+            "population",
+            "unit",
+            "status",
+            "payload",
+            "reason",
+            "slot_ref"
+          ],
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            },
+            "population": {
+              "$ref": "#/$defs/population"
+            },
+            "unit": {
+              "const": "functions"
+            },
+            "status": {
+              "const": "measured"
+            },
+            "payload": {
+              "$ref": "#/$defs/complexFunctions"
+            },
+            "reason": {
+              "type": "null"
+            },
+            "slot_ref": {
+              "$ref": "#/$defs/refId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observed_at",
+            "source",
+            "population",
+            "unit",
+            "status",
+            "payload",
+            "reason",
+            "slot_ref"
+          ],
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "source": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/source"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "population": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/population"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "unit": {
+              "const": "functions"
+            },
+            "status": {
+              "enum": [
+                "unknown",
+                "unsupported",
+                "failed",
+                "stale"
+              ]
+            },
+            "payload": {
+              "type": "null"
+            },
+            "reason": {
+              "enum": [
+                "not-collected",
+                "unsupported-tool",
+                "scope-unavailable",
+                "incomplete-input",
+                "producer-error",
+                "stale-source",
+                "redacted"
+              ]
+            },
+            "prior_snapshot_ref": {
+              "type": "string",
+              "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "slot_ref": {
+              "$ref": "#/$defs/refId"
+            }
+          }
+        }
+      ]
+    },
+    "unusedCandidatesMetric": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observed_at",
+            "source",
+            "population",
+            "unit",
+            "status",
+            "payload",
+            "reason",
+            "slot_ref"
+          ],
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            },
+            "population": {
+              "$ref": "#/$defs/population"
+            },
+            "unit": {
+              "const": "candidates"
+            },
+            "status": {
+              "const": "measured"
+            },
+            "payload": {
+              "$ref": "#/$defs/unusedCandidates"
+            },
+            "reason": {
+              "type": "null"
+            },
+            "slot_ref": {
+              "$ref": "#/$defs/refId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observed_at",
+            "source",
+            "population",
+            "unit",
+            "status",
+            "payload",
+            "reason",
+            "slot_ref"
+          ],
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "source": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/source"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "population": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/population"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "unit": {
+              "const": "candidates"
+            },
+            "status": {
+              "enum": [
+                "unknown",
+                "unsupported",
+                "failed",
+                "stale"
+              ]
+            },
+            "payload": {
+              "type": "null"
+            },
+            "reason": {
+              "enum": [
+                "not-collected",
+                "unsupported-tool",
+                "scope-unavailable",
+                "incomplete-input",
+                "producer-error",
+                "stale-source",
+                "redacted"
+              ]
+            },
+            "prior_snapshot_ref": {
+              "type": "string",
+              "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "slot_ref": {
+              "$ref": "#/$defs/refId"
+            }
+          }
+        }
+      ]
+    },
+    "coverageMetric": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observed_at",
+            "source",
+            "population",
+            "unit",
+            "status",
+            "payload",
+            "reason",
+            "slot_ref"
+          ],
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            },
+            "population": {
+              "$ref": "#/$defs/population"
+            },
+            "unit": {
+              "enum": [
+                "lines",
+                "branches",
+                "functions"
+              ]
+            },
+            "status": {
+              "const": "measured"
+            },
+            "payload": {
+              "$ref": "#/$defs/coverage"
+            },
+            "reason": {
+              "type": "null"
+            },
+            "slot_ref": {
+              "$ref": "#/$defs/refId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observed_at",
+            "source",
+            "population",
+            "unit",
+            "status",
+            "payload",
+            "reason",
+            "slot_ref"
+          ],
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "source": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/source"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "population": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/population"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "unit": {
+              "enum": [
+                "lines",
+                "branches",
+                "functions"
+              ]
+            },
+            "status": {
+              "enum": [
+                "unknown",
+                "unsupported",
+                "failed",
+                "stale"
+              ]
+            },
+            "payload": {
+              "type": "null"
+            },
+            "reason": {
+              "enum": [
+                "not-collected",
+                "unsupported-tool",
+                "scope-unavailable",
+                "incomplete-input",
+                "producer-error",
+                "stale-source",
+                "redacted"
+              ]
+            },
+            "prior_snapshot_ref": {
+              "type": "string",
+              "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "slot_ref": {
+              "$ref": "#/$defs/refId"
+            }
+          }
+        }
+      ]
+    },
+    "ciFirstAttemptMetric": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observed_at",
+            "source",
+            "population",
+            "unit",
+            "status",
+            "payload",
+            "reason",
+            "slot_ref"
+          ],
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            },
+            "population": {
+              "$ref": "#/$defs/population"
+            },
+            "unit": {
+              "const": "runs"
+            },
+            "status": {
+              "const": "measured"
+            },
+            "payload": {
+              "$ref": "#/$defs/ciFirstAttempt"
+            },
+            "reason": {
+              "type": "null"
+            },
+            "slot_ref": {
+              "$ref": "#/$defs/refId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observed_at",
+            "source",
+            "population",
+            "unit",
+            "status",
+            "payload",
+            "reason",
+            "slot_ref"
+          ],
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "source": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/source"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "population": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/population"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "unit": {
+              "const": "runs"
+            },
+            "status": {
+              "enum": [
+                "unknown",
+                "unsupported",
+                "failed",
+                "stale"
+              ]
+            },
+            "payload": {
+              "type": "null"
+            },
+            "reason": {
+              "enum": [
+                "not-collected",
+                "unsupported-tool",
+                "scope-unavailable",
+                "incomplete-input",
+                "producer-error",
+                "stale-source",
+                "redacted"
+              ]
+            },
+            "prior_snapshot_ref": {
+              "type": "string",
+              "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "slot_ref": {
+              "$ref": "#/$defs/refId"
+            }
+          }
+        }
+      ]
+    },
+    "confirmedRegressionsMetric": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observed_at",
+            "source",
+            "population",
+            "unit",
+            "status",
+            "payload",
+            "reason",
+            "slot_ref"
+          ],
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            },
+            "population": {
+              "$ref": "#/$defs/population"
+            },
+            "unit": {
+              "const": "regressions"
+            },
+            "status": {
+              "const": "measured"
+            },
+            "payload": {
+              "$ref": "#/$defs/confirmedRegressions"
+            },
+            "reason": {
+              "type": "null"
+            },
+            "slot_ref": {
+              "$ref": "#/$defs/refId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observed_at",
+            "source",
+            "population",
+            "unit",
+            "status",
+            "payload",
+            "reason",
+            "slot_ref"
+          ],
+          "properties": {
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "source": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/source"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "population": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/population"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "unit": {
+              "const": "regressions"
+            },
+            "status": {
+              "enum": [
+                "unknown",
+                "unsupported",
+                "failed",
+                "stale"
+              ]
+            },
+            "payload": {
+              "type": "null"
+            },
+            "reason": {
+              "enum": [
+                "not-collected",
+                "unsupported-tool",
+                "scope-unavailable",
+                "incomplete-input",
+                "producer-error",
+                "stale-source",
+                "redacted"
+              ]
+            },
+            "prior_snapshot_ref": {
+              "type": "string",
+              "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "slot_ref": {
+              "$ref": "#/$defs/refId"
+            }
+          }
+        }
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_ref",
+        "attempt",
+        "tool",
+        "language",
+        "platform",
+        "feature_refs",
+        "metric_version",
+        "scope_version",
+        "config_digest",
+        "scope_digest"
+      ],
+      "properties": {
+        "run_ref": {
+          "type": "string",
+          "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/token"
+            },
+            "version": {
+              "$ref": "#/$defs/token"
+            }
+          }
+        },
+        "language": {
+          "$ref": "#/$defs/token"
+        },
+        "platform": {
+          "$ref": "#/$defs/token"
+        },
+        "feature_refs": {
+          "$ref": "#/$defs/featureRefs"
+        },
+        "metric_version": {
+          "$ref": "#/$defs/token"
+        },
+        "scope_version": {
+          "$ref": "#/$defs/token"
+        },
+        "config_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "scope_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "population": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "included_refs",
+        "excluded_refs"
+      ],
+      "properties": {
+        "included_refs": {
+          "$ref": "#/$defs/refList"
+        },
+        "excluded_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^ref:[a-z0-9][a-z0-9-]{0,95}$",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "maxItems": 1000,
+          "uniqueItems": true
+        }
+      }
+    }
+  }
+}

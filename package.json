@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "node scripts/build-frontend.mjs",
     "test:frontend": "node scripts/run-frontend-tests.mjs",
+    "test:code-health": "node --test scripts/test-code-health-producer.mjs scripts/test-code-health-workflow.mjs && node tests/scripts/test-code-health-contract-provenance.mjs && node tests/scripts/validate-code-health-objective.mjs && node tests/scripts/test-code-health-policy.mjs",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "release:check": "node scripts/check-release.mjs",

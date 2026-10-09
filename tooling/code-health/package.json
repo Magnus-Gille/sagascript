@@ -1,0 +1,8 @@
+{
+  "name": "sagascript-code-health-tools",
+  "private": true,
+  "version": "0.0.0",
+  "devDependencies": {
+    "knip": "5.46.0"
+  }
+}

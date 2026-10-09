@@ -1,0 +1,142 @@
+name: Informational code health
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 5 * * *" # Daily first-attempt CI cohort, 05:17 UTC.
+    - cron: "29 5 * * 1" # Weekly static measurements, Monday 05:29 UTC.
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Collection mode
+        required: true
+        type: choice
+        options:
+          - static
+          - ci-only
+        default: static
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-health-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    runs-on: macos-14
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Initialize collection status artifact
+        env:
+          REPORT_DIR: ${{ runner.temp }}/code-health-report
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR"
+          printf '%s\n' '{"status":"not-collected","reason":"workflow-setup-not-completed"}' > "$REPORT_DIR/workflow-status.json"
+
+      - name: Checkout source and cohort history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select collection mode
+        id: mode
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          INPUT_MODE: ${{ inputs.mode }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request) mode=static ;;
+            workflow_dispatch) mode="$INPUT_MODE" ;;
+            schedule)
+              case "$EVENT_SCHEDULE" in
+                '17 5 * * *') mode=ci-only ;;
+                '29 5 * * 1') mode=static ;;
+                *) echo "Unregistered schedule: $EVENT_SCHEDULE" >&2; exit 1 ;;
+              esac
+              ;;
+            *) echo "Unsupported event: $EVENT_NAME" >&2; exit 1 ;;
+          esac
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+
+      - name: Test code-health contracts and workflow
+        run: npm run test:code-health
+
+      - name: Install pinned Rust toolchain and isolated analyzers
+        if: ${{ steps.mode.outputs.mode == 'static' }}
+        env:
+          TOOL_ROOT: ${{ runner.temp }}/code-health-tools
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.93.1 --profile minimal
+          rustup default 1.93.1
+          rustup component add llvm-tools-preview --toolchain 1.93.1
+          mkdir -p "$TOOL_ROOT"
+          cargo install --locked --jobs 2 --root "$TOOL_ROOT" cargo-llvm-cov --version 0.9.1
+          cargo install --locked --jobs 2 --root "$TOOL_ROOT" rust-code-analysis-cli --version 0.0.25
+          echo "$TOOL_ROOT/bin" >> "$GITHUB_PATH"
+
+      - name: Install project graph from the checked-in lockfile
+        if: ${{ steps.mode.outputs.mode == 'static' }}
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Install isolated Knip analyzer
+        if: ${{ steps.mode.outputs.mode == 'static' }}
+        run: npm ci --prefix tooling/code-health --ignore-scripts --no-audit --no-fund
+
+      - name: Collect static measurements
+        if: ${{ steps.mode.outputs.mode == 'static' }}
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          CODE_HEALTH_KNIP: ${{ github.workspace }}/tooling/code-health/node_modules/.bin/knip
+        run: |
+          set -euo pipefail
+          report_dir="$RUNNER_TEMP/code-health-report"
+          rm -f "$report_dir/workflow-status.json"
+          if node scripts/code-health-produce.mjs --mode static --output-dir "$report_dir"; then
+            :
+          else
+            status=$?
+            printf '{"status":"failed","reason":"collector-exit","exit_code":%s}\n' "$status" > "$report_dir/workflow-status.json"
+            exit "$status"
+          fi
+
+      - name: Collect daily CI cohort
+        if: ${{ steps.mode.outputs.mode == 'ci-only' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNNER_TEMP: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          report_dir="$RUNNER_TEMP/code-health-report"
+          rm -f "$report_dir/workflow-status.json"
+          if node scripts/code-health-produce.mjs --mode ci-only --output-dir "$report_dir"; then
+            :
+          else
+            status=$?
+            printf '{"status":"failed","reason":"collector-exit","exit_code":%s}\n' "$status" > "$report_dir/workflow-status.json"
+            exit "$status"
+          fi
+
+      - name: Upload sanitized code-health report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: code-health-v1
+          path: ${{ runner.temp }}/code-health-report
+          if-no-files-found: error
+          retention-days: 30
