@@ -6,6 +6,12 @@ mockConvertFileSrc("macos");
 const pending = new Map();
 const meetings = new Map();
 const calls = [];
+function waitForRecoveryGate(kind) {
+  const gate = window.qaRecoveryGates?.[kind];
+  if (!gate?.blocked) return Promise.resolve();
+  gate.started = true;
+  return new Promise(resolve => { gate.resolve = resolve; });
+}
 let active = 0;
 const profileModels = { swedish: "auto", english: "base.en" };
 let pianissimoDownloaded = false;
@@ -81,6 +87,18 @@ window.qa = {
   prepareUpdate: (nonce) => emit("update-preparing", nonce),
   abortUpdate: () => emit("update-aborted", "Synthetic install failure"),
   dictationResult: (text) => emit("transcription-result", text),
+  blockRecovery: (kind) => {
+    window.qaRecoveryGates ??= {};
+    window.qaRecoveryGates[kind] = { blocked: true, started: false, resolve: null };
+  },
+  releaseRecovery: (kind) => {
+    const gate = window.qaRecoveryGates?.[kind];
+    if (!gate) return;
+    gate.blocked = false;
+    gate.resolve?.();
+    gate.resolve = null;
+  },
+  recoveryGateStarted: (kind) => Boolean(window.qaRecoveryGates?.[kind]?.started),
   holdNextPianissimoDownload: () => { holdPianissimoDownload = true; },
   releasePianissimo: () => { releasePianissimoDownload?.(); },
   setPianissimoSize: (mb) => { pianissimoSizeMb = mb; },
@@ -129,11 +147,18 @@ mockIPC(async (cmd, args = {}) => {
   calls.push({ cmd, args });
   switch (cmd) {
     case "load_update_recovery":
+      await waitForRecoveryGate("load");
       if (window.qaRecoveryDelayMs) await new Promise((resolve) => setTimeout(resolve, window.qaRecoveryDelayMs));
       if (window.qaRecoveryLoadError) throw new Error("Synthetic recovery read failure");
       return window.qaRecovery ?? null;
-    case "save_update_recovery": window.qaRecovery = args.payload; return null;
-    case "clear_update_recovery": window.qaRecovery = null; return null;
+    case "save_update_recovery":
+      await waitForRecoveryGate("save");
+      window.qaRecovery = args.payload;
+      return null;
+    case "clear_update_recovery":
+      await waitForRecoveryGate("clear");
+      window.qaRecovery = null;
+      return null;
     case "complete_update_preparation": return null;
     case "get_build_info": return { version: "test", git_hash: "synthetic-qa", build_date: "fixture" };
     case "get_last_transcription":

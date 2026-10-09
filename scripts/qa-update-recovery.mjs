@@ -77,6 +77,154 @@ await page.route(url, (route) => route.fulfill({ contentType: "text/html",
 }));
 
 try {
+  const waitForPreparation = async (nonce) => {
+    await page.waitForFunction((expectedNonce) => window.qa.calls.some((call) =>
+      call.cmd === "complete_update_preparation" && call.args.nonce === expectedNonce), nonce);
+    return page.evaluate((expectedNonce) => window.qa.calls.findLast((call) =>
+      call.cmd === "complete_update_preparation" && call.args.nonce === expectedNonce).args, nonce);
+  };
+
+  await page.goto(url);
+  await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
+  await page.getByRole("tab", { name: "recovered.wav completed" }).waitFor();
+  await page.getByRole("tab", { name: "recovered-meeting.wav completed" }).waitFor();
+
+  // Q1: prepare and discard must serialize their durable mutations. The
+  // blocked prepare read represents a deterministic load/save interleave; a
+  // direct clear would otherwise be followed by a stale recovery save.
+  await page.evaluate(() => {
+    window.qa.blockRecovery("load");
+    window.qa.prepareUpdate("qa-queued-discard");
+  });
+  await page.waitForFunction(() => window.qa.recoveryGateStarted("load"));
+  await page.evaluate(() => window.qa.abortUpdate());
+  await page.getByRole("button", { name: "Discard recovered drafts" }).click();
+  await page.evaluate(() => window.qa.releaseRecovery("load"));
+  const queuedDiscard = await waitForPreparation("qa-queued-discard");
+  await page.waitForFunction(() => window.qa.calls.some((call) => call.cmd === "clear_update_recovery"));
+  assert.equal(queuedDiscard.error, null);
+  assert.equal(await page.evaluate(() => window.qaRecovery), null,
+    "discard must remain durable after a prepare read was already in flight");
+
+  // Q1b: a late file delivery cleanup must reread after a held prepare save
+  // and preserve the newer in-memory meeting edit captured by preparation.
+  await page.goto(url);
+  await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
+  await page.getByRole("tab", { name: "recovered-meeting.wav completed" }).click();
+  await page.getByRole("heading", { name: "Acoustic activity" }).waitFor();
+  await page.getByLabel(/Edit transcript segment at/).fill("New unsaved meeting snapshot");
+  await page.evaluate(() => {
+    window.qa.blockRecovery("save");
+    window.qa.prepareUpdate("qa-queued-copy");
+  });
+  await page.waitForFunction(() => window.qa.recoveryGateStarted("save"));
+  await page.evaluate(() => window.qa.abortUpdate());
+  await page.getByRole("tab", { name: "recovered.wav completed" }).click();
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
+  await page.evaluate(() => window.qa.releaseRecovery("save"));
+  const queuedCopy = await waitForPreparation("qa-queued-copy");
+  assert.equal(queuedCopy.error, null);
+  await page.waitForFunction(() => window.qaRecovery?.files?.length === 0
+    && window.qaRecovery?.meetings?.[0]?.editor_draft?.texts?.["seg-1"] === "New unsaved meeting snapshot");
+
+  // Q2a: an edited native result remains in the same editor lineage across
+  // abort/retry, so retry may replace the bytes persisted by the first prepare.
+  const initialRecoveryDictation = recovery.dictation;
+  recovery.dictation = null;
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Native E1";
+    window.qa.dictationResult("Native E1");
+  });
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Native E1");
+  await page.locator("textarea.test-result").fill("Native E1 edited");
+  await page.evaluate(() => window.qa.prepareUpdate("qa-native-first"));
+  assert.equal((await waitForPreparation("qa-native-first")).error, null);
+  await page.evaluate(() => window.qa.abortUpdate());
+  await page.locator("textarea.test-result").fill("Native E2 edited");
+  await page.evaluate(() => window.qa.prepareUpdate("qa-native-retry"));
+  assert.equal((await waitForPreparation("qa-native-retry")).error, null,
+    "same-lineage edit must be retryable after an aborted update");
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation.text), "Native E2 edited");
+
+  // Q2b: the same lineage rule applies to a recovered editor. Delivery must
+  // remove the earlier persisted bytes, then a later prepare must be empty.
+  recovery.dictation = { text: "Recovered E1" };
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Recovered E1");
+  await page.locator("textarea.test-result").fill("Recovered E1 edited");
+  await page.evaluate(() => window.qa.prepareUpdate("qa-recovered-first"));
+  assert.equal((await waitForPreparation("qa-recovered-first")).error, null);
+  await page.evaluate(() => window.qa.abortUpdate());
+  await page.locator("textarea.test-result").fill("Recovered E2 edited");
+  const recoveredCopySaveCount = await page.evaluate(() => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length);
+  await page.getByRole("button", { name: "Copy result", exact: true }).click();
+  await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
+  await page.waitForFunction((before) => window.qa.calls.filter((call) => call.cmd === "save_update_recovery").length > before
+    && window.qaRecovery?.dictation === null, recoveredCopySaveCount);
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation), null,
+    "delivery must remove only the earlier persisted draft in the same lineage");
+  await page.evaluate(() => window.qa.prepareUpdate("qa-recovered-after-copy"));
+  assert.equal((await waitForPreparation("qa-recovered-after-copy")).error, null);
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation), null);
+
+  // Q2-no-op: delivering a distinct native replacement must not issue a
+  // cleanup write when its captured lineage has no matching durable bytes.
+  const initialRecoveryFiles = recovery.files;
+  const initialRecoveryMeetings = recovery.meetings;
+  recovery.files = [];
+  recovery.meetings = [];
+  recovery.dictation = { text: "Persisted D" };
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Replacement N";
+    window.qa.dictationResult("Replacement N");
+  });
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Replacement N");
+  const noOpCallsBefore = await page.evaluate(() => window.qa.calls.length);
+  await page.getByRole("button", { name: "Copy result", exact: true }).click();
+  await page.getByText("Copied to clipboard.", { exact: true }).waitFor();
+  const noOpResult = await page.evaluate((start) => ({
+    mutations: window.qa.calls.slice(start).filter((call) => ["save_update_recovery", "clear_update_recovery"].includes(call.cmd)),
+    dictation: window.qaRecovery?.dictation?.text,
+  }), noOpCallsBefore);
+  assert.deepEqual(noOpResult.mutations, [], "unmatched delivery cleanup must not rewrite durable recovery");
+  assert.equal(noOpResult.dictation, "Persisted D");
+  recovery.files = initialRecoveryFiles;
+  recovery.meetings = initialRecoveryMeetings;
+
+  // Q2c: a distinct native replacement advances lineage and retains the old
+  // persisted draft behind the conflict guard.
+  recovery.dictation = null;
+  await page.goto(url);
+  await page.getByRole("button", { name: "Dictate", exact: true }).click();
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Control D1";
+    window.qa.dictationResult("Control D1");
+  });
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Control D1");
+  await page.locator("textarea.test-result").fill("Control D1 edited");
+  await page.evaluate(() => window.qa.prepareUpdate("qa-control-first"));
+  assert.equal((await waitForPreparation("qa-control-first")).error, null);
+  await page.evaluate(() => window.qa.abortUpdate());
+  await page.evaluate(() => {
+    window.qaNativePending = true;
+    window.qaLastNativeDictation = "Control D2";
+    window.qa.dictationResult("Control D2");
+  });
+  await page.waitForFunction(() => document.querySelector("textarea.test-result")?.value === "Control D2");
+  await page.evaluate(() => window.qa.prepareUpdate("qa-control-retry"));
+  const controlRetry = await waitForPreparation("qa-control-retry");
+  assert.match(controlRetry.error, /different unsaved dictation/i);
+  assert.equal(await page.evaluate(() => window.qaRecovery.dictation.text), "Control D1 edited");
+  recovery.dictation = initialRecoveryDictation;
   await page.goto(url);
   await page.getByRole("status", { name: "Recovered drafts" }).waitFor();
   await page.getByRole("tab", { name: "recovered.wav completed" }).waitFor();

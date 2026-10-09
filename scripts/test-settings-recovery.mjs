@@ -54,13 +54,30 @@ test("recovery cleanup removes only explicitly delivered durable drafts", () => 
   assert.match(source, /persistRemainingRecoveredDrafts\(\{ fileJobIds: \[jobId\] \}\)/);
   assert.match(source, /persistRemainingRecoveredDrafts\(\{ meetingJobIds: \[jobId\] \}\)/);
   assert.match(source, /persistRemainingRecoveredDrafts\(\{ dictationTexts/);
-  assert.match(source, /const originalRecoveredDictationText = recoveredDictationText/);
+  assert.match(source, /recoveredText: recoveredDictationText/);
 });
 
 test("recovery cleanup warnings identify the durable file and repair path", () => {
   assert.match(source, /update-recovery\.json/);
-  assert.match(source, /Application Support/);
+  assert.match(source, /app data folder/);
+  assert.match(source, /restart Sagascript/);
   assert.match(source, /repair update-recovery\.json/);
+});
+
+test("all durable recovery mutations share one queue through their acknowledgements", () => {
+  assert.match(source, /function enqueueRecoveryMutation<T>\(mutation: \(\) => Promise<T>\)/);
+  assert.match(source, /return enqueueRecoveryMutation\(async \(\) => \{[\s\S]*readPersistedUpdateRecoveryPayload\(await loadUpdateRecovery\(\)[\s\S]*await saveUpdateRecovery\(payload\)[\s\S]*await completeUpdatePreparation\(nonce, null\)/);
+  assert.match(source, /await enqueueRecoveryMutation\(async \(\) => \{\s*await clearUpdateRecovery\(\);/);
+  assert.match(source, /const changed = dictationMatches/);
+});
+
+test("dictation recovery replacement is restricted to the current editor lineage", () => {
+  assert.match(source, /let dictationEditorLineage = 0/);
+  assert.match(source, /lastPersistedDictation: \{ text: string; lineage: number \}/);
+  assert.match(source, /lastPersistedDictation\.lineage === dictationEditorLineage/);
+  assert.match(source, /dictationEditorLineage\+\+/);
+  assert.match(source, /const delivery = captureDictationDelivery\(text\)/);
+  assert.match(source, /persistedText: lastPersistedDictation\?\.lineage === lineage/);
 });
 
 test("recovered jobs cannot trigger automatic transcription or paste", () => {
