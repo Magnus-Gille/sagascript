@@ -11,6 +11,7 @@ import {
   KNIP_ARGS,
   paginate,
   parseProducerOptions,
+  filterSwiftCoverageReport,
   prepareSwiftCoverageInputs,
   restJson,
   runSwiftCoverageSteps,
@@ -21,6 +22,7 @@ import { createObjective } from "./lib/code-health-producer.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = readFileSync(join(root, ".github/workflows/code-health.yml"), "utf8");
+const collectionDocs = readFileSync(join(root, "docs/code-health-collection.md"), "utf8");
 const producerSource = readFileSync(join(root, "scripts/code-health-produce.mjs"), "utf8");
 const config = JSON.parse(readFileSync(join(root, "docs/code-health-producer-v1.json"), "utf8"));
 const tooling = JSON.parse(readFileSync(join(root, "tooling/code-health/package.json"), "utf8"));
@@ -92,40 +94,89 @@ test("Knip candidates do not make the producer command fail", () => {
 });
 
 test("Swift runs coverage tests before querying the generated codecov report", () => {
-  const calls = [];
-  const scratchPath = "/tmp/swift-task/scratch";
-  const reportPath = `${scratchPath}/codecov/default/codecov.json`;
-  const actual = runSwiftCoverageSteps({
-    scratchPath,
-    tempRoot: "/tmp/swift-task",
-    runCommand: (args, options) => {
-      calls.push({ args, options });
-      return args.includes("--show-codecov-path") ? `${reportPath}\n` : "test run completed\n";
-    },
-  });
-  assert.deepEqual(calls.map(call => call.args), [
-    ["test", "--enable-code-coverage", "--jobs", "2", "--scratch-path", scratchPath],
-    ["test", "--show-codecov-path", "--scratch-path", scratchPath],
-  ]);
-  assert.deepEqual(calls.map(call => call.options.env.TMPDIR), ["/tmp/swift-task", "/tmp/swift-task"]);
-  assert.equal(actual, reportPath);
+  const rootPath = mkdtempSync(join(tmpdir(), "sagascript-swift-steps-test-"));
+  try {
+    const tempRoot = join(rootPath, "task-temp");
+    const scratchPath = join(tempRoot, "scratch");
+    const reportPath = `${scratchPath}/codecov/default/codecov.json`;
+    const calls = [];
+    const actual = runSwiftCoverageSteps({
+      scratchPath,
+      tempRoot,
+      runCommand: (args, options) => {
+        calls.push({ args, options });
+        return args.includes("--show-codecov-path") ? `${reportPath}\n` : "test run completed\n";
+      },
+    });
+    const sharedArgs = [
+      "--cache-path", join(tempRoot, "swiftpm-cache"),
+      "--config-path", join(tempRoot, "swiftpm-config"),
+      "--security-path", join(tempRoot, "swiftpm-security"),
+      "--scratch-path", scratchPath,
+    ];
+    assert.deepEqual(calls.map(call => call.args), [
+      ["test", "--enable-code-coverage", "--jobs", "2", ...sharedArgs],
+      ["test", "--show-codecov-path", ...sharedArgs],
+    ]);
+    assert.deepEqual(calls.map(call => call.options.env), [
+      {
+        TMPDIR: tempRoot,
+        CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
+        SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
+      },
+      {
+        TMPDIR: tempRoot,
+        CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
+        SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
+      },
+    ]);
+    assert.equal(actual, reportPath);
 
-  const failedCalls = [];
-  assert.throws(() => runSwiftCoverageSteps({
-    scratchPath,
-    tempRoot: "/tmp/swift-task",
-    runCommand: args => {
-      failedCalls.push(args);
-      throw new Error("swift test failed");
-    },
-  }), /swift test failed/);
-  assert.equal(failedCalls.length, 1);
-  assert.ok(!failedCalls[0].includes("--show-codecov-path"));
-  assert.throws(() => runSwiftCoverageSteps({
-    scratchPath,
-    tempRoot: "/tmp/swift-task",
-    runCommand: args => args.includes("--show-codecov-path") ? "/tmp/outside/coverage.json" : "",
-  }), /outside task-local scratch/);
+    const failedCalls = [];
+    assert.throws(() => runSwiftCoverageSteps({
+      scratchPath,
+      tempRoot,
+      runCommand: args => {
+        failedCalls.push(args);
+        throw new Error("swift test failed");
+      },
+    }), /swift test failed/);
+    assert.equal(failedCalls.length, 1);
+    assert.ok(!failedCalls[0].includes("--show-codecov-path"));
+    assert.throws(() => runSwiftCoverageSteps({
+      scratchPath,
+      tempRoot,
+      runCommand: args => args.includes("--show-codecov-path") ? "/tmp/outside/coverage.json" : "",
+    }), /outside task-local scratch/);
+  } finally {
+    rmSync(rootPath, { recursive: true, force: true });
+  }
+});
+
+test("Swift coverage filters external and generated exports while retaining source-only paths", () => {
+  const packageRoot = "/tmp/swift-task/swift-package";
+  const sourcePackageRoot = "/repo/src-tauri/engine-host/coreml";
+  const report = {
+    data: [{ files: [
+      { filename: `${packageRoot}/Sources/EngineHostCore/Engine.swift`, summary: { lines: { count: 10, covered: 7 } } },
+      { filename: `${packageRoot}/Sources/EngineHostCore/BuildInfo.swift`, summary: { lines: { count: 4, covered: 4 } } },
+      { filename: `${packageRoot}/Tests/EngineHostCoreTests/ContextBiasingTests.swift`, summary: { lines: { count: 20, covered: 20 } } },
+      { filename: `${packageRoot}/.build/out/Intermediates.noindex/test_entry_point.swift`, summary: { lines: { count: 5, covered: 5 } } },
+      { filename: "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/Swift.swiftmodule/Swift.swiftinterface", summary: { lines: { count: 100, covered: 100 } } },
+    ] }],
+  };
+
+  const filtered = filterSwiftCoverageReport(report, { packageRoot, sourcePackageRoot });
+  assert.deepEqual(filtered.report.data[0].files.map(file => file.filename), [
+    `${sourcePackageRoot}/Sources/EngineHostCore/Engine.swift`,
+  ]);
+  assert.deepEqual(filtered.excludedPaths, [
+    { path: "Sources/EngineHostCore/BuildInfo.swift", reason: "generated-build-info" },
+    { path: "Tests/EngineHostCoreTests/ContextBiasingTests.swift", reason: "outside-source-root" },
+    { path: ".build/out/Intermediates.noindex/test_entry_point.swift", reason: "outside-source-root" },
+    { path: null, reason: "outside-temporary-package" },
+  ]);
+  assert.equal(JSON.stringify(filtered).includes("/Applications/Xcode.app"), false);
 });
 
 test("Swift coverage preparation places only the shared tracked vector fixture at the package sibling path", () => {
@@ -172,6 +223,11 @@ test("workflow collection schedule and manual dispatch are explicit and informat
   assert.match(workflow, /steps\.mode\.outputs\.mode == 'static'/);
   assert.doesNotMatch(workflow, /INPUT_MODE|inputs\.mode/);
   assert.match(workflow, /github\.event_name != 'workflow_dispatch' \|\| github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /github\.event_name != 'schedule' \|\| vars\.CODE_HEALTH_COLLECTION_ENABLED == 'true'/);
+  assert.match(workflow, /jobs:\s*\n\s*collect:\s*\n\s*if: \$\{\{[^\n]*workflow_dispatch[^\n]*CODE_HEALTH_COLLECTION_ENABLED/);
+  assert.match(collectionDocs, /CODE_HEALTH_COLLECTION_ENABLED=true/);
+  assert.match(collectionDocs, /unsetting `CODE_HEALTH_COLLECTION_ENABLED` or setting it to\s+`false`/);
+  assert.match(collectionDocs, /pull-request conformance and main-branch manual collection remain available/);
   assert.match(workflow, /persist-credentials: false/);
   assert.match(workflow, /actions: read\s*\n\s*contents: read/);
   assert.match(workflow, /- name: Initialize collection status artifact[\s\S]*?workflow-setup-not-completed/);

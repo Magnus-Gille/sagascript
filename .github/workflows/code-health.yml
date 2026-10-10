@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   collect:
-    if: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && (github.event_name != 'schedule' || vars.CODE_HEALTH_COLLECTION_ENABLED == 'true') }}
     runs-on: macos-14
     timeout-minutes: 45
     permissions:

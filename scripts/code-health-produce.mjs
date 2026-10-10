@@ -314,14 +314,75 @@ export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand } = {}
   if (typeof scratchPath !== "string" || typeof tempRoot !== "string" || typeof runCommand !== "function") {
     throw new TypeError("Swift coverage command input is malformed");
   }
-  const options = { env: { TMPDIR: tempRoot } };
-  runCommand(["test", "--enable-code-coverage", "--jobs", "2", "--scratch-path", scratchPath], options);
-  const output = runCommand(["test", "--show-codecov-path", "--scratch-path", scratchPath], options);
+  const cachePath = join(tempRoot, "swiftpm-cache");
+  const configPath = join(tempRoot, "swiftpm-config");
+  const securityPath = join(tempRoot, "swiftpm-security");
+  mkdirSync(cachePath, { recursive: true });
+  mkdirSync(configPath, { recursive: true });
+  mkdirSync(securityPath, { recursive: true });
+  const sharedArgs = [
+    "--cache-path", cachePath,
+    "--config-path", configPath,
+    "--security-path", securityPath,
+    "--scratch-path", scratchPath,
+  ];
+  const options = {
+    env: {
+      TMPDIR: tempRoot,
+      CLANG_MODULE_CACHE_PATH: join(tempRoot, "clang-module-cache"),
+      SWIFT_MODULECACHE_PATH: join(tempRoot, "swift-module-cache"),
+    },
+  };
+  runCommand(["test", "--enable-code-coverage", "--jobs", "2", ...sharedArgs], options);
+  const output = runCommand(["test", "--show-codecov-path", ...sharedArgs], options);
   const codecovPath = output.trim().split(/\r?\n/).at(-1);
   if (!codecovPath || !resolve(codecovPath).startsWith(resolve(scratchPath) + sep)) {
     throw new Error("Swift reported a coverage path outside task-local scratch space");
   }
   return codecovPath;
+}
+
+function isWithinDirectory(root, path) {
+  const childPath = relative(root, path);
+  return childPath !== "" && childPath !== ".." && !childPath.startsWith(`..${sep}`) && !isAbsolute(childPath);
+}
+
+export function filterSwiftCoverageReport(report, { packageRoot, sourcePackageRoot } = {}) {
+  if (!report || !Array.isArray(report.data) || typeof packageRoot !== "string" || typeof sourcePackageRoot !== "string") {
+    throw new TypeError("Swift coverage report paths are malformed");
+  }
+  const resolvedPackageRoot = resolve(packageRoot);
+  const resolvedSourcePackageRoot = resolve(sourcePackageRoot);
+  const sourceRoot = resolve(resolvedPackageRoot, "Sources/EngineHostCore");
+  const excludedPaths = [];
+  const data = report.data.map(datum => {
+    if (!datum || !Array.isArray(datum.files)) throw new TypeError("Swift coverage report file list is malformed");
+    const files = [];
+    for (const file of datum.files) {
+      if (!file || typeof file.filename !== "string" || !file.summary?.lines) {
+        throw new TypeError("Swift coverage report contains a malformed file record");
+      }
+      const exportedPath = isAbsolute(file.filename)
+        ? resolve(file.filename)
+        : resolve(resolvedPackageRoot, file.filename);
+      if (!isWithinDirectory(resolvedPackageRoot, exportedPath)) {
+        excludedPaths.push({ path: null, reason: "outside-temporary-package" });
+        continue;
+      }
+      const packageRelativePath = relative(resolvedPackageRoot, exportedPath).split(sep).join("/");
+      if (!isWithinDirectory(sourceRoot, exportedPath)) {
+        excludedPaths.push({ path: packageRelativePath, reason: "outside-source-root" });
+        continue;
+      }
+      if (packageRelativePath === "Sources/EngineHostCore/BuildInfo.swift") {
+        excludedPaths.push({ path: packageRelativePath, reason: "generated-build-info" });
+        continue;
+      }
+      files.push({ ...file, filename: resolve(resolvedSourcePackageRoot, packageRelativePath) });
+    }
+    return { ...datum, files };
+  });
+  return { report: { ...report, data }, excludedPaths };
 }
 
 export function prepareSwiftCoverageInputs({ sourcePackageRoot, packageRoot, tempRoot, sharedFixturePath } = {}) {
@@ -338,7 +399,7 @@ export function prepareSwiftCoverageInputs({ sourcePackageRoot, packageRoot, tem
   return fixtureDestination;
 }
 
-function collectSwiftCoverage(tempRoot) {
+export function collectSwiftCoverage(tempRoot) {
   const sourcePackageRoot = join(REPO_ROOT, "src-tauri/engine-host/coreml");
   const packageRoot = join(tempRoot, "swift-package");
   const scratchPath = join(tempRoot, "swift-scratch");
@@ -370,25 +431,17 @@ function collectSwiftCoverage(tempRoot) {
       runCommand: (args, options) => command("swift", args, { cwd: packageRoot, ...options }),
     });
     const raw = JSON.parse(readFileSync(codecovPath, "utf8"));
-    const packagePrefix = resolve(packageRoot) + sep;
-    for (const datum of raw.data ?? []) {
-      if (!Array.isArray(datum.files)) throw new Error("Swift coverage report file list is malformed");
-      for (const file of datum.files) {
-        const path = resolve(file.filename);
-        if (!path.startsWith(packagePrefix)) throw new Error("Swift coverage report contains a path outside the temporary source copy");
-        const localPath = relative(packageRoot, path).split(sep).join("/");
-        file.filename = join(sourcePackageRoot, localPath);
-      }
-    }
+    const filtered = filterSwiftCoverageReport(raw, { packageRoot, sourcePackageRoot });
     const inventory = gitTracked("src-tauri/engine-host/coreml/Sources/EngineHostCore/", [".swift"])
       .filter(path => basename(path) !== "BuildInfo.swift");
     const profileRef = evidenceRef("profile-swift-coreml-source-only");
-    const parsed = parseExportedCoverage(raw, {
+    const parsed = parseExportedCoverage(filtered.report, {
       repoRoot: REPO_ROOT,
       inventoryPaths: inventory,
       sourceRoots: ["src-tauri/engine-host/coreml/Sources/EngineHostCore/"],
       excludedPaths: ["src-tauri/engine-host/coreml/Sources/EngineHostCore/BuildInfo.swift"],
     });
+    parsed.excluded_report_paths.push(...filtered.excludedPaths);
     const inventoryEvidence = addSourceInventoryEvidence("swift-coreml-source-only", inventory);
     const includedRefs = parsed.included_paths.map(path => refForSource(path, 1, "coverage"));
     const excludedRefs = parsed.not_emitted_paths.map(path => refForSource(path, 1, "coverage-excluded"));
@@ -415,6 +468,7 @@ function collectSwiftCoverage(tempRoot) {
   });
   if (result.status === "measured") setMeasured("swift-coreml", "coverage", result.value);
   else setFailure("swift-coreml", "coverage");
+  return result;
 }
 
 function collectKnip(tempRoot, knipPath) {
