@@ -1,0 +1,432 @@
+{
+  "contract_version": "1.0",
+  "snapshot_id": "ref:objective-2026-10-09-a",
+  "supersedes_ref": null,
+  "correction_ref": null,
+  "repository": {
+    "owner": "example-org",
+    "name": "example-repo"
+  },
+  "commit": "0123456789abcdef0123456789abcdef01234567",
+  "observed_at": "2026-10-09T10:00:00Z",
+  "metrics": {
+    "complex_functions": {
+      "status": "measured",
+      "payload": {
+        "algorithm": "cyclomatic-complexity-v1",
+        "threshold": 10,
+        "eligible_functions": 12,
+        "above_threshold_functions": 3
+      },
+      "reason": null,
+      "observed_at": "2026-10-09T10:00:00Z",
+      "unit": "functions",
+      "source": {
+        "run_ref": "ref:metric-run-complex-functions",
+        "attempt": 1,
+        "tool": {
+          "name": "complexity-scan",
+          "version": "2.4.1"
+        },
+        "language": "typescript",
+        "platform": "linux-x64",
+        "feature_refs": [
+          "ref:feature-api",
+          "ref:feature-worker"
+        ],
+        "metric_version": "objective-metrics-v1",
+        "scope_version": "repo-source-v1",
+        "config_digest": {
+          "algorithm": "sha256",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "scope_digest": {
+          "algorithm": "sha256",
+          "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "population": {
+        "included_refs": [
+          "ref:inventory-complex-functions"
+        ],
+        "excluded_refs": []
+      },
+      "slot_ref": "ref:slot-complex-functions"
+    },
+    "unused_candidates": {
+      "status": "measured",
+      "payload": {
+        "graph_status": "unqualified",
+        "candidate_count": 0,
+        "validated_count": 0,
+        "false_positive_count": 0,
+        "uncertain_count": 0,
+        "owner_validation_refs": [],
+        "graph_qualification_ref": null
+      },
+      "reason": null,
+      "observed_at": "2026-10-09T10:00:00Z",
+      "unit": "candidates",
+      "source": {
+        "run_ref": "ref:metric-run-unused-candidates",
+        "attempt": 1,
+        "tool": {
+          "name": "unused-analysis",
+          "version": "2.4.1"
+        },
+        "language": "typescript",
+        "platform": "linux-x64",
+        "feature_refs": [
+          "ref:feature-api",
+          "ref:feature-worker"
+        ],
+        "metric_version": "objective-metrics-v1",
+        "scope_version": "repo-source-v1",
+        "config_digest": {
+          "algorithm": "sha256",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "scope_digest": {
+          "algorithm": "sha256",
+          "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "population": {
+        "included_refs": [
+          "ref:inventory-unused-candidates"
+        ],
+        "excluded_refs": []
+      },
+      "slot_ref": "ref:slot-unused-candidates"
+    },
+    "coverage": {
+      "status": "measured",
+      "payload": {
+        "profile_refs": [
+          "ref:coverage-profile-clean"
+        ],
+        "measure": "lines",
+        "covered": 80,
+        "eligible": 100,
+        "emitted_source_files": 4,
+        "eligible_source_files": 5,
+        "includes_inline_tests": false,
+        "clean_profiles": true,
+        "source_inventory": "complete-declared-inventory"
+      },
+      "reason": null,
+      "observed_at": "2026-10-09T09:30:00Z",
+      "unit": "lines",
+      "source": {
+        "run_ref": "ref:metric-run-coverage",
+        "attempt": 1,
+        "tool": {
+          "name": "coverage-runner",
+          "version": "2.4.1"
+        },
+        "language": "typescript",
+        "platform": "linux-x64",
+        "feature_refs": [
+          "ref:feature-api",
+          "ref:feature-worker"
+        ],
+        "metric_version": "objective-metrics-v1",
+        "scope_version": "repo-source-v1",
+        "config_digest": {
+          "algorithm": "sha256",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "scope_digest": {
+          "algorithm": "sha256",
+          "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "population": {
+        "included_refs": [
+          "ref:inventory-coverage"
+        ],
+        "excluded_refs": []
+      },
+      "slot_ref": "ref:slot-coverage"
+    },
+    "ci_first_attempt": {
+      "status": "measured",
+      "payload": {
+        "branch": "main",
+        "event": "push",
+        "workflow_ref": "ref:workflow-ci-main",
+        "workflow_config_digest": {
+          "algorithm": "sha256",
+          "value": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "expected_job_refs": [
+          "ref:job-build",
+          "ref:job-test"
+        ],
+        "window_start": "2026-09-10T00:00:00Z",
+        "window_end": "2026-10-08T00:00:00Z",
+        "runs": [
+          {
+            "run_ref": "ref:ci-run-success",
+            "commit": "1123456789abcdef0123456789abcdef01234567",
+            "created_at": "2026-10-01T01:00:00Z",
+            "attempt": 1,
+            "latest_attempt": 1,
+            "jobs": [
+              {
+                "job_ref": "ref:job-build",
+                "conclusion": "success"
+              },
+              {
+                "job_ref": "ref:job-test",
+                "conclusion": "success"
+              }
+            ],
+            "overall_conclusion": "success"
+          },
+          {
+            "run_ref": "ref:ci-run-failure",
+            "commit": "2123456789abcdef0123456789abcdef01234567",
+            "created_at": "2026-10-02T01:00:00Z",
+            "attempt": 1,
+            "latest_attempt": 2,
+            "jobs": [
+              {
+                "job_ref": "ref:job-build",
+                "conclusion": "success"
+              },
+              {
+                "job_ref": "ref:job-test",
+                "conclusion": "failure"
+              }
+            ],
+            "overall_conclusion": "failure"
+          },
+          {
+            "run_ref": "ref:ci-run-infra",
+            "commit": "3123456789abcdef0123456789abcdef01234567",
+            "created_at": "2026-10-03T01:00:00Z",
+            "attempt": 1,
+            "latest_attempt": 1,
+            "jobs": [
+              {
+                "job_ref": "ref:job-build",
+                "conclusion": "success"
+              },
+              {
+                "job_ref": "ref:job-test",
+                "conclusion": "infra_failure"
+              }
+            ],
+            "overall_conclusion": "infra_failure"
+          },
+          {
+            "run_ref": "ref:ci-run-cancelled",
+            "commit": "4123456789abcdef0123456789abcdef01234567",
+            "created_at": "2026-10-04T01:00:00Z",
+            "attempt": 1,
+            "latest_attempt": 3,
+            "jobs": [
+              {
+                "job_ref": "ref:job-build",
+                "conclusion": "success"
+              },
+              {
+                "job_ref": "ref:job-test",
+                "conclusion": "cancelled"
+              }
+            ],
+            "overall_conclusion": "cancelled"
+          },
+          {
+            "run_ref": "ref:ci-run-skipped",
+            "commit": "5123456789abcdef0123456789abcdef01234567",
+            "created_at": "2026-10-05T01:00:00Z",
+            "attempt": 1,
+            "latest_attempt": 1,
+            "jobs": [
+              {
+                "job_ref": "ref:job-build",
+                "conclusion": "success"
+              },
+              {
+                "job_ref": "ref:job-test",
+                "conclusion": "skipped"
+              }
+            ],
+            "overall_conclusion": "skipped"
+          },
+          {
+            "run_ref": "ref:ci-run-pending",
+            "commit": "6123456789abcdef0123456789abcdef01234567",
+            "created_at": "2026-10-06T01:00:00Z",
+            "attempt": 1,
+            "latest_attempt": 1,
+            "jobs": [
+              {
+                "job_ref": "ref:job-build",
+                "conclusion": "success"
+              },
+              {
+                "job_ref": "ref:job-test",
+                "conclusion": "pending"
+              }
+            ],
+            "overall_conclusion": "pending"
+          },
+          {
+            "run_ref": "ref:ci-run-unknown",
+            "commit": "7123456789abcdef0123456789abcdef01234567",
+            "created_at": "2026-10-07T01:00:00Z",
+            "attempt": 1,
+            "latest_attempt": 1,
+            "jobs": [
+              {
+                "job_ref": "ref:job-build",
+                "conclusion": "success"
+              },
+              {
+                "job_ref": "ref:job-test",
+                "conclusion": "unknown"
+              }
+            ],
+            "overall_conclusion": "unknown"
+          }
+        ],
+        "expected_run_count": 7,
+        "run_inventory_ref": "ref:complete-run-inventory"
+      },
+      "reason": null,
+      "observed_at": "2026-10-09T10:00:00Z",
+      "unit": "runs",
+      "source": {
+        "run_ref": "ref:metric-run-ci-first-attempt",
+        "attempt": 1,
+        "tool": {
+          "name": "actions-export",
+          "version": "2.4.1"
+        },
+        "language": "typescript",
+        "platform": "linux-x64",
+        "feature_refs": [
+          "ref:feature-api",
+          "ref:feature-worker"
+        ],
+        "metric_version": "objective-metrics-v1",
+        "scope_version": "repo-source-v1",
+        "config_digest": {
+          "algorithm": "sha256",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "scope_digest": {
+          "algorithm": "sha256",
+          "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "population": {
+        "included_refs": [
+          "ref:inventory-ci-first-attempt"
+        ],
+        "excluded_refs": []
+      },
+      "slot_ref": "ref:slot-ci-first-attempt"
+    },
+    "confirmed_regressions": {
+      "status": "measured",
+      "payload": {
+        "window_closed": true,
+        "survey_complete": true,
+        "eligible_releases": 2,
+        "releases": [
+          {
+            "release_ref": "ref:release-1",
+            "published": true,
+            "observed_window": "complete",
+            "published_at": "2026-08-01T00:00:00Z",
+            "window_end": "2026-08-15T00:00:00Z"
+          },
+          {
+            "release_ref": "ref:release-2",
+            "published": true,
+            "observed_window": "complete",
+            "published_at": "2026-08-15T00:00:00Z",
+            "window_end": "2026-08-29T00:00:00Z"
+          }
+        ],
+        "regressions": [
+          {
+            "release_ref": "ref:release-1",
+            "introduction_commit": "8123456789abcdef0123456789abcdef01234567",
+            "known_good_release_ref": "ref:release-0",
+            "issue_ref": "ref:issue-11",
+            "confirmation_ref": "ref:confirmation-11",
+            "confirmation_role": "owning-maintainer",
+            "severity": "critical",
+            "first_observed_at": "2026-08-10T12:00:00Z",
+            "supporting_evidence_ref": "ref:regression-evidence-1"
+          },
+          {
+            "release_ref": "ref:release-2",
+            "introduction_commit": "9123456789abcdef0123456789abcdef01234567",
+            "known_good_release_ref": "ref:release-0",
+            "issue_ref": "ref:issue-12",
+            "confirmation_ref": "ref:confirmation-12",
+            "confirmation_role": "owning-maintainer",
+            "severity": "major",
+            "first_observed_at": "2026-08-20T12:00:00Z",
+            "supporting_evidence_ref": "ref:regression-evidence-2"
+          },
+          {
+            "release_ref": "ref:release-1",
+            "introduction_commit": "a123456789abcdef0123456789abcdef01234567",
+            "known_good_release_ref": "ref:release-0",
+            "issue_ref": "ref:issue-13",
+            "confirmation_ref": "ref:confirmation-13",
+            "confirmation_role": "owning-maintainer",
+            "severity": "minor",
+            "first_observed_at": "2026-08-14T23:59:59Z",
+            "supporting_evidence_ref": "ref:regression-evidence-3"
+          }
+        ],
+        "as_of": "2026-10-09T10:00:00Z",
+        "cohort_start": "2026-08-01T00:00:00Z",
+        "cohort_end": "2026-09-01T00:00:00Z",
+        "cohort_policy": "published-in-cohort"
+      },
+      "reason": null,
+      "observed_at": "2026-10-09T10:00:00Z",
+      "unit": "regressions",
+      "source": {
+        "run_ref": "ref:metric-run-confirmed-regressions",
+        "attempt": 1,
+        "tool": {
+          "name": "release-survey",
+          "version": "2.4.1"
+        },
+        "language": "typescript",
+        "platform": "linux-x64",
+        "feature_refs": [
+          "ref:feature-api",
+          "ref:feature-worker"
+        ],
+        "metric_version": "objective-metrics-v1",
+        "scope_version": "repo-source-v1",
+        "config_digest": {
+          "algorithm": "sha256",
+          "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "scope_digest": {
+          "algorithm": "sha256",
+          "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      },
+      "population": {
+        "included_refs": [
+          "ref:inventory-confirmed-regressions"
+        ],
+        "excluded_refs": []
+      },
+      "slot_ref": "ref:slot-confirmed-regressions"
+    }
+  }
+}

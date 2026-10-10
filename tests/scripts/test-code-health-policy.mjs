@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { seriesKey, currentMetricStatus } from '../../scripts/lib/code-health-policy.mjs';
+const read = p => JSON.parse(fs.readFileSync(new URL(p, import.meta.url), 'utf8'));
+const schema = read('../../docs/code-health-objective-v1.schema.json');
+const baseline = read('../fixtures/code-health/objective-positive.json');
+const key = snapshot => seriesKey(schema, snapshot, 'complex_functions');
+const changed = structuredClone(baseline);
+changed.commit = 'd'.repeat(40);
+changed.metrics.complex_functions.payload.eligible_functions += 1;
+changed.metrics.complex_functions.source.run_ref = 'ref:later-run';
+changed.metrics.complex_functions.population.included_refs = ['ref:later-inventory'];
+assert.equal(key(changed), key(baseline), 'source and population changes remain comparable under identical inventory policy');
+for (const field of ['scope_version', 'metric_version', 'language', 'platform']) {
+  const candidate = structuredClone(baseline);
+  candidate.metrics.complex_functions.source[field] += '-changed';
+  assert.notEqual(key(candidate), key(baseline), `${field} separates series`);
+}
+const reordered = structuredClone(baseline);
+reordered.metrics.complex_functions.source.feature_refs.reverse();
+assert.equal(key(reordered), key(baseline), 'set order does not change a series');
+const threshold = structuredClone(baseline);
+threshold.metrics.complex_functions.payload.threshold++;
+assert.notEqual(key(threshold), key(baseline), 'threshold changes cannot fake improvement');
+const after = (name, seconds) => new Date(Date.parse(baseline.metrics[name].observed_at) + seconds * 1000).toISOString().replace('.000Z', 'Z');
+assert.equal(currentMetricStatus(schema, baseline, 'coverage', after('coverage', 10 * 86400)), 'measured');
+assert.equal(currentMetricStatus(schema, baseline, 'coverage', after('coverage', 10 * 86400 + 1)), 'stale');
+assert.equal(currentMetricStatus(schema, baseline, 'ci_first_attempt', after('ci_first_attempt', 2 * 86400 + 1)), 'stale');
+assert.equal(currentMetricStatus(schema, baseline, 'coverage', '2026-10-08T10:00:00Z'), 'unknown', 'future clock cannot certify freshness');
+assert.throws(() => currentMetricStatus(schema, baseline, 'coverage', '2026-02-30T10:00:00Z'));
+assert.throws(() => seriesKey(schema, baseline, 'invented'));
+console.log('code-health series and freshness policy checks passed');

@@ -1,0 +1,22 @@
+{
+  "issues": {
+    "files": [
+      {"file": "src/lib/Unused.ts", "line": 1}
+    ],
+    "exports": [
+      {"file": "src/lib/Settings.ts", "symbol": "oldSetting", "line": 18}
+    ],
+    "dependencies": [
+      {"file": "package.json", "dependency": "unused-package"}
+    ],
+    "svelte": [
+      {"file": "src/lib/Unused.svelte", "name": "Unused.svelte", "line": 1}
+    ],
+    "generated": [
+      {"file": "src/generated/BuildInfo.ts", "symbol": "generated"}
+    ],
+    "outside": [
+      {"file": "../private/Transcript.ts", "symbol": "private"}
+    ]
+  }
+}

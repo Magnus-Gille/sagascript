@@ -1,0 +1,25 @@
+{
+  "files": [
+    "src/lib/Unused.ts",
+    "src/lib/Unused.svelte"
+  ],
+  "issues": [
+    {
+      "file": "src/lib/Settings.ts",
+      "owners": ["@maintainers"],
+      "exports": [{"name": "oldSetting", "line": 18}],
+      "nsExports": [{"name": "unusedNamespaceExport", "line": 22}],
+      "types": [{"name": "OldSettings", "line": 27}],
+      "nsTypes": [{"name": "UnusedNamespaceType", "line": 31}],
+      "enumMembers": {"Mode": [{"name": "Legacy", "line": 35}]},
+      "classMembers": {"Settings": [{"name": "unusedMethod", "line": 41}]},
+      "duplicates": [[{"name": "duplicateValue", "line": 48}]],
+      "dependencies": [],
+      "unresolved": []
+    },
+    {
+      "file": "src/lib/Widget.svelte",
+      "exports": [{"name": "unusedComponentExport", "line": 7}]
+    }
+  ]
+}

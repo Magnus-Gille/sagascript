@@ -1,0 +1,24 @@
+{
+  "data": [
+    {
+      "files": [
+        {
+          "filename": "/workspace/sagascript/src-tauri/engine-host/coreml/Sources/EngineHostCore/ProtocolServer.swift",
+          "summary": {"lines": {"count": 100, "covered": 80}}
+        },
+        {
+          "filename": "/workspace/sagascript/src-tauri/engine-host/coreml/Sources/EngineHostCore/BuildInfo.swift",
+          "summary": {"lines": {"count": 5, "covered": 5}}
+        },
+        {
+          "filename": "/workspace/sagascript/src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/ProtocolTests.swift",
+          "summary": {"lines": {"count": 50, "covered": 50}}
+        },
+        {
+          "filename": "/workspace/sagascript/src-tauri/engine-host/coreml/.build/generated.swift",
+          "summary": {"lines": {"count": 7, "covered": 7}}
+        }
+      ]
+    }
+  ]
+}

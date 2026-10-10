@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "contract_version": "1.0",
+  "repository": {
+    "owner": "Magnus-Gille",
+    "name": "sagascript"
+  },
+  "tools": {
+    "rust_toolchain": "1.93.1",
+    "rust_code_analysis_cli": "0.0.25",
+    "cargo_llvm_cov": "0.9.1",
+    "knip": "5.46.0",
+    "typescript": "5.7.3",
+    "swift": "runner-provided",
+    "github_actions_rest_api": "2022-11-28"
+  },
+  "complexity": {
+    "algorithm": "cyclomatic-complexity-v1",
+    "threshold": 10,
+    "comparison": "strictly-greater-than",
+    "scopes": {
+      "rust-core": [
+        "src-tauri/crates/sagascript-core/src/transcription/whisper_backend.rs",
+        "src-tauri/crates/sagascript-core/src/diarization_evaluation.rs",
+        "src-tauri/crates/sagascript-core/src/download.rs"
+      ],
+      "rust-cli": [
+        "src-tauri/crates/sagascript-cli/src/transcribe.rs",
+        "src-tauri/crates/sagascript-cli/src/diarization.rs"
+      ]
+    },
+    "function_inventory": "rust-code-analysis-cli function nodes; closures are separate entries; parent scores subtract nested function scores"
+  },
+  "coverage": {
+    "measure": "lines",
+    "rust": {
+      "package": "sagascript-core",
+      "command": "cargo +1.93.1 llvm-cov -p sagascript-core --no-default-features --lib --tests --json --summary-only",
+      "target": "isolated task-local CARGO_TARGET_DIR",
+      "includes_inline_tests": true,
+      "source_roots": [
+        "src-tauri/crates/sagascript-core/src/",
+        "src-tauri/crates/sagascript-core/tests/"
+      ],
+      "inventory": "exported-only"
+    },
+    "swift": {
+      "package": "src-tauri/engine-host/coreml",
+      "command": "swift test --enable-code-coverage --jobs 2 --scratch-path <task-temporary-directory>; swift test --show-codecov-path --scratch-path <task-temporary-directory>",
+      "source_root": "src-tauri/engine-host/coreml/Sources/EngineHostCore/",
+      "exclude": ["BuildInfo.swift"],
+      "inventory": "source-only-exported",
+      "generated_tests_excluded": true
+    }
+  },
+  "unused_candidates": {
+    "command": "knip --reporter json --no-progress --no-config-hints --no-exit-code",
+    "candidate_paths": {
+      "typescript": ["src/**/*.ts", "src/**/*.tsx"],
+      "svelte": ["src/**/*.svelte"]
+    },
+    "graph_status": "unqualified",
+    "validation": "all tool candidates remain uncertain; no candidate is deletion authorization",
+    "limitations": [
+      "default graph entrypoints are not qualified",
+      "platform-specific references may be absent",
+      "existing suppressions are not owner validation"
+    ]
+  },
+  "ci": {
+    "workflow": ".github/workflows/ci.yml",
+    "workflow_ref": "ref:workflow-ci-main-push",
+    "branch": "main",
+    "event": "push",
+    "window_days": 28,
+    "expected_job_ids": [
+      "scope",
+      "test-macos",
+      "build-macos",
+      "check-macos",
+      "test-linux",
+      "check-linux",
+      "test-windows",
+      "build-windows",
+      "check-windows"
+    ],
+    "attempt_policy": "always fetch attempt 1; latest attempt is recorded separately",
+    "timing_reuse": [
+      "scripts/ci-run-timings.mjs",
+      "scripts/ci-cohort-timings.mjs"
+    ],
+    "limits": {
+      "maximum_runs": 1000,
+      "maximum_jobs_per_run": 50
+    }
+  },
+  "regressions": {
+    "labels": ["code-health:regression", "severity:critical|major|minor"],
+    "observation_window_days": 14,
+    "survey_complete": false,
+    "status_reason": "No complete human-reviewed release and issue survey is supplied; the historical count remains unknown."
+  },
+  "exclusions": [
+    ".git",
+    "node_modules",
+    "target",
+    ".build",
+    "build",
+    "generated build identity sources",
+    "vendor/dependency source",
+    "private recordings and transcripts",
+    "model files",
+    "credentials and environment files",
+    "test bundle files from source-only Swift coverage"
+  ],
+  "collection": {
+    "cadence": "weekly plus workflow_dispatch",
+    "gates": "report-only; no existing CI, release, signing or deployment job consumes this report",
+    "raw_tool_output": "task-temporary only; uploaded artifacts contain sanitized summaries and relative source paths"
+  },
+  "scopes": [
+    {
+      "name": "rust-core",
+      "slots": {
+        "complex_functions": {"slot_ref": "ref:slot-rust-complex-functions-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "measured", "metric_version": "rust-cyclomatic-v1", "scope_version": "rust-selected-functions-v1", "freshness_days": 10},
+        "unused_candidates": {"slot_ref": "ref:slot-rust-unused-candidates-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "rust-unused-v1", "scope_version": "rust-dead-code-v1", "freshness_days": 10},
+        "coverage": {"slot_ref": "ref:slot-rust-core-coverage-v1", "language": "rust", "platform": "macos", "feature_refs": ["ref:feature-rust-core-no-default"], "status": "measured", "metric_version": "rust-lines-v1", "scope_version": "rust-core-no-default-exported-v1", "freshness_days": 10},
+        "ci_first_attempt": {"slot_ref": "ref:slot-rust-ci-first-attempt-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "rust-ci-v1", "scope_version": "rust-ci-not-applicable-v1", "freshness_days": 2},
+        "confirmed_regressions": {"slot_ref": "ref:slot-rust-confirmed-regressions-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "rust-release-v1", "scope_version": "rust-release-not-applicable-v1", "freshness_days": 10}
+      }
+    },
+    {
+      "name": "rust-cli",
+      "slots": {
+        "complex_functions": {"slot_ref": "ref:slot-rust-cli-complex-functions-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "measured", "metric_version": "rust-cyclomatic-v1", "scope_version": "rust-cli-selected-functions-v1", "freshness_days": 10},
+        "unused_candidates": {"slot_ref": "ref:slot-rust-cli-unused-candidates-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "rust-unused-v1", "scope_version": "rust-cli-dead-code-v1", "freshness_days": 10},
+        "coverage": {"slot_ref": "ref:slot-rust-cli-coverage-v1", "language": "rust", "platform": "macos", "feature_refs": ["ref:feature-rust-cli-no-default"], "status": "unknown", "reason": "incomplete-input", "metric_version": "rust-lines-v1", "scope_version": "rust-cli-no-default-clean-deferred-v1", "freshness_days": 10},
+        "ci_first_attempt": {"slot_ref": "ref:slot-rust-cli-ci-first-attempt-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "rust-ci-v1", "scope_version": "rust-cli-ci-not-applicable-v1", "freshness_days": 2},
+        "confirmed_regressions": {"slot_ref": "ref:slot-rust-cli-confirmed-regressions-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "rust-release-v1", "scope_version": "rust-cli-release-not-applicable-v1", "freshness_days": 10}
+      }
+    },
+    {
+      "name": "typescript",
+      "slots": {
+        "complex_functions": {"slot_ref": "ref:slot-typescript-complex-functions-v1", "language": "typescript", "platform": "webview", "feature_refs": ["ref:feature-frontend-webview"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "typescript-complexity-v1", "scope_version": "typescript-function-complexity-v1", "freshness_days": 10},
+        "unused_candidates": {"slot_ref": "ref:slot-typescript-unused-candidates-v1", "language": "typescript", "platform": "webview", "feature_refs": ["ref:feature-frontend-webview"], "status": "measured", "metric_version": "typescript-knip-raw-v1", "scope_version": "typescript-knip-unqualified-v1", "freshness_days": 10},
+        "coverage": {"slot_ref": "ref:slot-typescript-coverage-v1", "language": "typescript", "platform": "webview", "feature_refs": ["ref:feature-frontend-webview"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "typescript-lines-v1", "scope_version": "typescript-execution-coverage-v1", "freshness_days": 10},
+        "ci_first_attempt": {"slot_ref": "ref:slot-typescript-ci-first-attempt-v1", "language": "typescript", "platform": "webview", "feature_refs": ["ref:feature-frontend-webview"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "typescript-ci-v1", "scope_version": "typescript-ci-not-applicable-v1", "freshness_days": 2},
+        "confirmed_regressions": {"slot_ref": "ref:slot-typescript-confirmed-regressions-v1", "language": "typescript", "platform": "webview", "feature_refs": ["ref:feature-frontend-webview"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "typescript-release-v1", "scope_version": "typescript-release-not-applicable-v1", "freshness_days": 10}
+      }
+    },
+    {
+      "name": "svelte",
+      "slots": {
+        "complex_functions": {"slot_ref": "ref:slot-svelte-complex-functions-v1", "language": "svelte", "platform": "webview", "feature_refs": ["ref:feature-frontend-webview"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "svelte-complexity-v1", "scope_version": "svelte-function-complexity-v1", "freshness_days": 10},
+        "unused_candidates": {"slot_ref": "ref:slot-svelte-unused-candidates-v1", "language": "svelte", "platform": "webview", "feature_refs": ["ref:feature-frontend-webview"], "status": "measured", "metric_version": "svelte-knip-raw-v1", "scope_version": "svelte-knip-unqualified-v1", "freshness_days": 10},
+        "coverage": {"slot_ref": "ref:slot-svelte-coverage-v1", "language": "svelte", "platform": "webview", "feature_refs": ["ref:feature-frontend-webview"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "svelte-lines-v1", "scope_version": "svelte-execution-coverage-v1", "freshness_days": 10},
+        "ci_first_attempt": {"slot_ref": "ref:slot-svelte-ci-first-attempt-v1", "language": "svelte", "platform": "webview", "feature_refs": ["ref:feature-frontend-webview"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "svelte-ci-v1", "scope_version": "svelte-ci-not-applicable-v1", "freshness_days": 2},
+        "confirmed_regressions": {"slot_ref": "ref:slot-svelte-confirmed-regressions-v1", "language": "svelte", "platform": "webview", "feature_refs": ["ref:feature-frontend-webview"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "svelte-release-v1", "scope_version": "svelte-release-not-applicable-v1", "freshness_days": 10}
+      }
+    },
+    {
+      "name": "swift-coreml",
+      "slots": {
+        "complex_functions": {"slot_ref": "ref:slot-swift-complex-functions-v1", "language": "swift", "platform": "macos", "feature_refs": ["ref:feature-swift-coreml-host"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "swift-complexity-v1", "scope_version": "swift-function-complexity-v1", "freshness_days": 10},
+        "unused_candidates": {"slot_ref": "ref:slot-swift-unused-candidates-v1", "language": "swift", "platform": "macos", "feature_refs": ["ref:feature-swift-coreml-host"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "swift-unused-v1", "scope_version": "swift-unused-candidates-v1", "freshness_days": 10},
+        "coverage": {"slot_ref": "ref:slot-swift-coverage-v1", "language": "swift", "platform": "macos", "feature_refs": ["ref:feature-swift-coreml-host"], "status": "measured", "metric_version": "swift-lines-v1", "scope_version": "swift-coreml-source-only-v1", "freshness_days": 10},
+        "ci_first_attempt": {"slot_ref": "ref:slot-swift-ci-first-attempt-v1", "language": "swift", "platform": "macos", "feature_refs": ["ref:feature-swift-coreml-host"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "swift-ci-v1", "scope_version": "swift-ci-not-applicable-v1", "freshness_days": 2},
+        "confirmed_regressions": {"slot_ref": "ref:slot-swift-confirmed-regressions-v1", "language": "swift", "platform": "macos", "feature_refs": ["ref:feature-swift-coreml-host"], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "swift-release-v1", "scope_version": "swift-release-not-applicable-v1", "freshness_days": 10}
+      }
+    },
+    {
+      "name": "ci-release",
+      "slots": {
+        "complex_functions": {"slot_ref": "ref:slot-ci-complex-functions-v1", "language": "github-actions", "platform": "github-hosted", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "ci-complexity-v1", "scope_version": "ci-complexity-not-applicable-v1", "freshness_days": 10},
+        "unused_candidates": {"slot_ref": "ref:slot-ci-unused-candidates-v1", "language": "github-actions", "platform": "github-hosted", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "ci-unused-v1", "scope_version": "ci-unused-not-applicable-v1", "freshness_days": 10},
+        "coverage": {"slot_ref": "ref:slot-ci-coverage-v1", "language": "github-actions", "platform": "github-hosted", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "ci-coverage-v1", "scope_version": "ci-coverage-not-applicable-v1", "freshness_days": 10},
+        "ci_first_attempt": {"slot_ref": "ref:slot-ci-main-push-first-attempt-v1", "language": "github-actions", "platform": "github-hosted", "feature_refs": [], "status": "unknown", "reason": "not-collected", "metric_version": "gha-first-attempt-v1", "scope_version": "main-push-ci-v1", "freshness_days": 2},
+        "confirmed_regressions": {"slot_ref": "ref:slot-release-regressions-v1", "language": "repository", "platform": "github", "feature_refs": [], "status": "unknown", "reason": "incomplete-input", "metric_version": "release-regressions-v1", "scope_version": "release-review-survey-v1", "freshness_days": 10}
+      }
+    }
+  ]
+}

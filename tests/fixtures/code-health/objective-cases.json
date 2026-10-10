@@ -1,0 +1,935 @@
+{
+  "cases": [
+    {
+      "name": "measured-zero-is-not-unknown",
+      "expected": "valid",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "status"
+          ],
+          "value": "unknown"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "payload"
+          ],
+          "value": null
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "reason"
+          ],
+          "value": "not-collected"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "prior_snapshot_ref"
+          ],
+          "value": "ref:objective-prior"
+        }
+      ]
+    },
+    {
+      "name": "wrong-metric-payload",
+      "expected": "schema",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "coverage",
+            "payload"
+          ],
+          "value": {
+            "graph_status": "qualified",
+            "candidate_count": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "unknown-field",
+      "expected": "schema",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "unreviewed_note"
+          ],
+          "value": "free-form content is outside this contract"
+        }
+      ]
+    },
+    {
+      "name": "nonmeasured-cannot-contain-zero-payload",
+      "expected": "schema",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates"
+          ],
+          "value": {
+            "status": "unknown",
+            "payload": 0,
+            "reason": "not-collected",
+            "slot_ref": "ref:slot-unused-candidates"
+          }
+        }
+      ]
+    },
+    {
+      "name": "bad-utc-date",
+      "expected": "schema",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "observed_at"
+          ],
+          "value": "2026-13-40T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "complexity-numerator-exceeds-population",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "complex_functions",
+            "payload",
+            "above_threshold_functions"
+          ],
+          "value": 13
+        }
+      ]
+    },
+    {
+      "name": "unused-candidate-partition-does-not-reconcile",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "payload",
+            "candidate_count"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    {
+      "name": "coverage-exceeds-population",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "coverage",
+            "payload",
+            "covered"
+          ],
+          "value": 101
+        }
+      ]
+    },
+    {
+      "name": "covered-items-require-emitted-source-files",
+      "expected": "semantic",
+      "operations": [
+        { "op": "set", "path": ["metrics", "coverage", "payload", "emitted_source_files"], "value": 0 }
+      ]
+    },
+    {
+      "name": "complete-declared-inventory-can-record-zero-coverage-with-no-emitted-files",
+      "expected": "valid",
+      "operations": [
+        { "op": "set", "path": ["metrics", "coverage", "payload", "covered"], "value": 0 },
+        { "op": "set", "path": ["metrics", "coverage", "payload", "emitted_source_files"], "value": 0 }
+      ]
+    },
+    {
+      "name": "exported-only-cannot-claim-eligible-items-without-emitted-files",
+      "expected": "semantic",
+      "operations": [
+        { "op": "set", "path": ["metrics", "coverage", "payload", "source_inventory"], "value": "exported-only" },
+        { "op": "set", "path": ["metrics", "coverage", "payload", "emitted_source_files"], "value": 0 }
+      ]
+    },
+    {
+      "name": "mixed-coverage-profiles",
+      "expected": "schema",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "coverage",
+            "payload",
+            "profile_refs"
+          ],
+          "value": [
+            "ref:coverage-profile-clean",
+            "ref:coverage-profile-other"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "missing-expected-ci-job",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "splice",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            0,
+            "jobs"
+          ],
+          "index": 1
+        }
+      ]
+    },
+    {
+      "name": "duplicate-ci-rerun-record",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "append-from",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs"
+          ],
+          "source_path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "infra-failure-and-cancellation-are-separated",
+      "expected": "valid",
+      "operations": []
+    },
+    {
+      "name": "ci-window-must-be-nonempty",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "window_end"
+          ],
+          "value": "2026-10-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "regression-first-observed-outside-window",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "regressions",
+            0,
+            "first_observed_at"
+          ],
+          "value": "2026-10-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "duplicate-issue-release-regression-pair",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "append-from",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "regressions"
+          ],
+          "source_path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "regressions",
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "regression-must-match-complete-release",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "regressions",
+            0,
+            "release_ref"
+          ],
+          "value": "ref:release-unobserved"
+        }
+      ]
+    },
+    {
+      "name": "complete-zero-release-cohort-is-measured-sparse-zero",
+      "expected": "valid",
+      "operations": [
+        { "op": "set", "path": ["metrics", "confirmed_regressions", "payload", "eligible_releases"], "value": 0 },
+        { "op": "set", "path": ["metrics", "confirmed_regressions", "payload", "releases"], "value": [] },
+        { "op": "set", "path": ["metrics", "confirmed_regressions", "payload", "regressions"], "value": [] }
+      ]
+    },
+    {
+      "name": "regressions-with-no-release-remain-invalid",
+      "expected": "semantic",
+      "operations": [
+        { "op": "set", "path": ["metrics", "confirmed_regressions", "payload", "eligible_releases"], "value": 0 },
+        { "op": "set", "path": ["metrics", "confirmed_regressions", "payload", "releases"], "value": [] }
+      ]
+    },
+    {
+      "name": "validated-candidates-require-owner-evidence",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "payload",
+            "candidate_count"
+          ],
+          "value": 1
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "payload",
+            "validated_count"
+          ],
+          "value": 1
+        }
+      ]
+    },
+    {
+      "name": "validated-candidate-owner-evidence-is-retained",
+      "expected": "valid",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "payload",
+            "candidate_count"
+          ],
+          "value": 1
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "payload",
+            "validated_count"
+          ],
+          "value": 1
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "payload",
+            "owner_validation_refs"
+          ],
+          "value": [
+            "ref:owner-validation-evidence"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "qualified-graph-requires-qualification-evidence",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "payload",
+            "graph_status"
+          ],
+          "value": "qualified"
+        }
+      ]
+    },
+    {
+      "name": "qualified-graph-with-source-reference-is-valid",
+      "expected": "valid",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "payload",
+            "graph_status"
+          ],
+          "value": "qualified"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates",
+            "payload",
+            "graph_qualification_ref"
+          ],
+          "value": "ref:graph-qualification-evidence"
+        }
+      ]
+    },
+    {
+      "name": "release-window-must-be-exactly-fourteen-days",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "releases",
+            0,
+            "window_end"
+          ],
+          "value": "2026-08-14T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "release-window-must-be-closed-by-as-of",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "releases",
+            1,
+            "window_end"
+          ],
+          "value": "2026-10-10T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "release-publication-must-match-cohort-policy",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "releases",
+            0,
+            "published_at"
+          ],
+          "value": "2026-07-31T00:00:00Z"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "releases",
+            0,
+            "window_end"
+          ],
+          "value": "2026-08-14T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "regression-first-observed-at-release-window-end-is-outside",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "regressions",
+            0,
+            "first_observed_at"
+          ],
+          "value": "2026-08-15T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "regression-as-of-must-match-snapshot-observed-at",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "as_of"
+          ],
+          "value": "2026-10-08T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "failure-precedes-unknown-and-success",
+      "expected": "valid",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            1,
+            "jobs",
+            0,
+            "conclusion"
+          ],
+          "value": "unknown"
+        }
+      ]
+    },
+    {
+      "name": "all-excluded-ci-outcomes-have-no-fraction",
+      "expected": "valid",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            0,
+            "jobs",
+            1,
+            "conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            0,
+            "overall_conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            1,
+            "jobs",
+            1,
+            "conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            1,
+            "overall_conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            2,
+            "jobs",
+            1,
+            "conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            2,
+            "overall_conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            3,
+            "jobs",
+            1,
+            "conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            3,
+            "overall_conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            4,
+            "jobs",
+            1,
+            "conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            4,
+            "overall_conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            5,
+            "jobs",
+            1,
+            "conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            5,
+            "overall_conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            6,
+            "jobs",
+            1,
+            "conclusion"
+          ],
+          "value": "cancelled"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            6,
+            "overall_conclusion"
+          ],
+          "value": "cancelled"
+        }
+      ]
+    },
+    {
+      "name": "regression-needs-supporting-evidence-and-maintainer-confirmation",
+      "expected": "schema",
+      "operations": [
+        {
+          "op": "delete",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "regressions",
+            0,
+            "supporting_evidence_ref"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "failure-precedes-cancelled-dependent-job",
+      "expected": "valid",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            1,
+            "jobs",
+            0,
+            "conclusion"
+          ],
+          "value": "cancelled"
+        }
+      ]
+    },
+    {
+      "name": "infra-failure-precedes-unknown-dependent-job",
+      "expected": "valid",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "ci_first_attempt",
+            "payload",
+            "runs",
+            2,
+            "jobs",
+            0,
+            "conclusion"
+          ],
+          "value": "unknown"
+        }
+      ]
+    },
+    {
+      "name": "nonmeasured-slot-with-no-source-or-population",
+      "expected": "valid",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "unused_candidates"
+          ],
+          "value": {
+            "observed_at": "2026-10-09T10:00:00Z",
+            "source": null,
+            "population": null,
+            "unit": "candidates",
+            "status": "unknown",
+            "payload": null,
+            "reason": "not-collected",
+            "slot_ref": "ref:slot-unused-candidates"
+          }
+        }
+      ]
+    },
+    {
+      "name": "measured-slot-rejects-null-source",
+      "expected": "schema",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "coverage",
+            "source"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "measured-slot-rejects-null-population",
+      "expected": "schema",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "coverage",
+            "population"
+          ],
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "metric-observation-cannot-follow-envelope",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "coverage",
+            "observed_at"
+          ],
+          "value": "2026-10-10T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "coverage-unit-must-match-measure",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "coverage",
+            "unit"
+          ],
+          "value": "branches"
+        }
+      ]
+    },
+    {
+      "name": "regression-issue-counted-only-once-across-releases",
+      "expected": "semantic",
+      "operations": [
+        {
+          "op": "append-from",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "regressions"
+          ],
+          "source_path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "regressions",
+            0
+          ]
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "regressions",
+            3,
+            "release_ref"
+          ],
+          "value": "ref:release-2"
+        },
+        {
+          "op": "set",
+          "path": [
+            "metrics",
+            "confirmed_regressions",
+            "payload",
+            "regressions",
+            3,
+            "first_observed_at"
+          ],
+          "value": "2026-08-20T12:00:00Z"
+        }
+      ]
+    }
+  ]
+}

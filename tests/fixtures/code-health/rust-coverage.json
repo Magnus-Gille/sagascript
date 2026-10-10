@@ -1,0 +1,28 @@
+{
+  "data": [
+    {
+      "files": [
+        {
+          "filename": "/workspace/sagascript/src-tauri/crates/sagascript-core/src/covered.rs",
+          "summary": {"lines": {"count": 12, "covered": 7}}
+        },
+        {
+          "filename": "/workspace/sagascript/src-tauri/crates/sagascript-core/src/zero.rs",
+          "summary": {"lines": {"count": 4, "covered": 0}}
+        },
+        {
+          "filename": "/workspace/sagascript/src-tauri/crates/sagascript-core/src/generated/BuildInfo.rs",
+          "summary": {"lines": {"count": 2, "covered": 2}}
+        },
+        {
+          "filename": "/workspace/sagascript/src-tauri/crates/other/src/outside.rs",
+          "summary": {"lines": {"count": 9, "covered": 9}}
+        },
+        {
+          "filename": "/private/runner/secret.rs",
+          "summary": {"lines": {"count": 8, "covered": 8}}
+        }
+      ]
+    }
+  ]
+}

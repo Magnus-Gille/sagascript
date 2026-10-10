@@ -1,0 +1,39 @@
+{
+  "name": "src-tauri/crates/sagascript-cli/src/transcribe.rs",
+  "kind": "unit",
+  "spaces": [
+    {
+      "name": "outer",
+      "kind": "function",
+      "start_line": 10,
+      "end_line": 30,
+      "metrics": {"cyclomatic": {"sum": 15}},
+      "spaces": [
+        {
+          "name": "nested",
+          "kind": "function",
+          "start_line": 18,
+          "end_line": 20,
+          "metrics": {"cyclomatic": {"sum": 4}},
+          "spaces": []
+        }
+      ]
+    },
+    {
+      "name": "exact_threshold",
+      "kind": "function",
+      "start_line": 35,
+      "end_line": 38,
+      "metrics": {"cyclomatic": {"sum": 10}},
+      "spaces": []
+    },
+    {
+      "name": "<anonymous>",
+      "kind": "function",
+      "start_line": 42,
+      "end_line": 43,
+      "metrics": {"cyclomatic": {"sum": 11}},
+      "spaces": []
+    }
+  ]
+}

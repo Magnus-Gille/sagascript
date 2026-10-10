@@ -1,0 +1,55 @@
+{
+  "source": {
+    "reference": "code-health-contract issue #211",
+    "frozen_commit": "7df005ce952a52816597d9888da977d689a631fd",
+    "merged_commit": "58428191034d9ac5e0c908346840c0219446599f",
+    "frozen_tree": "768d661f090a9db5e96e2e1b8f2975a9490936bc"
+  },
+  "files": [
+    {
+      "path": "docs/code-health-contract.md",
+      "source_git_blob": "3772b834b297fb8a922ec3142ae00abd14e3fa07",
+      "sha256": "7bd17d7161fd79926170f36b6a0c7ce09a8b1f5ad259a270c646abe2b78e8e38"
+    },
+    {
+      "path": "docs/code-health-objective-v1.schema.json",
+      "source_git_blob": "2341049d20fe9a09f28489fcb4bea8d5087f3da3",
+      "sha256": "a483c9207e2c973061f69b952e1cbc6529e4015bdeb55f5d616f156ad1fc6cae"
+    },
+    {
+      "path": "scripts/lib/code-health-schema.mjs",
+      "source_git_blob": "225af390d3e4c5ac62615ef0dc56104f9f02a34a",
+      "sha256": "0bf6801120221ea0a21b64b8a0d15efe96e6f51a8858f4be042878f36885eb59"
+    },
+    {
+      "path": "scripts/lib/code-health-objective.mjs",
+      "source_git_blob": "f9308750aad0f3c02834b003a9a70cf7be7f5b99",
+      "sha256": "17014fa874d80f03e9e6c5cb01cf3275439abda5f33aa13d4b5a34ab7645b465"
+    },
+    {
+      "path": "scripts/lib/code-health-policy.mjs",
+      "source_git_blob": "e7870edaaf4f8f6bb1bf610c2d8b9b474534cb74",
+      "sha256": "f97400ab0f8c2917f9da03746afccf1d0ce8bd2b4783575aebcc15a31e227f53"
+    },
+    {
+      "path": "tests/fixtures/code-health/objective-positive.json",
+      "source_git_blob": "583aadd39501899e7cc6474d05d41c4ea9cff26f",
+      "sha256": "e48269b272f463be5d3aebd408ac31f3b70902f953c789c97845f4c2cc72510b"
+    },
+    {
+      "path": "tests/fixtures/code-health/objective-cases.json",
+      "source_git_blob": "f63a0d8cac615873a6f17aba36a6a4c7862cc38f",
+      "sha256": "c2669b59d7a922debbd0a3857bf58f0ea08b13147131acbccafce7e4d6995b93"
+    },
+    {
+      "path": "tests/scripts/validate-code-health-objective.mjs",
+      "source_git_blob": "0a91a7915281d3772370f6d0228d82bf83ec1c81",
+      "sha256": "fd363f2727a22091872274335c0b1cf9308a1d288590f0fef63c951bb70ac329"
+    },
+    {
+      "path": "tests/scripts/test-code-health-policy.mjs",
+      "source_git_blob": "a4152a80e5e37a411467d637a7f855d054e13e3b",
+      "sha256": "b301b6e81dba3fb26c2afeee376a60a3834ade3db3e8b0659ae284299e90d8e6"
+    }
+  ]
+}
