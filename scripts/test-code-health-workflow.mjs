@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -22,7 +22,7 @@ import {
 import { createObjective } from "./lib/code-health-producer.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const workflow = readFileSync(join(root, ".github/workflows/code-health.yml"), "utf8");
+const workflow = readFileSync(join(root, ".github/workflows/code-health.yml"), "utf8").replaceAll("\r\n", "\n");
 const collectionDocs = readFileSync(join(root, "docs/code-health-collection.md"), "utf8");
 const producerSource = readFileSync(join(root, "scripts/code-health-produce.mjs"), "utf8");
 const config = JSON.parse(readFileSync(join(root, "docs/code-health-producer-v1.json"), "utf8"));
@@ -162,21 +162,21 @@ test("Swift runs coverage tests before querying the generated codecov report", (
 });
 
 test("Swift coverage filters external and generated exports while retaining source-only paths", () => {
-  const packageRoot = "/tmp/swift-task/swift-package";
-  const sourcePackageRoot = "/repo/src-tauri/engine-host/coreml";
+  const packageRoot = resolve(join("/tmp/swift-task", "swift-package"));
+  const sourcePackageRoot = resolve(join("/repo", "src-tauri/engine-host/coreml"));
   const report = {
     data: [{ files: [
-      { filename: `${packageRoot}/Sources/EngineHostCore/Engine.swift`, summary: { lines: { count: 10, covered: 7 } } },
-      { filename: `${packageRoot}/Sources/EngineHostCore/BuildInfo.swift`, summary: { lines: { count: 4, covered: 4 } } },
-      { filename: `${packageRoot}/Tests/EngineHostCoreTests/ContextBiasingTests.swift`, summary: { lines: { count: 20, covered: 20 } } },
-      { filename: `${packageRoot}/.build/out/Intermediates.noindex/test_entry_point.swift`, summary: { lines: { count: 5, covered: 5 } } },
+      { filename: join(packageRoot, "Sources/EngineHostCore/Engine.swift"), summary: { lines: { count: 10, covered: 7 } } },
+      { filename: join(packageRoot, "Sources/EngineHostCore/BuildInfo.swift"), summary: { lines: { count: 4, covered: 4 } } },
+      { filename: join(packageRoot, "Tests/EngineHostCoreTests/ContextBiasingTests.swift"), summary: { lines: { count: 20, covered: 20 } } },
+      { filename: join(packageRoot, ".build/out/Intermediates.noindex/test_entry_point.swift"), summary: { lines: { count: 5, covered: 5 } } },
       { filename: "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/Swift.swiftmodule/Swift.swiftinterface", summary: { lines: { count: 100, covered: 100 } } },
     ] }],
   };
 
   const filtered = filterSwiftCoverageReport(report, { packageRoot, sourcePackageRoot });
   assert.deepEqual(filtered.report.data[0].files.map(file => file.filename), [
-    `${sourcePackageRoot}/Sources/EngineHostCore/Engine.swift`,
+    join(sourcePackageRoot, "Sources/EngineHostCore/Engine.swift"),
   ]);
   assert.deepEqual(filtered.excludedPaths, [
     { path: "Sources/EngineHostCore/BuildInfo.swift", reason: "generated-build-info" },
