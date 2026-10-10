@@ -9,6 +9,7 @@ import {
   createMetadataTransport,
   firstAttemptRunContext,
   KNIP_ARGS,
+  newLocalCollectionRunRef,
   paginate,
   parseProducerOptions,
   filterSwiftCoverageReport,
@@ -78,6 +79,13 @@ test("static GitHub collection binds exact repo, checkout, run and attempt witho
   assert.throws(() => workflowRunContext({ ...env, GITHUB_REPOSITORY: "someone/else" }, commitSha, "/checkout/sagascript"), /repository identity/);
   assert.throws(() => workflowRunContext({ ...env, GITHUB_SHA: "c".repeat(40) }, commitSha, "/checkout/sagascript"), /commit identity/);
   assert.throws(() => workflowRunContext({ ...env, GITHUB_WORKSPACE: "/checkout/other" }, commitSha, "/checkout/sagascript"), /workspace/);
+});
+
+test("local collections receive a unique stable run reference", () => {
+  const first = newLocalCollectionRunRef();
+  const second = newLocalCollectionRunRef();
+  assert.match(first, /^ref:collection-run-[0-9a-f-]+-attempt-1$/);
+  assert.notEqual(first, second);
 });
 
 test("producer rejects modified, staged, and untracked checkout state", () => {

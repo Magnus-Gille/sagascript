@@ -498,8 +498,9 @@ function sourceFor(slot, context, observation) {
     platform: slot.platform,
     feature_refs: slot.feature_refs,
     scope_version: slot.scope_version,
-    included_refs: observation.included_refs,
-    excluded_refs: observation.excluded_refs,
+    tool: observation.tool,
+    command: observation.command,
+    inventory_policy: observation.scope_policy,
   }));
   return {
     run_ref: context.runRef,
@@ -545,7 +546,8 @@ function createMetric(name, slot, context, measurement) {
     };
   }
   if (!measurement.payload || !measurement.tool || !Array.isArray(measurement.included_refs)
-    || !Array.isArray(measurement.excluded_refs) || typeof measurement.command !== "string") {
+    || !Array.isArray(measurement.excluded_refs) || typeof measurement.command !== "string"
+    || !measurement.scope_policy || typeof measurement.scope_policy !== "object" || Array.isArray(measurement.scope_policy)) {
     throw new TypeError("measured metric is missing source or population provenance");
   }
   const payload = structuredClone(measurement.payload);
@@ -605,7 +607,13 @@ export function createObjective(scope, context, measurements = {}) {
   }
   return {
     contract_version: "1.0",
-    snapshot_id: "ref:sagascript-" + scope.name + "-" + context.commitSha.slice(0, 12),
+    snapshot_id: "ref:sagascript-" + sha256(canonical({
+      repository: { owner: "Magnus-Gille", name: "sagascript" },
+      commit: context.commitSha,
+      run_ref: context.runRef,
+      attempt: context.attempt,
+      scope: scope.name,
+    })),
     supersedes_ref: null,
     correction_ref: null,
     repository: { owner: "Magnus-Gille", name: "sagascript" },

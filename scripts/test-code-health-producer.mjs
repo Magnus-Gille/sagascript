@@ -5,6 +5,7 @@ import {
   assembleReportBundle,
   assertCompletePageCount,
   buildCiFirstAttemptPayload,
+  createObjective,
   parseWorkflowJobIds,
   normalizeCiCohort,
   parseExportedCoverage,
@@ -12,7 +13,8 @@ import {
   parseRustComplexity,
   wholeSecondUtc,
 } from "./lib/code-health-producer.mjs";
-import { validateObjective } from "./lib/code-health-objective.mjs";
+import { validateObjective, validateObjectiveSeries } from "./lib/code-health-objective.mjs";
+import { seriesKey } from "./lib/code-health-policy.mjs";
 import { summarizeCohorts } from "./ci-cohort-timings.mjs";
 
 const readJson = path => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
@@ -313,6 +315,69 @@ test("contract scope registry creates six exact-schema snapshots with distinct s
   for (const snapshot of snapshots) assert.equal(validateObjective(schema, snapshot).valid, true);
 });
 
+test("snapshot identities distinguish collections and attempts while replaying the same artifact", () => {
+  const scope = config.scopes.find(item => item.name === "rust-core");
+  const context = (runRef, attempt) => ({
+    commitSha: commit,
+    observedAt,
+    runRef,
+    attempt,
+  });
+  const first = createObjective(scope, context("ref:github-run-7021-attempt-1", 1));
+  const replay = createObjective(scope, context("ref:github-run-7021-attempt-1", 1));
+  const rerun = createObjective(scope, context("ref:github-run-7021-attempt-2", 2));
+  const otherRun = createObjective(scope, context("ref:github-run-7022-attempt-1", 1));
+  const sameCommitPrefix = createObjective(scope, {
+    ...context("ref:github-run-7021-attempt-1", 1),
+    commitSha: "a".repeat(12) + "b".repeat(28),
+  });
+
+  assert.equal(first.snapshot_id, replay.snapshot_id);
+  assert.notEqual(first.snapshot_id, rerun.snapshot_id);
+  assert.notEqual(first.snapshot_id, otherRun.snapshot_id);
+  assert.notEqual(first.snapshot_id, sameCommitPrefix.snapshot_id);
+  const admission = validateObjectiveSeries(schema, [first, replay, rerun, otherRun, sameCommitPrefix]);
+  assert.equal(admission.valid, true, admission.errors.join("; "));
+  assert.equal(admission.replayCount, 1);
+});
+
+test("scope digest tracks registered policy rather than changing population membership", () => {
+  const scope = config.scopes.find(item => item.name === "rust-core");
+  const context = { commitSha: commit, observedAt, runRef, attempt: 1 };
+  const scopePolicy = {
+    inventory: "configured-rust-source-files-v1",
+    included_paths: ["src-tauri/crates/sagascript-core/src/download.rs"],
+    excluded_paths: ["generated/**"],
+    parser: config.complexity.function_inventory,
+  };
+  const objectiveFor = (includedRefs, policy = scopePolicy) => createObjective(scope, context, {
+    complex_functions: {
+      status: "measured",
+      payload: {
+        algorithm: config.complexity.algorithm,
+        threshold: config.complexity.threshold,
+        eligible_functions: includedRefs.length,
+        above_threshold_functions: 0,
+      },
+      tool: { name: "rust-code-analysis-cli", version: "0.0.25" },
+      command: "rust-code-analysis-cli -p <selected-repository-path> -m -F -O json --pr",
+      scope_policy: policy,
+      included_refs: includedRefs,
+      excluded_refs: [],
+    },
+  });
+  const first = objectiveFor(["ref:function-a"]);
+  const changedPopulation = objectiveFor(["ref:function-a", "ref:function-b"]);
+  const changedPolicy = objectiveFor(["ref:function-a"], {
+    ...scopePolicy,
+    excluded_paths: ["generated/**", "vendor/**"],
+  });
+  assert.equal(seriesKey(schema, first, "complex_functions"), seriesKey(schema, changedPopulation, "complex_functions"));
+  assert.notEqual(seriesKey(schema, first, "complex_functions"), seriesKey(schema, changedPolicy, "complex_functions"));
+  assert.deepEqual(first.metrics.complex_functions.population.included_refs, ["ref:function-a"]);
+  assert.deepEqual(changedPopulation.metrics.complex_functions.population.included_refs, ["ref:function-a", "ref:function-b"]);
+});
+
 test("report transport uses the root manifest shape and rejects unresolved population evidence", () => {
   const noMeasures = Object.fromEntries(config.scopes.map(scope => [scope.name, {}]));
   const bundle = assembleReportBundle({
@@ -337,6 +402,7 @@ test("report transport uses the root manifest shape and rejects unresolved popul
           payload: { algorithm: "cyclomatic-complexity-v1", threshold: 10, eligible_functions: 2, above_threshold_functions: 1 },
           tool: { name: "rust-code-analysis-cli", version: "0.0.25" },
           command: "fixture",
+          scope_policy: { inventory: "fixture-policy-v1" },
           included_refs: ["ref:missing-inventory"],
           excluded_refs: [],
         },

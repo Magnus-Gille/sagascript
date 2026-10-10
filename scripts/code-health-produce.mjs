@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -236,6 +236,13 @@ function collectRustComplexity(scopeName, files, executable, actualVersion) {
       excluded_refs: [],
       tool: { name: "rust-code-analysis-cli", version: actualVersion },
       command: "rust-code-analysis-cli -p <selected-repository-path> -m -F -O json --pr",
+      scope_policy: {
+        configured_paths: config.complexity.scopes[scopeName],
+        parser: config.complexity.function_inventory,
+        algorithm: config.complexity.algorithm,
+        threshold: config.complexity.threshold,
+        comparison: config.complexity.comparison,
+      },
     };
   });
   if (result.status === "measured") setMeasured(scopeName, "complex_functions", result.value);
@@ -304,6 +311,11 @@ function collectRustCoverage(tempRoot, cargoVersion, llvmCovVersion, rustVersion
       profile_ref: profileRef,
       tool: { name: "cargo-llvm-cov", version: llvmCovVersion },
       command: `cargo ${useNamedToolchain ? "+1.93.1 " : ""}llvm-cov -p sagascript-core --no-default-features --lib --tests --json --output-path <task-temporary-report>`,
+      scope_policy: {
+        ...config.coverage.rust,
+        excluded_paths: ["src-tauri/crates/sagascript-core/src/generated/BuildInfo.rs"],
+        inventory_construction: "tracked paths under registered roots; exported-only coverage",
+      },
     };
   });
   if (result.status === "measured") setMeasured(scopeName, "coverage", result.value);
@@ -464,6 +476,11 @@ export function collectSwiftCoverage(tempRoot) {
       profile_ref: profileRef,
       tool: { name: "swift", version: swiftVersion },
       command: "swift test --enable-code-coverage --jobs 2 --scratch-path <task-temporary-directory>; swift test --show-codecov-path --scratch-path <task-temporary-directory>",
+      scope_policy: {
+        ...config.coverage.swift,
+        shared_test_fixture: "src-tauri/engine-host/test-vectors/context-biasing.json",
+        inventory_construction: "tracked Swift sources under the registered source root, excluding configured generated files",
+      },
     };
   });
   if (result.status === "measured") setMeasured("swift-coreml", "coverage", result.value);
@@ -515,6 +532,11 @@ function collectKnip(tempRoot, knipPath) {
         excluded_refs: [],
         tool: { name: "knip", version: versionResult.value.version },
         command: "knip --reporter json --no-progress --no-config-hints --no-exit-code",
+        scope_policy: {
+          candidate_paths: config.unused_candidates.candidate_paths[language],
+          graph_status: config.unused_candidates.graph_status,
+          inventory_construction: "tracked source files filtered by registered language paths",
+        },
       };
     });
     if (parsed.status === "measured") setMeasured(scopeName, "unused_candidates", parsed.value);
@@ -781,6 +803,15 @@ function collectCi(observedAt) {
       tool: { name: "GitHub Actions REST API", version: "2022-11-28" },
       command: "GET /repos/{owner}/{repo}/actions/workflows/ci.yml/runs and attempt-1 jobs with pagination",
       workflowRef,
+      scope_policy: {
+        workflow: config.ci.workflow,
+        branch: config.ci.branch,
+        event: config.ci.event,
+        window_days: config.ci.window_days,
+        expected_job_ids: config.ci.expected_job_ids,
+        limits: config.ci.limits,
+        attempt_policy: config.ci.attempt_policy,
+      },
     };
   });
   if (result.status === "measured" && result.value.unavailable) {
@@ -834,6 +865,10 @@ export function workflowRunContext(env, commitSha, repoRoot) {
   return { runId, attempt, runRef: `ref:github-run-${runId}-attempt-${attempt}` };
 }
 
+export function newLocalCollectionRunRef() {
+  return `ref:collection-run-${randomUUID()}-attempt-1`;
+}
+
 function validateCiRunContext(commitSha) {
   if (!process.env.GITHUB_ACTIONS) throw new Error("CI collection is only supported inside the standalone GitHub Actions workflow");
   const context = workflowRunContext(process.env, commitSha, REPO_ROOT);
@@ -859,7 +894,7 @@ function main() {
   const outputDir = options.outputDir;
   const ciOnly = options.mode === "ci-only";
   const includeCi = ciOnly || options.includeCi;
-  const localRunRef = `ref:collection-run-${commitSha.slice(0, 12)}-attempt-1`;
+  const localRunRef = newLocalCollectionRunRef();
   let runRef = workflowContext?.runRef ?? localRunRef;
   let attempt = workflowContext?.attempt ?? 1;
   try {
