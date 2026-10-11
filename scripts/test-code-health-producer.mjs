@@ -45,6 +45,30 @@ test("Swift compiler diagnostics keep the error message without leaking source p
   assert.doesNotMatch(diagnostic, /CoreMLTests\.swift|\/Users\/magnus|import Testing/);
 });
 
+test("Rust failure diagnostics retain ANSI-colored test names and PID panic identities safely", () => {
+  const red = "\u001b[31m";
+  const reset = "\u001b[0m";
+  const token = `ghp_${"a".repeat(32)}`;
+  const diagnostic = safeProducerFailureDiagnostic(
+    [
+      `${red}test core::parser::rejects_bad_input ... FAILED${reset}`,
+      "",
+      `${red}failures:${reset}`,
+      "",
+      `${red}---- core::parser::rejects_bad_input stdout ----${reset}`,
+      `${red}thread 'core::parser::rejects_bad_input' (38122136812) panicked at /Users/magnus/repos/sagascript/src-tauri/src/lib.rs:42:7: ${token}${reset}`,
+      "",
+      `${red}test result: FAILED. 0 passed; 1 failed${reset}`,
+    ].join("\n"),
+    `${red}error: token ${token} at /Users/magnus/private/credential.txt${reset}`,
+  );
+  assert.match(diagnostic, /failed-test: core::parser::rejects_bad_input/);
+  assert.match(diagnostic, /test-failed: core::parser::rejects_bad_input/);
+  assert.match(diagnostic, /test result: FAILED/);
+  assert.match(diagnostic, /<redacted-token>/);
+  assert.doesNotMatch(diagnostic, /\u001b|38122136812|ghp_[a-zA-Z0-9_]{20,}|\/Users\/magnus/);
+});
+
 test("Rust complexity counts function-body complexity once and uses a strict threshold", () => {
   const result = parseRustComplexity([{
     path: "src-tauri/crates/sagascript-cli/src/transcribe.rs",

@@ -101,23 +101,25 @@ export function safeFailureDiagnostic(stdout, stderr) {
   for (const [stream, value] of [["stdout", stdout], ["stderr", stderr]]) {
     if (typeof value !== "string") continue;
     for (const rawLine of value.split(/\r?\n/)) {
-      const line = rawLine.trim();
+      const line = rawLine.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").trim();
       if (!line) {
         collectingFailures = false;
         continue;
       }
-      const panic = /^thread '([^']+)' panicked\b/.exec(line);
+      const panic = /^thread '([^']+)'(?: \(\d+\))? panicked\b/.exec(line);
       const section = /^---- (.+?) (?:stdout|stderr) ----$/.exec(line);
+      const rustFailedTest = /^test (.+?) \.\.\. FAILED$/.exec(line);
       const swiftFailure = /^(?:✘|X) Test (.+?)(?: recorded an issue| failed)/.exec(line);
       const swiftDiagnostic = /^.+:\d+:\d+(?::\d+)?:\s*error:\s*(.+)$/i.exec(line);
-      if (panic) lines.push(`${stream} test-failed: ${panic[1]}`);
-      else if (section) lines.push(`${stream} test-failed: ${section[1]}`);
-      else if (swiftFailure) lines.push(`${stream} test-failed: ${swiftFailure[1]}`);
+      if (panic) lines.push(`${stream} test-failed: ${safeDiagnostic(panic[1]).slice(0, 400)}`);
+      else if (section) lines.push(`${stream} test-failed: ${safeDiagnostic(section[1]).slice(0, 400)}`);
+      else if (rustFailedTest) lines.push(`${stream} failed-test: ${safeDiagnostic(rustFailedTest[1]).slice(0, 400)}`);
+      else if (swiftFailure) lines.push(`${stream} test-failed: ${safeDiagnostic(swiftFailure[1]).slice(0, 400)}`);
       else if (/^failures:$/.test(line)) {
         lines.push(`${stream} failures:`);
         collectingFailures = true;
       } else if (collectingFailures && /^(?:[A-Za-z0-9_.-]+::)+[A-Za-z0-9_.-]+$/.test(line)) {
-        lines.push(`${stream} failed-test: ${line}`);
+        lines.push(`${stream} failed-test: ${safeDiagnostic(line).slice(0, 400)}`);
       } else if (/^(?:test result: FAILED|Executed \d+ tests?, with \d+ failures?)/i.test(line)) {
         lines.push(`${stream} ${line}`);
       } else if (swiftDiagnostic) {
