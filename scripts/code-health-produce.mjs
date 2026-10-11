@@ -106,6 +106,7 @@ export function safeFailureDiagnostic(stdout, stderr) {
       const panic = /^thread '([^']+)' panicked\b/.exec(line);
       const section = /^---- (.+?) (?:stdout|stderr) ----$/.exec(line);
       const swiftFailure = /^(?:✘|X) Test (.+?)(?: recorded an issue| failed)/.exec(line);
+      const swiftDiagnostic = /^.+:\d+:\d+(?::\d+)?:\s*error:\s*(.+)$/i.exec(line);
       if (panic) lines.push(`${stream} test-failed: ${panic[1]}`);
       else if (section) lines.push(`${stream} test-failed: ${section[1]}`);
       else if (swiftFailure) lines.push(`${stream} test-failed: ${swiftFailure[1]}`);
@@ -116,6 +117,8 @@ export function safeFailureDiagnostic(stdout, stderr) {
         lines.push(`${stream} failed-test: ${line}`);
       } else if (/^(?:test result: FAILED|Executed \d+ tests?, with \d+ failures?)/i.test(line)) {
         lines.push(`${stream} ${line}`);
+      } else if (swiftDiagnostic) {
+        lines.push(`${stream} swift-error: ${safeDiagnostic(swiftDiagnostic[1]).slice(0, 400)}`);
       } else if (/^(?:error(?:\[[A-Z0-9]+\])?:|fatal error:|TypeError:|ReferenceError:|SyntaxError:)/i.test(line)) {
         lines.push(`${stream} ${safeDiagnostic(line).slice(0, 400)}`);
       } else if (/\b(?:ENOENT|EACCES|EPERM|PermissionDenied|Operation not permitted|Permission denied)\b/i.test(line)) {

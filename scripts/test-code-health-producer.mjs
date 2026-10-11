@@ -13,6 +13,7 @@ import {
   parseRustComplexity,
   wholeSecondUtc,
 } from "./lib/code-health-producer.mjs";
+import { safeFailureDiagnostic as safeProducerFailureDiagnostic } from "./code-health-produce.mjs";
 import { validateObjective, validateObjectiveSeries } from "./lib/code-health-objective.mjs";
 import { seriesKey } from "./lib/code-health-policy.mjs";
 import { summarizeCohorts } from "./ci-cohort-timings.mjs";
@@ -27,6 +28,15 @@ const observedAt = "2026-10-09T10:00:00Z";
 const digest = "b".repeat(64);
 const at = (offsetSeconds = 0) => new Date(Date.parse("2026-09-15T00:00:00Z") + offsetSeconds * 1000).toISOString().replace(".000Z", "Z");
 const expectedJobs = ["scope", "test-macos"];
+
+test("Swift compiler diagnostics keep the error message without leaking source paths or snippets", () => {
+  const diagnostic = safeProducerFailureDiagnostic(
+    "",
+    "/Users/magnus/repos/sagascript/src-tauri/engine-host/coreml/Tests/CoreMLTests.swift:3:8: error: no such module 'Testing'",
+  );
+  assert.match(diagnostic, /stderr swift-error: no such module 'Testing'/);
+  assert.doesNotMatch(diagnostic, /CoreMLTests\.swift|\/Users\/magnus|import Testing/);
+});
 
 test("Rust complexity counts function-body complexity once and uses a strict threshold", () => {
   const result = parseRustComplexity([{
