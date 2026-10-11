@@ -512,6 +512,22 @@ mod tests {
     use sagascript_core::transcription::engine_host::LoadSpec;
     use std::path::Path;
 
+    fn fake_host_executable_from_cargo_messages(stdout: &str) -> Option<PathBuf> {
+        stdout.lines().find_map(|line| {
+            let message: Value = serde_json::from_str(line).ok()?;
+            if message["reason"] != "compiler-artifact"
+                || message["target"]["name"] != "sagascript-fake-engine-host"
+                || !message["target"]["kind"]
+                    .as_array()?
+                    .iter()
+                    .any(|kind| kind == "bin")
+            {
+                return None;
+            }
+            message["executable"].as_str().map(PathBuf::from)
+        })
+    }
+
     /// The fake host lives in sagascript-core's bins; it is built by core's own
     /// tests, so build it on demand when running this crate alone.
     fn fake_host() -> PathBuf {
@@ -521,14 +537,54 @@ mod tests {
         let path = profile_dir.join(&name);
         if !path.is_file() {
             let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-            let status = std::process::Command::new(cargo)
-                .args(["build", "-p", "sagascript-core", "--bin", "sagascript-fake-engine-host"])
-                .status()
+            let output = std::process::Command::new(cargo)
+                .args([
+                    "build",
+                    "-p",
+                    "sagascript-core",
+                    "--bin",
+                    "sagascript-fake-engine-host",
+                    "--message-format=json",
+                ])
+                .stderr(std::process::Stdio::inherit())
+                .output()
                 .expect("run cargo build for the fake engine host");
-            assert!(status.success(), "building the fake engine host failed");
+            assert!(
+                output.status.success(),
+                "building the fake engine host failed ({})",
+                output.status
+            );
+            let emitted_path = fake_host_executable_from_cargo_messages(
+                &String::from_utf8_lossy(&output.stdout),
+            )
+            .expect("cargo did not report the fake engine host executable");
+            assert!(
+                emitted_path.is_file(),
+                "cargo reported a missing fake host at {}",
+                emitted_path.display()
+            );
+            return emitted_path;
         }
         assert!(path.is_file(), "fake host missing at {}", path.display());
         path
+    }
+
+    #[test]
+    fn fake_host_build_selects_only_its_reported_cargo_artifact() {
+        let stdout = [
+            r#"{"reason":"compiler-artifact","target":{"kind":["bin"],"name":"other-bin"},"executable":"/tmp/other"}"#,
+            "not json",
+            r#"{"reason":"compiler-artifact","target":{"kind":["bin"],"name":"sagascript-fake-engine-host"},"executable":"/tmp/target-triple/debug/sagascript-fake-engine-host"}"#,
+            r#"{"reason":"compiler-artifact","target":{"kind":["test"],"name":"sagascript-fake-engine-host"},"executable":"/tmp/not-a-bin"}"#,
+        ]
+        .join("\n");
+        assert_eq!(
+            fake_host_executable_from_cargo_messages(&stdout),
+            Some(PathBuf::from(
+                "/tmp/target-triple/debug/sagascript-fake-engine-host"
+            ))
+        );
+        assert_eq!(fake_host_executable_from_cargo_messages("not json"), None);
     }
 
     fn probe(host: PathBuf, supported: bool, installed: bool) -> Probe {

@@ -8,6 +8,9 @@ import {
   assertCompletePageCount,
   assertNoAbsoluteArtifactPaths,
   buildCiFirstAttemptPayload,
+  classifyCiWorkflowConfiguration,
+  ciCohortUnavailableReason,
+  ciUnavailableMeasurement,
   normalizeCiCohort,
   parseExportedCoverage,
   parseKnipCandidates,
@@ -98,23 +101,25 @@ export function safeFailureDiagnostic(stdout, stderr) {
   for (const [stream, value] of [["stdout", stdout], ["stderr", stderr]]) {
     if (typeof value !== "string") continue;
     for (const rawLine of value.split(/\r?\n/)) {
-      const line = rawLine.trim();
+      const line = rawLine.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").trim();
       if (!line) {
         collectingFailures = false;
         continue;
       }
-      const panic = /^thread '([^']+)' panicked\b/.exec(line);
+      const panic = /^thread '([^']+)'(?: \(\d+\))? panicked\b/.exec(line);
       const section = /^---- (.+?) (?:stdout|stderr) ----$/.exec(line);
+      const rustFailedTest = /^test (.+?) \.\.\. FAILED$/.exec(line);
       const swiftFailure = /^(?:✘|X) Test (.+?)(?: recorded an issue| failed)/.exec(line);
       const swiftDiagnostic = /^.+:\d+:\d+(?::\d+)?:\s*error:\s*(.+)$/i.exec(line);
-      if (panic) lines.push(`${stream} test-failed: ${panic[1]}`);
-      else if (section) lines.push(`${stream} test-failed: ${section[1]}`);
-      else if (swiftFailure) lines.push(`${stream} test-failed: ${swiftFailure[1]}`);
+      if (panic) lines.push(`${stream} test-failed: ${safeDiagnostic(panic[1]).slice(0, 400)}`);
+      else if (section) lines.push(`${stream} test-failed: ${safeDiagnostic(section[1]).slice(0, 400)}`);
+      else if (rustFailedTest) lines.push(`${stream} failed-test: ${safeDiagnostic(rustFailedTest[1]).slice(0, 400)}`);
+      else if (swiftFailure) lines.push(`${stream} test-failed: ${safeDiagnostic(swiftFailure[1]).slice(0, 400)}`);
       else if (/^failures:$/.test(line)) {
         lines.push(`${stream} failures:`);
         collectingFailures = true;
       } else if (collectingFailures && /^(?:[A-Za-z0-9_.-]+::)+[A-Za-z0-9_.-]+$/.test(line)) {
-        lines.push(`${stream} failed-test: ${line}`);
+        lines.push(`${stream} failed-test: ${safeDiagnostic(line).slice(0, 400)}`);
       } else if (/^(?:test result: FAILED|Executed \d+ tests?, with \d+ failures?)/i.test(line)) {
         lines.push(`${stream} ${line}`);
       } else if (swiftDiagnostic) {
@@ -732,17 +737,68 @@ function collectCi(observedAt) {
     const apiRuns = paginate(runsUrl, "workflow_runs", config.ci.limits.maximum_runs, request);
     const normalizedInputs = [];
     const runEvidence = {};
+    const excludedWorkflowRuns = [];
+    const runInventoryRows = [];
     for (const apiRun of apiRuns) {
       if (!Number.isSafeInteger(apiRun.id) || !Number.isSafeInteger(apiRun.run_attempt) || !/^[a-f0-9]{40}$/.test(apiRun.head_sha)
         || typeof apiRun.created_at !== "string" || !Number.isFinite(Date.parse(apiRun.created_at))) {
         throw new Error("GitHub Actions workflow run inventory contains a malformed identity or timestamp");
       }
       const sha = apiRun.head_sha;
-      const historicalWorkflow = command("git", ["show", `${sha}:${config.ci.workflow}`], { timeout: request.remainingMs() });
-      const historicalDigest = sha256(historicalWorkflow);
-      if (historicalDigest !== currentWorkflowDigest) {
-        throw new Error("CI workflow configuration changed inside the 28-day cohort");
+      const createdAt = Date.parse(apiRun.created_at);
+      if (apiRun.event !== "push" || apiRun.head_branch !== "main"
+        || createdAt < Date.parse(windowStart) || createdAt >= Date.parse(windowEnd)) {
+        normalizedInputs.push({
+          id: apiRun.id,
+          head_sha: sha,
+          run_attempt: apiRun.run_attempt,
+          event: apiRun.event,
+          head_branch: apiRun.head_branch,
+          created_at: apiRun.created_at,
+        });
+        runInventoryRows.push({
+          id: apiRun.id,
+          head_sha: sha,
+          event: apiRun.event,
+          head_branch: apiRun.head_branch,
+          created_at: apiRun.created_at,
+          status: apiRun.status ?? null,
+          conclusion: apiRun.conclusion ?? null,
+          attempt: 1,
+          latest_attempt: apiRun.run_attempt,
+          latest_status: apiRun.status ?? null,
+          latest_conclusion: apiRun.conclusion ?? null,
+          excluded_reason: "outside-declared-cohort",
+        });
+        continue;
       }
+      const historicalWorkflow = command("git", ["show", `${sha}:${config.ci.workflow}`], { timeout: request.remainingMs() });
+      const workflowClassification = classifyCiWorkflowConfiguration({
+        runId: apiRun.id,
+        commit: sha,
+        historicalWorkflow: Buffer.from(historicalWorkflow),
+        expectedDigest: currentWorkflowDigest,
+      });
+      if (!workflowClassification.included) {
+        excludedWorkflowRuns.push(workflowClassification.excluded);
+        runInventoryRows.push({
+          id: apiRun.id,
+          status: apiRun.status ?? null,
+          conclusion: apiRun.conclusion ?? null,
+          attempt: 1,
+          latest_attempt: apiRun.run_attempt,
+          latest_status: apiRun.status ?? null,
+          latest_conclusion: apiRun.conclusion ?? null,
+          head_sha: sha,
+          event: apiRun.event,
+          head_branch: apiRun.head_branch,
+          created_at: apiRun.created_at,
+          workflow_config_digest: workflowClassification.excluded.workflow_config_digest,
+          excluded_reason: workflowClassification.excluded.reason,
+        });
+        continue;
+      }
+      const historicalDigest = workflowClassification.digest;
       const firstAttempt = firstAttemptRunContext(apiRun, request);
       let attempt1Jobs = [];
       try {
@@ -781,6 +837,20 @@ function collectCi(observedAt) {
           steps: job.steps,
         })),
       });
+      runInventoryRows.push({
+        id: apiRun.id,
+        status: firstAttempt.status,
+        conclusion: firstAttempt.conclusion,
+        attempt: 1,
+        latest_attempt: apiRun.run_attempt,
+        latest_status: apiRun.status ?? null,
+        latest_conclusion: apiRun.conclusion ?? null,
+        head_sha: sha,
+        event: apiRun.event,
+        head_branch: apiRun.head_branch,
+        created_at: apiRun.created_at,
+        workflow_config_digest: historicalDigest,
+      });
     }
     const cohort = normalizeCiCohort({
       runs: normalizedInputs,
@@ -790,16 +860,8 @@ function collectCi(observedAt) {
       workflowConfigDigest: currentWorkflowDigest,
       workflowPath: config.ci.workflow,
       repoRoot: REPO_ROOT,
+      preExcludedRuns: excludedWorkflowRuns,
     });
-    const rawWorkflowRuns = normalizedInputs.map(run => ({
-      id: run.id,
-      status: run.status ?? null,
-      conclusion: run.conclusion ?? null,
-      attempt: 1,
-      latest_attempt: run.run_attempt,
-      latest_status: run.latest_status,
-      latest_conclusion: run.latest_conclusion,
-    }));
     const payload = buildCiFirstAttemptPayload({
       normalizedRuns: cohort.runs,
       windowStart,
@@ -814,8 +876,10 @@ function collectCi(observedAt) {
       workflow_path: config.ci.workflow,
       workflow_config_digest: currentWorkflowDigest,
       filter: { branch: "main", event: "push", window_start: windowStart, window_end: windowEnd },
+      scope_version: "main-push-current-config-ci-v2",
+      denominator_policy: "current-configuration included runs only; no current-configuration runs is not-collected",
       api_total_count: apiRuns.length,
-      workflow_runs: rawWorkflowRuns,
+      workflow_runs: runInventoryRows,
       included_run_ids: cohort.runs.map(run => Number(run.run_ref.match(/ci-run-(\d+)-attempt-1/)[1])).sort((a, b) => a - b),
       excluded_runs: cohort.excluded_runs,
     }, payload.run_inventory_ref);
@@ -867,9 +931,8 @@ function collectCi(observedAt) {
       per_run: timingRunSummaries,
       cohorts: timingCohorts,
     });
-    if (cohort.incomplete_runs.length) {
-      return { unavailable: true, reason: "incomplete-input", incomplete_runs: cohort.incomplete_runs };
-    }
+    const unavailableReason = ciCohortUnavailableReason(cohort);
+    if (unavailableReason) return { unavailable: true, reason: unavailableReason, incomplete_runs: cohort.incomplete_runs };
     void workflowRef;
     return {
       payload,
@@ -886,14 +949,17 @@ function collectCi(observedAt) {
         expected_job_ids: config.ci.expected_job_ids,
         limits: config.ci.limits,
         attempt_policy: config.ci.attempt_policy,
+        scope_version: "main-push-current-config-ci-v2",
       },
     };
   });
   if (result.status === "measured" && result.value.unavailable) {
     const collector = collectionStatus.collectors["ci-first-attempt"];
-    collector.status = "failed";
-    collector.error = "workflow failure has unresolved attempt-1 jobs";
-    setFailure(scopeName, "ci_first_attempt", result.value.reason);
+    collector.status = result.value.reason === "not-collected" ? "not-collected" : "failed";
+    collector.error = result.value.reason === "not-collected"
+      ? "no current-configuration CI runs fell in the 28-day cohort"
+      : "workflow failure has unresolved attempt-1 jobs";
+    measurementsByScope[scopeName].ci_first_attempt = ciUnavailableMeasurement(result.value.reason);
   }
   else if (result.status === "measured") setMeasured(scopeName, "ci_first_attempt", result.value);
   else setFailure(scopeName, "ci_first_attempt", "incomplete-input");
