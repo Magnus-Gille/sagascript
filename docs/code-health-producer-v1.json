@@ -44,6 +44,18 @@
       ],
       "inventory": "exported-only"
     },
+    "rust_cli": {
+      "package": "sagascript-cli",
+      "command": "cargo +1.93.1 llvm-cov -p sagascript-cli --no-default-features --tests --json --summary-only",
+      "target": "isolated task-local CARGO_TARGET_DIR",
+      "includes_inline_tests": true,
+      "source_roots": [
+        "src-tauri/crates/sagascript-cli/src/",
+        "src-tauri/crates/sagascript-cli/tests/"
+      ],
+      "inventory": "exported-only",
+      "features": "no-default-features"
+    },
     "swift": {
       "package": "src-tauri/engine-host/coreml",
       "command": "swift test --enable-code-coverage --jobs 2 --scratch-path <task-temporary-directory>; swift test --show-codecov-path --scratch-path <task-temporary-directory>",
@@ -134,7 +146,7 @@
       "slots": {
         "complex_functions": {"slot_ref": "ref:slot-rust-cli-complex-functions-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "measured", "metric_version": "rust-cyclomatic-v1", "scope_version": "rust-cli-selected-functions-v1", "freshness_days": 10},
         "unused_candidates": {"slot_ref": "ref:slot-rust-cli-unused-candidates-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "rust-unused-v1", "scope_version": "rust-cli-dead-code-v1", "freshness_days": 10},
-        "coverage": {"slot_ref": "ref:slot-rust-cli-coverage-v1", "language": "rust", "platform": "macos", "feature_refs": ["ref:feature-rust-cli-no-default"], "status": "unknown", "reason": "incomplete-input", "metric_version": "rust-lines-v1", "scope_version": "rust-cli-no-default-clean-deferred-v1", "freshness_days": 10},
+        "coverage": {"slot_ref": "ref:slot-rust-cli-coverage-v1", "language": "rust", "platform": "macos", "feature_refs": ["ref:feature-rust-cli-no-default"], "status": "measured", "metric_version": "rust-lines-v1", "scope_version": "rust-cli-no-default-exported-v1", "freshness_days": 10},
         "ci_first_attempt": {"slot_ref": "ref:slot-rust-cli-ci-first-attempt-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "rust-ci-v1", "scope_version": "rust-cli-ci-not-applicable-v1", "freshness_days": 2},
         "confirmed_regressions": {"slot_ref": "ref:slot-rust-cli-confirmed-regressions-v1", "language": "rust", "platform": "multi-platform-source", "feature_refs": [], "status": "unsupported", "reason": "unsupported-tool", "metric_version": "rust-release-v1", "scope_version": "rust-cli-release-not-applicable-v1", "freshness_days": 10}
       }

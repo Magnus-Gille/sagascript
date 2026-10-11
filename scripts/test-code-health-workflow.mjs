@@ -329,3 +329,21 @@ test("workflow analyzer installs match the producer's declared exact versions", 
   assert.equal(toolingLock.packages[""].devDependencies.typescript, config.tools.typescript);
   assert.equal(toolingLock.packages["node_modules/typescript"].version, config.tools.typescript);
 });
+
+test("Rust CLI coverage is a separate no-default-features profile", () => {
+  assert.deepEqual(config.coverage.rust_cli, {
+    package: "sagascript-cli",
+    command: "cargo +1.93.1 llvm-cov -p sagascript-cli --no-default-features --tests --json --summary-only",
+    target: "isolated task-local CARGO_TARGET_DIR",
+    includes_inline_tests: true,
+    source_roots: [
+      "src-tauri/crates/sagascript-cli/src/",
+      "src-tauri/crates/sagascript-cli/tests/",
+    ],
+    inventory: "exported-only",
+    features: "no-default-features",
+  });
+  assert.match(producerSource, /coverage-rust-cli[\s\S]*sagascript-cli[\s\S]*--no-default-features[\s\S]*--tests/);
+  assert.match(producerSource, /setFailure\("rust-cli", "coverage"\)/);
+  assert.match(collectionDocs, /Rust CLI coverage runs the lean batch profile/);
+});

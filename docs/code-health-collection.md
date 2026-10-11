@@ -57,6 +57,12 @@ files that Swift does not emit remain explicit in `not_emitted_paths`. This keep
 collector inputs complete without copying unrelated engine-host contents or counting generated
 coverage.
 
+Rust CLI coverage runs the lean batch profile with `cargo +1.93.1 llvm-cov -p sagascript-cli
+--no-default-features --tests`. Its tracked inventory includes the CLI `src/` and `tests/` roots;
+feature-gated files that do not emit in this profile remain explicit `not_emitted_paths` evidence.
+The CLI profile is recorded independently from the core profile, so default-feature and no-default-
+features counters are never combined.
+
 The CI-only job receives only the run-scoped, read-only `actions` and `contents` permissions needed
 to enumerate workflow runs and inspect commit history. The static PR path does not expose
 `GH_TOKEN`; no production Heimdall or Munin credentials are configured in either job.

@@ -325,6 +325,78 @@ function collectRustCoverage(tempRoot, cargoVersion, llvmCovVersion, rustVersion
   else setFailure(scopeName, "coverage");
 }
 
+export function collectRustCliCoverage(tempRoot, cargoVersion, llvmCovVersion, rustVersion, useNamedToolchain, runCommand = command) {
+  const scopeName = "rust-cli";
+  const packageRoot = join(REPO_ROOT, "src-tauri");
+  const coveragePath = join(tempRoot, "rust-cli-coverage.json");
+  const isolatedTarget = join(tempRoot, "cargo-target-rust-cli");
+  mkdirSync(isolatedTarget, { recursive: true });
+  const env = {
+    ...process.env,
+    CARGO_TARGET_DIR: isolatedTarget,
+    CARGO_BUILD_JOBS: "2",
+    LLVM_PROFILE_FILE: join(tempRoot, "rust-cli-%p-%m.profraw"),
+    TMPDIR: tempRoot,
+  };
+  env.CARGO_ENCODED_RUSTFLAGS = "";
+  const result = recordCollector("coverage-rust-cli", `${rustVersion}; ${cargoVersion}; ${llvmCovVersion}`, () => {
+    const toolchainArgs = useNamedToolchain ? ["+1.93.1"] : [];
+    runCommand("cargo", [
+      ...toolchainArgs, "llvm-cov", "-p", "sagascript-cli", "--no-default-features", "--tests",
+      "--json", "--output-path", coveragePath,
+    ], { cwd: packageRoot, env });
+    const raw = JSON.parse(readFileSync(coveragePath, "utf8"));
+    const inventory = [
+      ...gitTracked("src-tauri/crates/sagascript-cli/src/", [".rs"]),
+      ...gitTracked("src-tauri/crates/sagascript-cli/tests/", [".rs"]),
+    ].sort();
+    const profileRef = evidenceRef("profile-rust-cli-no-default-inline");
+    const parsed = parseExportedCoverage(raw, {
+      repoRoot: REPO_ROOT,
+      inventoryPaths: inventory,
+      sourceRoots: [
+        "src-tauri/crates/sagascript-cli/src/",
+        "src-tauri/crates/sagascript-cli/tests/",
+      ],
+      includesInlineTests: true,
+    });
+    if (parsed.included_paths.length > 1000 || parsed.not_emitted_paths.length > 1000) {
+      throw new Error("coverage path inventory exceeds the contract reference limit");
+    }
+    const inventoryEvidence = addSourceInventoryEvidence("rust-cli-no-default", inventory);
+    const includedRefs = parsed.included_paths.map(path => refForSource(path, 1, "coverage"));
+    const excludedRefs = parsed.not_emitted_paths.map(path => refForSource(path, 1, "coverage-excluded"));
+    const profilePath = "evidence/profile-rust-cli-no-default-inline.json";
+    addEvidenceFile(profilePath, {
+      profile: "sagascript-cli no-default-features; --tests; inline tests included",
+      tool: { rustc: rustVersion, cargo_llvm_cov: llvmCovVersion },
+      inventory_ref: inventoryEvidence.ref,
+      measure: parsed.measure,
+      covered: parsed.covered,
+      eligible: parsed.eligible,
+      emitted_source_files: parsed.emitted_source_files,
+      included_paths: parsed.included_paths,
+      not_emitted_paths: parsed.not_emitted_paths,
+      excluded_report_paths: parsed.excluded_report_paths,
+    }, profileRef);
+    return {
+      payload: parsed,
+      included_refs: includedRefs,
+      excluded_refs: excludedRefs,
+      profile_ref: profileRef,
+      tool: { name: "cargo-llvm-cov", version: llvmCovVersion },
+      command: `cargo ${useNamedToolchain ? "+1.93.1 " : ""}llvm-cov -p sagascript-cli --no-default-features --tests --json --output-path <task-temporary-report>`,
+      scope_policy: {
+        ...config.coverage.rust_cli,
+        inventory_construction: "tracked paths under registered roots; exported-only coverage",
+      },
+    };
+  });
+  if (result.status === "measured") setMeasured(scopeName, "coverage", result.value);
+  else setFailure(scopeName, "coverage");
+  return result;
+}
+
 export function runSwiftCoverageSteps({ scratchPath, tempRoot, runCommand } = {}) {
   if (typeof scratchPath !== "string" || typeof tempRoot !== "string" || typeof runCommand !== "function") {
     throw new TypeError("Swift coverage command input is malformed");
@@ -936,7 +1008,11 @@ function main() {
       }
       if (rustVersion !== "unknown" && cargoCovActual && cargoToolchainVersion.status === "measured") {
         collectRustCoverage(tempRoot, cargoToolchainVersion.value, cargoCovActual, rustVersion, useNamedToolchain);
-      } else setFailure("rust-core", "coverage");
+        collectRustCliCoverage(tempRoot, cargoToolchainVersion.value, cargoCovActual, rustVersion, useNamedToolchain);
+      } else {
+        setFailure("rust-core", "coverage");
+        setFailure("rust-cli", "coverage");
+      }
 
       collectSwiftCoverage(tempRoot);
 

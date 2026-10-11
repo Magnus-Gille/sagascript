@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   assembleReportBundle,
   assertCompletePageCount,
@@ -13,7 +16,7 @@ import {
   parseRustComplexity,
   wholeSecondUtc,
 } from "./lib/code-health-producer.mjs";
-import { safeFailureDiagnostic as safeProducerFailureDiagnostic } from "./code-health-produce.mjs";
+import { collectRustCliCoverage, safeFailureDiagnostic as safeProducerFailureDiagnostic } from "./code-health-produce.mjs";
 import { validateObjective, validateObjectiveSeries } from "./lib/code-health-objective.mjs";
 import { seriesKey } from "./lib/code-health-policy.mjs";
 import { summarizeCohorts } from "./ci-cohort-timings.mjs";
@@ -22,6 +25,7 @@ const readJson = path => JSON.parse(readFileSync(new URL(path, import.meta.url),
 const config = readJson("../docs/code-health-producer-v1.json");
 const schema = readJson("../docs/code-health-objective-v1.schema.json");
 const fixture = path => readJson("../tests/fixtures/code-health/" + path);
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const commit = "a".repeat(40);
 const runRef = "ref:local-aaaaaaaaaaaa-attempt-1";
 const observedAt = "2026-10-09T10:00:00Z";
@@ -89,6 +93,66 @@ test("Rust coverage labels inline tests and keeps inactive or non-emitted files 
   assert.throws(() => parseExportedCoverage({ data: [{ files: [{ filename: "src/a.rs", summary: { lines: { count: 1, covered: 2 } } }] }] }, {
     repoRoot: "/workspace/sagascript", inventoryPaths: ["src/a.rs"], sourceRoots: ["src/"],
   }), /counts are invalid/);
+});
+
+test("Rust CLI collector uses an isolated no-default profile and tracked CLI inventory", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "sagascript-cli-coverage-test-"));
+  const captured = {};
+  try {
+    const result = collectRustCliCoverage(tempRoot, "cargo 1.93.1", "cargo-llvm-cov 0.9.1", "rustc 1.93.1", true,
+      (executable, args, options) => {
+        captured.executable = executable;
+        captured.args = args;
+        captured.options = options;
+        const outputPath = args[args.indexOf("--output-path") + 1];
+        writeFileSync(outputPath, JSON.stringify({ data: [{ files: [
+          { filename: join(repoRoot, "src-tauri/crates/sagascript-cli/src/lib.rs"), summary: { lines: { count: 10, covered: 4 } } },
+          { filename: join(repoRoot, "src-tauri/crates/sagascript-cli/tests/latency_report.rs"), summary: { lines: { count: 3, covered: 1 } } },
+          { filename: join(repoRoot, "src-tauri/crates/sagascript-cli/src/not-tracked.rs"), summary: { lines: { count: 5, covered: 5 } } },
+          { filename: join(repoRoot, "src-tauri/crates/sagascript-core/src/lib.rs"), summary: { lines: { count: 7, covered: 7 } } },
+          { filename: join(tempRoot, "external.rs"), summary: { lines: { count: 9, covered: 9 } } },
+        ] }] }));
+        return "";
+      });
+    assert.equal(result.status, "measured");
+    assert.equal(result.value.payload.covered, 5);
+    assert.equal(result.value.payload.eligible, 13);
+    assert.deepEqual(result.value.payload.included_paths, [
+      "src-tauri/crates/sagascript-cli/src/lib.rs",
+      "src-tauri/crates/sagascript-cli/tests/latency_report.rs",
+    ]);
+    assert.ok(result.value.payload.not_emitted_paths.includes("src-tauri/crates/sagascript-cli/src/diarization.rs"));
+    assert.ok(result.value.payload.excluded_report_paths.some(item => item.reason === "outside-repository"));
+    assert.ok(result.value.payload.excluded_report_paths.some(item => item.reason === "not-in-declared-inventory" && item.path.endsWith("not-tracked.rs")));
+    assert.equal(captured.executable, "cargo");
+    assert.deepEqual(captured.args, [
+      "+1.93.1", "llvm-cov", "-p", "sagascript-cli", "--no-default-features", "--tests",
+      "--json", "--output-path", join(tempRoot, "rust-cli-coverage.json"),
+    ]);
+    assert.equal(captured.options.cwd, join(repoRoot, "src-tauri"));
+    assert.match(captured.options.env.CARGO_TARGET_DIR, /cargo-target-rust-cli$/);
+    assert.match(captured.options.env.LLVM_PROFILE_FILE, /rust-cli-%p-%m\.profraw$/);
+    assert.equal(captured.options.env.CARGO_ENCODED_RUSTFLAGS, "");
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("Rust CLI collector fails instead of emitting a zero result on command or report errors", () => {
+  for (const [label, runCommand, expected] of [
+    ["command", () => { throw new Error("fake cargo failed"); }, /fake cargo failed/],
+    ["report", (_executable, args) => writeFileSync(args[args.indexOf("--output-path") + 1], JSON.stringify({ data: [] })), /emitted no files/],
+  ]) {
+    const tempRoot = mkdtempSync(join(tmpdir(), `sagascript-cli-coverage-${label}-`));
+    try {
+      const result = collectRustCliCoverage(tempRoot, "cargo 1.93.1", "cargo-llvm-cov 0.9.1", "rustc 1.93.1", false, runCommand);
+      assert.equal(result.status, "failed");
+      assert.equal(result.value, undefined);
+      assert.match(result.error.message, expected);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  }
 });
 
 test("Swift source-only coverage excludes generated identity and test bundle files", () => {
