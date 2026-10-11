@@ -228,6 +228,11 @@ test("workflow collection schedule and manual dispatch are explicit and informat
   assert.match(workflow, /workflow_dispatch:\s*\n\npermissions:/);
   assert.match(workflow, /pull_request\) mode=conformance/);
   assert.match(workflow, /workflow_dispatch\) mode=static/);
+  assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?find \/Applications -maxdepth 1 -name "Xcode_\*\.app"/);
+  assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?if: \$\{\{ steps\.mode\.outputs\.mode == 'static' \}\}/);
+  assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?echo "DEVELOPER_DIR=\$developer_dir" >> "\$GITHUB_ENV"/);
+  assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?swift --version/);
+  assert.ok(workflow.indexOf("name: Select newest Xcode for Swift coverage") < workflow.indexOf("name: Collect static measurements"));
   assert.match(workflow, /steps\.mode\.outputs\.mode == 'static'/);
   assert.doesNotMatch(workflow, /INPUT_MODE|inputs\.mode/);
   assert.match(workflow, /github\.event_name != 'workflow_dispatch' \|\| github\.ref == 'refs\/heads\/main'/);

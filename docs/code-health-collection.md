@@ -43,8 +43,10 @@ sanitized relative-path evidence. Raw analyzer reports and compiler output stay 
 temporary storage. The static job installs the project graph from the checked-in npm lockfile with
 lifecycle scripts disabled, then installs analyzers under `$RUNNER_TEMP`. Knip's isolated manifest
 and lockfile live under `tooling/code-health/`. Exact versions are checked against
-`docs/code-health-producer-v1.json` before measurements are accepted. Swift's compiler version is
-recorded from the runner because Xcode supplies Swift.
+`docs/code-health-producer-v1.json` before measurements are accepted. The static workflow selects
+the newest installed versioned Xcode before Swift coverage, and records the resulting compiler
+version because Xcode supplies Swift. This matches the product CI's Swift Testing requirement and
+avoids relying on the macOS runner's default Xcode selection.
 
 Swift coverage prepares a temporary copy of the Core ML package and the single tracked shared
 `engine-host/test-vectors/context-biasing.json` fixture at the sibling path expected by its test
