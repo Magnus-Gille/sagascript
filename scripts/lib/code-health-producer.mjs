@@ -368,6 +368,7 @@ export function normalizeCiCohort({
   workflowConfigDigest,
   repoRoot,
   workflowPath = ".github/workflows/ci.yml",
+  preExcludedRuns = [],
 } = {}) {
   if (!Array.isArray(runs) || !Array.isArray(expectedJobIds) || expectedJobIds.length === 0) {
     throw new TypeError("CI run or job inventory is malformed");
@@ -375,9 +376,19 @@ export function normalizeCiCohort({
   if (runs.length > 1000) throw new RangeError("CI run inventory exceeds the v1 limit");
   if (!SHA256.test(workflowConfigDigest)) throw new TypeError("CI workflow digest is invalid");
   if (new Set(expectedJobIds).size !== expectedJobIds.length) throw new TypeError("expected CI jobs are duplicated");
+  if (!Array.isArray(preExcludedRuns) || runs.length + preExcludedRuns.length > 1000) {
+    throw new TypeError("CI excluded run inventory is malformed or exceeds the v1 limit");
+  }
   const ids = new Set();
+  for (const excluded of preExcludedRuns) {
+    if (!excluded || !Number.isSafeInteger(excluded.id) || excluded.id < 1
+      || !FULL_SHA.test(excluded.commit) || !SHA256.test(excluded.workflow_config_digest)
+      || excluded.workflow_config_digest === workflowConfigDigest || excluded.reason !== "workflow-config-mismatch"
+      || ids.has(excluded.id)) throw new TypeError("CI excluded run inventory is malformed or duplicated");
+    ids.add(excluded.id);
+  }
   const normalizedRuns = [];
-  const excludedRuns = [];
+  const excludedRuns = [...preExcludedRuns];
   const timingRuns = [];
   const incompleteRuns = [];
   for (const run of [...runs].sort((a, b) => Number(a.id) - Number(b.id))) {
@@ -459,6 +470,33 @@ export function normalizeCiCohort({
     });
   }
   return { runs: normalizedRuns, excluded_runs: excludedRuns, timing_runs: timingRuns, incomplete_runs: incompleteRuns };
+}
+
+export function classifyCiWorkflowConfiguration({ runId, commit, historicalWorkflow, expectedDigest } = {}) {
+  if (!Number.isSafeInteger(runId) || runId < 1 || !FULL_SHA.test(commit)
+    || !Buffer.isBuffer(historicalWorkflow) || !SHA256.test(expectedDigest)) {
+    throw new TypeError("CI historical workflow evidence is missing or malformed");
+  }
+  const digest = sha256(historicalWorkflow);
+  if (digest === expectedDigest) return { included: true, digest };
+  return {
+    included: false,
+    excluded: { id: runId, commit, workflow_config_digest: digest, reason: "workflow-config-mismatch" },
+  };
+}
+
+export function ciCohortUnavailableReason(cohort) {
+  if (!cohort || !Array.isArray(cohort.runs) || !Array.isArray(cohort.incomplete_runs)) {
+    throw new TypeError("CI cohort availability input is malformed");
+  }
+  if (cohort.incomplete_runs.length > 0) return "incomplete-input";
+  if (cohort.runs.length === 0) return "not-collected";
+  return null;
+}
+
+export function ciUnavailableMeasurement(reason) {
+  if (!["not-collected", "incomplete-input"].includes(reason)) throw new TypeError("Invalid CI unavailability reason");
+  return { status: reason === "not-collected" ? "unknown" : "failed", reason };
 }
 
 export function buildCiFirstAttemptPayload({

@@ -8,6 +8,9 @@ import {
   assembleReportBundle,
   assertCompletePageCount,
   buildCiFirstAttemptPayload,
+  classifyCiWorkflowConfiguration,
+  ciCohortUnavailableReason,
+  ciUnavailableMeasurement,
   createObjective,
   parseWorkflowJobIds,
   normalizeCiCohort,
@@ -245,6 +248,74 @@ test("CI cohort uses attempt 1 despite a successful retry and preserves job outc
   assert.equal(timings.cohorts[0].attempt, 1);
   assert.equal(timings.cohorts[0].counts.outcomes.failure, 1);
   assert.equal(timings.cohorts[0].ledger[0].attempt, 1);
+});
+
+test("CI cohort excludes historical workflow configurations and measures current runs only", () => {
+  const oldCommit = "f".repeat(40);
+  const oldWorkflow = Buffer.from("name: older CI workflow\n");
+  const classified = classifyCiWorkflowConfiguration({
+    runId: 41,
+    commit: oldCommit,
+    historicalWorkflow: oldWorkflow,
+    expectedDigest: digest,
+  });
+  assert.equal(classified.included, false);
+  assert.equal(classified.excluded.id, 41);
+  assert.equal(classified.excluded.commit, oldCommit);
+  assert.equal(classified.excluded.reason, "workflow-config-mismatch");
+  assert.match(classified.excluded.workflow_config_digest, /^[a-f0-9]{64}$/);
+  assert.throws(() => classifyCiWorkflowConfiguration({
+    runId: 41,
+    commit: oldCommit,
+    expectedDigest: digest,
+  }), /historical workflow evidence is missing or malformed/);
+
+  const currentRun = {
+    id: 42,
+    head_sha: "c".repeat(40),
+    run_attempt: 1,
+    event: "push",
+    head_branch: "main",
+    created_at: at(0),
+    workflow_config_digest: digest,
+    attempt1_jobs: [
+      { id: 1001, name: "scope", status: "completed", conclusion: "success", steps: [] },
+      { id: 1002, name: "test-macos", status: "completed", conclusion: "success", steps: [] },
+    ],
+  };
+  const normalized = normalizeCiCohort({
+    runs: [currentRun],
+    expectedJobIds: expectedJobs,
+    windowStart: "2026-09-11T00:00:00Z",
+    windowEnd: "2026-10-09T00:00:00Z",
+    workflowConfigDigest: digest,
+    preExcludedRuns: [classified.excluded],
+  });
+  assert.equal(normalized.runs.length, 1);
+  assert.equal(normalized.runs[0].overall_conclusion, "success");
+  assert.deepEqual(normalized.excluded_runs, [classified.excluded]);
+  assert.equal(ciCohortUnavailableReason(normalized), null);
+  assert.equal(ciCohortUnavailableReason({ runs: [], incomplete_runs: [], excluded_runs: [classified.excluded] }), "not-collected");
+  const args = { runs: [currentRun], expectedJobIds: expectedJobs,
+    windowStart: "2026-09-11T00:00:00Z", windowEnd: "2026-10-09T00:00:00Z", workflowConfigDigest: digest };
+  assert.throws(() => normalizeCiCohort({ ...args, preExcludedRuns: [classified.excluded, classified.excluded] }), /duplicated/);
+  assert.throws(() => normalizeCiCohort({ ...args, preExcludedRuns: [{ ...classified.excluded, id: currentRun.id }] }), /duplicate run ID/);
+  assert.throws(() => normalizeCiCohort({ ...args, preExcludedRuns: [{ ...classified.excluded, workflow_config_digest: digest }] }), /malformed/);
+  assert.throws(() => normalizeCiCohort({ ...args, runs: [{ ...currentRun, attempt1_jobs: [{ id: 1001, name: "unregistered", status: "completed", conclusion: "success" }] }] }), /unregistered job/);
+});
+
+test("empty current CI cohort remains unknown while incomplete failed evidence remains failed", () => {
+  const scope = config.scopes.find(item => item.name === "ci-release");
+  const context = { commitSha: commit, runRef, attempt: 1, observedAt };
+  const empty = createObjective(scope, context, { ci_first_attempt: ciUnavailableMeasurement("not-collected") });
+  assert.equal(empty.metrics.ci_first_attempt.status, "unknown");
+  assert.equal(empty.metrics.ci_first_attempt.reason, "not-collected");
+  assert.equal(empty.metrics.ci_first_attempt.payload, null);
+  assert.equal(validateObjective(schema, empty).valid, true);
+  const incomplete = createObjective(scope, context, { ci_first_attempt: ciUnavailableMeasurement("incomplete-input") });
+  assert.equal(incomplete.metrics.ci_first_attempt.status, "failed");
+  assert.equal(incomplete.metrics.ci_first_attempt.reason, "incomplete-input");
+  assert.throws(() => ciUnavailableMeasurement("unsupported-tool"), /Invalid/);
 });
 
 test("CI gaps stay unknown and unproven startup or timeout conclusions stay failures with raw evidence", () => {

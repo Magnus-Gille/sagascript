@@ -13,8 +13,13 @@ The collection modes are intentionally separate:
   complexity, Rust and Swift coverage, and unqualified Knip candidate collection. Unsupported tools
   and scopes remain visible in each snapshot.
 - When enabled, a daily schedule reads the previous 28 days of first-attempt `CI` push runs on
-  `main`. It skips static analyzers; static metric slots stay `unknown` with `not-collected`, not
-  copied from a previous artifact or represented as zero.
+  `main`, scoped to runs whose workflow file matches the current `.github/workflows/ci.yml`
+  configuration. Historical runs with a different workflow digest are listed in the run inventory
+  with their run ID, commit, digest, and exclusion reason; their job metadata is not fetched. The
+  expected-run denominator counts only current-configuration runs. If none fall in the window, the
+  CI metric stays `unknown` with `not-collected`, not represented as zero. The scope version is
+  `main-push-current-config-ci-v2`. This job skips static analyzers; static metric slots stay
+  `unknown` with `not-collected`, not copied from a previous artifact or represented as zero.
 - Manual dispatch is limited to `main` and offers `static` collection by default or an
   explicit `ci-only` run for the daily CI cohort metadata.
 
