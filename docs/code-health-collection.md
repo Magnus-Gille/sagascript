@@ -15,7 +15,8 @@ The collection modes are intentionally separate:
 - When enabled, a daily schedule reads the previous 28 days of first-attempt `CI` push runs on
   `main`. It skips static analyzers; static metric slots stay `unknown` with `not-collected`, not
   copied from a previous artifact or represented as zero.
-- Manual dispatch runs static collection and is limited to `main`.
+- Manual dispatch is limited to `main` and offers `static` collection by default or an
+  explicit `ci-only` run for the daily CI cohort metadata.
 
 Every collector run requires a clean checkout, including no untracked files, and checks the
 checked-out SHA, workspace path, repository identity, run ID, and attempt against GitHub's run
