@@ -378,7 +378,7 @@ test("workflow analyzer installs match the producer's declared exact versions", 
 test("Rust CLI coverage is a separate no-default-features profile", () => {
   assert.deepEqual(config.coverage.rust_cli, {
     package: "sagascript-cli",
-    command: "cargo +1.93.1 llvm-cov -p sagascript-cli --no-default-features --tests --json --summary-only",
+    command: "cargo +1.93.1 llvm-cov -p sagascript-cli --no-default-features --tests --json --output-path <task-temporary-report>",
     target: "isolated task-local CARGO_TARGET_DIR",
     includes_inline_tests: true,
     source_roots: [
