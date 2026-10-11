@@ -15,7 +15,8 @@ The collection modes are intentionally separate:
 - When enabled, a daily schedule reads the previous 28 days of first-attempt `CI` push runs on
   `main`. It skips static analyzers; static metric slots stay `unknown` with `not-collected`, not
   copied from a previous artifact or represented as zero.
-- Manual dispatch runs static collection and is limited to `main`.
+- Manual dispatch is limited to `main` and offers `static` collection by default or an
+  explicit `ci-only` run for the daily CI cohort metadata.
 
 Every collector run requires a clean checkout, including no untracked files, and checks the
 checked-out SHA, workspace path, repository identity, run ID, and attempt against GitHub's run
@@ -56,6 +57,12 @@ external toolchain files are excluded and recorded in `excluded_report_paths`; r
 files that Swift does not emit remain explicit in `not_emitted_paths`. This keeps isolated
 collector inputs complete without copying unrelated engine-host contents or counting generated
 coverage.
+
+Rust CLI coverage runs the lean batch profile with `cargo +1.93.1 llvm-cov -p sagascript-cli
+--no-default-features --tests`. Its tracked inventory includes the CLI `src/` and `tests/` roots;
+feature-gated files that do not emit in this profile remain explicit `not_emitted_paths` evidence.
+The CLI profile is recorded independently from the core profile, so default-feature and no-default-
+features counters are never combined.
 
 The CI-only job receives only the run-scoped, read-only `actions` and `contents` permissions needed
 to enumerate workflow runs and inspect commit history. The static PR path does not expose

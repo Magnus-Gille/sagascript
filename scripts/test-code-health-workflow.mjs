@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,27 @@ const producerSource = readFileSync(join(root, "scripts/code-health-produce.mjs"
 const config = JSON.parse(readFileSync(join(root, "docs/code-health-producer-v1.json"), "utf8"));
 const tooling = JSON.parse(readFileSync(join(root, "tooling/code-health/package.json"), "utf8"));
 const toolingLock = JSON.parse(readFileSync(join(root, "tooling/code-health/package-lock.json"), "utf8"));
+const modeScriptMatch = workflow.match(/- name: Select collection mode[\s\S]*?\n        run: \|\n((?:          .*\n?)+?)(?=\n      - name:)/);
+assert.ok(modeScriptMatch, "collection mode selection script is missing");
+const modeScript = modeScriptMatch[1].split("\n").map(line => line.slice(10)).join("\n");
+
+function runModeSelection({ eventName, eventSchedule = "", dispatchMode = "" }) {
+  const outputDir = mkdtempSync(join(tmpdir(), "sagascript-mode-selection-test-"));
+  const outputPath = join(outputDir, "github-output");
+  const result = spawnSync("bash", ["-euo", "pipefail", "-c", modeScript], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      EVENT_NAME: eventName,
+      EVENT_SCHEDULE: eventSchedule,
+      DISPATCH_MODE: dispatchMode,
+      GITHUB_OUTPUT: outputPath,
+    },
+  });
+  const output = existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "";
+  rmSync(outputDir, { recursive: true, force: true });
+  return { ...result, output };
+}
 
 test("workflow-level first-attempt failure cannot be replaced by a successful rerun", () => {
   const run = { id: 42, head_sha: "a".repeat(40), run_attempt: 2, event: "push", head_branch: "main", status: "completed", conclusion: "success" };
@@ -225,16 +247,39 @@ test("workflow collection schedule and manual dispatch are explicit and informat
   assert.match(workflow, /pull_request:\s*\n\s*branches: \[main\]/);
   assert.match(workflow, /- cron: "17 5 \* \* \*"[^\n]*Daily first-attempt CI cohort/);
   assert.match(workflow, /- cron: "29 5 \* \* 1"[^\n]*Weekly static measurements/);
-  assert.match(workflow, /workflow_dispatch:\s*\n\npermissions:/);
+  assert.match(workflow, /workflow_dispatch:\s*\n\s*inputs:\s*\n\s*mode:\s*\n\s*description: Collection mode for this manual run\s*\n\s*required: false\s*\n\s*default: static\s*\n\s*type: choice\s*\n\s*options:\s*\n\s*- static\s*\n\s*- ci-only/);
   assert.match(workflow, /pull_request\) mode=conformance/);
-  assert.match(workflow, /workflow_dispatch\) mode=static/);
+  assert.match(workflow, /DISPATCH_MODE: \$\{\{ inputs\.mode \}\}/);
+  assert.match(workflow, /workflow_dispatch\)[\s\S]*?''\|static\) mode=static/);
+  assert.match(workflow, /workflow_dispatch\)[\s\S]*?ci-only\) mode=ci-only/);
+  assert.match(workflow, /Unsupported manual mode: \$DISPATCH_MODE/);
+  assert.doesNotMatch(workflow, /workflow_dispatch\) mode=\$\{\{/);
+  for (const [dispatchMode, expected] of [["", "static"], ["static", "static"], ["ci-only", "ci-only"]]) {
+    const result = runModeSelection({ eventName: "workflow_dispatch", dispatchMode });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.output.trim(), `mode=${expected}`);
+  }
+  const invalid = runModeSelection({ eventName: "workflow_dispatch", dispatchMode: "everything" });
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /Unsupported manual mode: everything/);
+  for (const [eventName, eventSchedule, expected] of [
+    ["pull_request", "", "conformance"],
+    ["schedule", "17 5 * * *", "ci-only"],
+    ["schedule", "29 5 * * 1", "static"],
+  ]) {
+    const result = runModeSelection({ eventName, eventSchedule });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.output.trim(), `mode=${expected}`);
+  }
+  const invalidSchedule = runModeSelection({ eventName: "schedule", eventSchedule: "0 0 * * *" });
+  assert.notEqual(invalidSchedule.status, 0);
+  assert.match(invalidSchedule.stderr, /Unregistered schedule/);
   assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?find \/Applications -maxdepth 1 -name "Xcode_\*\.app"/);
   assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?if: \$\{\{ steps\.mode\.outputs\.mode == 'static' \}\}/);
   assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?echo "DEVELOPER_DIR=\$developer_dir" >> "\$GITHUB_ENV"/);
   assert.match(workflow, /name: Select newest Xcode for Swift coverage[\s\S]*?swift --version/);
   assert.ok(workflow.indexOf("name: Select newest Xcode for Swift coverage") < workflow.indexOf("name: Collect static measurements"));
   assert.match(workflow, /steps\.mode\.outputs\.mode == 'static'/);
-  assert.doesNotMatch(workflow, /INPUT_MODE|inputs\.mode/);
   assert.match(workflow, /github\.event_name != 'workflow_dispatch' \|\| github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /github\.event_name != 'schedule' \|\| vars\.CODE_HEALTH_COLLECTION_ENABLED == 'true'/);
   assert.match(workflow, /jobs:\s*\n\s*collect:\s*\n\s*if: \$\{\{[^\n]*workflow_dispatch[^\n]*CODE_HEALTH_COLLECTION_ENABLED/);
@@ -328,4 +373,22 @@ test("workflow analyzer installs match the producer's declared exact versions", 
   assert.equal(tooling.devDependencies.typescript, config.tools.typescript);
   assert.equal(toolingLock.packages[""].devDependencies.typescript, config.tools.typescript);
   assert.equal(toolingLock.packages["node_modules/typescript"].version, config.tools.typescript);
+});
+
+test("Rust CLI coverage is a separate no-default-features profile", () => {
+  assert.deepEqual(config.coverage.rust_cli, {
+    package: "sagascript-cli",
+    command: "cargo +1.93.1 llvm-cov -p sagascript-cli --no-default-features --tests --json --output-path <task-temporary-report>",
+    target: "isolated task-local CARGO_TARGET_DIR",
+    includes_inline_tests: true,
+    source_roots: [
+      "src-tauri/crates/sagascript-cli/src/",
+      "src-tauri/crates/sagascript-cli/tests/",
+    ],
+    inventory: "exported-only",
+    features: "no-default-features",
+  });
+  assert.match(producerSource, /coverage-rust-cli[\s\S]*sagascript-cli[\s\S]*--no-default-features[\s\S]*--tests/);
+  assert.match(producerSource, /setFailure\("rust-cli", "coverage"\)/);
+  assert.match(collectionDocs, /Rust CLI coverage runs the lean batch profile/);
 });
