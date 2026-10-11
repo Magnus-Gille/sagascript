@@ -62,6 +62,8 @@ test("Rust failure diagnostics retain ANSI-colored test names and PID panic iden
     ].join("\n"),
     `${red}error: token ${token} at /Users/magnus/private/credential.txt${reset}`,
   );
+  const panicOnly = safeProducerFailureDiagnostic("", `${red}thread 'core::parser::pid_only' (123) panicked at /private/tmp/test.rs:1:1:${reset}`);
+  assert.equal(panicOnly, "stderr test-failed: core::parser::pid_only");
   assert.match(diagnostic, /failed-test: core::parser::rejects_bad_input/);
   assert.match(diagnostic, /test-failed: core::parser::rejects_bad_input/);
   assert.match(diagnostic, /test result: FAILED/);
