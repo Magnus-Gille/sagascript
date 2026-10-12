@@ -171,23 +171,27 @@ impl<E: Engine> Server<E> {
             self.send_failure(0, ErrorCode::Protocol, "JSON line exceeds 16 MiB", false);
             return;
         }
+        let raw: Option<Value> = serde_json::from_str(line.trim()).ok();
+        let field = |key: &str| raw.as_ref().and_then(|value| value.get(key));
         let parsed = match decode_request(line) {
             Ok(parsed) => parsed,
             Err(error) => {
-                self.send_failure(0, ErrorCode::Protocol, &error.to_string(), false);
+                // An envelope error still echoes the id when it is usable (for example a request
+                // without `op`), so the client can fail that request instead of timing out.
+                let id = field("id")
+                    .and_then(Value::as_u64)
+                    .filter(|id| *id >= 1)
+                    .unwrap_or(0);
+                self.send_failure(id, ErrorCode::Protocol, &error.to_string(), false);
                 return;
             }
         };
-        let (id, op) = match parsed {
-            ParsedRequest::Ok { id, op } => (id, Some(op)),
-            ParsedRequest::UnknownOp { id, .. } | ParsedRequest::BadParams { id, .. } => (id, None),
+        let id = match &parsed {
+            ParsedRequest::Ok { id, .. }
+            | ParsedRequest::UnknownOp { id, .. }
+            | ParsedRequest::BadParams { id, .. } => *id,
         };
-        // Envelope version.
-        let version_ok = serde_json::from_str::<Value>(line.trim())
-            .ok()
-            .and_then(|v| v.get("v").and_then(Value::as_u64))
-            == Some(u64::from(PROTOCOL_VERSION));
-        if !version_ok {
+        if field("v").and_then(Value::as_u64) != Some(u64::from(PROTOCOL_VERSION)) {
             self.send_failure(id, ErrorCode::Protocol, "Invalid request envelope", false);
             return;
         }
@@ -199,10 +203,14 @@ impl<E: Engine> Server<E> {
             self.send_failure(id, ErrorCode::Protocol, "Host is shutting down", false);
             return;
         }
-        let is_hello = matches!(op, Some(RequestOp::Hello { .. }));
+        let is_hello = field("op").and_then(Value::as_str) == Some("hello");
         if !saw_hello {
-            match op {
-                Some(RequestOp::Hello { .. }) => self.handle_hello(id),
+            match (is_hello, parsed) {
+                (true, ParsedRequest::Ok { .. }) => self.handle_hello(id),
+                // An incomplete client identity is a bad request, not the handshake.
+                (true, ParsedRequest::BadParams { message, .. }) => {
+                    self.send_failure(id, ErrorCode::BadRequest, &message, false)
+                }
                 _ => self.send_failure(
                     id,
                     ErrorCode::Protocol,
@@ -221,21 +229,21 @@ impl<E: Engine> Server<E> {
             );
             return;
         }
-        let Some(op) = op else {
-            // Unknown op or bad parameters, re-parse to tell them apart.
-            match decode_request(line) {
-                Ok(ParsedRequest::UnknownOp { op, .. }) => self.send_failure(
+        let op = match parsed {
+            ParsedRequest::Ok { op, .. } => op,
+            ParsedRequest::UnknownOp { op, .. } => {
+                self.send_failure(
                     id,
                     ErrorCode::Unsupported,
                     &format!("Unknown operation: {op}"),
                     false,
-                ),
-                Ok(ParsedRequest::BadParams { message, .. }) => {
-                    self.send_failure(id, ErrorCode::BadRequest, &message, false)
-                }
-                _ => self.send_failure(id, ErrorCode::Protocol, "Invalid request envelope", false),
+                );
+                return;
             }
-            return;
+            ParsedRequest::BadParams { message, .. } => {
+                self.send_failure(id, ErrorCode::BadRequest, &message, false);
+                return;
+            }
         };
         match op {
             RequestOp::Hello { .. } => unreachable!("handled above"),
@@ -305,14 +313,8 @@ impl<E: Engine> Server<E> {
 
     fn handle_hello(&self, id: u64) {
         lock(&self.flags).saw_hello = true;
-        let mut capabilities =
-            serde_json::to_value(self.engine.capabilities()).unwrap_or(Value::Null);
-        if let Some(object) = capabilities.as_object_mut() {
-            // `min_macos` is Core ML specific; leave it out rather than sending null.
-            if object.get("min_macos").is_some_and(Value::is_null) {
-                object.remove("min_macos");
-            }
-        }
+        // `min_macos` is Core ML specific; `Capabilities` leaves it out when it is `None`.
+        let capabilities = serde_json::to_value(self.engine.capabilities()).unwrap_or(Value::Null);
         let mut fields = Map::new();
         fields.insert("protocol".into(), json!(PROTOCOL_VERSION));
         fields.insert(
@@ -602,5 +604,7 @@ impl<E: Engine> Server<E> {
     }
 }
 
+#[cfg(test)]
+mod golden_tests;
 #[cfg(test)]
 mod tests;
