@@ -10,7 +10,7 @@ const read = (path) =>
   readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8").replace(/\r\n?/g, "\n");
 
 const toolchainFile = read("rust-toolchain.toml");
-const channel = /^channel = "([^"]+)"$/m.exec(toolchainFile)?.[1];
+const channel = /^channel = "([^"]+)"\s*(?:#.*)?$/m.exec(toolchainFile)?.[1];
 const nodeMajor = read(".nvmrc").trim();
 const workflows = Object.fromEntries(
   readdirSync(fileURLToPath(new URL("../.github/workflows/", import.meta.url)))
@@ -58,11 +58,12 @@ test("a workflow that installs a different Rust release overrides the toolchain 
   // measures with another release (code-health's 1.93.1 cohort) must export
   // RUSTUP_TOOLCHAIN or its unprefixed rustc/cargo calls silently switch.
   for (const [name, text] of Object.entries(workflows)) {
-    for (const match of text.matchAll(/rustup toolchain install ([0-9][0-9.]*) /g)) {
+    for (const match of text.matchAll(/rustup toolchain install ([0-9]+(?:\.[0-9]+)*)\b/g)) {
       if (match[1] === channel) continue;
+      // Exported for later steps too, not only for the installing step's shell.
       assert.ok(
-        text.includes(`RUSTUP_TOOLCHAIN=${match[1]}`),
-        `${name}: installs Rust ${match[1]} but never exports RUSTUP_TOOLCHAIN=${match[1]}`,
+        text.includes(`RUSTUP_TOOLCHAIN=${match[1]}" >> "$GITHUB_ENV"`),
+        `${name}: installs Rust ${match[1]} but never writes RUSTUP_TOOLCHAIN=${match[1]} to $GITHUB_ENV`,
       );
     }
   }
@@ -77,7 +78,7 @@ test("the MSRV is declared once, inherited by every crate and checked in CI", ()
   const ci = workflows["ci.yml"];
   const msrvJob = ci.slice(ci.indexOf("\n  msrv-linux:\n"), ci.indexOf("\n  check-linux:\n"));
   assert.match(msrvJob, /rust-version = /, "msrv-linux must read the declared rust-version, not hardcode it");
-  assert.match(msrvJob, /RUSTUP_TOOLCHAIN=\$msrv/);
+  assert.match(msrvJob, /echo "RUSTUP_TOOLCHAIN=\$msrv" >> "\$GITHUB_ENV"/);
   assert.match(msrvJob, /cargo check --workspace --locked/);
   assert.match(ci, /^  check-linux:\n    needs: \[[^\]]*msrv-linux[^\]]*\]$/m, "check-linux must gate on msrv-linux");
 });
@@ -92,8 +93,8 @@ test("Node.js is pinned to one major everywhere", () => {
   assert.equal(JSON.parse(read("package.json")).engines?.node, `>=${nodeMajor}`);
 });
 
-test("README and CONTRIBUTING state the same versions as the pin files", () => {
-  for (const doc of ["README.md", "CONTRIBUTING.md"]) {
+test("README, CONTRIBUTING and the installation guide state the same versions as the pin files", () => {
+  for (const doc of ["README.md", "CONTRIBUTING.md", "docs/installation.md"]) {
     const text = read(doc);
     assert.ok(text.includes(`Rust ${msrv}+`), `${doc} must state Rust ${msrv}+`);
     assert.ok(text.includes(`Node.js ${nodeMajor}+`), `${doc} must state Node.js ${nodeMajor}+`);
