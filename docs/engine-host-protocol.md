@@ -7,6 +7,13 @@ transcribes **one window** of audio at a time. This keeps every engine small, le
 between the windows of a long file job, and gives all engines one tested merge
 (`sagascript-core/src/transcription/chunk_merge.rs`).
 
+This document is the prose specification. The **source of truth** is the set of golden
+transcripts in `src-tauri/engine-host/test-vectors/protocol/` (see
+[Golden transcripts](#golden-transcripts)): the Rust types (`sagascript-engine-protocol`) decode
+them strictly and both hosts replay them in their unit tests, so a change to the wire format
+starts there. Where this text and the transcripts disagree, the transcripts win and the text is
+the bug.
+
 ## Transport
 
 - The client spawns the host with `--protocol 1`. stdin carries requests, stdout carries responses
@@ -27,11 +34,29 @@ between the windows of a long file job, and gives all engines one tested merge
 
 Every request gets exactly one terminal response. Responses to concurrent requests may arrive in
 any order; correlate by `id`. Unknown fields are ignored (forward compatibility); an unknown `op`
-fails with `unsupported`. Breaking changes bump `protocol`.
+(including an empty one) fails with `unsupported`. Breaking changes bump `protocol`.
 
 Error codes: `protocol` (e.g. op before `hello`, bad envelope), `bad_request`, `unsupported`,
 `not_loaded`, `model_missing`, `model_load_failed`, `busy` (retryable), `cancelled`, `engine`,
-`internal`.
+`internal`. `retryable` is true for `busy` only; the client retries `busy` only when it is set.
+Engine errors (`not_loaded`, `model_missing`, `model_load_failed`, `busy`, `engine`, `internal`)
+reach the client with the host's code, message and `retryable` unchanged.
+
+Envelope errors are `protocol` errors. A line that is not a JSON object, or has no integer
+`id` ≥ 1, is answered with `id` 0; a line with a usable `id` but a missing or non-string `op`, or
+`v` other than the integer 1, is answered with that `id`. Integer fields must be JSON integers
+(`2.0` is not an id). After `shutdown`, and after stdin EOF, the host answers any further
+request with `protocol`.
+
+**Required and optional fields.** Every field of a request or result shown below is required
+unless this document marks it optional; a missing or mistyped required field is a decode error
+on the receiving side (`bad_request` for a request, a protocol error in the client for a
+result), never a silent zero or empty value. The optional result fields are `hello.host.git_sha`
+(decoded leniently so that its absence fails the handshake with an explicit build-identity
+error), `hello.host.build_dirty`, `hello.capabilities.min_macos`,
+`hello.capabilities.context_biasing`, `tokens[].confidence`, `timings.boost_us`, `boost_active`,
+`boost_reason`, and `status.model_id` (`null` when no model is loaded). The optional request
+fields are `boost_terms` and `boost_weight`.
 
 All `*_ms` and `*_bytes` fields are non-negative JSON integers (clients also accept and round
 non-negative floats for robustness).
@@ -39,7 +64,10 @@ non-negative floats for robustness).
 ## Operations
 
 ### `hello` (must be first)
-Request: `{"client":{"name","version","git_sha"}}`.
+Request: `{"client":{"name","version","git_sha"}}` (three strings). A `hello` whose `client` lacks
+one of them is answered `bad_request` and is not the handshake: the next request must again be
+`hello`. Any other request before a successful `hello`, and a second `hello`, is a `protocol`
+error.
 Result:
 ```json
 {"protocol":1,
@@ -49,13 +77,16 @@ Result:
                  "compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0",
                  "context_biasing":true}}
 ```
-The client rejects a host whose `protocol` differs or whose `git_sha` is missing, and logs a
-warning when the host build differs from its own (build-identity invariant).
+`host.build_dirty` (optional) tells whether the host was built from a modified tree. The client
+rejects a host whose `protocol` differs or whose `git_sha` is missing, and logs a warning when
+the host build differs from its own (build-identity invariant).
 
 ### `load`
 Request: `{"model_dir":"<abs path>","model_id":"pianissimo-sv-coreml-<rev>","compute_units":"ane"}`.
+A relative `model_dir` or an empty `model_id` is `bad_request`.
 Result: `{"model_id","load_ms","compiled":<bool: first-time device compile happened>,
-"window_s","frame_s","vocab_size","blank_id"}`. May emit `{"event":"load_progress","phase":"compiling"}`.
+"window_s","frame_s","vocab_size","blank_id"}`, all required (`blank_id` 0 is a real token id, so
+a missing one must never read as 0). May emit `{"event":"load_progress","phase":"compiling"}`.
 `compiled` is true only when this load compiled at least one `.mlpackage`; a load served from the
 compiled-model cache (`~/Library/Caches/Sagascript/EngineHost/<key>/<Name>.mlmodelc`, valid once its
 `.complete` marker exists) reports false. The host loads from that stable path so the OS Neural
@@ -77,7 +108,9 @@ Request:
 - `pcm_path` is a raw little-endian float32 mono file written by the client (0600, private temp
   dir, deleted by the client). The host reads `num_samples` starting at `offset_samples`.
 - `num_samples ≤ max_window_s × sample_rate`, else `bad_request`. Shorter windows are padded
-  internally; tokens beyond the real audio are dropped.
+  internally; tokens beyond the real audio are dropped. `num_samples` must be at least 1,
+  `pcm_path` absolute, `format` `f32le` and `sample_rate` the host's `capabilities.sample_rate`;
+  anything else is `bad_request`, checked before the window is queued.
 - Optional context biasing: `"boost_terms":["Gille","Magnus Gille"]` (at most 500 terms of at most 64
   Unicode scalars, else `bad_request`) and `"boost_weight":5.0` (logit bonus, `0..=20`). A request without a
   dictionary is byte-identical to a pre-biasing request (the fields are omitted, never sent as empty), and a
@@ -106,7 +139,8 @@ Request:
     type and bounds whenever present, even when the other field is absent or empty (`bad_request`, with fixed
     texts that never echo the dictionary: terms are personal data).
   - Discovery: `hello.capabilities.context_biasing: true`. A result for a window that carried a dictionary
-    includes `"boost_active": true|false` (and `timings.boost_us`); `false` comes with `boost_reason`:
+    includes `"boost_active": true|false` (and `timings.boost_us`, which the ONNX host omits when it is 0;
+    absent means 0); `false` comes with `boost_reason`:
     `no_usable_terms` (no term could be tokenized with the vocabulary) or `no_top_k_outputs` (for example a
     Core ML joint without top-K outputs). `true` with an unchanged transcript just means nothing needed
     changing. A host without the capability bit, or a result
@@ -114,9 +148,10 @@ Request:
     prints a warning instead of claiming biasing was active.
   - Results are still the raw pieces, so replacements remain a client-side post-step. Both hosts load the
     shared vectors `src-tauri/engine-host/test-vectors/context-biasing.json` in their unit tests.
-- `priority` is `interactive` (dictation) or `batch` (file chunks). When more requests are queued
-  than `max_in_flight`, interactive ones run first. A host that is not loaded answers `not_loaded`;
-  the client then reloads and resends the window once.
+- `priority` is `interactive` (dictation) or `batch` (file chunks) and is required: a window
+  without it is `bad_request` (the Core ML host used to assume `batch`). When more requests are
+  queued than `max_in_flight`, interactive ones run first. A host that is not loaded answers
+  `not_loaded`; the client then reloads and resends the window once.
 
 Result:
 ```json
@@ -129,15 +164,22 @@ in time order. `confidence` is optional.
 
 ### `cancel`
 Request: `{"target":<request id>}` → `{"cancelled":<bool>}`. If the target has not finished, it
-terminates with error `cancelled`. Cancellation is best effort; a window may still complete.
+terminates with error `cancelled`. Cancellation is best effort; a window may still complete. An
+unknown or finished target (any integer ≥ 0) answers `false`; a missing or non-integer `target` is
+`bad_request`.
 
 ### `status`, `ping`, `unload`, `shutdown`
 - `status` → `{"state":"idle|loading|ready|busy","model_id":null|"…","in_flight":0,"rss_bytes":…,"uptime_s":…}`
 - `ping` → `{}`; always answered, even while busy.
 - `unload` → `{}`; frees model memory, process stays.
-- `shutdown` → `{}`; the host flushes and exits 0.
+- `shutdown` → `{}`; the host cancels queued and running windows (they terminate with
+  `cancelled`), flushes and exits 0.
 
 `status`, `ping` and `cancel` are always served immediately and never count toward `max_in_flight`.
+A window stops counting toward `status.in_flight` before its response is written.
+
+On stdin EOF the host fails queued windows with `cancelled`, cancels running ones and exits 0
+(the client is gone, so a host may exit before writing those responses).
 
 ## Client behavior (normative for Sagascript's Rust client)
 
@@ -196,10 +238,70 @@ This host does not pad short windows: the models take dynamic input lengths, so 
 real audio. `SAGASCRIPT_ORT_TRACE=1` prints one stderr line per window (frames, session-run time,
 joint steps, tokens); `scripts/benchmark-windows-engine-host.ps1` sweeps these settings on a device.
 
+## Golden transcripts
+
+`src-tauri/engine-host/test-vectors/protocol/` holds the machine-checked contract (#367):
+
+| File | Covers |
+|---|---|
+| `handshake.jsonl` | requests before `hello`, an incomplete `hello`, the handshake, duplicate `hello`, `ping`, `status`, unknown fields and ops, every kind of envelope error |
+| `load.jsonl` | `load` parameter checks, `model_missing`, `model_load_failed`, a successful `load`, `status` around `load`/`unload`, loading another model |
+| `transcribe.jsonl` | `not_loaded` before `load` and after `unload`, windows of both priorities and maximal length, engine errors `busy` (retryable), `engine`, `internal`, every `transcribe_window` parameter check |
+| `context-biasing.jsonl` | a boosted window, `no_usable_terms`, dictionaries that decode unboosted, every malformed dictionary with its fixed text |
+| `cancel.jsonl` | cancelling a queued and a running window, unknown and finished targets, `status` while busy |
+| `shutdown.jsonl` | `shutdown` cancelling a running window, exit, requests after `shutdown` |
+| `eof.jsonl` | stdin EOF failing queued and running windows |
+
+Each `.jsonl` line is one step, an object with exactly one of:
+
+- `{"send": <request>}`: the client writes the request as one line. A step may add
+  `"unknown_fields": [...]` naming request fields that no host knows (they must be ignored).
+- `{"send_raw": "<text>"}`: the client writes this exact line (malformed input).
+- `{"expect": <response>}`: the host writes a response with this `id`. It is matched against the
+  earliest response with that `id` not matched yet, so concurrent responses may come in any
+  order; events are ignored. Objects must have exactly the same keys (a renamed, missing or extra
+  field fails), arrays the same items; a number written as an integer must be an integer, a
+  fractional one matches within a relative 1e-6. Host-specific values use the placeholders
+  `"<string>"`, `"<sha40>"`, `"<bool>"`, `"<uint>"` and `"<number>"` (non-negative). Messages of
+  host-generated errors are `"<string>"`; engine messages and the fixed dictionary texts are exact.
+- `{"eof": true}`: the client closes stdin. `{"exit": 0}`: the host has shut down (in-process:
+  its shutdown callback ran).
+- `{"note": "..."}`: a comment.
+
+After the last step the host must not have written a response that no step expected.
+
+The host runs behind the scripted engine in `fake-engine.json`: `capabilities` is what it
+announces; `load` of a `model_dir` listed in `load_errors` fails with that error, any other
+returns `load_result` with the requested `model_id`; `transcribe` before `load` (or after
+`unload`) fails with `not_loaded`, otherwise `windows[pcm_path]` decides: `result`, `error`, or
+`hold` (block until cancelled, then fail with `cancelled`). `expect_boost` is the dictionary the
+engine must receive (terms with a positive weight); a window without it must receive none.
+
+Who checks what:
+
+- `sagascript-engine-protocol` (`src/vector_tests.rs`, `cargo test -p sagascript-engine-protocol`)
+  decodes every expected response with the client's types and encodes it again (so a field the
+  types do not know, or a missing required one, fails), checks that removing any field not listed
+  as optional above is a decode error, decodes every request as the hosts answer it, and checks
+  that the transcripts cover every op and every error code. The `golden` cargo feature exposes
+  the transcript reader, matcher and fake engine to other crates' tests.
+- The Core ML host replays every transcript through `EngineHostServer` in
+  `ProtocolServerTests.swift` (`swift test`, CI test-macos).
+- The ONNX host replays them through its `Server` in `src/server/golden_tests.rs`
+  (`cargo test --locked` in `engine-host/ort`, CI test-linux).
+
 ## Conformance
 
-`scripts/engine-host-conformance.py <host binary> --model-dir <dir>` exercises `hello`, `load`,
-`transcribe_window` (including out-of-order concurrent responses and an over-long window),
-`cancel`, `status`, `ping`, `unload`, EOF exit and `shutdown`. Every engine host must pass it.
-The script is engine-agnostic (it sends `compute_units:"ane"`, which non-Core ML hosts map to
-their only device); set `ORT_DYLIB_PATH` when running it against the ONNX host.
+`scripts/engine-host-conformance.py <host binary> --no-model` runs against a real host process
+and needs no model: `hello`, `ping`, `status`, a request before `hello`, an unknown op, `load` of
+a missing model (`model_missing`), a window before `load` (`not_loaded`), `cancel` of a finished
+request, `shutdown` and EOF exit. CI runs it against the staged Core ML host (test-macos; `npm run
+verify` check `engine-host-conformance`).
+
+`scripts/engine-host-conformance.py <host binary> --model-dir <dir>` runs those checks and then
+exercises `load`, `transcribe_window` (including out-of-order concurrent responses and an
+over-long window), `cancel`, `status`, `unload`, EOF exit and `shutdown` with a real model. Every
+engine host must pass it. It needs a downloaded Pianissimo model, so it is run by hand (for
+example with `--model-dir` from `sagascript engine status --json`). The script is engine-agnostic
+(it sends `compute_units:"ane"`, which non-Core ML hosts map to their only device); set
+`ORT_DYLIB_PATH` when running it against the ONNX host.

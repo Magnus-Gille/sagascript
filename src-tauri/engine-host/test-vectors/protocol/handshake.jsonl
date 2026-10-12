@@ -1,0 +1,47 @@
+{"note":"hello must come first: any other request before a successful hello fails with protocol, echoing the id."}
+{"send":{"v":1,"id":1,"op":"ping"}}
+{"expect":{"id":1,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"note":"A hello whose client identity is incomplete is a bad_request and is not the handshake."}
+{"send":{"v":1,"id":2,"op":"hello","client":{"name":"sagascript"}}}
+{"expect":{"id":2,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":3,"op":"status"}}
+{"expect":{"id":3,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"note":"The handshake: protocol version, build identity (host specific, hence placeholders) and the engine's capabilities."}
+{"send":{"v":1,"id":4,"op":"hello","client":{"name":"sagascript","version":"1.4.4","git_sha":"0123456789abcdef0123456789abcdef01234567"}}}
+{"expect":{"id":4,"ok":true,"protocol":1,"host":{"name":"sagascript-engine-host","version":"<string>","git_sha":"<sha40>","build_dirty":"<bool>","engine":"<string>","engine_version":"<string>"},"capabilities":{"sample_rate":16000,"max_window_s":1.0,"preferred_window_s":1.0,"preferred_overlap_s":0.2,"max_in_flight":2,"token_timestamps":true,"languages":["sv"],"compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0","context_biasing":true}}}
+{"note":"hello may only be sent once."}
+{"send":{"v":1,"id":5,"op":"hello","client":{"name":"sagascript","version":"1.4.4","git_sha":"0123456789abcdef0123456789abcdef01234567"}}}
+{"expect":{"id":5,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":6,"op":"ping"}}
+{"expect":{"id":6,"ok":true}}
+{"note":"Unknown request fields are ignored (forward compatibility)."}
+{"send":{"v":1,"id":7,"op":"ping","future_field":{"nested":true}},"unknown_fields":["future_field"]}
+{"expect":{"id":7,"ok":true}}
+{"send":{"v":1,"id":8,"op":"status"}}
+{"expect":{"id":8,"ok":true,"state":"idle","model_id":null,"in_flight":0,"rss_bytes":"<uint>","uptime_s":"<number>"}}
+{"note":"Unknown ops, including an empty op name, are unsupported."}
+{"send":{"v":1,"id":9,"op":"frobnicate","x":1}}
+{"expect":{"id":9,"ok":false,"error":{"code":"unsupported","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":10,"op":""}}
+{"expect":{"id":10,"ok":false,"error":{"code":"unsupported","message":"<string>","retryable":false}}}
+{"note":"Envelope errors are protocol errors; the id is echoed when it is a usable integer >= 1, else 0."}
+{"send":{"v":2,"id":11,"op":"ping"}}
+{"expect":{"id":11,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send":{"id":12,"op":"ping"}}
+{"expect":{"id":12,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":13}}
+{"expect":{"id":13,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":14,"op":5}}
+{"expect":{"id":14,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send":{"v":1,"op":"ping"}}
+{"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":0,"op":"ping"}}
+{"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":"15","op":"ping"}}
+{"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send_raw":"not json"}
+{"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send_raw":"[1,2,3]"}
+{"expect":{"id":0,"ok":false,"error":{"code":"protocol","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":16,"op":"ping"}}
+{"expect":{"id":16,"ok":true}}

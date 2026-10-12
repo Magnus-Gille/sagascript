@@ -1,0 +1,50 @@
+{"send":{"v":1,"id":1,"op":"hello","client":{"name":"sagascript","version":"1.4.4","git_sha":"0123456789abcdef0123456789abcdef01234567"}}}
+{"expect":{"id":1,"ok":true,"protocol":1,"host":{"name":"sagascript-engine-host","version":"<string>","git_sha":"<sha40>","build_dirty":"<bool>","engine":"<string>","engine_version":"<string>"},"capabilities":{"sample_rate":16000,"max_window_s":1.0,"preferred_window_s":1.0,"preferred_overlap_s":0.2,"max_in_flight":2,"token_timestamps":true,"languages":["sv"],"compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0","context_biasing":true}}}
+{"note":"A window before load fails with the engine's not_loaded (the client then reloads and resends once)."}
+{"send":{"v":1,"id":2,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"interactive"}}
+{"expect":{"id":2,"ok":false,"error":{"code":"not_loaded","message":"No model is loaded","retryable":false}}}
+{"send":{"v":1,"id":3,"op":"load","model_dir":"/vectors/model","model_id":"vectors-model","compute_units":"ane"}}
+{"expect":{"id":3,"ok":true,"model_id":"vectors-model","load_ms":4,"compiled":false,"window_s":1.0,"frame_s":0.08,"vocab_size":3,"blank_id":2}}
+{"send":{"v":1,"id":4,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":4,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.5}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3}}}
+{"send":{"v":1,"id":5,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":8000,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"interactive"}}
+{"expect":{"id":5,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.5}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3}}}
+{"note":"A window may be as long as max_window_s x sample_rate (1.0 s here)."}
+{"send":{"v":1,"id":6,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":16000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":6,"ok":true,"tokens":[{"id":0,"text":"▁hej","start":0.0,"duration":0.08,"confidence":0.98},{"id":1,"text":"san","start":0.16,"duration":0.08,"confidence":0.5}],"audio_s":0.5,"timings":{"preprocess_ms":1,"encode_ms":2,"decode_ms":3}}}
+{"send":{"v":1,"id":7,"op":"status"}}
+{"expect":{"id":7,"ok":true,"state":"ready","model_id":"vectors-model","in_flight":0,"rss_bytes":"<uint>","uptime_s":"<number>"}}
+{"note":"Engine errors pass through with their code, message and retryable flag; busy is the retryable one."}
+{"send":{"v":1,"id":8,"op":"transcribe_window","pcm_path":"/vectors/busy.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":8,"ok":false,"error":{"code":"busy","message":"All engine slots are busy","retryable":true}}}
+{"send":{"v":1,"id":9,"op":"transcribe_window","pcm_path":"/vectors/engine-failure.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":9,"ok":false,"error":{"code":"engine","message":"Decoder failed","retryable":false}}}
+{"send":{"v":1,"id":10,"op":"transcribe_window","pcm_path":"/vectors/internal.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":10,"ok":false,"error":{"code":"internal","message":"Unexpected engine state","retryable":false}}}
+{"note":"Parameter checks, each with exactly one fault; all are bad_request."}
+{"send":{"v":1,"id":11,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le"}}
+{"expect":{"id":11,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":12,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"urgent"}}
+{"expect":{"id":12,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":13,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":0,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":13,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":14,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":16001,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":14,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":15,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"s16le","priority":"batch"}}
+{"expect":{"id":15,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":16,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":8000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":16,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":17,"op":"transcribe_window","pcm_path":"vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":17,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":18,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":18,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":19,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":-1,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":19,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":20,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":"8000","sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":20,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":21,"op":"transcribe_window","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"batch"}}
+{"expect":{"id":21,"ok":false,"error":{"code":"bad_request","message":"<string>","retryable":false}}}
+{"send":{"v":1,"id":22,"op":"unload"}}
+{"expect":{"id":22,"ok":true}}
+{"send":{"v":1,"id":23,"op":"transcribe_window","pcm_path":"/vectors/speech.f32","offset_samples":0,"num_samples":8000,"sample_rate":16000,"format":"f32le","priority":"interactive"}}
+{"expect":{"id":23,"ok":false,"error":{"code":"not_loaded","message":"No model is loaded","retryable":false}}}
