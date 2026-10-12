@@ -258,7 +258,10 @@ fn migrate_engine_defaults_at(path: &Path, loaded: Settings) -> Settings {
         return fresh;
     }
     with_settings_lock(path, || {
-        let mut settings = load_from(path);
+        let mut settings = match load_from_checked(path) {
+            Ok(settings) => settings,
+            Err(error) => return Ok(unmigrated_defaults(path, &error, "engine defaults")),
+        };
         if settings.migrate_engine_defaults() {
             if let Err(error) = save_to(path, &settings) {
                 tracing::warn!(
@@ -285,7 +288,10 @@ fn migrate_lineup_at(path: &Path, loaded: Settings, env: &LineupEnv<'_>) -> Sett
         return fresh;
     }
     with_settings_lock(path, || {
-        let mut settings = load_from(path);
+        let mut settings = match load_from_checked(path) {
+            Ok(settings) => settings,
+            Err(error) => return Ok(unmigrated_defaults(path, &error, "Swedish model lineup")),
+        };
         if settings.migrate_swedish_lineup(env) {
             if let Err(error) = save_to(path, &settings) {
                 tracing::warn!(
@@ -312,7 +318,16 @@ fn load_at_with_legacy_sources(
     }
     with_settings_lock(path, || {
         migrate_legacy_identifier_settings_locked(path, legacy_sources);
-        let settings = load_from(path);
+        let settings = match load_from_checked(path) {
+            Ok(settings) => settings,
+            Err(error) => {
+                return Ok(unmigrated_defaults(
+                    path,
+                    &error,
+                    "profile settings and dictionaries",
+                ))
+            }
+        };
         if has_embedded_glossary_fields(path) || needs_profile_model_migration(path) {
             if let Err(error) = save_to(path, &settings) {
                 tracing::warn!(
@@ -332,49 +347,134 @@ fn load_at_with_legacy_sources(
     })
 }
 
-/// Load settings from a specific path. Returns defaults if missing or unreadable.
-pub fn load_from(path: &Path) -> Settings {
-    let mut settings = match std::fs::read_to_string(path) {
-        Ok(contents) => {
-            match serde_json::from_str::<serde_json::Value>(&contents).and_then(|mut value| {
-                if let Some(map) = value.as_object_mut() {
-                    canonicalize_legacy_keys(map);
-                    if let Some(models) = map.get_mut("profile_models") {
-                        if let Some(entries) = models.as_object_mut() {
-                            entries.retain(|id, model| {
-                                let valid = validate_profile_file_id(id).is_ok()
-                                    && model.as_str().is_some_and(|id| {
-                                        FileModelPreference::parse_id(id).is_ok()
-                                    });
-                                if !valid {
-                                    tracing::warn!("Ignoring invalid profile model setting");
-                                }
-                                valid
-                            });
-                        } else {
-                            tracing::warn!("Ignoring malformed profile model map");
-                            map.remove("profile_models");
-                        }
-                    }
-                }
-                serde_json::from_value(value)
-            }) {
-                Ok(settings) => settings,
-                Err(e) => {
-                    // One wrong-typed field would otherwise silently reset ALL
-                    // user settings to defaults with no diagnostic trail. We
-                    // still fall back to defaults (self-healing contract), but
-                    // now there's a log line to explain why.
-                    tracing::warn!(
-                        "Failed to parse settings file at {}: {e} — falling back to defaults",
-                        path.display()
-                    );
-                    Settings::default()
-                }
-            }
+/// A startup migration never persists over a settings file it could not load.
+/// Warn once and use defaults in memory; the file stays as it is until an
+/// explicit save, which preserves its bytes first (see [`save_to`]).
+fn unmigrated_defaults(path: &Path, error: &SettingsLoadError, migration: &str) -> Settings {
+    tracing::warn!(
+        "Settings file at {} could not be loaded ({error}); skipping the {migration} migration and using defaults without changing the file",
+        path.display()
+    );
+    defaults_for(path)
+}
+
+/// Why the bytes of a settings file cannot be used as [`Settings`].
+#[derive(Debug)]
+enum SettingsParseError {
+    /// Not UTF-8, not JSON, or not a JSON object.
+    Syntax(String),
+    /// A JSON object that does not deserialize as `Settings`, such as one with
+    /// a wrong-typed known field.
+    Schema(String),
+}
+
+impl std::fmt::Display for SettingsParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Syntax(reason) => write!(f, "not a valid JSON settings object: {reason}"),
+            Self::Schema(reason) => write!(f, "invalid setting value: {reason}"),
         }
-        Err(_) => Settings::default(),
+    }
+}
+
+/// Why [`load_from_checked`] could not load an existing settings file.
+#[derive(Debug)]
+enum SettingsLoadError {
+    /// Any read error other than a missing file.
+    Read(std::io::Error),
+    Syntax(String),
+    Schema(String),
+}
+
+impl From<SettingsParseError> for SettingsLoadError {
+    fn from(error: SettingsParseError) -> Self {
+        match error {
+            SettingsParseError::Syntax(reason) => Self::Syntax(reason),
+            SettingsParseError::Schema(reason) => Self::Schema(reason),
+        }
+    }
+}
+
+impl std::fmt::Display for SettingsLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Read(error) => write!(f, "read failed: {error}"),
+            Self::Syntax(reason) => write!(f, "not a valid JSON settings object: {reason}"),
+            Self::Schema(reason) => write!(f, "invalid setting value: {reason}"),
+        }
+    }
+}
+
+/// Parse the bytes of a settings file the way every load does.
+fn parse_settings(contents: &[u8]) -> Result<Settings, SettingsParseError> {
+    settings_from_object(parse_settings_object(contents)?, true)
+}
+
+/// Syntax stage of [`parse_settings`]: the bytes must be a UTF-8 JSON object.
+fn parse_settings_object(
+    contents: &[u8],
+) -> Result<serde_json::Map<String, serde_json::Value>, SettingsParseError> {
+    let text = std::str::from_utf8(contents)
+        .map_err(|error| SettingsParseError::Syntax(format!("not UTF-8 ({error})")))?;
+    match serde_json::from_str(text) {
+        Ok(serde_json::Value::Object(map)) => Ok(map),
+        Ok(_) => Err(SettingsParseError::Syntax(
+            "the top level is not a JSON object".to_string(),
+        )),
+        Err(error) => Err(SettingsParseError::Syntax(error.to_string())),
+    }
+}
+
+/// Schema stage of [`parse_settings`]. Invalid profile-model entries are
+/// dropped rather than failing the whole file; `report_ignored` logs them.
+fn settings_from_object(
+    mut map: serde_json::Map<String, serde_json::Value>,
+    report_ignored: bool,
+) -> Result<Settings, SettingsParseError> {
+    canonicalize_legacy_keys(&mut map);
+    if let Some(models) = map.get_mut("profile_models") {
+        if let Some(entries) = models.as_object_mut() {
+            entries.retain(|id, model| {
+                let valid = validate_profile_file_id(id).is_ok()
+                    && model
+                        .as_str()
+                        .is_some_and(|id| FileModelPreference::parse_id(id).is_ok());
+                if !valid && report_ignored {
+                    tracing::warn!("Ignoring invalid profile model setting");
+                }
+                valid
+            });
+        } else {
+            if report_ignored {
+                tracing::warn!("Ignoring malformed profile model map");
+            }
+            map.remove("profile_models");
+        }
+    }
+    serde_json::from_value(serde_json::Value::Object(map))
+        .map_err(|error| SettingsParseError::Schema(error.to_string()))
+}
+
+/// Load settings from a specific path, reporting why an existing file could
+/// not be used. A missing file is not an error: it loads as defaults.
+fn load_from_checked(path: &Path) -> Result<Settings, SettingsLoadError> {
+    let mut settings = match std::fs::read(path) {
+        Ok(contents) => parse_settings(&contents)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Settings::default(),
+        Err(error) => return Err(SettingsLoadError::Read(error)),
     };
+    finish_loaded_settings(path, &mut settings);
+    Ok(settings)
+}
+
+/// Defaults with the same post-processing a successful load applies.
+fn defaults_for(path: &Path) -> Settings {
+    let mut settings = Settings::default();
+    finish_loaded_settings(path, &mut settings);
+    settings
+}
+
+fn finish_loaded_settings(path: &Path, settings: &mut Settings) {
     settings.profile_glossaries.retain(|profile_id, _| {
         if let Err(error) = validate_profile_file_id(profile_id) {
             tracing::warn!("Ignoring embedded {error}");
@@ -383,10 +483,22 @@ pub fn load_from(path: &Path) -> Settings {
             true
         }
     });
-    load_external_glossaries(path, &mut settings);
+    load_external_glossaries(path, settings);
     settings.materialize_profile_models();
     settings.migrate_global_glossary_to_profiles();
-    settings
+}
+
+/// Load settings from a specific path. Returns defaults if missing or unreadable.
+pub fn load_from(path: &Path) -> Settings {
+    load_from_checked(path).unwrap_or_else(|error| {
+        // One wrong-typed field resets ALL settings to defaults in memory.
+        // Saving over the file then preserves its bytes first (see `save_to`).
+        tracing::warn!(
+            "Failed to load settings file at {} ({error}) — falling back to defaults",
+            path.display()
+        );
+        defaults_for(path)
+    })
 }
 
 /// Persist settings to disk using read-merge-write to preserve unknown or
@@ -506,7 +618,7 @@ where
 }
 
 /// Persist settings to a specific path. Test seam for `save`, which always
-/// targets `settings_path()`.
+/// targets `settings_path()`. Caller must hold the settings lock.
 fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     let dir = path
         .parent()
@@ -516,38 +628,10 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     // Ensure directory exists
     create_private_dir_all(&dir).map_err(|e| format!("Failed to create settings dir: {e}"))?;
 
-    // Read existing file to preserve non-settings keys
-    let mut map: serde_json::Map<String, serde_json::Value> = if let Ok(contents) =
-        std::fs::read_to_string(path)
-    {
-        match serde_json::from_str(&contents) {
-            Ok(m) => m,
-            Err(e) => {
-                // A parse failure here used to silently drop every
-                // preserved unknown or legacy key
-                // this read-merge-write exists to protect. Back up the
-                // corrupt bytes to a sidecar before starting fresh, rather
-                // than aborting the save (aborting would contradict the
-                // corrupt-to-defaults self-healing contract).
-                tracing::warn!(
-                    "Existing settings file at {} is corrupt ({e}) — backing up to .bak and starting fresh",
-                    path.display()
-                );
-                let bak_path = path.with_extension("json.bak");
-                if let Err(be) =
-                    atomic_write(&bak_path, contents.as_bytes(), "corrupt settings backup")
-                {
-                    tracing::warn!(
-                        "Failed to write corrupt settings backup to {}: {be}",
-                        bak_path.display()
-                    );
-                }
-                serde_json::Map::new()
-            }
-        }
-    } else {
-        serde_json::Map::new()
-    };
+    // Read existing file to preserve non-settings keys. This is the one place
+    // every settings write passes through, so it is also where an unreadable
+    // or invalid file is protected before anything is replaced.
+    let mut map = existing_settings_for_merge(path)?;
     canonicalize_legacy_keys(&mut map);
 
     save_external_glossaries(path, settings)?;
@@ -573,6 +657,168 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     atomic_write(path, json.as_bytes(), "settings")?;
 
     Ok(())
+}
+
+/// The existing JSON object `save_to` merges into, after making it safe to
+/// replace the file. Caller must hold the settings lock.
+///
+/// - Missing: an empty object.
+/// - Unreadable: an error, so the file is never replaced.
+/// - Valid settings: its object, so unknown keys survive.
+/// - Invalid settings: its exact bytes are first preserved by
+///   [`preserve_invalid_settings`] (an error if that fails, so nothing is
+///   written). Then its object for a schema error, so unknown keys survive, or
+///   an empty object for a syntax error.
+fn existing_settings_for_merge(
+    path: &Path,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let contents = match std::fs::read(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(serde_json::Map::new())
+        }
+        Err(error) => {
+            return Err(format!(
+                "Settings file {} could not be read ({error}); refusing to overwrite it",
+                path.display()
+            ))
+        }
+    };
+    // The same two stages as `parse_settings`; the load already reported any
+    // ignored profile-model entries.
+    let (problem, merge_base) = match parse_settings_object(&contents) {
+        Err(problem) => (problem, serde_json::Map::new()),
+        Ok(object) => match settings_from_object(object.clone(), false) {
+            Ok(_) => return Ok(object),
+            Err(problem) => (problem, object),
+        },
+    };
+    let recovery = preserve_invalid_settings(path, &contents).map_err(|error| {
+        format!(
+            "Settings file {} is invalid ({problem}) and a recovery copy could not be saved ({error}); refusing to overwrite it",
+            path.display()
+        )
+    })?;
+    tracing::warn!(
+        "Settings file {} is invalid ({problem}). Its exact contents were saved to {} before it was replaced; the other settings were reset to defaults and can be restored from that copy.",
+        path.display(),
+        recovery.display()
+    );
+    Ok(merge_base)
+}
+
+/// Bound on numbered recovery copies, so the search always ends.
+const MAX_RECOVERY_COPIES: usize = 1000;
+
+/// Preserve the exact bytes of an invalid settings file before it is replaced
+/// and return where they are. Caller must hold the settings lock.
+///
+/// Never overwrites anything: the first copy is `settings.json.bak`, later ones
+/// `settings.json.bak.1`, `settings.json.bak.2`, ..., each created exclusively.
+/// A candidate that already holds these exact bytes is reused instead of
+/// duplicated. A new copy is owner-only (0600 on Unix) and synced, with its
+/// directory, before this returns.
+fn preserve_invalid_settings(path: &Path, contents: &[u8]) -> Result<PathBuf, String> {
+    #[cfg(test)]
+    if FAIL_RECOVERY_COPY.with(std::cell::Cell::get) {
+        return Err("injected recovery copy failure".to_string());
+    }
+
+    let first = path.with_extension("json.bak");
+    let dir = match first.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    for index in 0..MAX_RECOVERY_COPIES {
+        let candidate = if index == 0 {
+            first.clone()
+        } else {
+            let mut name = first.clone().into_os_string();
+            name.push(format!(".{index}"));
+            PathBuf::from(name)
+        };
+        match create_new_private_file(&candidate) {
+            Ok(file) => {
+                write_recovery_copy(file, &candidate, &dir, contents)?;
+                return Ok(candidate);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Only a regular file (not a symlink) with these exact bytes
+                // counts as an earlier copy; anything else is skipped.
+                let identical = std::fs::symlink_metadata(&candidate).is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.len() == contents.len() as u64
+                }) && std::fs::read(&candidate)
+                    .is_ok_and(|existing| existing == contents);
+                if identical {
+                    return Ok(candidate);
+                }
+            }
+            Err(error) => return Err(format!("Failed to create {}: {error}", candidate.display())),
+        }
+    }
+    Err(format!(
+        "{MAX_RECOVERY_COPIES} recovery copies of {} already exist",
+        path.display()
+    ))
+}
+
+fn write_recovery_copy(
+    mut file: std::fs::File,
+    candidate: &Path,
+    dir: &Path,
+    contents: &[u8],
+) -> Result<(), String> {
+    use std::io::Write;
+
+    if let Err(error) = file.write_all(contents).and_then(|()| file.sync_all()) {
+        drop(file);
+        // Created exclusively above, so this incomplete copy is ours to remove.
+        let _ = std::fs::remove_file(candidate);
+        return Err(format!("Failed to write {}: {error}", candidate.display()));
+    }
+    sync_directory(dir).map_err(|error| {
+        format!(
+            "Saved {} but failed to sync its directory: {error}",
+            candidate.display()
+        )
+    })
+}
+
+/// Create a new owner-only file, failing if anything (even a dangling
+/// symlink) already has that name.
+fn create_new_private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_RECOVERY_COPY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test-only fault injection: while alive, recovery copies on this thread fail.
+#[cfg(test)]
+struct FailRecoveryCopy;
+
+#[cfg(test)]
+impl FailRecoveryCopy {
+    fn enable() -> Self {
+        FAIL_RECOVERY_COPY.with(|fail| fail.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for FailRecoveryCopy {
+    fn drop(&mut self) {
+        FAIL_RECOVERY_COPY.with(|fail| fail.set(false));
+    }
 }
 
 fn has_embedded_glossary_fields(path: &Path) -> bool {
@@ -2057,6 +2303,234 @@ mod tests {
                 serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(raw["language"], "sv");
         });
+    }
+
+    // -- invalid settings files are preserved before any replacement (#340) --
+
+    /// The `index`th recovery-copy name: `settings.json.bak`, then
+    /// `settings.json.bak.1`, `settings.json.bak.2`, ...
+    fn recovery_copy_path(path: &Path, index: usize) -> PathBuf {
+        let first = path.with_extension("json.bak");
+        if index == 0 {
+            return first;
+        }
+        let mut name = first.into_os_string();
+        name.push(format!(".{index}"));
+        PathBuf::from(name)
+    }
+
+    fn dir_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[track_caller]
+    fn assert_file_bytes(path: impl AsRef<Path>, expected: &[u8]) {
+        let path = path.as_ref();
+        let actual = fs::read(path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        assert!(
+            actual == expected,
+            "{} holds:\n{}\nexpected exactly:\n{}",
+            path.display(),
+            String::from_utf8_lossy(&actual),
+            String::from_utf8_lossy(expected)
+        );
+    }
+
+    const SCHEMA_INVALID_SETTINGS: &[u8] = br#"{
+  "show_overlay": false,
+  "language": "sv",
+  "beam_size": 3,
+  "future_key": {"keep": [1, 2]},
+  "auto_paste": "invalid-bool"
+}
+"#;
+
+    #[test]
+    fn schema_error_preserves_original_bytes_before_field_update() {
+        with_temp_settings(|path| {
+            fs::write(&path, SCHEMA_INVALID_SETTINGS).unwrap();
+
+            let updated = update_at(&path, |settings| settings.beam_size = 9).unwrap();
+            assert_eq!(updated.beam_size, 9);
+
+            let recovery = recovery_copy_path(&path, 0);
+            assert!(
+                recovery.exists(),
+                "a schema-invalid settings file must be preserved before it is replaced"
+            );
+            assert_file_bytes(&recovery, SCHEMA_INVALID_SETTINGS);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    fs::metadata(&recovery).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+
+            let raw: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(raw["beam_size"], 9);
+            assert_eq!(raw["auto_paste"], true);
+            assert_eq!(raw["future_key"], serde_json::json!({"keep": [1, 2]}));
+            // A valid file is no longer invalid: the next save makes no copy.
+            update_at(&path, |settings| settings.beam_size = 4).unwrap();
+            assert!(!recovery_copy_path(&path, 1).exists());
+        });
+    }
+
+    #[test]
+    fn repeated_invalid_files_never_overwrite_an_earlier_recovery_copy() {
+        with_temp_settings(|path| {
+            let first_bad: &[u8] = br#"{"show_overlay": false, "language": "sv""#;
+            let second_bad: &[u8] = br#"["not", "an", "object"]"#;
+            let third_bad: &[u8] = b"{\"language\": \"sv\xff\"}";
+
+            fs::write(&path, first_bad).unwrap();
+            update_at(&path, |settings| settings.beam_size = 9).unwrap();
+            assert_file_bytes(recovery_copy_path(&path, 0), first_bad);
+
+            fs::write(&path, second_bad).unwrap();
+            update_at(&path, |settings| settings.beam_size = 8).unwrap();
+            // An earlier recovery copy must never be overwritten.
+            assert_file_bytes(recovery_copy_path(&path, 0), first_bad);
+            assert_file_bytes(recovery_copy_path(&path, 1), second_bad);
+
+            // Bytes that are not UTF-8 are invalid settings, not a missing file.
+            fs::write(&path, third_bad).unwrap();
+            update_at(&path, |settings| settings.beam_size = 7).unwrap();
+            assert_file_bytes(recovery_copy_path(&path, 2), third_bad);
+
+            // Meeting the same invalid bytes again (for example on a retry)
+            // reuses the existing copy instead of making a duplicate.
+            fs::write(&path, first_bad).unwrap();
+            update_at(&path, |settings| settings.beam_size = 6).unwrap();
+            fs::write(&path, second_bad).unwrap();
+            save_to(&path, &Settings::default()).unwrap();
+            assert!(!recovery_copy_path(&path, 3).exists());
+            assert_file_bytes(recovery_copy_path(&path, 0), first_bad);
+            assert_file_bytes(recovery_copy_path(&path, 1), second_bad);
+            assert_file_bytes(recovery_copy_path(&path, 2), third_bad);
+            assert_eq!(load_from(&path).beam_size, Settings::default().beam_size);
+        });
+    }
+
+    #[test]
+    fn failed_recovery_copy_refuses_the_write() {
+        with_temp_settings(|path| {
+            let syntax_invalid: &[u8] = b"this is not json{{{";
+            for original in [SCHEMA_INVALID_SETTINGS, syntax_invalid] {
+                fs::write(&path, original).unwrap();
+                let _failing = FailRecoveryCopy::enable();
+
+                let error = update_at(&path, |settings| settings.beam_size = 9).unwrap_err();
+                assert!(error.contains("refusing to overwrite"), "{error}");
+                assert!(try_update_at(&path, |settings| {
+                    settings.beam_size = 9;
+                    Ok(())
+                })
+                .is_err());
+                assert!(save_to(&path, &Settings::default()).is_err());
+
+                assert_file_bytes(&path, original);
+                assert!(!recovery_copy_path(&path, 0).exists());
+                assert!(!global_glossary_path_for_settings(&path).exists());
+            }
+        });
+    }
+
+    #[test]
+    fn unreadable_settings_file_is_never_overwritten() {
+        // `chmod 000` cannot produce a read error for root (CAP_DAC_OVERRIDE),
+        // so the portable case puts a directory at the settings path: reading
+        // it fails with EISDIR on Unix and access denied on Windows, neither
+        // of which is NotFound.
+        with_temp_settings(|path| {
+            let dir = path.parent().unwrap().to_path_buf();
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("keep"), b"original").unwrap();
+            // Create the lock file up front so the listing only changes if
+            // something is written.
+            with_settings_lock(&path, || Ok(())).unwrap();
+            let before = dir_names(&dir);
+
+            let save_error = save_to(&path, &Settings::default()).unwrap_err();
+            assert_eq!(dir_names(&dir), before, "nothing may be written");
+            let update_error = update_at(&path, |settings| settings.beam_size = 9).unwrap_err();
+            let try_update_error = try_update_at(&path, |settings| {
+                settings.beam_size = 9;
+                Ok(())
+            })
+            .unwrap_err();
+            for error in [save_error, update_error, try_update_error] {
+                assert!(
+                    error.contains("could not be read") && error.contains("refusing to overwrite"),
+                    "{error}"
+                );
+            }
+            assert_eq!(dir_names(&dir), before, "nothing may be written");
+            assert_eq!(fs::read(path.join("keep")).unwrap(), b"original");
+        });
+
+        // Where permissions do apply (not root), an unreadable regular file
+        // is the real-world case: renaming over it would otherwise succeed.
+        #[cfg(unix)]
+        with_temp_settings(|path| {
+            use std::os::unix::fs::PermissionsExt;
+            fs::write(&path, br#"{"language":"sv"}"#).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+            if fs::read(&path).is_ok() {
+                return; // Running as root: permissions do not block reads.
+            }
+            let error = update_at(&path, |settings| settings.beam_size = 9).unwrap_err();
+            assert!(error.contains("refusing to overwrite"), "{error}");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+            assert_file_bytes(&path, br#"{"language":"sv"}"#);
+        });
+    }
+
+    #[test]
+    fn startup_migrations_do_not_overwrite_an_invalid_file() {
+        let schema_invalid: &[u8] = br#"{"model_lineup_version":0,"engine_defaults_version":0,"language":"sv","initial_prompt":"OpenRouter","show_overlay":false,"auto_paste":"invalid-bool","future_key":1}"#;
+        let syntax_invalid: &[u8] = br#"{"model_lineup_version":0,"engine_defaults_version":0,"#;
+        for original in [schema_invalid, syntax_invalid] {
+            with_temp_settings(|path| {
+                fs::write(&path, original).unwrap();
+                let ready = |_: WhisperModel| true;
+                let env = LineupEnv {
+                    pianissimo_supported: true,
+                    pianissimo_downloaded: true,
+                    whisper_downloaded: &ready,
+                };
+
+                // The same sequence `load()` runs at startup.
+                let loaded = load_at_with_legacy_sources(&path, std::iter::empty());
+                let loaded = migrate_lineup_at(&path, loaded, &env);
+                let loaded = migrate_engine_defaults_at(&path, loaded);
+                assert_eq!(loaded.language, Settings::default().language);
+                // And with stale in-memory markers that force both migrations
+                // to consult the file under the lock.
+                let stale = Settings {
+                    model_lineup_version: 0,
+                    engine_defaults_version: 0,
+                    ..Default::default()
+                };
+                let lineup = migrate_lineup_at(&path, stale.clone(), &env);
+                let engine = migrate_engine_defaults_at(&path, stale);
+                assert_eq!(lineup.language, Settings::default().language);
+                assert_eq!(engine.language, Settings::default().language);
+
+                assert_file_bytes(&path, original);
+                assert!(!recovery_copy_path(&path, 0).exists());
+                assert!(!global_glossary_path_for_settings(&path).exists());
+            });
+        }
     }
 
     #[test]
