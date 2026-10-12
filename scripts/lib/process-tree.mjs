@@ -113,6 +113,11 @@ export function trapTerminationSignals(onSignal) {
  * root exits, processes still in its group get `lingerMs` to exit on their
  * own (helpers such as esbuild follow their parent a moment later); the rest
  * are killed and `leftovers` is set, so no child outlives the call (POSIX).
+ *
+ * With `captureStdout` the call ends when the root exits, after at most
+ * `drainMs` for the pipe to close: a descendant that left the group (setsid)
+ * may hold the pipe open indefinitely, and its output is not waited for.
+ * `onStdout` sees each captured chunk as it arrives (to tee it).
  */
 export function runProcessTree({
   command,
@@ -122,8 +127,10 @@ export function runProcessTree({
   timeoutMs,
   killGraceMs = 5000,
   lingerMs = 500,
+  drainMs = 500,
   abortSignal,
   captureStdout = false,
+  onStdout,
   shell = false,
 }) {
   return new Promise((resolveRun) => {
@@ -134,12 +141,19 @@ export function runProcessTree({
     let abortedBy = null;
     let timer;
     let killTimer;
+    let drainTimer;
+    let terminating = false;
     let settled = false;
 
+    const destroyPipes = () => child?.stdout?.destroy();
     const terminate = () => {
-      if (killTimer || !child?.pid) return;
+      if (terminating || !child?.pid) return;
+      terminating = true;
       killProcessTree(child.pid, "SIGTERM");
-      killTimer = setTimeout(() => killProcessTree(child.pid, "SIGKILL"), killGraceMs);
+      killTimer = setTimeout(() => {
+        killProcessTree(child.pid, "SIGKILL");
+        destroyPipes();
+      }, killGraceMs);
     };
     const onAbort = () => {
       abortedBy = abortSignal.reason ?? "aborted";
@@ -150,6 +164,7 @@ export function runProcessTree({
       settled = true;
       clearTimeout(timer);
       clearTimeout(killTimer);
+      clearTimeout(drainTimer);
       abortSignal?.removeEventListener("abort", onAbort);
       const durationMs = Date.now() - started;
       const done = (leftovers) =>
@@ -197,12 +212,30 @@ export function runProcessTree({
       finish({ error });
       return;
     }
-    child.stdout?.on("data", (chunk) => chunks.push(chunk));
+    child.stdout?.on("data", (chunk) => {
+      chunks.push(chunk);
+      onStdout?.(chunk);
+    });
+    child.stdout?.on("error", () => {});
     child.once("error", (error) => {
       // A failed spawn emits only "error"; a running child may also "close".
       if (!child.pid) finish({ error });
     });
-    child.once("close", (code, signal) => finish({ code, signal }));
+    let exitOutcome = null;
+    child.once("exit", (code, signal) => {
+      exitOutcome = { code, signal };
+      if (!child.stdout) {
+        finish(exitOutcome);
+        return;
+      }
+      // Give the pipe a moment to deliver what the root wrote, then stop
+      // waiting for descendants that still hold it.
+      drainTimer = setTimeout(() => {
+        destroyPipes();
+        finish(exitOutcome);
+      }, drainMs);
+    });
+    child.once("close", (code, signal) => finish(exitOutcome ?? { code, signal }));
 
     if (timeoutMs !== undefined && timeoutMs !== null) {
       timer = setTimeout(() => {

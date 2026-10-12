@@ -6,10 +6,17 @@
 // .github/workflows/ci.yml. Before anything runs, a preflight checks the
 // tools and packages the selected checks need and reports everything that is
 // missing in one error; it never installs anything. Every check has a time
-// budget; on timeout, Ctrl-C or SIGTERM its whole process tree is stopped.
+// budget; on timeout, Ctrl-C, SIGTERM or SIGHUP its whole process tree is
+// stopped. (A SIGKILL of verify cannot be caught: the running check, in its
+// own process group, survives it.)
+//
+// Test hook: SAGASCRIPT_VERIFY_CONFIG=<module> replaces CHECKS (and the root,
+// extra prerequisites, kill grace) with synthetic ones; only
+// scripts/test-verify-runner.mjs sets it, and verify announces it on stderr.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -47,7 +54,11 @@ const nodeTests = (group) =>
  * Each check:
  *   id, area      names for --only/--skip (an area selects all its checks)
  *   steps         commands run in order:
- *                 { run, cwd, argv?, env?, forbidOutput?, requireOutput? }.
+ *                 { run, cwd, argv?, env?, forbidOutput?, requireOutput?, outputValue? }.
+ *                 {name} in argv/env is replaced: gitHead, cargoTargetDir,
+ *                 freshTempDir (a new temporary directory), msrvToolchain,
+ *                 or a value an earlier step stored with outputValue (its
+ *                 last output line).
  *                 `run` is what a human would type (and what --list prints);
  *                 `argv` overrides how it is spawned (e.g. no npm/npx shims).
  *   sets          "default" (npm run verify), "fast" (npm run verify:fast);
@@ -415,13 +426,23 @@ export const CHECKS = [
   {
     id: "swift",
     area: "swift",
-    title: "Swift Core ML engine host (generates BuildInfo.swift first)",
-    steps: [step("./scripts/build-engine-host.sh"), step("swift test", "src-tauri/engine-host/coreml")],
+    title:
+      "Swift Core ML engine host: build (writes BuildInfo.swift), revision check, swift test " +
+      "(CI also pins DEVELOPER_DIR to the newest Xcode; verify uses the selected one)",
+    steps: [
+      // The last line build-engine-host.sh prints is the built binary.
+      step("./scripts/build-engine-host.sh", undefined, { outputValue: "engineHostBinary" }),
+      step("./scripts/check-engine-host-identity.sh {engineHostBinary} {gitHead}"),
+      step("swift test", "src-tauri/engine-host/coreml"),
+    ],
     sets: ["default"],
     platforms: MACOS,
     requires: ["swift"],
     timeoutMinutes: 30,
-    ci: [ci("swift test", "src-tauri/engine-host/coreml")],
+    ci: [
+      ci('./scripts/check-engine-host-identity.sh build/engine-host/sagascript-engine-host "$GITHUB_SHA"'),
+      ci("swift test", "src-tauri/engine-host/coreml"),
+    ],
     lanes: ["test-macos"],
   },
   {
@@ -470,7 +491,13 @@ export const CHECKS = [
     id: "browser",
     area: "browser",
     title: "Playwright UI flows against the mocked IPC (Transcribe tab, update recovery)",
-    steps: [step("npm run test:browser", undefined, { argv: ["node", "scripts/run-transcription-browser-tests.mjs"] })],
+    steps: [
+      step("npm run test:browser", undefined, {
+        argv: ["node", "scripts/run-transcription-browser-tests.mjs"],
+        // As in CI: the QA scripts otherwise write to /private/tmp (macOS only).
+        env: { QA_OUTPUT_DIR: "{freshTempDir}" },
+      }),
+    ],
     sets: [],
     platforms: ALL,
     requires: ["npm:vite", "npm:playwright", "playwright-chromium"],
@@ -579,18 +606,25 @@ function probeMsrvToolchain(ctx) {
   return { ok: true };
 }
 
+// webkit2gtk and friends for Tauri, ALSA for `record`, OpenSSL for reqwest's
+// native-tls (openssl-sys).
+const LINUX_PKG_CONFIG = ["webkit2gtk-4.1", "alsa", "openssl"];
+
 function probeLinuxLibs(ctx) {
   if (ctx.platform !== "linux") return { ok: true };
   const fix =
     "sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev " +
-    "libasound2-dev build-essential pkg-config file (see CONTRIBUTING.md for other distributions)";
-  const pkgConfig = quiet("pkg-config", ["--exists", "webkit2gtk-4.1", "alsa"]);
-  if (pkgConfig.ok) return { ok: true };
+    "libasound2-dev libssl-dev build-essential pkg-config file (Debian/Ubuntu package names)";
+  const absent = [];
+  for (const name of LINUX_PKG_CONFIG) {
+    const result = quiet("pkg-config", ["--exists", name]);
+    if (result.error) return { ok: false, missing: "pkg-config and the Tauri, ALSA and OpenSSL development libraries", fix };
+    if (!result.ok) absent.push(name);
+  }
+  if (absent.length === 0) return { ok: true };
   return {
     ok: false,
-    missing: pkgConfig.error
-      ? "pkg-config and the Tauri/ALSA development libraries"
-      : "Tauri/ALSA development libraries (pkg-config cannot find webkit2gtk-4.1 or alsa)",
+    missing: `Tauri, ALSA and OpenSSL development libraries (pkg-config cannot find ${absent.join(", ")})`,
     fix,
   };
 }
@@ -610,18 +644,28 @@ function pythonCandidates(platform) {
   return platform === "win32" ? ["python", "python3"] : ["python3", "python"];
 }
 
+// The default Python checks pass on 3.10 and fail on 3.9 (dictation_eval);
+// CI runs 3.12.
+const PYTHON_MINIMUM = [3, 10];
+
 function probePython(ctx) {
+  const found = [];
   for (const candidate of pythonCandidates(ctx.platform)) {
-    const result = quiet(candidate, ["-c", "import sys; print(sys.version_info[0])"]);
-    if (result.ok && result.stdout.trim() === "3") {
+    const result = quiet(candidate, ["-c", "import sys; print('%d %d' % sys.version_info[:2])"]);
+    const version = /^(\d+) (\d+)$/.exec(result.stdout.trim());
+    if (!result.ok || !version) continue;
+    const [major, minor] = [Number(version[1]), Number(version[2])];
+    if (major > PYTHON_MINIMUM[0] || (major === PYTHON_MINIMUM[0] && minor >= PYTHON_MINIMUM[1])) {
       ctx.values.python = candidate;
       return { ok: true };
     }
+    found.push(`${major}.${minor}`);
   }
+  const minimum = PYTHON_MINIMUM.join(".");
   return {
     ok: false,
-    missing: "Python 3 (python3 or python on PATH; CI uses 3.12)",
-    fix: "install Python 3.12 from https://www.python.org/downloads/ (macOS: brew install python@3.12)",
+    missing: `Python ${minimum} or newer (${found.length > 0 ? `found ${[...new Set(found)].join(", ")}` : "python3 or python on PATH"}; CI uses 3.12)`,
+    fix: `install Python ${minimum} or newer, e.g. 3.12 from https://www.python.org/downloads/ (macOS: brew install python@3.12)`,
   };
 }
 
@@ -929,12 +973,23 @@ function cargoTargetDir(root) {
   return JSON.parse(result.stdout).target_directory;
 }
 
+function gitHead(root) {
+  const result = quiet("git", ["rev-parse", "HEAD"], { cwd: root });
+  if (!result.ok) throw new Error(`git rev-parse HEAD failed: ${result.stderr.trim() || result.error?.message}`);
+  return result.stdout.trim();
+}
+
 function substitute(value, ctx) {
   return value.replace(/\{(\w+)\}/g, (_, name) => {
     if (name === "cargoTargetDir") {
       ctx.values.cargoTargetDir ??= cargoTargetDir(ctx.root);
       return ctx.values.cargoTargetDir;
     }
+    if (name === "gitHead") {
+      ctx.values.gitHead ??= gitHead(ctx.root);
+      return ctx.values.gitHead;
+    }
+    if (name === "freshTempDir") return mkdtempSync(join(tmpdir(), "sagascript-verify-"));
     if (ctx.values[name] === undefined) throw new Error(`no value for {${name}}`);
     return ctx.values[name];
   });
@@ -998,43 +1053,61 @@ async function runCheck(check, ctx, io) {
   for (const [index, stepDefinition] of check.steps.entries()) {
     const label = check.steps.length > 1 ? `step ${index + 1}/${check.steps.length} (${stepDefinition.run}): ` : "";
     if (check.steps.length > 1) io.out(`  $ ${stepLine(stepDefinition)}`);
+    const fail = (detail, status = "fail") => ({ status, detail: `${label}${detail}`, durationMs: Date.now() - started });
+    const cwd = join(ctx.root, stepDefinition.cwd ?? ".");
+    if (!existsSync(cwd)) return fail(`working directory ${stepDefinition.cwd ?? "."} does not exist`);
     let plan;
     let env;
     try {
       plan = spawnPlan(stepDefinition, ctx);
       env = { ...process.env, ...ctx.env };
-      for (const [key, value] of Object.entries(stepDefinition.env ?? {})) env[key] = substitute(value, ctx);
+      for (const [key, value] of Object.entries(stepDefinition.env ?? {})) {
+        env[key] = substitute(value, ctx);
+        io.out(`  env ${key}=${env[key]}`);
+      }
     } catch (error) {
-      return { status: "fail", detail: `${label}${error.message}`, durationMs: Date.now() - started };
+      return fail(error.message);
     }
+    // Output a step checks is captured; for test and build output it is also
+    // shown live (tee), for long listings (cargo tree) only when it fails.
+    const tee = Boolean(stepDefinition.requireOutput || stepDefinition.outputValue);
     const result = await runProcessTree({
       ...plan,
-      cwd: join(ctx.root, stepDefinition.cwd ?? "."),
+      cwd,
       env,
       timeoutMs: Math.max(0, deadline - Date.now()),
       killGraceMs: ctx.killGraceMs,
       abortSignal: ctx.abortSignal,
-      captureStdout: Boolean(stepDefinition.forbidOutput || stepDefinition.requireOutput),
+      captureStdout: Boolean(stepDefinition.forbidOutput || tee),
+      onStdout: tee ? (io.write ?? STDIO.write) : undefined,
     });
+    const showCaptured = () => {
+      if (!tee && result.stdout) io.out(result.stdout.trimEnd());
+    };
     if (result.leftovers) notes.push("stopped processes it left running");
     if (result.abortedBy) {
-      return { status: "interrupted", detail: `${label}${describeFailure(result, budget)}`, durationMs: Date.now() - started };
+      showCaptured();
+      return fail(describeFailure(result, budget), "interrupted");
     }
     if (result.timedOut || result.error || result.code !== 0) {
-      return { status: "fail", detail: `${label}${describeFailure(result, budget)}`, durationMs: Date.now() - started };
+      showCaptured();
+      return fail(describeFailure(result, budget));
     }
-    if (stepDefinition.requireOutput) {
-      io.out(result.stdout.trimEnd());
-      if (!stepDefinition.requireOutput.pattern.test(result.stdout)) {
-        return { status: "fail", detail: `${label}${stepDefinition.requireOutput.message}`, durationMs: Date.now() - started };
-      }
+    if (stepDefinition.requireOutput && !stepDefinition.requireOutput.pattern.test(result.stdout)) {
+      return fail(stepDefinition.requireOutput.message);
     }
     if (stepDefinition.forbidOutput) {
       const offending = result.stdout.split(/\r?\n/).filter((line) => stepDefinition.forbidOutput.pattern.test(line));
       if (offending.length > 0) {
+        showCaptured();
         io.err(`${stepDefinition.forbidOutput.message}:\n${offending.join("\n")}`);
-        return { status: "fail", detail: `${label}${stepDefinition.forbidOutput.message}`, durationMs: Date.now() - started };
+        return fail(stepDefinition.forbidOutput.message);
       }
+    }
+    if (stepDefinition.outputValue) {
+      const last = result.stdout.trimEnd().split(/\r?\n/).pop()?.trim();
+      if (!last) return fail(`printed no ${stepDefinition.outputValue}`);
+      ctx.values[stepDefinition.outputValue] = last;
     }
   }
   return { status: "pass", detail: notes.join("; "), durationMs: Date.now() - started };
@@ -1059,17 +1132,22 @@ export function formatSummary(results, { platform, totalMs, optIn }) {
     .map((status) => [status, results.filter((result) => result.status === status).length])
     .filter(([, count]) => count > 0)
     .map(([status, count]) => `${count} ${STATUS_LABELS[status].toLowerCase()}`);
-  lines.push(counts.join(", "));
+  const ran = results.some((result) => result.status !== "skip");
+  lines.push(`${counts.join(", ")}${ran ? "" : "; nothing ran on this OS"}`);
   if (optIn.length > 0) {
     lines.push(`Opt-in, not in this run: ${optIn.map((check) => check.id).join(", ")} (run with --only <id>)`);
   }
   return lines.join("\n");
 }
 
-async function loadConfig() {
+async function loadConfig(io) {
   const configPath = process.env.SAGASCRIPT_VERIFY_CONFIG;
   if (!configPath) return { checks: CHECKS, prerequisites: PREREQUISITES, root: REPO_ROOT, killGraceMs: 5000 };
-  // Test hook: scripts/test-verify-runner.mjs points this at synthetic checks.
+  // Test hook (see the file header): synthetic checks for the runner's tests.
+  io.err(
+    `verify: SAGASCRIPT_VERIFY_CONFIG is set: running the test checks in ${configPath}, ` +
+      "not the ones defined in scripts/verify.mjs",
+  );
   const config = await import(pathToFileURL(resolve(configPath)).href);
   return {
     checks: config.checks.map((check) => ({
@@ -1089,7 +1167,13 @@ async function loadConfig() {
   };
 }
 
-export async function main(argv, io = { out: (line) => console.log(line), err: (line) => console.error(line) }) {
+const STDIO = {
+  out: (line) => console.log(line),
+  err: (line) => console.error(line),
+  write: (chunk) => process.stdout.write(chunk),
+};
+
+export async function main(argv, io = STDIO) {
   let options;
   let config;
   let selection;
@@ -1100,7 +1184,7 @@ export async function main(argv, io = { out: (line) => console.log(line), err: (
       io.out(USAGE);
       return 0;
     }
-    config = await loadConfig();
+    config = await loadConfig(io);
     if (options.list) {
       io.out(formatList(config.checks, platform));
       return 0;
@@ -1175,7 +1259,18 @@ export async function main(argv, io = { out: (line) => console.log(line), err: (
   return results.some((result) => result.status === "fail") ? 1 : 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// Node reports the real path in import.meta.url, so compare against the real
+// path of argv[1]: a symlinked invocation must still run.
+function invokedDirectly() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+  }
+}
+
+if (invokedDirectly()) {
   // No top-level await: a config or manifest module may import this module.
   main(process.argv.slice(2)).then((code) => {
     process.exitCode = code;
