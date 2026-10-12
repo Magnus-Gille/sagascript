@@ -10,7 +10,7 @@ Thanks for your interest in contributing! This guide will help you get set up an
 
 - Rust 1.88+ (the minimum supported version, `rust-version` in `src-tauri/Cargo.toml`). Use rustup with the development toolchain pinned in `rust-toolchain.toml`, including clippy and rustfmt; if it is missing, `npm run verify` prints the exact `rustup toolchain install` command
 - Node.js 22+ (`.nvmrc`), then `npm ci`
-- Python 3 (CI uses 3.12) for the evaluation tooling tests
+- Python 3.10+ (CI uses 3.12) for the evaluation tooling tests
 - Tauri CLI: `cargo install tauri-cli`
 
 **macOS:**
@@ -20,7 +20,7 @@ Thanks for your interest in contributing! This guide will help you get set up an
 
 **Linux:**
 
-- `sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev build-essential pkg-config file` (Debian/Ubuntu; see [docs/linux-notes.md](docs/linux-notes.md))
+- `sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev libssl-dev build-essential pkg-config file` (Debian/Ubuntu package names; other distributions need the equivalent development packages; runtime notes such as `xdotool` are in [docs/linux-notes.md](docs/linux-notes.md))
 
 **Windows:**
 
@@ -69,8 +69,10 @@ npm run verify -- --list                 # every check with its commands, budget
   toolchain with clippy and rustfmt, the Linux system libraries, Python, Xcode on macOS, …)
   and prints one error listing everything missing with the command that provides it. It never installs anything, and it runs cargo with
   `RUSTUP_AUTO_INSTALL=0` so `rust-toolchain.toml` cannot pull a toolchain in either.
-- **Time budgets.** Every check has one. On timeout, Ctrl-C or SIGTERM the check's whole
-  process tree is stopped, and the summary says why.
+- **Time budgets.** Every check has one. On timeout, Ctrl-C, SIGTERM or SIGHUP the check's
+  whole process tree is stopped, and the summary says why. Checks run in their own process
+  group, so a SIGKILL of verify itself (which cannot be caught) leaves the running check
+  behind; stop verify with Ctrl-C or SIGTERM.
 - **Summary.** A table of pass/fail/skip with the reason and duration; the exit status is
   non-zero when a check failed. Checks for another OS (Swift on Linux, for example) are
   listed as skipped.
@@ -82,7 +84,7 @@ npm run verify -- --list                 # every check with its commands, budget
 | `fmt` | `fmt`, `fmt-ort` | `cargo fmt --all -- --check` and `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check` (`src-tauri`) | Rust | test-linux |
 | `clippy` | `clippy-workspace`, `clippy-cli-lean`; `clippy-app` (fast set) | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings` (`src-tauri`) | Rust; Linux libraries; `dist/` (workspace, app) | test-macos, test-linux, test-windows (per crate) |
 | `rust-deps` | `cli-lean-deps` | `cargo tree -p sagascript-cli --no-default-features -e normal` contains no cpal/ALSA | Rust | test-linux |
-| `rust-test` | `test-workspace`, `test-cli-lean` | `cargo test --workspace`; `cargo test -p sagascript-cli --no-default-features` | Rust; Linux libraries; `dist/` (workspace) | test-macos, test-windows; lean CLI also test-linux |
+| `rust-test` | `test-workspace`, `test-cli-lean` | `cargo test --workspace`; `cargo test -p sagascript-cli --no-default-features` | Rust; Linux libraries; `dist/` (workspace) | workspace: test-macos, test-windows (`cargo test` and per crate); lean CLI: test-macos, test-linux |
 | `core-features` | `core-clippy`, `core-clippy-diarization`, `core-test`, `core-test-record`, `core-test-diarization` | `cargo clippy`/`cargo test -p sagascript-core` without features, with `record`, with `diarization` | Rust | test-macos, test-linux, test-windows |
 | `engine-protocol` | `engine-protocol` | `cargo test -p sagascript-engine-protocol` | Rust | test-linux |
 | `ort-host` | `ort-host-clippy`, `ort-host-test` | `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (`src-tauri/engine-host/ort`) | Rust | test-linux |
@@ -91,8 +93,8 @@ npm run verify -- --list                 # every check with its commands, budget
 | `svelte-check` | `svelte-check` | `npx svelte-check --tsconfig ./tsconfig.json` | `npm ci` | test-macos |
 | `node` | `node-ui`, `node-ci`, `node-release` | `npm run test:ui`, `npm run test:ci`, `npm run test:release` | `npm ci` (ui) | test-macos, test-windows (`npm run test:frontend`) |
 | `code-health` | `code-health` | `npm run test:code-health` | Node | `code-health.yml`; also in `test:frontend` |
-| `python` | `python-dictation-eval`, `python-diarization-reference`; `python-diarization` (opt-in) | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; `scripts/diarization_sv` reference tests; opt-in: the full suite against a freshly built lean CLI | Python 3; opt-in: `pip install -r scripts/diarization_sv/requirements-evaluation.txt` | all three; diarization: test-macos, test-linux |
-| `swift` | `swift` (macOS) | `./scripts/build-engine-host.sh` (generates `BuildInfo.swift`), then `swift test` (`src-tauri/engine-host/coreml`) | Xcode 16+ | test-macos |
+| `python` | `python-dictation-eval`, `python-diarization-reference`; `python-diarization` (opt-in) | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; `scripts/diarization_sv` reference tests; opt-in: the full suite against a freshly built lean CLI | Python 3.10+; opt-in: `pip install -r scripts/diarization_sv/requirements-evaluation.txt` | all three; diarization: test-macos, test-linux |
+| `swift` | `swift` (macOS) | `./scripts/build-engine-host.sh` (generates `BuildInfo.swift`), `./scripts/check-engine-host-identity.sh` on the built host against `git rev-parse HEAD`, then `swift test` (`src-tauri/engine-host/coreml`); CI also pins `DEVELOPER_DIR` to the newest Xcode, verify uses the selected one | Xcode 16+ | test-macos |
 | `msrv` | `msrv` (opt-in; run it for dependency bumps or newer language features) | `cargo check --workspace --locked`, the lean CLI and the ORT host on the `rust-version` toolchain | `rustup toolchain install 1.88 --profile minimal`; `dist/` | msrv-linux |
 | `browser` | `browser` (opt-in) | `npm run test:browser` (Playwright against the mocked IPC) | `npx playwright install chromium` | test-macos |
 
@@ -103,10 +105,11 @@ build-windows), engine-host staging, the DER/JER cross-check against a downloade
 the release checks `npm run release:check` and `npm run licenses:check`. Where every suite
 lives is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#5-where-tests-live-and-how-ci-runs-them).
 
-**Node test groups.** `scripts/node-test-groups.mjs` puts every `scripts/test-*.mjs` and
-`scripts/**/test_*.mjs` file in one group: `ui`, `ci`, `release` or `codeHealth`.
-`npm run test:frontend` runs all of them (as CI does); a new test file that is not in the
-manifest makes the runner fail.
+**Node test groups.** `scripts/node-test-groups.mjs` puts every `test-*.mjs` and `test_*.mjs`
+file anywhere under `scripts/` (except `fixtures/`) in one group: `ui`, `ci`, `release` or
+`codeHealth`. `npm run test:frontend` runs all of them (as CI does); a new test file that is
+not in the manifest makes the runner fail. Tests in both `ci` and `release` read workflow
+files, so after editing `.github/workflows/` run `npm run test:frontend`, not one group.
 
 #### Reference: the individual commands
 
