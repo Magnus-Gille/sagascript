@@ -1,0 +1,44 @@
+# Dependabot version updates (#354). Monthly, with one grouped pull request per
+# ecosystem for minor and patch bumps so the PR flow stays reviewable; major
+# bumps still arrive as individual pull requests.
+#
+# Dependabot alerts and security updates are repository settings, not part of
+# this file: the owner enables them in the repository's code security settings.
+#
+# tooling/code-health is deliberately not listed: its analyzers are pinned to
+# the exact versions the code-health producer verifies, so they move by hand.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directories:
+      - "/src-tauri"
+      - "/src-tauri/engine-host/ort"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: npm
+    directories:
+      - "/"
+      - "/site"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

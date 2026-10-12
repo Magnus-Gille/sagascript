@@ -148,7 +148,7 @@ test("rust-toolchain is pinned by full SHA with an explicit toolchain in the rel
 test("promote-release checkout does not persist credentials", () => {
   const w = workflows.release;
   const promote = w.slice(w.indexOf("  promote-release:"), w.indexOf("  verify-draft:"));
-  assert.match(promote, /actions\/checkout@v6\s*\n\s+with:\n\s+persist-credentials: false/);
+  assert.match(promote, /actions\/checkout@[0-9a-f]{40} # v6\.\d+\.\d+\s*\n\s+with:\n\s+persist-credentials: false/);
 });
 
 test("locate-prebuild requires unexpired artifacts and logs why it falls back", () => {

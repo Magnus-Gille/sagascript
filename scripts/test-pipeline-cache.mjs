@@ -81,7 +81,8 @@ test("Windows candidates cache only verified models with a candidate primary key
   assert.ok(modelCacheStart > rustCacheStart && identityStart > modelCacheStart);
 
   const cache = section(windowsWorkflow, "name: Cache downloaded models", "name: Pin validated Windows build identity");
-  assert.match(cache, /uses: actions\/cache@v5/);
+  // SHA-pinned (#354); the trailing comment names the v5 release it resolves to.
+  assert.match(cache, /uses: actions\/cache@[0-9a-f]{40} # v5\.\d+\.\d+$/m);
   assert.match(cache, /path: ~\\AppData\\Roaming\\Sagascript\\Models/);
   assert.equal((cache.match(/^\s*path:/gm) ?? []).length, 1, "cache must contain one exact model path");
   assert.equal(
