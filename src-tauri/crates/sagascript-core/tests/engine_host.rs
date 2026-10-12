@@ -1301,7 +1301,8 @@ fn failed_host_gets_a_fresh_attempt_after_the_cooldown() {
     let marker = tempfile::tempdir().unwrap();
     let crash = marker.path().join("crash");
     std::fs::write(&crash, b"crash").unwrap();
-    let cooldown = Duration::from_millis(500);
+    // Long enough that two back-to-back calls never straddle it on a loaded runner.
+    let cooldown = Duration::from_secs(1);
     let f = fixture_with(
         &[("FAKE_CRASH_ON_START_FILE", crash.to_str().unwrap())],
         |c| c.failed_cooldown = cooldown,
@@ -1631,6 +1632,12 @@ fn startup_sweep_removes_only_pcm_dirs_of_dead_owners() {
     dead.kill().unwrap(); // no destructor runs: the dir stays behind
     dead.wait().unwrap();
     assert!(dead_dir.join("audio.f32le").is_file());
+    // Windows may release a killed process's file lock with a delay; the
+    // startup sweep below runs once, so wait until the lock is free.
+    wait_until("dead owner's lock released", Duration::from_secs(5), || {
+        std::fs::File::open(dead_dir.join("owner.lock"))
+            .is_ok_and(|f| fs2::FileExt::try_lock_exclusive(&f).is_ok())
+    });
 
     // Entries the sweep must leave alone: a non-matching name and a dir in
     // the pre-#366 format, whose owner cannot be proven dead.
