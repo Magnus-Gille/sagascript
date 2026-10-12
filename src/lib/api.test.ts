@@ -5,22 +5,9 @@
 import { describe, expect, test } from "vitest";
 import * as api from "./api";
 import * as reprocessing from "./meeting-reprocessing-api";
-import {
-  COMMAND_NAMES,
-  mockIpc,
-  type CommandArgs,
-  type CommandHandlers,
-  type CommandName,
-} from "../test/ipc";
-import type {
-  CorrectionFile,
-  MeetingReview,
-  MeetingTranscript,
-} from "./meeting-types";
-import type {
-  MeetingReprocessingProposal,
-  SelectedReprocessingPlan,
-} from "./meeting-reprocessing-types";
+import { COMMAND_NAMES, mockIpc, type CommandArgs, type CommandHandlers, type CommandName } from "../test/ipc";
+import type { CorrectionFile, MeetingReview, MeetingTranscript } from "./meeting-types";
+import type { MeetingReprocessingProposal, SelectedReprocessingPlan } from "./meeting-reprocessing-types";
 import type { UpdateRecoveryPayload } from "./update-recovery";
 
 const transcript: MeetingTranscript = {
@@ -260,12 +247,14 @@ const contracts: Contract[] = [
   contract(api.setOnboardingCompleted, [], "set_onboarding_completed", {}),
   contract(api.setPianissimoDictation, [true], "set_pianissimo_dictation", { enabled: true }),
   contract(api.getDictationModelInfo, ["sv"], "get_dictation_model_info", { language: "sv" }),
-  contract(
-    reprocessing.planMeetingReprocessing,
-    [review, "recluster", 0.5, true, "names", "default"],
-    "plan_meeting_reprocessing",
-    { previous: review, mode: "recluster", threshold: 0.5, saveCache: true, prompt: "names", profileId: "default" },
-  ),
+  contract(reprocessing.planMeetingReprocessing, [review, "recluster", 0.5, true, "names", "default"], "plan_meeting_reprocessing", {
+    previous: review,
+    mode: "recluster",
+    threshold: 0.5,
+    saveCache: true,
+    prompt: "names",
+    profileId: "default",
+  }),
   contract(reprocessing.beginMeetingReprocessing, [selectedPlan, review, null, null], "begin_meeting_reprocessing", {
     filePath: "/audio/meeting.wav",
     prompt: null,
@@ -279,12 +268,12 @@ const contracts: Contract[] = [
     },
   }),
   contract(reprocessing.previewMeetingProposal, [proposal], "preview_meeting_proposal", { proposal }),
-  contract(
-    reprocessing.resolveMeetingProposal,
-    [proposal, 0, corrections.operations],
-    "resolve_meeting_proposal",
-    { proposal, expectedRevision: "proposal-1", index: 0, operations: corrections.operations },
-  ),
+  contract(reprocessing.resolveMeetingProposal, [proposal, 0, corrections.operations], "resolve_meeting_proposal", {
+    proposal,
+    expectedRevision: "proposal-1",
+    index: 0,
+    operations: corrections.operations,
+  }),
   contract(reprocessing.acceptMeetingProposal, [proposal, review], "accept_meeting_proposal", {
     proposal,
     currentReview: review,
@@ -310,9 +299,7 @@ describe("each wrapper invokes its command with the documented arguments", () =>
 });
 
 test("every exported wrapper has a contract", () => {
-  const exported = [...Object.values(api), ...Object.values(reprocessing)].filter(
-    (value) => typeof value === "function",
-  );
+  const exported = [...Object.values(api), ...Object.values(reprocessing)].filter((value) => typeof value === "function");
   const covered = new Set(contracts.map((entry) => entry.wrapper));
   expect(exported.filter((wrapper) => !covered.has(wrapper)).map((wrapper) => wrapper.name)).toEqual([]);
 });

@@ -103,7 +103,10 @@ for (const [name, text] of Object.entries(workflows)) {
       assert.ok(runsSteps, `${name}:${job.id} must run steps or call a reusable workflow`);
       assert.ok(timeout, `${name}:${job.id} must set timeout-minutes`);
       const minutes = Number(timeout[1]);
-      assert.ok(minutes > 0 && minutes < DEFAULT_TIMEOUT_MINUTES, `${name}:${job.id} timeout ${minutes} must be below the ${DEFAULT_TIMEOUT_MINUTES}-minute default`);
+      assert.ok(
+        minutes > 0 && minutes < DEFAULT_TIMEOUT_MINUTES,
+        `${name}:${job.id} timeout ${minutes} must be below the ${DEFAULT_TIMEOUT_MINUTES}-minute default`,
+      );
     }
   });
 
@@ -134,7 +137,10 @@ for (const [name, text] of Object.entries(workflows)) {
       assert.match(command, /--version \d+\.\d+\.\d+\b/, `${name}: ${command.trim()} must pin --version`);
     }
     for (const [command, args] of text.matchAll(/^.*\bnpm (?:install|i) (?:-g|--global)\b(.*)$/gm)) {
-      const packages = args.trim().split(/\s+/).filter((arg) => arg && !arg.startsWith("-"));
+      const packages = args
+        .trim()
+        .split(/\s+/)
+        .filter((arg) => arg && !arg.startsWith("-"));
       assert.ok(packages.length > 0, `${name}: ${command.trim()} installs nothing`);
       for (const spec of packages) {
         assert.match(spec, /^(?:@[^@/\s]+\/)?[^@\s]+@\d+\.\d+\.\d+$/, `${name}: ${spec} must be pinned to an exact version`);

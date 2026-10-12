@@ -3,8 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const workflow = (await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
-  .replace(/\r\n/g, "\n");
+const workflow = (await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 
 function jobBlock(jobId) {
   const start = workflow.indexOf(`  ${jobId}:`);
@@ -17,7 +16,8 @@ function jobBlock(jobId) {
 
 function scopedAggregator(jobId, expectedNeeds, laneResultNames, stepName) {
   const block = jobBlock(jobId);
-  const needs = /^    needs: \[([^\]]+)\]$/m.exec(block)?.[1]
+  const needs = /^    needs: \[([^\]]+)\]$/m
+    .exec(block)?.[1]
     .split(",")
     .map((value) => value.trim());
   assert.deepEqual(needs, expectedNeeds, `${jobId} must wait for scope and its applicable lane(s)`);
@@ -43,9 +43,24 @@ function runScopedAggregator(run, values) {
 }
 
 for (const [jobId, needs, laneResultNames, stepName] of [
-  ["check-macos", ["scope", "test-macos", "build-macos"], { TEST_RESULT: "test-macos", BUILD_RESULT: "build-macos" }, "Assert macOS CI lanes passed"],
-  ["check-windows", ["scope", "test-windows", "build-windows"], { TEST_RESULT: "test-windows", BUILD_RESULT: "build-windows" }, "Assert Windows CI lanes passed"],
-  ["check-linux", ["scope", "test-linux", "msrv-linux"], { LINUX_RESULT: "test-linux", MSRV_RESULT: "msrv-linux" }, "Assert Linux CI lanes passed"],
+  [
+    "check-macos",
+    ["scope", "test-macos", "build-macos"],
+    { TEST_RESULT: "test-macos", BUILD_RESULT: "build-macos" },
+    "Assert macOS CI lanes passed",
+  ],
+  [
+    "check-windows",
+    ["scope", "test-windows", "build-windows"],
+    { TEST_RESULT: "test-windows", BUILD_RESULT: "build-windows" },
+    "Assert Windows CI lanes passed",
+  ],
+  [
+    "check-linux",
+    ["scope", "test-linux", "msrv-linux"],
+    { LINUX_RESULT: "test-linux", MSRV_RESULT: "msrv-linux" },
+    "Assert Linux CI lanes passed",
+  ],
 ]) {
   test(`${jobId} accepts only trusted docs-only skips or successful full lanes`, () => {
     const run = scopedAggregator(jobId, needs, laneResultNames, stepName);
@@ -53,37 +68,66 @@ for (const [jobId, needs, laneResultNames, stepName] of [
     const correctDocsOnly = Object.fromEntries(laneVariables.map((variable) => [variable, "skipped"]));
     const correctFull = Object.fromEntries(laneVariables.map((variable) => [variable, "success"]));
 
-    assert.doesNotThrow(() => runScopedAggregator(run, {
-      SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: "true", ...correctDocsOnly,
-    }));
-    assert.doesNotThrow(() => runScopedAggregator(run, {
-      SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: "false", ...correctFull,
-    }));
+    assert.doesNotThrow(() =>
+      runScopedAggregator(run, {
+        SCOPE_RESULT: "success",
+        SCOPE_TRUSTED: "true",
+        DOCS_ONLY: "true",
+        ...correctDocsOnly,
+      }),
+    );
+    assert.doesNotThrow(() =>
+      runScopedAggregator(run, {
+        SCOPE_RESULT: "success",
+        SCOPE_TRUSTED: "true",
+        DOCS_ONLY: "false",
+        ...correctFull,
+      }),
+    );
 
     for (const scopeResult of ["failure", "cancelled", "skipped"]) {
       for (const docsOnly of ["true", "false"]) {
-        assert.throws(() => runScopedAggregator(run, {
-          SCOPE_RESULT: scopeResult, SCOPE_TRUSTED: "true", DOCS_ONLY: docsOnly,
-          ...(docsOnly === "true" ? correctDocsOnly : correctFull),
-        }));
+        assert.throws(() =>
+          runScopedAggregator(run, {
+            SCOPE_RESULT: scopeResult,
+            SCOPE_TRUSTED: "true",
+            DOCS_ONLY: docsOnly,
+            ...(docsOnly === "true" ? correctDocsOnly : correctFull),
+          }),
+        );
       }
     }
     for (const trusted of ["false", "", "untrusted"]) {
-      assert.throws(() => runScopedAggregator(run, {
-        SCOPE_RESULT: "success", SCOPE_TRUSTED: trusted, DOCS_ONLY: "true", ...correctDocsOnly,
-      }));
+      assert.throws(() =>
+        runScopedAggregator(run, {
+          SCOPE_RESULT: "success",
+          SCOPE_TRUSTED: trusted,
+          DOCS_ONLY: "true",
+          ...correctDocsOnly,
+        }),
+      );
     }
     for (const docsOnly of ["", "unknown"]) {
-      assert.throws(() => runScopedAggregator(run, {
-        SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: docsOnly, ...correctFull,
-      }));
+      assert.throws(() =>
+        runScopedAggregator(run, {
+          SCOPE_RESULT: "success",
+          SCOPE_TRUSTED: "true",
+          DOCS_ONLY: docsOnly,
+          ...correctFull,
+        }),
+      );
     }
     for (const variable of laneVariables) {
       for (const result of ["failure", "cancelled", "skipped"]) {
-        assert.throws(() => runScopedAggregator(run, {
-          SCOPE_RESULT: "success", SCOPE_TRUSTED: "true", DOCS_ONLY: "false",
-          ...correctFull, [variable]: result,
-        }));
+        assert.throws(() =>
+          runScopedAggregator(run, {
+            SCOPE_RESULT: "success",
+            SCOPE_TRUSTED: "true",
+            DOCS_ONLY: "false",
+            ...correctFull,
+            [variable]: result,
+          }),
+        );
       }
     }
   });
@@ -91,9 +135,7 @@ for (const [jobId, needs, laneResultNames, stepName] of [
 
 function parseSteps(job) {
   const lines = job.split("\n");
-  const starts = lines
-    .map((line, index) => (/^      - name: (.*)$/.exec(line) ? index : -1))
-    .filter((index) => index >= 0);
+  const starts = lines.map((line, index) => (/^      - name: (.*)$/.exec(line) ? index : -1)).filter((index) => index >= 0);
   const result = new Map();
 
   for (let i = 0; i < starts.length; i += 1) {
@@ -139,17 +181,35 @@ const BASELINE_GATES = {
       ["Cargo clippy (sagascript-cli)", "cargo clippy -p sagascript-cli --all-targets -- -D warnings"],
       ["Cargo check (sagascript-core, diarization)", "cargo check -p sagascript-core --features diarization"],
       ["Cargo test (sagascript-core, diarization)", "cargo test -p sagascript-core --features diarization"],
-      ["Cargo clippy (sagascript-core, diarization)", "cargo clippy -p sagascript-core --features diarization --all-targets -- -D warnings"],
+      [
+        "Cargo clippy (sagascript-core, diarization)",
+        "cargo clippy -p sagascript-core --features diarization --all-targets -- -D warnings",
+      ],
     ],
     build: [
       ["Build native release binary (no installer)", "npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle"],
-      ["Verify native release binary", "BINARY=src-tauri/target/release/sagascript\n[[ -x \"$BINARY\" ]]\nfile \"$BINARY\""],
-      ["Smoke test — help and version", "BINARY=src-tauri/target/release/sagascript\n$BINARY --help\n$BINARY transcribe --help\n$BINARY record --help"],
-      ["Smoke test — config management", "BINARY=src-tauri/target/release/sagascript\n$BINARY config list\n$BINARY config get language\n$BINARY config set language sv\n$BINARY config get language | grep -q sv\n$BINARY config reset language\n$BINARY config get language | grep -q en\n$BINARY config path"],
+      ["Verify native release binary", 'BINARY=src-tauri/target/release/sagascript\n[[ -x "$BINARY" ]]\nfile "$BINARY"'],
+      [
+        "Smoke test — help and version",
+        "BINARY=src-tauri/target/release/sagascript\n$BINARY --help\n$BINARY transcribe --help\n$BINARY record --help",
+      ],
+      [
+        "Smoke test — config management",
+        "BINARY=src-tauri/target/release/sagascript\n$BINARY config list\n$BINARY config get language\n$BINARY config set language sv\n$BINARY config get language | grep -q sv\n$BINARY config reset language\n$BINARY config get language | grep -q en\n$BINARY config path",
+      ],
       ["Smoke test — model listing and formats", "BINARY=src-tauri/target/release/sagascript\n$BINARY list-models\n$BINARY formats"],
-      ["Smoke test — shell completions", "BINARY=src-tauri/target/release/sagascript\n$BINARY completions zsh > /dev/null\n$BINARY completions bash > /dev/null"],
-      ["Smoke test — download model and transcribe", "BINARY=src-tauri/target/release/sagascript\n$BINARY download-model nb-whisper-tiny\nRESULT=$($BINARY transcribe --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3)\necho \"Transcription: $RESULT\"\necho \"$RESULT\" | grep -iq \"stortinget\""],
-      ["Smoke test — transcribe with JSON output", "BINARY=src-tauri/target/release/sagascript\nSTDOUT=\"$RUNNER_TEMP/transcription-smoke.json\"\nSTDERR=\"$RUNNER_TEMP/transcription-smoke.stderr\"\n$BINARY transcribe --json --language no --model nb-whisper-tiny \\\n  test-audio/norwegian-short-3s.mp3 > \"$STDOUT\" 2> \"$STDERR\"\npython3 scripts/verify-json-cli-streams.py \"$STDOUT\" \"$STDERR\""],
+      [
+        "Smoke test — shell completions",
+        "BINARY=src-tauri/target/release/sagascript\n$BINARY completions zsh > /dev/null\n$BINARY completions bash > /dev/null",
+      ],
+      [
+        "Smoke test — download model and transcribe",
+        'BINARY=src-tauri/target/release/sagascript\n$BINARY download-model nb-whisper-tiny\nRESULT=$($BINARY transcribe --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3)\necho "Transcription: $RESULT"\necho "$RESULT" | grep -iq "stortinget"',
+      ],
+      [
+        "Smoke test — transcribe with JSON output",
+        'BINARY=src-tauri/target/release/sagascript\nSTDOUT="$RUNNER_TEMP/transcription-smoke.json"\nSTDERR="$RUNNER_TEMP/transcription-smoke.stderr"\n$BINARY transcribe --json --language no --model nb-whisper-tiny \\\n  test-audio/norwegian-short-3s.mp3 > "$STDOUT" 2> "$STDERR"\npython3 scripts/verify-json-cli-streams.py "$STDOUT" "$STDERR"',
+      ],
     ],
   },
   windows: {
@@ -164,13 +224,34 @@ const BASELINE_GATES = {
     ],
     build: [
       ["Build native release binary (no installer)", "npx tauri build --config scripts/tauri-ci-prebuilt.json --no-bundle"],
-      ["Verify native release binary", "$binary = \"src-tauri\\target\\release\\sagascript.exe\"\nif (-not (Test-Path -PathType Leaf $binary)) {\n  throw \"Missing native release binary: $binary\"\n}"],
-      ["Smoke test — help and version", "$env:BINARY = \"src-tauri\\target\\release\\sagascript.exe\"\n& $env:BINARY --help\n& $env:BINARY transcribe --help\n& $env:BINARY record --help"],
-      ["Smoke test — config management", "$env:BINARY = \"src-tauri\\target\\release\\sagascript.exe\"\n& $env:BINARY config list\n& $env:BINARY config get language\n& $env:BINARY config set language sv\n$result = & $env:BINARY config get language\nif ($result -notmatch \"sv\") { throw \"Expected 'sv'\" }\n& $env:BINARY config reset language\n$result = & $env:BINARY config get language\nif ($result -notmatch \"en\") { throw \"Expected 'en'\" }\n& $env:BINARY config path"],
-      ["Smoke test — model listing and formats", "$env:BINARY = \"src-tauri\\target\\release\\sagascript.exe\"\n& $env:BINARY list-models\n& $env:BINARY formats"],
-      ["Smoke test — shell completions", "$env:BINARY = \"src-tauri\\target\\release\\sagascript.exe\"\n& $env:BINARY completions powershell | Out-Null"],
-      ["Smoke test — download model and transcribe", "$env:BINARY = \"src-tauri\\target\\release\\sagascript.exe\"\n& $env:BINARY download-model nb-whisper-tiny\n$result = & $env:BINARY transcribe --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3\nWrite-Host \"Transcription: $result\"\nif ($result -notmatch \"(?i)stortinget\") { throw \"Expected 'stortinget' in output\" }"],
-      ["Smoke test — transcribe with JSON output", "set BINARY=src-tauri\\target\\release\\sagascript.exe\n%BINARY% transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3 > json_output.txt 2>nul\ntype json_output.txt\nfindstr /C:\"text\" json_output.txt\nfindstr /C:\"duration_seconds\" json_output.txt\nfindstr /C:\"language\" json_output.txt"],
+      [
+        "Verify native release binary",
+        '$binary = "src-tauri\\target\\release\\sagascript.exe"\nif (-not (Test-Path -PathType Leaf $binary)) {\n  throw "Missing native release binary: $binary"\n}',
+      ],
+      [
+        "Smoke test — help and version",
+        '$env:BINARY = "src-tauri\\target\\release\\sagascript.exe"\n& $env:BINARY --help\n& $env:BINARY transcribe --help\n& $env:BINARY record --help',
+      ],
+      [
+        "Smoke test — config management",
+        '$env:BINARY = "src-tauri\\target\\release\\sagascript.exe"\n& $env:BINARY config list\n& $env:BINARY config get language\n& $env:BINARY config set language sv\n$result = & $env:BINARY config get language\nif ($result -notmatch "sv") { throw "Expected \'sv\'" }\n& $env:BINARY config reset language\n$result = & $env:BINARY config get language\nif ($result -notmatch "en") { throw "Expected \'en\'" }\n& $env:BINARY config path',
+      ],
+      [
+        "Smoke test — model listing and formats",
+        '$env:BINARY = "src-tauri\\target\\release\\sagascript.exe"\n& $env:BINARY list-models\n& $env:BINARY formats',
+      ],
+      [
+        "Smoke test — shell completions",
+        '$env:BINARY = "src-tauri\\target\\release\\sagascript.exe"\n& $env:BINARY completions powershell | Out-Null',
+      ],
+      [
+        "Smoke test — download model and transcribe",
+        '$env:BINARY = "src-tauri\\target\\release\\sagascript.exe"\n& $env:BINARY download-model nb-whisper-tiny\n$result = & $env:BINARY transcribe --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3\nWrite-Host "Transcription: $result"\nif ($result -notmatch "(?i)stortinget") { throw "Expected \'stortinget\' in output" }',
+      ],
+      [
+        "Smoke test — transcribe with JSON output",
+        'set BINARY=src-tauri\\target\\release\\sagascript.exe\n%BINARY% transcribe --json --language no --model nb-whisper-tiny test-audio/norwegian-short-3s.mp3 > json_output.txt 2>nul\ntype json_output.txt\nfindstr /C:"text" json_output.txt\nfindstr /C:"duration_seconds" json_output.txt\nfindstr /C:"language" json_output.txt',
+      ],
     ],
   },
 };
@@ -183,17 +264,10 @@ for (const [platform, jobIds] of Object.entries({
     test(`${platform} ${lane} lane retains every baseline gate`, () => {
       const block = jobBlock(jobIds[lane]);
       assert.match(block, /^    needs: scope$/m, "each lane must wait only for the scope gate");
-      assert.match(
-        block,
-        /^    if: \$\{\{ needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' \}\}$/m,
-      );
+      assert.match(block, /^    if: \$\{\{ needs\.scope\.result == 'success' && needs\.scope\.outputs\.docs_only != 'true' \}\}$/m);
       const commands = parseSteps(block);
       for (const [name, expected] of BASELINE_GATES[platform][lane]) {
-        assert.equal(
-          commands.get(name),
-          normalizeCommand(expected),
-          `${jobIds[lane]} must retain the baseline ${name} command`,
-        );
+        assert.equal(commands.get(name), normalizeCommand(expected), `${jobIds[lane]} must retain the baseline ${name} command`);
       }
     });
   }
@@ -246,7 +320,8 @@ test("model caches are isolated to native lanes", () => {
 
 function aggregator(jobId, expectedNeeds, testResultName, buildResultName) {
   const block = jobBlock(jobId);
-  const needs = /^    needs: \[([^\]]+)\]$/m.exec(block)?.[1]
+  const needs = /^    needs: \[([^\]]+)\]$/m
+    .exec(block)?.[1]
     .split(",")
     .map((value) => value.trim());
   assert.deepEqual(needs, expectedNeeds, `${jobId} must wait for scope and its applicable lane(s)`);

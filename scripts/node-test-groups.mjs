@@ -82,8 +82,5 @@ export const TEST_GROUPS = {
     "scripts/test-windows-x64-cpu-policy.mjs",
     "scripts/test-windows-x64-portable.mjs",
   ],
-  codeHealth: [
-    "scripts/test-code-health-producer.mjs",
-    "scripts/test-code-health-workflow.mjs",
-  ],
+  codeHealth: ["scripts/test-code-health-producer.mjs", "scripts/test-code-health-workflow.mjs"],
 };

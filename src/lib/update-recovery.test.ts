@@ -334,9 +334,7 @@ test("sample-quantized region support survives recovery within one 16kHz sample"
     source_sha256: diarizationReport.source_sha256,
     diarization: { ...diarizationReport, regions: [region] },
   };
-  expect(recovery.createUpdateRecoveryPayload(payload).meetings[0].review.transcript.diarization!.regions[0]).toStrictEqual(
-    region,
-  );
+  expect(recovery.createUpdateRecoveryPayload(payload).meetings[0].review.transcript.diarization!.regions[0]).toStrictEqual(region);
   region.active_speech_seconds = 1.00007;
   expect(() => recovery.createUpdateRecoveryPayload(payload)).toThrow(/Invalid updater recovery payload/);
 });
@@ -620,9 +618,7 @@ test("oversized serialized payloads are rejected", () => {
       dictation: { text: "x".repeat(recovery.UPDATE_RECOVERY_LIMITS.maxTextLength + 1) },
     }),
   ).toThrow(/exceed the updater recovery limits/i);
-  expect(recovery.parseUpdateRecoveryPayload("x".repeat(recovery.UPDATE_RECOVERY_LIMITS.maxPayloadBytes + 1))).toBe(
-    null,
-  );
+  expect(recovery.parseUpdateRecoveryPayload("x".repeat(recovery.UPDATE_RECOVERY_LIMITS.maxPayloadBytes + 1))).toBe(null);
 });
 
 test("persisted payload parsing enforces the limit in UTF-8 bytes", () => {

@@ -43,13 +43,8 @@ export async function registerDownloadListeners(
     return unlisten;
   };
 
-  const results = await Promise.allSettled([
-    ownRegistration(registerProgress),
-    ownRegistration(registerReady),
-  ]);
-  const owned = results.flatMap((result) =>
-    result.status === "fulfilled" && result.value ? [result.value] : [],
-  );
+  const results = await Promise.allSettled([ownRegistration(registerProgress), ownRegistration(registerReady)]);
+  const owned = results.flatMap((result) => (result.status === "fulfilled" && result.value ? [result.value] : []));
   const failure = results.find((result) => result.status === "rejected");
 
   if (isCancelled() || failure || owned.length !== 2) {

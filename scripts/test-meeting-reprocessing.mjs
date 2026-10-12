@@ -6,17 +6,11 @@ import test from "node:test";
 // #361. The meeting-reprocessing-state tests moved to
 // src/lib/meeting-reprocessing-state.test.ts (Vitest).
 
-const source = await readFile(
-  new URL("../src/lib/MeetingReprocessing.svelte", import.meta.url),
-  "utf8",
-);
+const source = await readFile(new URL("../src/lib/MeetingReprocessing.svelte", import.meta.url), "utf8");
 
 test("execution uses the selected plan when plan controls have changed", () => {
   assert.match(source, /These controls set the next plan/);
-  assert.match(
-    source,
-    /selected && \(mode !== selected\.plan\.mode \|\| threshold !== selected\.plan\.threshold\)/,
-  );
+  assert.match(source, /selected && \(mode !== selected\.plan\.mode \|\| threshold !== selected\.plan\.threshold\)/);
   assert.match(source, /This is the plan that Execute will run/);
   assert.match(source, /selected\.plan\.mode\].label/);
   assert.match(source, /selected\.plan\.threshold\.toFixed\(2\)/);

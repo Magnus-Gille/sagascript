@@ -5,9 +5,13 @@ import ts from "typescript";
 
 const fileSource = await readFile(new URL("../src/lib/FileTranscription.svelte", import.meta.url), "utf8");
 const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
-const compile = source => ts.transpileModule(source, { compilerOptions: {
-  module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022,
-} }).outputText;
+const compile = (source) =>
+  ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
 async function load(name) {
   const source = await readFile(new URL(`../src/lib/${name}.ts`, import.meta.url), "utf8");
   return import(`data:text/javascript;base64,${Buffer.from(compile(source)).toString("base64")}`);
@@ -19,12 +23,17 @@ const recent = await load("recent-transcriptions");
 function functions(source, names) {
   const script = source.split('<script lang="ts">')[1].split("</script>")[0];
   const ast = ts.createSourceFile("component.ts", script, ts.ScriptTarget.Latest, true);
-  return ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.includes(node.name.text))
-    .map(node => node.getText(ast)).join("\n");
+  return ast.statements
+    .filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name.text))
+    .map((node) => node.getText(ast))
+    .join("\n");
 }
 function deferred() {
   let resolve, reject;
-  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
   return { promise, resolve, reject };
 }
 function fileHarness(path, overrides = {}) {
@@ -32,16 +41,39 @@ function fileHarness(path, overrides = {}) {
   let removed = 0;
   const calls = [];
   const native = deferred();
-  const deps = { ...stages, ...ui, job: { id: "job-1", path, profileId: "swedish", prompt: "Astrid", diarize: false },
-    listen: async (event, handler) => { assert.equal(event, "plain-transcription-progress"); listener = handler; return () => { removed++; }; },
-    transcribeFile: async (...args) => { calls.push(args); return native.promise; },
-    cancelFileTranscription: async id => { calls.push(["cancel", id]); return true; },
-    copyTranscriptionText: async text => { calls.push(["copy", text]); },
-    saveTranscriptionText: async (...args) => { calls.push(["save", ...args]); return true; },
+  const deps = {
+    ...stages,
+    ...ui,
+    job: { id: "job-1", path, profileId: "swedish", prompt: "Astrid", diarize: false },
+    listen: async (event, handler) => {
+      assert.equal(event, "plain-transcription-progress");
+      listener = handler;
+      return () => {
+        removed++;
+      };
+    },
+    transcribeFile: async (...args) => {
+      calls.push(args);
+      return native.promise;
+    },
+    cancelFileTranscription: async (id) => {
+      calls.push(["cancel", id]);
+      return true;
+    },
+    copyTranscriptionText: async (text) => {
+      calls.push(["copy", text]);
+    },
+    saveTranscriptionText: async (...args) => {
+      calls.push(["save", ...args]);
+      return true;
+    },
     setUpdateResultPending: async () => {},
     onFileRecoveryChange: () => {},
-    waitForMeetingActions: async () => {}, revealTranscriptionResult: async () => {},
-    onMissingFile: path => calls.push(["missing", path]), ...overrides };
+    waitForMeetingActions: async () => {},
+    revealTranscriptionResult: async () => {},
+    onMissingFile: (path) => calls.push(["missing", path]),
+    ...overrides,
+  };
   const source = `let transcribing = false, cancellingPlain = false, plainRequestStarted = false;
     let plainRunId = null, meetingJobStatus = null, meetingPollGeneration = 0, meetingDocumentRevision = 0;
     let meetingError = '', transcriptionProgress = 0, transcribeError = '', transcriptionResult = '';
@@ -51,9 +83,9 @@ function fileHarness(path, overrides = {}) {
       copy: copyTranscriptionResult, save: saveTranscriptionResult,
       state: () => ({transcribing, cancellingPlain, plainStages, transcribeError, transcriptionResult, resultActionMessage}) };`;
   const instance = new Function(...Object.keys(deps), compile(source))(...Object.values(deps));
-  return { ...instance, calls, native, progress: payload => listener({ payload }), removed: () => removed };
+  return { ...instance, calls, native, progress: (payload) => listener({ payload }), removed: () => removed };
 }
-const flush = () => new Promise(resolve => setImmediate(resolve));
+const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test("per-file progress is run-scoped, subscribed before work, and duplicate starts cannot spawn workers", async () => {
   const h = fileHarness("/audio/one.wav");
@@ -120,7 +152,11 @@ test("late cancellation reply cannot alter a settled result", async () => {
 });
 
 test("failed Stop followed by native success does not mark a successful file failed", async () => {
-  const h = fileHarness("/audio/one.wav", { cancelFileTranscription: async () => { throw new Error("cancel unavailable"); } });
+  const h = fileHarness("/audio/one.wav", {
+    cancelFileTranscription: async () => {
+      throw new Error("cancel unavailable");
+    },
+  });
   const run = h.start();
   await flush();
   await h.cancel();
@@ -145,7 +181,7 @@ test("accepted cancellation discards partial output and missing sources notify o
   await flush();
   missing.native.reject(new Error("Failed to open file: No such file or directory"));
   await attempt;
-  assert.ok(missing.calls.some(call => call[0] === "missing" && call[1] === "/audio/missing.wav"));
+  assert.ok(missing.calls.some((call) => call[0] === "missing" && call[1] === "/audio/missing.wav"));
 });
 
 test("each result saves and copies its own output and source even while another file is busy", async () => {
@@ -159,7 +195,10 @@ test("each result saves and copies its own output and source even while another 
   await flush();
   await first.save();
   await first.copy();
-  assert.deepEqual(first.calls.slice(-2), [["save", "first text", "same.txt", "/first"], ["copy", "first text"]]);
+  assert.deepEqual(first.calls.slice(-2), [
+    ["save", "first text", "same.txt", "/first"],
+    ["copy", "first text"],
+  ]);
   assert.equal(second.state().transcribing, true);
   second.native.resolve("second text");
   await secondRun;
@@ -170,12 +209,17 @@ test("each result saves and copies its own output and source even while another 
 test("re-run appends a fresh job with the selected request's options and obeys the serial scheduler", () => {
   const current = { id: "existing", path: "/other.wav", profileId: null, prompt: null, diarize: false, status: "running" };
   const request = { path: "/chosen.wav", profileId: "swedish", prompt: "Astrid", diarize: true };
-  const deps = { ...queue, ...recent, profileForId: id => id === "swedish" };
-  const factory = new Function(...Object.keys(deps), "current", "request", compile(`
+  const deps = { ...queue, ...recent, profileForId: (id) => id === "swedish" };
+  const factory = new Function(
+    ...Object.keys(deps),
+    "current",
+    "request",
+    compile(`
     let fileJobs = [current], recentTranscriptions = [request], selectedRerunPath = request.path;
     let selectedFileId = current.id, rerunError = '';
     ${functions(settingsSource, ["retryLastTranscription"])}
-    retryLastTranscription(); return { fileJobs, selectedFileId, rerunError };`));
+    retryLastTranscription(); return { fileJobs, selectedFileId, rerunError };`),
+  );
   const result = factory(...Object.values(deps), current, request);
   assert.equal(result.fileJobs[0], current);
   const added = result.fileJobs[1];

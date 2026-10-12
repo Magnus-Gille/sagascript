@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const rustCacheRef =
-  "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6";
+const rustCacheRef = "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6";
 
 const [ciWorkflow, testBuildWorkflow, windowsWorkflow] = await Promise.all([
   readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
@@ -35,8 +34,7 @@ test("signed test builds use the shared dependency cache without raw target dump
   assert.match(cache, /shared-key:\s+sagascript-test-macos-arm64/);
   assert.doesNotMatch(cache, /actions\/cache|src-tauri\/target/);
   assert.ok(
-    testBuildWorkflow.indexOf("name: Import Developer ID certificate") >
-      testBuildWorkflow.indexOf("name: Cache Rust dependencies"),
+    testBuildWorkflow.indexOf("name: Import Developer ID certificate") > testBuildWorkflow.indexOf("name: Cache Rust dependencies"),
     "signing must remain after the dependency cache",
   );
 });
@@ -94,10 +92,7 @@ test("Windows candidates cache only verified models with a candidate primary key
     cache,
     /key: windows-models-package-\$\{\{ matrix\.architecture \}\}-\$\{\{ hashFiles\('src-tauri\/crates\/sagascript-core\/src\/settings\/manager\.rs', 'src-tauri\/crates\/sagascript-core\/src\/transcription\/model\.rs', 'src-tauri\/crates\/sagascript-core\/src\/diarization\/model\.rs'\) \}\}/,
   );
-  assert.match(
-    cache,
-    /restore-keys:[\s\S]*windows-models-package-\$\{\{ matrix\.architecture \}\}-[\s\S]*windows-models-/,
-  );
+  assert.match(cache, /restore-keys:[\s\S]*windows-models-package-\$\{\{ matrix\.architecture \}\}-[\s\S]*windows-models-/);
   const nativeGate = windowsWorkflow.indexOf("name: Gate real Windows transcription");
   const englishGate = windowsWorkflow.indexOf("name: Gate repeated English dictation");
   assert.ok(nativeGate > modelCacheStart && englishGate > nativeGate);

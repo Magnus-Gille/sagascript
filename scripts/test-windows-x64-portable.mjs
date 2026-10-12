@@ -41,7 +41,10 @@ function cmakeBracketArgument(value) {
 
 function parseFixtureOutput(output) {
   return Object.fromEntries(
-    output.trim().split(/\r?\n/).map((line) => line.split("=")),
+    output
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => line.split("=")),
   );
 }
 
@@ -69,9 +72,7 @@ async function runFixture({
     assignments.push(`set(${name} ${value} CACHE BOOL "fixture preseed" FORCE)`);
   }
   const names = Object.keys(baselineFlags);
-  const outputLines = names
-    .map((name) => `  "${name}=\${${name}}\\n"`)
-    .join("\n");
+  const outputLines = names.map((name) => `  "${name}=\${${name}}\\n"`).join("\n");
   const script = [
     ...assignments,
     `include(${cmakeBracketArgument(hookPath)})`,

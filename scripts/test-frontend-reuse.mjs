@@ -33,28 +33,19 @@ test("changed frontend output is rejected", async (t) => {
   const { distPath, metadataPath } = await fixture(t);
   await writeFile(join(distPath, "app.js"), "changed");
 
-  assert.throws(
-    () => validateFrontend({ distPath, metadataPath }),
-    /does not match build metadata/,
-  );
+  assert.throws(() => validateFrontend({ distPath, metadataPath }), /does not match build metadata/);
 });
 
 test("missing frontend output is rejected", async (t) => {
   const { distPath, metadataPath } = await fixture(t);
   await rm(distPath, { recursive: true });
 
-  assert.throws(
-    () => validateFrontend({ distPath, metadataPath }),
-    /missing dist\/index\.html/,
-  );
+  assert.throws(() => validateFrontend({ distPath, metadataPath }), /missing dist\/index\.html/);
 });
 
 test("missing frontend metadata is rejected", async (t) => {
   const { distPath, metadataPath } = await fixture(t);
   await rm(metadataPath);
 
-  assert.throws(
-    () => validateFrontend({ distPath, metadataPath }),
-    /Frontend metadata is missing/,
-  );
+  assert.throws(() => validateFrontend({ distPath, metadataPath }), /Frontend metadata is missing/);
 });

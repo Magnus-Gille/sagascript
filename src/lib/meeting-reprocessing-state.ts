@@ -20,31 +20,18 @@ export function proposalIsFullyApplied(proposal: ProposalPreview | null): boolea
   return proposal !== null && proposal.preview.steps.every((step) => step.status === "applied");
 }
 
-export function selectedPlanIsCurrent(
-  selected: PlanContext | null,
-  currentReviewRevision: string | null | undefined,
-): boolean {
-  return selected !== null
-    && typeof currentReviewRevision === "string"
-    && selected.plan.context.previous_revision === currentReviewRevision;
+export function selectedPlanIsCurrent(selected: PlanContext | null, currentReviewRevision: string | null | undefined): boolean {
+  return (
+    selected !== null && typeof currentReviewRevision === "string" && selected.plan.context.previous_revision === currentReviewRevision
+  );
 }
 
-export function proposalIsCurrent(
-  proposal: ProposalBase | null,
-  currentReviewRevision: string | null | undefined,
-): boolean {
-  return proposal !== null
-    && typeof currentReviewRevision === "string"
-    && proposal.proposal.previous.revision === currentReviewRevision;
+export function proposalIsCurrent(proposal: ProposalBase | null, currentReviewRevision: string | null | undefined): boolean {
+  return proposal !== null && typeof currentReviewRevision === "string" && proposal.proposal.previous.revision === currentReviewRevision;
 }
 
-export function proposalWasExported(
-  proposal: ProposalRevision | null,
-  exportedRevision: string | null,
-): boolean {
-  return proposal !== null
-    && exportedRevision !== null
-    && proposal.proposal.revision === exportedRevision;
+export function proposalWasExported(proposal: ProposalRevision | null, exportedRevision: string | null): boolean {
+  return proposal !== null && exportedRevision !== null && proposal.proposal.revision === exportedRevision;
 }
 
 function formatSegmentTimestamp(seconds: number): string {
@@ -71,14 +58,7 @@ export function filterCandidateSegments<Segment extends CandidateSegment>(
     if (selected.has(segment.id)) return true;
     const start = formatSegmentTimestamp(segment.start);
     const end = formatSegmentTimestamp(segment.end);
-    const searchText = [
-      segment.id,
-      segment.text,
-      start,
-      end,
-      `${start}-${end}`,
-      `${start}–${end}`,
-    ].join(" ").toLowerCase();
+    const searchText = [segment.id, segment.text, start, end, `${start}-${end}`, `${start}–${end}`].join(" ").toLowerCase();
     return searchText.includes(normalizedQuery);
   });
 }

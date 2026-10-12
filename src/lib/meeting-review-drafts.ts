@@ -13,16 +13,11 @@ export interface MeetingReviewDraftSnapshot {
 function stringMap(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .filter(([key, entry]) => key.length > 0 && typeof entry === "string"),
+    Object.entries(value as Record<string, unknown>).filter(([key, entry]) => key.length > 0 && typeof entry === "string"),
   ) as Record<string, string>;
 }
 
-function mapForIds(
-  value: unknown,
-  ids: readonly string[],
-  fallback: Record<string, string>,
-): Record<string, string> {
+function mapForIds(value: unknown, ids: readonly string[], fallback: Record<string, string>): Record<string, string> {
   const source = stringMap(value);
   return Object.fromEntries(ids.map((id) => [id, source[id] ?? fallback[id] ?? ""]));
 }
@@ -38,19 +33,14 @@ export function restoreMeetingDraftSnapshot(
   sourceSha256: string,
   reviewRevision: string,
 ): DraftState {
-  if (
-    !snapshot
-    || snapshot.source_sha256 !== sourceSha256
-    || snapshot.review_revision !== reviewRevision
-  ) return base;
+  if (!snapshot || snapshot.source_sha256 !== sourceSha256 || snapshot.review_revision !== reviewRevision) return base;
 
   const speakerIds = transcript.speakers.map((speaker) => speaker.id);
   const segmentIds = transcript.segments.map((segment) => segment.id);
   const speakerIdSet = new Set(speakerIds);
   const mergeSource = stringMap(snapshot.drafts?.mergeTargets);
   const mergeTargets = Object.fromEntries(
-    Object.entries(mergeSource).filter(([from, into]) =>
-      from !== into && speakerIdSet.has(from) && speakerIdSet.has(into)),
+    Object.entries(mergeSource).filter(([from, into]) => from !== into && speakerIdSet.has(from) && speakerIdSet.has(into)),
   );
   const speakerDrafts = mapForIds(snapshot.drafts?.speakers, segmentIds, base.speakers);
   for (const id of segmentIds) {

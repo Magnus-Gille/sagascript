@@ -12,12 +12,7 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-  formatBudget,
-  runProcessTree,
-  signalExitCode,
-  trapTerminationSignals,
-} from "./lib/process-tree.mjs";
+import { formatBudget, runProcessTree, signalExitCode, trapTerminationSignals } from "./lib/process-tree.mjs";
 import { findPackageDirectory } from "./lib/node-packages.mjs";
 
 const DEFAULT_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -106,7 +101,12 @@ export function parseArgs(argv) {
     };
     switch (flag) {
       case "--group":
-        options.groups.push(...value().split(",").map((name) => name.trim()).filter(Boolean));
+        options.groups.push(
+          ...value()
+            .split(",")
+            .map((name) => name.trim())
+            .filter(Boolean),
+        );
         break;
       case "--list":
         options.list = true;
@@ -161,8 +161,7 @@ export async function main(argv) {
   const problems = classificationProblems(groups, discoverTestFiles(root), root);
   if (problems.length > 0) {
     console.error(
-      `run-frontend-tests: ${MANIFEST} does not match the test files on disk:\n` +
-        problems.map((problem) => `  - ${problem}`).join("\n"),
+      `run-frontend-tests: ${MANIFEST} does not match the test files on disk:\n` + problems.map((problem) => `  - ${problem}`).join("\n"),
     );
     return 2;
   }
@@ -184,9 +183,7 @@ export async function main(argv) {
     return 2;
   }
 
-  const missing = [...new Set(selected.flatMap((group) => npmPackages[group] ?? []))].filter(
-    (name) => !isPackageResolvable(root, name),
-  );
+  const missing = [...new Set(selected.flatMap((group) => npmPackages[group] ?? []))].filter((name) => !isPackageResolvable(root, name));
   if (missing.length > 0) {
     const neededBy = selected.filter((group) => (npmPackages[group] ?? []).some((name) => missing.includes(name)));
     console.error(

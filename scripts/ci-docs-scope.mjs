@@ -4,17 +4,15 @@ import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
-const ALLOWED_PATHS = [
-  /^README\.md$/,
-  /^docs\/release-readiness\.md$/,
-  /^docs\/research\/(?:[^/]+\/)*[^/]+\.md$/,
-];
+const ALLOWED_PATHS = [/^README\.md$/, /^docs\/release-readiness\.md$/, /^docs\/research\/(?:[^/]+\/)*[^/]+\.md$/];
 
 export function isAllowedPath(path) {
-  return typeof path === "string"
-    && !path.includes("\\")
-    && !path.split("/").some((segment) => segment === "." || segment === "..")
-    && ALLOWED_PATHS.some((pattern) => pattern.test(path));
+  return (
+    typeof path === "string" &&
+    !path.includes("\\") &&
+    !path.split("/").some((segment) => segment === "." || segment === "..") &&
+    ALLOWED_PATHS.some((pattern) => pattern.test(path))
+  );
 }
 
 export function parseNameStatusZ(output) {
@@ -71,7 +69,9 @@ export function classifyRecords(records) {
     scope_classification: docsOnly ? "docs-only" : "full-required",
     reason: docsOnly
       ? "all-changed-paths-are-allowlisted"
-      : supportedStatuses ? "changed-path-outside-allowlist" : "unsupported-change-status",
+      : supportedStatuses
+        ? "changed-path-outside-allowlist"
+        : "unsupported-change-status",
     changed_paths: paths,
   };
 }
@@ -88,18 +88,20 @@ function classifyFull() {
 }
 
 function gitDiff(base, head) {
-  for (const [name, value] of [["base", base], ["head", head]]) {
+  for (const [name, value] of [
+    ["base", base],
+    ["head", head],
+  ]) {
     if (!SHA_RE.test(value)) {
       throw new Error(`${name} must be a 40-character lowercase commit SHA`);
     }
   }
 
   const range = `${base}...${head}`;
-  const result = spawnSync(
-    "git",
-    ["diff", "--name-status", "--find-renames=50%", "-z", range, "--"],
-    { encoding: "buffer", stdio: ["ignore", "pipe", "pipe"] },
-  );
+  const result = spawnSync("git", ["diff", "--name-status", "--find-renames=50%", "-z", range, "--"], {
+    encoding: "buffer",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     const details = result.stderr?.toString("utf8").trim();
@@ -113,11 +115,9 @@ function writeGithubOutput(result) {
   if (!outputPath) return;
   appendFileSync(
     outputPath,
-    [
-      `docs_only=${result.docs_only}`,
-      `scope_trusted=${result.scope_trusted}`,
-      `scope_classification=${result.scope_classification}`,
-    ].join("\n") + "\n",
+    [`docs_only=${result.docs_only}`, `scope_trusted=${result.scope_trusted}`, `scope_classification=${result.scope_classification}`].join(
+      "\n",
+    ) + "\n",
   );
 }
 

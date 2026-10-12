@@ -54,10 +54,7 @@ export interface CommandMap {
   get_last_error: Command<typeof api.getLastError>;
   get_last_transcription: Command<typeof api.getLastTranscription>;
   start_recording: Command<typeof api.startRecording>;
-  start_training_recording: Command<
-    typeof api.startTrainingRecording,
-    { profileId: Arg<typeof api.startTrainingRecording> }
-  >;
+  start_training_recording: Command<typeof api.startTrainingRecording, { profileId: Arg<typeof api.startTrainingRecording> }>;
   cancel_recording: Command<typeof api.cancelRecording>;
   stop_and_transcribe: Command<typeof api.stopAndTranscribe>;
   stop_and_transcribe_training: Command<typeof api.stopAndTranscribeTraining>;
@@ -90,10 +87,7 @@ export interface CommandMap {
   get_settings: Command<typeof api.getSettings>;
   set_language: Command<typeof api.setLanguage, { language: Arg<typeof api.setLanguage> }>;
   set_whisper_model: Command<typeof api.setWhisperModel, { model: Arg<typeof api.setWhisperModel> }>;
-  set_file_transcription_model: Command<
-    typeof api.setFileTranscriptionModel,
-    { modelId: Arg<typeof api.setFileTranscriptionModel> }
-  >;
+  set_file_transcription_model: Command<typeof api.setFileTranscriptionModel, { modelId: Arg<typeof api.setFileTranscriptionModel> }>;
   set_auto_select_model: Command<typeof api.setAutoSelectModel, { enabled: Arg<typeof api.setAutoSelectModel> }>;
   set_hotkey_mode: Command<typeof api.setHotkeyMode, { mode: Arg<typeof api.setHotkeyMode> }>;
   set_hotkey: Command<typeof api.setHotkey, { shortcut: Arg<typeof api.setHotkey> }>;
@@ -102,10 +96,7 @@ export interface CommandMap {
     typeof api.setProfileModel,
     { profileId: Arg<typeof api.setProfileModel, 0>; modelId: Arg<typeof api.setProfileModel, 1> }
   >;
-  get_profile_model_info: Command<
-    typeof api.getProfileModelInfo,
-    { profileId: Arg<typeof api.getProfileModelInfo> }
-  >;
+  get_profile_model_info: Command<typeof api.getProfileModelInfo, { profileId: Arg<typeof api.getProfileModelInfo> }>;
   get_active_hotkey_profile: Command<typeof api.getActiveHotkeyProfile>;
   hotkey_status: Command<typeof api.hotkeyStatus>;
   retry_hotkey_registration: Command<typeof api.retryHotkeyRegistration>;
@@ -124,37 +115,19 @@ export interface CommandMap {
   >;
   set_show_overlay: Command<typeof api.setShowOverlay, { enabled: Arg<typeof api.setShowOverlay> }>;
   set_beam_size: Command<typeof api.setBeamSize, { beamSize: Arg<typeof api.setBeamSize> }>;
-  set_temperature_fallback: Command<
-    typeof api.setTemperatureFallback,
-    { enabled: Arg<typeof api.setTemperatureFallback> }
-  >;
+  set_temperature_fallback: Command<typeof api.setTemperatureFallback, { enabled: Arg<typeof api.setTemperatureFallback> }>;
   set_engine_prewarm: Command<typeof api.setEnginePrewarm, { mode: Arg<typeof api.setEnginePrewarm> }>;
-  set_engine_idle_unload_minutes: Command<
-    typeof api.setEngineIdleUnloadMinutes,
-    { minutes: Arg<typeof api.setEngineIdleUnloadMinutes> }
-  >;
+  set_engine_idle_unload_minutes: Command<typeof api.setEngineIdleUnloadMinutes, { minutes: Arg<typeof api.setEngineIdleUnloadMinutes> }>;
   set_vad_enabled: Command<typeof api.setVadEnabled, { enabled: Arg<typeof api.setVadEnabled> }>;
-  set_pianissimo_dictation: Command<
-    typeof api.setPianissimoDictation,
-    { enabled: Arg<typeof api.setPianissimoDictation> }
-  >;
+  set_pianissimo_dictation: Command<typeof api.setPianissimoDictation, { enabled: Arg<typeof api.setPianissimoDictation> }>;
   set_onboarding_completed: Command<typeof api.setOnboardingCompleted>;
 
   // Models and engine
   engine_status: Command<typeof api.getEngineStatus>;
   get_model_info: Command<typeof api.getModelInfo>;
-  get_effective_model_info: Command<
-    typeof api.getEffectiveModelInfo,
-    { language: Arg<typeof api.getEffectiveModelInfo> }
-  >;
-  get_auto_file_model_info: Command<
-    typeof api.getAutoFileModelInfo,
-    { language: Arg<typeof api.getAutoFileModelInfo> }
-  >;
-  get_dictation_model_info: Command<
-    typeof api.getDictationModelInfo,
-    { language: Arg<typeof api.getDictationModelInfo> }
-  >;
+  get_effective_model_info: Command<typeof api.getEffectiveModelInfo, { language: Arg<typeof api.getEffectiveModelInfo> }>;
+  get_auto_file_model_info: Command<typeof api.getAutoFileModelInfo, { language: Arg<typeof api.getAutoFileModelInfo> }>;
+  get_dictation_model_info: Command<typeof api.getDictationModelInfo, { language: Arg<typeof api.getDictationModelInfo> }>;
   get_file_model_options: Command<
     typeof api.getFileModelOptions,
     {
@@ -164,10 +137,7 @@ export interface CommandMap {
   >;
   get_loaded_model: Command<typeof api.getLoadedModel>;
   is_model_ready: Command<typeof api.isModelReady>;
-  is_model_downloaded: Command<
-    typeof api.isModelDownloaded,
-    { whisperModel: Arg<typeof api.isModelDownloaded> }
-  >;
+  is_model_downloaded: Command<typeof api.isModelDownloaded, { whisperModel: Arg<typeof api.isModelDownloaded> }>;
   download_model: Command<typeof api.downloadModel, { whisperModel: Arg<typeof api.downloadModel> }>;
   download_pianissimo_model: Command<typeof api.downloadPianissimoModel>;
   get_build_info: Command<typeof api.getBuildInfo>;
@@ -186,10 +156,7 @@ export interface CommandMap {
       autoPaste: false;
     }
   >;
-  cancel_file_transcription: Command<
-    typeof api.cancelFileTranscription,
-    { runId: Arg<typeof api.cancelFileTranscription> }
-  >;
+  cancel_file_transcription: Command<typeof api.cancelFileTranscription, { runId: Arg<typeof api.cancelFileTranscription> }>;
   save_transcription_text: Command<
     typeof api.saveTranscriptionText,
     {
@@ -198,10 +165,7 @@ export interface CommandMap {
       directory: Arg<typeof api.saveTranscriptionText, 2>;
     }
   >;
-  copy_transcription_text: Command<
-    typeof api.copyTranscriptionText,
-    { text: Arg<typeof api.copyTranscriptionText> }
-  >;
+  copy_transcription_text: Command<typeof api.copyTranscriptionText, { text: Arg<typeof api.copyTranscriptionText> }>;
 
   // Updater recovery
   set_update_result_pending: Command<
@@ -211,14 +175,8 @@ export interface CommandMap {
       pending: Arg<typeof api.setUpdateResultPending, 1>;
     }
   >;
-  get_update_result_pending: Command<
-    typeof api.getUpdateResultPending,
-    { resultId: Arg<typeof api.getUpdateResultPending> }
-  >;
-  acknowledge_update_result: Command<
-    typeof api.acknowledgeUpdateResult,
-    { expectedText: Arg<typeof api.acknowledgeUpdateResult> }
-  >;
+  get_update_result_pending: Command<typeof api.getUpdateResultPending, { resultId: Arg<typeof api.getUpdateResultPending> }>;
+  acknowledge_update_result: Command<typeof api.acknowledgeUpdateResult, { expectedText: Arg<typeof api.acknowledgeUpdateResult> }>;
   save_update_recovery: Command<typeof api.saveUpdateRecovery, { payload: Arg<typeof api.saveUpdateRecovery> }>;
   load_update_recovery: Command<typeof api.loadUpdateRecovery>;
   clear_update_recovery: Command<typeof api.clearUpdateRecovery>;
@@ -261,10 +219,7 @@ export interface CommandMap {
     typeof api.saveMeetingExport,
     { transcript: Arg<typeof api.saveMeetingExport, 0>; format: Arg<typeof api.saveMeetingExport, 1> }
   >;
-  create_meeting_review: Command<
-    typeof api.createMeetingReview,
-    { transcript: Arg<typeof api.createMeetingReview> }
-  >;
+  create_meeting_review: Command<typeof api.createMeetingReview, { transcript: Arg<typeof api.createMeetingReview> }>;
   apply_meeting_corrections: Command<
     typeof api.applyMeetingCorrections,
     {
@@ -291,10 +246,7 @@ export interface CommandMap {
     typeof api.saveMeetingReview,
     { review: Arg<typeof api.saveMeetingReview, 0>; format: Arg<typeof api.saveMeetingReview, 1> }
   >;
-  attach_meeting_audio: Command<
-    typeof api.attachMeetingAudio,
-    { sourceSha256: Arg<typeof api.attachMeetingAudio> }
-  >;
+  attach_meeting_audio: Command<typeof api.attachMeetingAudio, { sourceSha256: Arg<typeof api.attachMeetingAudio> }>;
   detach_meeting_audio: Command<typeof api.detachMeetingAudio, { token: Arg<typeof api.detachMeetingAudio> }>;
 
   // Meeting reprocessing (src/lib/meeting-reprocessing-api.ts)
@@ -344,10 +296,7 @@ export interface CommandMap {
       currentReview: Arg<typeof reprocessing.acceptMeetingProposal, 1>;
     }
   >;
-  save_meeting_proposal: Command<
-    typeof reprocessing.saveMeetingProposal,
-    { proposal: Arg<typeof reprocessing.saveMeetingProposal> }
-  >;
+  save_meeting_proposal: Command<typeof reprocessing.saveMeetingProposal, { proposal: Arg<typeof reprocessing.saveMeetingProposal> }>;
   open_meeting_proposal: Command<typeof reprocessing.openMeetingProposal>;
 
   // Onboarding permissions
@@ -363,9 +312,7 @@ export type CommandName = keyof CommandMap;
 export type CommandArgs<C extends CommandName> = CommandMap[C]["args"];
 export type CommandResult<C extends CommandName> = CommandMap[C]["result"];
 /** Throw a string to mimic a Rust `Err(String)`; the wrapper rejects with it. */
-export type CommandHandler<C extends CommandName> = (
-  args: CommandArgs<C>,
-) => CommandResult<C> | Promise<CommandResult<C>>;
+export type CommandHandler<C extends CommandName> = (args: CommandArgs<C>) => CommandResult<C> | Promise<CommandResult<C>>;
 export type CommandHandlers = { [C in CommandName]?: CommandHandler<C> };
 /** One recorded invocation; narrow on `command` to get typed `args`. */
 export type IpcCall = { [C in CommandName]: { command: C; args: CommandArgs<C> } }[CommandName];
@@ -558,9 +505,7 @@ function eventPlugin(state: ActiveMock, command: string, args: InvokeArgs | unde
       return handler;
     }
     case "plugin:event|unlisten":
-      state.listeners = state.listeners.filter(
-        (listener) => !(listener.event === fields.event && listener.handler === fields.eventId),
-      );
+      state.listeners = state.listeners.filter((listener) => !(listener.event === fields.event && listener.handler === fields.eventId));
       return null;
     case "plugin:event|emit":
       dispatch(state, String(fields.event), fields.payload);
@@ -601,9 +546,7 @@ export function mockIpc(handlers: CommandHandlers = {}): IpcMock {
       return state.calls;
     },
     callsTo<C extends CommandName>(command: C): CommandArgs<C>[] {
-      return state.calls.flatMap((call) =>
-        call.command === command ? [call.args as CommandArgs<C>] : [],
-      );
+      return state.calls.flatMap((call) => (call.command === command ? [call.args as CommandArgs<C>] : []));
     },
     get unmocked() {
       return state.unmocked;

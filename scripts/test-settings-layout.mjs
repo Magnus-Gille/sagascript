@@ -26,7 +26,10 @@ test("Settings presents build identity above the ordered navigation tabs", () =>
   assert(tabsEnd > tabsStart, "Tab bar closes");
   const tabsContent = content.slice(tabsStart, tabsEnd);
   const indices = ["Dictate", "Transcribe", "Settings"].map((label) => tabsContent.indexOf(label));
-  assert(indices.every((index) => index >= 0), "All tab labels remain");
+  assert(
+    indices.every((index) => index >= 0),
+    "All tab labels remain",
+  );
   assert(indices[0] < indices[1] && indices[1] < indices[2], "Tab order remains unchanged");
 });
 
@@ -67,8 +70,14 @@ test("Settings shows engine host identity and Pianissimo engine controls without
   const header = content.slice(content.indexOf('<header class="window-header">'), content.indexOf("</header>"));
   assert.match(header, /engineHostIdentity/);
   assert.match(content, /getEngineStatus/);
-  for (const text of ["Prepare Pianissimo when", "When I press the dictation key", "When Sagascript starts",
-    "Only when needed", "Unload after idle", "Requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon)"]) {
+  for (const text of [
+    "Prepare Pianissimo when",
+    "When I press the dictation key",
+    "When Sagascript starts",
+    "Only when needed",
+    "Unload after idle",
+    "Requires macOS 14+ on Apple Silicon or Windows on ARM (Snapdragon)",
+  ]) {
     assert(content.includes(text), `Settings contains "${text}"`);
   }
   assert.match(content, /engineIdleChoices = \[5, 10, 30, 60, 0\]/);

@@ -30,7 +30,10 @@ function cmakeBracketArgument(value) {
 
 function parseFixtureOutput(output) {
   return Object.fromEntries(
-    output.trim().split(/\r?\n/).map((line) => line.split("=")),
+    output
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => line.split("=")),
   );
 }
 
@@ -55,9 +58,7 @@ async function runScriptFixture({
   for (const [name, value] of Object.entries(preseed)) {
     assignments.push(`set(${name} ${value} CACHE BOOL "fixture preseed" FORCE)`);
   }
-  const outputLines = machineSupportFlags
-    .map((name) => `  "${name}=\${${name}}\\n"`)
-    .join("\n");
+  const outputLines = machineSupportFlags.map((name) => `  "${name}=\${${name}}\\n"`).join("\n");
   const script = [
     ...assignments,
     `include(${cmakeBracketArgument(hookPath)})`,
@@ -102,13 +103,13 @@ async function runConfigureFixture() {
     "set(CMAKE_SYSTEM_NAME Windows)",
     "set(CMAKE_SYSTEM_PROCESSOR aarch64)",
     "set(CMAKE_SIZEOF_VOID_P 8)",
-    "set(GGML_MACHINE_SUPPORTS_sve ON CACHE BOOL \"fixture preseed\" FORCE)",
-    "set(GGML_MACHINE_SUPPORTS_sme ON CACHE BOOL \"fixture preseed\" FORCE)",
-    "set(GGML_NATIVE ON CACHE BOOL \"fixture preseed\" FORCE)",
-    "set(GGML_MACHINE_SUPPORTS_dotprod ON CACHE BOOL \"fixture preseed\" FORCE)",
-    "set(GGML_MACHINE_SUPPORTS_i8mm ON CACHE BOOL \"fixture preseed\" FORCE)",
-    "set(GGML_MACHINE_SUPPORTS_nosve ON CACHE BOOL \"fixture preseed\" FORCE)",
-    "set(GGML_MACHINE_SUPPORTS_nosme ON CACHE BOOL \"fixture preseed\" FORCE)",
+    'set(GGML_MACHINE_SUPPORTS_sve ON CACHE BOOL "fixture preseed" FORCE)',
+    'set(GGML_MACHINE_SUPPORTS_sme ON CACHE BOOL "fixture preseed" FORCE)',
+    'set(GGML_NATIVE ON CACHE BOOL "fixture preseed" FORCE)',
+    'set(GGML_MACHINE_SUPPORTS_dotprod ON CACHE BOOL "fixture preseed" FORCE)',
+    'set(GGML_MACHINE_SUPPORTS_i8mm ON CACHE BOOL "fixture preseed" FORCE)',
+    'set(GGML_MACHINE_SUPPORTS_nosve ON CACHE BOOL "fixture preseed" FORCE)',
+    'set(GGML_MACHINE_SUPPORTS_nosme ON CACHE BOOL "fixture preseed" FORCE)',
     `include(${cmakeBracketArgument(hookPath)})`,
     "check_cxx_source_runs([=[",
     "#error This source must not be compiled when the hook pre-seeds SVE OFF",
@@ -116,7 +117,7 @@ async function runConfigureFixture() {
     "]=] GGML_MACHINE_SUPPORTS_sve)",
     "check_cxx_source_runs([=[#error SME probe must also be skipped]=] GGML_MACHINE_SUPPORTS_sme)",
     "if(GGML_MACHINE_SUPPORTS_sve OR GGML_MACHINE_SUPPORTS_sme)",
-    "  message(FATAL_ERROR \"pre-seeded SVE probe unexpectedly ran\")",
+    '  message(FATAL_ERROR "pre-seeded SVE probe unexpectedly ran")',
     "endif()",
     `file(WRITE ${cmakeBracketArgument(outputPath)}\n${machineSupportFlags.map((name) => `  "${name}=\${${name}}\\n"`).join("\n")}\n)`,
   ].join("\n");

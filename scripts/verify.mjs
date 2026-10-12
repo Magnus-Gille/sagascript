@@ -19,13 +19,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-  formatBudget,
-  formatDuration,
-  runProcessTree,
-  signalExitCode,
-  trapTerminationSignals,
-} from "./lib/process-tree.mjs";
+import { formatBudget, formatDuration, runProcessTree, signalExitCode, trapTerminationSignals } from "./lib/process-tree.mjs";
 import { findPackageDirectory } from "./lib/node-packages.mjs";
 
 export const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -36,7 +30,6 @@ const POSIX = ["darwin", "linux"];
 const LINUX = ["linux"];
 const MINUTE = 60_000;
 const PLATFORM_NAMES = { darwin: "macOS", linux: "Linux", win32: "Windows" };
-
 
 const step = (run, cwd, extra = {}) => ({ run, cwd, ...extra });
 const budgetMs = (check) => check.timeoutMs ?? check.timeoutMinutes * MINUTE;
@@ -257,10 +250,7 @@ export const CHECKS = [
     id: "deny",
     area: "deps",
     title: "Rust dependency policy: advisories, licenses, bans, sources (cargo-deny, src-tauri/deny.toml)",
-    steps: [
-      step("cargo deny --locked --workspace check", "src-tauri"),
-      step(ORT_DENY, "src-tauri"),
-    ],
+    steps: [step("cargo deny --locked --workspace check", "src-tauri"), step(ORT_DENY, "src-tauri")],
     sets: ["default"],
     platforms: ALL,
     requires: ["rust", "cargo-deny"],
@@ -837,7 +827,10 @@ timed out, 2 usage or preflight error, 128+n interrupted by signal n.`;
 class UsageError extends Error {}
 
 function splitList(value, flag) {
-  const items = value.split(",").map((item) => item.trim()).filter(Boolean);
+  const items = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
   if (items.length === 0) throw new UsageError(`${flag} needs at least one check or area`);
   return items;
 }
@@ -892,8 +885,7 @@ function resolveNames(names, checks, flag) {
   if (unknown.length > 0) {
     const areas = [...new Set(checks.map((check) => check.area))].join(", ");
     throw new UsageError(
-      `${flag}: unknown check or area ${unknown.join(", ")}.\n` +
-        `Checks: ${checks.map((check) => check.id).join(", ")}\nAreas: ${areas}`,
+      `${flag}: unknown check or area ${unknown.join(", ")}.\n` + `Checks: ${checks.map((check) => check.id).join(", ")}\nAreas: ${areas}`,
     );
   }
   return ids;
@@ -1018,9 +1010,7 @@ function npxBin(root, name) {
 // How to spawn a step, without npm/npx shims (no download, no shell) where
 // possible.
 function spawnPlan(stepDefinition, ctx) {
-  const [program, ...rest] = (stepDefinition.argv ?? splitCommand(stepDefinition.run)).map((part) =>
-    substitute(part, ctx),
-  );
+  const [program, ...rest] = (stepDefinition.argv ?? splitCommand(stepDefinition.run)).map((part) => substitute(part, ctx));
   if (program === "node") return { command: process.execPath, args: rest };
   if (program === "python") return { command: ctx.values.python ?? pythonCandidates(ctx.platform)[0], args: rest };
   if (program === "npx") {
@@ -1145,8 +1135,7 @@ async function loadConfig(io) {
   if (!configPath) return { checks: CHECKS, prerequisites: PREREQUISITES, root: REPO_ROOT, killGraceMs: 5000 };
   // Test hook (see the file header): synthetic checks for the runner's tests.
   io.err(
-    `verify: SAGASCRIPT_VERIFY_CONFIG is set: running the test checks in ${configPath}, ` +
-      "not the ones defined in scripts/verify.mjs",
+    `verify: SAGASCRIPT_VERIFY_CONFIG is set: running the test checks in ${configPath}, ` + "not the ones defined in scripts/verify.mjs",
   );
   const config = await import(pathToFileURL(resolve(configPath)).href);
   return {

@@ -23,8 +23,7 @@ import { CHECKS } from "./verify.mjs";
 // SAGASCRIPT_PARITY_CI_YML=<file> checks another copy of ci.yml (used to show
 // the detections on mutated copies; never set in CI).
 
-const ciPath =
-  process.env.SAGASCRIPT_PARITY_CI_YML ?? fileURLToPath(new URL("../.github/workflows/ci.yml", import.meta.url));
+const ciPath = process.env.SAGASCRIPT_PARITY_CI_YML ?? fileURLToPath(new URL("../.github/workflows/ci.yml", import.meta.url));
 const read = (path) => readFileSync(path, "utf8").replace(/\r\n?/g, "\n");
 const workflow = read(ciPath);
 const packageJson = read(fileURLToPath(new URL("../package.json", import.meta.url)));
@@ -138,9 +137,7 @@ function stepsOf(text, jobId) {
         name: /^ {8}name: (.*)$/m.exec(raw)?.[1],
         run: inline ?? block ?? "",
         cwd: /^ {8}working-directory: (.*)$/m.exec(raw)?.[1],
-        env: Object.fromEntries(
-          [...envBlock.matchAll(/^ {10}([A-Za-z_][A-Za-z0-9_]*): (.*)$/gm)].map((match) => [match[1], match[2]]),
-        ),
+        env: Object.fromEntries([...envBlock.matchAll(/^ {10}([A-Za-z_][A-Za-z0-9_]*): (.*)$/gm)].map((match) => [match[1], match[2]])),
       };
     });
 }
@@ -226,7 +223,13 @@ const classified = new Set(Object.values(TEST_GROUPS).flat());
 // verify runs every group (node-ui, node-ci, node-release, code-health).
 function nodeTestFilesCovered(run) {
   const match = /^node (?:--test )?((?:scripts\/\S+\.mjs ?)+)$/.exec(run);
-  return Boolean(match) && match[1].trim().split(" ").every((file) => classified.has(file));
+  return (
+    Boolean(match) &&
+    match[1]
+      .trim()
+      .split(" ")
+      .every((file) => classified.has(file))
+  );
 }
 
 function allowlisted(run) {
@@ -309,7 +312,11 @@ test("the parser finds the commands of the CI test lanes", () => {
   ]) {
     assert.ok(keys.has(expected), `parsed ${expected}`);
   }
-  for (const job of TEST_LANES) assert.ok(ciCommands.some((command) => command.job === job), `${job} has commands`);
+  for (const job of TEST_LANES)
+    assert.ok(
+      ciCommands.some((command) => command.job === job),
+      `${job} has commands`,
+    );
 });
 
 test("every command in the CI test lanes has a verify check, a manifest entry or an allowlisted reason", () => {
@@ -335,9 +342,7 @@ test("every CI command a verify check claims exists in the CI test lanes", () =>
 test("each check's lanes are the ci.yml jobs that run its commands", () => {
   for (const check of CHECKS) {
     const jobs = [
-      ...new Set(
-        ciCommands.filter((command) => check.ci.some((claim) => key(claim) === key(command))).map((command) => command.job),
-      ),
+      ...new Set(ciCommands.filter((command) => check.ci.some((claim) => key(claim) === key(command))).map((command) => command.job)),
     ];
     const declared = check.lanes.filter((lane) => !lane.endsWith(".yml"));
     assert.deepEqual(declared.sort(), jobs.sort(), `${check.id} lanes`);
@@ -346,7 +351,10 @@ test("each check's lanes are the ci.yml jobs that run its commands", () => {
 
 test("every allowlist entry still matches a CI command", () => {
   for (const entry of ALLOWLIST) {
-    assert.ok(ciCommands.some((command) => allowlisted(command.run) === entry), `stale allowlist entry: ${entry.run}`);
+    assert.ok(
+      ciCommands.some((command) => allowlisted(command.run) === entry),
+      `stale allowlist entry: ${entry.run}`,
+    );
     assert.ok(entry.reason.length > 20, `${entry.run} needs a reason`);
   }
 });

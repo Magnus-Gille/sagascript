@@ -34,18 +34,26 @@ const KEY_ALIASES: Record<string, string> = {
 
 export function canonicalShortcut(shortcut: string | null | undefined, platform = "macos"): string {
   if (typeof shortcut !== "string") return "";
-  const tokens = shortcut.split("+").map((token) => token.trim().toLowerCase()).filter(Boolean);
+  const tokens = shortcut
+    .split("+")
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
   if (tokens.length === 0) return "";
   const keyToken = tokens[tokens.length - 1];
-  const modifiers = [...new Set(tokens.slice(0, -1).map((token) => {
-    if (["commandorcontrol", "commandorctrl", "cmdorctrl", "cmdorcontrol"].includes(token)) {
-      return platform === "macos" ? "super" : "control";
-    }
-    return MODIFIER_ALIASES[token] ?? token;
-  }))].sort();
-  const key = KEY_ALIASES[keyToken]
-    ?? (keyToken.length === 1 && /^[a-z]$/.test(keyToken) ? `key${keyToken}` : null)
-    ?? (keyToken.length === 1 && /^[0-9]$/.test(keyToken) ? `digit${keyToken}` : keyToken);
+  const modifiers = [
+    ...new Set(
+      tokens.slice(0, -1).map((token) => {
+        if (["commandorcontrol", "commandorctrl", "cmdorctrl", "cmdorcontrol"].includes(token)) {
+          return platform === "macos" ? "super" : "control";
+        }
+        return MODIFIER_ALIASES[token] ?? token;
+      }),
+    ),
+  ].sort();
+  const key =
+    KEY_ALIASES[keyToken] ??
+    (keyToken.length === 1 && /^[a-z]$/.test(keyToken) ? `key${keyToken}` : null) ??
+    (keyToken.length === 1 && /^[0-9]$/.test(keyToken) ? `digit${keyToken}` : keyToken);
   return [...modifiers, key].join("+");
 }
 
@@ -53,11 +61,7 @@ function nonEmpty(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
-export function displayProfileShortcut(
-  profile: HotkeyProfile,
-  slot: ProfileShortcutSlot,
-  hotkeyMode: HotkeyMode,
-): string {
+export function displayProfileShortcut(profile: HotkeyProfile, slot: ProfileShortcutSlot, hotkeyMode: HotkeyMode): string {
   const explicit = nonEmpty(profile[slot]);
   if (explicit) return explicit;
   const hasAnyExplicitBinding = nonEmpty(profile.push_to_talk_shortcut) || nonEmpty(profile.toggle_shortcut);
@@ -126,20 +130,18 @@ export function suggestedProfileShortcuts(
   legacyShortcut: string,
   platform: string,
 ): { push_to_talk_shortcut: string | null; toggle_shortcut: string | null; shortcut: string } {
-  const occupied = new Set([
-    ...profiles.flatMap((profile) => [profile.shortcut, profile.push_to_talk_shortcut, profile.toggle_shortcut]),
-    legacyShortcut,
-  ].map((shortcut) => canonicalShortcut(shortcut, platform)).filter(Boolean));
-  const pttCandidates = platform === "macos"
-    ? ["Super+S", "Super+E"]
-    : ["Control+S", "Control+E"];
-  const toggleCandidates = platform === "macos"
-    ? ["Shift+Super+S", "Shift+Super+E"]
-    : ["Control+Shift+S", "Control+Shift+E"];
-  const pick = (candidates: string[], reserved = new Set<string>()) => candidates.find((candidate) => {
-    const canonical = canonicalShortcut(candidate, platform);
-    return !occupied.has(canonical) && !reserved.has(canonical);
-  }) ?? "";
+  const occupied = new Set(
+    [...profiles.flatMap((profile) => [profile.shortcut, profile.push_to_talk_shortcut, profile.toggle_shortcut]), legacyShortcut]
+      .map((shortcut) => canonicalShortcut(shortcut, platform))
+      .filter(Boolean),
+  );
+  const pttCandidates = platform === "macos" ? ["Super+S", "Super+E"] : ["Control+S", "Control+E"];
+  const toggleCandidates = platform === "macos" ? ["Shift+Super+S", "Shift+Super+E"] : ["Control+Shift+S", "Control+Shift+E"];
+  const pick = (candidates: string[], reserved = new Set<string>()) =>
+    candidates.find((candidate) => {
+      const canonical = canonicalShortcut(candidate, platform);
+      return !occupied.has(canonical) && !reserved.has(canonical);
+    }) ?? "";
   const ptt = pick(pttCandidates);
   const reserved = new Set(ptt ? [canonicalShortcut(ptt, platform)] : []);
   const toggle = pick(toggleCandidates, reserved);

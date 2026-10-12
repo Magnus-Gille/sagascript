@@ -89,11 +89,7 @@ test("exhausted suggestions use null slots and normalize the untouched PTT slot"
   expect(suggestion.push_to_talk_shortcut).toBe(null);
   expect(suggestion.toggle_shortcut).toBe(null);
 
-  const draft = profileWithShortcut(
-    { ...suggestion, id: "third", name: "Third", language: "en" },
-    "push_to_talk_shortcut",
-    "Super+N",
-  );
+  const draft = profileWithShortcut({ ...suggestion, id: "third", name: "Third", language: "en" }, "push_to_talk_shortcut", "Super+N");
   expect(draft.push_to_talk_shortcut).toBe("Super+N");
   expect(draft.toggle_shortcut).toBe(null);
   expect(draft.shortcut).toBe("Super+N");
@@ -105,11 +101,7 @@ test("exhausted suggestions normalize the untouched toggle slot", () => {
     { shortcut: "Super+E", push_to_talk_shortcut: "Super+E", toggle_shortcut: "Shift+Super+E" },
   ];
   const suggestion = suggestedProfileShortcuts(occupied, "Control+Option+F12", "macos");
-  const draft = profileWithShortcut(
-    { ...suggestion, id: "third", name: "Third", language: "en" },
-    "toggle_shortcut",
-    "Shift+Super+N",
-  );
+  const draft = profileWithShortcut({ ...suggestion, id: "third", name: "Third", language: "en" }, "toggle_shortcut", "Shift+Super+N");
   expect(draft.push_to_talk_shortcut).toBe(null);
   expect(draft.toggle_shortcut).toBe("Shift+Super+N");
   expect(draft.shortcut).toBe("Shift+Super+N");

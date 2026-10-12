@@ -1,11 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -13,10 +7,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const acceptanceScript = await readFile(
-  new URL("./accept-windows-candidate.ps1", import.meta.url),
-  "utf8",
-);
+const acceptanceScript = await readFile(new URL("./accept-windows-candidate.ps1", import.meta.url), "utf8");
 
 test("Windows acceptance uses separate asynchronous UTF-8 native streams", () => {
   assert.match(acceptanceScript, /System\.Diagnostics\.ProcessStartInfo/);
@@ -90,11 +81,7 @@ class Program
 }`,
       "utf8",
     );
-    const compile = spawnSync(
-      compiler,
-      ["/nologo", "/target:exe", `/out:${cliPath}`, sourcePath],
-      { encoding: "utf8" },
-    );
+    const compile = spawnSync(compiler, ["/nologo", "/target:exe", `/out:${cliPath}`, sourcePath], { encoding: "utf8" });
     assert.equal(compile.status, 0, compile.stderr || compile.stdout);
     writeFileSync(fixturePath, Buffer.from("public fixture bytes\n", "utf8"));
     writeFileSync(
@@ -133,13 +120,7 @@ try {
       "utf8",
     );
 
-    const powershell = join(
-      process.env.SystemRoot ?? "C:\\Windows",
-      "System32",
-      "WindowsPowerShell",
-      "v1.0",
-      "powershell.exe",
-    );
+    const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     const run = (env = process.env) =>
       spawnSync(
         powershell,

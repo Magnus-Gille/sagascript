@@ -61,7 +61,7 @@ async function fixture({ withAttributes = true } = {}) {
   if (withAttributes) {
     await writeFile(join(cwd, ".gitattributes"), await readFile(fixtureAttributes));
   }
-  await writeFile(join(cwd, "src-tauri/capabilities/default.json"), "{\"permission\":true}\n");
+  await writeFile(join(cwd, "src-tauri/capabilities/default.json"), '{"permission":true}\n');
   for (const relativePath of [
     "src-tauri/gen/schemas/acl-manifests.json",
     "src-tauri/gen/schemas/capabilities.json",
@@ -209,7 +209,7 @@ test("initialize rejects git failure and dirty tracked or untracked files", asyn
   assertRejected(failedGit);
 
   const repo = await fixture();
-  await writeFile(join(repo.cwd, "src-tauri/capabilities/default.json"), "{\"permission\":false}\n");
+  await writeFile(join(repo.cwd, "src-tauri/capabilities/default.json"), '{"permission":false}\n');
   await writeFile(join(repo.cwd, "unexpected.txt"), "untracked\n");
   const result = invoke(repo.cwd, ["--initialize"], {
     GITHUB_SHA: repo.sha,
@@ -237,7 +237,7 @@ test("verify rejects a changed HEAD after initialization", async () => {
 test("verify permits only regular generated schema outputs", async () => {
   const repo = await fixture();
   const date = await initialized(repo);
-  await writeFile(join(repo.cwd, allowedOutput), "{\"generated\":true}\n");
+  await writeFile(join(repo.cwd, allowedOutput), '{"generated":true}\n');
   await writeFile(join(repo.cwd, "src-tauri/gen/schemas/windows-schema.json"), "{}\n");
   const result = invoke(repo.cwd, ["--verify"], verifyEnv(repo, date));
   assert.equal(result.status, 0, result.stderr);
@@ -251,7 +251,7 @@ test("verify permits only regular generated schema outputs", async () => {
 test("verify rejects unexpected, untracked, and capability-source changes", async () => {
   for (const change of [
     async (repo) => writeFile(join(repo.cwd, "unexpected.txt"), "nope\n"),
-    async (repo) => writeFile(join(repo.cwd, "src-tauri/capabilities/default.json"), "{\"permission\":false}\n"),
+    async (repo) => writeFile(join(repo.cwd, "src-tauri/capabilities/default.json"), '{"permission":false}\n'),
   ]) {
     const repo = await fixture();
     const date = await initialized(repo);
@@ -369,8 +369,12 @@ test("fixture Git operations ignore hostile global configuration", async () => {
   await writeFile(
     hostileGlobal,
     "[core]\n" +
-      "\texcludesfile = \"" + hostileIgnore.replaceAll("\\", "/") + "\"\n" +
-      "\tattributesfile = \"" + hostileAttributes.replaceAll("\\", "/") + "\"\n" +
+      '\texcludesfile = "' +
+      hostileIgnore.replaceAll("\\", "/") +
+      '"\n' +
+      '\tattributesfile = "' +
+      hostileAttributes.replaceAll("\\", "/") +
+      '"\n' +
       "\tautocrlf = true\n" +
       "\teol = crlf\n",
   );

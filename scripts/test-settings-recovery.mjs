@@ -19,7 +19,10 @@ test("update preparation snapshots current dictation, file, and meeting entries"
   assert.match(preparation, /await tick\(\)/);
   assert.match(preparation, /createUpdateRecoveryPayload\(\{/);
   assert.match(preparation, /nativeResultPending = await getUpdateResultPending\("live-dictation"\)/);
-  assert.match(preparation, /dictation: testResultRecoveryPending && \(nativeResultPending \|\| recoveredDictationActive \|\| testResultEdited\)/);
+  assert.match(
+    preparation,
+    /dictation: testResultRecoveryPending && \(nativeResultPending \|\| recoveredDictationActive \|\| testResultEdited\)/,
+  );
   assert.match(preparation, /files: fileRecoveryEntries/);
   assert.match(preparation, /meetings: meetingRecoveryEntries/);
   assert.match(preparation, /serializeUpdateRecoveryPayload\(payload\)/);
@@ -29,7 +32,10 @@ test("update preparation snapshots current dictation, file, and meeting entries"
 });
 
 test("a failed startup recovery read prevents update installation", () => {
-  const restore = source.slice(source.indexOf("async function restoreUpdateRecovery"), source.indexOf("async function discardRecoveredDrafts"));
+  const restore = source.slice(
+    source.indexOf("async function restoreUpdateRecovery"),
+    source.indexOf("async function discardRecoveredDrafts"),
+  );
   assert.match(restore, /throw error;/);
   assert.match(restore, /recoveryReadError = `Update blocked: unreadable recovery drafts were retained/);
   assert.match(source, /recoveryRestore = restoreUpdateRecovery\(\)/);
@@ -46,7 +52,10 @@ test("recovery callbacks are wired to clear entries after explicit result action
 });
 
 test("recovery cleanup removes only explicitly delivered durable drafts", () => {
-  const persistence = source.slice(source.indexOf("function enqueueRecoveryCleanup"), source.indexOf("function persistRemainingRecoveredDrafts"));
+  const persistence = source.slice(
+    source.indexOf("function enqueueRecoveryCleanup"),
+    source.indexOf("function persistRemainingRecoveredDrafts"),
+  );
   assert.match(persistence, /fileJobIds/);
   assert.match(persistence, /meetingJobIds/);
   assert.match(persistence, /dictationTexts/);
@@ -66,7 +75,10 @@ test("recovery cleanup warnings identify the durable file and repair path", () =
 
 test("all durable recovery mutations share one queue through their acknowledgements", () => {
   assert.match(source, /function enqueueRecoveryMutation<T>\(mutation: \(\) => Promise<T>\)/);
-  assert.match(source, /return enqueueRecoveryMutation\(async \(\) => \{[\s\S]*readPersistedUpdateRecoveryPayload\(await loadUpdateRecovery\(\)[\s\S]*await saveUpdateRecovery\(payload\)[\s\S]*await completeUpdatePreparation\(nonce, null\)/);
+  assert.match(
+    source,
+    /return enqueueRecoveryMutation\(async \(\) => \{[\s\S]*readPersistedUpdateRecoveryPayload\(await loadUpdateRecovery\(\)[\s\S]*await saveUpdateRecovery\(payload\)[\s\S]*await completeUpdatePreparation\(nonce, null\)/,
+  );
   assert.match(source, /await enqueueRecoveryMutation\(async \(\) => \{\s*await clearUpdateRecovery\(\);/);
   assert.match(source, /const changed = dictationMatches/);
 });
@@ -104,13 +116,19 @@ test("delivery cleanup runs before stale-editor handling and captures native ori
 });
 
 test("recovered jobs cannot trigger automatic transcription or paste", () => {
-  const recoveryBlock = source.slice(source.indexOf("async function restoreUpdateRecovery"), source.indexOf("async function discardRecoveredDrafts"));
+  const recoveryBlock = source.slice(
+    source.indexOf("async function restoreUpdateRecovery"),
+    source.indexOf("async function discardRecoveredDrafts"),
+  );
   assert.doesNotMatch(recoveryBlock, /handleFileTranscription|startMeetingFileTranscription|paste/);
   assert.match(recoveryBlock, /status: "completed" as const/);
 });
 
 test("recovered-draft persistence rereads before any destructive write", () => {
-  const persistence = source.slice(source.indexOf("function enqueueRecoveryCleanup"), source.indexOf("function refreshRecoveredDraftsNotice"));
+  const persistence = source.slice(
+    source.indexOf("function enqueueRecoveryCleanup"),
+    source.indexOf("function refreshRecoveredDraftsNotice"),
+  );
   assert.match(persistence, /readPersistedUpdateRecoveryPayload\(await loadUpdateRecovery\(\)\)/);
   assert.match(persistence, /readPersistedUpdateRecoveryPayload[\s\S]*clearUpdateRecovery/);
 });
@@ -142,8 +160,14 @@ test("update preparation fences every stale nonce continuation", () => {
 test("native event drains before queued editor capture and recovery load", () => {
   const preparation = source.slice(source.indexOf("async function prepareForUpdate"), source.indexOf("async function copyTestResult"));
   const queued = preparation.slice(preparation.indexOf("enqueueRecoveryMutation"));
-  assert.match(preparation.slice(0, preparation.indexOf("enqueueRecoveryMutation")), /const stableNativeDictation = await getLastTranscription\(\)/);
-  assert.match(preparation.slice(0, preparation.indexOf("enqueueRecoveryMutation")), /const initialNativeResultPending = await getUpdateResultPending\("live-dictation"\)/);
+  assert.match(
+    preparation.slice(0, preparation.indexOf("enqueueRecoveryMutation")),
+    /const stableNativeDictation = await getLastTranscription\(\)/,
+  );
+  assert.match(
+    preparation.slice(0, preparation.indexOf("enqueueRecoveryMutation")),
+    /const initialNativeResultPending = await getUpdateResultPending\("live-dictation"\)/,
+  );
   assert.match(queued, /const nativeEditorOwnsResult = nativeEditorOrigin\?\.lineage === payloadLineage/);
   assert.match(queued, /const nativeResultPending = await getUpdateResultPending\("live-dictation"\)/);
   assert.match(queued, /nativeEditorOrigin\.text === stableNativeDictation/);

@@ -24,10 +24,10 @@ import { validateObjective, validateObjectiveSeries } from "./lib/code-health-ob
 import { seriesKey } from "./lib/code-health-policy.mjs";
 import { summarizeCohorts } from "./ci-cohort-timings.mjs";
 
-const readJson = path => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
+const readJson = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "utf8"));
 const config = readJson("../docs/code-health-producer-v1.json");
 const schema = readJson("../docs/code-health-objective-v1.schema.json");
-const fixture = path => readJson("../tests/fixtures/code-health/" + path);
+const fixture = (path) => readJson("../tests/fixtures/code-health/" + path);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const commit = "a".repeat(40);
 const runRef = "ref:local-aaaaaaaaaaaa-attempt-1";
@@ -62,7 +62,10 @@ test("Rust failure diagnostics retain ANSI-colored test names and PID panic iden
     ].join("\n"),
     `${red}error: token ${token} at /Users/magnus/private/credential.txt${reset}`,
   );
-  const panicOnly = safeProducerFailureDiagnostic("", `${red}thread 'core::parser::pid_only' (123) panicked at /private/tmp/test.rs:1:1:${reset}`);
+  const panicOnly = safeProducerFailureDiagnostic(
+    "",
+    `${red}thread 'core::parser::pid_only' (123) panicked at /private/tmp/test.rs:1:1:${reset}`,
+  );
   assert.equal(panicOnly, "stderr test-failed: core::parser::pid_only");
   assert.match(diagnostic, /failed-test: core::parser::rejects_bad_input/);
   assert.match(diagnostic, /test-failed: core::parser::rejects_bad_input/);
@@ -72,20 +75,31 @@ test("Rust failure diagnostics retain ANSI-colored test names and PID panic iden
 });
 
 test("Rust complexity counts function-body complexity once and uses a strict threshold", () => {
-  const result = parseRustComplexity([{
-    path: "src-tauri/crates/sagascript-cli/src/transcribe.rs",
-    ast: fixture("rust-complexity.json"),
-  }], 10);
+  const result = parseRustComplexity(
+    [
+      {
+        path: "src-tauri/crates/sagascript-cli/src/transcribe.rs",
+        ast: fixture("rust-complexity.json"),
+      },
+    ],
+    10,
+  );
   assert.equal(result.eligible_functions, 4);
   assert.equal(result.above_threshold_functions, 2);
-  assert.deepEqual(result.functions.map(item => [item.name, item.cyclomatic]), [
-    ["outer", 11],
-    ["nested", 4],
-    ["exact_threshold", 10],
-    ["<anonymous>", 11],
-  ]);
+  assert.deepEqual(
+    result.functions.map((item) => [item.name, item.cyclomatic]),
+    [
+      ["outer", 11],
+      ["nested", 4],
+      ["exact_threshold", 10],
+      ["<anonymous>", 11],
+    ],
+  );
   assert.throws(() => parseRustComplexity([], 10), /inventory is empty/);
-  assert.throws(() => parseRustComplexity([{ path: "broken.rs", ast: { spaces: [{ kind: "function", spaces: [] }] } }], 10), /score is missing/);
+  assert.throws(
+    () => parseRustComplexity([{ path: "broken.rs", ast: { spaces: [{ kind: "function", spaces: [] }] } }], 10),
+    /score is missing/,
+  );
 });
 
 test("Rust coverage labels inline tests and keeps inactive or non-emitted files out of the denominator", () => {
@@ -97,10 +111,7 @@ test("Rust coverage labels inline tests and keeps inactive or non-emitted files 
       "src-tauri/crates/sagascript-core/src/feature-disabled.rs",
       "src-tauri/crates/sagascript-core/tests/it.rs",
     ],
-    sourceRoots: [
-      "src-tauri/crates/sagascript-core/src/",
-      "src-tauri/crates/sagascript-core/tests/",
-    ],
+    sourceRoots: ["src-tauri/crates/sagascript-core/src/", "src-tauri/crates/sagascript-core/tests/"],
     excludedPaths: ["src-tauri/crates/sagascript-core/src/generated/BuildInfo.rs"],
     includesInlineTests: true,
   });
@@ -115,34 +126,73 @@ test("Rust coverage labels inline tests and keeps inactive or non-emitted files 
     "src-tauri/crates/sagascript-core/src/feature-disabled.rs",
     "src-tauri/crates/sagascript-core/tests/it.rs",
   ]);
-  assert.ok(parsed.excluded_report_paths.every(item => item.path === null || !item.path.startsWith("/")));
-  assert.throws(() => parseExportedCoverage({ data: [] }, {
-    repoRoot: "/workspace/sagascript", inventoryPaths: [], sourceRoots: ["src/"],
-  }), /emitted no files/);
-  assert.throws(() => parseExportedCoverage({ data: [{ files: [{ filename: "src/a.rs", summary: { lines: { count: 1, covered: 2 } } }] }] }, {
-    repoRoot: "/workspace/sagascript", inventoryPaths: ["src/a.rs"], sourceRoots: ["src/"],
-  }), /counts are invalid/);
+  assert.ok(parsed.excluded_report_paths.every((item) => item.path === null || !item.path.startsWith("/")));
+  assert.throws(
+    () =>
+      parseExportedCoverage(
+        { data: [] },
+        {
+          repoRoot: "/workspace/sagascript",
+          inventoryPaths: [],
+          sourceRoots: ["src/"],
+        },
+      ),
+    /emitted no files/,
+  );
+  assert.throws(
+    () =>
+      parseExportedCoverage(
+        { data: [{ files: [{ filename: "src/a.rs", summary: { lines: { count: 1, covered: 2 } } }] }] },
+        {
+          repoRoot: "/workspace/sagascript",
+          inventoryPaths: ["src/a.rs"],
+          sourceRoots: ["src/"],
+        },
+      ),
+    /counts are invalid/,
+  );
 });
 
 test("Rust CLI collector uses an isolated no-default profile and tracked CLI inventory", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "sagascript-cli-coverage-test-"));
   const captured = {};
   try {
-    const result = collectRustCliCoverage(tempRoot, "cargo 1.93.1", "cargo-llvm-cov 0.9.1", "rustc 1.93.1", true,
+    const result = collectRustCliCoverage(
+      tempRoot,
+      "cargo 1.93.1",
+      "cargo-llvm-cov 0.9.1",
+      "rustc 1.93.1",
+      true,
       (executable, args, options) => {
         captured.executable = executable;
         captured.args = args;
         captured.options = options;
         const outputPath = args[args.indexOf("--output-path") + 1];
-        writeFileSync(outputPath, JSON.stringify({ data: [{ files: [
-          { filename: join(repoRoot, "src-tauri/crates/sagascript-cli/src/lib.rs"), summary: { lines: { count: 10, covered: 4 } } },
-          { filename: join(repoRoot, "src-tauri/crates/sagascript-cli/tests/latency_report.rs"), summary: { lines: { count: 3, covered: 1 } } },
-          { filename: join(repoRoot, "src-tauri/crates/sagascript-cli/src/not-tracked.rs"), summary: { lines: { count: 5, covered: 5 } } },
-          { filename: join(repoRoot, "src-tauri/crates/sagascript-core/src/lib.rs"), summary: { lines: { count: 7, covered: 7 } } },
-          { filename: join(tempRoot, "external.rs"), summary: { lines: { count: 9, covered: 9 } } },
-        ] }] }));
+        writeFileSync(
+          outputPath,
+          JSON.stringify({
+            data: [
+              {
+                files: [
+                  { filename: join(repoRoot, "src-tauri/crates/sagascript-cli/src/lib.rs"), summary: { lines: { count: 10, covered: 4 } } },
+                  {
+                    filename: join(repoRoot, "src-tauri/crates/sagascript-cli/tests/latency_report.rs"),
+                    summary: { lines: { count: 3, covered: 1 } },
+                  },
+                  {
+                    filename: join(repoRoot, "src-tauri/crates/sagascript-cli/src/not-tracked.rs"),
+                    summary: { lines: { count: 5, covered: 5 } },
+                  },
+                  { filename: join(repoRoot, "src-tauri/crates/sagascript-core/src/lib.rs"), summary: { lines: { count: 7, covered: 7 } } },
+                  { filename: join(tempRoot, "external.rs"), summary: { lines: { count: 9, covered: 9 } } },
+                ],
+              },
+            ],
+          }),
+        );
         return "";
-      });
+      },
+    );
     assert.equal(result.status, "measured");
     assert.equal(result.value.payload.covered, 5);
     assert.equal(result.value.payload.eligible, 13);
@@ -151,12 +201,23 @@ test("Rust CLI collector uses an isolated no-default profile and tracked CLI inv
       "src-tauri/crates/sagascript-cli/tests/latency_report.rs",
     ]);
     assert.ok(result.value.payload.not_emitted_paths.includes("src-tauri/crates/sagascript-cli/src/diarization.rs"));
-    assert.ok(result.value.payload.excluded_report_paths.some(item => item.reason === "outside-repository"));
-    assert.ok(result.value.payload.excluded_report_paths.some(item => item.reason === "not-in-declared-inventory" && item.path.endsWith("not-tracked.rs")));
+    assert.ok(result.value.payload.excluded_report_paths.some((item) => item.reason === "outside-repository"));
+    assert.ok(
+      result.value.payload.excluded_report_paths.some(
+        (item) => item.reason === "not-in-declared-inventory" && item.path.endsWith("not-tracked.rs"),
+      ),
+    );
     assert.equal(captured.executable, "cargo");
     assert.deepEqual(captured.args, [
-      "+1.93.1", "llvm-cov", "-p", "sagascript-cli", "--no-default-features", "--tests",
-      "--json", "--output-path", join(tempRoot, "rust-cli-coverage.json"),
+      "+1.93.1",
+      "llvm-cov",
+      "-p",
+      "sagascript-cli",
+      "--no-default-features",
+      "--tests",
+      "--json",
+      "--output-path",
+      join(tempRoot, "rust-cli-coverage.json"),
     ]);
     assert.equal(captured.options.cwd, join(repoRoot, "src-tauri"));
     assert.match(captured.options.env.CARGO_TARGET_DIR, /cargo-target-rust-cli$/);
@@ -169,8 +230,18 @@ test("Rust CLI collector uses an isolated no-default profile and tracked CLI inv
 
 test("Rust CLI collector fails instead of emitting a zero result on command or report errors", () => {
   for (const [label, runCommand, expected] of [
-    ["command", () => { throw new Error("fake cargo failed"); }, /fake cargo failed/],
-    ["report", (_executable, args) => writeFileSync(args[args.indexOf("--output-path") + 1], JSON.stringify({ data: [] })), /emitted no files/],
+    [
+      "command",
+      () => {
+        throw new Error("fake cargo failed");
+      },
+      /fake cargo failed/,
+    ],
+    [
+      "report",
+      (_executable, args) => writeFileSync(args[args.indexOf("--output-path") + 1], JSON.stringify({ data: [] })),
+      /emitted no files/,
+    ],
   ]) {
     const tempRoot = mkdtempSync(join(tmpdir(), `sagascript-cli-coverage-${label}-`));
     try {
@@ -198,7 +269,7 @@ test("Swift source-only coverage excludes generated identity and test bundle fil
   assert.equal(parsed.eligible, 100);
   assert.equal(parsed.emitted_source_files, 1);
   assert.deepEqual(parsed.not_emitted_paths, ["src-tauri/engine-host/coreml/Sources/EngineHostCore/CoreMLEngine.swift"]);
-  assert.ok(!parsed.included_paths.some(path => path.includes("BuildInfo") || path.includes("Tests/")));
+  assert.ok(!parsed.included_paths.some((path) => path.includes("BuildInfo") || path.includes("Tests/")));
 });
 
 test("Knip candidates are projected by source language and generated/test candidates are excluded", () => {
@@ -216,39 +287,55 @@ test("Knip candidates are projected by source language and generated/test candid
 test("native Knip JSON retains grouped file candidates and nested member candidates", () => {
   const report = fixture("knip-native.json");
   const typescript = parseKnipCandidates(report, { repoRoot: "/workspace/sagascript", language: "typescript" });
-  assert.deepEqual(typescript.map(({ category, path, name, line }) => ({ category, path, name, line })), [
-    { category: "classMembers", path: "src/lib/Settings.ts", name: "Settings.unusedMethod", line: 41 },
-    { category: "duplicates", path: "src/lib/Settings.ts", name: "duplicateValue", line: 48 },
-    { category: "enumMembers", path: "src/lib/Settings.ts", name: "Mode.Legacy", line: 35 },
-    { category: "exports", path: "src/lib/Settings.ts", name: "oldSetting", line: 18 },
-    { category: "nsExports", path: "src/lib/Settings.ts", name: "unusedNamespaceExport", line: 22 },
-    { category: "nsTypes", path: "src/lib/Settings.ts", name: "UnusedNamespaceType", line: 31 },
-    { category: "types", path: "src/lib/Settings.ts", name: "OldSettings", line: 27 },
-    { category: "files", path: "src/lib/Unused.ts", name: null, line: 1 },
-  ]);
+  assert.deepEqual(
+    typescript.map(({ category, path, name, line }) => ({ category, path, name, line })),
+    [
+      { category: "classMembers", path: "src/lib/Settings.ts", name: "Settings.unusedMethod", line: 41 },
+      { category: "duplicates", path: "src/lib/Settings.ts", name: "duplicateValue", line: 48 },
+      { category: "enumMembers", path: "src/lib/Settings.ts", name: "Mode.Legacy", line: 35 },
+      { category: "exports", path: "src/lib/Settings.ts", name: "oldSetting", line: 18 },
+      { category: "nsExports", path: "src/lib/Settings.ts", name: "unusedNamespaceExport", line: 22 },
+      { category: "nsTypes", path: "src/lib/Settings.ts", name: "UnusedNamespaceType", line: 31 },
+      { category: "types", path: "src/lib/Settings.ts", name: "OldSettings", line: 27 },
+      { category: "files", path: "src/lib/Unused.ts", name: null, line: 1 },
+    ],
+  );
   assert.deepEqual(parseKnipCandidates(report, { repoRoot: "/workspace/sagascript", language: "svelte" }), [
     { category: "files", path: "src/lib/Unused.svelte", name: null, line: 1 },
     { category: "exports", path: "src/lib/Widget.svelte", name: "unusedComponentExport", line: 7 },
   ]);
-  assert.throws(() => parseKnipCandidates({ files: [null], issues: [] }, { repoRoot: "/workspace/sagascript", language: "typescript" }), /file candidate is malformed/);
+  assert.throws(
+    () => parseKnipCandidates({ files: [null], issues: [] }, { repoRoot: "/workspace/sagascript", language: "typescript" }),
+    /file candidate is malformed/,
+  );
 });
 
 test("CI cohort uses attempt 1 despite a successful retry and preserves job outcomes", () => {
   const normalized = normalizeCiCohort({
-    runs: [{
-      id: 42,
-      head_sha: "c".repeat(40),
-      run_attempt: 2,
-      event: "push",
-      head_branch: "main",
-      created_at: at(0),
-      workflow_config_digest: digest,
-      attempt1_jobs: [
-        { id: 1001, name: "scope", status: "completed", conclusion: "failure", started_at: at(5), completed_at: at(20), steps: [] },
-        { id: 1002, name: "test-macos", status: "completed", conclusion: "cancelled", started_at: at(6), completed_at: at(10), steps: [] },
-      ],
-      latest_conclusion: "success",
-    }],
+    runs: [
+      {
+        id: 42,
+        head_sha: "c".repeat(40),
+        run_attempt: 2,
+        event: "push",
+        head_branch: "main",
+        created_at: at(0),
+        workflow_config_digest: digest,
+        attempt1_jobs: [
+          { id: 1001, name: "scope", status: "completed", conclusion: "failure", started_at: at(5), completed_at: at(20), steps: [] },
+          {
+            id: 1002,
+            name: "test-macos",
+            status: "completed",
+            conclusion: "cancelled",
+            started_at: at(6),
+            completed_at: at(10),
+            steps: [],
+          },
+        ],
+        latest_conclusion: "success",
+      },
+    ],
     expectedJobIds: expectedJobs,
     windowStart: "2026-09-11T00:00:00Z",
     windowEnd: "2026-10-09T00:00:00Z",
@@ -259,7 +346,10 @@ test("CI cohort uses attempt 1 despite a successful retry and preserves job outc
   assert.equal(normalized.runs[0].attempt, 1);
   assert.equal(normalized.runs[0].latest_attempt, 2);
   assert.equal(normalized.runs[0].overall_conclusion, "failure");
-  assert.deepEqual(normalized.runs[0].jobs.map(job => job.conclusion), ["failure", "cancelled"]);
+  assert.deepEqual(
+    normalized.runs[0].jobs.map((job) => job.conclusion),
+    ["failure", "cancelled"],
+  );
   const payload = buildCiFirstAttemptPayload({
     normalizedRuns: normalized.runs,
     windowStart: "2026-09-11T00:00:00Z",
@@ -290,11 +380,15 @@ test("CI cohort excludes historical workflow configurations and measures current
   assert.equal(classified.excluded.commit, oldCommit);
   assert.equal(classified.excluded.reason, "workflow-config-mismatch");
   assert.match(classified.excluded.workflow_config_digest, /^[a-f0-9]{64}$/);
-  assert.throws(() => classifyCiWorkflowConfiguration({
-    runId: 41,
-    commit: oldCommit,
-    expectedDigest: digest,
-  }), /historical workflow evidence is missing or malformed/);
+  assert.throws(
+    () =>
+      classifyCiWorkflowConfiguration({
+        runId: 41,
+        commit: oldCommit,
+        expectedDigest: digest,
+      }),
+    /historical workflow evidence is missing or malformed/,
+  );
 
   const currentRun = {
     id: 42,
@@ -322,16 +416,31 @@ test("CI cohort excludes historical workflow configurations and measures current
   assert.deepEqual(normalized.excluded_runs, [classified.excluded]);
   assert.equal(ciCohortUnavailableReason(normalized), null);
   assert.equal(ciCohortUnavailableReason({ runs: [], incomplete_runs: [], excluded_runs: [classified.excluded] }), "not-collected");
-  const args = { runs: [currentRun], expectedJobIds: expectedJobs,
-    windowStart: "2026-09-11T00:00:00Z", windowEnd: "2026-10-09T00:00:00Z", workflowConfigDigest: digest };
+  const args = {
+    runs: [currentRun],
+    expectedJobIds: expectedJobs,
+    windowStart: "2026-09-11T00:00:00Z",
+    windowEnd: "2026-10-09T00:00:00Z",
+    workflowConfigDigest: digest,
+  };
   assert.throws(() => normalizeCiCohort({ ...args, preExcludedRuns: [classified.excluded, classified.excluded] }), /duplicated/);
   assert.throws(() => normalizeCiCohort({ ...args, preExcludedRuns: [{ ...classified.excluded, id: currentRun.id }] }), /duplicate run ID/);
-  assert.throws(() => normalizeCiCohort({ ...args, preExcludedRuns: [{ ...classified.excluded, workflow_config_digest: digest }] }), /malformed/);
-  assert.throws(() => normalizeCiCohort({ ...args, runs: [{ ...currentRun, attempt1_jobs: [{ id: 1001, name: "unregistered", status: "completed", conclusion: "success" }] }] }), /unregistered job/);
+  assert.throws(
+    () => normalizeCiCohort({ ...args, preExcludedRuns: [{ ...classified.excluded, workflow_config_digest: digest }] }),
+    /malformed/,
+  );
+  assert.throws(
+    () =>
+      normalizeCiCohort({
+        ...args,
+        runs: [{ ...currentRun, attempt1_jobs: [{ id: 1001, name: "unregistered", status: "completed", conclusion: "success" }] }],
+      }),
+    /unregistered job/,
+  );
 });
 
 test("empty current CI cohort remains unknown while incomplete failed evidence remains failed", () => {
-  const scope = config.scopes.find(item => item.name === "ci-release");
+  const scope = config.scopes.find((item) => item.name === "ci-release");
   const context = { commitSha: commit, runRef, attempt: 1, observedAt };
   const empty = createObjective(scope, context, { ci_first_attempt: ciUnavailableMeasurement("not-collected") });
   assert.equal(empty.metrics.ci_first_attempt.status, "unknown");
@@ -366,9 +475,15 @@ test("CI gaps stay unknown and unproven startup or timeout conclusions stay fail
     workflowConfigDigest: digest,
     repoRoot: "/workspace/sagascript",
   });
-  assert.deepEqual(normalized.runs[0].jobs.map(job => job.conclusion), ["failure", "failure"]);
+  assert.deepEqual(
+    normalized.runs[0].jobs.map((job) => job.conclusion),
+    ["failure", "failure"],
+  );
   assert.equal(normalized.runs[0].overall_conclusion, "failure");
-  assert.deepEqual(normalized.timing_runs[0].jobs.map(job => job.conclusion), ["startup_failure", "timed_out"]);
+  assert.deepEqual(
+    normalized.timing_runs[0].jobs.map((job) => job.conclusion),
+    ["startup_failure", "timed_out"],
+  );
   const missingJob = normalizeCiCohort({
     runs: [{ ...base, attempt1_jobs: [{ id: 2001, name: "scope", status: "completed", conclusion: "startup_failure" }] }],
     expectedJobIds: expectedJobs,
@@ -377,65 +492,95 @@ test("CI gaps stay unknown and unproven startup or timeout conclusions stay fail
     workflowConfigDigest: digest,
     repoRoot: "/workspace/sagascript",
   });
-  assert.deepEqual(missingJob.runs[0].jobs.map(job => job.conclusion), ["failure", "unknown"]);
-  assert.throws(() => normalizeCiCohort({
-    runs: [{ ...base, created_at: "not-a-date" }],
-    expectedJobIds: expectedJobs,
-    windowStart: "2026-09-11T00:00:00Z",
-    windowEnd: "2026-10-09T00:00:00Z",
-    workflowConfigDigest: digest,
-  }), /malformed identity or timestamp/);
-  assert.throws(() => normalizeCiCohort({
-    runs: [{ ...base, workflow_config_digest: "e".repeat(64) }],
-    expectedJobIds: expectedJobs,
-    windowStart: "2026-09-11T00:00:00Z",
-    windowEnd: "2026-10-09T00:00:00Z",
-    workflowConfigDigest: digest,
-  }), /configuration changed/);
-  assert.throws(() => normalizeCiCohort({
-    runs: [{ ...base, attempt1_jobs: [...base.attempt1_jobs, { id: 2003, name: "new-job", status: "completed", conclusion: "success" }] }],
-    expectedJobIds: expectedJobs,
-    windowStart: "2026-09-11T00:00:00Z",
-    windowEnd: "2026-10-09T00:00:00Z",
-    workflowConfigDigest: digest,
-  }), /unregistered job/);
-  assert.throws(() => normalizeCiCohort({
-    runs: [{ ...base, id: "9" }],
-    expectedJobIds: expectedJobs,
-    windowStart: "2026-09-11T00:00:00Z",
-    windowEnd: "2026-10-09T00:00:00Z",
-    workflowConfigDigest: digest,
-  }), /malformed identity or timestamp/);
-  assert.throws(() => normalizeCiCohort({
-    runs: [{ ...base, attempt1_jobs: [{ id: "2001", name: "scope", status: "completed", conclusion: "success" }] }],
-    expectedJobIds: expectedJobs,
-    windowStart: "2026-09-11T00:00:00Z",
-    windowEnd: "2026-10-09T00:00:00Z",
-    workflowConfigDigest: digest,
-  }), /malformed identity/);
+  assert.deepEqual(
+    missingJob.runs[0].jobs.map((job) => job.conclusion),
+    ["failure", "unknown"],
+  );
+  assert.throws(
+    () =>
+      normalizeCiCohort({
+        runs: [{ ...base, created_at: "not-a-date" }],
+        expectedJobIds: expectedJobs,
+        windowStart: "2026-09-11T00:00:00Z",
+        windowEnd: "2026-10-09T00:00:00Z",
+        workflowConfigDigest: digest,
+      }),
+    /malformed identity or timestamp/,
+  );
+  assert.throws(
+    () =>
+      normalizeCiCohort({
+        runs: [{ ...base, workflow_config_digest: "e".repeat(64) }],
+        expectedJobIds: expectedJobs,
+        windowStart: "2026-09-11T00:00:00Z",
+        windowEnd: "2026-10-09T00:00:00Z",
+        workflowConfigDigest: digest,
+      }),
+    /configuration changed/,
+  );
+  assert.throws(
+    () =>
+      normalizeCiCohort({
+        runs: [
+          { ...base, attempt1_jobs: [...base.attempt1_jobs, { id: 2003, name: "new-job", status: "completed", conclusion: "success" }] },
+        ],
+        expectedJobIds: expectedJobs,
+        windowStart: "2026-09-11T00:00:00Z",
+        windowEnd: "2026-10-09T00:00:00Z",
+        workflowConfigDigest: digest,
+      }),
+    /unregistered job/,
+  );
+  assert.throws(
+    () =>
+      normalizeCiCohort({
+        runs: [{ ...base, id: "9" }],
+        expectedJobIds: expectedJobs,
+        windowStart: "2026-09-11T00:00:00Z",
+        windowEnd: "2026-10-09T00:00:00Z",
+        workflowConfigDigest: digest,
+      }),
+    /malformed identity or timestamp/,
+  );
+  assert.throws(
+    () =>
+      normalizeCiCohort({
+        runs: [{ ...base, attempt1_jobs: [{ id: "2001", name: "scope", status: "completed", conclusion: "success" }] }],
+        expectedJobIds: expectedJobs,
+        windowStart: "2026-09-11T00:00:00Z",
+        windowEnd: "2026-10-09T00:00:00Z",
+        workflowConfigDigest: digest,
+      }),
+    /malformed identity/,
+  );
 });
 
 test("failed workflow with mixed known and unknown jobs is retained but makes the CI slot incomplete", () => {
   const normalized = normalizeCiCohort({
-    runs: [{
-      id: 91,
-      head_sha: "e".repeat(40),
-      run_attempt: 1,
-      event: "push",
-      head_branch: "main",
-      created_at: at(500),
-      status: "completed",
-      conclusion: "failure",
-      workflow_config_digest: digest,
-      attempt1_jobs: [{ id: 9101, name: "scope", status: "completed", conclusion: "success" }],
-    }],
+    runs: [
+      {
+        id: 91,
+        head_sha: "e".repeat(40),
+        run_attempt: 1,
+        event: "push",
+        head_branch: "main",
+        created_at: at(500),
+        status: "completed",
+        conclusion: "failure",
+        workflow_config_digest: digest,
+        attempt1_jobs: [{ id: 9101, name: "scope", status: "completed", conclusion: "success" }],
+      },
+    ],
     expectedJobIds: expectedJobs,
     windowStart: "2026-09-11T00:00:00Z",
     windowEnd: "2026-10-09T00:00:00Z",
     workflowConfigDigest: digest,
     repoRoot: "/workspace/sagascript",
   });
-  assert.deepEqual(normalized.runs[0].jobs.map(job => job.conclusion), ["success", "unknown"]);
+  assert.deepEqual(
+    normalized.runs[0].jobs.map((job) => job.conclusion),
+    ["success", "unknown"],
+  );
   assert.equal(normalized.runs[0].overall_conclusion, "unknown");
   assert.deepEqual(normalized.incomplete_runs, [{ id: 91, status: "completed", conclusion: "failure" }]);
   assert.equal(normalized.timing_runs[0].status, "completed");
@@ -454,7 +599,7 @@ test("CI workflow job inventory and pagination reject incomplete or duplicate ev
 
 test("contract scope registry creates six exact-schema snapshots with distinct slot identities", () => {
   const scopes = config.scopes;
-  const snapshots = scopes.map(scope => ({
+  const snapshots = scopes.map((scope) => ({
     contract_version: "1.0",
     snapshot_id: "ref:sagascript-" + scope.name + "-" + commit.slice(0, 12),
     supersedes_ref: null,
@@ -462,32 +607,37 @@ test("contract scope registry creates six exact-schema snapshots with distinct s
     repository: { owner: "Magnus-Gille", name: "sagascript" },
     commit,
     observed_at: observedAt,
-    metrics: Object.fromEntries([
-      ["complex_functions", "functions"],
-      ["unused_candidates", "candidates"],
-      ["coverage", "lines"],
-      ["ci_first_attempt", "runs"],
-      ["confirmed_regressions", "regressions"],
-    ].map(([name, unit]) => {
-      const slot = scope.slots[name];
-      return [name, {
-        observed_at: observedAt,
-        source: null,
-        population: null,
-        unit,
-        status: slot.status === "measured" ? "unknown" : slot.status,
-        payload: null,
-        reason: slot.status === "measured" ? "not-collected" : slot.reason,
-        slot_ref: slot.slot_ref,
-      }];
-    })),
+    metrics: Object.fromEntries(
+      [
+        ["complex_functions", "functions"],
+        ["unused_candidates", "candidates"],
+        ["coverage", "lines"],
+        ["ci_first_attempt", "runs"],
+        ["confirmed_regressions", "regressions"],
+      ].map(([name, unit]) => {
+        const slot = scope.slots[name];
+        return [
+          name,
+          {
+            observed_at: observedAt,
+            source: null,
+            population: null,
+            unit,
+            status: slot.status === "measured" ? "unknown" : slot.status,
+            payload: null,
+            reason: slot.status === "measured" ? "not-collected" : slot.reason,
+            slot_ref: slot.slot_ref,
+          },
+        ];
+      }),
+    ),
   }));
-  assert.equal(new Set(scopes.flatMap(scope => Object.values(scope.slots).map(slot => slot.slot_ref))).size, 30);
+  assert.equal(new Set(scopes.flatMap((scope) => Object.values(scope.slots).map((slot) => slot.slot_ref))).size, 30);
   for (const snapshot of snapshots) assert.equal(validateObjective(schema, snapshot).valid, true);
 });
 
 test("snapshot identities distinguish collections and attempts while replaying the same artifact", () => {
-  const scope = config.scopes.find(item => item.name === "rust-core");
+  const scope = config.scopes.find((item) => item.name === "rust-core");
   const context = (runRef, attempt) => ({
     commitSha: commit,
     observedAt,
@@ -513,7 +663,7 @@ test("snapshot identities distinguish collections and attempts while replaying t
 });
 
 test("scope digest tracks registered policy rather than changing population membership", () => {
-  const scope = config.scopes.find(item => item.name === "rust-core");
+  const scope = config.scopes.find((item) => item.name === "rust-core");
   const context = { commitSha: commit, observedAt, runRef, attempt: 1 };
   const scopePolicy = {
     inventory: "configured-rust-source-files-v1",
@@ -521,22 +671,23 @@ test("scope digest tracks registered policy rather than changing population memb
     excluded_paths: ["generated/**"],
     parser: config.complexity.function_inventory,
   };
-  const objectiveFor = (includedRefs, policy = scopePolicy) => createObjective(scope, context, {
-    complex_functions: {
-      status: "measured",
-      payload: {
-        algorithm: config.complexity.algorithm,
-        threshold: config.complexity.threshold,
-        eligible_functions: includedRefs.length,
-        above_threshold_functions: 0,
+  const objectiveFor = (includedRefs, policy = scopePolicy) =>
+    createObjective(scope, context, {
+      complex_functions: {
+        status: "measured",
+        payload: {
+          algorithm: config.complexity.algorithm,
+          threshold: config.complexity.threshold,
+          eligible_functions: includedRefs.length,
+          above_threshold_functions: 0,
+        },
+        tool: { name: "rust-code-analysis-cli", version: "0.0.25" },
+        command: "rust-code-analysis-cli -p <selected-repository-path> -m -F -O json --pr",
+        scope_policy: policy,
+        included_refs: includedRefs,
+        excluded_refs: [],
       },
-      tool: { name: "rust-code-analysis-cli", version: "0.0.25" },
-      command: "rust-code-analysis-cli -p <selected-repository-path> -m -F -O json --pr",
-      scope_policy: policy,
-      included_refs: includedRefs,
-      excluded_refs: [],
-    },
-  });
+    });
   const first = objectiveFor(["ref:function-a"]);
   const changedPopulation = objectiveFor(["ref:function-a", "ref:function-b"]);
   const changedPolicy = objectiveFor(["ref:function-a"], {
@@ -550,7 +701,7 @@ test("scope digest tracks registered policy rather than changing population memb
 });
 
 test("report transport uses the root manifest shape and rejects unresolved population evidence", () => {
-  const noMeasures = Object.fromEntries(config.scopes.map(scope => [scope.name, {}]));
+  const noMeasures = Object.fromEntries(config.scopes.map((scope) => [scope.name, {}]));
   const bundle = assembleReportBundle({
     scopes: config.scopes,
     measurementsByScope: noMeasures,
@@ -559,29 +710,38 @@ test("report transport uses the root manifest shape and rejects unresolved popul
     config,
   });
   assert.deepEqual(Object.keys(bundle.manifest), [
-    "contract_version", "repo_owner", "repo_name", "commit_sha", "snapshots", "evidence_index",
+    "contract_version",
+    "repo_owner",
+    "repo_name",
+    "commit_sha",
+    "snapshots",
+    "evidence_index",
   ]);
   assert.equal(bundle.manifest.snapshots.length, 6);
   assert.equal(bundle.evidenceIndex.version, "1.0");
   for (const snapshot of bundle.snapshots) assert.equal(validateObjective(schema, snapshot).valid, true);
-  assert.throws(() => assembleReportBundle({
-    scopes: [config.scopes[0]],
-    measurementsByScope: {
-      "rust-core": {
-        complex_functions: {
-          status: "measured",
-          payload: { algorithm: "cyclomatic-complexity-v1", threshold: 10, eligible_functions: 2, above_threshold_functions: 1 },
-          tool: { name: "rust-code-analysis-cli", version: "0.0.25" },
-          command: "fixture",
-          scope_policy: { inventory: "fixture-policy-v1" },
-          included_refs: ["ref:missing-inventory"],
-          excluded_refs: [],
+  assert.throws(
+    () =>
+      assembleReportBundle({
+        scopes: [config.scopes[0]],
+        measurementsByScope: {
+          "rust-core": {
+            complex_functions: {
+              status: "measured",
+              payload: { algorithm: "cyclomatic-complexity-v1", threshold: 10, eligible_functions: 2, above_threshold_functions: 1 },
+              tool: { name: "rust-code-analysis-cli", version: "0.0.25" },
+              command: "fixture",
+              scope_policy: { inventory: "fixture-policy-v1" },
+              included_refs: ["ref:missing-inventory"],
+              excluded_refs: [],
+            },
+          },
         },
-      },
-    },
-    context: { commitSha: commit, observedAt, runRef, attempt: 1 },
-    config,
-  }), /unresolved/);
+        context: { commitSha: commit, observedAt, runRef, attempt: 1 },
+        config,
+      }),
+    /unresolved/,
+  );
 });
 
 test("timestamps are normalized to the contract's UTC whole-second precision", () => {

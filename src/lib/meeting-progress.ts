@@ -1,13 +1,6 @@
 import type { MeetingJobStatus } from "./api";
 
-export const meetingPhases = [
-  "preparing",
-  "decoding",
-  "loading_model",
-  "analyzing",
-  "clustering",
-  "finalizing",
-] as const;
+export const meetingPhases = ["preparing", "decoding", "loading_model", "analyzing", "clustering", "finalizing"] as const;
 
 export type MeetingProgressPhase = (typeof meetingPhases)[number];
 

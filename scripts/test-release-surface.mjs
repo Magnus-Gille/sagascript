@@ -21,58 +21,19 @@ test("Finnish models document the generic default and pinned optional specialist
   }
 });
 
-const settingsSource = await readFile(
-  new URL("../src/lib/Settings.svelte", import.meta.url),
-  "utf8",
-);
-const onboardingSource = await readFile(
-  new URL("../src/lib/Onboarding.svelte", import.meta.url),
-  "utf8",
-);
-const apiSource = await readFile(
-  new URL("../src/lib/api.ts", import.meta.url),
-  "utf8",
-);
-const mainSource = await readFile(
-  new URL("../src-tauri/src/main.rs", import.meta.url),
-  "utf8",
-);
-const commandsSource = await readFile(
-  new URL("../src-tauri/src/commands.rs", import.meta.url),
-  "utf8",
-);
-const appSource = await readFile(
-  new URL("../src/App.svelte", import.meta.url),
-  "utf8",
-);
-const brandMarkSource = await readFile(
-  new URL("../assets/brand/sagascript-mark.svg", import.meta.url),
-  "utf8",
-);
-const appIconSource = await readFile(
-  new URL("../assets/brand/sagascript-app-icon.svg", import.meta.url),
-  "utf8",
-);
-const faviconSource = await readFile(
-  new URL("../site/public/favicon.svg", import.meta.url),
-  "utf8",
-);
-const siteMarkSource = await readFile(
-  new URL("../site/public/sagascript-mark.svg", import.meta.url),
-  "utf8",
-);
-const siteCssSource = await readFile(
-  new URL("../site/app/globals.css", import.meta.url),
-  "utf8",
-);
-const sitePageSource = await readFile(
-  new URL("../site/app/page.tsx", import.meta.url),
-  "utf8",
-);
-const siteLayoutSource = await readFile(
-  new URL("../site/app/layout.tsx", import.meta.url),
-  "utf8",
-);
+const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
+const onboardingSource = await readFile(new URL("../src/lib/Onboarding.svelte", import.meta.url), "utf8");
+const apiSource = await readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+const mainSource = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+const commandsSource = await readFile(new URL("../src-tauri/src/commands.rs", import.meta.url), "utf8");
+const appSource = await readFile(new URL("../src/App.svelte", import.meta.url), "utf8");
+const brandMarkSource = await readFile(new URL("../assets/brand/sagascript-mark.svg", import.meta.url), "utf8");
+const appIconSource = await readFile(new URL("../assets/brand/sagascript-app-icon.svg", import.meta.url), "utf8");
+const faviconSource = await readFile(new URL("../site/public/favicon.svg", import.meta.url), "utf8");
+const siteMarkSource = await readFile(new URL("../site/public/sagascript-mark.svg", import.meta.url), "utf8");
+const siteCssSource = await readFile(new URL("../site/app/globals.css", import.meta.url), "utf8");
+const sitePageSource = await readFile(new URL("../site/app/page.tsx", import.meta.url), "utf8");
+const siteLayoutSource = await readFile(new URL("../site/app/layout.tsx", import.meta.url), "utf8");
 
 test("release navigation exposes only Dictate, Transcribe, and Settings", () => {
   for (const label of ["Dictate", "Transcribe", "Settings"]) {
@@ -160,10 +121,7 @@ test("Dictate reflects backend loading and transcription instead of offering a c
   assert.match(settingsSource, /backendDictationState/);
   assert.match(settingsSource, /dictateButtonAction\(backendDictationState, testOwnsRecording\)/);
   assert.match(settingsSource, /Recording via hotkey\.\.\./);
-  assert.match(
-    settingsSource,
-    /\["idle", "recording", "loading_model", "transcribing"\]\.includes\(nextState\)/,
-  );
+  assert.match(settingsSource, /\["idle", "recording", "loading_model", "transcribing"\]\.includes\(nextState\)/);
   assert.match(settingsSource, /backendDictationState === "loading_model"/);
   assert.match(settingsSource, /Preparing speech engine\.\.\./);
 });
@@ -186,19 +144,12 @@ test("Accessibility onboarding reopens System Settings without prompting again",
 
   const reopenSource = onboardingSource.slice(reopenStart, reopenEnd);
   assert.match(reopenSource, /await openAccessibilitySettings\(\)/);
-  assert.doesNotMatch(
-    reopenSource,
-    /requestAccessibilityPermission|beginPollOperation|startPoll/,
-  );
+  assert.doesNotMatch(reopenSource, /requestAccessibilityPermission|beginPollOperation|startPoll/);
   assert.match(
     apiSource,
     /export async function openAccessibilitySettings\(\): Promise<void> \{\s*return invoke\("open_accessibility_settings"\);/,
   );
-  assert.match(
-    mainSource,
-    /commands::open_accessibility_settings,/,
-    "Accessibility settings command is not registered with Tauri",
-  );
+  assert.match(mainSource, /commands::open_accessibility_settings,/, "Accessibility settings command is not registered with Tauri");
   assert.match(
     onboardingSource,
     /\{:else if accessibilityChecking\}[\s\S]*onclick=\{reopenAccessibilitySettings\}[\s\S]*Open Accessibility Settings Again/,
@@ -299,10 +250,7 @@ test("app and website use the exact canonical single-S geometry", () => {
     ["website favicon", faviconSource],
     ["website mark", siteMarkSource],
   ]) {
-    assert.ok(
-      source.includes(`d="${canonicalPath}"`),
-      `${name} has drifted from the canonical S geometry`,
-    );
+    assert.ok(source.includes(`d="${canonicalPath}"`), `${name} has drifted from the canonical S geometry`);
   }
 });
 

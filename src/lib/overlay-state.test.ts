@@ -9,8 +9,7 @@ import {
   type OverlayState,
 } from "./overlay-state";
 
-const run = (actions: OverlayAction[], start: OverlayState = initialOverlayState) =>
-  actions.reduce(reduceOverlay, start);
+const run = (actions: OverlayAction[], start: OverlayState = initialOverlayState) => actions.reduce(reduceOverlay, start);
 const state = (value: string): OverlayAction => ({ type: "state", value });
 const engine = (value: string) => ({ type: "engine", value }) as const;
 const elapsed: OverlayAction = { type: "loading-delay-elapsed" };

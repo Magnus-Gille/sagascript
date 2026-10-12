@@ -8,27 +8,12 @@ import test from "node:test";
 // src/lib/meeting-review-drafts.ts) to meeting-review-drafts.test.ts, and
 // draft reconciliation to meeting-types.test.ts.
 
-const settingsSource = await readFile(
-  new URL("../src/lib/Settings.svelte", import.meta.url),
-  "utf8",
-);
-const fileTranscriptionSource = await readFile(
-  new URL("../src/lib/FileTranscription.svelte", import.meta.url),
-  "utf8",
-);
+const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
+const fileTranscriptionSource = await readFile(new URL("../src/lib/FileTranscription.svelte", import.meta.url), "utf8");
 const apiSource = await readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8");
-const reviewSource = await readFile(
-  new URL("../src/lib/MeetingReview.svelte", import.meta.url),
-  "utf8",
-);
-const pollingSource = await readFile(
-  new URL("../src/lib/meeting-job-client.ts", import.meta.url),
-  "utf8",
-);
-const typesSource = await readFile(
-  new URL("../src/lib/meeting-types.ts", import.meta.url),
-  "utf8",
-);
+const reviewSource = await readFile(new URL("../src/lib/MeetingReview.svelte", import.meta.url), "utf8");
+const pollingSource = await readFile(new URL("../src/lib/meeting-job-client.ts", import.meta.url), "utf8");
+const typesSource = await readFile(new URL("../src/lib/meeting-types.ts", import.meta.url), "utf8");
 
 test("diarized imports use the job API while ordinary imports keep transcribeFile", () => {
   assert.match(apiSource, /invoke\("begin_meeting_file", \{ filePath, prompt, profileId \}\)/);
@@ -64,10 +49,14 @@ test("polling is serialized, stale generations are ignored, and cancellation wai
   assert.match(fileTranscriptionSource, /await waitForMeetingActions\(\)/);
   assert.match(fileTranscriptionSource, /meetingDocumentRevision/);
   assert.match(fileTranscriptionSource, /generation !== meetingPollGeneration/);
-  const importBody = fileTranscriptionSource.split("async function startMeetingFileTranscription(")[1]
+  const importBody = fileTranscriptionSource
+    .split("async function startMeetingFileTranscription(")[1]
     .split("async function handleFileTranscription(")[0];
-  assert.doesNotMatch(importBody, /\+\+meetingDocumentRevision|meetingDocumentRevision\s*\+=/,
-    "starting or failing an import must not remount the previous review's unsaved drafts");
+  assert.doesNotMatch(
+    importBody,
+    /\+\+meetingDocumentRevision|meetingDocumentRevision\s*\+=/,
+    "starting or failing an import must not remount the previous review's unsaved drafts",
+  );
   assert.match(fileTranscriptionSource, /meetingFailureText\(error, "Could not check meeting progress\."\)/);
   assert.match(fileTranscriptionSource, /generation !== meetingPollGeneration \|\| meetingJobId !== jobId/);
 });

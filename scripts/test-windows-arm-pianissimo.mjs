@@ -30,10 +30,10 @@ test("host build and ORT staging run for arm64 only, with a pinned SHA-256", () 
   assert.match(build, /SHA256 mismatch/);
   assert.match(build, /onnxruntime\.dll/);
   assert.match(build, /verify-windows-engine-host\.ps1/);
-  assert.ok(workflow.indexOf("name: Build and stage ARM64 ONNX engine host") <
-    workflow.indexOf("name: Build unsigned internal installers"));
-  assert.ok(workflow.indexOf("name: Build and stage ARM64 ONNX engine host") >
-    workflow.indexOf("name: Verify native runner architecture"));
+  assert.ok(
+    workflow.indexOf("name: Build and stage ARM64 ONNX engine host") < workflow.indexOf("name: Build unsigned internal installers"),
+  );
+  assert.ok(workflow.indexOf("name: Build and stage ARM64 ONNX engine host") > workflow.indexOf("name: Verify native runner architecture"));
 });
 
 test("installer build applies the engine-host bundle config for arm64 only", () => {
@@ -69,14 +69,24 @@ test("installers bundle the console CLI beside engine-host, and the portable zip
   assert.match(generic, /--version/);
   const install = step("Verify silent per-user install runs the installed ARM64 CLI");
   assert.match(install, /if: matrix\.architecture == 'arm64'/);
-  for (const needle of ["'/S'", "--version", "engine status --json", "engine doctor", "engine -ne 'onnx'",
-    "transcribe --model pianissimo-sv --language sv", "uninstall.exe", "Uninstall removed sagascript-cli.exe"])
+  for (const needle of [
+    "'/S'",
+    "--version",
+    "engine status --json",
+    "engine doctor",
+    "engine -ne 'onnx'",
+    "transcribe --model pianissimo-sv --language sv",
+    "uninstall.exe",
+    "Uninstall removed sagascript-cli.exe",
+  ])
     assert.ok(install.includes(needle), `install step missing ${needle}`);
   const zip = step("Build and verify ARM64 portable zip");
   assert.match(zip, /if: matrix\.architecture == 'arm64'/);
   assert.match(zip, /Sagascript-Windows-\$architecture-Portable\.zip/);
   assert.match(zip, /engine status --json/);
-  assert.ok(workflow.indexOf("name: Build and verify ARM64 portable zip") < workflow.indexOf("name: Prepare and verify candidate artifacts"));
+  assert.ok(
+    workflow.indexOf("name: Build and verify ARM64 portable zip") < workflow.indexOf("name: Prepare and verify candidate artifacts"),
+  );
 });
 
 function workflowOutsideArm64Steps() {
@@ -105,11 +115,23 @@ test("verifier checks version, hello and ping beside the DLL", () => {
 
 test("owner test script covers every listed step", () => {
   for (const needle of [
-    "Win32_OperatingSystem", "Win32_Processor", "'--version'", "'engine', 'status', '--json'",
-    "'download-model', 'pianissimo-sv'", "'engine', 'doctor', '--json'", "'transcribe', '--model', 'pianissimo-sv'",
-    "Measure-Command", "swedish-fleurs-hongkong.wav", "raw.githubusercontent.com", "$LongAudio", "$Audio",
-    "660 MB", "windows-arm-pianissimo-result.json", "windows-arm-pianissimo-result.txt",
-  ]) assert.ok(script.includes(needle), `script is missing ${needle}`);
+    "Win32_OperatingSystem",
+    "Win32_Processor",
+    "'--version'",
+    "'engine', 'status', '--json'",
+    "'download-model', 'pianissimo-sv'",
+    "'engine', 'doctor', '--json'",
+    "'transcribe', '--model', 'pianissimo-sv'",
+    "Measure-Command",
+    "swedish-fleurs-hongkong.wav",
+    "raw.githubusercontent.com",
+    "$LongAudio",
+    "$Audio",
+    "660 MB",
+    "windows-arm-pianissimo-result.json",
+    "windows-arm-pianissimo-result.txt",
+  ])
+    assert.ok(script.includes(needle), `script is missing ${needle}`);
   assert.doesNotMatch(script, /RunAs|Set-ExecutionPolicy|Add-MpPreference|reg add/i);
 });
 

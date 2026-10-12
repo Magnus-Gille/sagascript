@@ -6,8 +6,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const read = (path) =>
-  readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8").replace(/\r\n?/g, "\n");
+const read = (path) => readFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), "utf8").replace(/\r\n?/g, "\n");
 
 const toolchainFile = read("rust-toolchain.toml");
 const channel = /^channel = "([^"]+)"\s*(?:#.*)?$/m.exec(toolchainFile)?.[1];
@@ -72,7 +71,12 @@ test("a workflow that installs a different Rust release overrides the toolchain 
 test("the MSRV is declared once, inherited by every crate and checked in CI", () => {
   assert.match(msrv ?? "", /^\d+\.\d+(\.\d+)?$/);
   assert.equal(rustVersion("src-tauri/engine-host/ort/Cargo.toml"), msrv, "ORT host must declare the same MSRV");
-  for (const crate of ["src-tauri", "src-tauri/crates/sagascript-core", "src-tauri/crates/sagascript-cli", "src-tauri/crates/sagascript-engine-protocol"]) {
+  for (const crate of [
+    "src-tauri",
+    "src-tauri/crates/sagascript-core",
+    "src-tauri/crates/sagascript-cli",
+    "src-tauri/crates/sagascript-engine-protocol",
+  ]) {
     assert.match(read(`${crate}/Cargo.toml`), /^rust-version\.workspace = true$/m, `${crate} must inherit rust-version`);
   }
   const ci = workflows["ci.yml"];

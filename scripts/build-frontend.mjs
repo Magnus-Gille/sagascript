@@ -52,9 +52,7 @@ export function validateFrontend({ distPath, metadataPath }) {
 
   const actualHash = hashFrontendTree(distPath);
   if (actualHash !== match[1]) {
-    throw new Error(
-      `Frontend output hash ${actualHash} does not match build metadata ${match[1]}`,
-    );
+    throw new Error(`Frontend output hash ${actualHash} does not match build metadata ${match[1]}`);
   }
   return actualHash;
 }
@@ -69,10 +67,7 @@ function buildFrontend() {
   const frontendHash = hashFrontendTree(dist);
   // build.rs watches this ignored file. A changed frontend content hash forces
   // Cargo/Tauri to regenerate the embedded asset context even with target/ cached.
-  writeFileSync(
-    join(root, "src-tauri", "build-meta.env"),
-    `SAGASCRIPT_FRONTEND_HASH=${frontendHash}\n`,
-  );
+  writeFileSync(join(root, "src-tauri", "build-meta.env"), `SAGASCRIPT_FRONTEND_HASH=${frontendHash}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

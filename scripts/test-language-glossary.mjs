@@ -2,14 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const settingsSource = await readFile(
-  new URL("../src/lib/Settings.svelte", import.meta.url),
-  "utf8",
-);
-const apiSource = await readFile(
-  new URL("../src/lib/api.ts", import.meta.url),
-  "utf8",
-);
+const settingsSource = await readFile(new URL("../src/lib/Settings.svelte", import.meta.url), "utf8");
+const apiSource = await readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8");
 
 test("profile glossary API preserves the validated camelCase command payload", () => {
   assert.match(
@@ -22,7 +16,11 @@ test("profile glossary API preserves the validated camelCase command payload", (
 test("file transcription resolves a profile by default", () => {
   assert.match(apiSource, /options\?: \{ prompt\?: string; diarize\?: boolean; profileId\?: string; runId\?: string \}/);
   assert.match(apiSource, /profileId: options\?\.profileId \?\? null/);
-  assert.match(apiSource, /invoke\("transcribe_file", \{[^}]*autoPaste: false/s, "queued file imports must use explicit Copy, never auto-paste");
+  assert.match(
+    apiSource,
+    /invoke\("transcribe_file", \{[^}]*autoPaste: false/s,
+    "queued file imports must use explicit Copy, never auto-paste",
+  );
   assert.match(settingsSource, /createFileJobs\(paths, \{[\s\S]*diarize: transcribeDiarize/);
   assert.match(settingsSource, /prompt: transcribePrompt\.trim\(\) \|\| null/);
   assert.match(settingsSource, /profileId: selectedTranscribeProfile\(\)\?\.id \?\? null/);
@@ -34,7 +32,10 @@ test("dictionary scope contains profiles, not a global tier", () => {
   assert.match(settingsSource, /function explicitProfiles\(source: Settings \| null = settings\)/);
   assert.match(settingsSource, /return source\?\.hotkey_profiles \?\? \[\]/);
   assert.match(settingsSource, /let glossaryScopeId: string = \$state\("default"\)/);
-  assert.match(settingsSource, /<select id="dictionary-scope" value=\{glossaryScopeId\} onchange=\{onGlossaryScopeChange\} disabled=\{glossarySaving \|\| languageSaving\}>/);
+  assert.match(
+    settingsSource,
+    /<select id="dictionary-scope" value=\{glossaryScopeId\} onchange=\{onGlossaryScopeChange\} disabled=\{glossarySaving \|\| languageSaving\}>/,
+  );
   assert.doesNotMatch(settingsSource, /<option value="">Global hints<\/option>/);
   assert.match(settingsSource, /This profile owns its dictionary/);
 });
@@ -52,7 +53,10 @@ test("scope switching is local and stale saves cannot overwrite a newer scope", 
   const switchSource = settingsSource.slice(switchStart, switchEnd);
   assert.doesNotMatch(switchSource, /setInitialPrompt|setProfileGlossary|applySetting/);
   assert.match(settingsSource, /let glossaryScopeGeneration = \$state\(0\)/);
-  assert.match(settingsSource, /function isCurrentGlossaryRequest\(request: GlossarySaveRequest\)[\s\S]*request\.generation === glossaryScopeGeneration[\s\S]*request\.scopeId === glossaryScopeId[\s\S]*request\.draftGeneration === glossaryDraftGeneration/);
+  assert.match(
+    settingsSource,
+    /function isCurrentGlossaryRequest\(request: GlossarySaveRequest\)[\s\S]*request\.generation === glossaryScopeGeneration[\s\S]*request\.scopeId === glossaryScopeId[\s\S]*request\.draftGeneration === glossaryDraftGeneration/,
+  );
   assert.doesNotMatch(settingsSource, /else if \(!conflict && settings\)[\s\S]*glossaryDraft = glossarySourceForScope/);
 });
 
@@ -68,7 +72,10 @@ test("clean scopes follow persisted refreshes while dirty and newer drafts survi
 });
 
 test("dictionary saves use the edit baseline and preserve concurrent conflicts", () => {
-  assert.match(settingsSource, /let glossaryEditBaseline: \{ scopeId: string; source: string; generation: number \} \| null = \$state\(null\)/);
+  assert.match(
+    settingsSource,
+    /let glossaryEditBaseline: \{ scopeId: string; source: string; generation: number \} \| null = \$state\(null\)/,
+  );
   assert.match(settingsSource, /const editBaseline = glossaryEditBaseline/);
   assert.match(settingsSource, /editBaseline\.generation <= draftGeneration/);
   assert.match(settingsSource, /setProfileGlossary\(scopeId, value, expectedSource\)/);

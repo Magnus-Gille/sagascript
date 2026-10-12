@@ -13,9 +13,7 @@ export interface OverlayState {
 }
 
 export type OverlayAction =
-  | { type: "state"; value: string }
-  | { type: "engine"; value: string; source?: string }
-  | { type: "loading-delay-elapsed" };
+  { type: "state"; value: string } | { type: "engine"; value: string; source?: string } | { type: "loading-delay-elapsed" };
 
 /** Loads faster than this never show the "Loading model" label (no flicker). */
 export const LOADING_LABEL_DELAY_MS = 150;
@@ -60,10 +58,7 @@ export function reduceOverlay(state: OverlayState, action: OverlayAction): Overl
     }
     case "engine": {
       let engine: EngineLoad =
-        action.value === "loading" ||
-        action.value === "ready" ||
-        action.value === "failed" ||
-        action.value === "unknown"
+        action.value === "loading" || action.value === "ready" || action.value === "failed" || action.value === "unknown"
           ? action.value
           : state.engine;
       // Only a failure of the load this dictation is waiting on is an error.
@@ -71,8 +66,7 @@ export function reduceOverlay(state: OverlayState, action: OverlayAction): Overl
       const background = engine === "failed" && action.source === "warm";
       if (background) engine = "unknown";
       if (engine === state.engine) return state;
-      const phase: OverlayPhase =
-        engine === "failed" && isWorking(state.phase) ? "error" : state.phase;
+      const phase: OverlayPhase = engine === "failed" && isWorking(state.phase) ? "error" : state.phase;
       return settle({ ...state, engine, phase });
     }
     case "loading-delay-elapsed":
@@ -112,11 +106,7 @@ export function overlayStrings(locale: string | undefined): Strings {
   return /^sv\b/i.test(locale ?? "") ? STRINGS.sv : STRINGS.en;
 }
 
-export function overlayLabel(
-  state: OverlayState,
-  profileLanguage: string | null,
-  locale: string | undefined,
-): string {
+export function overlayLabel(state: OverlayState, profileLanguage: string | null, locale: string | undefined): string {
   const text = overlayStrings(locale);
   if (state.phase === "error") return state.engine === "failed" ? text.loadFailed : text.failed;
   if (isWorking(state.phase)) return state.loadingVisible ? text.loading : text.transcribing;

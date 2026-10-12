@@ -19,9 +19,7 @@ test("meeting progress formats supplied durations without inventing precision", 
 test("meeting phases have human-readable labels and the long-running analysis explanation", () => {
   expect(phaseLabel("loading_model")).toBe("Loading speech model");
   expect(phaseLabel("unknown")).toBe("Processing meeting");
-  expect(phaseDetail("analyzing")).toBe(
-    "Transcribing speech and identifying speakers. This can take several minutes for long recordings.",
-  );
+  expect(phaseDetail("analyzing")).toBe("Transcribing speech and identifying speakers. This can take several minutes for long recordings.");
 });
 
 test("status titles cover running, cancellation, and terminal outcomes", () => {
@@ -35,9 +33,7 @@ test("status titles cover running, cancellation, and terminal outcomes", () => {
 test("status feedback distinguishes recent checks, stale responses, and failed checks", () => {
   expect(statusCheckMessage(0, false)).toBe("Status checked just now");
   expect(statusCheckMessage(2_000, false)).toBe("Status checked 2 seconds ago");
-  expect(statusCheckMessage(10_001, false)).toBe(
-    "No status response for 10 seconds — processing may still be running.",
-  );
+  expect(statusCheckMessage(10_001, false)).toBe("No status response for 10 seconds — processing may still be running.");
   expect(statusCheckMessage(0, true)).toBe("Status check failed — processing may still be running.");
 });
 

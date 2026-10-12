@@ -13,12 +13,8 @@ import {
 
 test("plain cancel is only available for non-diarized runs in flight", () => {
   expect(canCancelPlainTranscription({ transcribing: true, meetingJobStatus: null, cancellingPlain: false })).toBe(true);
-  expect(canCancelPlainTranscription({ transcribing: true, meetingJobStatus: "running", cancellingPlain: false })).toBe(
-    false,
-  );
-  expect(canCancelPlainTranscription({ transcribing: false, meetingJobStatus: null, cancellingPlain: false })).toBe(
-    false,
-  );
+  expect(canCancelPlainTranscription({ transcribing: true, meetingJobStatus: "running", cancellingPlain: false })).toBe(false);
+  expect(canCancelPlainTranscription({ transcribing: false, meetingJobStatus: null, cancellingPlain: false })).toBe(false);
   expect(canCancelPlainTranscription({ transcribing: true, meetingJobStatus: null, cancellingPlain: true })).toBe(false);
 });
 

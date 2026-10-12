@@ -2,23 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const source = async (path) =>
-  readFile(new URL(`../${path}`, import.meta.url), "utf8");
+const source = async (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-const [
-  api,
-  settings,
-  overlay,
-  onboarding,
-  transcribe,
-  models,
-  benchmark,
-  benchmarkConfig,
-  latency,
-  config,
-  record,
-  cli,
-] =
+const [api, settings, overlay, onboarding, transcribe, models, benchmark, benchmarkConfig, latency, config, record, cli] =
   await Promise.all([
     source("src/lib/api.ts"),
     source("src/lib/Settings.svelte"),

@@ -2,23 +2,9 @@ import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { canonical } from "./code-health-schema.mjs";
 
-export const METRIC_NAMES = [
-  "complex_functions",
-  "unused_candidates",
-  "coverage",
-  "ci_first_attempt",
-  "confirmed_regressions",
-];
+export const METRIC_NAMES = ["complex_functions", "unused_candidates", "coverage", "ci_first_attempt", "confirmed_regressions"];
 
-export const CI_CONCLUSION_PRIORITY = [
-  "failure",
-  "infra_failure",
-  "unknown",
-  "pending",
-  "cancelled",
-  "skipped",
-  "success",
-];
+export const CI_CONCLUSION_PRIORITY = ["failure", "infra_failure", "unknown", "pending", "cancelled", "skipped", "success"];
 
 const METRIC_UNITS = {
   complex_functions: "functions",
@@ -52,14 +38,10 @@ export function safeRepoPath(value, repoRoot) {
   return rel.split(sep).join("/");
 }
 
-export function parseExportedCoverage(report, {
-  repoRoot,
-  inventoryPaths,
-  sourceRoots,
-  excludedPaths = [],
-  measure = "lines",
-  includesInlineTests = false,
-} = {}) {
+export function parseExportedCoverage(
+  report,
+  { repoRoot, inventoryPaths, sourceRoots, excludedPaths = [], measure = "lines", includesInlineTests = false } = {},
+) {
   if (!report || !Array.isArray(report.data) || !Array.isArray(inventoryPaths) || !Array.isArray(sourceRoots)) {
     throw new TypeError("coverage report or declared inventory is malformed");
   }
@@ -79,7 +61,7 @@ export function parseExportedCoverage(report, {
         outsideInventory.push({ path: null, reason: "outside-repository" });
         continue;
       }
-      if (excluded.has(path) || !sourceRoots.some(root => path.startsWith(root))) continue;
+      if (excluded.has(path) || !sourceRoots.some((root) => path.startsWith(root))) continue;
       if (!inventory.has(path)) {
         outsideInventory.push({ path, reason: "not-in-declared-inventory" });
         continue;
@@ -99,7 +81,7 @@ export function parseExportedCoverage(report, {
   const eligible = paths.reduce((sum, path) => sum + emitted.get(path).eligible, 0);
   const covered = paths.reduce((sum, path) => sum + emitted.get(path).covered, 0);
   if (eligible < 1) throw new TypeError("coverage report has no eligible units");
-  const notEmitted = [...inventory].filter(path => !emitted.has(path)).sort();
+  const notEmitted = [...inventory].filter((path) => !emitted.has(path)).sort();
   return {
     measure,
     covered,
@@ -112,7 +94,7 @@ export function parseExportedCoverage(report, {
     included_paths: paths,
     not_emitted_paths: notEmitted,
     excluded_report_paths: outsideInventory,
-    per_file: paths.map(path => ({ path, ...emitted.get(path) })),
+    per_file: paths.map((path) => ({ path, ...emitted.get(path) })),
   };
 }
 
@@ -189,7 +171,7 @@ export function parseRustComplexity(fileReports, threshold) {
     algorithm: "cyclomatic-complexity-v1",
     threshold,
     eligible_functions: functions.length,
-    above_threshold_functions: functions.filter(item => item.cyclomatic > threshold).length,
+    above_threshold_functions: functions.filter((item) => item.cyclomatic > threshold).length,
     functions,
   };
 }
@@ -200,7 +182,7 @@ function nativeKnipCandidates(report) {
   if (!Array.isArray(report.files) || !Array.isArray(report.issues)) {
     throw new TypeError("Knip JSON report is missing file candidates or grouped issues");
   }
-  const collected = report.files.map(file => {
+  const collected = report.files.map((file) => {
     if (typeof file !== "string") throw new TypeError("Knip file candidate is malformed");
     return { category: "files", item: { file, line: 1 } };
   });
@@ -275,9 +257,8 @@ export function parseKnipCandidates(report, { repoRoot, language } = {}) {
   }
   if (!report || typeof report !== "object" || Array.isArray(report)) throw new TypeError("Knip output is malformed");
   if (!["typescript", "svelte"].includes(language)) throw new TypeError("Knip candidate language is unsupported");
-  const collected = Array.isArray(report.files) || Array.isArray(report.issues)
-    ? nativeKnipCandidates(report)
-    : legacyKnipCandidates(report);
+  const collected =
+    Array.isArray(report.files) || Array.isArray(report.issues) ? nativeKnipCandidates(report) : legacyKnipCandidates(report);
   const extension = language === "svelte" ? ".svelte" : null;
   const candidates = [];
   for (const { category, item } of collected) {
@@ -285,16 +266,20 @@ export function parseKnipCandidates(report, { repoRoot, language } = {}) {
     if (!sourcePath || !sourcePath.startsWith("src/")) continue;
     const pathParts = sourcePath.toLowerCase().split("/");
     const fileName = pathParts.at(-1);
-    if (pathParts.some(part => ["generated", "vendor", "__tests__", "tests", "build", "coverage"].includes(part))
-      || /\.(test|spec)\.(ts|tsx)$/.test(fileName) || /^buildinfo\./.test(fileName)) continue;
+    if (
+      pathParts.some((part) => ["generated", "vendor", "__tests__", "tests", "build", "coverage"].includes(part)) ||
+      /\.(test|spec)\.(ts|tsx)$/.test(fileName) ||
+      /^buildinfo\./.test(fileName)
+    )
+      continue;
     if (language === "svelte") {
       if (!sourcePath.endsWith(extension)) continue;
     } else if (!/\.(ts|tsx)$/.test(sourcePath)) {
       continue;
     }
-    const line = Number.isSafeInteger(item.line) && item.line > 0 ? item.line : (category === "files" ? 1 : null);
-    const candidateName = [item.symbol, item.name, item.dependency, item.export]
-      .find(value => typeof value === "string" && value.length > 0) ?? null;
+    const line = Number.isSafeInteger(item.line) && item.line > 0 ? item.line : category === "files" ? 1 : null;
+    const candidateName =
+      [item.symbol, item.name, item.dependency, item.export].find((value) => typeof value === "string" && value.length > 0) ?? null;
     candidates.push({ category, path: sourcePath, name: candidateName, line });
   }
   const deduplicated = new Map();
@@ -302,14 +287,19 @@ export function parseKnipCandidates(report, { repoRoot, language } = {}) {
     const key = canonical(candidate);
     deduplicated.set(key, candidate);
   }
-  return [...deduplicated.values()].sort((a, b) => a.path.localeCompare(b.path)
-    || a.category.localeCompare(b.category) || (a.line ?? 0) - (b.line ?? 0) || (a.name ?? "").localeCompare(b.name ?? ""));
+  return [...deduplicated.values()].sort(
+    (a, b) =>
+      a.path.localeCompare(b.path) ||
+      a.category.localeCompare(b.category) ||
+      (a.line ?? 0) - (b.line ?? 0) ||
+      (a.name ?? "").localeCompare(b.name ?? ""),
+  );
 }
 
 export function parseWorkflowJobIds(workflowText) {
   if (typeof workflowText !== "string") throw new TypeError("CI workflow source must be text");
   const lines = workflowText.split(/\r?\n/);
-  const jobsLine = lines.findIndex(line => /^jobs:\s*$/.test(line));
+  const jobsLine = lines.findIndex((line) => /^jobs:\s*$/.test(line));
   if (jobsLine < 0) throw new TypeError("CI workflow has no jobs section");
   const jobIds = [];
   for (const line of lines.slice(jobsLine + 1)) {
@@ -325,9 +315,14 @@ export function parseWorkflowJobIds(workflowText) {
 }
 
 export function assertCompletePageCount(actualCount, totalCount, maximumCount) {
-  if (!Number.isSafeInteger(actualCount) || actualCount < 0
-    || !Number.isSafeInteger(totalCount) || totalCount < 0
-    || !Number.isSafeInteger(maximumCount) || maximumCount < 1) {
+  if (
+    !Number.isSafeInteger(actualCount) ||
+    actualCount < 0 ||
+    !Number.isSafeInteger(totalCount) ||
+    totalCount < 0 ||
+    !Number.isSafeInteger(maximumCount) ||
+    maximumCount < 1
+  ) {
     throw new TypeError("GitHub Actions page counts are malformed");
   }
   if (totalCount > maximumCount) throw new RangeError("GitHub Actions API inventory exceeds the configured limit");
@@ -341,18 +336,25 @@ function conclusionForJob(job) {
     return "unknown";
   }
   switch (job.conclusion) {
-    case "success": return "success";
-    case "failure": return "failure";
-    case "startup_failure": return "failure";
-    case "timed_out": return "failure";
-    case "cancelled": return "cancelled";
-    case "skipped": return "skipped";
-    default: return "unknown";
+    case "success":
+      return "success";
+    case "failure":
+      return "failure";
+    case "startup_failure":
+      return "failure";
+    case "timed_out":
+      return "failure";
+    case "cancelled":
+      return "cancelled";
+    case "skipped":
+      return "skipped";
+    default:
+      return "unknown";
   }
 }
 
 function runConclusion(jobs) {
-  return CI_CONCLUSION_PRIORITY.find(conclusion => jobs.some(job => job.conclusion === conclusion)) ?? "unknown";
+  return CI_CONCLUSION_PRIORITY.find((conclusion) => jobs.some((job) => job.conclusion === conclusion)) ?? "unknown";
 }
 
 function inHalfOpenWindow(timestamp, start, end) {
@@ -381,10 +383,17 @@ export function normalizeCiCohort({
   }
   const ids = new Set();
   for (const excluded of preExcludedRuns) {
-    if (!excluded || !Number.isSafeInteger(excluded.id) || excluded.id < 1
-      || !FULL_SHA.test(excluded.commit) || !SHA256.test(excluded.workflow_config_digest)
-      || excluded.workflow_config_digest === workflowConfigDigest || excluded.reason !== "workflow-config-mismatch"
-      || ids.has(excluded.id)) throw new TypeError("CI excluded run inventory is malformed or duplicated");
+    if (
+      !excluded ||
+      !Number.isSafeInteger(excluded.id) ||
+      excluded.id < 1 ||
+      !FULL_SHA.test(excluded.commit) ||
+      !SHA256.test(excluded.workflow_config_digest) ||
+      excluded.workflow_config_digest === workflowConfigDigest ||
+      excluded.reason !== "workflow-config-mismatch" ||
+      ids.has(excluded.id)
+    )
+      throw new TypeError("CI excluded run inventory is malformed or duplicated");
     ids.add(excluded.id);
   }
   const normalizedRuns = [];
@@ -392,10 +401,18 @@ export function normalizeCiCohort({
   const timingRuns = [];
   const incompleteRuns = [];
   for (const run of [...runs].sort((a, b) => Number(a.id) - Number(b.id))) {
-    if (!run || !Number.isSafeInteger(run.id) || run.id < 1 || !FULL_SHA.test(run.head_sha)
-      || !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1
-      || typeof run.created_at !== "string" || !Number.isFinite(Date.parse(run.created_at))
-      || typeof run.event !== "string" || typeof run.head_branch !== "string") {
+    if (
+      !run ||
+      !Number.isSafeInteger(run.id) ||
+      run.id < 1 ||
+      !FULL_SHA.test(run.head_sha) ||
+      !Number.isSafeInteger(run.run_attempt) ||
+      run.run_attempt < 1 ||
+      typeof run.created_at !== "string" ||
+      !Number.isFinite(Date.parse(run.created_at)) ||
+      typeof run.event !== "string" ||
+      typeof run.head_branch !== "string"
+    ) {
       throw new TypeError("CI run inventory contains a malformed identity or timestamp");
     }
     if (ids.has(run.id)) throw new TypeError("CI run inventory contains a duplicate run ID");
@@ -421,7 +438,7 @@ export function normalizeCiCohort({
       if (!expectedJobIds.includes(job.name)) throw new TypeError("CI attempt-1 contains an unregistered job");
       actualByName.set(job.name, job);
     }
-    const jobs = expectedJobIds.map(jobId => ({
+    const jobs = expectedJobIds.map((jobId) => ({
       job_ref: "ref:job-ci-" + jobId,
       conclusion: conclusionForJob(actualByName.get(jobId)),
     }));
@@ -436,9 +453,11 @@ export function normalizeCiCohort({
     };
     const workflowStatus = typeof run.status === "string" ? run.status : null;
     const workflowConclusion = typeof run.conclusion === "string" ? run.conclusion : null;
-    if (workflowStatus === "completed"
-      && ["failure", "startup_failure", "timed_out"].includes(workflowConclusion)
-      && normalized.overall_conclusion === "unknown") {
+    if (
+      workflowStatus === "completed" &&
+      ["failure", "startup_failure", "timed_out"].includes(workflowConclusion) &&
+      normalized.overall_conclusion === "unknown"
+    ) {
       incompleteRuns.push({ id: run.id, status: workflowStatus, conclusion: workflowConclusion });
     }
     normalizedRuns.push(normalized);
@@ -448,17 +467,17 @@ export function normalizeCiCohort({
       workflowName: "CI",
       event: "push",
       attempt: 1,
-      status: workflowStatus ?? (jobs.every(job => !["pending", "unknown"].includes(job.conclusion)) ? "completed" : "in_progress"),
+      status: workflowStatus ?? (jobs.every((job) => !["pending", "unknown"].includes(job.conclusion)) ? "completed" : "in_progress"),
       conclusion: workflowConclusion ?? normalized.overall_conclusion,
       createdAt: normalized.created_at,
-      jobs: attemptJobs.map(job => ({
+      jobs: attemptJobs.map((job) => ({
         databaseId: job.id,
         name: job.name,
         status: job.status,
         conclusion: job.conclusion,
         startedAt: job.started_at ?? null,
         completedAt: job.completed_at ?? null,
-        steps: (job.steps ?? []).map(step => ({
+        steps: (job.steps ?? []).map((step) => ({
           number: step.number,
           name: step.name,
           status: step.status,
@@ -473,8 +492,13 @@ export function normalizeCiCohort({
 }
 
 export function classifyCiWorkflowConfiguration({ runId, commit, historicalWorkflow, expectedDigest } = {}) {
-  if (!Number.isSafeInteger(runId) || runId < 1 || !FULL_SHA.test(commit)
-    || !Buffer.isBuffer(historicalWorkflow) || !SHA256.test(expectedDigest)) {
+  if (
+    !Number.isSafeInteger(runId) ||
+    runId < 1 ||
+    !FULL_SHA.test(commit) ||
+    !Buffer.isBuffer(historicalWorkflow) ||
+    !SHA256.test(expectedDigest)
+  ) {
     throw new TypeError("CI historical workflow evidence is missing or malformed");
   }
   const digest = sha256(historicalWorkflow);
@@ -515,7 +539,7 @@ export function buildCiFirstAttemptPayload({
     event: "push",
     workflow_ref: "ref:workflow-ci-main-push",
     workflow_config_digest: { algorithm: "sha256", value: workflowConfigDigest },
-    expected_job_refs: expectedJobIds.map(id => "ref:job-ci-" + id),
+    expected_job_refs: expectedJobIds.map((id) => "ref:job-ci-" + id),
     window_start: wholeSecondUtc(windowStart),
     window_end: wholeSecondUtc(windowEnd),
     runs: normalizedRuns,
@@ -525,21 +549,25 @@ export function buildCiFirstAttemptPayload({
 }
 
 function sourceFor(slot, context, observation) {
-  const configDigest = sha256(canonical({
-    tool: observation.tool,
-    command: observation.command,
-    metric_version: slot.metric_version,
-  }));
-  const scopeDigest = sha256(canonical({
-    slot_ref: slot.slot_ref,
-    language: slot.language,
-    platform: slot.platform,
-    feature_refs: slot.feature_refs,
-    scope_version: slot.scope_version,
-    tool: observation.tool,
-    command: observation.command,
-    inventory_policy: observation.scope_policy,
-  }));
+  const configDigest = sha256(
+    canonical({
+      tool: observation.tool,
+      command: observation.command,
+      metric_version: slot.metric_version,
+    }),
+  );
+  const scopeDigest = sha256(
+    canonical({
+      slot_ref: slot.slot_ref,
+      language: slot.language,
+      platform: slot.platform,
+      feature_refs: slot.feature_refs,
+      scope_version: slot.scope_version,
+      tool: observation.tool,
+      command: observation.command,
+      inventory_policy: observation.scope_policy,
+    }),
+  );
   return {
     run_ref: context.runRef,
     attempt: context.attempt,
@@ -558,8 +586,8 @@ function createMetric(name, slot, context, measurement) {
   const unit = METRIC_UNITS[name];
   if (!measurement) {
     const status = slot.status === "measured" ? "unknown" : slot.status;
-    const reason = slot.status === "measured" ? "not-collected"
-      : slot.reason ?? (status === "unsupported" ? "unsupported-tool" : "not-collected");
+    const reason =
+      slot.status === "measured" ? "not-collected" : (slot.reason ?? (status === "unsupported" ? "unsupported-tool" : "not-collected"));
     return {
       observed_at: context.observedAt,
       source: null,
@@ -583,9 +611,16 @@ function createMetric(name, slot, context, measurement) {
       slot_ref: slot.slot_ref,
     };
   }
-  if (!measurement.payload || !measurement.tool || !Array.isArray(measurement.included_refs)
-    || !Array.isArray(measurement.excluded_refs) || typeof measurement.command !== "string"
-    || !measurement.scope_policy || typeof measurement.scope_policy !== "object" || Array.isArray(measurement.scope_policy)) {
+  if (
+    !measurement.payload ||
+    !measurement.tool ||
+    !Array.isArray(measurement.included_refs) ||
+    !Array.isArray(measurement.excluded_refs) ||
+    typeof measurement.command !== "string" ||
+    !measurement.scope_policy ||
+    typeof measurement.scope_policy !== "object" ||
+    Array.isArray(measurement.scope_policy)
+  ) {
     throw new TypeError("measured metric is missing source or population provenance");
   }
   const payload = structuredClone(measurement.payload);
@@ -595,11 +630,30 @@ function createMetric(name, slot, context, measurement) {
     }
   } else if (name === "unused_candidates") {
     for (const key of Object.keys(payload)) {
-      if (!["graph_status", "candidate_count", "validated_count", "false_positive_count", "uncertain_count", "owner_validation_refs", "graph_qualification_ref"].includes(key)) delete payload[key];
+      if (
+        ![
+          "graph_status",
+          "candidate_count",
+          "validated_count",
+          "false_positive_count",
+          "uncertain_count",
+          "owner_validation_refs",
+          "graph_qualification_ref",
+        ].includes(key)
+      )
+        delete payload[key];
     }
   } else if (name === "coverage") {
-    const coverageKeys = ["covered", "eligible", "emitted_source_files", "eligible_source_files", "includes_inline_tests", "clean_profiles", "source_inventory"];
-    const coveragePayload = Object.fromEntries(coverageKeys.map(key => [key, payload[key]]));
+    const coverageKeys = [
+      "covered",
+      "eligible",
+      "emitted_source_files",
+      "eligible_source_files",
+      "includes_inline_tests",
+      "clean_profiles",
+      "source_inventory",
+    ];
+    const coveragePayload = Object.fromEntries(coverageKeys.map((key) => [key, payload[key]]));
     coveragePayload.profile_refs = [measurement.profile_ref];
     coveragePayload.measure = "lines";
     return {
@@ -645,13 +699,17 @@ export function createObjective(scope, context, measurements = {}) {
   }
   return {
     contract_version: "1.0",
-    snapshot_id: "ref:sagascript-" + sha256(canonical({
-      repository: { owner: "Magnus-Gille", name: "sagascript" },
-      commit: context.commitSha,
-      run_ref: context.runRef,
-      attempt: context.attempt,
-      scope: scope.name,
-    })),
+    snapshot_id:
+      "ref:sagascript-" +
+      sha256(
+        canonical({
+          repository: { owner: "Magnus-Gille", name: "sagascript" },
+          commit: context.commitSha,
+          run_ref: context.runRef,
+          attempt: context.attempt,
+          scope: scope.name,
+        }),
+      ),
     supersedes_ref: null,
     correction_ref: null,
     repository: { owner: "Magnus-Gille", name: "sagascript" },
@@ -662,8 +720,13 @@ export function createObjective(scope, context, measurements = {}) {
 }
 
 function safeArtifactPath(path) {
-  return typeof path === "string" && path.length > 0 && !path.startsWith("/")
-    && !path.includes("\\") && !path.split("/").some(part => part === "" || part === "." || part === "..");
+  return (
+    typeof path === "string" &&
+    path.length > 0 &&
+    !path.startsWith("/") &&
+    !path.includes("\\") &&
+    !path.split("/").some((part) => part === "" || part === "." || part === "..")
+  );
 }
 
 function artifactRef(path) {
@@ -677,14 +740,7 @@ function addEvidence(refs, key, value) {
   refs[key] = value;
 }
 
-export function assembleReportBundle({
-  scopes,
-  measurementsByScope,
-  context,
-  evidenceFiles = {},
-  evidenceRefs = {},
-  config,
-} = {}) {
+export function assembleReportBundle({ scopes, measurementsByScope, context, evidenceFiles = {}, evidenceRefs = {}, config } = {}) {
   if (!Array.isArray(scopes) || !config || !context) throw new TypeError("report bundle input is malformed");
   const snapshots = [];
   const snapshotFiles = [];
@@ -699,8 +755,8 @@ export function assembleReportBundle({
   for (const snapshot of snapshots) {
     for (const metric of Object.values(snapshot.metrics)) {
       addEvidence(refs, metric.slot_ref, artifactRef(registryPath));
-      if (metric.source) addEvidence(refs, metric.source.run_ref, evidenceRefs[metric.source.run_ref]
-        ?? artifactRef("evidence/collection-overhead.json"));
+      if (metric.source)
+        addEvidence(refs, metric.source.run_ref, evidenceRefs[metric.source.run_ref] ?? artifactRef("evidence/collection-overhead.json"));
       for (const ref of metric.source?.feature_refs ?? []) addEvidence(refs, ref, artifactRef(registryPath));
       for (const ref of metric.population?.included_refs ?? []) {
         if (!refs[ref]) throw new TypeError("population evidence reference is unresolved: " + ref);
@@ -738,7 +794,10 @@ export function assembleReportBundle({
     if (value.kind === "source" && (!safeArtifactPath(value.path) || !Number.isSafeInteger(value.line) || value.line < 1)) {
       throw new TypeError("source evidence is malformed");
     }
-    if (value.kind === "github-run" && (!Number.isSafeInteger(value.run_id) || value.run_id < 1 || !Number.isSafeInteger(value.attempt) || value.attempt < 1)) {
+    if (
+      value.kind === "github-run" &&
+      (!Number.isSafeInteger(value.run_id) || value.run_id < 1 || !Number.isSafeInteger(value.attempt) || value.attempt < 1)
+    ) {
       throw new TypeError("GitHub run evidence is malformed");
     }
     if (!["artifact-file", "source", "github-run"].includes(value.kind)) throw new TypeError("unsupported evidence kind");
@@ -756,16 +815,17 @@ export function assembleReportBundle({
 }
 
 export function assertNoAbsoluteArtifactPaths(bundle) {
-  const values = [
-    bundle.manifest,
-    bundle.evidenceIndex,
-    ...bundle.snapshots,
-    ...bundle.files.values(),
-  ];
+  const values = [bundle.manifest, bundle.evidenceIndex, ...bundle.snapshots, ...bundle.files.values()];
   const visit = (value, location = "$report") => {
     if (typeof value === "string") {
-      if (/^(\/|[A-Za-z]:[\\/])/.test(value) || value.includes("/Users/") || value.includes("/private/tmp/")
-        || value.includes("/var/folders/") || value.includes("/private/var/") || /^https?:\/\//i.test(value)) {
+      if (
+        /^(\/|[A-Za-z]:[\\/])/.test(value) ||
+        value.includes("/Users/") ||
+        value.includes("/private/tmp/") ||
+        value.includes("/var/folders/") ||
+        value.includes("/private/var/") ||
+        /^https?:\/\//i.test(value)
+      ) {
         throw new TypeError(`report contains an absolute local path at ${location}`);
       }
       return;

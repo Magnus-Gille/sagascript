@@ -12,18 +12,14 @@ const expectedVersion = "1.1.3";
 const expectedGitHash = "0123456789abcdef0123456789abcdef01234567";
 
 function findPowerShell(probeCwd) {
-  const candidates = [
-    process.env.SAGASCRIPT_PWSH,
-    join(homedir(), ".dotnet", "tools", "pwsh"),
-    "pwsh",
-  ].filter(Boolean);
+  const candidates = [process.env.SAGASCRIPT_PWSH, join(homedir(), ".dotnet", "tools", "pwsh"), "pwsh"].filter(Boolean);
 
   for (const candidate of candidates) {
-    const probe = spawnSync(
-      candidate,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"],
-      { cwd: probeCwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
+    const probe = spawnSync(candidate, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"], {
+      cwd: probeCwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     if (probe.status === 0) {
       return candidate;
     }
@@ -40,12 +36,12 @@ function writePowerShellFixtures(root) {
     [
       "#!/usr/bin/env pwsh",
       "param([string]$Argument)",
-      "if ($Argument -eq \"--version\") {",
+      'if ($Argument -eq "--version") {',
       "    Write-Output $env:SAGASCRIPT_TEST_VERSION_OUTPUT",
       "    exit 0",
       "}",
-      "if ($Argument -eq \"--help\") {",
-      "    Write-Output \"help\"",
+      'if ($Argument -eq "--help") {',
+      '    Write-Output "help"',
       "    exit 0",
       "}",
       "exit 17",
@@ -65,11 +61,11 @@ function writePowerShellFixtures(root) {
       "    [string]$ExpectedGitHash,",
       "    [switch]$OmitExpectedGitHash",
       ")",
-      "$ErrorActionPreference = \"Stop\"",
+      '$ErrorActionPreference = "Stop"',
       "# Test-only mock: this does not make any Authenticode claim.",
       "function Get-AuthenticodeSignature {",
       "    param([string]$FilePath)",
-      "    [pscustomobject]@{ Status = \"NotSigned\" }",
+      '    [pscustomobject]@{ Status = "NotSigned" }',
       "}",
       "if ($OmitExpectedGitHash) {",
       "    & $VerifierPath -CliExe $CliPath -ExpectedVersion $ExpectedVersion -Artifacts $CliPath -ChecksumOutput $ChecksumPath",
@@ -144,11 +140,7 @@ test("Windows release verifier enforces clean full build identity", (t) => {
     };
     const validOutput = `sagascript ${expectedVersion} (git ${expectedGitHash}, built 2026-09-06)`;
 
-    const backwardsCompatible = run(
-      "sagascript 1.1.3 (git 0949345, built 2026-09-06)",
-      "",
-      true,
-    );
+    const backwardsCompatible = run("sagascript 1.1.3 (git 0949345, built 2026-09-06)", "", true);
     assert.equal(backwardsCompatible.result.status, 0, `${backwardsCompatible.result.stderr}\nstdout=${backwardsCompatible.result.stdout}`);
     assert.ok(existsSync(backwardsCompatible.checksumPath));
 
@@ -169,19 +161,10 @@ test("Windows release verifier enforces clean full build identity", (t) => {
       assert.notEqual(rejected.result.status, 0, `unexpectedly accepted: ${output}`);
     }
 
-    const malformedExpectedHashes = [
-      "",
-      expectedGitHash.toUpperCase(),
-      expectedGitHash.slice(0, 39),
-      `${expectedGitHash}0`,
-    ];
+    const malformedExpectedHashes = ["", expectedGitHash.toUpperCase(), expectedGitHash.slice(0, 39), `${expectedGitHash}0`];
     for (const malformedExpectedHash of malformedExpectedHashes) {
       const rejected = run(validOutput, malformedExpectedHash);
-      assert.notEqual(
-        rejected.result.status,
-        0,
-        `unexpectedly accepted expected hash: ${malformedExpectedHash}`,
-      );
+      assert.notEqual(rejected.result.status, 0, `unexpectedly accepted expected hash: ${malformedExpectedHash}`);
     }
 
     const mismatchedExpectedHash = run(validOutput, "1".repeat(40));

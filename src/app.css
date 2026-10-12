@@ -27,7 +27,9 @@ body {
   overflow: hidden;
 }
 
-h1, h2, h3 {
+h1,
+h2,
+h3 {
   font-weight: 600;
 }
 
@@ -73,7 +75,9 @@ button.danger:hover {
   color: white;
 }
 
-select, input[type="text"], input[type="password"] {
+select,
+input[type="text"],
+input[type="password"] {
   background: var(--bg-secondary);
   color: var(--text);
   border: 1px solid var(--border);
@@ -85,11 +89,13 @@ select, input[type="text"], input[type="password"] {
   width: 100%;
 }
 
-select:focus, input:focus {
+select:focus,
+input:focus {
   border-color: var(--accent);
 }
 
-label, .field-label {
+label,
+.field-label {
   display: block;
   color: var(--text-muted);
   font-size: 12px;
@@ -107,7 +113,8 @@ label, .field-label {
   margin-bottom: 12px;
 }
 
-.field-row label, .field-row .field-label {
+.field-row label,
+.field-row .field-label {
   margin-bottom: 0;
   color: var(--text);
   font-size: 13px;
