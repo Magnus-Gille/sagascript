@@ -209,20 +209,23 @@ test("Swift coverage filters external and generated exports while retaining sour
   assert.equal(JSON.stringify(filtered).includes("/Applications/Xcode.app"), false);
 });
 
-test("Swift coverage preparation places only the shared tracked vector fixture at the package sibling path", () => {
-  assert.match(producerSource, /sharedFixturePath: join\(REPO_ROOT, "src-tauri\/engine-host\/test-vectors\/context-biasing\.json"\)/);
+test("Swift coverage preparation places the shared tracked vectors at the package sibling path", () => {
+  assert.match(producerSource, /sharedFixtureRoot: join\(REPO_ROOT, "src-tauri\/engine-host\/test-vectors"\)/);
   const rootPath = mkdtempSync(join(tmpdir(), "sagascript-swift-input-test-"));
   try {
     const sourcePackageRoot = join(rootPath, "source-package");
     const tempRoot = join(rootPath, "task-temp");
     const packageRoot = join(tempRoot, "swift-package");
-    const fixturePath = join(rootPath, "context-biasing.json");
+    const fixtureRoot = join(rootPath, "test-vectors");
     mkdirSync(join(sourcePackageRoot, "Tests/EngineHostCoreTests"), { recursive: true });
     writeFileSync(join(sourcePackageRoot, "Tests/EngineHostCoreTests/ContextBiasingTests.swift"), "fixture consumer");
-    writeFileSync(fixturePath, '{"fixture":"shared"}\n');
-    const copiedFixture = prepareSwiftCoverageInputs({ sourcePackageRoot, packageRoot, tempRoot, sharedFixturePath: fixturePath });
-    assert.equal(copiedFixture, join(tempRoot, "test-vectors/context-biasing.json"));
-    assert.equal(readFileSync(copiedFixture, "utf8"), '{"fixture":"shared"}\n');
+    mkdirSync(join(fixtureRoot, "protocol"), { recursive: true });
+    writeFileSync(join(fixtureRoot, "context-biasing.json"), '{"fixture":"shared"}\n');
+    writeFileSync(join(fixtureRoot, "protocol/handshake.jsonl"), '{"note":"golden"}\n');
+    const copied = prepareSwiftCoverageInputs({ sourcePackageRoot, packageRoot, tempRoot, sharedFixtureRoot: fixtureRoot });
+    assert.equal(copied, join(tempRoot, "test-vectors"));
+    assert.equal(readFileSync(join(copied, "context-biasing.json"), "utf8"), '{"fixture":"shared"}\n');
+    assert.equal(readFileSync(join(copied, "protocol/handshake.jsonl"), "utf8"), '{"note":"golden"}\n');
     assert.equal(readFileSync(join(packageRoot, "Tests/EngineHostCoreTests/ContextBiasingTests.swift"), "utf8"), "fixture consumer");
   } finally {
     rmSync(rootPath, { recursive: true, force: true });
