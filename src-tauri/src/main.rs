@@ -1496,6 +1496,8 @@ fn main() {
                     // the background when a dictation profile uses it.
                     let handle = app.handle().clone();
                     forward_engine_load_state(&handle);
+                    // Dictation audio a killed earlier run left in the temp dir.
+                    sagascript_core::transcription::engine_host::pipeline::sweep_stale_pcm_dirs_at_startup();
                     prewarm_engine_for(&handle, sagascript_core::transcription::pianissimo_backend::WarmTrigger::AppStart);
                     #[cfg(target_os = "macos")]
                     {

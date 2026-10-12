@@ -3,16 +3,17 @@
 
 use super::client::{batch_lane, EngineHostClient, WindowOutput, WindowRequest, WindowTicket};
 use super::{EngineHostError, Result};
+use crate::sync::lock_or_recover;
 use crate::transcription::chunk_merge::{
     merge_window, offset_tokens, plan_windows, tokens_to_text, tokens_to_words, AlignedToken,
     Window, Word,
 };
 use sagascript_engine_protocol::Priority;
 use std::collections::VecDeque;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Cooperative cancellation flag shared between the caller and a running job.
@@ -72,8 +73,29 @@ pub struct Transcription {
     pub audio_s: f64,
 }
 
+/// Name of a PCM temp dir: this prefix, then exactly [`PCM_DIR_RAND_LEN`]
+/// random ASCII letters and digits. The sweep matches nothing else.
+const PCM_DIR_PREFIX: &str = "sagascript-pcm-";
+const PCM_DIR_RAND_LEN: usize = 12;
+/// A sweep renames a dead owner's dir to this prefix (same random part)
+/// before removing it, so an interrupted removal is finished by a later sweep.
+const PCM_DEAD_PREFIX: &str = "sagascript-pcm-dead-";
+const PCM_AUDIO_FILE: &str = "audio.f32le";
+/// Locked by the owning process for the dir's whole lifetime.
+const PCM_OWNER_FILE: &str = "owner.lock";
+/// First bytes of the owner file, written after the lock is taken.
+const PCM_OWNER_MARKER: &str = "sagascript-pcm-owner";
+
 /// Raw f32le PCM in a private (0700) temp dir, removed on drop.
+///
+/// The dir holds `owner.lock`, exclusively locked (`flock` / `LockFileEx`)
+/// for as long as this value lives. The OS drops the lock when the process
+/// ends, however it ends, so a dir whose lock can be taken has no live owner:
+/// [`sweep_stale_pcm_dirs`] removes such dirs left behind by a killed process.
 pub struct PcmFile {
+    // Field order is drop order: the lock is released before the dir is
+    // removed (a sweep that slips in between removes the same dir).
+    _owner: std::fs::File,
     dir: tempfile::TempDir,
     path: PathBuf,
 }
@@ -81,7 +103,7 @@ pub struct PcmFile {
 impl PcmFile {
     pub fn write(samples: &[f32], parent: Option<&Path>) -> Result<Self> {
         let mut builder = tempfile::Builder::new();
-        builder.prefix("sagascript-pcm-");
+        builder.prefix(PCM_DIR_PREFIX).rand_bytes(PCM_DIR_RAND_LEN);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -91,7 +113,8 @@ impl PcmFile {
             Some(p) => builder.tempdir_in(p)?,
             None => builder.tempdir()?,
         };
-        let path = dir.path().join("audio.f32le");
+        let owner = lock_pcm_owner(dir.path())?;
+        let path = dir.path().join(PCM_AUDIO_FILE);
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create_new(true);
         #[cfg(unix)]
@@ -108,7 +131,11 @@ impl PcmFile {
             f.write_all(&bytes)?;
         }
         f.flush()?;
-        Ok(Self { dir, path })
+        Ok(Self {
+            _owner: owner,
+            dir,
+            path,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -120,23 +147,158 @@ impl PcmFile {
     }
 }
 
+/// Create `owner.lock` in a new PCM dir, lock it, then write the marker. A
+/// sweep that takes the lock but finds no marker yet (the owner is between
+/// creating and locking the file) leaves the dir alone.
+fn lock_pcm_owner(dir: &Path) -> std::io::Result<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(dir.join(PCM_OWNER_FILE))?;
+    fs2::FileExt::lock_exclusive(&file)?;
+    writeln!(file, "{PCM_OWNER_MARKER} pid={}", std::process::id())?;
+    file.flush()?;
+    Ok(file)
+}
+
 /// Outcome of [`sweep_stale_pcm_dirs`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PcmSweep {
     /// Dirs of dead owners that were removed.
     pub removed: usize,
-    /// Dirs whose owner is alive.
+    /// Dirs whose owner is alive (its lock is held).
     pub kept: usize,
 }
 
-/// Remove PCM temp dirs in `parent` whose owning process is gone (#366; not
-/// implemented yet).
-pub fn sweep_stale_pcm_dirs(_parent: &Path) -> std::io::Result<PcmSweep> {
-    Ok(PcmSweep::default())
+fn is_pcm_rand(rand: &str) -> bool {
+    rand.len() == PCM_DIR_RAND_LEN && rand.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
-/// [`sweep_stale_pcm_dirs`] on a background thread (not implemented yet).
-pub fn sweep_stale_pcm_dirs_in_background(_parent: PathBuf) {}
+/// `Some(true)` when the dir's owner is provably gone: its owner file is a
+/// regular file carrying the marker and its lock can be taken. `Some(false)`
+/// while the lock is held. `None` when it cannot tell (no owner file, as in
+/// dirs from before #366, or an owner still setting up).
+fn pcm_owner_is_dead(dir: &Path) -> Option<bool> {
+    let owner = dir.join(PCM_OWNER_FILE);
+    if !std::fs::symlink_metadata(&owner).is_ok_and(|m| m.is_file()) {
+        return None;
+    }
+    let file = std::fs::File::open(&owner).ok()?;
+    if fs2::FileExt::try_lock_exclusive(&file).is_err() {
+        return Some(false);
+    }
+    let mut marker = String::new();
+    (&file)
+        .take(PCM_OWNER_MARKER.len() as u64)
+        .read_to_string(&mut marker)
+        .ok()?;
+    // Dropping `file` releases the lock; nothing can own the dir again.
+    (marker == PCM_OWNER_MARKER).then_some(true)
+}
+
+/// Remove `dir` (already renamed to the dead prefix). Never follows symlinks.
+fn remove_dead_pcm_dir(dir: &Path) -> bool {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            tracing::warn!(error_kind = ?e.kind(), "could not remove a stale PCM temp dir");
+            false
+        }
+    }
+}
+
+/// Remove PCM temp dirs in `parent` (not below it) that belong to no live
+/// process, typically audio left behind by an app or CLI that was killed.
+///
+/// Only real directories (never symlinks) named exactly like a PCM dir are
+/// considered, and only those whose owner lock can be taken, so a dir of a
+/// running app or CLI (or of this process) is never touched. Logs counts only.
+pub fn sweep_stale_pcm_dirs(parent: &Path) -> std::io::Result<PcmSweep> {
+    let mut sweep = PcmSweep::default();
+    for entry in std::fs::read_dir(parent)? {
+        let Ok(entry) = entry else { continue };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let path = entry.path();
+        // `symlink_metadata` does not follow a symlink, which is then skipped.
+        if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        if let Some(rand) = name.strip_prefix(PCM_DEAD_PREFIX) {
+            // An earlier sweep proved the owner dead but did not finish.
+            if is_pcm_rand(rand) && remove_dead_pcm_dir(&path) {
+                sweep.removed += 1;
+            }
+            continue;
+        }
+        let Some(rand) = name.strip_prefix(PCM_DIR_PREFIX).filter(|r| is_pcm_rand(r)) else {
+            continue;
+        };
+        match pcm_owner_is_dead(&path) {
+            Some(false) => sweep.kept += 1,
+            None => {}
+            Some(true) => {
+                // Rename first (atomic, never follows a symlink): a concurrent
+                // sweep then skips it, and an interrupted removal is retried.
+                let dead = parent.join(format!("{PCM_DEAD_PREFIX}{rand}"));
+                match std::fs::rename(&path, &dead) {
+                    Ok(()) => {
+                        if remove_dead_pcm_dir(&dead) {
+                            sweep.removed += 1;
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        tracing::warn!(error_kind = ?e.kind(), "could not remove a stale PCM temp dir")
+                    }
+                }
+            }
+        }
+    }
+    if sweep.removed > 0 {
+        tracing::info!(
+            removed = sweep.removed,
+            kept = sweep.kept,
+            "removed PCM temp dirs left behind by processes that ended without cleanup"
+        );
+    }
+    Ok(sweep)
+}
+
+/// Run [`sweep_stale_pcm_dirs`] for `parent` on a background thread, at most
+/// once per process and directory.
+pub fn sweep_stale_pcm_dirs_in_background(parent: PathBuf) {
+    // Consistent after any panic: the critical section is one `Vec` lookup and push.
+    static SWEPT: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    {
+        let mut swept = lock_or_recover(&SWEPT, "engine_host.pcm_sweep");
+        if swept.contains(&parent) {
+            return;
+        }
+        swept.push(parent.clone());
+    }
+    let spawned = std::thread::Builder::new()
+        .name("engine-host-pcm-sweep".into())
+        .spawn(move || {
+            if let Err(e) = sweep_stale_pcm_dirs(&parent) {
+                tracing::warn!(error_kind = ?e.kind(), "could not sweep stale PCM temp dirs");
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "could not start the PCM temp dir sweep");
+    }
+}
+
+/// Startup sweep of the system temp dir, where PCM dirs live unless a client
+/// sets [`super::EngineHostConfig::temp_dir`]. Background, once per process.
+pub fn sweep_stale_pcm_dirs_at_startup() {
+    sweep_stale_pcm_dirs_in_background(std::env::temp_dir());
+}
 
 /// Progress callback: `(merged_windows, total_windows)`.
 pub type ProgressFn<'a> = &'a mut dyn FnMut(usize, usize);
@@ -353,5 +515,58 @@ fn finish(
         tokens,
         windows,
         audio_s: n_samples as f64 / f64::from(sr),
+    }
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+
+    fn pcm_dir(parent: &Path, rand: &str) -> PathBuf {
+        let dir = parent.join(format!("{PCM_DIR_PREFIX}{rand}"));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join(PCM_AUDIO_FILE), b"pcm").unwrap();
+        dir
+    }
+
+    /// Dirs the sweep cannot prove dead stay; an interrupted removal is finished.
+    #[test]
+    fn sweep_keeps_unprovable_dirs_and_finishes_interrupted_removals() {
+        let parent = tempfile::tempdir().unwrap();
+        // Owner between creating and locking its owner file: no marker yet.
+        let setting_up = pcm_dir(parent.path(), "SettingUp123");
+        std::fs::write(setting_up.join(PCM_OWNER_FILE), b"").unwrap();
+        // Name not in the exact format (11 random characters).
+        let short = pcm_dir(parent.path(), "Short123456");
+        std::fs::write(short.join(PCM_OWNER_FILE), PCM_OWNER_MARKER).unwrap();
+        // Dead owner (marker, nobody holds the lock), and an earlier sweep's leftover.
+        let dead = pcm_dir(parent.path(), "DeadOwner123");
+        std::fs::write(dead.join(PCM_OWNER_FILE), PCM_OWNER_MARKER).unwrap();
+        let leftover = parent.path().join(format!("{PCM_DEAD_PREFIX}Leftover1234"));
+        std::fs::create_dir(&leftover).unwrap();
+        std::fs::write(leftover.join(PCM_AUDIO_FILE), b"pcm").unwrap();
+        // A live dir of this process.
+        let live = PcmFile::write(&[0.0; 16], Some(parent.path())).unwrap();
+
+        let sweep = sweep_stale_pcm_dirs(parent.path()).unwrap();
+        assert_eq!(
+            sweep,
+            PcmSweep {
+                removed: 2,
+                kept: 1
+            }
+        );
+        assert!(!dead.exists() && !leftover.exists());
+        assert!(setting_up.join(PCM_AUDIO_FILE).is_file());
+        assert!(short.join(PCM_AUDIO_FILE).is_file());
+        assert!(live.path().is_file());
+        let names: Vec<_> = std::fs::read_dir(parent.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n.starts_with(PCM_DEAD_PREFIX)),
+            "{names:?}"
+        );
     }
 }
