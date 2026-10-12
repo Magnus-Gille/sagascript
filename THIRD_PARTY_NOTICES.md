@@ -179,7 +179,6 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | getrandom | 0.4.1 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-random/getrandom) |
 | glob | 0.3.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/glob) |
 | global-hotkey | 0.8.0 | Apache-2.0 OR MIT | [upstream](https://github.com/tauri-apps/global-hotkey) |
-| h2 | 0.4.13 | MIT | [upstream](https://github.com/hyperium/h2) |
 | half | 2.7.1 | MIT OR Apache-2.0 | [upstream](https://github.com/VoidStarKat/half-rs) |
 | hashbrown | 0.12.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/hashbrown) |
 | hashbrown | 0.16.1 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/hashbrown) |
@@ -350,7 +349,6 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | regex | 1.12.3 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
 | regex-automata | 0.4.14 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
 | regex-syntax | 0.8.9 | MIT OR Apache-2.0 | [upstream](https://github.com/rust-lang/regex) |
-| reqwest | 0.12.28 | MIT OR Apache-2.0 | [upstream](https://github.com/seanmonstar/reqwest) |
 | reqwest | 0.13.2 | MIT OR Apache-2.0 | [upstream](https://github.com/seanmonstar/reqwest) |
 | rfd | 0.16.0 | MIT | [upstream](https://github.com/PolyMeilex/rfd) |
 | ring | 0.17.14 | Apache-2.0 AND ISC | [upstream](https://github.com/briansmith/ring) |
@@ -364,7 +362,6 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | rustls-pki-types | 1.14.0 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/pki-types) |
 | rustls-platform-verifier | 0.6.2 | MIT OR Apache-2.0 | [upstream](https://github.com/rustls/rustls-platform-verifier) |
 | rustls-webpki | 0.103.9 | ISC | [upstream](https://github.com/rustls/webpki) |
-| ryu | 1.0.23 | Apache-2.0 OR BSL-1.0 | [upstream](https://github.com/dtolnay/ryu) |
 | same-file | 1.0.6 | Unlicense/MIT | [upstream](https://github.com/BurntSushi/same-file) |
 | schemars | 0.8.22 | MIT | [upstream](https://github.com/GREsau/schemars) |
 | schemars | 0.9.0 | MIT | [upstream](https://github.com/GREsau/schemars) |
@@ -387,7 +384,6 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | serde_json | 1.0.151 | MIT OR Apache-2.0 | [upstream](https://github.com/serde-rs/json) |
 | serde_repr | 0.1.20 | MIT OR Apache-2.0 | [upstream](https://github.com/dtolnay/serde-repr) |
 | serde_spanned | 1.0.4 | MIT OR Apache-2.0 | [upstream](https://github.com/toml-rs/toml) |
-| serde_urlencoded | 0.7.1 | MIT/Apache-2.0 | [upstream](https://github.com/nox/serde_urlencoded) |
 | serde_with | 3.16.1 | MIT OR Apache-2.0 | [upstream](https://github.com/jonasbb/serde_with/) |
 | serde_with_macros | 3.16.1 | MIT OR Apache-2.0 | [upstream](https://github.com/jonasbb/serde_with/) |
 | serialize-to-javascript | 0.1.2 | MIT OR Apache-2.0 | [upstream](https://github.com/chippers/serialize-to-javascript) |
@@ -5902,34 +5898,6 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
-### 54987d63f266
-
-Components: Rust reqwest@0.12.28
-
-Source filenames: LICENSE-MIT
-
-~~~~text
-Copyright (c) 2016-2025 Sean McArthur
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-~~~~
-
 ### 5662394bebb1
 
 Components: Rust bumpalo@3.20.1
@@ -6309,7 +6277,7 @@ Apache License
 
 ### 5c3866f31ed2
 
-Components: Rust reqwest@0.12.28, Rust reqwest@0.13.2
+Components: Rust reqwest@0.13.2
 
 Source filenames: LICENSE-APACHE
 
@@ -10091,7 +10059,7 @@ SOFTWARE.
 
 ### 85ad950cce87
 
-Components: Rust anyhow@1.0.101, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.180, Rust libc@0.2.189, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust ryu@1.0.23, Rust semver@1.0.27, Rust serde-untagged@0.1.9, Rust serde@1.0.228, Rust serde@1.0.229, Rust serde_core@1.0.228, Rust serde_core@1.0.229, Rust serde_derive@1.0.228, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.149, Rust serde_json@1.0.151, Rust serde_repr@0.1.20, Rust serde_urlencoded@0.7.1, Rust syn@2.0.116, Rust syn@3.0.6, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.18, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.18, Rust thiserror@2.0.21, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
+Components: Rust anyhow@1.0.101, Rust dtoa@1.0.11, Rust dyn-clone@1.0.20, Rust erased-serde@0.4.9, Rust itoa@1.0.17, Rust itoa@1.0.18, Rust libc@0.2.180, Rust libc@0.2.189, Rust mach2@0.4.3, Rust osakit@0.3.1, Rust prettyplease@0.2.37, Rust proc-macro2@1.0.106, Rust proc-macro2@1.0.107, Rust quote@1.0.44, Rust quote@1.0.47, Rust ref-cast-impl@1.0.25, Rust ref-cast@1.0.25, Rust rustc-hash@2.1.1, Rust semver@1.0.27, Rust serde-untagged@0.1.9, Rust serde@1.0.228, Rust serde@1.0.229, Rust serde_core@1.0.228, Rust serde_core@1.0.229, Rust serde_derive@1.0.228, Rust serde_derive@1.0.229, Rust serde_derive_internals@0.29.1, Rust serde_json@1.0.149, Rust serde_json@1.0.151, Rust serde_repr@0.1.20, Rust syn@2.0.116, Rust syn@3.0.6, Rust thiserror-impl@1.0.69, Rust thiserror-impl@2.0.18, Rust thiserror-impl@2.0.21, Rust thiserror@1.0.69, Rust thiserror@2.0.18, Rust thiserror@2.0.21, Rust typeid@1.0.3, Rust unicode-ident@1.0.24, Rust unicode-ident@1.0.26, Rust utf-8@0.7.6, Rust utf8-zero@0.8.1, Rust utf8parse@0.2.2
 
 Source filenames: LICENSE-APACHE
 
@@ -13462,38 +13430,6 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ~~~~
 
-### 8d8291caf1ce
-
-Components: Rust ryu@1.0.23
-
-Source filenames: LICENSE-BOOST
-
-~~~~text
-Boost Software License - Version 1.0 - August 17th, 2003
-
-Permission is hereby granted, free of charge, to any person or organization
-obtaining a copy of the software and accompanying documentation covered by
-this license (the "Software") to use, reproduce, display, distribute,
-execute, and transmit the Software, and to prepare derivative works of the
-Software, and to permit third-parties to whom the Software is furnished to
-do so, all subject to the following:
-
-The copyright notices in the Software and this entire statement, including
-the above license grant, this restriction and the following disclaimer,
-must be included in all copies of the Software, in whole or in part, and
-all derivative works of the Software, unless such copies or derivative
-works are solely in the form of machine-executable object code generated by
-a source language processor.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
-SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
-FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-~~~~
-
 ### 8fd8980cab89
 
 Components: Rust strsim@0.11.1
@@ -16472,40 +16408,6 @@ Apache License
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-~~~~
-
-### b5dae9532426
-
-Components: Rust serde_urlencoded@0.7.1
-
-Source filenames: LICENSE-MIT
-
-~~~~text
-Copyright (c) 2016 Anthony Ramine
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### b7f455413bfe
@@ -21113,40 +21015,6 @@ Source filenames: LICENSE-MIT
 
 ~~~~text
 Copyright (c) 2017 http-rs authors
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-~~~~
-
-### f5352eaa5597
-
-Components: Rust h2@0.4.13
-
-Source filenames: LICENSE
-
-~~~~text
-Copyright (c) 2017 h2 authors
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
