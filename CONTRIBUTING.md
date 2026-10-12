@@ -149,6 +149,38 @@ feature gate, the lean-CLI checks code that compiles only with default features,
 - **Svelte 5:** Use runes (`$state`, `$effect`), not legacy stores.
 - **No hardcoded secrets** -- ever.
 
+### Clippy policy lints
+
+The clippy gate above (`-D warnings`) uses clippy's default lints. On top of it, CI counts a
+stricter set of policy lints in production code and fails when any count rises
+([#356](https://github.com/Magnus-Gille/sagascript/issues/356)): `unwrap_used`, `expect_used`,
+`panic`, `await_holding_lock`, `too_many_lines` (over 150 lines), `cognitive_complexity`
+(over 30), `dbg_macro`, `print_stdout` and `print_stderr`. They are not in
+`[workspace.lints]`, because the existing findings would fail the `-D warnings` gate.
+
+- **Check:** `node scripts/clippy-policy.mjs` from the repo root (CI: test-linux). It runs
+  clippy with only these lints on the whole workspace and on the batch-only CLI
+  (`-p sagascript-cli --no-default-features`), prints a lint by crate table (baseline, now,
+  delta) and exits non-zero if a count is above `src-tauri/clippy-policy-baseline.json`,
+  listing where that lint currently fires in that crate.
+- **What counts:** the lib and bin targets of the workspace crates; not tests, examples,
+  benches or build scripts. Each source location counts once. Only the platform it runs on is
+  measured, so code behind `cfg(target_os = "macos")` or `cfg(target_os = "windows")` is not
+  counted. `src-tauri/clippy.toml` sets the size thresholds and lets tests unwrap, expect,
+  panic and print.
+- **New code:** return or handle the error (`?`, `map_err`, a fallback) instead of `unwrap`
+  or `expect`, and split long functions. If an `expect` guards a real invariant, mark it
+  `#[expect(clippy::expect_used, reason = "...")]`; reviewers treat the reason like code.
+  The CLI's user-facing output will get a scoped allow for the print lints
+  ([#364](https://github.com/Magnus-Gille/sagascript/issues/364)).
+- **Lowering the baseline:** after removing findings, run
+  `node scripts/clippy-policy.mjs --update` and commit the baseline in the same PR. `--update`
+  refuses to raise a count; `--update --allow-increase` does, and the PR must say why.
+- **Zero means deny:** when a crate reaches zero for a lint, add the lint to the
+  `#![deny(...)]` list in its crate roots so the regular gate enforces it on every platform
+  (`sagascript-engine-protocol` denies all of them). Zero is measured on Linux only, so the
+  macOS and Windows clippy jobs confirm a new deny.
+
 ### CLI-first design rule
 
 Every user-facing feature must have a CLI equivalent. The GUI is a convenience layer on top of CLI commands. When adding a new feature, implement the CLI subcommand first (or alongside the GUI). The CLI commands in `src-tauri/crates/sagascript-cli/src/` are the source of truth for what the app can do.
