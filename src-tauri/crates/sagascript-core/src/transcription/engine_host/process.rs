@@ -185,6 +185,14 @@ impl HostProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // The ONNX Runtime host is a console-subsystem program: without this
+        // flag Windows opens a console window for it next to the GUI app.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
         for (k, v) in env {
             cmd.env(k, v);
         }
