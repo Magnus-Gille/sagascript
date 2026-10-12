@@ -22,6 +22,10 @@ const ALLOWLIST = [
   { run: "npm ci", reason: "installs dependencies; verify never installs (its preflight names `npm ci`)" },
   { run: "npx playwright install chromium", reason: "installs a browser; the browser check's preflight names it" },
   {
+    run: "cargo install --locked cargo-deny --version 0.20.2",
+    reason: "installs a tool; the deny check's preflight names this command",
+  },
+  {
     run: "npm run build",
     reason: "builds dist/, a prerequisite: verify's preflight asks for it before the checks that compile the app crate",
   },

@@ -33,6 +33,12 @@ const PLATFORM_NAMES = { darwin: "macOS", linux: "Linux", win32: "Windows" };
 const step = (run, cwd, extra = {}) => ({ run, cwd, ...extra });
 const budgetMs = (check) => check.timeoutMs ?? check.timeoutMinutes * MINUTE;
 const ci = (run, cwd) => ({ run, cwd });
+// The cargo-deny release CI installs (ci.yml, test-linux), and the ORT host
+// run, which may only silence policy entries the main workspace alone uses.
+export const CARGO_DENY_VERSION = "0.20.2";
+const ORT_DENY =
+  "cargo deny --locked --manifest-path engine-host/ort/Cargo.toml --workspace check " +
+  "-A license-not-encountered -A license-exception-not-encountered -A unmatched-source";
 const nodeTests = (group) =>
   step(`npm run test:${group}`, undefined, { argv: ["node", "scripts/run-frontend-tests.mjs", "--group", group] });
 
@@ -220,6 +226,34 @@ export const CHECKS = [
     timeoutMinutes: 5,
     ci: [ci("cargo tree -p sagascript-cli --no-default-features -e normal", "src-tauri")],
     lanes: ["test-linux"],
+  },
+  // Dependency policy (#355). Both fetch advisory data over the network.
+  {
+    id: "deny",
+    area: "deps",
+    title: "Rust dependency policy: advisories, licenses, bans, sources (cargo-deny, src-tauri/deny.toml)",
+    steps: [
+      step("cargo deny --locked --workspace check", "src-tauri"),
+      step(ORT_DENY, "src-tauri"),
+    ],
+    sets: ["default"],
+    platforms: ALL,
+    requires: ["rust", "cargo-deny"],
+    timeoutMinutes: 10,
+    ci: [ci("cargo deny --locked --workspace check", "src-tauri"), ci(ORT_DENY, "src-tauri")],
+    lanes: ["test-linux"],
+  },
+  {
+    id: "npm-audit",
+    area: "deps",
+    title: "npm advisories in the root package-lock.json (high and critical)",
+    steps: [step("npm audit --audit-level=high")],
+    sets: ["default"],
+    platforms: ALL,
+    requires: [],
+    timeoutMinutes: 5,
+    ci: [ci("npm audit --audit-level=high")],
+    lanes: ["test-macos"],
   },
   {
     id: "core-clippy",
@@ -628,6 +662,17 @@ function probeSwift(ctx) {
   return { ok: true };
 }
 
+function probeCargoDeny(ctx) {
+  const fix = `cargo install --locked cargo-deny --version ${CARGO_DENY_VERSION}`;
+  const version = quiet("cargo", ["deny", "--version"], { cwd: join(ctx.root, "src-tauri") });
+  const found = /cargo-deny (\S+)/.exec(version.stdout)?.[1];
+  if (!version.ok || !found) return { ok: false, missing: `cargo-deny ${CARGO_DENY_VERSION}`, fix };
+  if (found !== CARGO_DENY_VERSION) {
+    return { ok: false, missing: `cargo-deny ${CARGO_DENY_VERSION} as in CI (found ${found})`, fix: `${fix} --force` };
+  }
+  return { ok: true };
+}
+
 function probePlaywrightChromium(ctx) {
   const fix = "npx playwright install chromium";
   const directory = findPackageDirectory(ctx.root, "playwright");
@@ -645,6 +690,7 @@ export const PREREQUISITES = {
   "msrv-toolchain": { label: "MSRV toolchain", probe: probeMsrvToolchain },
   "linux-libs": { label: "Linux system libraries", probe: probeLinuxLibs },
   "frontend-dist": { label: "built frontend (dist/)", probe: probeFrontendDist },
+  "cargo-deny": { label: "cargo-deny", probe: probeCargoDeny },
   python: { label: "Python 3", probe: probePython },
   "python-eval-packages": { label: "Python evaluation packages", probe: probePythonEvalPackages },
   swift: { label: "Swift toolchain", probe: probeSwift },

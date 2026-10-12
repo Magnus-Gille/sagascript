@@ -85,6 +85,16 @@ test("test-linux gates both Cargo workspaces on cargo-deny before compiling", ()
   assert.ok(main < names.indexOf("Cargo check (GUI app)"), "the policy must fail before any compilation");
 });
 
+test("npm run verify runs the same cargo-deny release CI installs", async () => {
+  const { CARGO_DENY_VERSION } = await import("./verify.mjs");
+  assert.ok(
+    steps("test-linux").some((step) =>
+      step.commands.includes(`cargo install --locked cargo-deny --version ${CARGO_DENY_VERSION}`),
+    ),
+    `verify's preflight asks for cargo-deny ${CARGO_DENY_VERSION}; test-linux must install the same release`,
+  );
+});
+
 test("test-macos gates the npm lockfile on npm audit", () => {
   const names = steps("test-macos").map((step) => step.name);
   const audit = blockingStep("test-macos", "npm audit --audit-level=high", undefined);
