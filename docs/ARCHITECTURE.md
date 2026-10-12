@@ -275,7 +275,7 @@ sequenceDiagram
 
 | Lock | Where | Notes |
 |---|---|---|
-| `SharedController = Mutex<AppController>` | `commands.rs`, managed in `main()` | Taken from commands, the hotkey handler, the watcher and the updater. Audio start/stop and log writes happen under it. Never hold it across `.await` or inference; `SharedWhisper` lives outside it for that reason. |
+| `SharedController = Mutex<AppController>` | `commands.rs`, managed in `main()` | Taken from commands, the hotkey handler, the watcher, the updater and meeting jobs, always via `lock_controller`. Audio start/stop and log writes happen under it. Never hold it across `.await` or inference; `SharedWhisper` lives outside it for that reason. |
 | `<settings>.json.lock` | `with_settings_lock` in `settings/store.rs` | Exclusive file lock shared by app and CLI processes, held for read-merge-write only. |
 | `HotkeyHealth { state, transition }` | `hotkey/health.rs` | `transition` serializes OS (un)registration between commands and the watcher; kept out of the controller on purpose (see its doc comment). |
 | `UpdateActivity`, `UpdatePreparation` | `update_activity.rs` | Work leases and the exclusive update permit. |
@@ -314,10 +314,14 @@ of propagating: `sagascript_core::sync::lock_or_recover` (and `commands::lock_co
 the last panic message (`install_panic_recorder`). Where a panic can leave state stale, recovery
 restores a safe state first (`lock_or_recover_with`): the engine-host client forgets `loaded` so
 the next request re-validates the host, and the whisper warm state is discarded. The whisper
-`load_lock` deliberately still fails closed with its restart message. `Drop` impls always use
-the tolerant helpers. The settings watcher runs each event under `catch_unwind`; its health is
-`HotkeyStatus.settings_watcher`. Meeting paths (`meeting_jobs.rs`, `meeting_media.rs`) still map
-poison to an error message.
+`load_lock` deliberately still fails closed with its restart message; Whisper dictation holds it
+across inference, so a panic mid-inference leaves that backend unavailable until restart. Every
+`SharedController` lock, including those in `meeting_jobs.rs`,
+`meeting_reprocessing_commands.rs` and the pre-warm `try_lock`, goes through `lock_controller`
+(or recovers `TryLockError::Poisoned`). `Drop` impls always use the tolerant helpers. The
+settings watcher runs each event under `catch_unwind`; its health is
+`HotkeyStatus.settings_watcher`. The meeting-job slot and the meeting audio attachment
+(`meeting_media.rs`) are separate mutexes that still fail closed with an error message.
 
 ## 4. Feature flags
 

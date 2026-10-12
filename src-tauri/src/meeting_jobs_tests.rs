@@ -344,3 +344,35 @@ fn write_new_export_leaves_no_partial_file_for_invalid_destinations() {
     assert!(destination_directory.is_dir());
     assert!(staging_files(scratch.path()).is_empty());
 }
+
+/// #359: a panic elsewhere that poisoned the controller must not keep a
+/// finished meeting job's lease (state stays Transcribing, blocking dictation
+/// and further imports until the app restarts).
+#[test]
+fn finished_meeting_releases_its_lease_from_a_poisoned_controller() {
+    let controller: SharedController = std::sync::Mutex::new(
+        crate::app_controller::AppController::new(sagascript_core::settings::Settings::default()),
+    );
+    assert!(crate::commands::lock_controller(&controller).begin_meeting_job("meeting-1"));
+    std::thread::scope(|scope| {
+        let panicked = scope
+            .spawn(|| {
+                let _guard = controller.lock().unwrap();
+                panic!("injected panic while holding the controller (#359)");
+            })
+            .join();
+        assert!(panicked.is_err());
+    });
+    assert!(controller.is_poisoned());
+
+    assert!(
+        release_meeting_lease(&controller, "meeting-1", true),
+        "the worker must release its lease despite the poison"
+    );
+    let mut ctrl = crate::commands::lock_controller(&controller);
+    assert!(ctrl.is_update_result_pending("meeting:meeting-1"));
+    assert!(
+        ctrl.begin_meeting_job("meeting-2"),
+        "the next import can start"
+    );
+}

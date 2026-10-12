@@ -853,13 +853,20 @@ fn prewarm_engine_for(
     use sagascript_core::transcription::pianissimo_backend::{warm_in_background, warm_on};
     let ctrl: tauri::State<'_, SharedController> = app.state();
     // Wake callbacks run on the main thread inside an ObjC block: never block
-    // on the controller there. Skip this warm when it is busy.
-    let Ok(c) = ctrl.try_lock() else {
-        tracing::debug!(
-            reason = trigger.reason(),
-            "pre-warm skipped: controller busy"
-        );
-        return;
+    // on the controller there. Skip this warm when it is busy; a poisoned
+    // controller is recovered like everywhere else (ADR 0005), not "busy".
+    let c = match ctrl.try_lock() {
+        Ok(c) => c,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            sagascript_core::sync::recover_poisoned(&ctrl, commands::CONTROLLER_LOCK, poisoned)
+        }
+        Err(std::sync::TryLockError::WouldBlock) => {
+            tracing::debug!(
+                reason = trigger.reason(),
+                "pre-warm skipped: controller busy"
+            );
+            return;
+        }
     };
     warm_on(c.settings(), trigger, None, warm_in_background);
 }
@@ -2817,6 +2824,9 @@ fn start_settings_watcher(app: tauri::AppHandle) {
             let validation_error = new_settings.validate_shortcut_configuration().err();
             if new_shortcuts != old_shortcuts || validation_error.is_some() {
                 info!("Settings watcher: hotkey profiles changed");
+                // A panic between unregister and register must not leave
+                // health claiming the old shortcuts are still registered.
+                let _registration_change = health.registration_change();
                 let old_operational = health.operational_hotkey();
                 let unregister_error = if validation_error.is_none() {
                     match &old_operational {
@@ -2999,16 +3009,26 @@ mod tests {
         run_settings_watcher_loop(1..=3, watcher, |event| {
             running_while_handling.push(watcher.status().running);
             if event == 2 {
-                panic!("injected settings reload panic (#359)");
+                let _registration_change = health.registration_change();
+                panic!("injected panic between unregister and register (#359)");
             }
             handled.push(event);
         });
 
         assert_eq!(handled, [1, 3], "the event after the panic was handled");
         assert_eq!(running_while_handling, [true, true, true]);
-        let status = health.status().settings_watcher;
-        assert_eq!(status.recovered_panics, 1);
-        assert!(!status.running, "the loop ended with its event source");
+        let status = health.status();
+        assert_eq!(status.settings_watcher.recovered_panics, 1);
+        assert!(
+            !status.settings_watcher.running,
+            "the loop ended with its event source"
+        );
+        assert_eq!(
+            health.operational_hotkey(),
+            hotkey::OperationalHotkey::Unknown,
+            "an interrupted re-registration is not reported as still registered"
+        );
+        assert!(!status.ok);
     }
 
     #[test]

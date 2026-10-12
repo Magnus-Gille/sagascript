@@ -460,14 +460,17 @@ mod glossary_options_tests {
 /// cpal::Stream is !Send and we need sync access from Tauri commands
 pub type SharedController = Mutex<AppController>;
 
+/// Lock name for the shared controller in poison-recovery logs.
+pub const CONTROLLER_LOCK: &str = "app_controller";
+
 /// Lock the shared controller, recovering it if a panic poisoned the mutex
 /// (ADR 0005, #359). Every command and hotkey path re-reads `state()` and the
 /// settings it needs, and interrupted work is ended through the existing
 /// stop/cancel/error paths, so continuing with the recovered controller is
 /// safe; propagating the poison would panic every later command and hotkey
-/// press until the app restarts. Never lock it with `lock().unwrap()`.
+/// press until the app restarts. Never unwrap the plain `lock()` result.
 pub fn lock_controller(controller: &SharedController) -> MutexGuard<'_, AppController> {
-    sagascript_core::sync::lock_or_recover(controller, "app_controller")
+    sagascript_core::sync::lock_or_recover(controller, CONTROLLER_LOCK)
 }
 
 /// Shared whisper backend — separate from AppController to avoid holding

@@ -3927,4 +3927,40 @@ mod warm_state_tests {
         assert!(backend.state.lock().unwrap().is_none());
         assert_eq!(backend.loaded_model(), None);
     }
+
+    /// Pins the documented fail-closed exception (ADR 0005): dictation holds
+    /// `load_lock` across inference, so a panic mid-inference poisons it as
+    /// well as `state`. Every later dictation then returns the actionable
+    /// restart error; it neither panics nor resumes the interrupted runtime.
+    #[test]
+    fn panic_mid_dictation_keeps_failing_closed_with_the_restart_error() {
+        let backend = Arc::new(WhisperBackend::new());
+        let holder = Arc::clone(&backend);
+        let panicked = thread::spawn(move || {
+            let _load = holder.load_lock.lock().unwrap();
+            let _state = holder.state.lock().unwrap();
+            panic!("injected panic mid-inference (#359)");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert!(backend.load_lock.is_poisoned() && backend.state.is_poisoned());
+
+        for _ in 0..2 {
+            let mut timings = DictationTimings::default();
+            let result = backend.transcribe_dictation(
+                WhisperModel::Base,
+                &[0.0; 8_000],
+                Language::English,
+                &TranscribeOptions::default(),
+                &mut timings,
+            );
+            assert!(
+                matches!(result, Err(DictationError::TranscriptionFailed(ref message))
+                    if message.contains("restart Sagascript")),
+                "expected the fail-closed restart error, got {result:?}"
+            );
+            assert!(!timings.inference_started);
+        }
+        assert!(backend.load_lock.is_poisoned(), "fail-closed is sticky");
+    }
 }

@@ -1,11 +1,11 @@
 //! Poison-tolerant locking (docs/adr/0005-mutex-poison-policy.md, #359).
 //!
 //! A `std::sync::Mutex` is poisoned when a thread panics while holding its
-//! guard. Propagating that with `lock().unwrap()` turns one panic into a panic
-//! in every later caller (and an abort when the caller is a `Drop` running
-//! during unwinding). Sagascript recovers instead: the data is taken from the
-//! poisoned lock, the poison flag is cleared so each incident is reported once,
-//! and an `error!` names the lock and the panic that poisoned it.
+//! guard. Unwrapping the `lock()` result propagates that: one panic becomes a
+//! panic in every later caller (and an abort when the caller is a `Drop`
+//! running during unwinding). Sagascript recovers instead: the data is taken
+//! from the poisoned lock, the poison flag is cleared so each incident is
+//! reported once, and an `error!` names the lock and the panic behind it.
 //!
 //! Recovering is only correct when the protected data is still consistent or
 //! the caller re-validates it. Modules whose invariants a panic could break

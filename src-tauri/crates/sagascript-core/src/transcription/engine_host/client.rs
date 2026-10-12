@@ -434,7 +434,7 @@ impl EngineHostClient {
                 return false;
             }
         }
-        let Ok(_g) = inner.lifecycle.try_lock() else {
+        let Some(_g) = inner.try_lock_lifecycle() else {
             return false;
         };
         {
@@ -863,6 +863,18 @@ impl Inner {
         guard
     }
 
+    /// `lifecycle.try_lock()` for opportunistic passes (idle supervision,
+    /// memory pressure): `None` only while another lifecycle step runs. A
+    /// poisoned lock is recovered (and the host re-validated), not mistaken
+    /// for "busy", or these passes would never run again.
+    fn try_lock_lifecycle(&self) -> Option<MutexGuard<'_, ()>> {
+        match self.lifecycle.try_lock() {
+            Ok(guard) => Some(guard),
+            Err(TryLockError::Poisoned(poisoned)) => Some(self.recover_lifecycle(poisoned)),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
+
     /// `lifecycle.lock()`, but a cancelled caller stops waiting for it.
     fn lock_lifecycle(&self, cancel: Option<&CancelToken>) -> Result<MutexGuard<'_, ()>> {
         let Some(cancel) = cancel else {
@@ -1229,7 +1241,7 @@ impl Inner {
         if !unload && !shutdown {
             return;
         }
-        let Ok(_g) = self.lifecycle.try_lock() else {
+        let Some(_g) = self.try_lock_lifecycle() else {
             return;
         };
         // Re-check under the lifecycle lock: a request may have slipped in.
@@ -1390,6 +1402,55 @@ mod poison_tests {
             matches!(started, Err(EngineHostError::Spawn { .. })),
             "expected the missing host to fail to spawn, got {:?}",
             started.err()
+        );
+    }
+
+    /// A client whose idle passes act immediately, with a live stand-in host
+    /// (`/bin/cat` never answers, so requests to it time out quickly).
+    #[cfg(unix)]
+    fn idle_client_with_live_host() -> EngineHostClient {
+        let mut cfg = EngineHostConfig::new(
+            "/nonexistent/sagascript-engine-host",
+            LoadSpec {
+                model_dir: PathBuf::from("/nonexistent"),
+                model_id: "test".into(),
+                compute_units: "cpu".into(),
+            },
+        );
+        cfg.idle_unload = Some(Duration::ZERO);
+        cfg.idle_shutdown = Some(Duration::ZERO);
+        cfg.supervisor_tick = Duration::from_secs(3600); // passes run only when the test asks
+        cfg.timeouts.unload = Duration::from_millis(50);
+        cfg.timeouts.shutdown_grace = Duration::from_millis(50);
+        let client = EngineHostClient::new(cfg);
+        let host = HostProcess::spawn(std::path::Path::new("/bin/cat"), &[], &[]).unwrap();
+        client.inner.lock_state().proc = Some(Arc::new(host));
+        client
+    }
+
+    /// The idle supervisor and the memory-pressure unload take the lifecycle
+    /// lock with `try_lock`; a poisoned lock must be recovered there, not
+    /// treated as "busy" forever (no idle unload or shutdown ever again).
+    #[cfg(unix)]
+    #[test]
+    fn idle_and_memory_pressure_passes_recover_a_poisoned_lifecycle_lock() {
+        let client = idle_client_with_live_host();
+        client.inner.lock_state().loaded = true;
+        poison(&client.inner.lifecycle);
+
+        // Recovery re-validates the host, so this pass finds nothing loaded…
+        assert!(!client.unload_if_idle());
+        assert!(!client.inner.lifecycle.is_poisoned());
+        // …and the next one (after a reload marked the model loaded) unloads.
+        client.inner.lock_state().loaded = true;
+        assert!(client.unload_if_idle(), "memory-pressure unload runs again");
+
+        poison(&client.inner.lifecycle);
+        client.run_idle_check_now();
+        assert!(!client.inner.lifecycle.is_poisoned());
+        assert!(
+            !client.snapshot().running,
+            "the idle pass shut the host down despite the poisoned lock"
         );
     }
 }

@@ -132,6 +132,13 @@ impl HotkeyHealth {
         &self.settings_watcher
     }
 
+    /// Guard for an unregister/register sequence. If the thread unwinds from
+    /// a panic before the guard is dropped normally, the OS registration is
+    /// recorded as unknown (#359), as after an unregister error.
+    pub fn registration_change(&self) -> RegistrationChange<'_> {
+        RegistrationChange { health: self }
+    }
+
     /// Serialize process-global unregister/register transactions from the GUI
     /// command and the external-settings watcher.
     pub fn transition_guard(&self) -> MutexGuard<'_, ()> {
@@ -200,6 +207,31 @@ impl HotkeyHealth {
             changed: status != prev,
             status,
         }
+    }
+}
+
+/// See [`HotkeyHealth::registration_change`].
+pub struct RegistrationChange<'a> {
+    health: &'a HotkeyHealth,
+}
+
+impl Drop for RegistrationChange<'_> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        // Runs while unwinding: only poison-tolerant locking, no panics.
+        let shortcut = lock_or_recover(&self.health.state, STATE_LOCK)
+            .shortcut
+            .clone();
+        self.health.record(
+            &shortcut,
+            Some(
+                "A hotkey change was interrupted by an internal error; restart Sagascript to re-register shortcuts"
+                    .to_string(),
+            ),
+            OperationalHotkey::Unknown,
+        );
     }
 }
 
@@ -403,6 +435,28 @@ mod tests {
             "watcher health is not a registration change"
         );
         assert_eq!(again.status.settings_watcher, watcher);
+    }
+
+    #[test]
+    fn registration_change_marks_registration_unknown_only_when_unwinding() {
+        let h = HotkeyHealth::new("Control+Shift+Space");
+        h.record(
+            "Control+Shift+Space",
+            None,
+            OperationalHotkey::registered("Control+Shift+Space"),
+        );
+
+        drop(h.registration_change());
+        assert!(h.status().ok, "a completed change leaves health alone");
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _change = h.registration_change();
+            panic!("injected panic between unregister and register (#359)");
+        }));
+        assert!(unwound.is_err());
+        assert_eq!(h.operational_hotkey(), OperationalHotkey::Unknown);
+        assert!(h.is_failed());
+        assert_eq!(h.status().shortcut, "Control+Shift+Space");
     }
 
     /// The settings watcher holds `transition_guard()` while it re-registers
