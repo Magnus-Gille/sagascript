@@ -74,6 +74,7 @@ Also run these when your change touches the area:
 | Feature-gated core code (`record`, `diarization`) | `cargo test -p sagascript-core`, `cargo test -p sagascript-core --features record`, `cargo test -p sagascript-core --features diarization`, `cargo clippy -p sagascript-core --all-targets -- -D warnings` |
 | Swift Core ML engine host | `./scripts/build-engine-host.sh`, then `swift test` in `src-tauri/engine-host/coreml` |
 | ORT engine host | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `src-tauri/engine-host/ort/` (CI: test-linux) |
+| Dependency bumps or newer language features (MSRV, CI: msrv-linux) | `rustup toolchain install 1.88`, then from `src-tauri/`: `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` and `RUSTUP_TOOLCHAIN=1.88 cargo check -p sagascript-cli --no-default-features --locked`; in `src-tauri/engine-host/ort/`: `RUSTUP_TOOLCHAIN=1.88 cargo check --locked` |
 | Python evaluation tooling | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; for `scripts/diarization_sv`, see `.github/workflows/ci.yml` |
 | Code-health tooling | `npm run test:code-health` |
 | Release metadata, licenses | `npm run release:check`, `npm run licenses:check` |

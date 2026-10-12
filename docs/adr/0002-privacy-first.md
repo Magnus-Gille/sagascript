@@ -31,6 +31,11 @@ Evidence in the code:
   device names" ([configuration.md](../configuration.md)); the controller test
   `terminal_session_payload_is_consumed_once_without_transcript_contents` checks the log
   payload.
+- File paths are handled case by case today, with no written rule: the engine-host client
+  logs no paths because "the persistent log must not carry the user's home directory"
+  (`start_and_handshake` in `engine_host/client.rs`), while settings warnings in
+  `settings/store.rs` log the settings file path and the watcher start message in `main.rs`
+  logs its directory.
 
 ## Decision
 

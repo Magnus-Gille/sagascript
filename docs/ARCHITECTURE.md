@@ -39,7 +39,7 @@ App crate modules (`src-tauri/src/`):
 | `app_controller.rs` | `AppController`: dictation state (`AppState`), audio capture, in-memory `Settings` copy, session logging. |
 | `events.rs` | Event-name constants (`events::event::*`). |
 | `hotkey/` | Shortcut registration, `HotkeyHealth`, bare F-key monitor `macos_bare.rs`. |
-| `paste/` | `PasteService` (clipboard + simulated paste: enigo on macOS/Windows, `xdotool` on Linux) and completion wait. |
+| `paste/` | `PasteService` (clipboard + simulated paste: enigo on macOS/Windows, `xdotool` on Linux). `paste/completion.rs` (completion wait) is mounted from `main.rs` via `#[path]` as `crate::paste_completion`. |
 | `platform/`, `overlay.rs`, `focus_diag.rs`, `logging/` | Per-OS helpers, recording indicator window, focus diagnostics, app log file. |
 | `plain_file_jobs.rs`, `meeting_*.rs` | File-transcription and meeting job slots, cancel, deadlines. |
 | `updates.rs`, `update_activity.rs`, `update_recovery.rs` | Update checks, work/exclusivity accounting, recovery drafts. |
@@ -65,6 +65,8 @@ for tests.
   that compiles the app crate (check, test, clippy), or it fails at compile time.
 - `swift test` needs `Sources/EngineHostCore/BuildInfo.swift`, which is gitignored and written
   by `scripts/build-engine-host.sh` (CI runs `scripts/stage-engine-host.sh` first).
+- `rust-toolchain.toml` pins the development compiler; `rust-version` in `src-tauri/Cargo.toml`
+  is the minimum supported version (MSRV), checked by CI's `msrv-linux` job.
 - Build identity comes from `src-tauri/build.rs` (`GIT_HASH`, `BUILD_DATE`, overridable with
   `SAGASCRIPT_GIT_HASH` / `SAGASCRIPT_BUILD_DATE`) and feeds the tray `BUILD_IDENTITY`, the
   `get_build_info` command and the engine-host handshake.
@@ -77,16 +79,18 @@ for tests.
 sequenceDiagram
     autonumber
     participant OS as OS hotkey
+    participant HK as Hotkey callback
     participant Main as Main thread
     participant Ctrl as AppController mutex
     participant Task as Async task
     participant Work as Blocking worker
     participant UI as Webviews and tray
-    OS->>Main: key down (global-shortcut handler or macos_bare monitor)
-    Main->>Ctrl: handle_hotkey_down_for_binding starts audio capture
-    Main->>UI: emit state-changed recording, overlay::show, tray status
-    OS->>Main: key up (push-to-talk) or second press (toggle)
-    Main->>Task: stop_recording_and_transcribe spawns a task
+    Note over OS,HK: callback thread depends on the platform, see below
+    OS->>HK: key down (global-shortcut handler or macos_bare monitor)
+    HK->>Ctrl: handle_hotkey_down_for_binding starts audio capture
+    HK->>UI: emit state-changed recording, overlay::show, tray status
+    OS->>HK: key up (push-to-talk) or second press (toggle)
+    HK->>Task: stop_recording_and_transcribe spawns a task
     Task->>Ctrl: stop_recording_generation returns 16 kHz samples
     Task->>Main: dispatch_to_main updates tray to transcribing
     Task->>Work: spawn_blocking LiveDictationBackend::transcribe
@@ -108,12 +112,17 @@ sequenceDiagram
   (`app_controller.rs`) over `sagascript_core::audio::AudioCaptureService`; engine choice in
   `crates/sagascript-core/src/transcription/live_dictation.rs` (Whisper via
   `whisper_backend.rs`, Pianissimo via `pianissimo_backend.rs` and the engine host, 2.4).
-- Main-thread hops: the hotkey handler runs on the UI thread and must not block (the 300 ms
-  `MIN_RECORDING_MS` top-up is a `tokio::time::sleep` inside the task); tray and overlay
-  updates from the task go through `dispatch_to_main`; on macOS `restore_target_before_paste`
-  waits on the blocking pool and sends each AppKit call to the main thread with a 500 ms
-  timeout, then the paste closure runs via `run_on_main_thread`. On Windows and Linux the
-  paste closure runs on `spawn_blocking`. See [ADR 0003](adr/0003-main-thread-native-apis.md).
+- Callback thread: `tauri-plugin-global-shortcut` calls `handle_hotkey_event` inline from
+  `global-hotkey`. On macOS that is the main thread (Carbon handler; the `macos_bare` NSEvent
+  monitors too); on Windows key-down arrives on the main thread and key-up on a spawned
+  `GetAsyncKeyState` polling thread; on Linux (X11) both arrive on the library's event thread,
+  so the direct `overlay::show`, `select_profile_menu` and `update_tray_status` calls there
+  break [ADR 0003](adr/0003-main-thread-native-apis.md) (known violation).
+- Main-thread hops: the handler must not block (the 300 ms `MIN_RECORDING_MS` top-up is a
+  `tokio::time::sleep` inside the task); tray and overlay updates from the task go through
+  `dispatch_to_main`; on macOS `restore_target_before_paste` waits on the blocking pool and
+  sends each AppKit call to the main thread with a 500 ms timeout, then the paste closure runs
+  via `run_on_main_thread`. On Windows and Linux the paste closure runs on `spawn_blocking`.
 - The Dictate tab's test recording (`commands::stop_and_transcribe`) repeats the
   timeout/abort transaction with its own `TRANSCRIPTION_TIMEOUT_SECS` / `ABORT_GRACE_SECS`.
   **Planned:** [#344](https://github.com/Magnus-Gille/sagascript/issues/344) makes the
@@ -243,7 +252,8 @@ sequenceDiagram
   `client.rs` handshake/lifecycle/restart budget, `pipeline.rs` long-audio windows) and
   `pianissimo_backend.rs` (`resolve_host`, `runtime_supported_on_this_os`, `config_for_host`,
   `shared_client`, `warm_in_background`, `shutdown_shared_client`). The client API is
-  blocking; each host has a stdout reader and a stderr drain thread, each client a supervisor.
+  blocking; each host has a stdout reader and a stderr drain thread, and a client gets a
+  supervisor thread only when an idle policy is set.
 - Settings: `engine_idle_unload_minutes` → `idle_policy` (unload after N minutes, exit after
   2N, 0 = never); `engine_prewarm` (`off`, `on_app_start`, `on_key_down`). Hosts are
   resolved from the bundle (`Resources/EngineHost/sagascript-engine-host`,
@@ -257,10 +267,10 @@ sequenceDiagram
 
 | Thread | What runs there |
 |---|---|
-| Main (UI) thread | Tauri setup, tray/window/overlay APIs, global-shortcut and `macos_bare` callbacks, `run_on_main_thread` closures (macOS paste, AppKit focus calls), sync (non-`async`) Tauri commands. |
+| Main (UI) thread | Tauri setup, tray/window/overlay APIs, global-shortcut callbacks on macOS (and key-down on Windows), `macos_bare` callbacks, `run_on_main_thread` closures (macOS paste, AppKit focus calls), sync (non-`async`) Tauri commands. |
 | Tokio runtime | `async` Tauri commands, tasks from `tauri::async_runtime::spawn` (dictation stop pipeline, update flow). |
 | Blocking pool | `spawn_blocking`: inference, paste on Windows/Linux, focus-restore wait, recovery file I/O. |
-| Dedicated threads | Settings watcher, startup model warm-up, engine-host reader/stderr/supervisor threads, cpal audio callback. |
+| Dedicated threads | Settings watcher, startup model warm-up, engine-host reader/stderr/supervisor threads, audio capture worker and cpal callback, `global-hotkey` event thread (Linux) and key-up polling thread (Windows). |
 | CLI | `sagascript_cli::run` builds its own Tokio runtime; inference commands run on a worker thread (16 MiB stack on Windows, `run_inference_command`). |
 
 | Lock | Where | Notes |
@@ -272,23 +282,30 @@ sequenceDiagram
 | Tray state (`SharedUpdateMenuState`, `SharedStatusItem`, `SharedProfileMenuState`) | `main.rs` | Short critical sections. |
 | Job slots (`MeetingJobs`, `SharedMeetingAudio`, `PlainFileJobs` fields) | `meeting_jobs.rs`, `meeting_media.rs`, `plain_file_jobs.rs` | One active job each. |
 | `LoggingService` (`log_file`, `dictation_session_id`) | `logging/service.rs` | Taken inside controller methods. |
-| `WhisperBackend` (`state`, `context`, `loaded_runtime`, `cached_runtime`, `load_lock`) | `transcription/whisper_backend.rs` | `state` is taken with a bounded wait (`lock_state_bounded`, returns `ModelBusy`). |
+| `WhisperBackend` (`load_lock`, `state`, `context`, `loaded_runtime`, `cached_runtime`) | `transcription/whisper_backend.rs` | `load_lock` and `state` are taken with a bounded wait (`lock_load_bounded`, `lock_state_bounded`, `WARM_STATE_GRACE`), returning `ModelBusy` instead of blocking. |
 | Engine host (`lifecycle`, `state`; process `routing`, `stdin`, `child`) | `engine_host/client.rs`, `process.rs` | `lifecycle` serializes start/load/unload/shutdown. |
 | Pianissimo `shared_slot` and load-state statics | `pianissimo_backend.rs` | Process-global client. |
+| Others | `AudioCaptureService` buffers (`audio/capture.rs`), `GLOBAL_DICTATION` (`logging/service.rs`), the download `verification_cache` (`download.rs`), `LiveDictationBackend.active_job`, `PianissimoBackend.active`, `HostProcess` `stderr_tail`/`reader`, the CLI `Canceller` (`cancel.rs`) | Leaf locks. The capture buffers are taken under `SharedController` by start/stop and without it by the capture worker and cpal callback. |
 
 Observed acquisition order (outer → inner). Nothing enforces it; keep new code consistent:
 
 1. `HotkeyHealth.transition` is held for a whole hotkey transaction (`apply_hotkey_change`,
    settings watcher). Inside it the controller lock and the settings file lock are each taken
-   and released in turn, never nested.
+   and released in turn, never nested. The configuration lease (`acquire_hotkey_configuration`)
+   is a flag, not a lock: `apply_hotkey_change` takes `transition` then the lease, the watcher
+   the lease then `transition`. No deadlock (the lease is try-acquire), but a GUI hotkey change
+   that races a watcher reload fails with "Finish or cancel the active dictation…" while idle.
 2. Setters take the settings file lock first, release it, then take the controller lock.
 3. `MeetingJobs` slot → `SharedController` (`begin_meeting_file`).
 4. `SharedController` → `UpdateActivity` state (work leases dropped in controller methods)
    and → `LoggingService` locks.
+   - (4b) `SharedController` → `HotkeyHealth.state`: `handle_hotkey_event` reads
+     `health.operational_hotkey()` under the controller guard; no reverse order exists.
 5. `PlainFileJobs.active` → `pending_cancels`.
 6. Engine host `lifecycle` → `state`.
-7. Whisper `state` → `context` → `loaded_runtime` → `cached_runtime` (comment in
-   `WhisperBackend::load_model_inner`).
+7. Whisper `load_lock` → `state` → `context` → `loaded_runtime` → `cached_runtime` (comment in
+   `WhisperBackend::load_model_inner`). Both outer locks are try-locks with a grace period, so
+   an inversion surfaces as `ModelBusy`, not as a deadlock.
 
 **Poison handling today (as-is, not a policy):** the app crate locks with `.lock().unwrap()`
 almost everywhere; `meeting_jobs.rs` and `meeting_media.rs` map poison to an error message;
@@ -327,6 +344,7 @@ contains no cpal/ALSA.
 | Rust unit, core/CLI/protocol | inline; `sagascript-cli/src/meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | per-crate steps; protocol and the release guard in test-linux |
 | Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
 | ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy) |
+| MSRV | whole workspace, lean CLI, ORT host | `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` (see CONTRIBUTING.md) | msrv-linux |
 | Swift | `src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/` | `scripts/build-engine-host.sh`, then `swift test` | test-macos |
 | Node | `scripts/test-*.mjs` (`node:test`): frontend logic plus CI/release contract checks | `npm run test:frontend` | test-macos, test-windows |
 | Code health | `scripts/test-code-health-*.mjs`, `tests/scripts/*.mjs` | `npm run test:code-health` | `code-health.yml` |
@@ -338,11 +356,14 @@ contains no cpal/ALSA.
 
 CI (`.github/workflows/ci.yml`) splits cargo per crate and feature set: test-linux runs both
 `cargo fmt --check` gates, app `check`/`clippy`, the CLI with and without default features,
-core with no features and with `record`, and the no-ALSA tree check; test-macos runs app
-`check`/`test`/`clippy`, core with no features and with `diarization`, the CLI both ways,
-Swift tests and the frontend suites; test-windows runs app, core and CLI tests and clippy.
-`cargo test --workspace` runs in `windows-package.yml` (PRs touching `src/`, `src-tauri/`,
-`scripts/`, package files) and `release-quality-gate.yml`. A PR that only touches
+core with no features and with `record`, the protocol crate, ORT host test/clippy, the
+release-profile guard and the no-ALSA tree check; msrv-linux runs `cargo check --workspace
+--locked`, the lean CLI and the ORT host on the `rust-version` toolchain (1.88), and
+check-linux requires it; test-macos runs app `check`/`test`/`clippy`, core with no features
+and with `diarization`, the CLI both ways, Swift tests and the frontend suites; test-windows
+runs the Node suite and app, core and CLI tests and clippy. `cargo test --workspace` runs in
+`windows-package.yml` (on PRs touching `src/`, `src-tauri/`, `scripts/`, package files,
+`.gitattributes` or the workflow itself) and `release-quality-gate.yml`. A PR that only touches
 `README.md`, `docs/release-readiness.md` or `docs/research/**/*.md` skips the native lanes
 (`scripts/ci-docs-scope.mjs`). The local command list is in
 [CONTRIBUTING.md](../CONTRIBUTING.md#running-tests). **Planned:**

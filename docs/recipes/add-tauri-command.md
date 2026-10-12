@@ -33,6 +33,9 @@ pub async fn get_example_info(
 
 - `async fn` runs on the Tokio runtime. A command without `async` runs on the main thread,
   so only use a sync command for trivial work (`complete_update_preparation`).
+  `#[tauri::command(async)]` on a plain `fn` moves it off the main thread, but into a task on
+  the same Tokio runtime (tauri 2.10 `ipc/mod.rs`, `respond_async_serialized`), not onto the
+  blocking pool; long blocking work still belongs in `spawn_blocking`.
 - Async commands that borrow (`State<'_, T>`) must return `Result`. Errors are `String` today
   and the UI shows them. Planned: [#360](https://github.com/Magnus-Gille/sagascript/issues/360)
   introduces a typed `CommandError` (ADR 0006).

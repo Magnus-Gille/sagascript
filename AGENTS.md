@@ -44,13 +44,7 @@ Decisions and their reasons: `docs/adr/`.
 - `src-tauri/crates/sagascript-core/src/`: transcription, audio, settings, diarization, engine-host client.
 - `src-tauri/crates/sagascript-cli/src/`: canonical CLI commands.
 - `src-tauri/crates/sagascript-engine-protocol/`: engine-host JSON Lines wire types.
-- `src-tauri/engine-host/coreml/`: Swift Core ML engine host (`swift test` needs `scripts/build-engine-host.sh` first).
-- `src-tauri/engine-host/ort/`: ONNX Runtime engine host, a separate Cargo workspace.
-- `src-tauri/engine-host/test-vectors/`: vectors shared by both engine hosts' tests.
-- Meetings (import, review, reprocessing): `meeting*.rs` in the app, core and CLI crates.
-- `scripts/`: build/release/CI helpers, Node tests `test-*.mjs`, Playwright `qa-*.mjs`, Python eval tooling.
-- `tests/`: code-health contract tests; `tooling/code-health/`: pinned tools for that workflow.
-- `site/`: separate marketing site; not built by CI.
+- `src-tauri/engine-host/`: `coreml/` Swift host, `ort/` ONNX host (separate Cargo workspace), shared `test-vectors/`.
 - The app crate and CLI crate both emit a binary named `sagascript`; `target/release/sagascript`
   is whichever one was built most recently.
 

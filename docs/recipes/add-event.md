@@ -51,6 +51,9 @@ asynchronously, so a component can unmount before the unlisten function arrives;
 The pattern in `src/lib/Overlay.svelte`:
 
 ```ts
+import { onMount } from "svelte";
+import { listen } from "@tauri-apps/api/event";
+
 onMount(() => {
   let disposed = false;
   const stops: Array<() => void> = [];
@@ -76,7 +79,7 @@ typed event catalogue and contract test.
 |---|---|
 | Rust | The `events.rs` tests (name format, uniqueness). Unit-test the code that builds the payload. |
 | Frontend logic | `scripts/test-*.mjs` for the module that interprets the payload (see `scripts/test-overlay-state.mjs`). |
-| Browser | Add a helper to `window.qa` in `scripts/fixtures/transcription-browser-mock.js` that calls `emit("example-progress", {...})` (like `dictationResult`), and drive it from a `scripts/qa-*.mjs` flow. |
+| Browser | Add a helper to `window.qa` in `scripts/fixtures/transcription-browser-mock.js` that calls `emit("example-progress", {...})` (like `dictationResult`), and drive it from a `scripts/qa-*.mjs` flow. Emits reach `listen` only because the mock installs `mockIPC(..., { shouldMockEvents: true })`; keep that option. |
 
 No regex tests over `.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)).
 

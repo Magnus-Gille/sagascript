@@ -18,8 +18,10 @@ Known problems on this branch:
 
 - Twelve `scripts/test-*.mjs` files read `.svelte` source as text and assert with regexes
   (for example `test-settings-layout.mjs`, `test-settings-recovery.mjs`,
-  `test-language-glossary.mjs`); some cut functions out of `Settings.svelte` and run them in
-  `vm`. The audit counted 13–14 such files and 869 regex assertions. They pass when the
+  `test-language-glossary.mjs`); three cut functions out of a component and run them in
+  `node:vm` (`test-dictionary-explicit-save.mjs` and `test-language-switch-recovery.mjs` from
+  `Settings.svelte`, `test-meeting-reprocessing-integration.mjs` from
+  `FileTranscription.svelte`). The audit counted 13–14 such files and 869 regex assertions. They pass when the
   component is wrong and fail on pure renames.
 - The live dictation lifecycle has no fake-driven test; it is covered by helpers and CI smoke
   only (#344).
