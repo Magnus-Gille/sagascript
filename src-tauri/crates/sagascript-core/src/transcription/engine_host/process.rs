@@ -648,7 +648,7 @@ mod tests {
     #[cfg(unix)]
     impl Read for FailingReader {
         fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-            let _ = self.0.lock().unwrap().recv();
+            let _ = self.0.lock().expect("release channel").recv();
             Err(std::io::Error::other("injected stdout failure"))
         }
     }
@@ -684,7 +684,7 @@ mod tests {
         }
         assert!(!proc.is_alive());
         // Reaped: the exit status is already collected and it was killed.
-        let status = proc.child.lock().unwrap().try_wait().unwrap();
+        let status = proc.child.lock().expect("child").try_wait().unwrap();
         assert!(status.is_some_and(|s| !s.success()), "{status:?}");
         // New requests fail the same way.
         match proc.send(&RequestOp::Ping) {
@@ -699,7 +699,7 @@ mod tests {
         std::thread::scope(|scope| {
             let panicked = scope
                 .spawn(|| {
-                    let _guard = mutex.lock().unwrap();
+                    let _guard = mutex.lock().expect("not poisoned yet");
                     panic!("injected panic while holding the lock (#359)");
                 })
                 .join();

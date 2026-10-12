@@ -4,7 +4,7 @@
 use super::pipeline::CancelToken;
 use super::process::{crashed, Delivery, HostProcess, Pending};
 use super::{EngineHostError, Result};
-use crate::sync::{lock_or_recover_with, recover_poisoned};
+use crate::sync::{lock_or_recover, lock_or_recover_with, recover_poisoned};
 use sagascript_engine_protocol::{
     parse_result, Capabilities, ClientInfo, ErrorCode, HelloResult, HostInfo, LoadResult, Priority,
     RequestOp, StatusResult, TranscribeWindowResult, WindowTimings, WireToken, PROTOCOL_VERSION,
@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 
 const STATE_LOCK: &str = "engine_host_client.state";
 const LIFECYCLE_LOCK: &str = "engine_host_client.lifecycle";
+/// Recovered as-is: every critical section is one `Option` assignment or clone.
+const BOOST_LOCK: &str = "engine_host_client.boost";
 
 /// Identity announced in `hello`; compared with the host's build for a warning.
 #[derive(Debug, Clone)]
@@ -383,7 +385,7 @@ impl EngineHostClient {
 
     /// Set (or clear) the context-biasing dictionary for later jobs.
     pub fn set_boost(&self, boost: Option<BoostSpec>) {
-        *self.inner.boost.lock().unwrap_or_else(|e| e.into_inner()) = boost.map(Arc::new);
+        *lock_or_recover(&self.inner.boost, BOOST_LOCK) = boost.map(Arc::new);
     }
 
     /// What happened to the dictionary on the windows sent so far.
@@ -397,11 +399,7 @@ impl EngineHostClient {
     }
 
     pub fn boost(&self) -> Option<Arc<BoostSpec>> {
-        self.inner
-            .boost
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        lock_or_recover(&self.inner.boost, BOOST_LOCK).clone()
     }
 
     /// Start the host and load the model now (pre-warm). Returns its capabilities.
@@ -1513,7 +1511,7 @@ mod poison_tests {
         std::thread::scope(|scope| {
             let panicked = scope
                 .spawn(|| {
-                    let _guard = mutex.lock().unwrap();
+                    let _guard = mutex.lock().expect("not poisoned yet");
                     panic!("injected panic while holding the lock (#359)");
                 })
                 .join();
@@ -1542,14 +1540,14 @@ mod poison_tests {
     #[test]
     fn poisoned_state_is_recovered_and_forces_host_revalidation() {
         let client = client();
-        client.inner.state.lock().unwrap().loaded = true;
+        client.inner.state.lock().expect("not poisoned yet").loaded = true;
         poison(&client.inner.state);
 
         let snapshot = client.snapshot();
         assert!(!snapshot.running);
         assert!(!client.inner.state.is_poisoned());
         assert!(
-            !client.inner.state.lock().unwrap().loaded,
+            !client.inner.state.lock().expect("recovered").loaded,
             "recovery must force the next request through the readiness check"
         );
 
@@ -1558,7 +1556,7 @@ mod poison_tests {
         poison(&client.inner.state);
         let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(reservation)));
         assert!(dropped.is_ok(), "Reservation::drop must not panic");
-        assert_eq!(client.inner.state.lock().unwrap().active, 0);
+        assert_eq!(client.inner.state.lock().expect("recovered").active, 0);
     }
 
     #[test]
