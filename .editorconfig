@@ -16,13 +16,17 @@ indent_size = 4
 [*.{ts,js,mjs,cjs,svelte,json,css,html,yml,yaml}]
 indent_size = 2
 
+[*.plist]
+indent_style = tab
+
 [*.md]
 # Two trailing spaces are a Markdown hard line break.
 trim_trailing_whitespace = false
 
-# Reference data, golden fixtures and generated files are byte-for-byte inputs:
-# never let an editor normalise them.
-[{docs/benchmarks/data/**,test-audio/**,**/testdata/**,**/fixtures/**,**/test-vectors/**,src-tauri/gen/**}]
+# Reference data, golden fixtures and generated files (schemas, icons,
+# THIRD_PARTY_NOTICES.md) are byte-for-byte inputs: never let an editor
+# normalise them.
+[{docs/benchmarks/data/**,test-audio/**,**/testdata/**,**/fixtures/**,**/test-vectors/**,src-tauri/gen/**,src-tauri/icons/**,THIRD_PARTY_NOTICES.md}]
 charset = unset
 end_of_line = unset
 insert_final_newline = unset

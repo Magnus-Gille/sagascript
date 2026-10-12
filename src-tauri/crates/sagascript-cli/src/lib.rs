@@ -3,6 +3,9 @@ pub mod benchmark_dictation;
 mod benchmark_quality;
 pub mod cancel;
 pub mod config;
+pub mod diarization;
+#[cfg(feature = "diarization")]
+mod diarization_cache;
 pub mod engine;
 pub mod glossary;
 pub mod latency;
@@ -19,9 +22,6 @@ pub mod speaker_args;
 // Live recording is optional (`record` feature, on by default) so a pure
 // batch-transcribe build (`--no-default-features`) carries no audio-capture
 // stack — on Linux, no cpal/ALSA.
-pub mod diarization;
-#[cfg(feature = "diarization")]
-mod diarization_cache;
 #[cfg(feature = "record")]
 pub mod record;
 pub mod transcribe;

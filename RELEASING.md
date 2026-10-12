@@ -63,7 +63,7 @@ keychain and set `APPLE_SIGNING_IDENTITY`. Set `APPLE_API_ISSUER`,
    `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, and
    `src-tauri/tauri.conf.json`.
 2. Run `npm run release:check`, `npm run licenses:check`, `npm run check`,
-   `cargo test --workspace`, and
+   `cargo fmt --all -- --check`, `cargo test --workspace`, and
    `cargo clippy --workspace --all-targets -- -D warnings`.
 3. Merge the release commit to `main`. Do **not** tag yet.
 4. **Prebuild (owner touchpoint 1: signing approval).** The push to `main` starts
