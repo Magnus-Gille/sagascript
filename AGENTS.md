@@ -54,8 +54,8 @@ Decisions and their reasons: `docs/adr/`.
 In a fresh worktree first run `npm ci && npm run build`: `dist/` is needed by every cargo
 command that compiles the app crate (`tauri::generate_context!`).
 
-`npm run verify` runs every local check for this OS and stops at the first failure
-(`--keep-going` reports all); `npm run verify:fast` is the inner loop (rustfmt, app clippy,
+`npm run verify` runs every default check for this OS (opt-in ones, such as browser and
+MSRV, only with `--only`) and stops at the first failure (`--keep-going` reports all); `npm run verify:fast` is the inner loop (rustfmt, app clippy,
 svelte-check, UI node tests); `--only <check|area>` focuses; `--list` prints the checks.
 `scripts/verify.mjs` defines them, CONTRIBUTING.md "Running tests" has the control matrix. Its
 preflight lists every missing prerequisite (including `dist/`) in one error and installs
