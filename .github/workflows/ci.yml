@@ -407,11 +407,14 @@ jobs:
           cache: npm
 
       # Same rust-cache scheme as the macOS job (#178); the shared key spans
-      # branches while rust-cache keeps OS/target entries separate.
+      # branches while rust-cache keeps OS/target entries separate. The
+      # standalone ORT engine host is its own Cargo workspace (#357).
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
+          workspaces: |
+            src-tauri
+            src-tauri/engine-host/ort
           shared-key: sagascript-ci
 
       - name: Install npm dependencies
@@ -508,6 +511,35 @@ jobs:
             exit 1
           fi
           echo "OK: no cpal/ALSA in batch-only tree"
+
+      # The Rust<->Swift engine-host wire format (#357). No CI lane runs
+      # `cargo test --workspace` and cargo never runs a dependency's tests, so
+      # these otherwise ran only in the release gate and windows-package.yml.
+      - name: Cargo test (sagascript-engine-protocol)
+        working-directory: src-tauri
+        run: cargo test -p sagascript-engine-protocol
+
+      # The ONNX Runtime engine host is a separate Cargo workspace (#357), so
+      # the workspace steps above never reach it; windows-package.yml only
+      # builds it. Its tests include the context-biasing parity vectors shared
+      # with the Swift host. ort's `load-dynamic` means neither step needs an
+      # ONNX Runtime binary. rustfmt is gated in "Check Rust formatting".
+      - name: Cargo test (ORT engine host)
+        working-directory: src-tauri/engine-host/ort
+        run: cargo test --locked
+
+      - name: Cargo clippy (ORT engine host)
+        working-directory: src-tauri/engine-host/ort
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # Release-profile guard (#357): `release_build_ignores_the_real_environment`
+      # proves a release build ignores SAGASCRIPT_ENGINE_HOST and
+      # SAGASCRIPT_PIANISSIMO_MODEL_DIR. It is compiled only without
+      # debug_assertions and the `dev-overrides` feature, so every debug
+      # `cargo test` above leaves it out.
+      - name: Cargo test (sagascript-core, release-profile dev-override guard)
+        working-directory: src-tauri
+        run: cargo test --release -p sagascript-core --lib dev_overrides
 
   # Minimum supported Rust version (#353). `rust-version` in
   # src-tauri/Cargo.toml (and engine-host/ort) is a promise to people building
@@ -645,6 +677,12 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # The whole Node test suite on a Windows checkout (#357), not only the
+      # build identity gates above (which stay first so they fail before any
+      # npm or Cargo work). Platform-only cases skip themselves.
+      - name: Test frontend suite
+        run: npm run test:frontend
+
       - name: Build frontend
         run: npm run build
 
@@ -768,7 +806,6 @@ jobs:
           & $env:BINARY completions powershell | Out-Null
 
       - name: Smoke test — download model and transcribe
-        continue-on-error: true  # Model download/GPU availability varies across CI runners
         run: |
           $env:BINARY = "src-tauri\target\release\sagascript.exe"
           & $env:BINARY download-model nb-whisper-tiny
@@ -777,7 +814,6 @@ jobs:
           if ($result -notmatch "(?i)stortinget") { throw "Expected 'stortinget' in output" }
 
       - name: Smoke test — transcribe with JSON output
-        continue-on-error: true  # Model download/GPU availability varies across CI runners
         shell: cmd
         run: |
           set BINARY=src-tauri\target\release\sagascript.exe

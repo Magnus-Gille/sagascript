@@ -199,15 +199,21 @@ for (const [platform, jobIds] of Object.entries({
   }
 }
 
-test("parallel lanes preserve blocking checks and existing Windows smoke exceptions", () => {
-  for (const jobId of ["test-macos", "test-windows", "build-macos"]) {
-    assert.doesNotMatch(jobBlock(jobId), /continue-on-error:/);
+// The Windows model smoke steps were the last non-blocking exception (#357):
+// they succeeded in every observed run, so a failure there must now fail CI.
+test("every CI lane is blocking: no job or step uses continue-on-error", () => {
+  const jobs = workflow.slice(workflow.indexOf("\njobs:\n"));
+  const jobIds = [...jobs.matchAll(/^  ([a-z][a-z0-9-]*):$/gm)].map((match) => match[1]);
+  for (const expected of ["test-macos", "build-macos", "test-linux", "msrv-linux", "test-windows", "build-windows"]) {
+    assert.ok(jobIds.includes(expected), `workflow must define ${expected}`);
   }
-  const windows = jobBlock("build-windows");
-  assert.equal((windows.match(/continue-on-error: true/g) ?? []).length, 2);
+  for (const jobId of jobIds) {
+    assert.doesNotMatch(jobBlock(jobId), /continue-on-error/, `${jobId} must not tolerate failures`);
+  }
+  assert.doesNotMatch(workflow, /continue-on-error/);
+  const windows = parseSteps(jobBlock("build-windows"));
   for (const name of ["Smoke test — download model and transcribe", "Smoke test — transcribe with JSON output"]) {
-    const step = windows.slice(windows.indexOf(`      - name: ${name}`)).split(/\n      - name:/)[0];
-    assert.match(step, /continue-on-error: true/);
+    assert.ok(windows.has(name), `build-windows must keep the blocking ${name} step`);
   }
 });
 
