@@ -1346,3 +1346,37 @@ GitHub-issues har skapats; inga ändringar pushade.
 
 **Nästa steg.** Fila T01–T07, T10, T13, T36 först (våg 0 + de P0 i våg 1), i den ordningen;
 de är oberoende av varandra utom att T01 bör mergas före allt annat Rust-arbete.
+
+---
+
+## 6. Syntes mot Codex-tickets (#340–#351) och filade issues
+
+Codex ("Astra") filade 2026-10-12 sprintplanen #351 med elva tickets K01–K11 (#340–#350) på
+samma revision. Alla elva håller vid kodkontroll; #340, #341 och #342 verifierades i koden
+(#340 reproducerades dessutom av Codex med CLI). Inget är fel. Planen saknar dock hela
+våg 0 (grindar), stabilitetsriskerna lås/`Drop` (#359) och engine-host-`Failed`/wedge (#366),
+samt testinfrastrukturen (#361) som dess egna acceptanskriterier förutsätter.
+
+Kommentarer postade på #340–#351 (synteskommentar på #351). Följande tickets ur detta dokument
+filades som issues; T05, T08, T11, T23 och T28 filades **inte** utan lades som kommentarer på
+motsvarande Codex-ticket.
+
+| Ticket | Issue | Ticket | Issue | Ticket | Issue |
+|---|---|---|---|---|---|
+| T01 | #352 | T14 | #362 | T27 | #374 |
+| T02 | #353 | T15 | #363 | T29 | #375 |
+| T03 | #354 | T16 | #364 | T30 | #376 |
+| T04 | #355 | T17 | #365 | T31 | #377 |
+| T05 | → #350 (K11) | T18 | #366 | T32 | #378 |
+| T06 | #356 | T19 | #367 | T33 | #379 |
+| T07 | #357 | T20 | #368 | T34 | #380 |
+| T08 | → #350 (K11) | T21 | #369 | T35 | #381 |
+| T09 | #358 | T22 | #370 | T36 | #382 |
+| T10 | #359 | T23 | → #343 (K04) | T37 | #383 |
+| T11 | → #347 (K08) | T24 | #371 | T38 | #384 |
+| T12 | #360 | T25 | #372 | | |
+| T13 | #361 | T26 | #373 | | |
+| | | T28 | → #344 (K05) | | |
+
+Överlapp: K01↔T17 · K02↔T13/T14 · K03↔T26/T27 · K04↔T23 · K05↔T28/T29 · K06↔T14/T33 ·
+K07↔T26 · K08↔T11/T12/T19 · K09/K10↔T19 · K11↔T05/T08/T36.
