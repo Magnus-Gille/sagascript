@@ -1,48 +1,53 @@
+import type { MeetingReview, MeetingSegment } from "./meeting-types";
+import type { MeetingReprocessingProposal, MigrationStep, ReprocessingPlan } from "./meeting-reprocessing-types";
+
+// The parts of a ProposalState / SelectedReprocessingPlan each check reads;
+// the full types satisfy them.
+type ProposalPreview = { preview: { steps: readonly Pick<MigrationStep, "status">[] } };
+type PlanContext = { plan: { context: Pick<ReprocessingPlan["context"], "previous_revision"> } };
+type ProposalBase = { proposal: { previous: Pick<MeetingReview, "revision"> } };
+type ProposalRevision = { proposal: Pick<MeetingReprocessingProposal, "revision"> };
+type CandidateSegment = Pick<MeetingSegment, "id" | "start" | "end" | "text">;
+
 /**
  * Return whether a proposal can be accepted.
  *
  * Automatic mappings intentionally leave their resolution entry null. The
  * preview status is the source of truth for both automatic and explicit
  * dispositions, and an empty correction list is already fully applied.
- *
- * @param {{ preview: { steps: Array<{ status: string }> } } | null} proposal
  */
-export function proposalIsFullyApplied(proposal) {
+export function proposalIsFullyApplied(proposal: ProposalPreview | null): boolean {
   return proposal !== null && proposal.preview.steps.every((step) => step.status === "applied");
 }
 
-/**
- * @param {{ plan: { context: { previous_revision: string } } } | null} selected
- * @param {string | null | undefined} currentReviewRevision
- */
-export function selectedPlanIsCurrent(selected, currentReviewRevision) {
+export function selectedPlanIsCurrent(
+  selected: PlanContext | null,
+  currentReviewRevision: string | null | undefined,
+): boolean {
   return selected !== null
     && typeof currentReviewRevision === "string"
     && selected.plan.context.previous_revision === currentReviewRevision;
 }
 
-/**
- * @param {{ proposal: { previous: { revision: string } } } | null} proposal
- * @param {string | null | undefined} currentReviewRevision
- */
-export function proposalIsCurrent(proposal, currentReviewRevision) {
+export function proposalIsCurrent(
+  proposal: ProposalBase | null,
+  currentReviewRevision: string | null | undefined,
+): boolean {
   return proposal !== null
     && typeof currentReviewRevision === "string"
     && proposal.proposal.previous.revision === currentReviewRevision;
 }
 
-/**
- * @param {{ proposal: { revision: string } } | null} proposal
- * @param {string | null} exportedRevision
- */
-export function proposalWasExported(proposal, exportedRevision) {
+export function proposalWasExported(
+  proposal: ProposalRevision | null,
+  exportedRevision: string | null,
+): boolean {
   return proposal !== null
     && exportedRevision !== null
     && proposal.proposal.revision === exportedRevision;
 }
 
-/** @param {number} seconds */
-function formatSegmentTimestamp(seconds) {
+function formatSegmentTimestamp(seconds: number): string {
   const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
   const minutes = Math.floor(safeSeconds / 60);
   const remainder = (safeSeconds % 60).toFixed(2).padStart(5, "0");
@@ -52,12 +57,12 @@ function formatSegmentTimestamp(seconds) {
 /**
  * Filter candidate segments by text, id, or formatted start/end time.
  * The selected ids are always retained so filtering never hides a draft target.
- *
- * @param {Array<{ id: string, start: number, end: number, text: string, speaker: string }>} segments
- * @param {string} query
- * @param {string[]} selectedIds
  */
-export function filterCandidateSegments(segments, query, selectedIds = []) {
+export function filterCandidateSegments<Segment extends CandidateSegment>(
+  segments: Segment[],
+  query: string,
+  selectedIds: readonly string[] = [],
+): Segment[] {
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return segments;
   const selected = new Set(selectedIds);

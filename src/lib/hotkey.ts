@@ -4,13 +4,8 @@
  * `key` is the layout-dependent value (`KeyboardEvent.key`); `code` is the
  * physical key (`KeyboardEvent.code`) and is consulted for keys whose `key`
  * value differs between keyboard layouts.
- *
- * @param {string} key
- * @param {string} [code]
- * @param {string|null} [platform]
- * @returns {string | null}
  */
-export function tauriKeyName(key, code = "", platform = null) {
+export function tauriKeyName(key: string, code = "", platform: string | null = null): string | null {
   if (["Meta", "Control", "Alt", "Shift"].includes(key)) return null;
 
   // The ISO section key (`§` left of `1` on Swedish, UK and other Apple ISO
@@ -32,8 +27,7 @@ export function tauriKeyName(key, code = "", platform = null) {
   if (/^[a-zA-Z0-9]$/.test(key)) return key.toUpperCase();
   if (key.startsWith("Arrow")) return key;
 
-  /** @type {Record<string, string>} */
-  const mapped = {
+  const mapped: Record<string, string> = {
     Tab: "Tab",
     Enter: "Enter",
     Backspace: "Backspace",
@@ -52,12 +46,8 @@ export function tauriKeyName(key, code = "", platform = null) {
  * Return whether a canonical key may be registered without modifiers.
  * Sagascript has a native macOS path for F13-F24 and the Windows backend
  * supports the same range; the locked Linux backend has no mapping beyond F12.
- *
- * @param {string} key
- * @param {string} platform
- * @returns {boolean}
  */
-export function canUseBareHotkey(key, platform) {
+export function canUseBareHotkey(key: string, platform: string): boolean {
   const match = /^F(\d{1,2})$/i.exec(key.trim());
   if (!match) return false;
 
@@ -66,11 +56,7 @@ export function canUseBareHotkey(key, platform) {
   return number >= 13 && number <= maximum;
 }
 
-/**
- * @param {string} platform
- * @returns {string | null}
- */
-export function supportedBareFunctionKeyRange(platform) {
+export function supportedBareFunctionKeyRange(platform: string): string | null {
   if (platform === "macos") return "F13–F24";
   if (platform === "windows") return "F13–F24";
   return null;
@@ -79,12 +65,8 @@ export function supportedBareFunctionKeyRange(platform) {
 /**
  * macOS maps bare F14/F15 to the screen-brightness keys, so they usually never
  * reach the app. Returns a hint for such a shortcut, otherwise null.
- *
- * @param {string} shortcut
- * @param {string | null | undefined} platform
- * @returns {string | null}
  */
-export function brightnessKeyHotkeyWarning(shortcut, platform) {
+export function brightnessKeyHotkeyWarning(shortcut: string, platform: string | null | undefined): string | null {
   if (platform !== "macos") return null;
   if (!/^F1[45]$/i.test(shortcut.trim())) return null;
   return "F14 and F15 control screen brightness on Macs and usually don't reach Sagascript. F13 and F16–F19 work.";
@@ -93,12 +75,8 @@ export function brightnessKeyHotkeyWarning(shortcut, platform) {
 /**
  * Human-readable label for keys whose Tauri name is not what is printed on
  * the keycap. On Apple ISO keyboards the section key is labelled `§`.
- *
- * @param {string} key
- * @param {string | null | undefined} platform
- * @returns {string}
  */
-export function hotkeyKeyLabel(key, platform) {
+export function hotkeyKeyLabel(key: string, platform: string | null | undefined): string {
   if (key === "IntlBackslash") return platform === "macos" ? "§" : "IntlBackslash";
   return key;
 }
@@ -106,12 +84,8 @@ export function hotkeyKeyLabel(key, platform) {
 /**
  * Format a persisted shortcut without treating one modifier token as a
  * substring of another (for example, `CommandOrControl`).
- *
- * @param {string} shortcut
- * @param {string | null | undefined} platform
- * @returns {string}
  */
-export function formatHotkeyDisplay(shortcut, platform) {
+export function formatHotkeyDisplay(shortcut: string, platform: string | null | undefined): string {
   const mac = platform === "macos";
   return shortcut
     .split("+")
