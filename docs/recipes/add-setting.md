@@ -45,7 +45,7 @@ CLI first ([ADR 0001](../adr/0001-cli-first.md)): every user setting gets a `con
 
 ## 3. App command: `src-tauri/src/commands.rs` and `src-tauri/src/main.rs`
 
-Copy `set_temperature_fallback`:
+Copy `set_temperature_fallback` (`commands.rs`):
 
 ```rust
 #[tauri::command]
@@ -56,19 +56,24 @@ pub async fn set_example_flag(
     let persisted = sagascript_core::settings::store::update(|settings| {
         settings.example_flag = enabled;
     })?;
-    controller.lock().unwrap().settings_mut().example_flag = persisted.example_flag;
+    let mut ctrl = controller.lock().unwrap();
+    ctrl.settings_mut().example_flag = persisted.example_flag;
     info!("Example flag: {enabled}");
     Ok(())
 }
 ```
 
+The guard is held only for the copy and dropped when the function returns; nothing after it
+awaits.
+
 - Persist first with `store::update` (`store::try_update` when validation can fail), then copy
   the persisted value into the controller. Never `store::save()` an in-memory clone; never hold
   the controller lock across the store call or an `.await`.
 - Side effects go after the lock is released (`set_show_overlay`, `set_vad_enabled`). The
-  watcher (`start_settings_watcher` in `main.rs`) copies CLI edits into the controller but does
-  not replay setter side effects: prefer reading the value at use time from `ctrl.settings()`,
-  or add the side effect to the watcher too.
+  watcher (`start_settings_watcher` in `main.rs`) reloads the **whole** `Settings` from disk
+  when the CLI edits the file, so a plain value read at use time from `ctrl.settings()` needs
+  nothing there. It does not replay setter side effects: if your setter has one (recreate a
+  window, download a model), add it to the watcher too.
 - Register `commands::set_example_flag` in `tauri::generate_handler![...]` in `main()`.
 - Setter logic goes in a plain function with a `#[cfg(test)]` test (`apply_language_selection`
   / `language_selection_tests`, `effective_auto_paste` / `auto_paste_tests`).
@@ -82,8 +87,10 @@ pub async fn set_example_flag(
 2. `Settings.svelte`: import the wrapper; add a handler next to `onTemperatureFallbackToggle`
    that calls `applySetting(() => setExampleFlag(next))` (it re-reads `getSettings()` and shows
    errors); copy the `.field-row` toggle markup of "Show recording overlay"
-   (`role="switch"`, `aria-checked`, `aria-label`) into the `{#if activeTab === "settings"}`
-   block, or into the `Advanced` `<details>` for tuning knobs. Use runes, not stores.
+   (`role="switch"`, `aria-checked`, `aria-label`, and the `hotkey-hint` line under it). Put it
+   next to related settings: dictation and paste behaviour lives in the Dictate tab (next to
+   the auto-paste toggle), general settings in `{#if activeTab === "settings"}`, tuning knobs
+   in the `Advanced` `<details>`. Use runes, not stores.
 3. `scripts/fixtures/transcription-browser-mock.js`: add the field to the object returned by
    `case "get_settings"`. Setter commands need no case (unknown commands return `null`).
 
@@ -99,24 +106,40 @@ pub async fn set_example_flag(
 
 ## 6. Verify, including CLI/GUI parity
 
+Run this as one shell session (the exported variable must reach every command):
+
 ```bash
-npm run build                                   # once; needed by the app crate
+npm ci && npm run build                         # fresh worktree: deps, then dist/ for the app crate
 cd src-tauri
+cargo fmt --all                                 # CI rejects unformatted code
 cargo test -p sagascript-core settings
 cargo test -p sagascript-cli config
+cargo test -p sagascript-cli config -- --list | grep example_flag   # your new test really ran
 cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings
+cargo test -p sagascript-cli --no-default-features
 export SAGASCRIPT_SETTINGS_PATH="$(mktemp -d)/sagascript-settings.json"   # never your real file
-cargo run -q -p sagascript-cli --no-default-features -- config set example_flag true
-cargo run -q -p sagascript-cli --no-default-features -- config get example_flag   # true
-cargo run -q -p sagascript-cli --no-default-features -- config reset example_flag
-grep example_flag "$SAGASCRIPT_SETTINGS_PATH"
-cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:frontend
+cli() { cargo run -q -p sagascript-cli --no-default-features -- "$@"; }
+cli config get example_flag                     # false (the default)
+cli config set example_flag true && cli config get example_flag   # true
+cli config set example_flag maybe; echo "exit $?"                 # rejected: exit 1
+cli config list | grep example_flag             # the cmd_list row
+cli config set --help | grep example_flag       # the help text
+cli config reset example_flag && grep example_flag "$SAGASCRIPT_SETTINGS_PATH"  # key stays, now false
+cd ..
+grep -n set_example_flag src-tauri/src/commands.rs src-tauri/src/main.rs src/lib/api.ts  # all three
+npx svelte-check --tsconfig ./tsconfig.json && npm run test:frontend
+npx playwright install chromium && npm run test:browser   # you touched Settings.svelte and the mock
 ```
+
+No test catches a missing `generate_handler!` entry or a mismatched `invoke` name/parameter
+(they fail only at runtime in the GUI), hence the three-way `grep`.
 
 Parity: with the same `SAGASCRIPT_SETTINGS_PATH` exported, run `cargo tauri dev`, toggle the
 setting in the UI and check the file holds what `config set` writes; then `config set` while
-the app runs and check the UI follows (watcher → `settings_reloaded`). Finish with
-[CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests). Planned:
+the app runs and check the UI follows (watcher → `settings_reloaded`). Without a desktop
+session (a headless agent), say so in the PR and leave this step to a reviewer with a Mac.
+Finish with [CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests). Planned:
 [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (automated CLI/app parity table,
 table-driven key registry), [#347](https://github.com/Magnus-Gille/sagascript/issues/347)
 (Rust/TypeScript `Settings` contract test).
