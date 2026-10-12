@@ -30,9 +30,16 @@ pub fn segment_word(word: &str, pieces: &HashMap<&str, u32>) -> Vec<Vec<u32>> {
     best[0] = Some(Vec::new());
     for end in 1..=n {
         for start in end.saturating_sub(MAX_PIECE_CHARS)..end {
-            let Some(prefix) = best[start].clone() else { continue };
-            let Some(&id) = pieces.get(slice(start, end).as_str()) else { continue };
-            if best[end].as_ref().is_none_or(|b| prefix.len() + 1 < b.len()) {
+            let Some(prefix) = best[start].clone() else {
+                continue;
+            };
+            let Some(&id) = pieces.get(slice(start, end).as_str()) else {
+                continue;
+            };
+            if best[end]
+                .as_ref()
+                .is_none_or(|b| prefix.len() + 1 < b.len())
+            {
                 let mut seq = prefix;
                 seq.push(id);
                 best[end] = Some(seq);
@@ -89,7 +96,11 @@ impl BoostTrie {
                 }
             }
         }
-        let mut trie = Self { children: vec![HashMap::new()], terminal: vec![false], max_nodes };
+        let mut trie = Self {
+            children: vec![HashMap::new()],
+            terminal: vec![false],
+            max_nodes,
+        };
         for raw in terms.iter().take(MAX_BOOST_TERMS) {
             let term = raw.trim();
             if term.is_empty() || term.chars().count() > MAX_BOOST_TERM_CHARS {
@@ -97,7 +108,11 @@ impl BoostTrie {
             }
             let mut forms = vec![term.to_string()];
             let mut cs = term.chars();
-            let capitalized: String = cs.next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default() + cs.as_str();
+            let capitalized: String = cs
+                .next()
+                .map(|c| c.to_uppercase().collect::<String>())
+                .unwrap_or_default()
+                + cs.as_str();
             if capitalized != term {
                 forms.push(capitalized);
             }
@@ -111,7 +126,11 @@ impl BoostTrie {
                     }
                     sequences = sequences
                         .iter()
-                        .flat_map(|p| options.iter().map(move |o| [p.as_slice(), o.as_slice()].concat()))
+                        .flat_map(|p| {
+                            options
+                                .iter()
+                                .map(move |o| [p.as_slice(), o.as_slice()].concat())
+                        })
                         .take(MAX_SEQUENCES_PER_TERM)
                         .collect();
                 }
@@ -224,7 +243,13 @@ pub struct BiasParams {
 
 impl BiasParams {
     pub fn new(weight: f32) -> Self {
-        Self { weight, start_factor: 0.0, blank_margin: 4.0, max_gap_frames: 8, override_duration_cap: 1 }
+        Self {
+            weight,
+            start_factor: 0.0,
+            blank_margin: 4.0,
+            max_gap_frames: 8,
+            override_duration_cap: 1,
+        }
     }
 
     /// Measurement overrides: `SAGASCRIPT_BOOST_START_FACTOR`, `SAGASCRIPT_BOOST_BLANK_MARGIN`,
@@ -232,13 +257,21 @@ impl BiasParams {
     pub fn from_env(weight: f32) -> Self {
         let mut p = Self::new(weight);
         let get = |name: &str| std::env::var(name).ok();
-        if let Some(v) = get("SAGASCRIPT_BOOST_START_FACTOR").and_then(|v| v.parse::<f32>().ok()).filter(|v| v.is_finite()) {
+        if let Some(v) = get("SAGASCRIPT_BOOST_START_FACTOR")
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+        {
             p.start_factor = v.clamp(0.0, 1.0);
         }
-        if let Some(v) = get("SAGASCRIPT_BOOST_BLANK_MARGIN").and_then(|v| v.parse::<f32>().ok()).filter(|v| !v.is_nan()) {
+        if let Some(v) = get("SAGASCRIPT_BOOST_BLANK_MARGIN")
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| !v.is_nan())
+        {
             p.blank_margin = v.max(0.0);
         }
-        if let Some(v) = get("SAGASCRIPT_BOOST_OVERRIDE_DURATION_CAP").and_then(|v| v.parse::<usize>().ok()) {
+        if let Some(v) =
+            get("SAGASCRIPT_BOOST_OVERRIDE_DURATION_CAP").and_then(|v| v.parse::<usize>().ok())
+        {
             p.override_duration_cap = v;
         }
         p
@@ -291,19 +324,26 @@ impl<'a> BiasState<'a> {
     /// the model's own choice (highest logit, lowest id on ties) stands, so output without a
     /// dictionary is unchanged.
     pub fn choose(&mut self, token_logits: &[f32], frame: usize) -> Option<BiasChoice> {
-        if !self.active.is_empty() && frame.saturating_sub(self.last_emit_frame) > self.params.max_gap_frames {
+        if !self.active.is_empty()
+            && frame.saturating_sub(self.last_emit_frame) > self.params.max_gap_frames
+        {
             self.active.clear();
         }
         if token_logits.is_empty() {
             return None;
         }
         self.candidates.clear();
-        self.candidates.extend(token_logits.iter().enumerate().map(|(i, v)| (*v, i as u32)));
+        self.candidates
+            .extend(token_logits.iter().enumerate().map(|(i, v)| (*v, i as u32)));
         if self.candidates.len() > TOP_K {
             self.candidates.select_nth_unstable_by(TOP_K - 1, better);
             self.candidates.truncate(TOP_K);
         }
-        let original = *self.candidates.iter().min_by(|a, b| better(a, b)).expect("non-empty");
+        let original = *self
+            .candidates
+            .iter()
+            .min_by(|a, b| better(a, b))
+            .expect("non-empty");
         let overriding_blank = original.1 == self.blank;
         let blank_logit = self
             .candidates
@@ -316,10 +356,16 @@ impl<'a> BiasState<'a> {
         let mut chosen_score = f32::NEG_INFINITY;
         for &(logit, token) in &self.candidates {
             let mut bonus = 0.0f32;
-            if self.active.iter().any(|&n| self.trie.children[n].contains_key(&token)) {
+            if self
+                .active
+                .iter()
+                .any(|&n| self.trie.children[n].contains_key(&token))
+            {
                 bonus = self.params.weight;
             } else if self.trie.children[0].contains_key(&token)
-                && (token == original.1 || !overriding_blank || logit >= blank_logit - self.params.blank_margin)
+                && (token == original.1
+                    || !overriding_blank
+                    || logit >= blank_logit - self.params.blank_margin)
             {
                 bonus = self.params.weight * self.params.start_factor;
             }
@@ -329,7 +375,10 @@ impl<'a> BiasState<'a> {
                 chosen_score = score;
             }
         }
-        (chosen.1 != original.1).then_some(BiasChoice { id: chosen.1, overrode_blank: overriding_blank })
+        (chosen.1 != original.1).then_some(BiasChoice {
+            id: chosen.1,
+            overrode_blank: overriding_blank,
+        })
     }
 
     /// Advance partial matches after a non-blank `token` was emitted at `frame`.
@@ -337,7 +386,11 @@ impl<'a> BiasState<'a> {
         self.next.clear();
         // The implicit root is tried first, then the live matches.
         for index in 0..=self.active.len() {
-            let node = if index == 0 { 0 } else { self.active[index - 1] };
+            let node = if index == 0 {
+                0
+            } else {
+                self.active[index - 1]
+            };
             if let Some(&child) = self.trie.children[node].get(&token) {
                 if !self.trie.children[child].is_empty() && !self.next.contains(&child) {
                     self.next.push(child);
@@ -371,7 +424,11 @@ mod tests {
     }
 
     fn strings(v: &Value) -> Vec<String> {
-        v.as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect()
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect()
     }
 
     #[test]
@@ -384,7 +441,13 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|p| p.as_array().unwrap().iter().map(|t| t.as_u64().unwrap() as u32).collect())
+                .map(|p| {
+                    p.as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|t| t.as_u64().unwrap() as u32)
+                        .collect()
+                })
                 .collect();
             assert_eq!(trie.phrases(), expected, "trie case {}", case["name"]);
         }
@@ -405,7 +468,10 @@ mod tests {
             let mut state = BiasState::new(&trie, params, vocab.blank_id());
             for (index, step) in case["steps"].as_array().unwrap().iter().enumerate() {
                 if let Some(emit) = step.get("emit") {
-                    state.emitted(emit["token"].as_u64().unwrap() as u32, emit["frame"].as_u64().unwrap() as usize);
+                    state.emitted(
+                        emit["token"].as_u64().unwrap() as u32,
+                        emit["frame"].as_u64().unwrap() as usize,
+                    );
                 }
                 let mut logits = vec![default; vocab.len()];
                 for (key, value) in step["logits"].as_object().unwrap() {
@@ -429,7 +495,10 @@ mod tests {
     #[test]
     fn node_cap_is_reached_and_respected() {
         let (_, vocab) = vectors();
-        let terms: Vec<String> = ["Magnus", "Mag Gille", "Gille", "hej"].iter().map(|t| t.to_string()).collect();
+        let terms: Vec<String> = ["Magnus", "Mag Gille", "Gille", "hej"]
+            .iter()
+            .map(|t| t.to_string())
+            .collect();
         let full = BoostTrie::new(&terms, &vocab).node_count();
         assert!(full > 6);
         let capped = BoostTrie::with_node_cap(&terms, &vocab, 6);
@@ -453,10 +522,18 @@ mod tests {
         for case in root["request_cases"].as_array().unwrap() {
             let fields = case["fields"].as_object().unwrap();
             let verdict = sagascript_engine_protocol::validate_boost_fields(fields);
-            assert_eq!(verdict.is_ok(), case["valid"].as_bool().unwrap(), "request case {}", case["name"]);
+            assert_eq!(
+                verdict.is_ok(),
+                case["valid"].as_bool().unwrap(),
+                "request case {}",
+                case["name"]
+            );
             if let Err(message) = verdict {
                 // Fixed texts: never an echo of the supplied value.
-                assert!(!message.contains("Magnus") && !message.contains("secret"), "{message}");
+                assert!(
+                    !message.contains("Magnus") && !message.contains("secret"),
+                    "{message}"
+                );
             }
         }
     }
@@ -482,6 +559,9 @@ mod tests {
         params.start_factor = 1.0;
         let mut state = BiasState::new(&trie, params, 3);
         // 4 tokens only: blank is id 3, "▁Mag" is id 0.
-        assert_eq!(state.choose(&[1.5, -5.0, -5.0, 3.0], 0).map(|c| c.id), Some(0));
+        assert_eq!(
+            state.choose(&[1.5, -5.0, -5.0, 3.0], 0).map(|c| c.id),
+            Some(0)
+        );
     }
 }

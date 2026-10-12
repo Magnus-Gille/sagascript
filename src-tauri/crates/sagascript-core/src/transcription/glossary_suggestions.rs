@@ -119,11 +119,7 @@ pub fn suggest_glossary_candidates(
                     observed: String::new(),
                     canonical,
                     kind: GlossarySuggestionKind::HintOnly,
-                    context: context_window(
-                        &corrected_tokens,
-                        corrected_start,
-                        corrected_end,
-                    ),
+                    context: context_window(&corrected_tokens, corrected_start, corrected_end),
                 });
             }
             continue;
@@ -157,9 +153,7 @@ pub fn suggest_glossary_candidates(
         .iter()
         .filter(|candidate| candidate.kind == GlossarySuggestionKind::Alias)
         .count();
-    if alias_count > 1
-        && unchanged_words * 2 < heard_tokens.len().max(corrected_tokens.len())
-    {
+    if alias_count > 1 && unchanged_words * 2 < heard_tokens.len().max(corrected_tokens.len()) {
         return Vec::new();
     }
 

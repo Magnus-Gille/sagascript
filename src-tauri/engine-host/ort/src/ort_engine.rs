@@ -59,14 +59,20 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     pub fn from_env() -> Self {
         fn var(name: &str) -> Option<usize> {
-            std::env::var(name).ok()?.trim().parse().ok().filter(|n| *n > 0)
+            std::env::var(name)
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n| *n > 0)
         }
         let cores = std::thread::available_parallelism().map_or(4, usize::from);
         let encoder_threads = var("SAGASCRIPT_ORT_THREADS").unwrap_or_else(|| cores.min(8));
         Self {
             encoder_threads,
             preprocessor_threads: var("SAGASCRIPT_ORT_PRE_THREADS").unwrap_or(encoder_threads),
-            decoder_threads: var("SAGASCRIPT_ORT_DEC_THREADS").unwrap_or_else(|| encoder_threads.min(2)),
+            decoder_threads: var("SAGASCRIPT_ORT_DEC_THREADS")
+                .unwrap_or_else(|| encoder_threads.min(2)),
             arena: std::env::var("SAGASCRIPT_ORT_ARENA").is_ok_and(|v| v == "1"),
             max_in_flight: 2,
             execution_slots: var("SAGASCRIPT_ORT_SLOTS").unwrap_or(1),
@@ -76,7 +82,9 @@ impl RuntimeConfig {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn ort_error(context: &str, error: impl std::fmt::Display) -> HostError {
@@ -111,10 +119,18 @@ fn ensure_runtime() -> Result<&'static str, HostError> {
 const DEV_OVERRIDES: bool = cfg!(any(debug_assertions, feature = "dev-overrides"));
 
 fn resolve_library_path(executable_dir: &Path) -> PathBuf {
-    library_path(executable_dir, std::env::var_os("ORT_DYLIB_PATH"), DEV_OVERRIDES)
+    library_path(
+        executable_dir,
+        std::env::var_os("ORT_DYLIB_PATH"),
+        DEV_OVERRIDES,
+    )
 }
 
-fn library_path(executable_dir: &Path, env_value: Option<std::ffi::OsString>, dev_overrides: bool) -> PathBuf {
+fn library_path(
+    executable_dir: &Path,
+    env_value: Option<std::ffi::OsString>,
+    dev_overrides: bool,
+) -> PathBuf {
     match env_value.filter(|v| !v.is_empty()) {
         Some(value) if dev_overrides => {
             let value = PathBuf::from(value);
@@ -147,7 +163,10 @@ pub fn restrict_dll_search() {
         SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)
     };
     if ok == 0 {
-        eprintln!("warning: SetDefaultDllDirectories failed: {}", std::io::Error::last_os_error());
+        eprintln!(
+            "warning: SetDefaultDllDirectories failed: {}",
+            std::io::Error::last_os_error()
+        );
     }
 }
 
@@ -163,7 +182,11 @@ fn preload_windows_providers(executable_dir: &Path) {
     if !dll.is_file() {
         return;
     }
-    let wide: Vec<u16> = dll.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = dll
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     // SAFETY: `wide` is a NUL-terminated absolute path; the reserved handle argument is null.
     let handle = unsafe {
         LoadLibraryExW(
@@ -173,7 +196,11 @@ fn preload_windows_providers(executable_dir: &Path) {
         )
     };
     if handle == 0 {
-        eprintln!("warning: cannot preload {}: {}", dll.display(), std::io::Error::last_os_error());
+        eprintln!(
+            "warning: cannot preload {}: {}",
+            dll.display(),
+            std::io::Error::last_os_error()
+        );
     }
 }
 
@@ -196,7 +223,11 @@ fn runtime_version(path: &Path) -> String {
                 return None;
             }
             let text = ((*base).get_version_string)();
-            (!text.is_null()).then(|| std::ffi::CStr::from_ptr(text).to_string_lossy().into_owned())
+            (!text.is_null()).then(|| {
+                std::ffi::CStr::from_ptr(text)
+                    .to_string_lossy()
+                    .into_owned()
+            })
         })
     };
     match version {
@@ -241,7 +272,9 @@ impl OrtEngine {
     }
 
     fn session(&self, path: &Path, threads: usize) -> Result<Session, HostError> {
-        let arena = ep::CPU::default().with_arena_allocator(self.config.arena).build();
+        let arena = ep::CPU::default()
+            .with_arena_allocator(self.config.arena)
+            .build();
         let build = || -> Result<Session, ort::Error> {
             let mut builder = Session::builder()?
                 .with_execution_providers([arena])?
@@ -252,7 +285,10 @@ impl OrtEngine {
             builder.commit_from_file(path)
         };
         build().map_err(|e| {
-            HostError::new(ErrorCode::ModelLoadFailed, format!("cannot load {}: {e}", path.display()))
+            HostError::new(
+                ErrorCode::ModelLoadFailed,
+                format!("cannot load {}: {e}", path.display()),
+            )
         })
     }
 
@@ -266,7 +302,13 @@ impl OrtEngine {
         }
         let started = Instant::now();
         let dir = &params.model_dir;
-        for file in [ENCODER_FILE, DECODER_FILE, PREPROCESSOR_FILE, VOCAB_FILE, CONFIG_FILE] {
+        for file in [
+            ENCODER_FILE,
+            DECODER_FILE,
+            PREPROCESSOR_FILE,
+            VOCAB_FILE,
+            CONFIG_FILE,
+        ] {
             if !dir.join(file).is_file() {
                 return Err(HostError::new(
                     ErrorCode::ModelMissing,
@@ -279,15 +321,25 @@ impl OrtEngine {
         let config: serde_json::Value = std::fs::read_to_string(dir.join(CONFIG_FILE))
             .map_err(|e| e.to_string())
             .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
-            .map_err(|e| HostError::new(ErrorCode::ModelLoadFailed, format!("bad {CONFIG_FILE}: {e}")))?;
+            .map_err(|e| {
+                HostError::new(
+                    ErrorCode::ModelLoadFailed,
+                    format!("bad {CONFIG_FILE}: {e}"),
+                )
+            })?;
         let max_tokens_per_step = config["max_tokens_per_step"].as_u64().unwrap_or(10) as usize;
         let subsampling = config["subsampling_factor"].as_u64().unwrap_or(8) as f64;
         let vocab = std::fs::read_to_string(dir.join(VOCAB_FILE))
             .map_err(|e| e.to_string())
             .and_then(|text| Vocab::parse(&text))
-            .map_err(|e| HostError::new(ErrorCode::ModelLoadFailed, format!("bad {VOCAB_FILE}: {e}")))?;
+            .map_err(|e| {
+                HostError::new(ErrorCode::ModelLoadFailed, format!("bad {VOCAB_FILE}: {e}"))
+            })?;
 
-        let preprocessor = self.session(&dir.join(PREPROCESSOR_FILE), self.config.preprocessor_threads)?;
+        let preprocessor = self.session(
+            &dir.join(PREPROCESSOR_FILE),
+            self.config.preprocessor_threads,
+        )?;
         let encoder = self.session(&dir.join(ENCODER_FILE), self.config.encoder_threads)?;
         let decoder = self.session(&dir.join(DECODER_FILE), self.config.decoder_threads)?;
         let result = LoadResult {
@@ -313,7 +365,10 @@ impl OrtEngine {
         });
         *self.loaded.write().unwrap_or_else(|p| p.into_inner()) = Some(loaded);
         if self.config.trace {
-            eprintln!("ort-trace load: {:?} load_ms={}", self.config, result.load_ms);
+            eprintln!(
+                "ort-trace load: {:?} load_ms={}",
+                self.config, result.load_ms
+            );
         }
         Ok(result)
     }
@@ -374,7 +429,10 @@ impl Joint for OrtJoint<'_> {
 
     fn initial_state(&self) -> DecoderState {
         let zeros = vec![0.0; DECODER_LAYERS * DECODER_UNITS];
-        DecoderState { s1: zeros.clone(), s2: zeros }
+        DecoderState {
+            s1: zeros.clone(),
+            s2: zeros,
+        }
     }
 }
 
@@ -389,8 +447,12 @@ fn transcribe_loaded(
 ) -> Result<TranscribeWindowResult, HostError> {
     let cancelled = || HostError::new(ErrorCode::Cancelled, "Transcription was cancelled");
     let total_started = Instant::now();
-    let samples = pcm::read_window(&request.pcm_path, request.offset_samples, request.num_samples)
-        .map_err(|m| HostError::new(ErrorCode::BadRequest, m))?;
+    let samples = pcm::read_window(
+        &request.pcm_path,
+        request.offset_samples,
+        request.num_samples,
+    )
+    .map_err(|m| HostError::new(ErrorCode::BadRequest, m))?;
     let audio_s = samples.len() as f64 / f64::from(SAMPLE_RATE);
     let read_ms = millis(total_started);
     if is_cancelled() {
@@ -416,7 +478,11 @@ fn transcribe_loaded(
             .map_err(|e| ort_error("features_lens", e))?
             .1
             .to_vec();
-        (shape.iter().copied().collect::<Vec<i64>>(), data.to_vec(), lens)
+        (
+            shape.iter().copied().collect::<Vec<i64>>(),
+            data.to_vec(),
+            lens,
+        )
     };
     let preprocess_ms = millis(started);
     if is_cancelled() {
@@ -443,7 +509,10 @@ fn transcribe_loaded(
             .map_err(|e| ort_error("encoded_lengths", e))?
             .1;
         if shape.len() != 3 || shape[0] != 1 || shape[1] as usize != HIDDEN {
-            return Err(ort_error("encoder outputs", format!("unexpected shape {shape:?}")));
+            return Err(ort_error(
+                "encoder outputs",
+                format!("unexpected shape {shape:?}"),
+            ));
         }
         let total = shape[2] as usize;
         let valid = (lengths.first().copied().unwrap_or(0).max(0) as usize).min(total);
@@ -471,7 +540,11 @@ fn transcribe_loaded(
         Vec::new()
     } else {
         let mut session = lock(&loaded.decoder);
-        let mut joint = OrtJoint { session: &mut session, steps: 0, run_us: 0 };
+        let mut joint = OrtJoint {
+            session: &mut session,
+            steps: 0,
+            run_us: 0,
+        };
         let trie = boosting.then(|| {
             let (trie, micros) = loaded.boost_tries.get(&request.boost_terms, &loaded.vocab);
             boost_us = micros;
@@ -490,7 +563,8 @@ fn transcribe_loaded(
             blank,
             loaded.max_tokens_per_step,
             is_cancelled,
-            trie.as_deref().map(|t| crate::boost::BiasState::new(t, params, blank)),
+            trie.as_deref()
+                .map(|t| crate::boost::BiasState::new(t, params, blank)),
         );
         joint_steps = joint.steps;
         joint_run_ms = (joint.run_us / 1000) as u64;
@@ -513,7 +587,10 @@ fn transcribe_loaded(
     let mut tokens = Vec::with_capacity(raw.len());
     for token in raw {
         let text = loaded.vocab.piece(token.id).ok_or_else(|| {
-            HostError::new(ErrorCode::Engine, format!("decoder produced unknown token id {}", token.id))
+            HostError::new(
+                ErrorCode::Engine,
+                format!("decoder produced unknown token id {}", token.id),
+            )
         })?;
         tokens.push(WireToken {
             id: token.id,
@@ -526,7 +603,12 @@ fn transcribe_loaded(
     Ok(TranscribeWindowResult {
         tokens,
         audio_s,
-        timings: WindowTimings { preprocess_ms, encode_ms, decode_ms, boost_us },
+        timings: WindowTimings {
+            preprocess_ms,
+            encode_ms,
+            decode_ms,
+            boost_us,
+        },
         boost_active,
         boost_reason: (boost_active == Some(false)).then(|| "no_usable_terms".to_string()),
     })
@@ -606,9 +688,15 @@ mod dll_path_tests {
     fn env_override_needs_dev_overrides() {
         let dir = Path::new("app");
         let custom = Some(std::ffi::OsString::from("custom/ort.dll"));
-        assert_eq!(library_path(dir, custom.clone(), true), dir.join("custom/ort.dll"));
+        assert_eq!(
+            library_path(dir, custom.clone(), true),
+            dir.join("custom/ort.dll")
+        );
         assert_eq!(library_path(dir, custom, false), dir.join(ORT_LIBRARY));
         assert_eq!(library_path(dir, None, false), dir.join(ORT_LIBRARY));
-        assert_eq!(library_path(dir, Some("".into()), true), dir.join(ORT_LIBRARY));
+        assert_eq!(
+            library_path(dir, Some("".into()), true),
+            dir.join(ORT_LIBRARY)
+        );
     }
 }

@@ -84,7 +84,14 @@ mod tests {
             assert!(is_bare_extended_function_key(shortcut), "{shortcut}");
         }
         for shortcut in [
-            "F12", "F25", "Shift+F13", "F13+F14", "Space", "F013", "F0013", "F1a",
+            "F12",
+            "F25",
+            "Shift+F13",
+            "F13+F14",
+            "Space",
+            "F013",
+            "F0013",
+            "F1a",
         ] {
             assert!(!is_bare_extended_function_key(shortcut), "{shortcut}");
         }

@@ -134,8 +134,9 @@ impl DiarizationAnalysis {
                         || !item.overlap_seconds.is_finite()
                         || item.active_speech_seconds < 0.0
                         || item.overlap_seconds < 0.0
-                        || item.active_speech_seconds > region_seconds
-                            + crate::diarization_report::ACTIVITY_DURATION_TOLERANCE
+                        || item.active_speech_seconds
+                            > region_seconds
+                                + crate::diarization_report::ACTIVITY_DURATION_TOLERANCE
                         || item.overlap_seconds > item.active_speech_seconds + 1e-9
                 })
             {
@@ -421,8 +422,10 @@ pub fn cluster_with_outcome(
     } else {
         // Fully unembedded tracks each become an output speaker via the fallback; count them
         // against the hint so the hint bounds the final speaker count.
-        let embedded_tracks: std::collections::BTreeSet<usize> =
-            embeddings.iter().map(|(index, _)| raw_segments[*index].2).collect();
+        let embedded_tracks: std::collections::BTreeSet<usize> = embeddings
+            .iter()
+            .map(|(index, _)| raw_segments[*index].2)
+            .collect();
         let unembedded_tracks = raw_segments
             .iter()
             .map(|(_, _, track)| *track)
@@ -438,7 +441,10 @@ pub fn cluster_with_outcome(
             })
             .collect();
         let mut labels: Vec<usize> = clustered.iter().map(|(_, label)| *label).collect();
-        clustering::absorb_small_clusters(&embeddings, &mut labels, &durations,
+        clustering::absorb_small_clusters(
+            &embeddings,
+            &mut labels,
+            &durations,
             config.min_speaker_seconds,
             config.absorb_max_distance,
         );
@@ -452,7 +458,11 @@ pub fn cluster_with_outcome(
             // already exceed it: reduce nothing, keep the normal labels and report the shortfall.
             let hi_infeasible = hi.is_some_and(|hi| hi < unembedded_tracks + 1);
             let (lo, hi) = (budget(lo), hi.map(budget));
-            let found = clustered.iter().map(|(_, label)| *label).collect::<std::collections::BTreeSet<_>>().len();
+            let found = clustered
+                .iter()
+                .map(|(_, label)| *label)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len();
             let target = if found < lo {
                 Some(lo)
             } else {
@@ -474,7 +484,8 @@ pub fn cluster_with_outcome(
                         target,
                     );
                 } else {
-                    let mut labels: Vec<usize> = clustered.iter().map(|(_, label)| *label).collect();
+                    let mut labels: Vec<usize> =
+                        clustered.iter().map(|(_, label)| *label).collect();
                     // Clusters under the minimum speech are not speakers (the pipeline keeps them
                     // only because they are far from everyone): fold them in first, as far as the
                     // count needs. Only then are real speakers merged, within the distance limit.
@@ -718,19 +729,19 @@ mod tests {
             frame_duration: segmentation::FRAME_DURATION_S,
         };
         let raw_segments = vec![(0.0, 3.0 * segmentation::FRAME_DURATION_S, 0)];
-        let default_support = collect_region_activity_support(
-            &frame_activations,
-            4 * 270,
-            &raw_segments,
-        );
-        let exclusive_support = collect_region_activity_support(
-            &frame_activations,
-            4 * 270,
-            &raw_segments,
-        );
+        let default_support =
+            collect_region_activity_support(&frame_activations, 4 * 270, &raw_segments);
+        let exclusive_support =
+            collect_region_activity_support(&frame_activations, 4 * 270, &raw_segments);
         assert_eq!(default_support, exclusive_support);
-        assert_eq!(default_support[0].active_speech_seconds, 3.0 * segmentation::FRAME_DURATION_S);
-        assert_eq!(default_support[0].overlap_seconds, segmentation::FRAME_DURATION_S);
+        assert_eq!(
+            default_support[0].active_speech_seconds,
+            3.0 * segmentation::FRAME_DURATION_S
+        );
+        assert_eq!(
+            default_support[0].overlap_seconds,
+            segmentation::FRAME_DURATION_S
+        );
     }
 
     #[test]
@@ -741,16 +752,35 @@ mod tests {
         };
         let raw_segments = vec![(0.00006, 1.0, 0)];
         let mut analysis = DiarizationAnalysis {
-            region_activity_support: Some(collect_region_activity_support(&frames, 16_000, &raw_segments)),
+            region_activity_support: Some(collect_region_activity_support(
+                &frames,
+                16_000,
+                &raw_segments,
+            )),
             raw_segments,
             embeddings: vec![],
         };
-        assert_eq!(analysis.region_activity_support.as_ref().unwrap()[0].active_speech_seconds, 1.0);
+        assert_eq!(
+            analysis.region_activity_support.as_ref().unwrap()[0].active_speech_seconds,
+            1.0
+        );
         analysis.validate().unwrap();
         let config = DiarizeConfig::default();
         let speakers = cluster(&analysis, &config).unwrap();
-        analysis.report(&speakers, &config, vec![], true, "a".repeat(64),
-            1.0, "synthetic-build".into(), "test".into()).unwrap().validate().unwrap();
+        analysis
+            .report(
+                &speakers,
+                &config,
+                vec![],
+                true,
+                "a".repeat(64),
+                1.0,
+                "synthetic-build".into(),
+                "test".into(),
+            )
+            .unwrap()
+            .validate()
+            .unwrap();
         analysis.region_activity_support.as_mut().unwrap()[0].active_speech_seconds = 1.00007;
         assert!(analysis.validate().is_err());
     }
@@ -814,7 +844,12 @@ mod tests {
         let mut real = vec![0.0f32; dim];
         real[0] = 1.0;
         let analysis = DiarizationAnalysis {
-            raw_segments: vec![(0.0, 20.0, 0), (21.0, 30.0, 0), (31.0, 40.0, 1), (41.0, 50.0, 1)],
+            raw_segments: vec![
+                (0.0, 20.0, 0),
+                (21.0, 30.0, 0),
+                (31.0, 40.0, 1),
+                (41.0, 50.0, 1),
+            ],
             embeddings: vec![
                 (0, real.clone()),
                 (1, real),
@@ -824,7 +859,8 @@ mod tests {
             region_activity_support: None,
         };
         let segments = cluster(&analysis, &DiarizeConfig::default()).unwrap();
-        let speakers: std::collections::BTreeSet<_> = segments.iter().map(|s| s.speaker.clone()).collect();
+        let speakers: std::collections::BTreeSet<_> =
+            segments.iter().map(|s| s.speaker.clone()).collect();
         // One embedded speaker; the two zero-embedding segments share their track's fallback label
         // (not one speaker per zero vector).
         assert_eq!(speakers.len(), 2, "{segments:?}");
@@ -843,7 +879,12 @@ mod tests {
 
     #[test]
     fn unembedded_segment_follows_majority_cluster_of_its_track() {
-        let raw = vec![(0.0, 10.0, 0), (10.0, 10.1, 1), (11.0, 20.0, 1), (21.0, 21.1, 1)];
+        let raw = vec![
+            (0.0, 10.0, 0),
+            (10.0, 10.1, 1),
+            (11.0, 20.0, 1),
+            (21.0, 21.1, 1),
+        ];
         // Segments 1 and 3 are too short to embed; segment 2 is the only embedded one of track 1.
         let clustered = vec![(0, 3), (2, 8)];
         let labels = assign_speaker_labels(&raw, &clustered);
@@ -880,18 +921,29 @@ mod tests {
         near0[0] = 0.5;
         near0[2] = 0.866;
         let analysis = DiarizationAnalysis {
-            raw_segments: vec![(0.0, 20.0, 0), (21.0, 41.0, 0), (42.0, 43.0, 0), (44.0, 45.0, 0)],
+            raw_segments: vec![
+                (0.0, 20.0, 0),
+                (21.0, 41.0, 0),
+                (42.0, 43.0, 0),
+                (44.0, 45.0, 0),
+            ],
             embeddings: vec![(0, unit(0)), (1, unit(1)), (2, near0), (3, unit(5))],
             region_activity_support: None,
         };
         // Without absorption (distance limit 0) the glitch stays its own speaker.
-        let no_absorb = DiarizeConfig { absorb_max_distance: 0.0, ..DiarizeConfig::default() };
+        let no_absorb = DiarizeConfig {
+            absorb_max_distance: 0.0,
+            ..DiarizeConfig::default()
+        };
         let raw = cluster(&analysis, &no_absorb).unwrap();
         assert_ne!(raw[2].speaker, raw[0].speaker);
         let segments = cluster(&analysis, &DiarizeConfig::default()).unwrap();
         assert_ne!(segments[0].speaker, segments[1].speaker);
         assert_eq!(segments[2].speaker, segments[0].speaker);
-        assert!(segments[3].speaker != segments[0].speaker && segments[3].speaker != segments[1].speaker);
+        assert!(
+            segments[3].speaker != segments[0].speaker
+                && segments[3].speaker != segments[1].speaker
+        );
     }
 
     /// Deterministic 40-segment fixture (also generated by an equivalent Python script to record
@@ -923,15 +975,26 @@ mod tests {
     }
 
     fn labels_of(segments: &[SpeakerSegment]) -> String {
-        segments.iter().map(|s| s.speaker.trim_start_matches("SPEAKER_")).collect::<Vec<_>>().join("")
+        segments
+            .iter()
+            .map(|s| s.speaker.trim_start_matches("SPEAKER_"))
+            .collect::<Vec<_>>()
+            .join("")
     }
 
     fn with_hint(hint: SpeakerCountHint) -> DiarizeConfig {
-        DiarizeConfig { speaker_hint: Some(hint), ..DiarizeConfig::default() }
+        DiarizeConfig {
+            speaker_hint: Some(hint),
+            ..DiarizeConfig::default()
+        }
     }
 
     fn speaker_count(segments: &[SpeakerSegment]) -> usize {
-        segments.iter().map(|s| s.speaker.clone()).collect::<std::collections::BTreeSet<_>>().len()
+        segments
+            .iter()
+            .map(|s| s.speaker.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
     }
 
     /// Golden recorded from the build before the hint existed (main at e85a42f).
@@ -946,7 +1009,8 @@ mod tests {
             serde_json::to_string(&segments).unwrap(),
             include_str!("testdata/no_hint_golden_segments.json")
         );
-        let (_, outcome) = cluster_with_outcome(&hint_fixture(), &DiarizeConfig::default()).unwrap();
+        let (_, outcome) =
+            cluster_with_outcome(&hint_fixture(), &DiarizeConfig::default()).unwrap();
         assert_eq!(outcome, None);
     }
 
@@ -961,12 +1025,26 @@ mod tests {
     fn raising_the_count_splits_regardless_of_threshold() {
         let analysis = hint_fixture();
         // The pipeline finds 3; 4 splits a real speaker (the 7 s segment is not a speaker).
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(4))), (4, true));
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(3))), (3, true));
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::exact(4))),
+            (4, true)
+        );
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::exact(3))),
+            (3, true)
+        );
         let three = cluster(&analysis, &with_hint(SpeakerCountHint::exact(3))).unwrap();
-        assert_eq!(labels_of(&three), NO_HINT_GOLDEN, "already satisfied: unchanged");
+        assert_eq!(
+            labels_of(&three),
+            NO_HINT_GOLDEN,
+            "already satisfied: unchanged"
+        );
         // A very high threshold would merge everything; the exact count still splits.
-        let lax = DiarizeConfig { threshold: 2.0, speaker_hint: Some(SpeakerCountHint::exact(3)), ..DiarizeConfig::default() };
+        let lax = DiarizeConfig {
+            threshold: 2.0,
+            speaker_hint: Some(SpeakerCountHint::exact(3)),
+            ..DiarizeConfig::default()
+        };
         assert_eq!(delivered(&analysis, &lax), (3, true));
         // Reproducible.
         assert_eq!(
@@ -980,16 +1058,35 @@ mod tests {
         let analysis = hint_fixture();
         // The three real speakers are orthogonal (distance 1.0 > 0.75): exact 2 and max 2 keep 3
         // and say so.
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(2))), (3, false));
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::range(None, Some(2)))), (3, false));
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::exact(2))),
+            (3, false)
+        );
+        assert_eq!(
+            delivered(
+                &analysis,
+                &with_hint(SpeakerCountHint::range(None, Some(2)))
+            ),
+            (3, false)
+        );
         let kept = cluster(&analysis, &with_hint(SpeakerCountHint::exact(2))).unwrap();
         assert_eq!(labels_of(&kept), NO_HINT_GOLDEN);
         // A looser distance limit allows the merge.
-        let loose = DiarizeConfig { hint_merge_max_distance: 1.5, speaker_hint: Some(SpeakerCountHint::exact(2)), ..DiarizeConfig::default() };
+        let loose = DiarizeConfig {
+            hint_merge_max_distance: 1.5,
+            speaker_hint: Some(SpeakerCountHint::exact(2)),
+            ..DiarizeConfig::default()
+        };
         assert_eq!(delivered(&analysis, &loose), (2, true));
         // Forced counts merge regardless of distance, down to one.
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::forced(2))), (2, true));
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))), (1, true));
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::forced(2))),
+            (2, true)
+        );
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))),
+            (1, true)
+        );
     }
 
     #[test]
@@ -1008,10 +1105,20 @@ mod tests {
             embeddings: vec![(0, unit(0)), (1, near), (2, unit(5))],
             region_activity_support: None,
         };
-        let with = |hint: SpeakerCountHint| DiarizeConfig { speaker_hint: Some(hint), ..DiarizeConfig::default() };
+        let with = |hint: SpeakerCountHint| DiarizeConfig {
+            speaker_hint: Some(hint),
+            ..DiarizeConfig::default()
+        };
         // Found 3 (0.5 > 0.34 threshold); max 2 merges the 0.5-apart pair only.
-        let (segments, outcome) = cluster_with_outcome(&analysis, &with(SpeakerCountHint::range(None, Some(2)))).unwrap();
-        assert_eq!(outcome, Some(SpeakerHintOutcome { satisfied: true, delivered: 2 }));
+        let (segments, outcome) =
+            cluster_with_outcome(&analysis, &with(SpeakerCountHint::range(None, Some(2)))).unwrap();
+        assert_eq!(
+            outcome,
+            Some(SpeakerHintOutcome {
+                satisfied: true,
+                delivered: 2
+            })
+        );
         assert_eq!(segments[0].speaker, segments[1].speaker);
         assert_ne!(segments[0].speaker, segments[2].speaker);
     }
@@ -1020,19 +1127,46 @@ mod tests {
     fn exact_count_larger_than_the_embedded_segments_is_capped() {
         let analysis = hint_fixture();
         let segments = cluster(&analysis, &with_hint(SpeakerCountHint::exact(1000))).unwrap();
-        assert_eq!(speaker_count(&segments), 40, "one speaker per embedded segment");
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(1000))), (40, false));
+        assert_eq!(
+            speaker_count(&segments),
+            40,
+            "one speaker per embedded segment"
+        );
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::exact(1000))),
+            (40, false)
+        );
     }
 
     #[test]
     fn min_and_max_only_act_outside_the_range() {
         let analysis = hint_fixture();
-        let inside = cluster(&analysis, &with_hint(SpeakerCountHint::range(Some(2), Some(3)))).unwrap();
+        let inside = cluster(
+            &analysis,
+            &with_hint(SpeakerCountHint::range(Some(2), Some(3))),
+        )
+        .unwrap();
         assert_eq!(labels_of(&inside), NO_HINT_GOLDEN);
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::range(Some(4), None))), (4, true));
-        let lax = DiarizeConfig { threshold: 2.0, speaker_hint: Some(SpeakerCountHint::range(Some(2), None)), ..DiarizeConfig::default() };
+        assert_eq!(
+            delivered(
+                &analysis,
+                &with_hint(SpeakerCountHint::range(Some(4), None))
+            ),
+            (4, true)
+        );
+        let lax = DiarizeConfig {
+            threshold: 2.0,
+            speaker_hint: Some(SpeakerCountHint::range(Some(2), None)),
+            ..DiarizeConfig::default()
+        };
         assert_eq!(delivered(&analysis, &lax), (2, true));
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::range(None, Some(5)))), (3, true));
+        assert_eq!(
+            delivered(
+                &analysis,
+                &with_hint(SpeakerCountHint::range(None, Some(5)))
+            ),
+            (3, true)
+        );
     }
 
     fn unembedded_track_analysis() -> DiarizationAnalysis {
@@ -1061,9 +1195,18 @@ mod tests {
         assert_eq!(hinted[0].speaker, hinted[1].speaker);
         assert_ne!(hinted[0].speaker, hinted[2].speaker);
         // Unforced, the two embedded voices are orthogonal, so they stay apart and it is reported.
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(2))), (3, false));
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(3))), (3, true));
-        assert_eq!(labels_of(&cluster(&analysis, &with_hint(SpeakerCountHint::exact(3))).unwrap()), labels_of(&without));
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::exact(2))),
+            (3, false)
+        );
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::exact(3))),
+            (3, true)
+        );
+        assert_eq!(
+            labels_of(&cluster(&analysis, &with_hint(SpeakerCountHint::exact(3))).unwrap()),
+            labels_of(&without)
+        );
     }
 
     #[test]
@@ -1071,9 +1214,18 @@ mod tests {
         let analysis = unembedded_track_analysis();
         // One fallback track already uses the whole budget of 1 and the embedded speakers need at
         // least one cluster: unreachable, so nothing is merged and the shortfall is reported.
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))), (3, false));
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))),
+            (3, false)
+        );
         // Unforced, the orthogonal embedded voices also stay apart.
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::range(None, Some(1)))), (3, false));
+        assert_eq!(
+            delivered(
+                &analysis,
+                &with_hint(SpeakerCountHint::range(None, Some(1)))
+            ),
+            (3, false)
+        );
     }
 
     #[test]
@@ -1090,9 +1242,18 @@ mod tests {
             embeddings: vec![(0, unit(0)), (1, unit(1))],
             region_activity_support: None,
         };
-        assert_eq!(speaker_count(&cluster(&analysis, &DiarizeConfig::default()).unwrap()), 2);
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(1))), (2, false));
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))), (1, true));
+        assert_eq!(
+            speaker_count(&cluster(&analysis, &DiarizeConfig::default()).unwrap()),
+            2
+        );
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::exact(1))),
+            (2, false)
+        );
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))),
+            (1, true)
+        );
     }
 
     #[test]
@@ -1103,20 +1264,34 @@ mod tests {
         let mut b = vec![0.0f32; dim];
         b[0] = 0.5;
         b[1] = 0.866; // distance 0.5 from `a`: mergeable under the 0.9 limit
-        // Two 20 s embedded voices on track 0 plus a fully unembedded track 1.
+                      // Two 20 s embedded voices on track 0 plus a fully unembedded track 1.
         let analysis = DiarizationAnalysis {
             raw_segments: vec![(0.0, 20.0, 0), (21.0, 41.0, 0), (42.0, 42.1, 1)],
             embeddings: vec![(0, a), (1, b)],
             region_activity_support: None,
         };
         let base = cluster(&analysis, &DiarizeConfig::default()).unwrap();
-        for hint in [SpeakerCountHint::exact(1), SpeakerCountHint::range(None, Some(1)), SpeakerCountHint::forced(1)] {
+        for hint in [
+            SpeakerCountHint::exact(1),
+            SpeakerCountHint::range(None, Some(1)),
+            SpeakerCountHint::forced(1),
+        ] {
             let (segments, outcome) = cluster_with_outcome(&analysis, &with_hint(hint)).unwrap();
             assert_eq!(labels_of(&segments), labels_of(&base), "{hint:?}");
-            assert_eq!(outcome, Some(SpeakerHintOutcome { satisfied: false, delivered: 3 }), "{hint:?}");
+            assert_eq!(
+                outcome,
+                Some(SpeakerHintOutcome {
+                    satisfied: false,
+                    delivered: 3
+                }),
+                "{hint:?}"
+            );
         }
         // Reachable: the embedded pair merges (3 -> 2 total).
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(2))), (2, true));
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::exact(2))),
+            (2, true)
+        );
     }
 
     #[test]
@@ -1126,16 +1301,32 @@ mod tests {
             embeddings: Vec::new(),
             region_activity_support: None,
         };
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))), (3, false));
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::exact(3))), (3, true));
-        assert_eq!(delivered(&analysis, &with_hint(SpeakerCountHint::range(Some(5), None))), (3, false));
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::forced(1))),
+            (3, false)
+        );
+        assert_eq!(
+            delivered(&analysis, &with_hint(SpeakerCountHint::exact(3))),
+            (3, true)
+        );
+        assert_eq!(
+            delivered(
+                &analysis,
+                &with_hint(SpeakerCountHint::range(Some(5), None))
+            ),
+            (3, false)
+        );
     }
 
     #[test]
     fn invalid_hint_is_rejected_by_cluster() {
         let analysis = hint_fixture();
         assert!(cluster(&analysis, &with_hint(SpeakerCountHint::exact(0))).is_err());
-        assert!(cluster(&analysis, &with_hint(SpeakerCountHint::range(Some(3), Some(2)))).is_err());
+        assert!(cluster(
+            &analysis,
+            &with_hint(SpeakerCountHint::range(Some(3), Some(2)))
+        )
+        .is_err());
     }
 
     #[test]

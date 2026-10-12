@@ -48,11 +48,33 @@ mod tests {
             resolve(true, "X_TEST_A", Some("/dev/host".into())),
             Some(OsString::from("/dev/host"))
         );
-        assert_eq!(resolve(false, "X_TEST_B", Some("/tmp/rogue-host".into())), None);
-        assert_eq!(WARNED.lock().unwrap().iter().filter(|n| *n == "X_TEST_B").count(), 1);
+        assert_eq!(
+            resolve(false, "X_TEST_B", Some("/tmp/rogue-host".into())),
+            None
+        );
+        assert_eq!(
+            WARNED
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|n| *n == "X_TEST_B")
+                .count(),
+            1
+        );
         // The warning is emitted once per variable.
-        assert_eq!(resolve(false, "X_TEST_B", Some("/tmp/rogue-host".into())), None);
-        assert_eq!(WARNED.lock().unwrap().iter().filter(|n| *n == "X_TEST_B").count(), 1);
+        assert_eq!(
+            resolve(false, "X_TEST_B", Some("/tmp/rogue-host".into())),
+            None
+        );
+        assert_eq!(
+            WARNED
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|n| *n == "X_TEST_B")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -66,7 +88,10 @@ mod tests {
 
     #[test]
     fn debug_and_feature_builds_enable_overrides() {
-        assert_eq!(ENABLED, cfg!(debug_assertions) || cfg!(feature = "dev-overrides"));
+        assert_eq!(
+            ENABLED,
+            cfg!(debug_assertions) || cfg!(feature = "dev-overrides")
+        );
     }
 
     /// Only compiled into release builds without the feature
@@ -76,7 +101,10 @@ mod tests {
     fn release_build_ignores_the_real_environment() {
         std::env::set_var("SAGASCRIPT_ENGINE_HOST", "/tmp/rogue-host");
         std::env::set_var("SAGASCRIPT_PIANISSIMO_MODEL_DIR", "/tmp/rogue-model");
-        assert_eq!(crate::transcription::pianissimo_backend::resolve_host(), None);
+        assert_eq!(
+            crate::transcription::pianissimo_backend::resolve_host(),
+            None
+        );
         assert_eq!(crate::transcription::pianissimo_model::override_dir(), None);
     }
 }

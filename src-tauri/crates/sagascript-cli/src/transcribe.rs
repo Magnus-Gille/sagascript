@@ -4502,12 +4502,15 @@ mod diarize_threshold_tests {
         assert_eq!(options.beam_size, 0);
         assert!(options.vad_model_path.is_none());
 
-        let invalid_saved = Settings { beam_size: 99, ..stored };
+        let invalid_saved = Settings {
+            beam_size: 99,
+            ..stored
+        };
         let options = resolve_diarization_options(&defaulted.args, &invalid_saved).unwrap();
         assert_eq!(options.beam_size, 0);
-        let explicit = TestCli::try_parse_from([
-            "sagascript", "f.wav", "--diarize", "--beam", "2", "--vad",
-        ]).unwrap();
+        let explicit =
+            TestCli::try_parse_from(["sagascript", "f.wav", "--diarize", "--beam", "2", "--vad"])
+                .unwrap();
         let options = resolve_diarization_options(&explicit.args, &invalid_saved).unwrap();
         assert_eq!(options.beam_size, 2);
         assert!(options.vad_model_path.is_some());

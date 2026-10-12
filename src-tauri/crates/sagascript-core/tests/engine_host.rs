@@ -137,7 +137,10 @@ fn handshake_accepts_and_exposes_capabilities() {
 fn recording_observer() -> (LoadObserver, Arc<std::sync::Mutex<Vec<LoadEvent>>>) {
     let events = Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = events.clone();
-    (LoadObserver(Arc::new(move |event| sink.lock().unwrap().push(event))), events)
+    (
+        LoadObserver(Arc::new(move |event| sink.lock().unwrap().push(event))),
+        events,
+    )
 }
 
 #[test]
@@ -159,17 +162,24 @@ fn load_observer_reports_started_then_ready_once_and_nothing_when_warm() {
 #[test]
 fn load_observer_reports_failure() {
     let (observer, events) = recording_observer();
-    let f = fixture_with(&[("FAKE_PROTOCOL", "2")], |c| c.load_observer = Some(observer));
+    let f = fixture_with(&[("FAKE_PROTOCOL", "2")], |c| {
+        c.load_observer = Some(observer)
+    });
     assert!(f.client.warm().is_err());
     let seen = events.lock().unwrap();
     assert_eq!(seen[0], LoadEvent::Started);
-    assert!(matches!(seen.last(), Some(LoadEvent::Failed(_))), "{seen:?}");
+    assert!(
+        matches!(seen.last(), Some(LoadEvent::Failed(_))),
+        "{seen:?}"
+    );
 }
 
 #[test]
 fn load_observer_reports_a_terminal_event_when_the_wait_is_cancelled() {
     let (observer, events) = recording_observer();
-    let f = fixture_with(&[("FAKE_LOAD_DELAY_MS", "1500")], |c| c.load_observer = Some(observer));
+    let f = fixture_with(&[("FAKE_LOAD_DELAY_MS", "1500")], |c| {
+        c.load_observer = Some(observer)
+    });
     let cancel = CancelToken::new();
     let canceller = {
         let cancel = cancel.clone();
@@ -1022,7 +1032,12 @@ fn single_slot_host_sends_dictation_before_next_batch_window() {
                 .map(|o| o.tokens.len())
         })
     };
-    let windows = |p: &Path| ops_of(p).iter().filter(|o| *o == "transcribe_window").count();
+    let windows = |p: &Path| {
+        ops_of(p)
+            .iter()
+            .filter(|o| *o == "transcribe_window")
+            .count()
+    };
     wait_until("first batch window running", Duration::from_secs(5), || {
         windows(&log_path) >= 1
     });
@@ -1058,7 +1073,10 @@ fn idle_unload_cannot_race_with_a_batch_request() {
         cfg.test_hook = Some(TestHook(Arc::new(move |point| {
             if point == "after_ready" {
                 let _ = reached_tx.lock().unwrap().send(());
-                let _ = release_rx.lock().unwrap().recv_timeout(Duration::from_secs(5));
+                let _ = release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5));
             }
         })));
     });
@@ -1111,7 +1129,10 @@ fn not_loaded_response_is_retried_once_after_reload() {
         cfg.test_hook = Some(TestHook(Arc::new(move |point| {
             if point == "after_ready" {
                 let _ = reached_tx.lock().unwrap().send(());
-                let _ = release_rx.lock().unwrap().recv_timeout(Duration::from_secs(5));
+                let _ = release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5));
             }
         })));
     });

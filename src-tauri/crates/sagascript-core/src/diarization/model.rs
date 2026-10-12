@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 use crate::download::{
-    DownloadIntegrity, ExistingArtifact, download_to_path, prepare_existing_artifact,
+    download_to_path, prepare_existing_artifact, DownloadIntegrity, ExistingArtifact,
 };
 use crate::error::DictationError;
 
@@ -111,7 +111,9 @@ pub fn is_model_downloaded(model: DiarizationModel) -> bool {
 
 /// Check if all diarization models are downloaded.
 pub fn all_models_downloaded() -> bool {
-    DiarizationModel::ALL.iter().all(|m| is_model_downloaded(*m))
+    DiarizationModel::ALL
+        .iter()
+        .all(|m| is_model_downloaded(*m))
 }
 
 /// Download a diarization model from HuggingFace.

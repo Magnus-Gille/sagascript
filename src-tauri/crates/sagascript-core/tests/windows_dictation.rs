@@ -25,9 +25,7 @@ use std::thread;
 use sagascript_core::audio::decoder::decode_audio_file;
 use sagascript_core::settings::{Language, WhisperModel};
 use sagascript_core::transcription::model;
-use sagascript_core::transcription::whisper_backend::{
-    DictationTimings, WhisperBackend,
-};
+use sagascript_core::transcription::whisper_backend::{DictationTimings, WhisperBackend};
 use sagascript_core::transcription::TranscribeOptions;
 
 const ENGLISH_AUDIO_ENV: &str = "SAGASCRIPT_WINDOWS_ENGLISH_AUDIO";
@@ -38,8 +36,7 @@ fn english_fixture() -> PathBuf {
     std::env::var_os(ENGLISH_AUDIO_ENV)
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../test-audio/english-jfk.wav")
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../test-audio/english-jfk.wav")
         })
 }
 
@@ -59,9 +56,16 @@ fn require_fixture(path: PathBuf) -> Vec<f32> {
         path.display()
     );
     let audio = decode_audio_file(&path).unwrap_or_else(|error| {
-        panic!("failed to decode speech fixture {}: {error}", path.display())
+        panic!(
+            "failed to decode speech fixture {}: {error}",
+            path.display()
+        )
     });
-    assert!(!audio.is_empty(), "speech fixture is empty: {}", path.display());
+    assert!(
+        !audio.is_empty(),
+        "speech fixture is empty: {}",
+        path.display()
+    );
     audio
 }
 
@@ -136,9 +140,7 @@ fn concurrent_warmup_switching_keeps_bilingual_runtime_selection_atomic() {
     let english_audio = require_fixture(english_fixture());
     let swedish_audio = require_fixture(explicit_fixture(SWEDISH_AUDIO_ENV));
     let swedish_expected = std::env::var(SWEDISH_EXPECTED_ENV).unwrap_or_else(|_| {
-        panic!(
-            "set {SWEDISH_EXPECTED_ENV} to one expected word from the Swedish fixture"
-        )
+        panic!("set {SWEDISH_EXPECTED_ENV} to one expected word from the Swedish fixture")
     });
     require_model(WhisperModel::BaseEn);
     require_model(WhisperModel::KbWhisperBase);
@@ -163,7 +165,11 @@ fn concurrent_warmup_switching_keeps_bilingual_runtime_selection_atomic() {
         .expect("Swedish warmup should succeed");
 
     let residents = backend.resident_models();
-    assert_eq!(residents.len(), 2, "both bilingual runtimes should remain warm");
+    assert_eq!(
+        residents.len(),
+        2,
+        "both bilingual runtimes should remain warm"
+    );
     assert!(residents.contains(&WhisperModel::BaseEn));
     assert!(residents.contains(&WhisperModel::KbWhisperBase));
 

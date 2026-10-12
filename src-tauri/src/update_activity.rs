@@ -107,7 +107,11 @@ impl UpdateActivity {
     }
 
     pub fn is_result_pending(&self, result_id: &str) -> bool {
-        self.state.lock().unwrap().unsaved_results.contains(result_id)
+        self.state
+            .lock()
+            .unwrap()
+            .unsaved_results
+            .contains(result_id)
     }
 
     #[cfg(test)]
@@ -164,7 +168,9 @@ mod tests {
         assert!(!activity.is_result_pending("live-dictation"));
         activity.set_result_pending("live-dictation", true).unwrap();
         assert!(activity.is_result_pending("live-dictation"));
-        activity.set_result_pending("live-dictation", false).unwrap();
+        activity
+            .set_result_pending("live-dictation", false)
+            .unwrap();
         assert!(!activity.is_result_pending("live-dictation"));
     }
 

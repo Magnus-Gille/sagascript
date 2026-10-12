@@ -155,7 +155,9 @@ fn execute(args: MeetingArgs) -> Result<String, DictationError> {
     let operation = match args.action {
         #[cfg(feature = "diarization")]
         MeetingAction::Reprocess(_) => {
-            return Err(DictationError::SettingsError("reprocessing requires its explicit plan/execute command path".into()));
+            return Err(DictationError::SettingsError(
+                "reprocessing requires its explicit plan/execute command path".into(),
+            ));
         }
         MeetingAction::Proposal(_) => {
             return Err(DictationError::SettingsError(
@@ -222,9 +224,7 @@ fn run_review(action: MeetingReviewAction) -> Result<String, DictationError> {
         }
         MeetingReviewAction::Export { input, format } => {
             let review = read_review(&input)?;
-            review
-                .export(format.into())
-                .map_err(review_transform_error)
+            review.export(format.into()).map_err(review_transform_error)
         }
         MeetingReviewAction::AudioInfo { input, audio } => run_audio_info(&input, &audio),
         MeetingReviewAction::AudioRange { .. } => Err(DictationError::TranscriptionFailed(
@@ -273,14 +273,19 @@ fn read_input(path: &Path) -> Result<Vec<u8>, DictationError> {
     let metadata = std::fs::metadata(path)
         .map_err(|error| io_error("meeting input could not be inspected", error))?;
     if !metadata.is_file() {
-        return Err(DictationError::FileDecodeError("meeting input must be a regular file".into()));
+        return Err(DictationError::FileDecodeError(
+            "meeting input must be a regular file".into(),
+        ));
     }
     let file =
         File::open(path).map_err(|error| io_error("meeting input could not be opened", error))?;
-    let metadata = file.metadata()
+    let metadata = file
+        .metadata()
         .map_err(|error| io_error("opened meeting input could not be inspected", error))?;
     if !metadata.is_file() {
-        return Err(DictationError::FileDecodeError("meeting input must be a regular file".into()));
+        return Err(DictationError::FileDecodeError(
+            "meeting input must be a regular file".into(),
+        ));
     }
     if metadata.len() > MAX_INPUT_BYTES as u64 {
         return Err(DictationError::FileDecodeError(
@@ -330,8 +335,8 @@ fn serialize_review(review: &MeetingReview) -> Result<String, DictationError> {
 
 fn run_audio_info(input: &Path, audio: &Path) -> Result<String, DictationError> {
     let review = read_review(input)?;
-    let audio = MeetingAudio::open(audio, &review.original.source_sha256)
-        .map_err(media_transform_error)?;
+    let audio =
+        MeetingAudio::open(audio, &review.original.source_sha256).map_err(media_transform_error)?;
     serde_json::to_string(&serde_json::json!({
         "length": audio.len(),
         "mime": audio.mime(),
@@ -346,8 +351,8 @@ fn run_audio_range(
     length: u64,
 ) -> Result<Vec<u8>, DictationError> {
     let review = read_review(input)?;
-    let mut audio = MeetingAudio::open(audio, &review.original.source_sha256)
-        .map_err(media_transform_error)?;
+    let mut audio =
+        MeetingAudio::open(audio, &review.original.source_sha256).map_err(media_transform_error)?;
     audio
         .read_range(start, length)
         .map_err(media_transform_error)
@@ -410,7 +415,8 @@ mod tests {
 
     #[test]
     fn meeting_input_requires_a_regular_file_before_reading() {
-        let directory = std::env::temp_dir().join(format!("sagascript-meeting-input-{}", uuid::Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("sagascript-meeting-input-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&directory).unwrap();
         let result = read_input(&directory);
         std::fs::remove_dir(&directory).unwrap();
@@ -798,7 +804,10 @@ mod tests {
         })
         .expect("export review JSON");
         let review_export = review_value(&review_export);
-        assert_eq!(review_export["original_revision"], applied["original_revision"]);
+        assert_eq!(
+            review_export["original_revision"],
+            applied["original_revision"]
+        );
         assert_eq!(review_export["batches"], applied["batches"]);
 
         let undone_json = execute(MeetingArgs {
@@ -933,12 +942,20 @@ mod tests {
 
         let range = run_audio_range(&review_path, &audio_path, 4, 8).expect("audio range");
         assert_eq!(range, audio[4..12]);
-        assert_eq!(std::fs::read(&review_path).expect("review bytes"), review_bytes);
-        assert_eq!(std::fs::read(&audio_path).expect("audio bytes"), audio_bytes);
+        assert_eq!(
+            std::fs::read(&review_path).expect("review bytes"),
+            review_bytes
+        );
+        assert_eq!(
+            std::fs::read(&audio_path).expect("audio bytes"),
+            audio_bytes
+        );
 
         let out_of_bounds = run_audio_range(&review_path, &audio_path, 70, 8)
             .expect_err("out-of-bounds range must fail");
-        assert!(out_of_bounds.to_string().contains("source-bound media contract"));
+        assert!(out_of_bounds
+            .to_string()
+            .contains("source-bound media contract"));
 
         let wrong_audio_path = directory.join("wrong.wav");
         let mut wrong_audio = audio.clone();
@@ -946,9 +963,17 @@ mod tests {
         std::fs::write(&wrong_audio_path, &wrong_audio).expect("write wrong audio");
         let wrong_source = run_audio_range(&review_path, &wrong_audio_path, 4, 8)
             .expect_err("wrong source must fail");
-        assert!(wrong_source.to_string().contains("source-bound media contract"));
-        assert_eq!(std::fs::read(&review_path).expect("review bytes"), review_bytes);
-        assert_eq!(std::fs::read(&audio_path).expect("audio bytes"), audio_bytes);
+        assert!(wrong_source
+            .to_string()
+            .contains("source-bound media contract"));
+        assert_eq!(
+            std::fs::read(&review_path).expect("review bytes"),
+            review_bytes
+        );
+        assert_eq!(
+            std::fs::read(&audio_path).expect("audio bytes"),
+            audio_bytes
+        );
 
         let _ = std::fs::remove_dir_all(directory);
     }

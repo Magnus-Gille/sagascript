@@ -221,13 +221,8 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
 
     let cold_started = Instant::now();
     let mut cold_timings = DictationTimings::default();
-    let cold_text = backend.transcribe_live_dictation(
-        model,
-        &audio,
-        language,
-        &options,
-        &mut cold_timings,
-    )?;
+    let cold_text =
+        backend.transcribe_live_dictation(model, &audio, language, &options, &mut cold_timings)?;
     let cold_total_ms = cold_started.elapsed().as_secs_f64() * 1000.0;
     validate_text(
         "cold run",
@@ -266,13 +261,8 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
     for iteration in 0..args.iterations {
         let started = Instant::now();
         let mut timings = DictationTimings::default();
-        let text = backend.transcribe_live_dictation(
-            model,
-            &audio,
-            language,
-            &options,
-            &mut timings,
-        )?;
+        let text =
+            backend.transcribe_live_dictation(model, &audio, language, &options, &mut timings)?;
         let total_ms = started.elapsed().as_secs_f64() * 1000.0;
         let text_nonempty = !text.trim().is_empty();
         warm_text_nonempty_count += usize::from(text_nonempty);
@@ -299,7 +289,8 @@ pub fn run(args: BenchmarkDictationArgs) -> Result<(), DictationError> {
             budget_exceeded = Some((
                 iteration + 1,
                 total_ms,
-                args.max_warm_ms.expect("budget is present after exceeds_budget"),
+                args.max_warm_ms
+                    .expect("budget is present after exceeds_budget"),
             ));
         }
         samples.push(SampleTiming {
@@ -462,7 +453,10 @@ fn percentiles(
     value: impl Fn(&SampleTiming) -> f64,
 ) -> TimingPercentiles {
     let mut values: Vec<f64> = samples.iter().map(value).collect();
-    debug_assert!(!values.is_empty(), "iterations validation guarantees samples");
+    debug_assert!(
+        !values.is_empty(),
+        "iterations validation guarantees samples"
+    );
     values.sort_by(f64::total_cmp);
     TimingPercentiles {
         p50: percentile_sorted(&values, 0.50),
@@ -497,13 +491,9 @@ mod tests {
 
     #[test]
     fn clap_contract_requires_language_and_bounds_iterations() {
-        let parsed = BenchmarkTestCli::try_parse_from([
-            "sagascript",
-            "fixture.wav",
-            "--language",
-            "en",
-        ])
-        .expect("valid benchmark arguments should parse");
+        let parsed =
+            BenchmarkTestCli::try_parse_from(["sagascript", "fixture.wav", "--language", "en"])
+                .expect("valid benchmark arguments should parse");
         assert_eq!(parsed.args.input, PathBuf::from("fixture.wav"));
         assert_eq!(parsed.args.language, "en");
         assert_eq!(parsed.args.iterations, 5);

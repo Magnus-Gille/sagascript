@@ -112,7 +112,11 @@ impl Engine for Arc<MockEngine> {
             blank_id: 9,
         })
     }
-    fn transcribe(&self, request: &WindowRequest, is_cancelled: &dyn Fn() -> bool) -> Result<TranscribeWindowResult, HostError> {
+    fn transcribe(
+        &self,
+        request: &WindowRequest,
+        is_cancelled: &dyn Fn() -> bool,
+    ) -> Result<TranscribeWindowResult, HostError> {
         if self.loaded.lock().unwrap().is_none() {
             return Err(HostError::new(ErrorCode::NotLoaded, "not loaded"));
         }
@@ -127,11 +131,21 @@ impl Engine for Arc<MockEngine> {
                 if is_cancelled() {
                     return Err(HostError::new(ErrorCode::Cancelled, "cancelled"));
                 }
-                open = gate.cv.wait_timeout(open, Duration::from_millis(10)).unwrap().0;
+                open = gate
+                    .cv
+                    .wait_timeout(open, Duration::from_millis(10))
+                    .unwrap()
+                    .0;
             }
         }
         Ok(TranscribeWindowResult {
-            tokens: vec![WireToken { id: 1, text: "▁hej".into(), start: 0.0, duration: 0.08, confidence: None }],
+            tokens: vec![WireToken {
+                id: 1,
+                text: "▁hej".into(),
+                start: 0.0,
+                duration: 0.08,
+                confidence: None,
+            }],
             audio_s: request.num_samples as f64 / 16_000.0,
             timings: WindowTimings::default(),
             boost_active: None,
@@ -161,7 +175,10 @@ struct Fixture {
 }
 
 fn fixture(max_in_flight: u32, gated: bool) -> (Fixture, Arc<Gate>) {
-    let gate = Arc::new(Gate { open: Mutex::new(false), cv: Condvar::new() });
+    let gate = Arc::new(Gate {
+        open: Mutex::new(false),
+        cv: Condvar::new(),
+    });
     let (engine, started) = MockEngine::new(max_in_flight, gated.then(|| Arc::clone(&gate)));
     let engine = Arc::new(engine);
     let out = SharedOut::default();
@@ -169,11 +186,24 @@ fn fixture(max_in_flight: u32, gated: bool) -> (Fixture, Arc<Gate>) {
     let flag = Arc::clone(&shutdown);
     let server = Server::new(
         Arc::clone(&engine),
-        HostBuild { version: "9.9.9".into(), git_sha: "a".repeat(40), dirty: false },
+        HostBuild {
+            version: "9.9.9".into(),
+            git_sha: "a".repeat(40),
+            dirty: false,
+        },
         Box::new(out.clone()),
         Box::new(move || flag.store(true, Ordering::SeqCst)),
     );
-    (Fixture { server, engine, out, started, shutdown }, gate)
+    (
+        Fixture {
+            server,
+            engine,
+            out,
+            started,
+            shutdown,
+        },
+        gate,
+    )
 }
 
 fn open(gate: &Gate) {
@@ -192,16 +222,27 @@ fn req(id: u64, op: &str, extra: Value) -> String {
 }
 
 fn hello(f: &Fixture) {
-    f.server.handle_line(&req(1, "hello", json!({"client": {"name": "t", "version": "1", "git_sha": "0"}})));
+    f.server.handle_line(&req(
+        1,
+        "hello",
+        json!({"client": {"name": "t", "version": "1", "git_sha": "0"}}),
+    ));
 }
 
 fn load(f: &Fixture, id: u64) {
-    f.server.handle_line(&req(id, "load", json!({"model_dir": absolute("model"), "model_id": "m", "compute_units": "ane"})));
+    f.server.handle_line(&req(
+        id,
+        "load",
+        json!({"model_dir": absolute("model"), "model_id": "m", "compute_units": "ane"}),
+    ));
     assert_eq!(f.out.wait_response(id)["ok"], true);
 }
 
 fn absolute(name: &str) -> String {
-    std::env::temp_dir().join(name).to_string_lossy().into_owned()
+    std::env::temp_dir()
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn window(id: u64, name: &str, samples: u64, priority: &str) -> String {
@@ -231,7 +272,11 @@ fn hello_must_come_first_and_only_once() {
     assert_eq!(hello["host"]["git_sha"].as_str().unwrap().len(), 40);
     assert!(hello["capabilities"].get("min_macos").is_none());
     assert_eq!(hello["capabilities"]["max_in_flight"], 1);
-    f.server.handle_line(&req(2, "hello", json!({"client": {"name": "t", "version": "1", "git_sha": "0"}})));
+    f.server.handle_line(&req(
+        2,
+        "hello",
+        json!({"client": {"name": "t", "version": "1", "git_sha": "0"}}),
+    ));
     assert_eq!(error_code(&f.out.response(2).unwrap()), "protocol");
 }
 
@@ -245,9 +290,14 @@ fn envelope_errors_and_unknown_ops() {
     assert_eq!(error_code(&f.out.response(5).unwrap()), "protocol");
     f.server.handle_line(&req(6, "frobnicate", json!({})));
     assert_eq!(error_code(&f.out.response(6).unwrap()), "unsupported");
-    f.server.handle_line(&req(7, "load", json!({"model_dir": absolute("m")})));
+    f.server
+        .handle_line(&req(7, "load", json!({"model_dir": absolute("m")})));
     assert_eq!(error_code(&f.out.response(7).unwrap()), "bad_request");
-    f.server.handle_line(&req(8, "load", json!({"model_dir": "relative", "model_id": "m", "compute_units": "cpu"})));
+    f.server.handle_line(&req(
+        8,
+        "load",
+        json!({"model_dir": "relative", "model_id": "m", "compute_units": "cpu"}),
+    ));
     assert_eq!(error_code(&f.out.wait_response(8)), "bad_request");
 }
 
@@ -263,7 +313,11 @@ fn load_status_unload_and_integer_fields() {
     assert!(f.out.response(3).unwrap()["load_ms"].is_u64());
     f.server.handle_line(&req(4, "status", json!({})));
     assert_eq!(f.out.response(4).unwrap()["state"], "ready");
-    f.server.handle_line(&req(5, "load", json!({"model_dir": absolute("m"), "model_id": "bad", "compute_units": "cpu"})));
+    f.server.handle_line(&req(
+        5,
+        "load",
+        json!({"model_dir": absolute("m"), "model_id": "bad", "compute_units": "cpu"}),
+    ));
     assert_eq!(error_code(&f.out.wait_response(5)), "model_missing");
     f.server.handle_line(&req(6, "unload", json!({})));
     assert_eq!(f.out.wait_response(6)["ok"], true);
@@ -295,9 +349,12 @@ fn interactive_jumps_the_queue_and_in_flight_is_bounded() {
     load(&f, 2);
     f.server.handle_line(&window(10, "first", 16_000, "batch"));
     f.started.recv_timeout(Duration::from_secs(5)).unwrap();
-    f.server.handle_line(&window(11, "batch-2", 16_000, "batch"));
-    f.server.handle_line(&window(12, "batch-3", 16_000, "batch"));
-    f.server.handle_line(&window(13, "dictation", 16_000, "interactive"));
+    f.server
+        .handle_line(&window(11, "batch-2", 16_000, "batch"));
+    f.server
+        .handle_line(&window(12, "batch-3", 16_000, "batch"));
+    f.server
+        .handle_line(&window(13, "dictation", 16_000, "interactive"));
     f.server.handle_line(&req(14, "status", json!({})));
     let status = f.out.response(14).unwrap();
     assert_eq!(status["in_flight"], 1);
@@ -312,7 +369,13 @@ fn interactive_jumps_the_queue_and_in_flight_is_bounded() {
         .lock()
         .unwrap()
         .iter()
-        .map(|p| std::path::Path::new(p).file_name().unwrap().to_string_lossy().into_owned())
+        .map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     assert_eq!(order, ["first", "dictation", "batch-2", "batch-3"]);
 }
@@ -325,13 +388,16 @@ fn cancel_pending_running_and_unknown() {
     f.server.handle_line(&window(10, "run", 16_000, "batch"));
     f.started.recv_timeout(Duration::from_secs(5)).unwrap();
     f.server.handle_line(&window(11, "queued", 16_000, "batch"));
-    f.server.handle_line(&req(12, "cancel", json!({"target": 11})));
+    f.server
+        .handle_line(&req(12, "cancel", json!({"target": 11})));
     assert_eq!(f.out.response(12).unwrap()["cancelled"], true);
     assert_eq!(error_code(&f.out.response(11).unwrap()), "cancelled");
-    f.server.handle_line(&req(13, "cancel", json!({"target": 10})));
+    f.server
+        .handle_line(&req(13, "cancel", json!({"target": 10})));
     assert_eq!(f.out.response(13).unwrap()["cancelled"], true);
     assert_eq!(error_code(&f.out.wait_response(10)), "cancelled");
-    f.server.handle_line(&req(14, "cancel", json!({"target": 999})));
+    f.server
+        .handle_line(&req(14, "cancel", json!({"target": 999})));
     assert_eq!(f.out.response(14).unwrap()["cancelled"], false);
     open(&gate);
     f.server.handle_line(&req(15, "status", json!({})));
@@ -392,20 +458,35 @@ fn eof_fails_queued_windows() {
 
 #[test]
 fn advertised_two_with_one_execution_slot_still_runs_interactive_first() {
-    let gate = Arc::new(Gate { open: Mutex::new(false), cv: Condvar::new() });
+    let gate = Arc::new(Gate {
+        open: Mutex::new(false),
+        cv: Condvar::new(),
+    });
     let (mut engine, started) = MockEngine::new(2, Some(Arc::clone(&gate)));
     engine.slots = 1;
     let engine = Arc::new(engine);
     let out = SharedOut::default();
     let server = Server::new(
         Arc::clone(&engine),
-        HostBuild { version: "1".into(), git_sha: "b".repeat(40), dirty: false },
+        HostBuild {
+            version: "1".into(),
+            git_sha: "b".repeat(40),
+            dirty: false,
+        },
         Box::new(out.clone()),
         Box::new(|| {}),
     );
-    server.handle_line(&req(1, "hello", json!({"client": {"name": "t", "version": "1", "git_sha": "0"}})));
+    server.handle_line(&req(
+        1,
+        "hello",
+        json!({"client": {"name": "t", "version": "1", "git_sha": "0"}}),
+    ));
     assert_eq!(out.response(1).unwrap()["capabilities"]["max_in_flight"], 2);
-    server.handle_line(&req(2, "load", json!({"model_dir": absolute("m"), "model_id": "m", "compute_units": "cpu"})));
+    server.handle_line(&req(
+        2,
+        "load",
+        json!({"model_dir": absolute("m"), "model_id": "m", "compute_units": "cpu"}),
+    ));
     out.wait_response(2);
     server.handle_line(&window(10, "batch-run", 16_000, "batch"));
     started.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -423,7 +504,13 @@ fn advertised_two_with_one_execution_slot_still_runs_interactive_first() {
         .lock()
         .unwrap()
         .iter()
-        .map(|p| std::path::Path::new(p).file_name().unwrap().to_string_lossy().into_owned())
+        .map(|p| {
+            std::path::Path::new(p)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     assert_eq!(order, ["batch-run", "dictation", "batch-next"]);
 }

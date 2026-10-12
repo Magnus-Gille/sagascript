@@ -16,11 +16,11 @@ use sagascript_core::settings::{FileModel, Language, Settings, WhisperModel};
 use sagascript_core::transcription::{Glossary, WhisperBackend};
 use serde_json::json;
 
-use crate::speaker_args::SpeakerCountArgs;
 use crate::meeting_proposal::{read_json, write_json_new};
 use crate::meeting_reprocessing::{
     execute_reprocessing, plan_reprocessing, ReprocessingInput, ReprocessingResult,
 };
+use crate::speaker_args::SpeakerCountArgs;
 
 const MAX_REPROCESSING_JSON_BYTES: usize = 24 * 1024 * 1024;
 
@@ -230,22 +230,44 @@ fn resolve_runtime(args: &RuntimeArgs) -> Result<RuntimeInputs, DictationError> 
         Some(id) => crate::transcribe::resolve_profile(&stored, id)?,
         None => {
             let profiles = stored.resolved_hotkey_profiles();
-            profiles.iter().find(|candidate| candidate.id == "default")
-                .unwrap_or(&profiles[0]).clone()
+            profiles
+                .iter()
+                .find(|candidate| candidate.id == "default")
+                .unwrap_or(&profiles[0])
+                .clone()
         }
     };
-    let language = args.language.as_deref().map(crate::transcribe::parse_language)
-        .transpose()?.unwrap_or(profile.language);
-    let model = match crate::transcribe::resolve_file_model_for_run(args.model.as_deref(), language, &stored, true)? {
+    let language = args
+        .language
+        .as_deref()
+        .map(crate::transcribe::parse_language)
+        .transpose()?
+        .unwrap_or(profile.language);
+    let model = match crate::transcribe::resolve_file_model_for_run(
+        args.model.as_deref(),
+        language,
+        &stored,
+        true,
+    )? {
         FileModel::Whisper(model) => model,
-        FileModel::PianissimoOriginal => return Err(DictationError::SettingsError(
-            "Meeting reprocessing requires a Whisper model; select one with --model".into()
-        )),
+        FileModel::PianissimoOriginal => {
+            return Err(DictationError::SettingsError(
+                "Meeting reprocessing requires a Whisper model; select one with --model".into(),
+            ))
+        }
     };
     let glossary = if language == profile.language {
-        crate::transcribe::effective_glossary(&stored, Some(&profile.id), args.prompt.as_deref(), args.prompt_file.as_deref())?
+        crate::transcribe::effective_glossary(
+            &stored,
+            Some(&profile.id),
+            args.prompt.as_deref(),
+            args.prompt_file.as_deref(),
+        )?
     } else {
-        let hint = crate::transcribe::resolve_one_run_prompt(args.prompt.as_deref(), args.prompt_file.as_deref())?;
+        let hint = crate::transcribe::resolve_one_run_prompt(
+            args.prompt.as_deref(),
+            args.prompt_file.as_deref(),
+        )?;
         Glossary::parse(hint.as_deref().unwrap_or(""))
     };
     Ok(RuntimeInputs {
@@ -331,7 +353,16 @@ mod tests {
 
     #[test]
     fn plan_accepts_speaker_count_flags() {
-        let base = ["x", "a.wav", "--previous-review", "r.json", "--output", "o.json", "--language", "en"];
+        let base = [
+            "x",
+            "a.wav",
+            "--previous-review",
+            "r.json",
+            "--output",
+            "o.json",
+            "--language",
+            "en",
+        ];
         let parse = |extra: &[&str]| {
             <PlanArgs as clap::Args>::augment_args(clap::Command::new("x"))
                 .try_get_matches_from(base.iter().chain(extra.iter()).copied())
@@ -346,12 +377,24 @@ mod tests {
     fn default_threshold_matches_diarization_default() {
         // Pins the clap default literal against the core default.
         let default_literal = <PlanArgs as clap::Args>::augment_args(clap::Command::new("x"))
-            .get_matches_from(["x", "a.wav", "--previous-review", "r.json", "--output", "o.json", "--language", "en"])
+            .get_matches_from([
+                "x",
+                "a.wav",
+                "--previous-review",
+                "r.json",
+                "--output",
+                "o.json",
+                "--language",
+                "en",
+            ])
             .get_one::<f32>("threshold")
             .copied();
         assert_eq!(default_literal, Some(0.34));
         #[cfg(feature = "diarization")]
-        assert_eq!(default_literal, Some(sagascript_core::diarization::DEFAULT_THRESHOLD));
+        assert_eq!(
+            default_literal,
+            Some(sagascript_core::diarization::DEFAULT_THRESHOLD)
+        );
     }
 
     fn synthetic_review(source: &str, text: &str) -> MeetingReview {

@@ -81,6 +81,14 @@ fn long_swedish_file_does_not_drop_words() {
     let hypothesis = words(&text);
     let deleted = deletions(&reference, &hypothesis);
     let ratio = deleted as f64 / reference.len() as f64;
-    println!("deletions {deleted}/{} = {:.2}%", reference.len(), ratio * 100.0);
-    assert!(ratio < 0.03, "dropped {:.2}% of reference words", ratio * 100.0);
+    println!(
+        "deletions {deleted}/{} = {:.2}%",
+        reference.len(),
+        ratio * 100.0
+    );
+    assert!(
+        ratio < 0.03,
+        "dropped {:.2}% of reference words",
+        ratio * 100.0
+    );
 }

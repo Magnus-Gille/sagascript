@@ -140,14 +140,21 @@ pub fn validate_boost_fields(obj: &serde_json::Map<String, Value>) -> Result<(),
     if let Some(terms) = obj.get("boost_terms") {
         let ok = terms.as_array().is_some_and(|a| {
             a.len() <= MAX_BOOST_TERMS
-                && a.iter().all(|t| t.as_str().is_some_and(|t| t.chars().count() <= MAX_BOOST_TERM_CHARS))
+                && a.iter().all(|t| {
+                    t.as_str()
+                        .is_some_and(|t| t.chars().count() <= MAX_BOOST_TERM_CHARS)
+                })
         });
         if !ok {
-            return Err("boost_terms must be an array of at most 500 strings of at most 64 characters");
+            return Err(
+                "boost_terms must be an array of at most 500 strings of at most 64 characters",
+            );
         }
     }
     if let Some(weight) = obj.get("boost_weight") {
-        let ok = weight.as_f64().is_some_and(|w| w.is_finite() && (0.0..=f64::from(MAX_BOOST_WEIGHT)).contains(&w));
+        let ok = weight
+            .as_f64()
+            .is_some_and(|w| w.is_finite() && (0.0..=f64::from(MAX_BOOST_WEIGHT)).contains(&w));
         if !ok {
             return Err("boost_weight must be a number within 0...20");
         }
@@ -188,7 +195,10 @@ pub fn decode_request(line: &str) -> Result<ParsedRequest, DecodeError> {
         // Dictionary terms are personal data: reject malformed fields with fixed texts before typed
         // deserialization, whose errors would echo the offending value.
         if let Err(message) = validate_boost_fields(obj) {
-            return Ok(ParsedRequest::BadParams { id, message: message.into() });
+            return Ok(ParsedRequest::BadParams {
+                id,
+                message: message.into(),
+            });
         }
     }
     match serde_json::from_value::<RequestOp>(value) {
@@ -375,7 +385,11 @@ pub struct WindowTimings {
     #[serde(default, deserialize_with = "lenient_u64")]
     pub decode_ms: u64,
     /// Microseconds spent building the context-biasing trie (0 on a cache hit or when unused).
-    #[serde(default, deserialize_with = "lenient_u64", skip_serializing_if = "is_zero_u64")]
+    #[serde(
+        default,
+        deserialize_with = "lenient_u64",
+        skip_serializing_if = "is_zero_u64"
+    )]
     pub boost_us: u64,
 }
 

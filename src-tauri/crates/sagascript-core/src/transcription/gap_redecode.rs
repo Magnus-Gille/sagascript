@@ -61,8 +61,8 @@ impl RedecodeLimits {
 }
 
 fn segment_is_trustworthy(segment: &TranscriptSegment, limits: &RedecodeLimits) -> bool {
-    let no_speech = limits.no_speech_threshold > 0.0
-        && segment.no_speech_prob > limits.no_speech_threshold;
+    let no_speech =
+        limits.no_speech_threshold > 0.0 && segment.no_speech_prob > limits.no_speech_threshold;
     let low_confidence = segment
         .avg_logprob
         .is_some_and(|logprob| logprob < limits.min_avg_logprob);
@@ -302,13 +302,20 @@ mod tests {
         let samples = audio(60, &[(0, 10), (20, 40), (50, 60)]);
         let initial = vec![seg(0.0, 10.0, "first"), seg(50.0, 60.0, "last")];
         let mut calls = Vec::new();
-        let merged = redecode_uncovered_speech(&samples, initial, &limits(samples.len()), |slice| {
-            calls.push(slice.len());
-            Ok(vec![seg(0.0, 8.0, "middle one"), seg(8.0, 40.0, "middle two")])
-        });
+        let merged =
+            redecode_uncovered_speech(&samples, initial, &limits(samples.len()), |slice| {
+                calls.push(slice.len());
+                Ok(vec![
+                    seg(0.0, 8.0, "middle one"),
+                    seg(8.0, 40.0, "middle two"),
+                ])
+            });
         // Gap is 10s..50s (40s, 50% speech); decoded exactly once over that span.
         assert_eq!(calls, vec![40 * 16_000]);
-        assert_eq!(texts(&merged), ["first", "middle one", "middle two", "last"]);
+        assert_eq!(
+            texts(&merged),
+            ["first", "middle one", "middle two", "last"]
+        );
         assert_eq!(merged[1].start, 10.0);
         assert_eq!(merged[2].end, 50.0);
         assert!(analyze_coverage(&samples, &merged).warnings.is_empty());
@@ -318,7 +325,11 @@ mod tests {
     fn cancel_between_slices_skips_the_remaining_slices() {
         // Two separate dense-speech gaps: 10-30s and 40-60s.
         let samples = audio(70, &[(0, 10), (10, 30), (40, 60), (60, 70)]);
-        let initial = vec![seg(0.0, 10.0, "a"), seg(30.0, 40.0, "b"), seg(60.0, 70.0, "c")];
+        let initial = vec![
+            seg(0.0, 10.0, "a"),
+            seg(30.0, 40.0, "b"),
+            seg(60.0, 70.0, "c"),
+        ];
         let cancel = std::cell::Cell::new(false);
         let mut calls = 0;
         let _ = redecode_uncovered_speech_cancellable(
@@ -353,7 +364,10 @@ mod tests {
 
         let empty = redecode_uncovered_speech(&samples, initial.clone(), &l, |_| Ok(vec![]));
         assert_eq!(texts(&empty), ["first", "last"]);
-        assert_eq!(analyze_coverage(&samples, &empty).warnings[0].code, "uncovered_speech");
+        assert_eq!(
+            analyze_coverage(&samples, &empty).warnings[0].code,
+            "uncovered_speech"
+        );
 
         let failed = redecode_uncovered_speech(&samples, initial, &l, |_| {
             Err(DictationError::TranscriptionFailed("boom".into()))
@@ -367,11 +381,12 @@ mod tests {
         let samples = audio(60, &[(0, 10), (20, 60)]);
         let initial = vec![seg(0.0, 10.0, "first")];
         let mut slice_len = 0;
-        let merged = redecode_uncovered_speech(&samples, initial, &limits(samples.len()), |slice| {
-            slice_len = slice.len();
-            // Timestamps run past the slice end; they must clamp to the file.
-            Ok(vec![seg(0.0, 70.0, "tail")])
-        });
+        let merged =
+            redecode_uncovered_speech(&samples, initial, &limits(samples.len()), |slice| {
+                slice_len = slice.len();
+                // Timestamps run past the slice end; they must clamp to the file.
+                Ok(vec![seg(0.0, 70.0, "tail")])
+            });
         assert_eq!(slice_len, 50 * 16_000);
         assert_eq!(texts(&merged), ["first", "tail"]);
         assert_eq!(merged[1].start, 10.0);
@@ -383,10 +398,14 @@ mod tests {
         let samples = audio(1000, &[(0, 10), (20, 190), (195, 1000)]);
         let initial = vec![seg(0.0, 10.0, "first"), seg(195.0, 1000.0, "last")];
         let mut calls = Vec::new();
-        let merged = redecode_uncovered_speech(&samples, initial, &limits(samples.len()), |slice| {
-            calls.push(slice.len());
-            Ok(vec![seg(0.0, 60.0, "long one"), seg(60.0, 185.0, "long two")])
-        });
+        let merged =
+            redecode_uncovered_speech(&samples, initial, &limits(samples.len()), |slice| {
+                calls.push(slice.len());
+                Ok(vec![
+                    seg(0.0, 60.0, "long one"),
+                    seg(60.0, 185.0, "long two"),
+                ])
+            });
         // 10s..195s is 185 s; one call, Whisper windows it internally.
         assert_eq!(calls, vec![185 * 16_000]);
         assert_eq!(texts(&merged), ["first", "long one", "long two", "last"]);
@@ -461,12 +480,12 @@ mod tests {
         // 1000 s file -> cap is 200 s. Two gaps: A = 100 s at ~50% density,
         // B = 100 s at ~100% density; C = 100 s at ~50% would exceed the cap.
         let speech = [
-            (0, 10),    // covered
-            (60, 110),  // gap A: 10..110 (50 s of 100)
-            (110, 120), // covered
-            (120, 220), // gap B: 120..220 fully speech
-            (220, 230), // covered
-            (280, 330), // gap C: 230..330 (50 s of 100)
+            (0, 10),     // covered
+            (60, 110),   // gap A: 10..110 (50 s of 100)
+            (110, 120),  // covered
+            (120, 220),  // gap B: 120..220 fully speech
+            (220, 230),  // covered
+            (280, 330),  // gap C: 230..330 (50 s of 100)
             (330, 1000), // covered
         ];
         let samples = audio(1000, &speech);
@@ -486,14 +505,25 @@ mod tests {
         // B (densest) first, then one of the 50% spans; the third is over budget.
         assert_eq!(decoded, vec![100.0, 100.0]);
         assert_eq!(merged.iter().filter(|s| s.text == "recovered").count(), 2);
-        assert!(merged.iter().any(|s| s.text == "recovered" && s.start == 120.0));
+        assert!(merged
+            .iter()
+            .any(|s| s.text == "recovered" && s.start == 120.0));
     }
 
     #[test]
     fn budget_scales_with_duration_and_is_capped() {
-        assert_eq!(RedecodeLimits::for_audio(1000.0, 0.3).max_total_seconds, 200.0);
-        assert_eq!(RedecodeLimits::for_audio(36_000.0, 0.3).max_total_seconds, 600.0);
-        assert_eq!(RedecodeLimits::for_audio(120.0, 0.3).max_total_seconds, 60.0);
+        assert_eq!(
+            RedecodeLimits::for_audio(1000.0, 0.3).max_total_seconds,
+            200.0
+        );
+        assert_eq!(
+            RedecodeLimits::for_audio(36_000.0, 0.3).max_total_seconds,
+            600.0
+        );
+        assert_eq!(
+            RedecodeLimits::for_audio(120.0, 0.3).max_total_seconds,
+            60.0
+        );
         assert_eq!(RedecodeLimits::for_audio(30.0, 0.3).max_total_seconds, 30.0);
     }
 }

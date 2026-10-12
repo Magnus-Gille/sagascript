@@ -355,7 +355,10 @@ pub fn is_overridden() -> bool {
 // ---- presence and verification -------------------------------------------
 
 fn override_is_usable(manifest: &ModelManifest, dir: &Path) -> bool {
-    manifest.required_items.iter().all(|item| dir.join(item).exists())
+    manifest
+        .required_items
+        .iter()
+        .all(|item| dir.join(item).exists())
 }
 
 fn is_downloaded_in(manifest: &ModelManifest, dir: &Path) -> bool {
@@ -386,11 +389,7 @@ fn stamp_path_for(dir: &Path, file: &ManifestFile) -> PathBuf {
         .join(format!("{}.verified.json", file.path.replace('/', "__")))
 }
 
-fn verify_in(
-    manifest: &ModelManifest,
-    dir: &Path,
-    force: bool,
-) -> Result<(), DictationError> {
+fn verify_in(manifest: &ModelManifest, dir: &Path, force: bool) -> Result<(), DictationError> {
     if manifest.is_placeholder() {
         return Err(DictationError::ModelDownloadFailed(
             "The Pianissimo model manifest has not been published yet".into(),
@@ -483,8 +482,11 @@ fn extract_archive(archive: &Path, dest: &Path, max_bytes: u64) -> Result<(), Di
             .map_err(|e| install_err(format!("Cannot create {}: {e}", target.display())))?;
         // Bounded copy: a lying header cannot exceed the manifest's total size.
         let remaining = max_bytes.saturating_sub(written_total);
-        let copied = std::io::copy(&mut std::io::Read::take(&mut entry, remaining + 1), &mut out)
-            .map_err(|e| install_err(format!("Cannot extract {}: {e}", target.display())))?;
+        let copied = std::io::copy(
+            &mut std::io::Read::take(&mut entry, remaining + 1),
+            &mut out,
+        )
+        .map_err(|e| install_err(format!("Cannot extract {}: {e}", target.display())))?;
         written_total += copied;
         if written_total > max_bytes {
             return Err(install_err(
@@ -589,7 +591,8 @@ fn recover_in(manifest: &ModelManifest, models: &Path) {
     }
     let final_dir = installed_dir_in(manifest, models);
     if final_dir.exists() {
-        if is_downloaded_in(manifest, &final_dir) && verify_in(manifest, &final_dir, false).is_ok() {
+        if is_downloaded_in(manifest, &final_dir) && verify_in(manifest, &final_dir, false).is_ok()
+        {
             for backup in backups {
                 let _ = std::fs::remove_dir_all(backup);
             }
@@ -600,7 +603,10 @@ fn recover_in(manifest: &ModelManifest, models: &Path) {
         if is_downloaded_in(manifest, &backup) && verify_in(manifest, &backup, false).is_ok() {
             match std::fs::rename(&backup, &final_dir) {
                 Ok(()) => {
-                    warn!("Restored previous Pianissimo install from {}", backup.display());
+                    warn!(
+                        "Restored previous Pianissimo install from {}",
+                        backup.display()
+                    );
                     return;
                 }
                 Err(error) => warn!("Cannot restore {}: {error}", backup.display()),
@@ -679,7 +685,11 @@ pub fn install_archive_in(
     let result = (|| {
         std::fs::create_dir(&staging)
             .map_err(|e| install_err(format!("Cannot create staging directory: {e}")))?;
-        extract_archive(archive, &staging, manifest.installed_size().saturating_add(1 << 20))?;
+        extract_archive(
+            archive,
+            &staging,
+            manifest.installed_size().saturating_add(1 << 20),
+        )?;
         let root = content_root(&staging, manifest);
         verify_in(manifest, &root, true)?;
         write_attribution(manifest, &root)?;
@@ -697,8 +707,11 @@ fn write_attribution(manifest: &ModelManifest, dir: &Path) -> Result<(), Dictati
     if manifest.files.iter().any(|f| f.path == ATTRIBUTION_FILE) {
         return Ok(());
     }
-    std::fs::write(dir.join(ATTRIBUTION_FILE), format!("{}\n", manifest.attribution))
-        .map_err(|e| install_err(format!("Cannot write attribution notice: {e}")))
+    std::fs::write(
+        dir.join(ATTRIBUTION_FILE),
+        format!("{}\n", manifest.attribution),
+    )
+    .map_err(|e| install_err(format!("Cannot write attribution notice: {e}")))
 }
 
 /// Verify a staging directory of individually downloaded files and install it.
@@ -774,7 +787,10 @@ pub async fn download(
 ) -> Result<PathBuf, DictationError> {
     let manifest = active();
     if let Some(dir) = override_dir() {
-        info!("Using {MODEL_DIR_ENV}={}; nothing to download", dir.display());
+        info!(
+            "Using {MODEL_DIR_ENV}={}; nothing to download",
+            dir.display()
+        );
         return if override_is_usable(manifest, &dir) {
             Ok(dir)
         } else {
@@ -802,7 +818,10 @@ async fn download_in(
 
     if is_downloaded_in(manifest, &destination) && verify_in(manifest, &destination, false).is_ok()
     {
-        info!("Pianissimo model already exists at {}", destination.display());
+        info!(
+            "Pianissimo model already exists at {}",
+            destination.display()
+        );
         cleanup_superseded(manifest, &models);
         return Ok(destination);
     }
@@ -816,17 +835,32 @@ async fn download_in(
 
     let installed = match manifest.source {
         ModelSource::Files { .. } => {
-            download_files_in(manifest, &models, progress_callback, |url, dest, integrity, progress| async move {
-                download_to_path(&url, &dest, "onnx", integrity, None, progress).await
-            })
+            download_files_in(
+                manifest,
+                &models,
+                progress_callback,
+                |url, dest, integrity, progress| async move {
+                    download_to_path(&url, &dest, "onnx", integrity, None, progress).await
+                },
+            )
             .await?
         }
-        ModelSource::Archive { url, archive: integrity } => {
+        ModelSource::Archive {
+            url,
+            archive: integrity,
+        } => {
             let archive = models.join(format!("{}.zip", manifest.versioned_id()));
             if prepare_existing_artifact(&archive, integrity)? != ExistingArtifact::Verified {
                 info!("Downloading Pianissimo model from {url}");
-                download_to_path(url, &archive, "zip", integrity, Some(b"PK\x03\x04"), progress_callback)
-                    .await?;
+                download_to_path(
+                    url,
+                    &archive,
+                    "zip",
+                    integrity,
+                    Some(b"PK\x03\x04"),
+                    progress_callback,
+                )
+                .await?;
             }
             let installed = tokio::task::spawn_blocking({
                 let archive = archive.clone();
@@ -894,7 +928,8 @@ fn cleanup_superseded(manifest: &ModelManifest, models: &Path) {
             && name != current
             && !name.contains(PREVIOUS_MARKER)
             && entry.path().is_dir();
-        let stale_staging = name.starts_with(STAGING_PREFIX) || name.starts_with(LEGACY_TRASH_PREFIX);
+        let stale_staging =
+            name.starts_with(STAGING_PREFIX) || name.starts_with(LEGACY_TRASH_PREFIX);
         if stale_revision || stale_staging {
             if let Err(error) = remove_dir_if_present(&entry.path()) {
                 warn!("{error}");
@@ -935,7 +970,10 @@ mod tests {
     /// Fixture files: (relative path, contents).
     const FIXTURE: [(&str, &[u8]); 6] = [
         ("Preprocessor.mlpackage/Manifest.json", b"{\"pre\":1}"),
-        ("Encoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin", b"encoder-weights"),
+        (
+            "Encoder.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+            b"encoder-weights",
+        ),
         ("Decoder.mlpackage/Manifest.json", b"{\"dec\":1}"),
         ("JointDecisionv3.mlpackage/Manifest.json", b"{\"joint\":1}"),
         ("parakeet_vocab.json", b"[\"a\"]"),
@@ -994,16 +1032,29 @@ mod tests {
 
     #[test]
     fn production_manifest_is_published_pinned_and_complete() {
-        assert_eq!(MANIFEST.versioned_id(), format!("pianissimo-sv-coreml-{}", MANIFEST.revision));
-        assert!(!MANIFEST.is_placeholder(), "production manifest must reference the published artifact");
+        assert_eq!(
+            MANIFEST.versioned_id(),
+            format!("pianissimo-sv-coreml-{}", MANIFEST.revision)
+        );
+        assert!(
+            !MANIFEST.is_placeholder(),
+            "production manifest must reference the published artifact"
+        );
         let ModelSource::Archive { url, archive } = MANIFEST.source else {
             panic!("Core ML manifest must be an archive");
         };
         let pinned = regex_lite_commit(url);
-        assert!(pinned, "model URL must be pinned to a 40-hex Hugging Face commit: {url}");
+        assert!(
+            pinned,
+            "model URL must be pinned to a 40-hex Hugging Face commit: {url}"
+        );
         assert!(!url.contains("/resolve/main/"));
         assert!(url.ends_with(".zip"));
-        let hex64 = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+        let hex64 = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        };
         assert!(hex64(archive.sha256));
         assert!(archive.size > MANIFEST.installed_size());
         for file in MANIFEST.files {
@@ -1012,7 +1063,10 @@ mod tests {
         }
         for required in REQUIRED_ITEMS {
             assert!(
-                MANIFEST.files.iter().any(|f| f.path.starts_with(required) || f.path == required),
+                MANIFEST
+                    .files
+                    .iter()
+                    .any(|f| f.path.starts_with(required) || f.path == required),
                 "{required} missing from manifest"
             );
         }
@@ -1023,7 +1077,9 @@ mod tests {
 
     /// `https://huggingface.co/<owner>/<repo>/resolve/<40-hex commit>/<file>`.
     fn regex_lite_commit(url: &str) -> bool {
-        let Some(rest) = url.strip_prefix("https://huggingface.co/") else { return false };
+        let Some(rest) = url.strip_prefix("https://huggingface.co/") else {
+            return false;
+        };
         let parts: Vec<&str> = rest.split('/').collect();
         parts.len() == 5
             && parts[2] == "resolve"
@@ -1046,7 +1102,13 @@ mod tests {
         verify_in(&manifest, &dir, false).unwrap();
         // Stamps live outside the mlpackages.
         assert!(dir.join(STAMP_DIR).is_dir());
-        assert!(!dir.join("Encoder.mlpackage").join("Data").join("com.apple.CoreML").join("weights").join("weight.bin.verified.json").exists());
+        assert!(!dir
+            .join("Encoder.mlpackage")
+            .join("Data")
+            .join("com.apple.CoreML")
+            .join("weights")
+            .join("weight.bin.verified.json")
+            .exists());
         // No staging leftovers.
         let leftovers: Vec<_> = fs::read_dir(&models)
             .unwrap()
@@ -1087,7 +1149,11 @@ mod tests {
 
         assert!(error.to_string().contains("integrity"), "{error}");
         assert!(!installed_dir_in(&manifest, &models).exists());
-        assert_eq!(fs::read_dir(&models).unwrap().count(), 0, "staging dir cleaned up");
+        assert_eq!(
+            fs::read_dir(&models).unwrap().count(),
+            0,
+            "staging dir cleaned up"
+        );
     }
 
     #[test]
@@ -1154,7 +1220,10 @@ mod tests {
         let archive = build_zip(root.path(), &FIXTURE);
         let manifest = manifest_for(&FIXTURE, &archive);
         let dir = install_archive_in(&manifest, &archive, &models).unwrap();
-        let stamps: Vec<_> = fs::read_dir(dir.join(STAMP_DIR)).unwrap().flatten().collect();
+        let stamps: Vec<_> = fs::read_dir(dir.join(STAMP_DIR))
+            .unwrap()
+            .flatten()
+            .collect();
         assert_eq!(stamps.len(), FIXTURE.len());
         verify_in(&manifest, &dir, false).unwrap();
         verify_in(&manifest, &dir, true).unwrap();
@@ -1171,7 +1240,11 @@ mod tests {
         let manifest = manifest_for(&FIXTURE, &archive);
         let dir = install_archive_in(&manifest, &archive, &models).unwrap();
         fs::write(models.join(LEGACY_GGUF_FILENAME), b"gguf").unwrap();
-        fs::write(models.join(format!("{LEGACY_GGUF_FILENAME}.verified.json")), b"{}").unwrap();
+        fs::write(
+            models.join(format!("{LEGACY_GGUF_FILENAME}.verified.json")),
+            b"{}",
+        )
+        .unwrap();
         fs::write(models.join(LEGACY_NEMO_FILENAME), b"nemo").unwrap();
 
         delete_in(&manifest, &models).unwrap();
@@ -1224,7 +1297,9 @@ mod tests {
         ModelManifest {
             model_id: "pianissimo-sv-onnx",
             revision: "test1",
-            source: ModelSource::Files { base_url: "http://invalid.example/repo" },
+            source: ModelSource::Files {
+                base_url: "http://invalid.example/repo",
+            },
             files: Box::leak(files.into_boxed_slice()),
             required_items: Box::leak(required.into_boxed_slice()),
             attribution: ATTRIBUTION,
@@ -1249,7 +1324,12 @@ mod tests {
                 if fail == Some(name.as_str()) {
                     return Err(install_err("network down"));
                 }
-                let mut bytes = ONNX_FIXTURE.iter().find(|(p, _)| *p == name).unwrap().1.to_vec();
+                let mut bytes = ONNX_FIXTURE
+                    .iter()
+                    .find(|(p, _)| *p == name)
+                    .unwrap()
+                    .1
+                    .to_vec();
                 if corrupt == Some(name.as_str()) {
                     bytes[0] ^= 0xff;
                 }
@@ -1262,7 +1342,10 @@ mod tests {
     }
 
     fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
-        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(future)
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(future)
     }
 
     #[test]
@@ -1270,10 +1353,16 @@ mod tests {
         let m = &ONNX_MANIFEST;
         assert_eq!(m.versioned_id(), "pianissimo-sv-onnx-32118e6");
         assert!(!m.is_placeholder());
-        let ModelSource::Files { base_url } = m.source else { panic!("ONNX manifest must be a file list") };
+        let ModelSource::Files { base_url } = m.source else {
+            panic!("ONNX manifest must be a file list")
+        };
         assert!(base_url.starts_with("https://huggingface.co/KlangAI/pianissimo-sv-onnx/resolve/"));
         assert!(regex_lite_commit(&format!("{base_url}/x")), "{base_url}");
-        let hex64 = |s: &str| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+        let hex64 = |s: &str| {
+            s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        };
         for file in m.files {
             assert!(hex64(file.sha256) && file.size > 0, "{}", file.path);
         }
@@ -1313,13 +1402,20 @@ mod tests {
         verify_in(&manifest, &dir, true).unwrap();
         let notice = fs::read_to_string(dir.join(ATTRIBUTION_FILE)).unwrap();
         assert!(notice.contains("CC BY 4.0") && notice.contains("Klang AI AB"));
-        let leftovers: Vec<_> = fs::read_dir(&models).unwrap().flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with('.')).collect();
+        let leftovers: Vec<_> = fs::read_dir(&models)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
+            .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
         let seen = seen.lock().unwrap();
         let total: u64 = ONNX_FIXTURE.iter().map(|(_, b)| b.len() as u64).sum();
         assert!(seen.iter().all(|(_, t)| *t == total));
-        assert_eq!(seen.last().unwrap().0, total, "progress is aggregated across files");
+        assert_eq!(
+            seen.last().unwrap().0,
+            total,
+            "progress is aggregated across files"
+        );
         assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0));
     }
 
@@ -1330,7 +1426,14 @@ mod tests {
         let manifest = files_manifest(&ONNX_FIXTURE);
         let seen = Default::default();
 
-        let error = block_on(run_download(&manifest, &models, Some("vocab.txt"), None, seen)).unwrap_err();
+        let error = block_on(run_download(
+            &manifest,
+            &models,
+            Some("vocab.txt"),
+            None,
+            seen,
+        ))
+        .unwrap_err();
 
         assert!(error.to_string().contains("integrity"), "{error}");
         assert!(!installed_dir_in(&manifest, &models).exists());
@@ -1342,16 +1445,41 @@ mod tests {
         let root = tmp();
         let models = root.path().join("Models");
         let manifest = files_manifest(&ONNX_FIXTURE);
-        let dir = block_on(run_download(&manifest, &models, None, None, Default::default())).unwrap();
+        let dir = block_on(run_download(
+            &manifest,
+            &models,
+            None,
+            None,
+            Default::default(),
+        ))
+        .unwrap();
         fs::write(dir.join("config.json"), b"XX").unwrap(); // same size, wrong bytes
         assert!(verify_in(&manifest, &dir, true).is_err());
 
-        let error = block_on(run_download(&manifest, &models, None, Some("config.json"), Default::default())).unwrap_err();
+        let error = block_on(run_download(
+            &manifest,
+            &models,
+            None,
+            Some("config.json"),
+            Default::default(),
+        ))
+        .unwrap_err();
         assert!(error.to_string().contains("network down"), "{error}");
-        assert_eq!(fs::read(dir.join("config.json")).unwrap(), b"XX", "untouched on failure");
+        assert_eq!(
+            fs::read(dir.join("config.json")).unwrap(),
+            b"XX",
+            "untouched on failure"
+        );
 
         // A later successful run replaces the corrupt directory.
-        let dir = block_on(run_download(&manifest, &models, None, None, Default::default())).unwrap();
+        let dir = block_on(run_download(
+            &manifest,
+            &models,
+            None,
+            None,
+            Default::default(),
+        ))
+        .unwrap();
         verify_in(&manifest, &dir, true).unwrap();
         assert_eq!(fs::read_dir(&models).unwrap().count(), 1);
     }
@@ -1360,7 +1488,14 @@ mod tests {
     fn archive_manifests_have_no_per_file_urls_and_reject_file_downloads() {
         let root = tmp();
         let models = root.path().join("Models");
-        let error = block_on(run_download(&MANIFEST, &models, None, None, Default::default())).unwrap_err();
+        let error = block_on(run_download(
+            &MANIFEST,
+            &models,
+            None,
+            None,
+            Default::default(),
+        ))
+        .unwrap_err();
         assert!(error.to_string().contains("per-file"), "{error}");
         assert_eq!(fs::read_dir(&models).unwrap().count(), 0);
     }
@@ -1468,12 +1603,15 @@ mod tests {
         let root = tmp();
         let models = root.path().join("Models");
         let archive = build_zip(root.path(), &FIXTURE);
-        let manifest: &'static ModelManifest = Box::leak(Box::new(manifest_for(&FIXTURE, &archive)));
+        let manifest: &'static ModelManifest =
+            Box::leak(Box::new(manifest_for(&FIXTURE, &archive)));
         let result = download_in(manifest, &models, |_| Some(1), |_, _| {}).await;
         let message = result.unwrap_err().to_string();
         assert!(message.contains("Not enough free disk space"), "{message}");
         assert!(message.contains("GB"), "{message}");
-        assert!(!models.join(format!("{}.zip", manifest.versioned_id())).exists());
+        assert!(!models
+            .join(format!("{}.zip", manifest.versioned_id()))
+            .exists());
     }
 
     #[test]
@@ -1488,7 +1626,14 @@ mod tests {
         let root = tmp();
         let models = root.path().join("Models");
         let manifest = files_manifest(&ONNX_FIXTURE);
-        let dir = block_on(run_download(&manifest, &models, None, None, Default::default())).unwrap();
+        let dir = block_on(run_download(
+            &manifest,
+            &models,
+            None,
+            None,
+            Default::default(),
+        ))
+        .unwrap();
         // Crash after step 1 of promotion: old install only under the backup name.
         let backup = models.join(format!("{}{PREVIOUS_MARKER}crash", manifest.versioned_id()));
         fs::rename(&dir, &backup).unwrap();

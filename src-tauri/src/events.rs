@@ -54,10 +54,7 @@ mod tests {
                 !name.contains('_'),
                 "event '{name}' uses underscore instead of kebab-case"
             );
-            assert!(
-                !name.contains(' '),
-                "event '{name}' contains spaces"
-            );
+            assert!(!name.contains(' '), "event '{name}' contains spaces");
         }
     }
 

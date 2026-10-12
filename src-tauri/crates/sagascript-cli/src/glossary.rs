@@ -86,21 +86,28 @@ pub fn run(args: GlossaryArgs) -> Result<(), DictationError> {
     match args.action {
         GlossaryAction::Path { profile } => path(profile.as_deref()),
         GlossaryAction::List { profile } => list(profile.as_deref()),
-        GlossaryAction::Add { term, aliases, profile } => {
-            add(&term, &aliases, profile.as_deref())
-        }
+        GlossaryAction::Add {
+            term,
+            aliases,
+            profile,
+        } => add(&term, &aliases, profile.as_deref()),
         GlossaryAction::Remove { term, profile } => remove(&term, profile.as_deref()),
         GlossaryAction::Clear { yes, profile } => clear(yes, profile.as_deref()),
-        GlossaryAction::Suggest { heard, corrected, profile, json, apply } => {
-            suggest(&heard, &corrected, profile.as_deref(), json, apply)
-        }
+        GlossaryAction::Suggest {
+            heard,
+            corrected,
+            profile,
+            json,
+            apply,
+        } => suggest(&heard, &corrected, profile.as_deref(), json, apply),
     }
 }
 
 fn path(profile: Option<&str>) -> Result<(), DictationError> {
     let stored = settings::store::load();
     let profile = resolved_profile_id(&stored, profile)?;
-    let path = settings::store::profile_glossary_path(&profile).map_err(DictationError::SettingsError)?;
+    let path =
+        settings::store::profile_glossary_path(&profile).map_err(DictationError::SettingsError)?;
     println!("{}", path.display());
     Ok(())
 }
@@ -187,7 +194,7 @@ fn clear(confirmed: bool, profile: Option<&str>) -> Result<(), DictationError> {
         glossary_source_mut(stored, profile)?.clear();
         Ok(())
     })
-        .map_err(DictationError::SettingsError)?;
+    .map_err(DictationError::SettingsError)?;
     eprintln!("Cleared personal dictionary");
     Ok(())
 }
@@ -231,7 +238,10 @@ fn suggest(
                 );
             }
 
-            let source = latest.profile_glossaries.entry(profile_id.clone()).or_default();
+            let source = latest
+                .profile_glossaries
+                .entry(profile_id.clone())
+                .or_default();
             let mut scoped = Glossary::parse(source);
             apply_candidates(&mut scoped, &reviewed);
             *source = scoped.render();
@@ -291,17 +301,20 @@ fn load_training_input(
         .into_iter()
         .find(|profile| profile.id == profile_id)
         .expect("validated profile must still exist");
-    let choice = stored.dictation_model_for_profile(profile_id).map_err(DictationError::SettingsError)?;
+    let choice = stored
+        .dictation_model_for_profile(profile_id)
+        .map_err(DictationError::SettingsError)?;
     match choice {
         FileModel::Whisper(model) if !model::is_model_downloaded(model) => {
             return Err(DictationError::TranscriptionFailed(format!(
                 "Model '{}' is not downloaded. Run: sagascript download-model {}",
-                model.display_name(), model_id_string(model)
+                model.display_name(),
+                model_id_string(model)
             )));
         }
         FileModel::PianissimoOriginal if !pianissimo_model::is_downloaded() => {
             return Err(DictationError::TranscriptionFailed(
-                "Pianissimo is not downloaded. Run: sagascript download-model pianissimo-sv".into()
+                "Pianissimo is not downloaded. Run: sagascript download-model pianissimo-sv".into(),
             ));
         }
         _ => {}
@@ -316,11 +329,17 @@ fn load_training_input(
     }
     let raw = match choice {
         FileModel::Whisper(model) => {
-            eprintln!("Transcribing training input locally with {}...", model.display_name());
+            eprintln!(
+                "Transcribing training input locally with {}...",
+                model.display_name()
+            );
             let backend = WhisperBackend::new();
             backend.load_model(model)?;
             backend.transcribe_sync_with_progress_and_prompt(
-                &audio, profile.language, glossary.decoder_prompt().as_deref(), |_| {},
+                &audio,
+                profile.language,
+                glossary.decoder_prompt().as_deref(),
+                |_| {},
             )?
         }
         FileModel::PianissimoOriginal => {
@@ -335,7 +354,10 @@ fn apply_candidates(glossary: &mut Glossary, candidates: &[GlossarySuggestion]) 
     for candidate in candidates {
         match candidate.kind {
             GlossarySuggestionKind::Alias => {
-                glossary.upsert(candidate.canonical.clone(), vec![candidate.observed.clone()]);
+                glossary.upsert(
+                    candidate.canonical.clone(),
+                    vec![candidate.observed.clone()],
+                );
             }
             GlossarySuggestionKind::HintOnly => {
                 glossary.upsert(candidate.canonical.clone(), Vec::new());
@@ -349,7 +371,11 @@ fn glossary_source<'a>(
     profile: Option<&str>,
 ) -> Result<&'a str, DictationError> {
     let id = resolved_profile_id(stored, profile)?;
-    Ok(stored.profile_glossaries.get(&id).map(String::as_str).unwrap_or(""))
+    Ok(stored
+        .profile_glossaries
+        .get(&id)
+        .map(String::as_str)
+        .unwrap_or(""))
 }
 
 fn glossary_source_mut<'a>(
@@ -360,7 +386,10 @@ fn glossary_source_mut<'a>(
     Ok(stored.profile_glossaries.entry(id).or_default())
 }
 
-fn resolved_profile_id(stored: &settings::Settings, profile: Option<&str>) -> Result<String, DictationError> {
+fn resolved_profile_id(
+    stored: &settings::Settings,
+    profile: Option<&str>,
+) -> Result<String, DictationError> {
     if let Some(id) = profile {
         if stored.profile_glossaries.contains_key(id) {
             return Ok(id.to_string());
@@ -368,8 +397,12 @@ fn resolved_profile_id(stored: &settings::Settings, profile: Option<&str>) -> Re
     }
     let id = profile.map(str::to_string).unwrap_or_else(|| {
         let profiles = stored.resolved_hotkey_profiles();
-        profiles.iter().find(|candidate| candidate.id == "default")
-            .unwrap_or(&profiles[0]).id.clone()
+        profiles
+            .iter()
+            .find(|candidate| candidate.id == "default")
+            .unwrap_or(&profiles[0])
+            .id
+            .clone()
     });
     validate_profile(stored, &id)?;
     Ok(id)

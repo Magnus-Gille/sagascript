@@ -72,25 +72,36 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let stored = sagascript_core::settings::store::load();
     let profile = match args.profile.as_deref() {
         Some(profile_id) => resolve_profile(&stored, profile_id)?,
-        None => stored.resolved_hotkey_profiles().into_iter()
+        None => stored
+            .resolved_hotkey_profiles()
+            .into_iter()
             .find(|candidate| candidate.id == "default")
             .or_else(|| stored.resolved_hotkey_profiles().into_iter().next())
             .expect("settings always resolve a default profile"),
     };
-    let language = args.language.as_deref().map(parse_language).transpose()?.unwrap_or(profile.language);
+    let language = args
+        .language
+        .as_deref()
+        .map(parse_language)
+        .transpose()?
+        .unwrap_or(profile.language);
     let save_only = args.output.is_some();
     // Saving audio does not select or require a transcription model. Resolve
     // and validate the engine before capture for every transcription run.
     let selected_model = if save_only {
         None
     } else {
-        let mut selected = resolve_record_model_for_profile(&stored, &profile, language, args.model.as_deref())?;
+        let mut selected =
+            resolve_record_model_for_profile(&stored, &profile, language, args.model.as_deref())?;
         // Pianissimo has no decoder hints. When it was only implied by
         // "recommended" (no --model, profile on Auto or a language override),
         // decode with the recommended Whisper model instead of failing.
         let implicit_pianissimo = args.model.is_none()
             && (language != profile.language
-                || stored.profile_models.get(&profile.id).is_none_or(|p| *p == sagascript_core::settings::FileModelPreference::Auto));
+                || stored
+                    .profile_models
+                    .get(&profile.id)
+                    .is_none_or(|p| *p == sagascript_core::settings::FileModelPreference::Auto));
         if selected == RecordModel::Pianissimo
             && implicit_pianissimo
             && (args.prompt.is_some() || args.prompt_file.is_some())
@@ -107,7 +118,12 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
     let glossary = if save_only {
         Glossary::parse("")
     } else if language == profile.language {
-        effective_glossary(&stored, Some(&profile.id), args.prompt.as_deref(), args.prompt_file.as_deref())?
+        effective_glossary(
+            &stored,
+            Some(&profile.id),
+            args.prompt.as_deref(),
+            args.prompt_file.as_deref(),
+        )?
     } else {
         let hint = resolve_one_run_prompt(args.prompt.as_deref(), args.prompt_file.as_deref())?;
         Glossary::parse(hint.as_deref().unwrap_or(""))
@@ -124,9 +140,11 @@ pub fn run(args: RecordArgs) -> Result<(), DictationError> {
                 }
             }
             RecordModel::Pianissimo => {
-                if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os() {
+                if !sagascript_core::transcription::pianissimo_backend::runtime_supported_on_this_os(
+                ) {
                     return Err(DictationError::TranscriptionFailed(
-                        sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE.into(),
+                        sagascript_core::transcription::pianissimo_backend::UNSUPPORTED_MESSAGE
+                            .into(),
                     ));
                 }
                 if !pianissimo_model::is_downloaded() {
@@ -274,9 +292,14 @@ fn resolve_record_model_for_profile(
     explicit: Option<&str>,
 ) -> Result<RecordModel, DictationError> {
     if explicit.is_none() && language == profile.language {
-        let (whisper, pianissimo) = stored.live_model_for_profile(&profile.id)
+        let (whisper, pianissimo) = stored
+            .live_model_for_profile(&profile.id)
             .map_err(DictationError::SettingsError)?;
-        return Ok(if pianissimo { RecordModel::Pianissimo } else { RecordModel::Whisper(whisper) });
+        return Ok(if pianissimo {
+            RecordModel::Pianissimo
+        } else {
+            RecordModel::Whisper(whisper)
+        });
     }
     resolve_record_model(
         explicit,
@@ -386,10 +409,12 @@ fn ctrlc_handler(running: Arc<AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_record_model, resolve_record_model_for_profile, validate_pianissimo_record_options, write_plain_record_output,
-        RecordModel,
+        resolve_record_model, resolve_record_model_for_profile, validate_pianissimo_record_options,
+        write_plain_record_output, RecordModel,
     };
-    use sagascript_core::settings::{FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel};
+    use sagascript_core::settings::{
+        FileModelPreference, HotkeyProfile, Language, Settings, WhisperModel,
+    };
 
     const FALLBACK: WhisperModel = WhisperModel::KbWhisperLarge;
 
@@ -401,11 +426,31 @@ mod tests {
         english.id = "english".into();
         english.name = "English".into();
         settings.hotkey_profiles = vec![swedish.clone(), english.clone()];
-        settings.profile_models.insert("default".into(), FileModelPreference::PianissimoOriginal);
-        settings.profile_models.insert("english".into(), FileModelPreference::Whisper(WhisperModel::SmallEn));
-        assert_eq!(resolve_record_model_for_profile(&settings, &swedish, Language::Swedish, None).unwrap(), RecordModel::Pianissimo);
-        assert_eq!(resolve_record_model_for_profile(&settings, &english, Language::English, None).unwrap(), RecordModel::Whisper(WhisperModel::SmallEn));
-        assert_eq!(resolve_record_model_for_profile(&settings, &swedish, Language::Swedish, Some("kb-whisper-base")).unwrap(), RecordModel::Whisper(WhisperModel::KbWhisperBase));
+        settings
+            .profile_models
+            .insert("default".into(), FileModelPreference::PianissimoOriginal);
+        settings.profile_models.insert(
+            "english".into(),
+            FileModelPreference::Whisper(WhisperModel::SmallEn),
+        );
+        assert_eq!(
+            resolve_record_model_for_profile(&settings, &swedish, Language::Swedish, None).unwrap(),
+            RecordModel::Pianissimo
+        );
+        assert_eq!(
+            resolve_record_model_for_profile(&settings, &english, Language::English, None).unwrap(),
+            RecordModel::Whisper(WhisperModel::SmallEn)
+        );
+        assert_eq!(
+            resolve_record_model_for_profile(
+                &settings,
+                &swedish,
+                Language::Swedish,
+                Some("kb-whisper-base")
+            )
+            .unwrap(),
+            RecordModel::Whisper(WhisperModel::KbWhisperBase)
+        );
     }
 
     #[test]

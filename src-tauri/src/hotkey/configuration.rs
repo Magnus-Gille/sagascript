@@ -9,17 +9,21 @@ pub enum HotkeyChange {
 
 impl HotkeyChange {
     pub fn prepare(&self, settings: &Settings) -> Result<Settings, String> {
-        self.prepare_with_notices(settings).map(|(candidate, _)| candidate)
+        self.prepare_with_notices(settings)
+            .map(|(candidate, _)| candidate)
     }
 
     /// Like [`Self::prepare`], also returning notices about profile models
     /// that were reset to Auto because a language change made them incompatible.
-    pub fn prepare_with_notices(&self, settings: &Settings) -> Result<(Settings, Vec<String>), String> {
+    pub fn prepare_with_notices(
+        &self,
+        settings: &Settings,
+    ) -> Result<(Settings, Vec<String>), String> {
         let mut candidate = settings.clone();
         let notices = match self {
-            Self::Profiles(profiles) => {
-                sagascript_core::settings::ModelResetNotice::messages(&candidate.replace_hotkey_profiles(profiles.clone())?)
-            }
+            Self::Profiles(profiles) => sagascript_core::settings::ModelResetNotice::messages(
+                &candidate.replace_hotkey_profiles(profiles.clone())?,
+            ),
             Self::Mode(mode) => {
                 candidate.replace_hotkey_mode(*mode)?;
                 Vec::new()
@@ -36,7 +40,9 @@ impl HotkeyChange {
     ) -> Result<(), String> {
         let candidate = self.prepare(fresh)?;
         if candidate.resolved_shortcuts() != registered {
-            return Err("Shortcut configuration changed concurrently; retry after settings refresh".into());
+            return Err(
+                "Shortcut configuration changed concurrently; retry after settings refresh".into(),
+            );
         }
         *fresh = candidate;
         Ok(())
@@ -50,7 +56,9 @@ mod tests {
 
     #[test]
     fn invalid_profiles_never_produce_registration_candidate() {
-        assert!(HotkeyChange::Profiles(Vec::new()).prepare(&Settings::default()).is_err());
+        assert!(HotkeyChange::Profiles(Vec::new())
+            .prepare(&Settings::default())
+            .is_err());
     }
 
     #[test]
@@ -102,7 +110,12 @@ mod tests {
         profiles[0].toggle_shortcut = Some("Super+Shift+S".into());
         let change = HotkeyChange::Profiles(profiles);
         let mut fresh = settings.clone();
-        assert!(change.apply_registered(&mut fresh, &["Super+S".into()]).is_err());
-        assert_eq!(fresh.resolved_hotkey_profiles(), settings.resolved_hotkey_profiles());
+        assert!(change
+            .apply_registered(&mut fresh, &["Super+S".into()])
+            .is_err());
+        assert_eq!(
+            fresh.resolved_hotkey_profiles(),
+            settings.resolved_hotkey_profiles()
+        );
     }
 }

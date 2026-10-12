@@ -5,7 +5,7 @@
 /// - Global mean subtraction across all frames
 use std::sync::OnceLock;
 
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, FftPlanner};
 
 const SAMPLE_RATE: f32 = 16_000.0;
 pub const N_FFT: usize = 400; // 25ms window at 16kHz
@@ -211,7 +211,10 @@ mod tests {
     fn audio_too_short_returns_empty() {
         let audio = vec![0.0f32; N_FFT - 1];
         let features = compute_fbank(&audio);
-        assert!(features.is_empty(), "audio shorter than N_FFT should return empty");
+        assert!(
+            features.is_empty(),
+            "audio shorter than N_FFT should return empty"
+        );
     }
 
     #[test]
@@ -235,7 +238,10 @@ mod tests {
         let fb = mel_filterbank();
         for (m, row) in fb.iter().enumerate() {
             let sum: f32 = row.iter().sum();
-            assert!(sum > 0.0, "mel filter {m} should have positive sum, got {sum}");
+            assert!(
+                sum > 0.0,
+                "mel filter {m} should have positive sum, got {sum}"
+            );
         }
     }
 

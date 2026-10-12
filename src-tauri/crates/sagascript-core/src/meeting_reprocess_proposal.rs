@@ -335,11 +335,7 @@ mod tests {
         }
     }
 
-    fn edit_with_speaker(
-        segment_id: &str,
-        text: &str,
-        speaker_id: &str,
-    ) -> CorrectionOperation {
+    fn edit_with_speaker(segment_id: &str, text: &str, speaker_id: &str) -> CorrectionOperation {
         CorrectionOperation::EditSegment {
             segment_id: segment_id.to_owned(),
             text: Some(text.to_owned()),
@@ -510,8 +506,8 @@ mod tests {
             }],
         )
         .expect("split transcript");
-        let proposal = MeetingReprocessingProposal::new(previous_review(), proposed)
-            .expect("proposal");
+        let proposal =
+            MeetingReprocessingProposal::new(previous_review(), proposed).expect("proposal");
         assert_eq!(
             proposal.preview().expect("preview").steps[0].status,
             MigrationStatus::Conflict
@@ -585,11 +581,8 @@ mod tests {
             label: "Bob".into(),
         });
         proposed.validate().expect("proposed speakers");
-        let proposal = MeetingReprocessingProposal::new(
-            previous_review(),
-            proposed,
-        )
-        .expect("proposal");
+        let proposal =
+            MeetingReprocessingProposal::new(previous_review(), proposed).expect("proposal");
         let resolved = proposal
             .resolve(
                 &proposal.revision,

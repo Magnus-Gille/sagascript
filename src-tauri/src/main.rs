@@ -105,7 +105,11 @@ fn format_menu_shortcut(shortcut: &str) -> String {
             let original = part.trim();
             let normalized = match original.to_ascii_lowercase().as_str() {
                 "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" => {
-                    if cfg!(target_os = "macos") { "command" } else { "control" }
+                    if cfg!(target_os = "macos") {
+                        "command"
+                    } else {
+                        "control"
+                    }
                 }
                 _ => original,
             };
@@ -216,7 +220,11 @@ pub(crate) fn update_profiles_menu(app: &tauri::AppHandle, profiles: &[HotkeyPro
 fn select_profile_menu(app: &tauri::AppHandle, profile: &HotkeyProfile) {
     let profiles = {
         let controller: tauri::State<'_, SharedController> = app.state();
-        let profiles = controller.lock().unwrap().settings().resolved_hotkey_profiles();
+        let profiles = controller
+            .lock()
+            .unwrap()
+            .settings()
+            .resolved_hotkey_profiles();
         profiles
     };
     {
@@ -478,14 +486,18 @@ async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
         let (nonce, response) = preparation.begin();
         if let Err(error) = app.emit_to("settings", "update-preparing", nonce.clone()) {
             preparation.cancel(&nonce);
-            return Err(format!("Could not ask Settings to save recovery drafts: {error}"));
+            return Err(format!(
+                "Could not ask Settings to save recovery drafts: {error}"
+            ));
         }
         let result = tokio::time::timeout(Duration::from_secs(30), response).await;
         preparation.cancel(&nonce);
         return match result {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err("Settings closed before recovery drafts were saved.".into()),
-            Err(_) => Err("Timed out while saving recovery drafts. The update was not installed.".into()),
+            Err(_) => {
+                Err("Timed out while saving recovery drafts. The update was not installed.".into())
+            }
         };
     }
 
@@ -538,7 +550,8 @@ async fn prepare_update_recovery(app: &tauri::AppHandle) -> Result<(), String> {
 
 #[cfg(any(target_os = "macos", test))]
 fn native_recovery_conflicts(payload: &serde_json::Value, text: &str) -> bool {
-    payload.get("dictation")
+    payload
+        .get("dictation")
         .and_then(|dictation| dictation.get("text"))
         .and_then(serde_json::Value::as_str)
         .is_some_and(|existing| !existing.trim().is_empty() && existing != text)
@@ -665,13 +678,25 @@ async fn install_signed_update(
             }
             Err(ExclusiveError::ResultsPending) => {
                 warn!("Update activity unexpectedly rejected the recovery path");
-                set_update_menu(&app, "Update preparation blocked", "Try Again…", true, UpdateMenuMode::Idle);
+                set_update_menu(
+                    &app,
+                    "Update preparation blocked",
+                    "Try Again…",
+                    true,
+                    UpdateMenuMode::Idle,
+                );
                 return;
             }
             Err(ExclusiveError::WorkActive) => {
                 if update_work_wait_expired(work_wait_started, Instant::now()) {
                     warn!("Update wait exceeded ten minutes; current work remains untouched");
-                    set_update_menu(&app, "Update wait timed out", "Try Again…", true, UpdateMenuMode::Idle);
+                    set_update_menu(
+                        &app,
+                        "Update wait timed out",
+                        "Try Again…",
+                        true,
+                        UpdateMenuMode::Idle,
+                    );
                     return;
                 }
                 set_update_menu(
@@ -684,7 +709,13 @@ async fn install_signed_update(
             }
             Err(error) => {
                 warn!(?error, "Could not safely apply update");
-                set_update_menu(&app, "Update preparation failed", "Try Again…", true, UpdateMenuMode::Idle);
+                set_update_menu(
+                    &app,
+                    "Update preparation failed",
+                    "Try Again…",
+                    true,
+                    UpdateMenuMode::Idle,
+                );
                 return;
             }
         }
@@ -770,10 +801,17 @@ fn load_settings_with_permission_gate() -> sagascript_core::settings::Settings {
 /// blocks the hotkey path: the work runs on its own thread and this only reads
 /// settings.
 fn prewarm_engine_on_key_down(ctrl: &tauri::State<'_, SharedController>) {
-    use sagascript_core::transcription::pianissimo_backend::{warm_in_background, warm_on, WarmTrigger};
+    use sagascript_core::transcription::pianissimo_backend::{
+        warm_in_background, warm_on, WarmTrigger,
+    };
     let c = ctrl.lock().unwrap();
     let profile_id = c.active_hotkey_profile().map(|profile| profile.id.clone());
-    warm_on(c.settings(), WarmTrigger::KeyDown, profile_id.as_deref(), warm_in_background);
+    warm_on(
+        c.settings(),
+        WarmTrigger::KeyDown,
+        profile_id.as_deref(),
+        warm_in_background,
+    );
 }
 
 /// Tell the overlay when the engine starts loading, is ready, failed or was
@@ -783,7 +821,10 @@ fn forward_engine_load_state(app: &tauri::AppHandle) {
     let app = app.clone();
     backend::set_load_listener(move |event, source| {
         let payload = backend::load_state_payload(Some(&(event, source)));
-        focus_diag::log("engine_load_state_event", serde_json::json!({ "origin": "load_listener" }));
+        focus_diag::log(
+            "engine_load_state_event",
+            serde_json::json!({ "origin": "load_listener" }),
+        );
         let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
     });
 }
@@ -792,18 +833,27 @@ fn forward_engine_load_state(app: &tauri::AppHandle) {
 /// created or shown and missed earlier events).
 fn reemit_engine_load_state(app: &tauri::AppHandle) {
     let payload = sagascript_core::transcription::pianissimo_backend::current_load_state_payload();
-    focus_diag::log("engine_load_state_event", serde_json::json!({ "origin": "reemit_after_overlay" }));
+    focus_diag::log(
+        "engine_load_state_event",
+        serde_json::json!({ "origin": "reemit_after_overlay" }),
+    );
     let _ = app.emit(events::event::ENGINE_LOAD_STATE, payload);
 }
 
 /// Warm the engine for `trigger` (wake, app start) when settings call for it.
-fn prewarm_engine_for(app: &tauri::AppHandle, trigger: sagascript_core::transcription::pianissimo_backend::WarmTrigger) {
+fn prewarm_engine_for(
+    app: &tauri::AppHandle,
+    trigger: sagascript_core::transcription::pianissimo_backend::WarmTrigger,
+) {
     use sagascript_core::transcription::pianissimo_backend::{warm_in_background, warm_on};
     let ctrl: tauri::State<'_, SharedController> = app.state();
     // Wake callbacks run on the main thread inside an ObjC block: never block
     // on the controller there. Skip this warm when it is busy.
     let Ok(c) = ctrl.try_lock() else {
-        tracing::debug!(reason = trigger.reason(), "pre-warm skipped: controller busy");
+        tracing::debug!(
+            reason = trigger.reason(),
+            "pre-warm skipped: controller busy"
+        );
         return;
     };
     warm_on(c.settings(), trigger, None, warm_in_background);
@@ -851,11 +901,8 @@ fn handle_hotkey_event(app: &tauri::AppHandle, shortcut: &str, state: hotkey::Ba
             };
             let (result, active_profile) = {
                 let mut c = ctrl.lock().unwrap();
-                let binding = c
-                    .settings()
-                    .resolved_hotkey_bindings()
-                    .into_iter()
-                    .find(|(_, configured, _)| {
+                let binding = c.settings().resolved_hotkey_bindings().into_iter().find(
+                    |(_, configured, _)| {
                         canonical_hotkey(configured).ok() == canonical_hotkey(shortcut).ok()
                     },
                 );
@@ -1670,8 +1717,7 @@ fn seed_macos_tray_preferred_position() {
     let defaults = NSUserDefaults::standardUserDefaults();
     let key_string = tray_preferred_position_key(TRAY_AUTOSAVE_NAME);
     let key = NSString::from_str(&key_string);
-    let Some(position) =
-        initial_tray_preferred_position(defaults.objectForKey(&key).is_some())
+    let Some(position) = initial_tray_preferred_position(defaults.objectForKey(&key).is_some())
     else {
         return;
     };
@@ -1856,7 +1902,9 @@ fn cli_args_request_console_output(args: &[std::ffi::OsString]) -> bool {
             || argument == std::ffi::OsStr::new("-V")
             || argument == std::ffi::OsStr::new("--help")
             || argument == std::ffi::OsStr::new("-h")
-    }) || args.get(1).is_some_and(|argument| argument == std::ffi::OsStr::new("help"))
+    }) || args
+        .get(1)
+        .is_some_and(|argument| argument == std::ffi::OsStr::new("help"))
 }
 
 /// The release GUI uses the Windows GUI subsystem, so it starts without a
@@ -1918,7 +1966,10 @@ fn gui_launch_mode(args: impl IntoIterator<Item = std::ffi::OsString>) -> GuiLau
 
 fn second_instance_requests_settings(args: &[String]) -> bool {
     // Retired private markers must never trigger UI or recording actions.
-    if args.iter().any(|argument| argument.starts_with("--presenter-")) {
+    if args
+        .iter()
+        .any(|argument| argument.starts_with("--presenter-"))
+    {
         return false;
     }
     // `tauri-plugin-single-instance` forwards the complete argv on Windows,
@@ -2228,24 +2279,36 @@ fn stop_recording_and_transcribe(
         // Extract what we need for transcription (lock briefly)
         let selection = {
             let c = ctrl.lock().unwrap();
-            let profile_id = c.active_hotkey_profile()
+            let profile_id = c
+                .active_hotkey_profile()
                 .map(|profile| profile.id.clone())
                 .unwrap_or_else(|| c.settings().default_profile().id);
-            c.settings().live_model_for_profile(&profile_id).map(|(effective_model, use_pianissimo)| (
-                c.language(),
-                effective_model,
-                commands::build_transcribe_options_for_profile(c.settings(), Some(&profile_id)),
-                sagascript_core::transcription::Glossary::parse(
-                    &c.settings().effective_glossary_source(Some(&profile_id)),
-                ),
-                use_pianissimo,
-            ))
+            c.settings().live_model_for_profile(&profile_id).map(
+                |(effective_model, use_pianissimo)| {
+                    (
+                        c.language(),
+                        effective_model,
+                        commands::build_transcribe_options_for_profile(
+                            c.settings(),
+                            Some(&profile_id),
+                        ),
+                        sagascript_core::transcription::Glossary::parse(
+                            &c.settings().effective_glossary_source(Some(&profile_id)),
+                        ),
+                        use_pianissimo,
+                    )
+                },
+            )
         };
         let (language, effective_model, opts, glossary, use_pianissimo) = match selection {
             Ok(selection) => selection,
             Err(error) => {
                 error!("Cannot resolve profile model: {error}");
-                if let Err(finish_error) = ctrl.lock().unwrap().finish_transcription(Err(error.clone())) {
+                if let Err(finish_error) = ctrl
+                    .lock()
+                    .unwrap()
+                    .finish_transcription(Err(error.clone()))
+                {
                     error!("Profile-model failure completion: {finish_error}");
                 }
                 dispatch_to_main(&app_handle, |app| {
@@ -2258,7 +2321,12 @@ fn stop_recording_and_transcribe(
             }
         };
 
-        let model_name = if use_pianissimo { "Pianissimo" } else { effective_model.display_name() }.to_string();
+        let model_name = if use_pianissimo {
+            "Pianissimo"
+        } else {
+            effective_model.display_name()
+        }
+        .to_string();
         let language_name = language.display_name().to_string();
         let beam_size = if use_pianissimo { 0 } else { opts.beam_size };
         let temperature_fallback = !use_pianissimo && opts.temperature_fallback;
@@ -2270,8 +2338,7 @@ fn stop_recording_and_transcribe(
         };
         info!(
             key_up_to_transcribe_ms = elapsed_ms(key_up_at),
-            model_was_warm,
-            "Transcribing with model: {model_name}"
+            model_was_warm, "Transcribing with model: {model_name}"
         );
 
         // Show model loading status in tray
@@ -2292,11 +2359,18 @@ fn stop_recording_and_transcribe(
             // WhisperBackend): request_abort() flips the flag whisper.cpp checks
             // between compute steps, so the blocking task returns and releases the
             // warm state instead of running to completion and wedging the pipeline.
-            let live_backend = std::sync::Arc::new(sagascript_core::transcription::live_dictation::LiveDictationBackend::new(whisper.inner().clone(), use_pianissimo));
+            let live_backend = std::sync::Arc::new(
+                sagascript_core::transcription::live_dictation::LiveDictationBackend::new(
+                    whisper.inner().clone(),
+                    use_pianissimo,
+                ),
+            );
             let live_ref = live_backend.clone();
             let mut fut = tokio::task::spawn_blocking(move || {
-                let mut timings = sagascript_core::transcription::whisper_backend::DictationTimings::default();
-                let result = live_ref.transcribe(effective_model, &audio, language, &opts, &mut timings);
+                let mut timings =
+                    sagascript_core::transcription::whisper_backend::DictationTimings::default();
+                let result =
+                    live_ref.transcribe(effective_model, &audio, language, &opts, &mut timings);
                 (result, timings)
             });
 
@@ -2334,7 +2408,8 @@ fn stop_recording_and_transcribe(
                     live_backend.request_abort();
                     // Brief grace for the aborted inference to unwind; log which
                     // outcome occurred so a genuine hang is visible.
-                    match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut).await
+                    match tokio::time::timeout(Duration::from_secs(ABORT_GRACE_SECS), &mut fut)
+                        .await
                     {
                         Ok(_) => {
                             info!("Aborted transcription task exited — warm-state lock released")
@@ -2352,11 +2427,13 @@ fn stop_recording_and_transcribe(
             }
         };
 
-        let key_up_to_whisper_complete_ms = whisper_ms
-            .and_then(|_| elapsed_ms_if_success(&result, key_up_at));
+        let key_up_to_whisper_complete_ms =
+            whisper_ms.and_then(|_| elapsed_ms_if_success(&result, key_up_at));
         let postprocess_started = std::time::Instant::now();
         let result = result.map(|text| commands::apply_glossary(text, &glossary));
-        ctrl.lock().unwrap().record_phase("postprocessing", postprocess_started.elapsed());
+        ctrl.lock()
+            .unwrap()
+            .record_phase("postprocessing", postprocess_started.elapsed());
         match result {
             Ok(text) => {
                 info!("Transcription complete: {} chars", text.len());
@@ -2475,7 +2552,9 @@ fn stop_recording_and_transcribe(
                             warn!("Auto-paste completion timed out after {PASTE_COMPLETION_TIMEOUT_MS}ms");
                         }
                     }
-                    ctrl.lock().unwrap().record_phase("clipboard_focus_paste", paste_started.elapsed());
+                    ctrl.lock()
+                        .unwrap()
+                        .record_phase("clipboard_focus_paste", paste_started.elapsed());
                 }
 
                 let mut c = ctrl.lock().unwrap();
@@ -2513,12 +2592,17 @@ fn stop_recording_and_transcribe(
                     let _ = app_handle.emit(events::event::TRANSCRIPTION_RESULT, &text);
                     let _ = app_handle.emit(events::event::ERROR, message);
                     let _ = app_handle.emit(events::event::STATE_CHANGED, "idle");
-                    let open_copy_fallback = paste_completion::should_open_copy_fallback(paste_outcome);
+                    let open_copy_fallback =
+                        paste_completion::should_open_copy_fallback(paste_outcome);
                     dispatch_to_main(&app_handle, move |app| {
                         overlay::hide(app);
                         update_tray_status(app, "idle");
                         if open_copy_fallback {
-                            open_settings_window(app, Some("dictate"), "paste_failed_copy_fallback");
+                            open_settings_window(
+                                app,
+                                Some("dictate"),
+                                "paste_failed_copy_fallback",
+                            );
                         }
                     });
                     return;
@@ -2780,19 +2864,24 @@ fn start_settings_watcher(app: tauri::AppHandle) {
 
             // Update controller with all new settings
             let profiles = new_settings.resolved_hotkey_profiles();
-            let warm_after_change = sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
-                &old_settings,
-                &new_settings,
-            );
+            let warm_after_change =
+                sagascript_core::transcription::pianissimo_backend::profile_change_needs_warm(
+                    &old_settings,
+                    &new_settings,
+                );
             let settings_for_unload = new_settings.clone();
             {
                 let mut c = ctrl.lock().unwrap();
                 c.update_settings(new_settings);
             }
             if warm_after_change {
-                sagascript_core::transcription::pianissimo_backend::warm_in_background("profile_change");
+                sagascript_core::transcription::pianissimo_backend::warm_in_background(
+                    "profile_change",
+                );
             }
-            sagascript_core::transcription::pianissimo_backend::unload_if_unused(&settings_for_unload);
+            sagascript_core::transcription::pianissimo_backend::unload_if_unused(
+                &settings_for_unload,
+            );
             update_profiles_menu(&app, &profiles);
 
             // Notify frontend so UI reflects external changes
@@ -3083,7 +3172,10 @@ mod tests {
         assert!(wants(&["sagascript", "transcribe", "--help"]));
         // Bare launch, GUI markers and ordinary subcommands never attach.
         assert!(!wants(&["sagascript"]));
-        assert!(!wants(&["sagascript", sagascript_cli::open::GUI_BACKGROUND_ARG]));
+        assert!(!wants(&[
+            "sagascript",
+            sagascript_cli::open::GUI_BACKGROUND_ARG
+        ]));
         assert!(!wants(&["sagascript", "transcribe", "file.wav"]));
         // argv[0] alone is never an argument.
         assert!(!wants(&["--version"]));
@@ -3204,9 +3296,7 @@ mod tests {
                 .with_compare_contents(true),
         )
         .unwrap();
-        watcher
-            .watch(&dir, RecursiveMode::NonRecursive)
-            .unwrap();
+        watcher.watch(&dir, RecursiveMode::NonRecursive).unwrap();
 
         for value in [1, 2, 3, 4, 5] {
             let temporary = dir.join(format!("settings-{value}.tmp"));
@@ -3261,8 +3351,8 @@ mod tests {
         let settings_path = watch_dir.join("sagascript-settings.json");
         let global_glossary_path = watch_dir.join("glossary.txt");
         let profile_glossary_dir = watch_dir.join("glossaries");
-        let unrelated = Event::new(EventKind::Modify(ModifyKind::Any))
-            .add_path(watch_dir.join("settings.tmp"));
+        let unrelated =
+            Event::new(EventKind::Modify(ModifyKind::Any)).add_path(watch_dir.join("settings.tmp"));
         assert!(!configuration_event_may_affect(
             &unrelated,
             &settings_path,
@@ -3279,8 +3369,7 @@ mod tests {
             &profile_glossary_dir,
         ));
 
-        let remove = Event::new(EventKind::Remove(RemoveKind::Any))
-            .add_path(settings_path.clone());
+        let remove = Event::new(EventKind::Remove(RemoveKind::Any)).add_path(settings_path.clone());
         assert!(!configuration_event_may_affect(
             &remove,
             &settings_path,
@@ -3297,8 +3386,7 @@ mod tests {
             &profile_glossary_dir,
         ));
 
-        let access = Event::new(EventKind::Access(AccessKind::Any))
-            .add_path(settings_path.clone());
+        let access = Event::new(EventKind::Access(AccessKind::Any)).add_path(settings_path.clone());
         assert!(!configuration_event_may_affect(
             &access,
             &settings_path,
@@ -3326,8 +3414,14 @@ mod tests {
     #[test]
     fn update_wait_times_out_without_stopping_active_work() {
         let start = Instant::now();
-        assert!(!update_work_wait_expired(start, start + Duration::from_secs(599)));
-        assert!(update_work_wait_expired(start, start + Duration::from_secs(600)));
+        assert!(!update_work_wait_expired(
+            start,
+            start + Duration::from_secs(599)
+        ));
+        assert!(update_work_wait_expired(
+            start,
+            start + Duration::from_secs(600)
+        ));
     }
 
     #[test]
@@ -3335,15 +3429,24 @@ mod tests {
         let old = serde_json::json!({ "dictation": { "text": "Older unsaved draft" } });
         assert!(native_recovery_conflicts(&old, "New unsaved dictation"));
         assert!(!native_recovery_conflicts(&old, "Older unsaved draft"));
-        assert!(!native_recovery_conflicts(&serde_json::json!({ "dictation": null }), "New unsaved dictation"));
+        assert!(!native_recovery_conflicts(
+            &serde_json::json!({ "dictation": null }),
+            "New unsaved dictation"
+        ));
     }
 
     #[test]
     fn normal_gui_launches_never_check_for_updates_implicitly() {
-        for mode in [GuiLaunchMode::Standard, GuiLaunchMode::ShowSettings, GuiLaunchMode::Background] {
+        for mode in [
+            GuiLaunchMode::Standard,
+            GuiLaunchMode::ShowSettings,
+            GuiLaunchMode::Background,
+        ] {
             assert!(!should_install_update_at_launch(mode));
         }
-        assert!(should_install_update_at_launch(GuiLaunchMode::InstallUpdate));
+        assert!(should_install_update_at_launch(
+            GuiLaunchMode::InstallUpdate
+        ));
     }
 
     #[test]
@@ -3409,7 +3512,10 @@ mod tests {
     fn startup_replaces_reserved_hotkey_with_safe_operational_fallback() {
         let (candidate, error) = startup_hotkey_candidate("Super+Q");
 
-        assert_eq!(candidate, sagascript_core::settings::Settings::default().hotkey);
+        assert_eq!(
+            candidate,
+            sagascript_core::settings::Settings::default().hotkey
+        );
         assert!(error
             .as_deref()
             .is_some_and(|message| message.contains("reserved for Quit on macOS")));
@@ -3420,7 +3526,10 @@ mod tests {
     fn startup_replaces_saved_cut_hotkey_with_safe_operational_fallback() {
         let (candidate, error) = startup_hotkey_candidate("Super+X");
 
-        assert_eq!(candidate, sagascript_core::settings::Settings::default().hotkey);
+        assert_eq!(
+            candidate,
+            sagascript_core::settings::Settings::default().hotkey
+        );
         assert!(error
             .as_deref()
             .is_some_and(|message| message.contains("reserved for Cut on macOS")));
@@ -3647,8 +3756,14 @@ mod tests {
         migrate_legacy_settings(&legacy, &new_path);
 
         assert!(!legacy.exists(), "legacy file should be renamed away");
-        assert!(new_path.exists(), "new path should now hold the migrated settings");
-        assert_eq!(std::fs::read_to_string(&new_path).unwrap(), r#"{"language":"sv"}"#);
+        assert!(
+            new_path.exists(),
+            "new path should now hold the migrated settings"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&new_path).unwrap(),
+            r#"{"language":"sv"}"#
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3663,7 +3778,10 @@ mod tests {
 
         migrate_legacy_settings_unless_overridden(&legacy, &new_path, true);
 
-        assert!(legacy.exists(), "override mode must not inspect or move legacy settings");
+        assert!(
+            legacy.exists(),
+            "override mode must not inspect or move legacy settings"
+        );
         assert!(!new_path.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3682,7 +3800,10 @@ mod tests {
         // Neither file should be touched — a Sagascript settings file already exists.
         assert!(legacy.exists());
         assert_eq!(std::fs::read_to_string(&legacy).unwrap(), "legacy-content");
-        assert_eq!(std::fs::read_to_string(&new_path).unwrap(), "already-migrated-content");
+        assert_eq!(
+            std::fs::read_to_string(&new_path).unwrap(),
+            "already-migrated-content"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3715,7 +3836,9 @@ mod tests {
         let legacy = dir.join("flowdictate-settings.json");
         std::fs::write(&legacy, "legacy-content").unwrap();
         // Destination's parent directory doesn't exist -> rename fails.
-        let new_path = dir.join("nonexistent-subdir").join("sagascript-settings.json");
+        let new_path = dir
+            .join("nonexistent-subdir")
+            .join("sagascript-settings.json");
 
         migrate_legacy_settings(&legacy, &new_path);
 

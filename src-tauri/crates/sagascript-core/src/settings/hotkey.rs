@@ -43,7 +43,11 @@ fn canonical_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Strin
             "alt" | "option" => "alt",
             "super" | "command" | "cmd" | "meta" => "super",
             "commandorcontrol" | "commandorctrl" | "cmdorctrl" | "cmdorcontrol" => {
-                if platform == HotkeyPlatform::MacOS { "super" } else { "control" }
+                if platform == HotkeyPlatform::MacOS {
+                    "super"
+                } else {
+                    "control"
+                }
             }
             "shift" => "shift",
             _ => unreachable!("validated modifier"),
@@ -424,13 +428,9 @@ fn validate_hotkey_for_platform(value: &str, platform: HotkeyPlatform) -> Result
             "q" | "keyq" if uses_command => Some(("Q", "Quit")),
             // Cut is only Command+X itself. Modified variants such as
             // Command+Shift+X are distinct macOS shortcuts and remain valid.
-            "x" | "keyx" if uses_command && modifier_tokens.len() == 1 => {
-                Some(("X", "Cut"))
-            }
+            "x" | "keyx" if uses_command && modifier_tokens.len() == 1 => Some(("X", "Cut")),
             // Do not intercept the active editor's standard Bold command.
-            "b" | "keyb" if uses_command && modifier_tokens.len() == 1 => {
-                Some(("B", "Bold Text"))
-            }
+            "b" | "keyb" if uses_command && modifier_tokens.len() == 1 => Some(("B", "Bold Text")),
             _ => None,
         };
         if let Some((key, action)) = reserved_shortcut {

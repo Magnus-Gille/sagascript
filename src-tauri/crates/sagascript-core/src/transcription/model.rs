@@ -5,8 +5,8 @@ use std::time::{Duration, SystemTime};
 use tracing::info;
 
 use crate::download::{
-    DownloadIntegrity, ExistingArtifact, GGML_MAGIC, download_to_path,
-    prepare_existing_artifact, verify_file,
+    download_to_path, prepare_existing_artifact, verify_file, DownloadIntegrity, ExistingArtifact,
+    GGML_MAGIC,
 };
 use crate::error::DictationError;
 use crate::settings::WhisperModel;
@@ -189,11 +189,18 @@ pub async fn download_model(
     let path = dir.join(model.ggml_filename());
 
     if prepare_existing_artifact(&path, model.download_integrity())? == ExistingArtifact::Verified {
-        info!("Model {} already exists at {}", model.display_name(), path.display());
+        info!(
+            "Model {} already exists at {}",
+            model.display_name(),
+            path.display()
+        );
         // Backfill the CoreML encoder for models downloaded before it was added.
         #[cfg(target_os = "macos")]
         if let Err(e) = ensure_coreml_encoder(model, &dir).await {
-            tracing::warn!("CoreML encoder not installed for {}: {e}", model.display_name());
+            tracing::warn!(
+                "CoreML encoder not installed for {}: {e}",
+                model.display_name()
+            );
         }
         return Ok(path);
     }
@@ -222,7 +229,10 @@ pub async fn download_model(
     // — transcription still works (just slower) if this fails.
     #[cfg(target_os = "macos")]
     if let Err(e) = ensure_coreml_encoder(model, &dir).await {
-        tracing::warn!("CoreML encoder not installed for {}: {e}", model.display_name());
+        tracing::warn!(
+            "CoreML encoder not installed for {}: {e}",
+            model.display_name()
+        );
     }
 
     Ok(path)
@@ -242,8 +252,7 @@ async fn ensure_coreml_encoder(
         model.coreml_encoder_url(),
         model.coreml_encoder_dirname(),
         model.coreml_encoder_integrity(),
-    )
-    else {
+    ) else {
         return Ok(()); // this model has no CoreML encoder
     };
 
@@ -369,9 +378,7 @@ fn sweep_orphaned_coreml_extract_dirs(dir: &Path, dirname: &str) {
 /// those directories are reversibly quarantined and can be backfilled from a
 /// verified archive without blocking ordinary Metal transcription.
 #[cfg(target_os = "macos")]
-pub fn quarantine_unverified_coreml_encoder(
-    model: WhisperModel,
-) -> Result<(), DictationError> {
+pub fn quarantine_unverified_coreml_encoder(model: WhisperModel) -> Result<(), DictationError> {
     let (Some(dirname), Some(integrity)) = (
         model.coreml_encoder_dirname(),
         model.coreml_encoder_integrity(),
@@ -382,9 +389,7 @@ pub fn quarantine_unverified_coreml_encoder(
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn quarantine_unverified_coreml_encoder(
-    _model: WhisperModel,
-) -> Result<(), DictationError> {
+pub fn quarantine_unverified_coreml_encoder(_model: WhisperModel) -> Result<(), DictationError> {
     Ok(())
 }
 
@@ -404,11 +409,11 @@ fn quarantine_unverified_coreml_encoder_at(
         return Ok(());
     }
 
-    let name = dest.file_name().and_then(|name| name.to_str()).unwrap_or("coreml");
-    let quarantine = dest.with_file_name(format!(
-        ".{name}.unverified.{}",
-        uuid::Uuid::new_v4()
-    ));
+    let name = dest
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("coreml");
+    let quarantine = dest.with_file_name(format!(".{name}.unverified.{}", uuid::Uuid::new_v4()));
     std::fs::rename(dest, &quarantine).map_err(|e| {
         DictationError::ModelDownloadFailed(format!(
             "CoreML encoder has no verified provenance and could not be quarantined ({}): {e}",
@@ -457,12 +462,10 @@ mod migrate_legacy_models_dir_tests {
     fn vad_source_is_immutable_and_manifest_is_plausible() {
         assert!(!VAD_MODEL_URL.contains("/resolve/main/"));
         assert_eq!(VAD_MODEL_INTEGRITY.sha256.len(), 64);
-        assert!(
-            VAD_MODEL_INTEGRITY
-                .sha256
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit())
-        );
+        assert!(VAD_MODEL_INTEGRITY
+            .sha256
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit()));
     }
 
     #[cfg(target_os = "macos")]
@@ -476,12 +479,10 @@ mod migrate_legacy_models_dir_tests {
 
         quarantine_unverified_coreml_encoder_at(&unverified, integrity).unwrap();
         assert!(!unverified.exists());
-        assert!(
-            std::fs::read_dir(&base)
-                .unwrap()
-                .flatten()
-                .any(|entry| entry.file_name().to_string_lossy().contains(".unverified."))
-        );
+        assert!(std::fs::read_dir(&base)
+            .unwrap()
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().contains(".unverified.")));
 
         let verified = base.join("ggml-base.en-encoder.mlmodelc");
         std::fs::create_dir_all(&verified).unwrap();
@@ -502,23 +503,14 @@ mod migrate_legacy_models_dir_tests {
         let base = temp_base();
         std::fs::create_dir_all(&base).unwrap();
         let dirname = "ggml-base-encoder.mlmodelc";
-        let stale = base.join(format!(
-            ".{dirname}.{}.extract",
-            uuid::Uuid::new_v4()
-        ));
-        let fresh = base.join(format!(
-            ".{dirname}.{}.extract",
-            uuid::Uuid::new_v4()
-        ));
+        let stale = base.join(format!(".{dirname}.{}.extract", uuid::Uuid::new_v4()));
+        let fresh = base.join(format!(".{dirname}.{}.extract", uuid::Uuid::new_v4()));
         let malformed = base.join(format!(".{dirname}.not-a-uuid.extract"));
         let other_model = base.join(format!(
             ".ggml-small-encoder.mlmodelc.{}.extract",
             uuid::Uuid::new_v4()
         ));
-        let matching_file = base.join(format!(
-            ".{dirname}.{}.extract",
-            uuid::Uuid::new_v4()
-        ));
+        let matching_file = base.join(format!(".{dirname}.{}.extract", uuid::Uuid::new_v4()));
         for path in [&stale, &fresh, &malformed, &other_model] {
             std::fs::create_dir_all(path).unwrap();
         }
@@ -549,8 +541,14 @@ mod migrate_legacy_models_dir_tests {
         let result = migrate_legacy_models_dir(&base);
 
         assert_eq!(result, base.join("Sagascript").join("Models"));
-        assert!(!base.join("FlowDictate").exists(), "must not create the legacy dir");
-        assert!(!result.exists(), "migration itself must not create the new dir either");
+        assert!(
+            !base.join("FlowDictate").exists(),
+            "must not create the legacy dir"
+        );
+        assert!(
+            !result.exists(),
+            "migration itself must not create the new dir either"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -565,7 +563,10 @@ mod migrate_legacy_models_dir_tests {
         let result = migrate_legacy_models_dir(&base);
 
         assert_eq!(result, base.join("Sagascript").join("Models"));
-        assert!(result.join("ggml-base.bin").exists(), "file must end up under Sagascript/Models");
+        assert!(
+            result.join("ggml-base.bin").exists(),
+            "file must end up under Sagascript/Models"
+        );
         assert!(
             !base.join("FlowDictate").exists(),
             "now-empty legacy parent should be cleaned up"
@@ -618,7 +619,10 @@ mod migrate_legacy_models_dir_tests {
 
         assert_eq!(result, base.join("Sagascript").join("Models"));
         assert!(result.join("ggml-base.bin").exists());
-        assert!(sibling.exists(), "sibling file in legacy parent must survive");
+        assert!(
+            sibling.exists(),
+            "sibling file in legacy parent must survive"
+        );
         assert!(
             base.join("FlowDictate").exists(),
             "legacy parent must survive since it's not empty"

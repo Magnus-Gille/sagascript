@@ -1,13 +1,20 @@
 //! Plain imports own one warm backend, separate from live dictation/training.
 //! A lease stays alive until the actual worker exits; Stop never targets an
 //! unrelated inference or a later import.
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex};
-use std::time::{Duration, Instant};
-use std::collections::VecDeque;
-use sagascript_core::{audio::decoder, error::DictationError, transcription::{ContextProfile, WhisperBackend, recommended_parallel_chunks}};
-use sagascript_core::transcription::{Glossary, pianissimo_backend::PianissimoBackend};
-use tauri::Emitter;
 use crate::commands::FileTranscriptionContext;
+use sagascript_core::transcription::{pianissimo_backend::PianissimoBackend, Glossary};
+use sagascript_core::{
+    audio::decoder,
+    error::DictationError,
+    transcription::{recommended_parallel_chunks, ContextProfile, WhisperBackend},
+};
+use std::collections::VecDeque;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::time::{Duration, Instant};
+use tauri::Emitter;
 
 pub type SharedPlainFileJobs = Arc<PlainFileJobs>;
 
@@ -19,7 +26,12 @@ pub struct PlainFileJobs {
 }
 impl Default for PlainFileJobs {
     fn default() -> Self {
-        Self { active: Mutex::new(None), pending_cancels: Mutex::new(VecDeque::new()), backend: Arc::new(WhisperBackend::new()), pianissimo_backend: Mutex::new(None) }
+        Self {
+            active: Mutex::new(None),
+            pending_cancels: Mutex::new(VecDeque::new()),
+            backend: Arc::new(WhisperBackend::new()),
+            pianissimo_backend: Mutex::new(None),
+        }
     }
 }
 struct RunControl {
@@ -27,25 +39,44 @@ struct RunControl {
     cancelled: AtomicBool,
     deadline: Mutex<Option<Instant>>,
 }
-struct Lease { jobs: SharedPlainFileJobs, control: Arc<RunControl> }
+struct Lease {
+    jobs: SharedPlainFileJobs,
+    control: Arc<RunControl>,
+}
 impl Drop for Lease {
     fn drop(&mut self) {
         let mut active = self.jobs.active.lock().unwrap();
-        if active.as_ref().is_some_and(|run| Arc::ptr_eq(run, &self.control)) { *active = None; }
+        if active
+            .as_ref()
+            .is_some_and(|run| Arc::ptr_eq(run, &self.control))
+        {
+            *active = None;
+        }
     }
 }
 impl PlainFileJobs {
     fn begin(self: &Arc<Self>, id: String) -> Result<Arc<Lease>, String> {
-        if id.is_empty() || id.len() > 128 { return Err("Invalid transcription run ID.".into()); }
+        if id.is_empty() || id.len() > 128 {
+            return Err("Invalid transcription run ID.".into());
+        }
         let mut active = self.active.lock().unwrap();
-        if active.is_some() { return Err("A file transcription is still running or stopping.".into()); }
+        if active.is_some() {
+            return Err("A file transcription is still running or stopping.".into());
+        }
         let mut pending = self.pending_cancels.lock().unwrap();
         pending.retain(|(_, time)| time.elapsed() < Duration::from_secs(30));
         let cancelled = pending.iter().any(|(pending_id, _)| pending_id == &id);
         pending.retain(|(pending_id, _)| pending_id != &id);
-        let control = Arc::new(RunControl { id, cancelled: AtomicBool::new(cancelled), deadline: Mutex::new(None) });
+        let control = Arc::new(RunControl {
+            id,
+            cancelled: AtomicBool::new(cancelled),
+            deadline: Mutex::new(None),
+        });
         *active = Some(control.clone());
-        Ok(Arc::new(Lease { jobs: self.clone(), control }))
+        Ok(Arc::new(Lease {
+            jobs: self.clone(),
+            control,
+        }))
     }
     pub fn cancel(&self, id: &str) -> bool {
         let active = self.active.lock().unwrap();
@@ -54,8 +85,12 @@ impl PlainFileJobs {
             // lived stop intent so a following begin cannot erase it.
             if !id.is_empty() && id.len() <= 128 {
                 let mut pending = self.pending_cancels.lock().unwrap();
-                pending.retain(|(pending_id, time)| pending_id != id && time.elapsed() < Duration::from_secs(30));
-                if pending.len() >= 32 { pending.pop_front(); }
+                pending.retain(|(pending_id, time)| {
+                    pending_id != id && time.elapsed() < Duration::from_secs(30)
+                });
+                if pending.len() >= 32 {
+                    pending.pop_front();
+                }
                 pending.push_back((id.to_string(), Instant::now()));
             }
             return false;
@@ -70,29 +105,48 @@ impl PlainFileJobs {
     }
     fn finish(&self, lease: &Lease, result: Result<String, String>) -> Result<String, String> {
         let mut active = self.active.lock().unwrap();
-        let result = if lease.control.cancelled.load(Ordering::SeqCst) { Err("Transcription cancelled.".into()) } else { result };
-        if active.as_ref().is_some_and(|run| Arc::ptr_eq(run, &lease.control)) { *active = None; }
+        let result = if lease.control.cancelled.load(Ordering::SeqCst) {
+            Err("Transcription cancelled.".into())
+        } else {
+            result
+        };
+        if active
+            .as_ref()
+            .is_some_and(|run| Arc::ptr_eq(run, &lease.control))
+        {
+            *active = None;
+        }
         result
     }
 }
 
 pub async fn transcribe_pianissimo(
-    app: tauri::AppHandle, jobs: SharedPlainFileJobs, run_id: String,
-    file_path: String, glossary: Glossary,
+    app: tauri::AppHandle,
+    jobs: SharedPlainFileJobs,
+    run_id: String,
+    file_path: String,
+    glossary: Glossary,
 ) -> Result<String, String> {
     let lease = jobs.begin(run_id)?;
     let worker_lease = lease.clone();
     let mut worker = tokio::task::spawn_blocking(move || -> Result<String, String> {
         let run = &worker_lease.control;
         let progress = |phase: &str, percent| {
-            let _ = app.emit(crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS,
-                Progress { run_id: &run.id, phase, percent });
+            let _ = app.emit(
+                crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS,
+                Progress {
+                    run_id: &run.id,
+                    phase,
+                    percent,
+                },
+            );
         };
         let work = || -> Result<String, DictationError> {
             run.check()?;
             progress("decoding", Some(0));
             let audio = decoder::decode_audio_file_with_stage_progress(
-                std::path::Path::new(&file_path), Some(&|| run.check()),
+                std::path::Path::new(&file_path),
+                Some(&|| run.check()),
                 &|pct| progress("decoding", Some(pct)),
                 &|pct| progress("resampling", Some(pct)),
             )?;
@@ -108,7 +162,11 @@ pub async fn transcribe_pianissimo(
             run.check()?;
             *run.deadline.lock().unwrap() = Some(Instant::now() + timeout);
             progress("transcribing", Some(0));
-            let result = backend.transcribe_with_cancel(&audio, |pct| progress("transcribing", Some(pct)), &run.cancelled)?;
+            let result = backend.transcribe_with_cancel(
+                &audio,
+                |pct| progress("transcribing", Some(pct)),
+                &run.cancelled,
+            )?;
             run.check()?;
             progress("finalizing", None);
             Ok(crate::commands::apply_glossary(result.text, &glossary))
@@ -136,12 +194,18 @@ pub async fn transcribe_pianissimo(
         }
     };
     let result = jobs.finish(&lease, result);
-    if timed_out { Err("Transcription timed out and has stopped.".into()) } else { result }
+    if timed_out {
+        Err("Transcription timed out and has stopped.".into())
+    } else {
+        result
+    }
 }
 impl RunControl {
     fn check(&self) -> Result<(), DictationError> {
         if self.cancelled.load(Ordering::SeqCst) {
-            return Err(DictationError::TranscriptionFailed("Transcription cancelled.".into()));
+            return Err(DictationError::TranscriptionFailed(
+                "Transcription cancelled.".into(),
+            ));
         }
         Ok(())
     }
@@ -149,11 +213,18 @@ impl RunControl {
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Progress<'a> { run_id: &'a str, phase: &'a str, percent: Option<u8> }
+struct Progress<'a> {
+    run_id: &'a str,
+    phase: &'a str,
+    percent: Option<u8>,
+}
 
 pub async fn transcribe(
-    app: tauri::AppHandle, jobs: SharedPlainFileJobs, run_id: String,
-    file_path: String, context: FileTranscriptionContext,
+    app: tauri::AppHandle,
+    jobs: SharedPlainFileJobs,
+    run_id: String,
+    file_path: String,
+    context: FileTranscriptionContext,
 ) -> Result<String, String> {
     let lease = jobs.begin(run_id)?;
     let worker_lease = lease.clone();
@@ -161,13 +232,21 @@ pub async fn transcribe(
         let run = &worker_lease.control;
         let backend = &worker_lease.jobs.backend;
         let progress = |phase: &str, percent| {
-            let _ = app.emit(crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS, Progress { run_id: &run.id, phase, percent });
+            let _ = app.emit(
+                crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS,
+                Progress {
+                    run_id: &run.id,
+                    phase,
+                    percent,
+                },
+            );
         };
         let work = || -> Result<String, DictationError> {
             run.check()?;
             progress("decoding", Some(0));
             let audio = decoder::decode_audio_file_with_stage_progress(
-                std::path::Path::new(&file_path), Some(&|| run.check()),
+                std::path::Path::new(&file_path),
+                Some(&|| run.check()),
                 &|pct| progress("decoding", Some(pct)),
                 &|pct| progress("resampling", Some(pct)),
             )?;
@@ -175,25 +254,47 @@ pub async fn transcribe(
             let timeout = Duration::from_secs(((audio.len() / 16_000) as u64 * 6).max(60));
             *run.deadline.lock().unwrap() = Some(Instant::now() + timeout);
             let mut options = context.options;
-            options.parallel_chunks = recommended_parallel_chunks(audio.len(), context.model, options.beam_size);
-            progress(if backend.needs_reload(context.model) { "loading" } else { "preparing" }, None);
-            let text = backend.with_model(context.model, ContextProfile::FlashAttention, |backend| {
-                run.check()?; // cancellation during model loading must not start inference
-                progress("preparing", None);
-                let encode_start = || {
-                    // Warm-state acquisition clears old abort flags. Reassert
-                    // this run's sticky cancellation after acquiring the lock.
-                    if run.cancelled.load(Ordering::SeqCst) { backend.request_abort(); }
-                    progress("encoding", None);
-                };
-                let progress_app = app.clone();
-                let id = run.id.clone();
-                backend.transcribe_sync_with_gap_recovery_text(&audio, context.language, &options, move |pct| {
-                    let _ = progress_app.emit(crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS, Progress {
-                        run_id: &id, phase: "transcribing", percent: Some(pct.clamp(0, 100) as u8),
-                    });
-                }, Some(&encode_start))
-            })?;
+            options.parallel_chunks =
+                recommended_parallel_chunks(audio.len(), context.model, options.beam_size);
+            progress(
+                if backend.needs_reload(context.model) {
+                    "loading"
+                } else {
+                    "preparing"
+                },
+                None,
+            );
+            let text =
+                backend.with_model(context.model, ContextProfile::FlashAttention, |backend| {
+                    run.check()?; // cancellation during model loading must not start inference
+                    progress("preparing", None);
+                    let encode_start = || {
+                        // Warm-state acquisition clears old abort flags. Reassert
+                        // this run's sticky cancellation after acquiring the lock.
+                        if run.cancelled.load(Ordering::SeqCst) {
+                            backend.request_abort();
+                        }
+                        progress("encoding", None);
+                    };
+                    let progress_app = app.clone();
+                    let id = run.id.clone();
+                    backend.transcribe_sync_with_gap_recovery_text(
+                        &audio,
+                        context.language,
+                        &options,
+                        move |pct| {
+                            let _ = progress_app.emit(
+                                crate::events::event::PLAIN_TRANSCRIPTION_PROGRESS,
+                                Progress {
+                                    run_id: &id,
+                                    phase: "transcribing",
+                                    percent: Some(pct.clamp(0, 100) as u8),
+                                },
+                            );
+                        },
+                        Some(&encode_start),
+                    )
+                })?;
             run.check()?;
             progress("finalizing", None);
             Ok(crate::commands::apply_glossary(text, &context.glossary))
@@ -216,7 +317,11 @@ pub async fn transcribe(
     };
     // Never detach native work and claim idle. Finish only after actual join.
     let result = jobs.finish(&lease, result);
-    if timed_out { Err("Transcription timed out and has stopped.".into()) } else { result }
+    if timed_out {
+        Err("Transcription timed out and has stopped.".into())
+    } else {
+        result
+    }
 }
 
 #[cfg(test)]
@@ -229,7 +334,9 @@ mod tests {
         let run = jobs.begin("early".into()).unwrap();
         assert!(run.control.check().is_err());
         drop(run);
-        for i in 0..100 { jobs.cancel(&format!("pending-{i}")); }
+        for i in 0..100 {
+            jobs.cancel(&format!("pending-{i}"));
+        }
         assert_eq!(jobs.pending_cancels.lock().unwrap().len(), 32);
     }
     #[test]

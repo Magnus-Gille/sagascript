@@ -29,20 +29,41 @@ impl Embedder {
     /// Load the embedding model from disk.
     pub fn new(model_path: &Path) -> Result<Self, DictationError> {
         let session = Session::builder()
-            .map_err(|e| DictationError::DiarizationError(format!("Failed to create ORT session builder: {e}")))?
+            .map_err(|e| {
+                DictationError::DiarizationError(format!(
+                    "Failed to create ORT session builder: {e}"
+                ))
+            })?
             .with_intra_threads(ORT_INTRA_THREADS)
-            .map_err(|e| DictationError::DiarizationError(format!("Failed to configure ORT intra-op threads: {e}")))?
+            .map_err(|e| {
+                DictationError::DiarizationError(format!(
+                    "Failed to configure ORT intra-op threads: {e}"
+                ))
+            })?
             .with_inter_threads(1)
-            .map_err(|e| DictationError::DiarizationError(format!("Failed to configure ORT inter-op threads: {e}")))?
+            .map_err(|e| {
+                DictationError::DiarizationError(format!(
+                    "Failed to configure ORT inter-op threads: {e}"
+                ))
+            })?
             .commit_from_file(model_path)
-            .map_err(|e| DictationError::DiarizationError(format!("Failed to load embedding model: {e}")))?;
+            .map_err(|e| {
+                DictationError::DiarizationError(format!("Failed to load embedding model: {e}"))
+            })?;
         info!(
             "Embedding model loaded from {} (ORT intra-op {}, inter-op 1)",
             model_path.display(),
             ORT_INTRA_THREADS
         );
         // Log expected input/output shapes so we can verify tensor orientation
-        info!("Embedding model input: {:?}", session.inputs().iter().map(|i| format!("'{}' {:?}", i.name(), i.dtype())).collect::<Vec<_>>());
+        info!(
+            "Embedding model input: {:?}",
+            session
+                .inputs()
+                .iter()
+                .map(|i| format!("'{}' {:?}", i.name(), i.dtype()))
+                .collect::<Vec<_>>()
+        );
         Ok(Self { session })
     }
 
@@ -68,14 +89,13 @@ impl Embedder {
 
         let tensor = Tensor::from_array(input)
             .map_err(|e| DictationError::DiarizationError(format!("Tensor error: {e}")))?;
-        let outputs = self
-            .session
-            .run(ort::inputs![tensor])
-            .map_err(|e| DictationError::DiarizationError(format!("Embedding inference failed: {e}")))?;
+        let outputs = self.session.run(ort::inputs![tensor]).map_err(|e| {
+            DictationError::DiarizationError(format!("Embedding inference failed: {e}"))
+        })?;
 
-        let raw = outputs[0]
-            .try_extract_array::<f32>()
-            .map_err(|e| DictationError::DiarizationError(format!("Output extraction failed: {e}")))?;
+        let raw = outputs[0].try_extract_array::<f32>().map_err(|e| {
+            DictationError::DiarizationError(format!("Output extraction failed: {e}"))
+        })?;
 
         let view = raw.view();
         let mut embedding = [0.0f32; EMBEDDING_DIM];
@@ -217,7 +237,10 @@ mod tests {
         v[3] = 1.0;
         let normalized = l2_normalize(v);
         for x in &normalized {
-            assert!(x.is_finite(), "non-finite component survived l2_normalize: {x}");
+            assert!(
+                x.is_finite(),
+                "non-finite component survived l2_normalize: {x}"
+            );
         }
     }
 
@@ -236,7 +259,10 @@ mod tests {
             let start_sample = (start_sec * sample_rate as f64) as usize;
             let end_sample = ((end_sec * sample_rate as f64) as usize).min(audio.len());
             let len = end_sample.saturating_sub(start_sample);
-            assert!(len < MIN_SAMPLES, "segment should be too short: {len} samples");
+            assert!(
+                len < MIN_SAMPLES,
+                "segment should be too short: {len} samples"
+            );
         }
     }
 

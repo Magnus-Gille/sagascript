@@ -7,7 +7,8 @@ use std::{
 use fs2::FileExt;
 
 use crate::settings::{
-    FileModelPreference, LineupEnv, Settings, WhisperModel, ENGINE_DEFAULTS_VERSION, MODEL_LINEUP_VERSION,
+    FileModelPreference, LineupEnv, Settings, WhisperModel, ENGINE_DEFAULTS_VERSION,
+    MODEL_LINEUP_VERSION,
 };
 
 const APP_IDENTIFIER: &str = "ai.gille.sagascript";
@@ -221,12 +222,14 @@ pub fn load() -> Settings {
     // Hot path: filesystem/OS probes only run while the one-time lineup
     // migration is still pending.
     if settings.model_lineup_version < MODEL_LINEUP_VERSION {
-        let whisper_downloaded = |model: WhisperModel| crate::transcription::model::is_model_downloaded(model);
+        let whisper_downloaded =
+            |model: WhisperModel| crate::transcription::model::is_model_downloaded(model);
         settings = migrate_lineup_at(
             &path,
             settings,
             &LineupEnv {
-                pianissimo_supported: crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
+                pianissimo_supported:
+                    crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
                 pianissimo_downloaded: crate::transcription::pianissimo_model::is_downloaded(),
                 whisper_downloaded: &whisper_downloaded,
             },
@@ -258,7 +261,10 @@ fn migrate_engine_defaults_at(path: &Path, loaded: Settings) -> Settings {
         let mut settings = load_from(path);
         if settings.migrate_engine_defaults() {
             if let Err(error) = save_to(path, &settings) {
-                tracing::warn!("Failed to persist the engine defaults migration to {}: {error}", path.display());
+                tracing::warn!(
+                    "Failed to persist the engine defaults migration to {}: {error}",
+                    path.display()
+                );
             }
         }
         Ok(settings)
@@ -282,7 +288,10 @@ fn migrate_lineup_at(path: &Path, loaded: Settings, env: &LineupEnv<'_>) -> Sett
         let mut settings = load_from(path);
         if settings.migrate_swedish_lineup(env) {
             if let Err(error) = save_to(path, &settings) {
-                tracing::warn!("Failed to persist the Swedish model lineup migration to {}: {error}", path.display());
+                tracing::warn!(
+                    "Failed to persist the Swedish model lineup migration to {}: {error}",
+                    path.display()
+                );
             }
         }
         Ok(settings)
@@ -297,7 +306,8 @@ fn load_at_with_legacy_sources(
     // Existing settings are installed with atomic rename, so an ordinary read
     // needs no lock. Embedded dictionaries from older releases are the one
     // exception: migrate those under the writer lock before returning.
-    if path.exists() && !has_embedded_glossary_fields(path) && !needs_profile_model_migration(path) {
+    if path.exists() && !has_embedded_glossary_fields(path) && !needs_profile_model_migration(path)
+    {
         return load_from(path);
     }
     with_settings_lock(path, || {
@@ -333,7 +343,9 @@ pub fn load_from(path: &Path) -> Settings {
                         if let Some(entries) = models.as_object_mut() {
                             entries.retain(|id, model| {
                                 let valid = validate_profile_file_id(id).is_ok()
-                                    && model.as_str().is_some_and(|id| FileModelPreference::parse_id(id).is_ok());
+                                    && model.as_str().is_some_and(|id| {
+                                        FileModelPreference::parse_id(id).is_ok()
+                                    });
                                 if !valid {
                                     tracing::warn!("Ignoring invalid profile model setting");
                                 }
@@ -522,7 +534,9 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
                     path.display()
                 );
                 let bak_path = path.with_extension("json.bak");
-                if let Err(be) = atomic_write(&bak_path, contents.as_bytes(), "corrupt settings backup") {
+                if let Err(be) =
+                    atomic_write(&bak_path, contents.as_bytes(), "corrupt settings backup")
+                {
                     tracing::warn!(
                         "Failed to write corrupt settings backup to {}: {be}",
                         bak_path.display()
@@ -580,17 +594,30 @@ fn needs_profile_model_migration(path: &Path) -> bool {
             if map.get("profile_glossary_migrated") != Some(&serde_json::Value::Bool(true)) {
                 return true;
             }
-            let Some(profiles) = map.get("hotkey_profiles").and_then(serde_json::Value::as_array) else {
+            let Some(profiles) = map
+                .get("hotkey_profiles")
+                .and_then(serde_json::Value::as_array)
+            else {
                 return true;
             };
-            let Some(models) = map.get("profile_models").and_then(serde_json::Value::as_object) else {
+            let Some(models) = map
+                .get("profile_models")
+                .and_then(serde_json::Value::as_object)
+            else {
                 return true;
             };
-            profiles.is_empty() || profiles.iter().any(|profile| {
-                profile.get("id").and_then(serde_json::Value::as_str)
-                    .is_some_and(|id| models.get(id).and_then(serde_json::Value::as_str)
-                        .is_none_or(|model| FileModelPreference::parse_id(model).is_err()))
-            })
+            profiles.is_empty()
+                || profiles.iter().any(|profile| {
+                    profile
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|id| {
+                            models
+                                .get(id)
+                                .and_then(serde_json::Value::as_str)
+                                .is_none_or(|model| FileModelPreference::parse_id(model).is_err())
+                        })
+                })
         })
 }
 
@@ -757,11 +784,20 @@ fn atomic_write(path: &Path, contents: &[u8], label: &str) -> Result<(), String>
         .unwrap_or_else(|| PathBuf::from("."));
     create_private_dir_all(&parent)
         .map_err(|error| format!("Failed to create {label} directory: {error}"))?;
-    install_replacement(&destination, &parent, contents, label, &copy_target_permissions)
+    install_replacement(
+        &destination,
+        &parent,
+        contents,
+        label,
+        &copy_target_permissions,
+    )
 }
 
 /// Copy an existing regular target's permissions onto the replacement file.
-fn copy_target_permissions(file: &std::fs::File, existing: &std::fs::Metadata) -> std::io::Result<()> {
+fn copy_target_permissions(
+    file: &std::fs::File,
+    existing: &std::fs::Metadata,
+) -> std::io::Result<()> {
     file.set_permissions(existing.permissions())
 }
 
@@ -861,7 +897,8 @@ fn install_temp_file(
             .map_err(|error| format!("Failed to reserve {label} backup name: {error}"))?;
         path
     };
-    let wide = |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() };
+    let wide =
+        |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() };
     let replaced = wide(destination);
     let replacement = wide(&temp_path);
     let backup_wide = wide(&backup);
@@ -879,7 +916,10 @@ fn install_temp_file(
     };
     if ok != 0 {
         if let Err(error) = std::fs::remove_file(&backup) {
-            tracing::warn!("Failed to remove {label} backup {}: {error}", backup.display());
+            tracing::warn!(
+                "Failed to remove {label} backup {}: {error}",
+                backup.display()
+            );
         }
         return Ok(());
     }
@@ -954,10 +994,17 @@ mod tests {
         with_temp_settings(|path| {
             fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","pianissimo_dictation":true,"auto_select_model":false,"whisper_model":"kb-whisper-small","hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"},{"id":"english","name":"English","shortcut":"Super+E","language":"en"}]}"#).unwrap();
             let migrated = load_at_with_legacy_sources(&path, std::iter::empty());
-            assert_eq!(migrated.profile_models["default"], FileModelPreference::PianissimoOriginal);
-            assert_eq!(migrated.profile_models["english"], FileModelPreference::Auto);
+            assert_eq!(
+                migrated.profile_models["default"],
+                FileModelPreference::PianissimoOriginal
+            );
+            assert_eq!(
+                migrated.profile_models["english"],
+                FileModelPreference::Auto
+            );
             assert_eq!(migrated.hotkey_profiles[0].shortcut, "Super+S");
-            let persisted: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let persisted: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(persisted["profile_models"]["default"], "pianissimo-sv");
             let reloaded = load_from(&path);
             assert_eq!(reloaded.profile_models, migrated.profile_models);
@@ -971,16 +1018,24 @@ mod tests {
             let migrated = migrate_engine_defaults_at(&path, load_from(&path));
             assert_eq!(migrated.engine_prewarm, EnginePrewarm::OnAppStart);
             assert_eq!(migrated.engine_idle_unload_minutes, 60);
-            let persisted: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let persisted: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(persisted["engine_prewarm"], "on_app_start");
             assert_eq!(persisted["engine_idle_unload_minutes"], 60);
-            assert_eq!(persisted["engine_defaults_version"], ENGINE_DEFAULTS_VERSION);
+            assert_eq!(
+                persisted["engine_defaults_version"],
+                ENGINE_DEFAULTS_VERSION
+            );
             assert_eq!(persisted["future_key"], 1);
             let before = fs::read_to_string(&path).unwrap();
             migrate_engine_defaults_at(&path, load_from(&path));
             assert_eq!(fs::read_to_string(&path).unwrap(), before);
 
-            fs::write(&path, r#"{"engine_prewarm":"off","engine_idle_unload_minutes":10}"#).unwrap();
+            fs::write(
+                &path,
+                r#"{"engine_prewarm":"off","engine_idle_unload_minutes":10}"#,
+            )
+            .unwrap();
             let off = migrate_engine_defaults_at(&path, load_from(&path));
             assert_eq!(off.engine_prewarm, EnginePrewarm::Off);
             assert_eq!(off.engine_idle_unload_minutes, 60);
@@ -992,16 +1047,32 @@ mod tests {
         with_temp_settings(|path| {
             fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","auto_select_model":false,"whisper_model":"kb-whisper-small","profile_glossary_migrated":true,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}],"profile_models":{"default":"kb-whisper-small"}}"#).unwrap();
             let ready = |_: WhisperModel| true;
-            let env = LineupEnv { pianissimo_supported: true, pianissimo_downloaded: true, whisper_downloaded: &ready };
-            let migrated = migrate_lineup_at(&path, load_at_with_legacy_sources(&path, std::iter::empty()), &env);
-            assert_eq!(migrated.profile_models["default"], FileModelPreference::PianissimoOriginal);
-            let persisted: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let env = LineupEnv {
+                pianissimo_supported: true,
+                pianissimo_downloaded: true,
+                whisper_downloaded: &ready,
+            };
+            let migrated = migrate_lineup_at(
+                &path,
+                load_at_with_legacy_sources(&path, std::iter::empty()),
+                &env,
+            );
+            assert_eq!(
+                migrated.profile_models["default"],
+                FileModelPreference::PianissimoOriginal
+            );
+            let persisted: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(persisted["profile_models"]["default"], "pianissimo-sv");
             assert_eq!(persisted["model_lineup_version"], MODEL_LINEUP_VERSION);
 
             // A second load neither re-runs nor rewrites the migration.
             let before = fs::read_to_string(&path).unwrap();
-            let again = migrate_lineup_at(&path, load_at_with_legacy_sources(&path, std::iter::empty()), &env);
+            let again = migrate_lineup_at(
+                &path,
+                load_at_with_legacy_sources(&path, std::iter::empty()),
+                &env,
+            );
             assert_eq!(again.profile_models, migrated.profile_models);
             assert_eq!(fs::read_to_string(&path).unwrap(), before);
         });
@@ -1012,10 +1083,22 @@ mod tests {
         with_temp_settings(|path| {
             fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","future_key":{"a":[1,2]},"profile_glossary_migrated":true,"profile_glossaries":{"default":"Sagascript"},"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"},{"id":"english","name":"English","shortcut":"Super+E","language":"en"}],"profile_models":{"default":"kb-whisper-small","english":"auto"}}"#).unwrap();
             let ready = |_: WhisperModel| true;
-            let env = LineupEnv { pianissimo_supported: true, pianissimo_downloaded: true, whisper_downloaded: &ready };
-            let migrated = migrate_lineup_at(&path, load_at_with_legacy_sources(&path, std::iter::empty()), &env);
-            assert_eq!(migrated.profile_models["default"], FileModelPreference::PianissimoOriginal);
-            let persisted: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let env = LineupEnv {
+                pianissimo_supported: true,
+                pianissimo_downloaded: true,
+                whisper_downloaded: &ready,
+            };
+            let migrated = migrate_lineup_at(
+                &path,
+                load_at_with_legacy_sources(&path, std::iter::empty()),
+                &env,
+            );
+            assert_eq!(
+                migrated.profile_models["default"],
+                FileModelPreference::PianissimoOriginal
+            );
+            let persisted: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(persisted["future_key"], serde_json::json!({"a":[1,2]}));
             // Glossaries live in per-profile dictionary files, not settings.json.
             assert_eq!(load_from(&path).profile_glossaries["default"], "Sagascript");
@@ -1030,12 +1113,19 @@ mod tests {
         with_temp_settings(|path| {
             fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","profile_glossary_migrated":true,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}]}"#).unwrap();
             let ready = |_: WhisperModel| true;
-            let env = LineupEnv { pianissimo_supported: true, pianissimo_downloaded: true, whisper_downloaded: &ready };
+            let env = LineupEnv {
+                pianissimo_supported: true,
+                pianissimo_downloaded: true,
+                whisper_downloaded: &ready,
+            };
             let mut loaded = load_at_with_legacy_sources(&path, std::iter::empty());
             loaded.profile_models.remove("default");
             loaded.model_lineup_version = 0;
             let migrated = migrate_lineup_at(&path, loaded, &env);
-            assert!(!migrated.profile_models.contains_key("default") || migrated.profile_models["default"] == FileModelPreference::Auto);
+            assert!(
+                !migrated.profile_models.contains_key("default")
+                    || migrated.profile_models["default"] == FileModelPreference::Auto
+            );
             assert_eq!(migrated.model_lineup_version, MODEL_LINEUP_VERSION);
         });
     }
@@ -1045,11 +1135,23 @@ mod tests {
         with_temp_settings(|path| {
             fs::write(&path, r#"{"language":"sv","hotkey":"Super+S","profile_glossary_migrated":true,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}],"profile_models":{"default":"kb-whisper-base"}}"#).unwrap();
             let only_base = |model: WhisperModel| model == WhisperModel::KbWhisperBase;
-            let env = LineupEnv { pianissimo_supported: true, pianissimo_downloaded: false, whisper_downloaded: &only_base };
-            let migrated = migrate_lineup_at(&path, load_at_with_legacy_sources(&path, std::iter::empty()), &env);
-            assert_eq!(migrated.profile_models["default"], FileModelPreference::Whisper(WhisperModel::KbWhisperBase));
+            let env = LineupEnv {
+                pianissimo_supported: true,
+                pianissimo_downloaded: false,
+                whisper_downloaded: &only_base,
+            };
+            let migrated = migrate_lineup_at(
+                &path,
+                load_at_with_legacy_sources(&path, std::iter::empty()),
+                &env,
+            );
+            assert_eq!(
+                migrated.profile_models["default"],
+                FileModelPreference::Whisper(WhisperModel::KbWhisperBase)
+            );
             // The marker is recorded even though nothing moved, so it never re-runs.
-            let persisted: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let persisted: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(persisted["model_lineup_version"], MODEL_LINEUP_VERSION);
         });
     }
@@ -1063,10 +1165,15 @@ mod tests {
             assert!(migrated.profile_glossaries["default"].contains("OpenRouter"));
             assert!(migrated.profile_glossaries["english"].contains("OpenRouter"));
             assert!(migrated.profile_glossaries["default"].contains("merge = merch"));
-            assert_eq!(fs::read_to_string(global_glossary_path_for_settings(&path)).unwrap(), "OpenRouter\n");
+            assert_eq!(
+                fs::read_to_string(global_glossary_path_for_settings(&path)).unwrap(),
+                "OpenRouter\n"
+            );
             let reloaded = load_at_with_legacy_sources(&path, std::iter::empty());
             assert_eq!(reloaded.profile_glossaries, migrated.profile_glossaries);
-            assert!(!reloaded.effective_glossary_source(Some("english")).contains("merge = merch"));
+            assert!(!reloaded
+                .effective_glossary_source(Some("english"))
+                .contains("merge = merch"));
         });
     }
 
@@ -1078,7 +1185,8 @@ mod tests {
             assert_eq!(loaded.default_profile().language, Language::Swedish);
             assert_eq!(loaded.default_profile().shortcut, "Super+S");
             assert_eq!(loaded.profile_models["default"], FileModelPreference::Auto);
-            let persisted: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let persisted: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(persisted["profile_models"]["default"], "auto");
         });
     }
@@ -2069,7 +2177,10 @@ mod tests {
                     symlink(format!("dotfiles/{name}.json"), &link).unwrap();
                 }
                 atomic_write(&link, b"{\"x\":1}", "settings").unwrap();
-                assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+                assert!(fs::symlink_metadata(&link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink());
                 assert_eq!(fs::read_to_string(&target).unwrap(), r#"{"x":1}"#);
                 assert_eq!(mode(&target), 0o600);
             }
@@ -2103,9 +2214,13 @@ mod tests {
             let path = dir.path().join("settings.json");
             fs::write(&path, b"original").unwrap();
             let fail = |_: &fs::File, _: &fs::Metadata| {
-                Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected"))
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected",
+                ))
             };
-            let error = install_replacement(&path, dir.path(), b"new", "settings", &fail).unwrap_err();
+            let error =
+                install_replacement(&path, dir.path(), b"new", "settings", &fail).unwrap_err();
             assert!(error.contains("preserve settings permissions"), "{error}");
             assert_eq!(fs::read(&path).unwrap(), b"original");
             assert_eq!(names(dir.path()), vec!["settings.json"]);
@@ -2121,7 +2236,11 @@ mod tests {
         let path = dir.path().join("settings.json");
         fs::write(&path, b"original").unwrap();
         // Open without FILE_SHARE_DELETE so the replace cannot move the target.
-        let _held = fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+        let _held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
         assert!(atomic_write(&path, b"new", "settings").is_err());
         assert_eq!(fs::read(&path).unwrap(), b"original");
         let names: Vec<_> = fs::read_dir(dir.path()).unwrap().collect();
@@ -2152,8 +2271,16 @@ mod tests {
         fs::write(&path, b"{}").unwrap();
         let user = std::env::var("USERNAME").unwrap();
         let icacls = |args: &[&str]| {
-            let out = Command::new("icacls").arg(&path).args(args).output().unwrap();
-            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+            let out = Command::new("icacls")
+                .arg(&path)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
         };
         icacls(&["/inheritance:r", "/grant:r", &format!("{user}:F")]);
         // Drop SYSTEM so the restricted ACL differs from an inherited one.
@@ -2161,7 +2288,11 @@ mod tests {
         let before = acl(&path);
         let fresh = dir.path().join("fresh.json");
         fs::write(&fresh, b"{}").unwrap();
-        assert_ne!(before, acl(&fresh), "precondition: restricted ACL must differ from inherited");
+        assert_ne!(
+            before,
+            acl(&fresh),
+            "precondition: restricted ACL must differ from inherited"
+        );
         fs::remove_file(&fresh).unwrap();
 
         atomic_write(&path, b"{\"a\":1}", "settings").unwrap();

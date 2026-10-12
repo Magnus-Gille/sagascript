@@ -54,7 +54,9 @@ mod tests {
     fn only_allowed_generated_files_are_ignored() {
         assert!(!is_dirty(""));
         assert!(!is_dirty(" M src-tauri/gen/schemas/windows-schema.json\n?? src-tauri/gen/schemas/acl-manifests.json"));
-        assert!(is_dirty(" M src-tauri/gen/schemas/windows-schema.json\n M src-tauri/src/lib.rs"));
+        assert!(is_dirty(
+            " M src-tauri/gen/schemas/windows-schema.json\n M src-tauri/src/lib.rs"
+        ));
         assert!(is_dirty("?? scripts/__pycache__/x.pyc"));
     }
 }

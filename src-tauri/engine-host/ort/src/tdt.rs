@@ -66,7 +66,15 @@ pub fn decode(
     max_tokens_per_step: usize,
     is_cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<RawToken>, DecodeError> {
-    decode_biased(frames, joint, vocab_size, blank, max_tokens_per_step, is_cancelled, None)
+    decode_biased(
+        frames,
+        joint,
+        vocab_size,
+        blank,
+        max_tokens_per_step,
+        is_cancelled,
+        None,
+    )
 }
 
 /// [`decode`] with optional context biasing (dictionary terms steer the token argmax).
@@ -100,7 +108,10 @@ pub fn decode_biased(
             )));
         }
         let mut step = argmax(&logits[vocab_size..]);
-        let token = match bias.as_mut().and_then(|b| b.choose(&logits[..vocab_size], t).map(|c| (c, b.params().override_duration_cap))) {
+        let token = match bias.as_mut().and_then(|b| {
+            b.choose(&logits[..vocab_size], t)
+                .map(|c| (c, b.params().override_duration_cap))
+        }) {
             Some((boosted, cap)) => {
                 if boosted.overrode_blank {
                     // The duration head described the blank this token replaced, which often
@@ -212,8 +223,16 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                RawToken { id: 1, frame: 0, duration_frames: 2 },
-                RawToken { id: 2, frame: 2, duration_frames: 1 },
+                RawToken {
+                    id: 1,
+                    frame: 0,
+                    duration_frames: 2
+                },
+                RawToken {
+                    id: 2,
+                    frame: 2,
+                    duration_frames: 1
+                },
             ]
         );
         assert_eq!(joint.seen_targets, vec![3, 1]); // blank first, then last emitted
@@ -224,7 +243,9 @@ mod tests {
         // Emits token 0 with duration 0 repeatedly; after max_tokens (2) advances one frame.
         let (tokens, joint) = run(vec![(0, 0)], 1, 2);
         assert_eq!(tokens.len(), 2);
-        assert!(tokens.iter().all(|t| t.frame == 0 && t.duration_frames == 0));
+        assert!(tokens
+            .iter()
+            .all(|t| t.frame == 0 && t.duration_frames == 0));
         assert_eq!(joint.calls, 2);
     }
 
@@ -250,8 +271,22 @@ mod tests {
         params.start_factor = 1.0;
         params.blank_margin = 100.0;
         params.override_duration_cap = cap;
-        let mut joint = Scripted { script: vec![(3, 4)], calls: 0, seen_targets: vec![], seen_frames: vec![] };
-        decode_biased(&frames(3), &mut joint, V, BLANK, 10, &|| false, Some(BiasState::new(&trie, params, BLANK))).unwrap()
+        let mut joint = Scripted {
+            script: vec![(3, 4)],
+            calls: 0,
+            seen_targets: vec![],
+            seen_frames: vec![],
+        };
+        decode_biased(
+            &frames(3),
+            &mut joint,
+            V,
+            BLANK,
+            10,
+            &|| false,
+            Some(BiasState::new(&trie, params, BLANK)),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -261,7 +296,10 @@ mod tests {
         // skip past the end of the audio and swallow the rest.
         let frames: Vec<usize> = biased(1).iter().map(|t| t.frame).collect();
         assert_eq!(frames, vec![0, 1, 2]);
-        assert_eq!(biased(4).iter().map(|t| t.frame).collect::<Vec<_>>(), vec![0]);
+        assert_eq!(
+            biased(4).iter().map(|t| t.frame).collect::<Vec<_>>(),
+            vec![0]
+        );
     }
 
     #[test]
@@ -270,13 +308,41 @@ mod tests {
         let vocab = crate::vocab::Vocab::parse("▁a 0\nb 1\nc 2\n<blk> 3\n").unwrap();
         let trie = BoostTrie::new(&["ab".to_string()], &vocab);
         let params = BiasParams::new(5.0); // start factor 0: only the continuation is boosted
-        // Frame 0: model emits "▁a" (dur 1). Frame 1: the model prefers blank, "b" is boosted.
-        let mut joint = Scripted { script: vec![(0, 1), (3, 1)], calls: 0, seen_targets: vec![], seen_frames: vec![] };
-        let tokens = decode_biased(&frames(2), &mut joint, V, BLANK, 10, &|| false, Some(BiasState::new(&trie, params, BLANK))).unwrap();
+                                           // Frame 0: model emits "▁a" (dur 1). Frame 1: the model prefers blank, "b" is boosted.
+        let mut joint = Scripted {
+            script: vec![(0, 1), (3, 1)],
+            calls: 0,
+            seen_targets: vec![],
+            seen_frames: vec![],
+        };
+        let tokens = decode_biased(
+            &frames(2),
+            &mut joint,
+            V,
+            BLANK,
+            10,
+            &|| false,
+            Some(BiasState::new(&trie, params, BLANK)),
+        )
+        .unwrap();
         assert_eq!(tokens.iter().map(|t| t.id).collect::<Vec<_>>(), vec![0, 1]);
         // Without the prefix having been emitted, "b" alone is not boosted.
-        let mut joint = Scripted { script: vec![(3, 1)], calls: 0, seen_targets: vec![], seen_frames: vec![] };
-        let tokens = decode_biased(&frames(2), &mut joint, V, BLANK, 10, &|| false, Some(BiasState::new(&trie, params, BLANK))).unwrap();
+        let mut joint = Scripted {
+            script: vec![(3, 1)],
+            calls: 0,
+            seen_targets: vec![],
+            seen_frames: vec![],
+        };
+        let tokens = decode_biased(
+            &frames(2),
+            &mut joint,
+            V,
+            BLANK,
+            10,
+            &|| false,
+            Some(BiasState::new(&trie, params, BLANK)),
+        )
+        .unwrap();
         assert!(tokens.is_empty());
     }
 
@@ -306,11 +372,19 @@ mod tests {
     fn joint_errors_and_short_logits_surface() {
         struct Bad;
         impl Joint for Bad {
-            fn step(&mut self, _: &[f32], _: i32, s: &DecoderState) -> Result<(Vec<f32>, DecoderState), String> {
+            fn step(
+                &mut self,
+                _: &[f32],
+                _: i32,
+                s: &DecoderState,
+            ) -> Result<(Vec<f32>, DecoderState), String> {
                 Ok((vec![0.0; V], s.clone()))
             }
             fn initial_state(&self) -> DecoderState {
-                DecoderState { s1: vec![], s2: vec![] }
+                DecoderState {
+                    s1: vec![],
+                    s2: vec![],
+                }
             }
         }
         let err = decode(&frames(1), &mut Bad, V, BLANK, 10, &|| false).unwrap_err();
