@@ -93,7 +93,7 @@ depends on it. Calls are recorded in `window.qa.calls` for assertions.
 | Layer | Where |
 |---|---|
 | Rust logic | `#[cfg(test)]` module next to the command (pure function, no Tauri runtime). |
-| Frontend logic | Put non-trivial handling in a `src/lib/*.ts` module and test it in `scripts/test-*.mjs` (`node:test`; see `scripts/test-overlay-state.mjs` for loading TS). |
+| Frontend logic | Put non-trivial handling in a `src/lib/*.ts` module and test it with Vitest in `src/lib/<module>.test.ts` (see `src/lib/overlay-state.test.ts`). Add the command to `CommandMap` in `src/test/ipc.ts` and its wrapper to `src/lib/api.test.ts`. |
 | User flow | A `scripts/qa-*.mjs` Playwright check against the mock, run by `npm run test:browser`. |
 
 Do not test by reading `.svelte` source with regexes ([ADR 0004](../adr/0004-test-strategy.md)).

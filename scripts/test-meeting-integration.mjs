@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "typescript";
+
+// Source-text assertions over the meeting UI, left for phase B of #361. The
+// module tests moved to Vitest: polling behaviour to
+// src/lib/meeting-job-client.test.ts, draft snapshots (now
+// src/lib/meeting-review-drafts.ts) to meeting-review-drafts.test.ts, and
+// draft reconciliation to meeting-types.test.ts.
 
 const settingsSource = await readFile(
   new URL("../src/lib/Settings.svelte", import.meta.url),
@@ -16,17 +21,6 @@ const reviewSource = await readFile(
   new URL("../src/lib/MeetingReview.svelte", import.meta.url),
   "utf8",
 );
-const moduleScript = reviewSource.match(/<script module lang="ts">([\s\S]*?)<\/script>/)?.[1];
-assert.ok(moduleScript, "MeetingReview.svelte should expose its draft snapshot module");
-const draftModule = ts.transpileModule(moduleScript, {
-  compilerOptions: {
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ES2022,
-  },
-}).outputText;
-const { createMeetingReviewDraftSnapshot, restoreMeetingDraftSnapshot } = await import(
-  `data:text/javascript;base64,${Buffer.from(draftModule).toString("base64")}`
-);
 const pollingSource = await readFile(
   new URL("../src/lib/meeting-job-client.ts", import.meta.url),
   "utf8",
@@ -34,24 +28,6 @@ const pollingSource = await readFile(
 const typesSource = await readFile(
   new URL("../src/lib/meeting-types.ts", import.meta.url),
   "utf8",
-);
-const typesModule = ts.transpileModule(typesSource, {
-  compilerOptions: {
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ES2022,
-  },
-}).outputText;
-const { initialMeetingDrafts, reconcileMeetingDrafts } = await import(
-  `data:text/javascript;base64,${Buffer.from(typesModule).toString("base64")}`
-);
-const pollingModule = ts.transpileModule(pollingSource, {
-  compilerOptions: {
-    module: ts.ModuleKind.ESNext,
-    target: ts.ScriptTarget.ES2022,
-  },
-}).outputText;
-const { pollMeetingJob } = await import(
-  `data:text/javascript;base64,${Buffer.from(pollingModule).toString("base64")}`
 );
 
 test("diarized imports use the job API while ordinary imports keep transcribeFile", () => {
@@ -94,105 +70,6 @@ test("polling is serialized, stale generations are ignored, and cancellation wai
     "starting or failing an import must not remount the previous review's unsaved drafts");
   assert.match(fileTranscriptionSource, /meetingFailureText\(error, "Could not check meeting progress\."\)/);
   assert.match(fileTranscriptionSource, /generation !== meetingPollGeneration \|\| meetingJobId !== jobId/);
-
-  const snapshots = [
-    { id: "job-1", status: "running", phase: "loading", error: null, transcript: null },
-    { id: "job-1", status: "cancelling", phase: "cancelling", error: null, transcript: null },
-    { id: "job-1", status: "cancelled", phase: "cancelled", error: null, transcript: null },
-  ];
-  const calls = [];
-  let inFlight = 0;
-  let maxInFlight = 0;
-  const seen = [];
-  let waits = 0;
-  let busy = true;
-  const fakeApi = {
-    get: async () => {
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      calls.push("get");
-      const snapshot = snapshots.shift();
-      inFlight -= 1;
-      return snapshot;
-    },
-  };
-  await pollMeetingJob({
-    jobId: "job-1",
-    get: fakeApi.get,
-    isCurrent: () => true,
-    onSnapshot: (snapshot) => {
-      seen.push(snapshot.status);
-      if (["completed", "cancelled", "failed"].includes(snapshot.status)) busy = false;
-    },
-    onFailure: assert.fail,
-    wait: async () => { waits += 1; },
-  });
-  assert.deepEqual(calls, ["get", "get", "get"]);
-  assert.deepEqual(seen, ["running", "cancelling", "cancelled"]);
-  assert.equal(waits, 2);
-  assert.equal(maxInFlight, 1);
-  assert.equal(busy, false);
-
-  let current = true;
-  let staleSnapshots = 0;
-  let staleFailure = 0;
-  let release;
-  const pending = new Promise((resolve) => { release = resolve; });
-  const stalePoll = pollMeetingJob({
-    jobId: "job-stale",
-    get: async () => pending,
-    isCurrent: () => current,
-    onSnapshot: () => { staleSnapshots += 1; },
-    onFailure: () => { staleFailure += 1; },
-    wait: async () => {},
-  });
-  current = false;
-  release({ id: "job-stale", status: "completed", phase: "done", error: null, transcript: null });
-  await stalePoll;
-  assert.equal(staleSnapshots, 0);
-  assert.equal(staleFailure, 0);
-
-  let foreignError = "";
-  let foreignSnapshots = 0;
-  await pollMeetingJob({
-    jobId: "job-owned",
-    get: async () => ({ id: "job-foreign", status: "completed", phase: "done", error: null, transcript: null }),
-    isCurrent: () => true,
-    onSnapshot: () => { foreignSnapshots += 1; },
-    onFailure: (error) => { foreignError = error.message; },
-    wait: async () => assert.fail("foreign snapshots must not wait"),
-  });
-  assert.match(foreignError, /identity changed/);
-  assert.equal(foreignSnapshots, 0);
-
-  let retry = false;
-  busy = true;
-  await pollMeetingJob({
-    jobId: "job-error",
-    get: async () => { throw new Error("temporary status outage"); },
-    isCurrent: () => true,
-    onSnapshot: () => assert.fail("failed status read must not produce a snapshot"),
-    onFailure: () => { retry = true; },
-    wait: async () => assert.fail("failed status read must not wait"),
-  });
-  assert.equal(busy, true);
-  assert.equal(retry, true);
-
-  let preservedTranscript = { source_sha256: "old-document" };
-  let missingTranscriptError = "";
-  await pollMeetingJob({
-    jobId: "job-missing-transcript",
-    get: async () => ({ id: "job-missing-transcript", status: "completed", phase: "done", error: null, transcript: null }),
-    isCurrent: () => true,
-    onSnapshot: (snapshot) => {
-      if (snapshot.status === "completed" && snapshot.transcript) preservedTranscript = snapshot.transcript;
-      else if (snapshot.status === "completed") missingTranscriptError = "Meeting completed without a transcript.";
-    },
-    onFailure: assert.fail,
-    wait: async () => assert.fail("terminal status must not wait"),
-  });
-  assert.deepEqual(preservedTranscript, { source_sha256: "old-document" });
-  assert.equal(missingTranscriptError, "Meeting completed without a transcript.");
 });
 
 test("meeting review exposes explicit corrections, playback, and all export formats", () => {
@@ -272,103 +149,4 @@ test("meeting review exposes explicit corrections, playback, and all export form
   assert.doesNotMatch(reviewSource, /{@html/);
   assert.doesNotMatch(reviewSource, /localStorage|fetch\(|AudioContext|MediaRecorder/);
   assert.doesNotMatch(reviewSource, /\.play\(\)/, "editing and timestamp controls must not autoplay audio");
-});
-
-test("meeting draft snapshots round-trip and reject another source or review revision", () => {
-  const transcript = {
-    schema_version: 1,
-    source_sha256: "source-a",
-    language: "en",
-    model: "model",
-    duration_seconds: 4,
-    segments: [
-      { id: "a", start: 0, end: 1, text: "A original", speaker: "s1" },
-      { id: "b", start: 1, end: 2, text: "B original", speaker: "s2" },
-    ],
-    speakers: [
-      { id: "s1", label: "Speaker 1" },
-      { id: "s2", label: "Speaker 2" },
-    ],
-  };
-  const clean = initialMeetingDrafts(transcript);
-  const dirty = {
-    labels: { ...clean.labels, s1: "Alice" },
-    mergeTargets: { s1: "s2", ignored: "s1", s2: "s2" },
-    texts: { ...clean.texts, a: "A edited", ignored: "should be dropped" },
-    speakers: { ...clean.speakers, b: "s1", ignored: "s1" },
-  };
-  const snapshot = createMeetingReviewDraftSnapshot("source-a", "revision-1", dirty);
-  dirty.texts.a = "mutated after snapshot";
-  assert.equal(snapshot.drafts.texts.a, "A edited", "snapshot must own serializable copies");
-
-  const restored = restoreMeetingDraftSnapshot(
-    clean,
-    snapshot,
-    transcript,
-    "source-a",
-    "revision-1",
-  );
-  assert.equal(restored.labels.s1, "Alice");
-  assert.equal(restored.texts.a, "A edited");
-  assert.equal(restored.speakers.b, "s1");
-  assert.deepEqual(restored.mergeTargets, { s1: "s2" }, "invalid merge targets and IDs are dropped");
-  assert.equal(restored.texts.ignored, undefined);
-  assert.deepEqual(
-    restoreMeetingDraftSnapshot(clean, snapshot, transcript, "source-b", "revision-1"),
-    clean,
-    "a different source must not hydrate editor state",
-  );
-  assert.deepEqual(
-    restoreMeetingDraftSnapshot(clean, snapshot, transcript, "source-a", "revision-2"),
-    clean,
-    "a different committed revision must not hydrate editor state",
-  );
-});
-
-test("review draft reconciliation preserves dirty segment B while applying segment A and another speaker rename", () => {
-  const transcript = {
-    schema_version: 1,
-    source_sha256: "source-a",
-    language: "en",
-    model: "model",
-    duration_seconds: 4,
-    segments: [
-      { id: "a", start: 0, end: 1, text: "A original", speaker: "s1" },
-      { id: "b", start: 1, end: 2, text: "B original", speaker: "s2" },
-    ],
-    speakers: [
-      { id: "s1", label: "Speaker 1" },
-      { id: "s2", label: "Speaker 2" },
-    ],
-  };
-  const drafts = initialMeetingDrafts(transcript);
-  drafts.texts.a = "A saved";
-  drafts.texts.b = "B still being edited";
-  const afterSegmentA = {
-    ...transcript,
-    segments: [{ ...transcript.segments[0], text: "A saved" }, transcript.segments[1]],
-  };
-  const reconciledA = reconcileMeetingDrafts(
-    transcript,
-    afterSegmentA,
-    drafts,
-    [{ kind: "edit_segment", segment_id: "a", text: "A saved" }],
-  );
-  assert.equal(reconciledA.texts.a, "A saved");
-  assert.equal(reconciledA.texts.b, "B still being edited");
-
-  reconciledA.labels.s2 = "Unsubmitted speaker name";
-  const afterSpeakerRename = {
-    ...afterSegmentA,
-    speakers: [{ id: "s1", label: "Alice" }, afterSegmentA.speakers[1]],
-  };
-  const reconciledB = reconcileMeetingDrafts(
-    afterSegmentA,
-    afterSpeakerRename,
-    reconciledA,
-    [{ kind: "rename_speaker", speaker_id: "s1", label: "Alice" }],
-  );
-  assert.equal(reconciledB.labels.s1, "Alice");
-  assert.equal(reconciledB.labels.s2, "Unsubmitted speaker name");
-  assert.equal(reconciledB.texts.b, "B still being edited");
 });
