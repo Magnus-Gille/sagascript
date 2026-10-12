@@ -539,7 +539,11 @@ jobs:
       # `cargo test` above leaves it out.
       - name: Cargo test (sagascript-core, release-profile dev-override guard)
         working-directory: src-tauri
-        run: cargo test --release -p sagascript-core --lib dev_overrides
+        run: |
+          set -o pipefail
+          cargo test --release -p sagascript-core --lib dev_overrides 2>&1 | tee "$RUNNER_TEMP/release-guard.log"
+          # cargo test exits 0 when the filter matches nothing: prove the guard ran.
+          grep -q 'release_build_ignores_the_real_environment ... ok' "$RUNNER_TEMP/release-guard.log"
 
   # Minimum supported Rust version (#353). `rust-version` in
   # src-tauri/Cargo.toml (and engine-host/ort) is a promise to people building
@@ -805,7 +809,16 @@ jobs:
           $env:BINARY = "src-tauri\target\release\sagascript.exe"
           & $env:BINARY completions powershell | Out-Null
 
+      # The two model smoke steps stay non-blocking (#357), but no longer
+      # silently: a step's `conclusion` is reported AFTER continue-on-error, so
+      # it read "success" while the transcription actually died after
+      # "Encoding audio..." in about half of the runs since 2026-10-09 (masked
+      # exit 1; suspected non-portable whisper.cpp build in the shared native
+      # cache). The report step below turns every masked failure into a
+      # warning annotation and a job-summary line until the cause is fixed.
       - name: Smoke test — download model and transcribe
+        id: smoke_transcribe
+        continue-on-error: true
         run: |
           $env:BINARY = "src-tauri\target\release\sagascript.exe"
           & $env:BINARY download-model nb-whisper-tiny
@@ -814,6 +827,8 @@ jobs:
           if ($result -notmatch "(?i)stortinget") { throw "Expected 'stortinget' in output" }
 
       - name: Smoke test — transcribe with JSON output
+        id: smoke_json
+        continue-on-error: true
         shell: cmd
         run: |
           set BINARY=src-tauri\target\release\sagascript.exe
@@ -822,6 +837,22 @@ jobs:
           findstr /C:"text" json_output.txt
           findstr /C:"duration_seconds" json_output.txt
           findstr /C:"language" json_output.txt
+
+      - name: Report masked smoke test failures
+        if: ${{ always() }}
+        shell: bash
+        env:
+          TRANSCRIBE_OUTCOME: ${{ steps.smoke_transcribe.outcome }}
+          JSON_OUTCOME: ${{ steps.smoke_json.outcome }}
+        run: |
+          for pair in "download model and transcribe=$TRANSCRIBE_OUTCOME" "transcribe with JSON output=$JSON_OUTCOME"; do
+            name=${pair%%=*}
+            outcome=${pair##*=}
+            echo "Windows smoke test — $name: $outcome" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$outcome" != success ]; then
+              echo "::warning title=Windows smoke test failed (non-blocking)::Smoke test — $name: $outcome (masked by continue-on-error, see #357)"
+            fi
+          done
 
   check-windows:
     needs: [scope, test-windows, build-windows]

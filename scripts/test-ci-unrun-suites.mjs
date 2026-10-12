@@ -75,7 +75,14 @@ test("test-linux runs the release-only dev-override guard in the release profile
   // ...and its doc comment names the command CI must run.
   const command = "cargo test --release -p sagascript-core --lib dev_overrides";
   assert.ok(devOverrides.includes(`(\`${command}\`)`), "the test's doc comment must name the CI command");
-  stepRunning("test-linux", command, "src-tauri");
+  const guard = steps("test-linux").filter((step) => step.run.split("\n").some((line) => line.startsWith(command)));
+  assert.equal(guard.length, 1, "test-linux must run the release guard exactly once");
+  assert.equal(guard[0].workingDirectory, "src-tauri");
+  assert.doesNotMatch(guard[0].raw, /^        (if|continue-on-error):/m, "the release guard must be unconditional and blocking");
+  // cargo test exits 0 when the filter matches nothing; the step must prove
+  // the guard test itself ran, and must not lose cargo's exit code in a pipe.
+  assert.match(guard[0].run, /^set -o pipefail$/m);
+  assert.match(guard[0].run, /^grep -q 'release_build_ignores_the_real_environment \.\.\. ok' /m);
 
   // A release profile with debug assertions would compile the guard out and
   // leave the step green with zero tests.

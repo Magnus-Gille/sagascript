@@ -199,22 +199,38 @@ for (const [platform, jobIds] of Object.entries({
   }
 }
 
-// The Windows model smoke steps were the last non-blocking exception (#357):
-// they succeeded in every observed run, so a failure there must now fail CI.
-test("every CI lane is blocking: no job or step uses continue-on-error", () => {
+// The Windows model smoke steps are the only non-blocking exception (#357).
+// continue-on-error masks their failures (a step's `conclusion` reads
+// "success"), so a report step must surface every one from the real `outcome`.
+test("only the two Windows smoke steps are non-blocking, and their failures are reported", () => {
   const jobs = workflow.slice(workflow.indexOf("\njobs:\n"));
   const jobIds = [...jobs.matchAll(/^  ([a-z][a-z0-9-]*):$/gm)].map((match) => match[1]);
   for (const expected of ["test-macos", "build-macos", "test-linux", "msrv-linux", "test-windows", "build-windows"]) {
     assert.ok(jobIds.includes(expected), `workflow must define ${expected}`);
   }
-  for (const jobId of jobIds) {
-    assert.doesNotMatch(jobBlock(jobId), /continue-on-error/, `${jobId} must not tolerate failures`);
+  for (const jobId of jobIds.filter((id) => id !== "build-windows")) {
+    assert.doesNotMatch(jobBlock(jobId), /continue-on-error:/, `${jobId} must not tolerate failures`);
   }
-  assert.doesNotMatch(workflow, /continue-on-error/);
-  const windows = parseSteps(jobBlock("build-windows"));
-  for (const name of ["Smoke test — download model and transcribe", "Smoke test — transcribe with JSON output"]) {
-    assert.ok(windows.has(name), `build-windows must keep the blocking ${name} step`);
+  const windows = jobBlock("build-windows");
+  assert.doesNotMatch(windows, /^    continue-on-error:/m, "build-windows itself must stay blocking");
+  assert.equal((windows.match(/^        continue-on-error: true$/gm) ?? []).length, 2);
+  const stepText = (name) => windows.slice(windows.indexOf(`      - name: ${name}`)).split(/\n      - name:/)[0];
+  for (const [name, id] of [
+    ["Smoke test — download model and transcribe", "smoke_transcribe"],
+    ["Smoke test — transcribe with JSON output", "smoke_json"],
+  ]) {
+    const step = stepText(name);
+    assert.match(step, /^        continue-on-error: true$/m, `${name} is a tolerated step`);
+    assert.match(step, new RegExp(`^        id: ${id}$`, "m"), `${name} needs id ${id} so its outcome can be reported`);
   }
+  const reportName = "Report masked smoke test failures";
+  const report = stepText(reportName);
+  assert.ok(windows.indexOf(reportName) > windows.indexOf("Smoke test — transcribe with JSON output"));
+  assert.match(report, /^        if: \$\{\{ always\(\) \}\}$/m);
+  assert.match(report, /TRANSCRIBE_OUTCOME: \$\{\{ steps\.smoke_transcribe\.outcome \}\}/);
+  assert.match(report, /JSON_OUTCOME: \$\{\{ steps\.smoke_json\.outcome \}\}/);
+  assert.match(report, /::warning /);
+  assert.match(report, /GITHUB_STEP_SUMMARY/);
 });
 
 test("model caches are isolated to native lanes", () => {
