@@ -242,6 +242,31 @@ struct LoadPending {
     deadline: Instant,
 }
 
+/// What [`Inner::plan_start_locked`] found.
+enum StartPlan {
+    Running(Arc<HostProcess>, Capabilities),
+    /// Spawn after `backoff`; `probing` is the one start after a failed cooldown.
+    Spawn {
+        backoff: Duration,
+        probing: bool,
+    },
+}
+
+/// Sleep `duration` in short slices; `Cancelled` as soon as `cancel` fires.
+fn sleep_unless_cancelled(duration: Duration, cancel: Option<&CancelToken>) -> Result<()> {
+    let end = Instant::now() + duration;
+    loop {
+        if cancel.is_some_and(CancelToken::is_cancelled) {
+            return Err(EngineHostError::Cancelled);
+        }
+        let now = Instant::now();
+        if now >= end {
+            return Ok(());
+        }
+        std::thread::sleep((end - now).min(Duration::from_millis(10)));
+    }
+}
+
 /// The restart budget was spent at `since`.
 struct Failure {
     reason: String,
@@ -421,7 +446,7 @@ impl EngineHostClient {
     pub fn connect(&self) -> Result<HostSnapshot> {
         {
             let _g = self.inner.lock_lifecycle_blocking();
-            self.inner.ensure_started_locked()?;
+            self.inner.ensure_started_locked(None)?;
         }
         Ok(self.snapshot())
     }
@@ -1057,12 +1082,15 @@ impl Inner {
                 }
             }
         }
-        let _g = self.lock_lifecycle(cancel)?;
+        let guard = self.lock_lifecycle(cancel)?;
         if cancel.is_some_and(CancelToken::is_cancelled) {
             return Err(EngineHostError::Cancelled);
         }
         self.notify_load(LoadEvent::Started);
-        let result = self.start_and_load_locked(cancel);
+        let (result, _guard) = match self.wait_restart_backoff(guard, cancel) {
+            Ok(guard) => (self.start_and_load_locked(cancel), Some(guard)),
+            Err(e) => (Err(e), None),
+        };
         match &result {
             Ok((_, load_ms)) => self.notify_load(LoadEvent::Ready { load_ms: *load_ms }),
             Err(EngineHostError::Cancelled) => self.notify_load(LoadEvent::Cancelled),
@@ -1073,6 +1101,28 @@ impl Inner {
         st.last_activity = Instant::now();
         let caps = st.caps.clone().expect("caps set with proc");
         Ok((proc, caps))
+    }
+
+    /// Sleep a pending restart backoff (up to 5 s by default) with the
+    /// lifecycle lock released, so shutdown, unload and the idle supervisor
+    /// are not held up behind it; `Cancelled` as soon as `cancel` fires.
+    /// Returns with the lock held again.
+    fn wait_restart_backoff<'a>(
+        &'a self,
+        mut guard: MutexGuard<'a, ()>,
+        cancel: Option<&CancelToken>,
+    ) -> Result<MutexGuard<'a, ()>> {
+        loop {
+            let backoff = match self.plan_start_locked() {
+                Ok(StartPlan::Spawn { backoff, .. }) if !backoff.is_zero() => backoff,
+                // Running, nothing to wait for, or an error the start reports.
+                _ => return Ok(guard),
+            };
+            drop(guard);
+            tracing::info!(?backoff, "delaying engine host restart");
+            sleep_unless_cancelled(backoff, cancel)?;
+            guard = self.lock_lifecycle(cancel)?;
+        }
     }
 
     fn notify_load(&self, event: LoadEvent) {
@@ -1088,7 +1138,7 @@ impl Inner {
         cancel: Option<&CancelToken>,
     ) -> Result<(Arc<HostProcess>, u64)> {
         let started = Instant::now();
-        let (proc, _) = self.ensure_started_locked()?;
+        let (proc, _) = self.ensure_started_locked(cancel)?;
         let loaded = self.lock_state().loaded;
         if !loaded {
             let r = self.load_locked(&proc, cancel)?;
@@ -1109,13 +1159,16 @@ impl Inner {
         st.crashes.push_back(Instant::now());
     }
 
-    fn ensure_started_locked(&self) -> Result<(Arc<HostProcess>, Capabilities)> {
-        // Inspect the current process; account for an unexpected exit.
-        let (backoff, probing, dead) = {
+    /// Inspect the current process (lifecycle lock held): account for an
+    /// unexpected exit, apply the failed state and the crash budget, and work
+    /// out the restart backoff. Calling it again changes nothing further.
+    fn plan_start_locked(&self) -> Result<StartPlan> {
+        let (plan, dead) = {
             let mut st = self.lock_state();
             if let Some(p) = &st.proc {
                 if p.is_alive() {
-                    return Ok((p.clone(), st.caps.clone().expect("caps set with proc")));
+                    let caps = st.caps.clone().expect("caps set with proc");
+                    return Ok(StartPlan::Running(p.clone(), caps));
                 }
             }
             let dead = st.proc.take();
@@ -1136,8 +1189,11 @@ impl Inner {
                 if waited < self.cfg.failed_cooldown {
                     return Err(failed_error(failure, self.cfg.failed_cooldown - waited));
                 }
-                tracing::info!(reason = %failure.reason, "engine host failed earlier; trying a fresh start after the cooldown");
-                (Duration::ZERO, true, dead)
+                let plan = StartPlan::Spawn {
+                    backoff: Duration::ZERO,
+                    probing: true,
+                };
+                (plan, dead)
             } else {
                 let window = self.cfg.restart_window;
                 st.crashes.retain(|t| t.elapsed() <= window);
@@ -1155,13 +1211,36 @@ impl Inner {
                     st.failed = Some(failure);
                     return Err(error);
                 }
-                (self.restart_backoff(&st, n), false, dead)
+                let plan = StartPlan::Spawn {
+                    backoff: self.restart_backoff(&st, n),
+                    probing: false,
+                };
+                (plan, dead)
             }
         };
         drop(dead); // reap the old process outside the state lock
-        if !backoff.is_zero() {
-            tracing::info!(?backoff, "delaying engine host restart");
-            std::thread::sleep(backoff);
+        Ok(plan)
+    }
+
+    /// Start the host if it is not running (lifecycle lock held). Callers
+    /// normally slept the backoff already ([`Self::wait_restart_backoff`]);
+    /// what is left is slept here, and a cancelled caller stops waiting.
+    fn ensure_started_locked(
+        &self,
+        cancel: Option<&CancelToken>,
+    ) -> Result<(Arc<HostProcess>, Capabilities)> {
+        let probing = match self.plan_start_locked()? {
+            StartPlan::Running(proc, caps) => return Ok((proc, caps)),
+            StartPlan::Spawn { backoff, probing } => {
+                if !backoff.is_zero() {
+                    tracing::info!(?backoff, "delaying engine host restart");
+                    sleep_unless_cancelled(backoff, cancel)?;
+                }
+                probing
+            }
+        };
+        if probing {
+            tracing::info!("engine host failed earlier; trying a fresh start after the cooldown");
         }
         match self.start_and_handshake() {
             Ok((proc, caps, host_info)) => {
