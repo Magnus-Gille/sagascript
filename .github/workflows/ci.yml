@@ -125,8 +125,10 @@ jobs:
         run: npm ci
 
       # npm advisories (#355): fail on a high or critical finding anywhere in
-      # package-lock.json, dev dependencies included, since they build the
-      # shipped frontend bundle.
+      # the root package-lock.json, dev dependencies included, since they
+      # build the shipped frontend bundle. site/ and tooling/code-health/ have
+      # their own lockfiles; neither ships in the app and neither is audited
+      # here.
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
 
@@ -434,8 +436,8 @@ jobs:
       - name: Check Rust dependency policy (cargo-deny)
         working-directory: src-tauri
         run: |
-          cargo deny --workspace check
-          cargo deny --manifest-path engine-host/ort/Cargo.toml --workspace check -A license-not-encountered -A license-exception-not-encountered -A unmatched-source
+          cargo deny --locked --workspace check
+          cargo deny --locked --manifest-path engine-host/ort/Cargo.toml --workspace check -A license-not-encountered -A license-exception-not-encountered -A unmatched-source
 
       - name: Install npm dependencies
         run: npm ci

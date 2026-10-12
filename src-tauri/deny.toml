@@ -2,10 +2,15 @@
 # standalone ORT engine host (engine-host/ort), which CI checks with the same
 # file through --manifest-path. Run from src-tauri/:
 #
-#   cargo deny --workspace check
-#   cargo deny --manifest-path engine-host/ort/Cargo.toml --workspace check
+#   cargo deny --locked --workspace check
+#   cargo deny --locked --manifest-path engine-host/ort/Cargo.toml --workspace check
 #
-# The advisory database is fetched from GitHub on each run.
+# The advisory database is fetched from GitHub on each run, so a newly
+# published advisory for a locked crate turns CI red on every PR, including
+# ones that touch no dependency. Respond in the PR that hits it, or in a
+# separate one: bump the crate (`cargo update -p <crate>`, keeping
+# rust-version), or, when no fixed version exists and the advisory does not
+# apply, add an `ignore` entry with its id and the reason.
 
 [graph]
 # The platforms Sagascript is built for: the official Apple Silicon app, the
@@ -23,11 +28,16 @@ all-features = true
 
 [advisories]
 # RustSec vulnerabilities fail the check for every crate in the graph.
-# Unsound and unmaintained advisories fail it for crates the workspace depends
-# on directly; deeper ones (today in tauri's GTK3, HTML-parsing and codegen
-# stacks, and below notify 7 and indicatif 0.17) are for those crates to
-# replace. `unsound = "workspace"` is cargo-deny's default; `unmaintained`
-# defaults to "all".
+# Unsound and unmaintained advisories fail it only for crates the workspace
+# depends on directly. `unsound = "workspace"` is cargo-deny's default;
+# `unmaintained` defaults to "all". Deeper ones this skips today (2026-10-12):
+# - unmaintained: fxhash, proc-macro-error and unic-* (tauri's HTML-parsing and
+#   codegen stacks), instant (below notify 7), number_prefix (below indicatif
+#   0.17);
+# - unsound: glib 0.18 (GTK3), rand 0.7/0.8 (build-time phf codegen), and two
+#   with fixed releases a lockfile bump would pick up: anyhow 1.0.101
+#   (RUSTSEC-2026-0190, via tauri; fixed in 1.0.103) and memmap2 0.9.10
+#   (RUSTSEC-2026-0186, via enigo's Linux keyboard stack; fixed in 0.9.11).
 unsound = "workspace"
 unmaintained = "workspace"
 # An ignore needs the advisory id and a reason, and should be rare.
