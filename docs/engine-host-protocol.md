@@ -30,8 +30,9 @@ any order; correlate by `id`. Unknown fields are ignored (forward compatibility)
 fails with `unsupported`. Breaking changes bump `protocol`.
 
 Error codes: `protocol` (e.g. op before `hello`, bad envelope), `bad_request`, `unsupported`,
-`not_loaded`, `model_missing`, `model_load_failed`, `busy` (retryable), `cancelled`, `engine`,
-`internal`.
+`not_loaded`, `model_missing`, `model_load_failed`, `busy` (retryable; **reserved**: no host sends
+it, both queue requests beyond `max_in_flight` instead; the client still retries it a few times),
+`cancelled`, `engine`, `internal`.
 
 All `*_ms` and `*_bytes` fields are non-negative JSON integers (clients also accept and round
 non-negative floats for robustness).
@@ -55,7 +56,9 @@ warning when the host build differs from its own (build-identity invariant).
 ### `load`
 Request: `{"model_dir":"<abs path>","model_id":"pianissimo-sv-coreml-<rev>","compute_units":"ane"}`.
 Result: `{"model_id","load_ms","compiled":<bool: first-time device compile happened>,
-"window_s","frame_s","vocab_size","blank_id"}`. May emit `{"event":"load_progress","phase":"compiling"}`.
+"window_s","frame_s","vocab_size","blank_id"}`. **Reserved:** `{"event":"load_progress","phase":"compiling"}`;
+no host emits it, and the client ignores events, so the `load` deadline (180 s) is fixed and never
+extended.
 `compiled` is true only when this load compiled at least one `.mlpackage`; a load served from the
 compiled-model cache (`~/Library/Caches/Sagascript/EngineHost/<key>/<Name>.mlmodelc`, valid once its
 `.complete` marker exists) reports false. The host loads from that stable path so the OS Neural
@@ -75,7 +78,8 @@ Request:
  "format":"f32le","priority":"batch"}
 ```
 - `pcm_path` is a raw little-endian float32 mono file written by the client (0600, private temp
-  dir, deleted by the client). The host reads `num_samples` starting at `offset_samples`.
+  dir, deleted by the client; see "PCM temp dirs" below). The host reads `num_samples` starting at
+  `offset_samples`.
 - `num_samples ≤ max_window_s × sample_rate`, else `bad_request`. Shorter windows are padded
   internally; tokens beyond the real audio are dropped.
 - Optional context biasing: `"boost_terms":["Gille","Magnus Gille"]` (at most 500 terms of at most 64
@@ -143,6 +147,14 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
 
 - Timeouts: `hello` 10 s, `load` 180 s (first-time ANE compile), `ping` 2 s, `transcribe_window`
   max(15 s, 3 × window seconds); `shutdown` grace 2 s, then kill.
+- Writes to the host's stdin go through a writer thread and are bounded (5 s, and never longer
+  than the request's own timeout). A host that stops reading stdin is killed (counted as a crash)
+  and the request fails with a timeout; shutdown never waits on a blocked write.
+- Wedged window: when a `transcribe_window` times out, the client sends `cancel` and waits up to
+  5 s (the wedge grace) for that request's terminal response. Without one the host is stuck in an
+  uninterruptible call (a Core ML prediction cannot be cancelled, yet `ping` is still answered),
+  so it is killed (counted as a crash) and the next request starts a fresh host. `status.in_flight`
+  is not used for this: it also counts healthy windows of other jobs.
 - Long audio: decode to 16 kHz mono f32 once, write one PCM file, plan windows with
   `chunk_merge::plan_windows(preferred_window_s, preferred_overlap_s)` with the effective window
   (see `load`), keep at most `max_in_flight − 1` batch windows in flight (`max_in_flight` when it
@@ -169,7 +181,16 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
   one warning) and use the bundled host and the manifest-verified model.
 - Lifecycle: lazy start, optional pre-warm, idle `unload` then `shutdown`, crash detection with
   bounded restart backoff. A request that was in flight when the host crashed fails with the
-  stderr tail; it is not silently retried more than once.
+  stderr tail; it is not silently retried more than once. The backoff (0, 1, 5 s) is slept without
+  holding the lifecycle lock and ends early when the caller cancels.
+- Failed: more than 3 crashes (or failed starts) within 300 s mark the client failed for a 60 s
+  cooldown, in which requests fail at once. The first request after it gets one fresh start: if it
+  succeeds the crash history is cleared, otherwise the cooldown starts again.
+- PCM temp dirs (`sagascript-pcm-<12 letters/digits>`) contain `owner.lock`, exclusively locked by
+  the owning process for the dir's lifetime. The app at startup and each process when it creates
+  its shared engine client remove, in the background, dirs whose lock can be taken (the owner was
+  killed before it could clean up); a running app or CLI keeps its lock, so its dir is never
+  touched.
 
 ## Engine hosts
 

@@ -4,9 +4,9 @@
 //! Threading model: the API is **blocking** and thread-based, like
 //! `pianissimo_backend` and the Whisper backends (callers run it inside
 //! `spawn_blocking` / a worker thread). Per host process there is one stdout
-//! reader thread (routes responses to waiters by request id) and one stderr
-//! drain thread; per client there is one small supervisor thread for idle
-//! unload/shutdown. No async runtime is required, which keeps the CLI's lean
+//! reader thread (routes responses to waiters by request id), one stderr
+//! drain thread and one stdin writer thread (bounded writes); per client
+//! there is one small supervisor thread for idle unload/shutdown. No async runtime is required, which keeps the CLI's lean
 //! build and test doubles simple.
 //!
 //! Layers:

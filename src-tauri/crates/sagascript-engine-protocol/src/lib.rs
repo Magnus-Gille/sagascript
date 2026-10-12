@@ -221,6 +221,8 @@ pub enum ErrorCode {
     NotLoaded,
     ModelMissing,
     ModelLoadFailed,
+    /// Reserved: no host sends it (hosts queue beyond `max_in_flight`).
+    /// Clients retry it a few times.
     Busy,
     Cancelled,
     Engine,
