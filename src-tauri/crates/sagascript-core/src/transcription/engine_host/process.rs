@@ -601,6 +601,8 @@ mod tests {
         }
     }
 
+    // Only the unix-gated test below poisons locks (it spawns /bin/cat).
+    #[cfg(unix)]
     fn poison<T: Send>(mutex: &Mutex<T>) {
         std::thread::scope(|scope| {
             let panicked = scope
