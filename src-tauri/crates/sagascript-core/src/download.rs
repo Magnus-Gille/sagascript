@@ -997,6 +997,7 @@ fn sweep_orphaned_tmp_files(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sagascript_testsupport::TempDir;
 
     const TEST_SHA: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -1005,10 +1006,6 @@ mod tests {
             sha256: TEST_SHA,
             size,
         }
-    }
-
-    fn temp_test_dir() -> PathBuf {
-        std::env::temp_dir().join(format!("sagascript-download-test-{}", uuid::Uuid::new_v4()))
     }
 
     // -- validate_download --
@@ -1137,8 +1134,7 @@ mod tests {
 
     #[test]
     fn verify_file_hashes_existing_artifact_before_use() {
-        let dir = temp_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let path = dir.join("model.bin");
         std::fs::write(&path, b"verified model").unwrap();
         let expected = DownloadIntegrity {
@@ -1148,7 +1144,6 @@ mod tests {
         assert!(verify_file(&path, expected).is_ok());
         std::fs::write(&path, b"tampered model").unwrap();
         assert!(verify_file(&path, expected).is_err());
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     // -- persistent verification stamp (unix only) --
@@ -1179,9 +1174,8 @@ mod tests {
         /// Fresh dir + model file. Each test uses its own path, so the
         /// process-wide cache (keyed by path) never leaks between tests; to
         /// exercise the *stamp* we clear that cache entry before each run.
-        fn setup() -> (PathBuf, PathBuf) {
-            let dir = temp_test_dir();
-            std::fs::create_dir_all(&dir).unwrap();
+        fn setup() -> (TempDir, PathBuf) {
+            let dir = TempDir::new();
             let path = dir.join("model.bin");
             std::fs::write(&path, BODY).unwrap();
             (dir, path)
@@ -1202,7 +1196,7 @@ mod tests {
         #[test]
         fn first_verify_hashes_and_writes_stamp_then_skips() {
             use std::os::unix::fs::PermissionsExt;
-            let (dir, path) = setup();
+            let (_dir, path) = setup();
             assert_eq!(run(&path, INTEGRITY, false), (1, true));
             let stamp_path = verification_stamp_path(&path);
             let stamp: VerificationStamp =
@@ -1220,12 +1214,11 @@ mod tests {
             // Forced verification always hashes.
             assert_eq!(run(&path, INTEGRITY, true), (1, true));
             assert!(verify_file_forced(&path, INTEGRITY).is_ok());
-            let _ = std::fs::remove_dir_all(dir);
         }
 
         #[test]
         fn touched_mtime_rehashes() {
-            let (dir, path) = setup();
+            let (_dir, path) = setup();
             stamped(&path);
             let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
             file.set_modified(SystemTime::now() + Duration::from_secs(5))
@@ -1238,17 +1231,15 @@ mod tests {
                 (0, true),
                 "stamp was rewritten"
             );
-            let _ = std::fs::remove_dir_all(dir);
         }
 
         #[test]
         fn changed_size_rehashes_and_fails() {
-            let (dir, path) = setup();
+            let (_dir, path) = setup();
             stamped(&path);
             std::fs::write(&path, b"longer verified model").unwrap();
             // Size mismatch is rejected before hashing.
             assert_eq!(run(&path, INTEGRITY, false), (0, false));
-            let _ = std::fs::remove_dir_all(dir);
         }
 
         #[test]
@@ -1259,12 +1250,11 @@ mod tests {
             std::fs::write(&replacement, BODY).unwrap();
             std::fs::rename(&replacement, &path).unwrap();
             assert_eq!(run(&path, INTEGRITY, false), (1, true));
-            let _ = std::fs::remove_dir_all(dir);
         }
 
         #[test]
         fn same_size_tampering_is_caught() {
-            let (dir, path) = setup();
+            let (_dir, path) = setup();
             stamped(&path);
             std::fs::write(&path, b"tampered model").unwrap();
             assert_eq!(run(&path, INTEGRITY, false), (1, false));
@@ -1272,30 +1262,27 @@ mod tests {
                 !verification_stamp_path(&path).exists(),
                 "stale stamp removed"
             );
-            let _ = std::fs::remove_dir_all(dir);
         }
 
         #[test]
         fn stamp_for_a_different_expected_sha_is_ignored() {
-            let (dir, path) = setup();
+            let (_dir, path) = setup();
             stamped(&path);
             let other = DownloadIntegrity {
                 sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 size: 14,
             };
             assert_eq!(run(&path, other, false), (1, false));
-            let _ = std::fs::remove_dir_all(dir);
         }
 
         #[test]
         fn corrupt_stamp_rehashes_and_is_rewritten() {
-            let (dir, path) = setup();
+            let (_dir, path) = setup();
             let (_, stamp_path) = stamped(&path);
             std::fs::write(&stamp_path, b"{not json").unwrap();
             assert_eq!(run(&path, INTEGRITY, false), (1, true));
             forget_process_cache(&path);
             assert_eq!(run(&path, INTEGRITY, false), (0, true));
-            let _ = std::fs::remove_dir_all(dir);
         }
 
         #[test]
@@ -1309,7 +1296,6 @@ mod tests {
             assert_eq!(result, (1, true));
             // (Running as root would bypass the mode bits.)
             assert!(!wrote || unsafe_is_root());
-            let _ = std::fs::remove_dir_all(dir);
         }
 
         fn unsafe_is_root() -> bool {
@@ -1339,24 +1325,21 @@ mod tests {
                 .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
                 .count();
             assert_eq!(leftovers, 0);
-            let _ = std::fs::remove_dir_all(dir);
         }
 
         #[test]
         fn removing_a_stamp_is_idempotent() {
-            let (dir, path) = setup();
+            let (_dir, path) = setup();
             stamped(&path);
             remove_verification_stamp(&path);
             remove_verification_stamp(&path);
             assert!(!verification_stamp_path(&path).exists());
-            let _ = std::fs::remove_dir_all(dir);
         }
     }
 
     #[test]
     fn verify_file_works_on_a_small_stack() {
-        let dir = temp_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let path = dir.join("model.bin");
         std::fs::write(&path, b"verified model").unwrap();
         let expected = DownloadIntegrity {
@@ -1379,13 +1362,11 @@ mod tests {
             .unwrap();
 
         assert!(result.is_ok());
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn prepare_existing_artifact_keeps_verified_file() {
-        let dir = temp_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let path = dir.join("model.bin");
         std::fs::write(&path, b"verified model").unwrap();
         let expected = DownloadIntegrity {
@@ -1398,13 +1379,11 @@ mod tests {
             ExistingArtifact::Verified
         );
         assert_eq!(std::fs::read(&path).unwrap(), b"verified model");
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn prepare_existing_artifact_removes_same_size_hash_mismatch() {
-        let dir = temp_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let path = dir.join("model.bin");
         std::fs::write(&path, b"tampered model").unwrap();
         let expected = DownloadIntegrity {
@@ -1417,13 +1396,11 @@ mod tests {
             ExistingArtifact::RemovedInvalid
         );
         assert!(!path.exists());
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn prepare_existing_artifact_preserves_file_for_invalid_manifest() {
-        let dir = temp_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let path = dir.join("model.bin");
         std::fs::write(&path, b"untrusted bytes").unwrap();
         let invalid_manifest = DownloadIntegrity {
@@ -1433,12 +1410,11 @@ mod tests {
 
         assert!(prepare_existing_artifact(&path, invalid_manifest).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"untrusted bytes");
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn prepare_existing_artifact_preserves_path_on_io_error() {
-        let dir = temp_test_dir();
+        let dir = TempDir::new();
         let path = dir.join("model.bin");
         std::fs::create_dir_all(&path).unwrap();
         let expected = DownloadIntegrity {
@@ -1451,7 +1427,6 @@ mod tests {
             path.is_dir(),
             "generic I/O failure must not delete the path"
         );
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]
@@ -1459,8 +1434,7 @@ mod tests {
     fn prepare_existing_artifact_preserves_dangling_symlink() {
         use std::os::unix::fs::symlink;
 
-        let dir = temp_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let path = dir.join("model.bin");
         symlink(dir.join("missing-target"), &path).unwrap();
 
@@ -1472,7 +1446,6 @@ mod tests {
                 .is_symlink(),
             "an open failure must not remove or replace the existing path"
         );
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn serve_once(body: &'static [u8]) -> String {
@@ -1485,8 +1458,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_existing_artifact_is_replaced_by_verified_download() {
-        let dir = temp_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let path = dir.join("model.bin");
         std::fs::write(&path, b"tampered model").unwrap();
         let expected = DownloadIntegrity {
@@ -1510,13 +1482,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(std::fs::read(&path).unwrap(), b"verified model");
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn failed_replacement_never_installs_partial_artifact() {
-        let dir = temp_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let path = dir.join("model.bin");
         std::fs::write(&path, b"tampered model").unwrap();
         let expected = DownloadIntegrity {
@@ -1540,7 +1510,6 @@ mod tests {
             std::fs::read_dir(&dir).unwrap().next().is_none(),
             "failed replacement must clean its unique temp file"
         );
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     // -- bounded downloads --
@@ -1668,11 +1637,10 @@ mod tests {
     ) -> (
         Result<(), DictationError>,
         Duration,
-        PathBuf,
+        TempDir,
         Vec<std::io::Error>,
     ) {
-        let dir = temp_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let (url, server) = serve_scripts(scripts);
         let start = std::time::Instant::now();
         let result = download_to_path_with_limits(
@@ -1706,7 +1674,6 @@ mod tests {
             assert!(err.contains("exceeds the pinned manifest size"), "{err}");
             assert!(took < Duration::from_millis(2500), "{took:?}");
             assert_empty(&dir, "oversized download left a file");
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -1733,7 +1700,6 @@ mod tests {
             let err = r.unwrap_err().to_string();
             assert!(err.contains("exceeds the pinned manifest size"), "{err}");
             assert_empty(&dir, "overflowing download left a file");
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -1742,8 +1708,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn wrong_content_length_is_rejected_before_any_write() {
         tokio::time::timeout(Duration::from_secs(30), async {
-            let dir = temp_test_dir();
-            std::fs::create_dir_all(&dir).unwrap();
+            let dir = TempDir::new();
             let (url, server) = serve_scripts(vec![vec![
                 ok_head(Some(1_000_000)),
                 Step::Write(vec![b'a'; 14]),
@@ -1773,7 +1738,6 @@ mod tests {
             );
             assert_empty(&dir, "rejected download left a file");
             join_server(server).await;
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -1796,7 +1760,6 @@ mod tests {
             assert!(err.contains("stalled"), "{err}");
             assert!(took < Duration::from_millis(2500), "{took:?}");
             assert_empty(&dir, "stalled download left a file");
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -1814,7 +1777,6 @@ mod tests {
             assert!(r.unwrap_err().to_string().contains("stalled"));
             assert!(took < Duration::from_millis(2500), "{took:?}");
             assert_empty(&dir, "header stall left a file");
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -1848,7 +1810,6 @@ mod tests {
                 std::fs::read(dir.join("model.bin")).unwrap(),
                 b"verified model"
             );
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -1861,7 +1822,6 @@ mod tests {
             let (r, _, dir, _) = run_scripts(scripts, 14, fast_limits()).await;
             assert!(r.unwrap_err().to_string().contains("Too many redirects"));
             assert_empty(&dir, "redirect loop left a file");
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -1883,7 +1843,6 @@ mod tests {
                     std::fs::read(dir.join("model.bin")).unwrap(),
                     b"verified model"
                 );
-                let _ = std::fs::remove_dir_all(dir);
             }
         })
         .await
@@ -1914,7 +1873,6 @@ mod tests {
                 std::fs::read(dir.join("model.bin")).unwrap(),
                 b"verified model"
             );
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -1924,8 +1882,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn total_deadline_expiring_during_processing_fails() {
         tokio::time::timeout(Duration::from_secs(30), async {
-            let dir = temp_test_dir();
-            std::fs::create_dir_all(&dir).unwrap();
+            let dir = TempDir::new();
             let (url, server) = serve_scripts(vec![vec![
                 ok_head(Some(14)),
                 Step::Write(b"verified".to_vec()),
@@ -1947,7 +1904,6 @@ mod tests {
             assert!(err.contains("total time limit"), "{err}");
             assert_empty(&dir, "expired download left a file");
             join_server(server).await;
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -1958,8 +1914,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn total_deadline_expiring_just_before_eof_fails() {
         tokio::time::timeout(Duration::from_secs(30), async {
-            let dir = temp_test_dir();
-            std::fs::create_dir_all(&dir).unwrap();
+            let dir = TempDir::new();
             let (url, server) = serve_scripts(vec![vec![
                 ok_head(Some(14)),
                 Step::Write(b"verified model".to_vec()),
@@ -1980,7 +1935,6 @@ mod tests {
             assert!(!dir.join("model.bin").exists());
             assert_empty(&dir, "expired download left a file");
             join_server(server).await;
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -1989,8 +1943,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn aborting_the_download_task_removes_the_partial_file() {
         tokio::time::timeout(Duration::from_secs(30), async {
-            let dir = temp_test_dir();
-            std::fs::create_dir_all(&dir).unwrap();
+            let dir = TempDir::new();
             let (url, server) = serve_scripts(vec![vec![
                 ok_head(Some(14)),
                 Step::Write(b"verified".to_vec()),
@@ -2025,7 +1978,6 @@ mod tests {
             let _ = task.await;
             assert_empty(&dir, "aborted download left a partial file");
             join_server(server).await;
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -2034,8 +1986,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn panicking_progress_callback_removes_the_partial_file() {
         tokio::time::timeout(Duration::from_secs(30), async {
-            let dir = temp_test_dir();
-            std::fs::create_dir_all(&dir).unwrap();
+            let dir = TempDir::new();
             let (url, server) = serve_scripts(vec![vec![
                 ok_head(Some(14)),
                 Step::Write(b"verified".to_vec()),
@@ -2057,7 +2008,6 @@ mod tests {
             assert!(task.await.unwrap_err().is_panic());
             assert_empty(&dir, "panicking callback left a partial file");
             join_server(server).await;
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -2104,7 +2054,6 @@ mod tests {
             let err = r.unwrap_err().to_string();
             assert!(err.contains("Unsupported redirect status 300"), "{err}");
             assert_empty(&dir, "unsupported redirect left a file");
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -2126,7 +2075,6 @@ mod tests {
             assert!(r.is_err());
             assert!(!dir.join("model.bin").exists());
             assert_empty(&dir, "integrity failure left a file");
-            let _ = std::fs::remove_dir_all(dir);
         })
         .await
         .expect("test exceeded its hard timeout");
@@ -2139,8 +2087,7 @@ mod tests {
             // after the response arrives, racing creation. Whatever the
             // interleaving, no file may remain once creation has settled.
             for _ in 0..20 {
-                let dir = temp_test_dir();
-                std::fs::create_dir_all(&dir).unwrap();
+                let dir = TempDir::new();
                 let (url, server) = serve_scripts(vec![vec![
                     ok_head(Some(14)),
                     Step::Sleep(Duration::from_millis(300)),
@@ -2164,7 +2111,6 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 assert_empty(&dir, "cancelled download left a file");
                 join_server(server).await;
-                let _ = std::fs::remove_dir_all(dir);
             }
         })
         .await
@@ -2198,8 +2144,7 @@ mod tests {
 
     #[test]
     fn sweep_removes_only_stale_tmp_files() {
-        let dir = temp_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
 
         let stale = dir.join("stale.bin.tmp");
         std::fs::write(&stale, b"leftover").unwrap();
@@ -2227,13 +2172,12 @@ mod tests {
             "fresh tmp file must survive — it might belong to a concurrent download"
         );
         assert!(keep.exists(), "non-tmp file must never be touched");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn sweep_tolerates_missing_directory() {
         // Must not panic if the models dir doesn't exist yet (fresh install).
-        sweep_orphaned_tmp_files(&temp_test_dir());
+        let dir = TempDir::new();
+        sweep_orphaned_tmp_files(&dir.join("missing"));
     }
 }

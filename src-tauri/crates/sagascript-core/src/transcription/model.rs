@@ -453,10 +453,7 @@ async fn run_ditto(
 #[cfg(test)]
 mod migrate_legacy_models_dir_tests {
     use super::*;
-
-    fn temp_base() -> PathBuf {
-        std::env::temp_dir().join(format!("sagascript-migrate-test-{}", uuid::Uuid::new_v4()))
-    }
+    use sagascript_testsupport::TempDir;
 
     #[test]
     fn vad_source_is_immutable_and_manifest_is_plausible() {
@@ -471,7 +468,7 @@ mod migrate_legacy_models_dir_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn coreml_install_requires_verified_archive_marker() {
-        let base = temp_base();
+        let base = TempDir::new();
         let unverified = base.join("ggml-base-encoder.mlmodelc");
         std::fs::create_dir_all(&unverified).unwrap();
         std::fs::write(unverified.join("model.mil"), b"native model").unwrap();
@@ -493,14 +490,12 @@ mod migrate_legacy_models_dir_tests {
         .unwrap();
         quarantine_unverified_coreml_encoder_at(&verified, integrity).unwrap();
         assert!(verified.exists());
-
-        let _ = std::fs::remove_dir_all(base);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn coreml_sweep_removes_only_stale_owned_extract_directories() {
-        let base = temp_base();
+        let base = TempDir::new();
         std::fs::create_dir_all(&base).unwrap();
         let dirname = "ggml-base-encoder.mlmodelc";
         let stale = base.join(format!(".{dirname}.{}.extract", uuid::Uuid::new_v4()));
@@ -529,12 +524,12 @@ mod migrate_legacy_models_dir_tests {
         assert!(malformed.exists());
         assert!(other_model.exists());
         assert!(matching_file.exists());
-        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
     fn fresh_install_creates_nothing_and_returns_new_path() {
-        let base = temp_base();
+        let temp = TempDir::new();
+        let base = temp.join("data");
         // Deliberately don't create `base` itself — a fresh install has
         // neither the legacy nor the new dir yet.
 
@@ -549,13 +544,11 @@ mod migrate_legacy_models_dir_tests {
             !result.exists(),
             "migration itself must not create the new dir either"
         );
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn legacy_dir_with_file_is_moved_and_old_dir_removed() {
-        let base = temp_base();
+        let base = TempDir::new();
         let legacy_models = base.join("FlowDictate").join("Models");
         std::fs::create_dir_all(&legacy_models).unwrap();
         std::fs::write(legacy_models.join("ggml-base.bin"), b"dummy").unwrap();
@@ -571,13 +564,11 @@ mod migrate_legacy_models_dir_tests {
             !base.join("FlowDictate").exists(),
             "now-empty legacy parent should be cleaned up"
         );
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn both_dirs_present_leaves_legacy_untouched() {
-        let base = temp_base();
+        let base = TempDir::new();
 
         let new_models = base.join("Sagascript").join("Models");
         std::fs::create_dir_all(&new_models).unwrap();
@@ -598,13 +589,11 @@ mod migrate_legacy_models_dir_tests {
             new_models.join("ggml-base.bin").exists(),
             "existing new-dir contents must be untouched"
         );
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
     fn sibling_file_in_legacy_parent_survives_migration() {
-        let base = temp_base();
+        let base = TempDir::new();
         let legacy_models = base.join("FlowDictate").join("Models");
         std::fs::create_dir_all(&legacy_models).unwrap();
         std::fs::write(legacy_models.join("ggml-base.bin"), b"dummy").unwrap();
@@ -627,8 +616,6 @@ mod migrate_legacy_models_dir_tests {
             base.join("FlowDictate").exists(),
             "legacy parent must survive since it's not empty"
         );
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

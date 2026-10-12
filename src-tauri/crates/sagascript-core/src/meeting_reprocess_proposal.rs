@@ -298,33 +298,15 @@ fn hash_json<T: Serialize>(value: &T) -> Result<String, ProposalError> {
 mod tests {
     use super::*;
     use crate::meeting::{MeetingSegmentInput, MeetingSpeaker};
+    use crate::test_support::meeting_transcript;
 
     fn transcript(source: &str, text: &str) -> MeetingTranscript {
-        MeetingTranscript::new(
-            source,
-            "en",
-            "tiny",
-            4.0,
-            vec![
-                MeetingSegmentInput {
-                    start: 0.0,
-                    end: 1.0,
-                    text: text.to_owned(),
-                    speaker: "speaker-a".into(),
-                },
-                MeetingSegmentInput {
-                    start: 1.0,
-                    end: 2.0,
-                    text: "world".into(),
-                    speaker: "speaker-a".into(),
-                },
-            ],
-            vec![MeetingSpeaker {
-                id: "speaker-a".into(),
-                label: "Alice".into(),
-            }],
-        )
-        .expect("valid transcript")
+        meeting_transcript()
+            .source_sha256(source)
+            .segment(0.0, 1.0, text, "speaker-a")
+            .segment(1.0, 2.0, "world", "speaker-a")
+            .speaker("speaker-a", "Alice")
+            .build()
     }
 
     fn edit(segment_id: &str, text: &str) -> CorrectionOperation {

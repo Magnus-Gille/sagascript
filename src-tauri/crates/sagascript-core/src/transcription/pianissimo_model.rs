@@ -963,7 +963,7 @@ mod tests {
     use std::fs;
     use std::io::Write;
 
-    use sha2::{Digest, Sha256};
+    use sagascript_testsupport::sha256_hex;
 
     use super::*;
 
@@ -979,10 +979,6 @@ mod tests {
         ("parakeet_vocab.json", b"[\"a\"]"),
         ("LICENSE-and-attribution.txt", b"CC BY 4.0"),
     ];
-
-    fn sha(bytes: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(bytes))
-    }
 
     fn leak(value: String) -> &'static str {
         Box::leak(value.into_boxed_str())
@@ -1006,7 +1002,7 @@ mod tests {
             .map(|(path, bytes)| ManifestFile {
                 path: leak((*path).to_string()),
                 size: bytes.len() as u64,
-                sha256: leak(sha(bytes)),
+                sha256: leak(sha256_hex(bytes)),
             })
             .collect();
         let bytes = fs::read(archive).unwrap();
@@ -1016,7 +1012,7 @@ mod tests {
             source: ModelSource::Archive {
                 url: "http://invalid.example/model.zip",
                 archive: DownloadIntegrity {
-                    sha256: leak(sha(&bytes)),
+                    sha256: leak(sha256_hex(&bytes)),
                     size: bytes.len() as u64,
                 },
             },
@@ -1290,7 +1286,7 @@ mod tests {
             .map(|(path, bytes)| ManifestFile {
                 path: leak((*path).to_string()),
                 size: bytes.len() as u64,
-                sha256: leak(sha(bytes)),
+                sha256: leak(sha256_hex(bytes)),
             })
             .collect();
         let required: Vec<&'static str> = files.iter().map(|f| f.path).collect();
