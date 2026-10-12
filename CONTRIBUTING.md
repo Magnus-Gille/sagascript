@@ -53,7 +53,7 @@ cd src-tauri && cargo clippy -p sagascript-cli --all-targets --no-default-featur
 
 ## Code style
 
-- **Rust:** Prefer clarity over cleverness. Keep modules small and testable. Run `cargo fmt --all` before committing; CI rejects unformatted code (`src-tauri/rustfmt.toml`).
+- **Rust:** Prefer clarity over cleverness. Keep modules small and testable. Run `cargo fmt --all` (plus `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all` for the separate ORT host workspace) before committing; CI rejects unformatted code (`src-tauri/rustfmt.toml`).
 - **Svelte 5:** Use runes (`$state`, `$effect`), not legacy stores.
 - **No hardcoded secrets** -- ever.
 

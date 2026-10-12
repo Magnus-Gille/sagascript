@@ -377,7 +377,7 @@ jobs:
 
       # Formatting gate (#352). Both Cargo workspaces must be rustfmt-clean:
       # the main one and the standalone ORT engine host. Runs before any
-      # compilation so an unformatted PR fails in seconds.
+      # compilation, so an unformatted PR fails early.
       - name: Check Rust formatting
         working-directory: src-tauri
         run: |
