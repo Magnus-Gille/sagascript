@@ -343,7 +343,7 @@ fn load_at_with_legacy_sources(
             "Failed to lock settings file at {} for loading: {error} — falling back to defaults",
             path.display()
         );
-        Settings::default()
+        defaults_for(path)
     })
 }
 
@@ -352,7 +352,7 @@ fn load_at_with_legacy_sources(
 /// explicit save, which preserves its bytes first (see [`save_to`]).
 fn unmigrated_defaults(path: &Path, error: &SettingsLoadError, migration: &str) -> Settings {
     tracing::warn!(
-        "Settings file at {} could not be loaded ({error}); skipping the {migration} migration and using defaults without changing the file",
+        "Settings file at {} could not be loaded ({error}); skipping the {migration} migration, which leaves the file untouched, and using defaults in memory",
         path.display()
     );
     defaults_for(path)
@@ -631,8 +631,36 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
     // Read existing file to preserve non-settings keys. This is the one place
     // every settings write passes through, so it is also where an unreadable
     // or invalid file is protected before anything is replaced.
-    let mut map = existing_settings_for_merge(path)?;
-    canonicalize_legacy_keys(&mut map);
+    let (mut map, recovered) = existing_settings_for_merge(path)?;
+    let written = merge_and_write(path, settings, &mut map);
+    if let Some(recovered) = recovered {
+        return match written {
+            Ok(()) => {
+                tracing::warn!(
+                    "Settings file {} was invalid ({}). Its exact original contents are preserved at {}; the file was rewritten from the current settings, so restore any lost values from that copy.",
+                    path.display(),
+                    recovered.problem,
+                    recovered.copy.display()
+                );
+                Ok(())
+            }
+            Err(error) => Err(format!(
+                "{error} (the invalid original settings file is preserved at {})",
+                recovered.copy.display()
+            )),
+        };
+    }
+    written
+}
+
+/// The merge-and-write half of [`save_to`], once the existing file is safe to
+/// replace.
+fn merge_and_write(
+    path: &Path,
+    settings: &Settings,
+    map: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    canonicalize_legacy_keys(map);
 
     save_external_glossaries(path, settings)?;
 
@@ -654,9 +682,14 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
 
     let json = serde_json::to_string_pretty(&map).map_err(|e| format!("Serialize error: {e}"))?;
 
-    atomic_write(path, json.as_bytes(), "settings")?;
+    atomic_write(path, json.as_bytes(), "settings")
+}
 
-    Ok(())
+/// An invalid settings file whose exact bytes [`preserve_invalid_settings`]
+/// saved before `save_to` replaces it.
+struct RecoveredSettings {
+    problem: String,
+    copy: PathBuf,
 }
 
 /// The existing JSON object `save_to` merges into, after making it safe to
@@ -668,14 +701,20 @@ fn save_to(path: &Path, settings: &Settings) -> Result<(), String> {
 /// - Invalid settings: its exact bytes are first preserved by
 ///   [`preserve_invalid_settings`] (an error if that fails, so nothing is
 ///   written). Then its object for a schema error, so unknown keys survive, or
-///   an empty object for a syntax error.
+///   an empty object for a syntax error, plus where the copy went.
 fn existing_settings_for_merge(
     path: &Path,
-) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+) -> Result<
+    (
+        serde_json::Map<String, serde_json::Value>,
+        Option<RecoveredSettings>,
+    ),
+    String,
+> {
     let contents = match std::fs::read(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(serde_json::Map::new())
+            return Ok((serde_json::Map::new(), None))
         }
         Err(error) => {
             return Err(format!(
@@ -689,7 +728,7 @@ fn existing_settings_for_merge(
     let (problem, merge_base) = match parse_settings_object(&contents) {
         Err(problem) => (problem, serde_json::Map::new()),
         Ok(object) => match settings_from_object(object.clone(), false) {
-            Ok(_) => return Ok(object),
+            Ok(_) => return Ok((object, None)),
             Err(problem) => (problem, object),
         },
     };
@@ -699,12 +738,13 @@ fn existing_settings_for_merge(
             path.display()
         )
     })?;
-    tracing::warn!(
-        "Settings file {} is invalid ({problem}). Its exact contents were saved to {} before it was replaced; the other settings were reset to defaults and can be restored from that copy.",
-        path.display(),
-        recovery.display()
-    );
-    Ok(merge_base)
+    Ok((
+        merge_base,
+        Some(RecoveredSettings {
+            problem: problem.to_string(),
+            copy: recovery,
+        }),
+    ))
 }
 
 /// Bound on numbered recovery copies, so the search always ends.
