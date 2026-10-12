@@ -9,6 +9,7 @@ use fs2::FileExt;
 use serde_json::Value;
 
 use crate::settings::{
+    lenient,
     migrations::{self, MachineProbe, Migration, Object},
     FileModelPreference, LineupEnv, Settings, SCHEMA_VERSION,
 };
@@ -251,6 +252,9 @@ fn load_at_with_machine(
 
 /// The startup load: copy settings from a legacy location on first use, run
 /// every pending migration and persist the result under the settings lock.
+/// A file with values that had to be reset is migrated in memory only: like
+/// a file that cannot be loaded at all, it is replaced only by an explicit
+/// save, which first preserves its bytes (see [`save_to`]).
 fn load_migrated(
     path: &Path,
     legacy_sources: impl IntoIterator<Item = PathBuf>,
@@ -268,7 +272,15 @@ fn load_migrated(
             Ok(loaded) => loaded,
             Err(error) => return Ok(unmigrated_defaults(path, &error)),
         };
-        if let Some(migration) = loaded.migration.filter(Migration::ran) {
+        let migration = loaded.migration.filter(Migration::ran);
+        if let (Some(migration), false) = (migration, loaded.reset.is_empty()) {
+            tracing::info!(
+                "Settings file {} needs migrating from schema version {} to {}; it is migrated in memory only until a save, because it has values that had to be reset",
+                path.display(),
+                migration.from,
+                migration.to
+            );
+        } else if let Some(migration) = migration {
             match save_to(path, &loaded.settings) {
                 Ok(()) => tracing::info!(
                     "Migrated settings file {} from schema version {} to {}",
@@ -329,7 +341,7 @@ impl std::fmt::Display for SettingsParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Syntax(reason) => write!(f, "not a valid JSON settings object: {reason}"),
-            Self::Schema(reason) => write!(f, "invalid setting value: {reason}"),
+            Self::Schema(reason) => f.write_str(reason),
         }
     }
 }
@@ -357,7 +369,7 @@ impl std::fmt::Display for SettingsLoadError {
         match self {
             Self::Read(error) => write!(f, "read failed: {error}"),
             Self::Syntax(reason) => write!(f, "not a valid JSON settings object: {reason}"),
-            Self::Schema(reason) => write!(f, "invalid setting value: {reason}"),
+            Self::Schema(reason) => f.write_str(reason),
         }
     }
 }
@@ -400,40 +412,72 @@ fn drop_invalid_profile_models(object: &mut Object, report_ignored: bool) {
     }
 }
 
-/// Whether a settings file's object reads as [`Settings`] as it is. A save
-/// over a file that does not first preserves its bytes (see
-/// [`existing_settings_for_merge`]).
+/// Whether a settings file's object reads as [`Settings`] as it is, with
+/// no field reset. A save over a file that does not first preserves its
+/// bytes (see [`existing_settings_for_merge`]).
 fn check_settings_object(mut object: Object) -> Result<(), SettingsParseError> {
     migrations::canonical_onboarding_key(&mut object);
     drop_invalid_profile_models(&mut object, false);
-    serde_json::from_value::<Settings>(Value::Object(object))
-        .map(drop)
-        .map_err(|error| SettingsParseError::Schema(error.to_string()))
+    match lenient::decode(&object) {
+        Ok(decoded) if decoded.reset.is_empty() => Ok(()),
+        Ok(decoded) => Err(SettingsParseError::Schema(invalid_fields(&decoded.reset))),
+        Err(reason) => Err(SettingsParseError::Schema(format!(
+            "invalid settings: {reason}"
+        ))),
+    }
+}
+
+/// Names, never values: a settings value can be anything the user typed.
+fn invalid_fields(fields: &[String]) -> String {
+    let noun = if fields.len() == 1 { "value" } else { "values" };
+    format!("invalid {noun} for {}", fields.join(", "))
 }
 
 /// The settings a settings file's object holds: its personal dictionaries
 /// read in from their files and its pending migrations run. `machine`
-/// enables the steps that need machine state (the startup load).
+/// enables the steps that need machine state (the startup load). A field
+/// that does not decode takes its default (see [`lenient`]) and is reported.
 fn settings_from_file_object(
     path: &Path,
     mut object: Object,
     machine: Option<&dyn MachineProbe>,
-) -> Result<(Settings, Migration), SettingsParseError> {
+) -> Result<FileSettings, SettingsParseError> {
     // Taken before the dictionaries are read in: embedding them is a legacy shape.
     let from = migrations::starting_version(&object);
     read_dictionary_files(path, &mut object);
     drop_invalid_profile_models(&mut object, true);
     let migration = migrations::migrate(&mut object, from, machine)
         .map_err(|error| SettingsParseError::Schema(error.to_string()))?;
-    let settings = serde_json::from_value(Value::Object(object))
-        .map_err(|error| SettingsParseError::Schema(error.to_string()))?;
-    Ok((settings, migration))
+    let decoded = lenient::decode(&object)
+        .map_err(|reason| SettingsParseError::Schema(format!("invalid settings: {reason}")))?;
+    if !decoded.reset.is_empty() {
+        tracing::warn!(
+            "Settings file {} has {}; using their defaults. The file keeps them until the next save, which first saves a recovery copy of it",
+            path.display(),
+            invalid_fields(&decoded.reset)
+        );
+    }
+    Ok(FileSettings {
+        settings: decoded.settings,
+        migration,
+        reset: decoded.reset,
+    })
 }
 
-/// A settings file as loaded, and what migrating it did (`None`: no file).
+/// What [`settings_from_file_object`] made of a settings object.
+struct FileSettings {
+    settings: Settings,
+    migration: Migration,
+    /// Fields that did not decode and took their defaults.
+    reset: Vec<String>,
+}
+
+/// A settings file as loaded, what migrating it did (`None`: no file) and
+/// the fields that had to be reset.
 struct Loaded {
     settings: Settings,
     migration: Option<Migration>,
+    reset: Vec<String>,
 }
 
 /// Load settings from a specific path, reporting why an existing file could
@@ -448,15 +492,17 @@ fn load_checked(
             return Ok(Loaded {
                 settings: defaults_for(path),
                 migration: None,
+                reset: Vec::new(),
             })
         }
         Err(error) => return Err(SettingsLoadError::Read(error)),
     };
     let object = parse_settings_object(&contents)?;
-    let (settings, migration) = settings_from_file_object(path, object, machine)?;
+    let loaded = settings_from_file_object(path, object, machine)?;
     Ok(Loaded {
-        settings,
-        migration: Some(migration),
+        settings: loaded.settings,
+        migration: Some(loaded.migration),
+        reset: loaded.reset,
     })
 }
 
@@ -471,17 +517,18 @@ fn defaults_for(path: &Path) -> Settings {
     let defaults = Settings::default();
     match serde_json::to_value(&defaults) {
         Ok(Value::Object(object)) => {
-            settings_from_file_object(path, object, None).map_or(defaults, |(settings, _)| settings)
+            settings_from_file_object(path, object, None).map_or(defaults, |loaded| loaded.settings)
         }
         _ => defaults,
     }
 }
 
-/// Load settings from a specific path. Returns defaults if missing or unreadable.
+/// Load settings from a specific path. A value that cannot be read takes its
+/// default; a file that is missing or cannot be read or parsed at all loads
+/// as defaults. Saving over an invalid file preserves its bytes first (see
+/// [`save_to`]).
 pub fn load_from(path: &Path) -> Settings {
     load_from_checked(path).unwrap_or_else(|error| {
-        // One wrong-typed field resets ALL settings to defaults in memory.
-        // Saving over the file then preserves its bytes first (see `save_to`).
         tracing::warn!(
             "Failed to load settings file at {} ({error}) — falling back to defaults",
             path.display()
@@ -2328,17 +2375,165 @@ mod tests {
     }
 
     #[test]
-    fn load_from_invalid_enum_value_returns_defaults() {
+    fn load_from_invalid_enum_value_resets_that_field() {
         with_temp_settings(|path| {
             let dir = path.parent().unwrap();
             fs::create_dir_all(dir).unwrap();
             // "de" is not a valid Language variant
-            fs::write(&path, r#"{"language":"de"}"#).unwrap();
+            fs::write(&path, r#"{"language":"de","beam_size":4}"#).unwrap();
 
             let s = load_from(&path);
             let d = Settings::default();
-            // Should fall back to full defaults since deserialization fails
+            // Only the field that cannot be read takes its default.
             assert_eq!(s.language, d.language);
+            assert_eq!(s.beam_size, 4);
+        });
+    }
+
+    // -- lenient per-field parsing (#365) --
+
+    /// A current settings file with a non-default value in every field.
+    fn every_field_set() -> serde_json::Map<String, serde_json::Value> {
+        match serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "language": "sv",
+            "whisper_model": "kb-whisper-medium",
+            "file_transcription_model": "kb-whisper-large",
+            "pianissimo_dictation": false,
+            "engine_prewarm": "off",
+            "engine_idle_unload_minutes": 30,
+            "hotkey_mode": "toggle",
+            "show_overlay": false,
+            "auto_paste": false,
+            "auto_select_model": false,
+            "hotkey": "Option+Space",
+            "hotkey_profiles": [
+                {"id": "default", "name": "Svenska", "shortcut": "Option+Space", "language": "sv"},
+                {"id": "english", "name": "English", "shortcut": "Option+E", "language": "en"}
+            ],
+            "profile_models": {"default": "kb-whisper-medium", "english": "base.en"},
+            "profile_glossary_migrated": true,
+            "beam_size": 5,
+            "temperature_fallback": false,
+            "vad_enabled": true,
+            "has_completed_onboarding": true,
+            "model_lineup_version": MODEL_LINEUP_VERSION,
+            "engine_defaults_version": ENGINE_DEFAULTS_VERSION,
+            "future_key": {"keep": [1, 2]}
+        }) {
+            serde_json::Value::Object(map) => map,
+            _ => unreachable!(),
+        }
+    }
+
+    /// [`every_field_set`] with `field` replaced by `value`, as file bytes.
+    fn every_field_set_but(field: &str, value: serde_json::Value) -> Vec<u8> {
+        let mut map = every_field_set();
+        map.insert(field.to_string(), value);
+        serde_json::to_vec_pretty(&map).unwrap()
+    }
+
+    /// The settings [`every_field_set`] holds with `fields` at their defaults.
+    fn every_field_set_without(fields: &[&str]) -> serde_json::Value {
+        let mut map = every_field_set();
+        for field in fields {
+            map.remove(*field);
+        }
+        let settings: Settings = serde_json::from_value(serde_json::Value::Object(map)).unwrap();
+        serde_json::to_value(settings).unwrap()
+    }
+
+    #[track_caller]
+    fn assert_only_reset(loaded: &Settings, fields: &[&str]) {
+        assert_eq!(
+            serde_json::to_value(loaded).unwrap(),
+            every_field_set_without(fields)
+        );
+    }
+
+    #[test]
+    fn unknown_whisper_model_resets_only_that_field_and_an_update_loses_nothing_else() {
+        with_temp_settings(|path| {
+            // A model removed from WhisperModel, or one a newer release added.
+            let original = every_field_set_but("whisper_model", "kb-whisper-xl-2027".into());
+            fs::write(&path, &original).unwrap();
+
+            assert_only_reset(&load_from(&path), &["whisper_model"]);
+            // Startup uses it too, but never rewrites a file it had to repair.
+            assert_only_reset(&startup_load(&path), &["whisper_model"]);
+            assert_file_bytes(&path, &original);
+            assert!(!recovery_copy_path(&path, 0).exists());
+
+            let updated = update_at(&path, |settings| settings.beam_size = 9).unwrap();
+            assert_eq!(updated.beam_size, 9);
+            let raw: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let mut expected = every_field_set();
+            expected.insert("whisper_model".into(), "base".into());
+            expected.insert("beam_size".into(), 9.into());
+            assert_eq!(raw, serde_json::Value::Object(expected));
+            // The dropped value is recoverable from the exact original bytes.
+            assert_file_bytes(recovery_copy_path(&path, 0), &original);
+        });
+    }
+
+    #[test]
+    fn unknown_language_variant_resets_only_the_language() {
+        with_temp_settings(|path| {
+            fs::write(&path, every_field_set_but("language", "de".into())).unwrap();
+            let loaded = load_from(&path);
+            assert_only_reset(&loaded, &["language"]);
+            // The default profile keeps its own language.
+            assert_eq!(loaded.default_profile().language, Language::Swedish);
+        });
+    }
+
+    #[test]
+    fn wrong_typed_fields_each_reset_alone() {
+        with_temp_settings(|path| {
+            let mut map = every_field_set();
+            map.insert("show_overlay".into(), "no".into());
+            map.insert("beam_size".into(), "five".into());
+            fs::write(&path, serde_json::to_vec(&map).unwrap()).unwrap();
+            assert_only_reset(&load_from(&path), &["beam_size", "show_overlay"]);
+        });
+    }
+
+    #[test]
+    fn an_invalid_value_nested_in_a_field_resets_the_whole_field() {
+        with_temp_settings(|path| {
+            let mut map = every_field_set();
+            map["hotkey_profiles"][1]["language"] = "de".into();
+            fs::write(&path, serde_json::to_vec(&map).unwrap()).unwrap();
+            let loaded = load_from(&path);
+            assert_only_reset(&loaded, &["hotkey_profiles"]);
+            // Without explicit profiles the legacy default profile applies.
+            assert_eq!(loaded.default_profile().shortcut, "Option+Space");
+        });
+    }
+
+    #[test]
+    fn invalid_values_are_reported_by_field_name_only() {
+        let map = match serde_json::from_slice(SCHEMA_INVALID_SETTINGS).unwrap() {
+            serde_json::Value::Object(map) => map,
+            _ => unreachable!(),
+        };
+        let problem = check_settings_object(map).unwrap_err().to_string();
+        assert_eq!(problem, "invalid value for auto_paste");
+        assert_eq!(
+            invalid_fields(&["beam_size".into(), "language".into()]),
+            "invalid values for beam_size, language"
+        );
+    }
+
+    #[test]
+    fn a_strictly_valid_file_loads_unchanged() {
+        with_temp_settings(|path| {
+            let bytes = serde_json::to_vec_pretty(&every_field_set()).unwrap();
+            fs::write(&path, &bytes).unwrap();
+            assert_only_reset(&load_from(&path), &[]);
+            assert_only_reset(&startup_load(&path), &[]);
+            assert_file_bytes(&path, &bytes);
         });
     }
 
@@ -2584,9 +2779,15 @@ mod tests {
                     whisper_downloaded: &ready,
                 };
 
-                // What `load()` runs at startup.
+                // What `load()` runs at startup. A schema error resets only
+                // the bad field in memory; a syntax error loads defaults.
                 let loaded = load_at_with_machine(&path, std::iter::empty(), &env);
-                assert_eq!(loaded.language, Settings::default().language);
+                let language = if original == schema_invalid {
+                    Language::Swedish
+                } else {
+                    Settings::default().language
+                };
+                assert_eq!(loaded.language, language);
 
                 assert_file_bytes(&path, original);
                 assert!(!recovery_copy_path(&path, 0).exists());

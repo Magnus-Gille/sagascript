@@ -1,4 +1,5 @@
 mod hotkey;
+mod lenient;
 pub mod manager;
 mod migrations;
 pub mod store;

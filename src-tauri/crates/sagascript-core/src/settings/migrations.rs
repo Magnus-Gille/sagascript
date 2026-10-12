@@ -333,10 +333,12 @@ fn engine_defaults(object: &mut Object) -> Result<(), String> {
 
 /// Run typed migration logic on the settings `object` holds and write back
 /// the top-level keys whose value it changed. Every other key, known or
-/// not, stays exactly as it was.
+/// not, stays exactly as it was. A field that does not decode is read as
+/// its default (see [`super::lenient`]) and never written back: it stays for
+/// the store's final decode to reset and report.
 fn with_settings(object: &mut Object, migrate: impl FnOnce(&mut Settings)) -> Result<(), String> {
-    let before: Settings =
-        serde_json::from_value(Value::Object(object.clone())).map_err(|e| e.to_string())?;
+    let decoded = super::lenient::decode(object)?;
+    let before = decoded.settings;
     let mut after = before.clone();
     migrate(&mut after);
     let as_object = |settings: &Settings| match serde_json::to_value(settings) {
@@ -346,7 +348,7 @@ fn with_settings(object: &mut Object, migrate: impl FnOnce(&mut Settings)) -> Re
     };
     let before = as_object(&before)?;
     for (key, value) in as_object(&after)? {
-        if before.get(&key) != Some(&value) {
+        if before.get(&key) != Some(&value) && !decoded.reset.contains(&key) {
             object.insert(key, value);
         }
     }

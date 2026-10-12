@@ -190,6 +190,16 @@ profile dictionaries are written to their new text files and removed from the
 JSON copy. Existing Accessibility authorization remains valid because the app's
 signed bundle identity does not change.
 
+The settings file records a `schema_version`. A newer Sagascript migrates an
+older file once, at startup. It keeps writing the version markers that earlier
+releases read (`model_lineup_version`, `engine_defaults_version`,
+`profile_glossary_migrated`), so going back to an earlier release does not
+migrate the file again. If a value cannot be read, for example a model that only
+a newer release knows, that setting uses its default and a warning names it; every
+other setting is kept. The file stays as it is until the next save, which first
+copies its exact contents to `sagascript-settings.json.bak` (then `.bak.1`, ...).
+See [ADR 0007](adr/0007-settings-file-evolution.md).
+
 ## Engine warm-up (Pianissimo)
 
 Decision (#277): the Pianissimo engine now loads in the background by default so

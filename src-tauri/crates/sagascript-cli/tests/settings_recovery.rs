@@ -1,6 +1,7 @@
-//! Owner regression for #340: a settings file with one wrong-typed field must be
-//! preserved byte-for-byte before `config set` replaces it with defaults plus the
-//! requested change. The CLI runs against an isolated settings path in a temp dir.
+//! Owner regression for #340 and #365: a settings file with one wrong-typed
+//! field must be preserved byte-for-byte before `config set` replaces it, and
+//! the replacement keeps every other value. The CLI runs against an isolated
+//! settings path in a temp dir.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -73,6 +74,18 @@ fn config_set_preserves_a_schema_invalid_settings_file_before_replacing_it() {
             .expect("settings are valid JSON");
     assert_eq!(written["beam_size"], 9);
     assert_eq!(written["future_key"], serde_json::json!({"keep": true}));
+    // Only the unreadable field took its default (#365).
+    assert_eq!(written["show_overlay"], false);
+    assert_eq!(written["language"], "sv");
+    assert_eq!(written["auto_paste"], true);
+    assert!(
+        stderr.contains("auto_paste"),
+        "stderr must name the field:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("invalid-bool"),
+        "stderr must not echo the value:\n{stderr}"
+    );
 
     // The file is valid now, so a second change makes no further copy.
     let output = run_cli(root.path(), &settings, &["config", "set", "beam_size", "4"]);
