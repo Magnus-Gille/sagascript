@@ -425,6 +425,24 @@ export const CHECKS = [
     lanes: ["test-macos"],
   },
   {
+    id: "engine-host-conformance",
+    area: "swift",
+    title: "Engine-host conformance, model-free subset, against the staged Core ML host",
+    steps: [
+      step("./scripts/stage-engine-host.sh"),
+      step("python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model"),
+    ],
+    sets: ["default"],
+    platforms: MACOS,
+    requires: ["swift", "python"],
+    timeoutMinutes: 30,
+    ci: [
+      ci("./scripts/stage-engine-host.sh"),
+      ci("python scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model"),
+    ],
+    lanes: ["test-macos"],
+  },
+  {
     id: "python-diarization",
     area: "python",
     title: "Python, full diarization suite with native CLI parity (needs evaluation packages)",

@@ -3,6 +3,14 @@
 
 Only Python's standard library is used. The checks intentionally exercise the
 wire behavior rather than importing or special-casing the CoreML implementation.
+
+  engine-host-conformance.py HOST --no-model         model-free subset (hello, ping,
+                                                     status, errors, shutdown, EOF exit)
+  engine-host-conformance.py HOST --model-dir DIR    the subset plus load, transcribe
+                                                     windows, cancel and unload
+
+CI runs the model-free subset against the staged Core ML host (ci.yml,
+test-macos). The full run needs a downloaded Pianissimo model.
 """
 
 import argparse
@@ -103,16 +111,84 @@ def assert_failure(response, request_id, code):
     require(response.get("error", {}).get("code") == code, f"expected {code}: {response}")
 
 
-def hello_and_load(host, model_dir):
+def hello(host):
     hello_id = host.send("hello", client={"name": "engine-host-conformance", "version": "1", "git_sha": "0" * 40})
-    hello = host.wait_for(hello_id, 10)
-    assert_success(hello, hello_id)
-    require(hello.get("protocol") == 1, f"wrong protocol: {hello}")
-    host_info = hello.get("host", {})
-    require(host_info.get("name") == "sagascript-engine-host", f"wrong host name: {hello}")
-    require(re.fullmatch(r"[0-9a-f]{40}", host_info.get("git_sha", "")), f"missing full git_sha: {hello}")
-    capabilities = hello.get("capabilities", {})
-    require(capabilities.get("max_in_flight", 0) >= 1, f"invalid capabilities: {hello}")
+    response = host.wait_for(hello_id, 10)
+    assert_success(response, hello_id)
+    require(response.get("protocol") == 1, f"wrong protocol: {response}")
+    host_info = response.get("host", {})
+    require(host_info.get("name") == "sagascript-engine-host", f"wrong host name: {response}")
+    require(re.fullmatch(r"[0-9a-f]{40}", host_info.get("git_sha", "")), f"missing full git_sha: {response}")
+    for key in ("version", "engine", "engine_version"):
+        require(isinstance(host_info.get(key), str), f"hello.host.{key} must be a string: {response}")
+    capabilities = response.get("capabilities", {})
+    require(capabilities.get("max_in_flight", 0) >= 1, f"invalid capabilities: {response}")
+    for key in ("sample_rate", "max_in_flight"):
+        require_int(capabilities, key, "hello.capabilities")
+    for key in ("max_window_s", "preferred_window_s", "preferred_overlap_s"):
+        value = capabilities.get(key)
+        require(isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0,
+                f"hello.capabilities.{key} must be a non-negative number, got {value!r}")
+    return response
+
+
+def exercise_without_model(binary, cache_dir, scratch):
+    """Every op that needs no model, plus the errors a client relies on."""
+    host = Host(binary, cache_dir)
+    try:
+        before = host.send("ping")
+        assert_failure(host.wait_for(before, 5), before, "protocol")
+        hello(host)
+        ping = host.send("ping")
+        ping_response = host.wait_for(ping, 2)
+        assert_success(ping_response, ping)
+        require(set(ping_response) == {"id", "ok"}, f"ping must answer {{}}: {ping_response}")
+        status = host.send("status")
+        status_response = host.wait_for(status, 2)
+        assert_success(status_response, status)
+        require(status_response.get("state") == "idle", f"a fresh host is idle: {status_response}")
+        require(status_response.get("model_id") is None, f"no model is loaded yet: {status_response}")
+        for key in ("in_flight", "rss_bytes"):
+            require_int(status_response, key, "status")
+        unknown = host.send("conformance_unknown_op")
+        assert_failure(host.wait_for(unknown, 5), unknown, "unsupported")
+        missing = host.send(
+            "load", model_dir=os.path.join(scratch, "no-such-model"),
+            model_id="pianissimo-sv-coreml-conformance", compute_units="ane"
+        )
+        assert_failure(host.wait_for(missing, 30), missing, "model_missing")
+        # The client reloads and resends once on not_loaded, so a host must say so before load.
+        unloaded = host.send(
+            "transcribe_window", pcm_path=os.path.join(scratch, "unused.f32le"), offset_samples=0,
+            num_samples=16_000, sample_rate=16_000, format="f32le", priority="interactive"
+        )
+        assert_failure(host.wait_for(unloaded, 10), unloaded, "not_loaded")
+        cancel = host.send("cancel", target=unloaded)
+        cancel_response = host.wait_for(cancel, 2)
+        assert_success(cancel_response, cancel)
+        require(cancel_response.get("cancelled") is False, f"a finished request cannot be cancelled: {cancel_response}")
+        shutdown = host.send("shutdown")
+        assert_success(host.wait_for(shutdown, 2), shutdown)
+        require(host.shutdown() == 0, "shutdown did not exit 0")
+    finally:
+        if host.process.poll() is None:
+            host.process.kill()
+            host.process.wait()
+
+    eof_host = Host(binary, cache_dir)
+    try:
+        hello(eof_host)
+        eof_host.process.stdin.close()
+        require(eof_host.process.wait(timeout=3) == 0, "EOF did not make host exit 0")
+    finally:
+        if eof_host.process.poll() is None:
+            eof_host.process.kill()
+            eof_host.process.wait()
+
+
+def hello_and_load(host, model_dir):
+    response = hello(host)
+    capabilities = response.get("capabilities", {})
     load_id = host.send(
         "load", model_dir=os.path.abspath(model_dir),
         model_id="pianissimo-sv-coreml-conformance", compute_units="ane"
@@ -123,13 +199,13 @@ def hello_and_load(host, model_dir):
     require(load.get("blank_id", 0) >= 0, f"load did not report blank_id: {load}")
     require_int(load, "load_ms", "load")
     require_int(capabilities, "max_in_flight", "hello.capabilities")
-    return hello, load
+    return response, load
 
 
 def exercise_host(binary, model_dir, cache_dir, pcm_path, expect_exit_on_eof=False):
     host = Host(binary, cache_dir)
     try:
-        hello, load = hello_and_load(host, model_dir)
+        _, load = hello_and_load(host, model_dir)
         window_samples = int(round(load["window_s"] * 16_000))
 
         first = host.send(
@@ -200,13 +276,19 @@ def exercise_host(binary, model_dir, cache_dir, pcm_path, expect_exit_on_eof=Fal
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("host_binary")
-    parser.add_argument("--model-dir", required=True)
+    model = parser.add_mutually_exclusive_group(required=True)
+    model.add_argument("--model-dir", help="run every check against this model directory")
+    model.add_argument("--no-model", action="store_true", help="run only the checks that need no model")
     parser.add_argument("--cache-dir")
     args = parser.parse_args()
     require(os.path.isfile(args.host_binary) and os.access(args.host_binary, os.X_OK), "host binary is not executable")
-    require(os.path.isdir(args.model_dir), "model directory does not exist")
+    require(args.no_model or os.path.isdir(args.model_dir), "model directory does not exist")
 
     with tempfile.TemporaryDirectory(prefix="sagascript-engine-host-") as directory:
+        exercise_without_model(args.host_binary, args.cache_dir, directory)
+        if args.no_model:
+            print("engine-host conformance (model-free subset): PASS")
+            return
         pcm_path = os.path.join(directory, "audio.f32le")
         fd = os.open(pcm_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:

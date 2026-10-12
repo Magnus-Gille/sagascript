@@ -39,13 +39,9 @@ const ALLOWLIST = [
     reason: "needs a third-party scorer the lane downloads with curl; CI-only network step",
   },
   {
-    run: "./scripts/stage-engine-host.sh",
-    reason: "stages the arm64 release engine host for bundling (packaging); the swift check builds it with build-engine-host.sh",
-  },
-  {
     run: "./scripts/check-engine-host-identity.sh",
     prefix: true,
-    reason: "checks the staged host carries $GITHUB_SHA; belongs to the packaging step above",
+    reason: "checks the staged host carries $GITHUB_SHA; staging already checks it against git HEAD, which verify uses",
   },
   { run: "swift --version", reason: "prints the selected toolchain for the CI log" },
 ];
