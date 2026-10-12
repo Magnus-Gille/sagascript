@@ -201,6 +201,7 @@ npm run build
 npm run release:check
 npm run licenses:check
 cargo check --workspace
+cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build -p sagascript-cli --no-default-features

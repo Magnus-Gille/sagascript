@@ -29,6 +29,12 @@ jobs:
           toolchain: 1.99.0
           components: clippy, rustfmt
 
+      - name: Check Rust formatting
+        working-directory: src-tauri
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
+
       - name: Install Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
@@ -98,12 +104,6 @@ jobs:
 
       - name: Check Svelte and TypeScript
         run: npm run check
-
-      - name: Check Rust formatting
-        working-directory: src-tauri
-        run: |
-          cargo fmt --all -- --check
-          cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
 
       - name: Test Rust workspace
         working-directory: src-tauri
