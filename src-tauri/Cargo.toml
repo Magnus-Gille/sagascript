@@ -69,6 +69,11 @@ notify = { version = "7", default-features = false }
 reqwest = { version = "0.13", default-features = false, features = ["native-tls-no-alpn", "system-proxy", "json"] }
 semver = "1"
 
+# Test-only helpers (#363): shared fixtures and core's `test-support` module.
+[dev-dependencies]
+sagascript-core = { path = "crates/sagascript-core", features = ["test-support"] }
+sagascript-testsupport = { path = "crates/sagascript-testsupport" }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # notify 7 requires one native macOS backend feature even when this app uses
 # PollWatcher explicitly for settings (see start_settings_watcher).
