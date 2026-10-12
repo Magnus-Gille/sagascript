@@ -138,8 +138,9 @@ test("no workflow uses secrets: inherit; the signing callee declares exactly the
 });
 
 test("rust-toolchain is pinned by full SHA with an explicit toolchain in the release workflows", () => {
+  const channel = /^channel = "([0-9]+\.[0-9]+\.[0-9]+)"$/m.exec(read("rust-toolchain.toml"))[1];
   for (const name of ["release-build-macos", "release-quality-gate"]) {
-    assert.match(workflows[name], /uses: dtolnay\/rust-toolchain@[0-9a-f]{40} # .*\n\s+with:\n\s+toolchain: stable/, name);
+    assert.match(workflows[name], new RegExp(`uses: dtolnay/rust-toolchain@[0-9a-f]{40} # .*\\n\\s+with:\\n\\s+toolchain: ${channel.replaceAll(".", "\\.")}\\n`), name);
     assert.doesNotMatch(workflows[name], /rust-toolchain@stable/);
   }
 });
@@ -212,7 +213,6 @@ test("new workflows pin third-party actions and avoid expression interpolation i
   for (const [name, text] of Object.entries(workflows)) {
     for (const [, action, ref] of text.matchAll(/^\s*(?:- )?uses: ([^\s@./][^\s@]*)@(\S+)/gm)) {
       if (action.startsWith("actions/")) continue;
-      if (name === "windows-package" && action.startsWith("dtolnay/")) continue; // repo-wide @stable, out of scope here
       assert.match(ref, /^[0-9a-f]{40}$/, `${name}: ${action} must be pinned by commit SHA`);
     }
     const lines = text.split("\n");

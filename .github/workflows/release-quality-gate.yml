@@ -23,15 +23,15 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, pinned
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # pinned; toolchain must match rust-toolchain.toml
         with:
-          toolchain: stable
+          toolchain: 1.99.0
           components: clippy, rustfmt
 
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       # Same rust-cache scheme as CI (#178): per-crate fingerprints shared

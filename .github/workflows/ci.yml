@@ -95,14 +95,15 @@ jobs:
         run: python -m unittest discover -s scripts/diarization_sv -p 'test_reference_dataset.py'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # pinned; toolchain must match rust-toolchain.toml
         with:
+          toolchain: 1.99.0
           components: clippy
 
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Cache Rust dependencies
@@ -222,12 +223,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # pinned; toolchain must match rust-toolchain.toml
+        with:
+          toolchain: 1.99.0
 
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Cache Rust dependencies
@@ -371,8 +374,9 @@ jobs:
             xdotool
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # pinned; toolchain must match rust-toolchain.toml
         with:
+          toolchain: 1.99.0
           components: clippy, rustfmt
 
       # Formatting gate (#352). Both Cargo workspaces must be rustfmt-clean:
@@ -387,7 +391,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       # Same rust-cache scheme as the macOS job (#178); the shared key spans
@@ -493,8 +497,76 @@ jobs:
           fi
           echo "OK: no cpal/ALSA in batch-only tree"
 
+  # Minimum supported Rust version (#353). `rust-version` in
+  # src-tauri/Cargo.toml (and engine-host/ort) is a promise to people building
+  # from source; compile with exactly that toolchain so it stays true. Linux is
+  # the cheapest lane that builds every workspace member. RUSTUP_TOOLCHAIN
+  # overrides the newer development pin in rust-toolchain.toml.
+  msrv-linux:
+    needs: scope
+    if: ${{ needs.scope.result == 'success' && needs.scope.outputs.docs_only != 'true' }}
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libasound2-dev \
+            build-essential \
+            file
+
+      - name: Install the declared MSRV toolchain
+        run: |
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml)
+          ort_msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' src-tauri/engine-host/ort/Cargo.toml)
+          test -n "$msrv"
+          test "$msrv" = "$ort_msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
+          echo "Checking against Rust $msrv"
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            src-tauri
+            src-tauri/engine-host/ort
+          shared-key: sagascript-msrv
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # tauri::generate_context! embeds ../dist, so the app crate needs it.
+      - name: Build frontend
+        run: npm run build
+
+      - name: Cargo check (workspace) on MSRV
+        working-directory: src-tauri
+        run: cargo check --workspace --locked
+
+      - name: Cargo check (headless CLI, batch-only) on MSRV
+        working-directory: src-tauri
+        run: cargo check -p sagascript-cli --no-default-features --locked
+
+      - name: Cargo check (ORT engine host) on MSRV
+        working-directory: src-tauri/engine-host/ort
+        run: cargo check --locked
+
   check-linux:
-    needs: [scope, test-linux]
+    needs: [scope, test-linux, msrv-linux]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     env:
@@ -502,16 +574,19 @@ jobs:
       SCOPE_TRUSTED: ${{ needs.scope.outputs.scope_trusted }}
       DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
       LINUX_RESULT: ${{ needs.test-linux.result }}
+      MSRV_RESULT: ${{ needs.msrv-linux.result }}
     steps:
-      - name: Assert Linux CI lane passed
+      - name: Assert Linux CI lanes passed
         run: |
           test "$SCOPE_RESULT" = success
           test "$SCOPE_TRUSTED" = true
           if [ "$DOCS_ONLY" = true ]; then
             test "$LINUX_RESULT" = skipped
+            test "$MSRV_RESULT" = skipped
           else
             test "$DOCS_ONLY" = false
             test "$LINUX_RESULT" = success
+            test "$MSRV_RESULT" = success
           fi
 
   test-windows:
@@ -532,14 +607,15 @@ jobs:
         run: python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # pinned; toolchain must match rust-toolchain.toml
         with:
+          toolchain: 1.99.0
           components: clippy
 
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Cache Rust dependencies
@@ -597,12 +673,14 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # pinned; toolchain must match rust-toolchain.toml
+        with:
+          toolchain: 1.99.0
 
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Cache Rust dependencies

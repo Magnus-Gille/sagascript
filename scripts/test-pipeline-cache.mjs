@@ -20,10 +20,11 @@ function section(content, startMarker, endMarker) {
 
 test("CI rust caches use the reviewed immutable action revision", () => {
   const refs = ciWorkflow.match(/uses: Swatinem\/rust-cache@[^\s]+/g) ?? [];
-  assert.equal(refs.length, 5);
+  // test-macos, build-macos, test-linux, msrv-linux (#353), test-windows, build-windows
+  assert.equal(refs.length, 6);
   assert.deepEqual(
     refs,
-    Array.from({ length: 5 }, () => `uses: ${rustCacheRef}`),
+    Array.from({ length: 6 }, () => `uses: ${rustCacheRef}`),
   );
 });
 

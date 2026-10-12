@@ -18,6 +18,10 @@ resolver = "2"
 [workspace.package]
 version = "1.4.4"
 edition = "2021"
+# Minimum supported Rust version (#353). The dependency tree (ort, time)
+# needs 1.88; CI's msrv-linux job keeps this claim true. Development and
+# the other CI lanes use the newer toolchain pinned in rust-toolchain.toml.
+rust-version = "1.88"
 license = "MIT"
 
 [workspace.lints.rust]
@@ -27,6 +31,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-cli
 name = "sagascript"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Low-latency macOS/Linux/Windows dictation app"
 build = "build.rs"

@@ -24,7 +24,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Test snapshot normalizer
         run: node --test scripts/test-record-release-downloads.mjs

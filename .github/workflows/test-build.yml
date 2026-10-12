@@ -38,14 +38,15 @@ jobs:
           fi
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # pinned; toolchain must match rust-toolchain.toml
         with:
+          toolchain: 1.99.0
           targets: aarch64-apple-darwin
 
       - name: Install Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Cache Rust dependencies

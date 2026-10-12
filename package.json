@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.4.4",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "build": "node scripts/build-frontend.mjs",
