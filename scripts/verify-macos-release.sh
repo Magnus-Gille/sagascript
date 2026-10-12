@@ -77,7 +77,7 @@ grep -q '^Authority=Developer ID Application:' <<<"$host_signature" || {
   echo "Engine host is not signed with Developer ID Application" >&2
   exit 1
 }
-"$(dirname "$0")/check-engine-host-identity.sh" "$host" "$expected_sha"
+"$(dirname "$0")/check-engine-host-identity.sh" --release "$host" "$expected_sha"
 signature=$(codesign -dvvv "$app" 2>&1)
 grep -q '^Authority=Developer ID Application:' <<<"$signature" || {
   echo "App is not signed with Developer ID Application" >&2

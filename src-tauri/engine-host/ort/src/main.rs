@@ -2,6 +2,10 @@
 //! stdout carries protocol lines only; diagnostics go to stderr.
 
 mod boost;
+// build.rs's dirty-tree rule, compiled here only so its tests run.
+#[cfg(test)]
+#[path = "../build_identity.rs"]
+mod build_identity;
 mod ort_engine;
 mod pcm;
 mod server;
