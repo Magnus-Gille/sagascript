@@ -59,7 +59,8 @@ pub struct Timeouts {
     pub transcribe_min: Duration,
     pub transcribe_factor: f64,
     pub shutdown_grace: Duration,
-    /// Upper bound for writing one request to the host's stdin.
+    /// Upper bound for writing one request to the host's stdin. A host that
+    /// stops reading it is killed and the request fails with a timeout.
     pub write: Duration,
     /// After a window times out and is cancelled, how long the host gets to
     /// finish it before it is considered wedged.
@@ -77,7 +78,7 @@ impl Default for Timeouts {
             transcribe_min: Duration::from_secs(15),
             transcribe_factor: 3.0,
             shutdown_grace: Duration::from_secs(2),
-            write: Duration::from_secs(5),
+            write: super::process::DEFAULT_WRITE_TIMEOUT,
             wedge_grace: Duration::from_secs(5),
         }
     }
@@ -1160,7 +1161,8 @@ impl Inner {
         let n = self.spawns.fetch_add(1, Ordering::Relaxed) + 1;
         // No paths: the persistent log must not carry the user's home directory.
         tracing::info!(spawn_count = n, "engine host: spawning");
-        let proc = HostProcess::spawn(&self.cfg.host_path, &args, &self.cfg.env)?;
+        let proc = HostProcess::spawn(&self.cfg.host_path, &args, &self.cfg.env)?
+            .with_write_timeout(self.cfg.timeouts.write);
         let id = &self.cfg.identity;
         let v = proc.request(
             &RequestOp::Hello {

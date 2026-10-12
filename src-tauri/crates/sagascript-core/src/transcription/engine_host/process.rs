@@ -19,9 +19,14 @@ use std::time::{Duration, Instant};
 /// Size of the stderr ring buffer used for error messages.
 pub const STDERR_TAIL_BYTES: usize = 8 * 1024;
 
+/// How long one stdin write may take before the host counts as no longer
+/// reading (see [`HostProcess::with_write_timeout`]). A host reads stdin on its
+/// own thread, so a healthy write completes in microseconds.
+pub const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
 // Poisoned transport locks are recovered as-is (ADR 0005): every critical
-// section is a single map insert/remove, `Option` take/clone, byte-ring update
-// or child `try_wait`/`kill`, so the data stays valid whatever a panic
+// section is a single map insert/remove, `Option` take/clone or channel send,
+// byte-ring update or child `try_wait`/`kill`, so the data stays valid whatever a panic
 // interrupted. Panicking instead would kill the stdout reader thread (leaving
 // waiters to time out against a host that never reports closing) or turn the
 // `Drop` reap into an abort while unwinding.
@@ -126,6 +131,12 @@ impl Shared {
     }
 }
 
+/// One request line for the stdin writer thread; `done` receives the outcome.
+struct WriteJob {
+    line: String,
+    done: Sender<std::io::Result<()>>,
+}
+
 /// A pending request handle.
 pub struct Pending {
     pub id: u64,
@@ -145,7 +156,11 @@ impl Pending {
 pub struct HostProcess {
     shared: Arc<Shared>,
     child: Arc<Mutex<Child>>,
-    stdin: Mutex<Option<ChildStdin>>,
+    /// Queue to the thread that owns the host's stdin; `None` once closed.
+    /// The lock only guards taking or using the sender, never a write, so a
+    /// host that stops reading cannot block `send` or `terminate` on it.
+    stdin: Mutex<Option<Sender<WriteJob>>>,
+    write_timeout: Duration,
     next_id: AtomicU64,
     pid: u32,
     started: Instant,
@@ -178,7 +193,7 @@ impl HostProcess {
             source,
         })?;
         let pid = child.id();
-        let stdin = child.stdin.take();
+        let stdin = child.stdin.take().expect("piped stdin");
         let stdout = wrap_stdout(child.stdout.take().expect("piped stdout"));
         let stderr = child.stderr.take().expect("piped stderr");
         let shared = Arc::new(Shared {
@@ -187,6 +202,11 @@ impl HostProcess {
             stderr_tail: Mutex::new(VecDeque::with_capacity(STDERR_TAIL_BYTES)),
             expected_exit: AtomicBool::new(false),
         });
+
+        let (stdin_tx, stdin_rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("engine-host-stdin".into())
+            .spawn(move || write_stdin(stdin, stdin_rx))?;
 
         let s = shared.clone();
         let stderr_thread = std::thread::Builder::new()
@@ -203,13 +223,20 @@ impl HostProcess {
         Ok(Self {
             shared,
             child,
-            stdin: Mutex::new(stdin),
+            stdin: Mutex::new(Some(stdin_tx)),
+            write_timeout: DEFAULT_WRITE_TIMEOUT,
             next_id: AtomicU64::new(1),
             pid,
             started: Instant::now(),
             reader: Mutex::new(Some(reader)),
             crash_counted: AtomicBool::new(false),
         })
+    }
+
+    /// Bound each stdin write by `timeout` instead of [`DEFAULT_WRITE_TIMEOUT`].
+    pub fn with_write_timeout(mut self, timeout: Duration) -> Self {
+        self.write_timeout = timeout;
+        self
     }
 
     pub fn pid(&self) -> u32 {
@@ -241,7 +268,15 @@ impl HostProcess {
     }
 
     /// Send a request; the returned handle receives events and the response.
+    ///
+    /// The write is bounded by the write timeout: a host that stops reading
+    /// its stdin is killed (it counts as a crash) and the request fails with
+    /// [`EngineHostError::Timeout`] instead of blocking forever.
     pub fn send(&self, op: &RequestOp) -> Result<Pending> {
+        self.send_within(op, self.write_timeout)
+    }
+
+    fn send_within(&self, op: &RequestOp, write_timeout: Duration) -> Result<Pending> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
         {
@@ -251,13 +286,39 @@ impl HostProcess {
             }
             r.waiters.insert(id, tx);
         }
-        let line = encode_request(id, op);
-        let write = {
-            let mut guard = lock_or_recover(&self.stdin, STDIN_LOCK);
-            match guard.as_mut() {
-                Some(w) => w.write_all(line.as_bytes()).and_then(|()| w.flush()),
-                None => Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+        let (done, written) = mpsc::channel();
+        let job = WriteJob {
+            line: encode_request(id, op),
+            done,
+        };
+        let queued = lock_or_recover(&self.stdin, STDIN_LOCK)
+            .as_ref()
+            .is_some_and(|writer| writer.send(job).is_ok());
+        let write = if queued {
+            match written.recv_timeout(write_timeout) {
+                Ok(result) => result,
+                Err(RecvTimeoutError::Timeout) => {
+                    self.forget(id);
+                    tracing::error!(
+                        pid = self.pid,
+                        op = op.name(),
+                        ?write_timeout,
+                        "engine host stopped reading its stdin; killing it"
+                    );
+                    // Ending the process fails the blocked write, which frees
+                    // the writer thread, and fails every in-flight request.
+                    let _ = lock_or_recover(&self.child, CHILD_LOCK).kill();
+                    return Err(EngineHostError::Timeout {
+                        op: op.name(),
+                        after: write_timeout,
+                    });
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+                }
             }
+        } else {
+            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
         };
         if let Err(e) = write {
             self.forget(id);
@@ -297,11 +358,12 @@ impl HostProcess {
         r.closed.clone()
     }
 
-    /// Send a request and wait for its terminal response.
+    /// Send a request and wait for its terminal response; `timeout` covers
+    /// the write as well.
     pub fn request(&self, op: &RequestOp, timeout: Duration) -> Result<Value> {
         let name = op.name();
-        let pending = self.send(op)?;
         let deadline = Instant::now() + timeout;
+        let pending = self.send_within(op, timeout.min(self.write_timeout))?;
         loop {
             let now = Instant::now();
             if now >= deadline {
@@ -325,13 +387,16 @@ impl HostProcess {
     }
 
     /// Ask the host to exit: `shutdown` request, then EOF, then kill after `grace`.
-    /// Returns once the process has been reaped.
+    /// Returns once the process has been reaped. Never waits on a stdin write
+    /// for longer than `grace`.
     pub fn terminate(&self, grace: Duration, graceful_request: bool) {
         self.shared.expected_exit.store(true, Ordering::SeqCst);
         if graceful_request && self.is_alive() {
             let _ = self.request(&RequestOp::Shutdown, grace);
         }
-        // EOF on stdin makes a well-behaved host exit on its own.
+        // EOF on stdin makes a well-behaved host exit on its own: the writer
+        // thread closes stdin once its queue is drained. A write that is still
+        // blocked is ended by the kill below.
         lock_or_recover(&self.stdin, STDIN_LOCK).take();
         let deadline = Instant::now() + grace;
         loop {
@@ -381,6 +446,25 @@ pub(crate) fn remote(e: ErrorBody) -> EngineHostError {
         code: e.code,
         message: e.message,
         retryable: e.retryable,
+    }
+}
+
+/// Owns the host's stdin: writes queued lines in order and reports each
+/// outcome. After the first failure every later line fails the same way.
+/// Returns (closing stdin, which is EOF for the host) once every sender is gone.
+fn write_stdin(mut stdin: ChildStdin, jobs: Receiver<WriteJob>) {
+    let mut broken: Option<std::io::ErrorKind> = None;
+    for job in jobs {
+        let result = match broken {
+            Some(kind) => Err(std::io::Error::from(kind)),
+            None => stdin
+                .write_all(job.line.as_bytes())
+                .and_then(|()| stdin.flush()),
+        };
+        if let Err(e) = &result {
+            broken.get_or_insert(e.kind());
+        }
+        let _ = job.done.send(result);
     }
 }
 
