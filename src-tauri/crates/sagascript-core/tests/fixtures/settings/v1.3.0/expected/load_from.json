@@ -36,6 +36,7 @@
     "default": "auto",
     "norsk": "auto"
   },
+  "schema_version": 4,
   "show_overlay": true,
   "temperature_fallback": true,
   "vad_enabled": false,

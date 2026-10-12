@@ -2,7 +2,8 @@
 //!
 //! Every fixture goes through the startup load with fixed machine state. The
 //! result must deserialize strictly, keep the user's values, hold no legacy
-//! keys, be idempotent and match the fixture's `expected/` snapshot.
+//! keys, be idempotent, survive an older release dropping `schema_version`
+//! without re-migrating, and match the fixture's `expected/` snapshot.
 //!
 //! After an intended change, regenerate the snapshots with
 //! `SAGASCRIPT_BLESS_SETTINGS=1 cargo test -p sagascript-core --test settings_fixtures`
@@ -12,7 +13,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use sagascript_core::settings::{store, LineupEnv, Settings, WhisperModel};
+use sagascript_core::settings::{
+    store, EnginePrewarm, FileModelPreference, LineupEnv, Settings, WhisperModel, SCHEMA_VERSION,
+};
 use serde_json::Value;
 
 const SETTINGS_FILE: &str = "sagascript-settings.json";
@@ -257,6 +260,13 @@ fn check(name: &str) {
     // Strict: the current struct reads it without any migration.
     serde_json::from_slice::<Settings>(migrated_bytes)
         .unwrap_or_else(|error| panic!("{name}: migrated file is not strictly valid: {error}"));
+    let (_, input) = input_settings(name);
+    assert_eq!(outcome.loaded["schema_version"], SCHEMA_VERSION, "{name}");
+    match migrated.get("schema_version") {
+        Some(version) => assert_eq!(version, SCHEMA_VERSION, "{name}"),
+        // Already current: the startup load does not rewrite it.
+        None => assert_eq!(migrated, input, "{name}: rewritten without schema_version"),
+    }
     for key in LEGACY_KEYS {
         assert!(
             migrated.get(*key).is_none(),
@@ -265,7 +275,6 @@ fn check(name: &str) {
     }
 
     // User values survive.
-    let (_, input) = input_settings(name);
     for (key, value) in input.as_object().unwrap() {
         match key.as_str() {
             "hasCompletedOnboarding" => {
@@ -287,7 +296,45 @@ fn check(name: &str) {
         }
     }
 
+    assert_no_remigration_without_schema_version(name, &outcome);
     compare_or_bless(name, &outcome);
+}
+
+/// A copy of a fixture's migrated configuration directory under a new root.
+fn migrated_copy(config: &BTreeMap<String, Vec<u8>>) -> (tempfile::TempDir, Layout) {
+    let root = tempfile::tempdir().unwrap();
+    for (relative, contents) in config {
+        let path = root.path().join("config").join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, contents).unwrap();
+    }
+    let paths = layout(root.path());
+    (root, paths)
+}
+
+fn edit_settings(path: &Path, edit: impl FnOnce(&mut serde_json::Map<String, Value>)) {
+    let mut file = json(&fs::read(path).unwrap());
+    edit(file.as_object_mut().unwrap());
+    fs::write(path, serde_json::to_string_pretty(&file).unwrap()).unwrap();
+}
+
+/// Downgrade safety. Releases up to 1.4.3 know nothing of `schema_version`
+/// and decide their migrations from the legacy markers, which this build
+/// keeps writing. Without `schema_version` a migrated file starts where
+/// those markers put it, the current version, so nothing runs again.
+fn assert_no_remigration_without_schema_version(name: &str, outcome: &Outcome) {
+    let (root, paths) = migrated_copy(&outcome.config);
+    edit_settings(&paths.settings, |file| {
+        file.remove("schema_version");
+    });
+    let before = files(&root.path().join("config"));
+    let loaded = store::load_at(&paths.settings, &paths.legacy, &machine());
+    assert_eq!(
+        files(&root.path().join("config")),
+        before,
+        "{name}: re-migrated after schema_version was removed"
+    );
+    assert_eq!(settings_json(&loaded), outcome.loaded, "{name}");
 }
 
 fn compare_or_bless(name: &str, outcome: &Outcome) {
@@ -393,4 +440,93 @@ fn v1_4_0() {
 #[test]
 fn v1_4_2() {
     check("v1.4.2");
+}
+
+#[test]
+fn removing_schema_version_never_reruns_a_migration_over_user_choices() {
+    // After migrating, the user picked values every one-time migration would
+    // change if it ran again, then the file lost schema_version.
+    let (root, paths) = migrated_copy(&run("v1.4.0").config);
+    edit_settings(&paths.settings, |file| {
+        file.remove("schema_version");
+        file.insert("engine_prewarm".into(), "on_key_down".into());
+        file.insert("engine_idle_unload_minutes".into(), 10.into());
+        file["profile_models"]["default"] = "kb-whisper-small".into();
+    });
+    let english = paths
+        .settings
+        .with_file_name("glossaries")
+        .join("english.txt");
+    fs::write(&english, "").unwrap();
+    let before = files(&root.path().join("config"));
+
+    let loaded = store::load_at(&paths.settings, &paths.legacy, &machine());
+    // The markers put it at the current version: nothing runs or is written.
+    assert_eq!(files(&root.path().join("config")), before);
+    assert_user_choices_kept(&loaded);
+
+    // A 1.0.x release also embedded its (empty) global dictionary, so the
+    // file starts at version 1 and every later step runs again. Their
+    // markers keep the user's choices all the same.
+    edit_settings(&paths.settings, |file| {
+        file.insert("initial_prompt".into(), "".into());
+    });
+    let loaded = store::load_at(&paths.settings, &paths.legacy, &machine());
+    let migrated = json(&fs::read(&paths.settings).unwrap());
+    assert_eq!(migrated["schema_version"], SCHEMA_VERSION);
+    assert!(migrated.get("initial_prompt").is_none());
+    assert_user_choices_kept(&loaded);
+    assert_eq!(fs::read_to_string(&english).unwrap(), "");
+}
+
+fn assert_user_choices_kept(loaded: &Settings) {
+    assert_eq!(loaded.engine_prewarm, EnginePrewarm::OnKeyDown);
+    assert_eq!(loaded.engine_idle_unload_minutes, 10);
+    assert_eq!(
+        loaded.profile_models["default"],
+        FileModelPreference::Whisper(WhisperModel::KbWhisperSmall)
+    );
+    assert_eq!(loaded.profile_glossaries["english"], "");
+}
+
+#[test]
+fn older_release_rewrite_is_migrated_again_where_it_regressed() {
+    // An older release rewrote a migrated file. It kept schema_version as an
+    // unknown key, but 1.0.6 – 1.3.x can add a profile without a model and
+    // 1.0.x embeds the global dictionary again (empty: it reads none).
+    let outcome = run("v1.1.0");
+    let (root, paths) = migrated_copy(&outcome.config);
+    edit_settings(&paths.settings, |file| {
+        file["hotkey_profiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": "norsk",
+                "language": "no",
+                "name": "Norsk",
+                "shortcut": "Option+N"
+            }));
+        file.insert("initial_prompt".into(), "".into());
+    });
+    let edited = json(&fs::read(&paths.settings).unwrap());
+
+    let loaded = store::load_at(&paths.settings, &paths.legacy, &machine());
+
+    let migrated = json(&fs::read(&paths.settings).unwrap());
+    assert_eq!(migrated["schema_version"], SCHEMA_VERSION);
+    assert!(migrated.get("initial_prompt").is_none());
+    // The dictionary file wins over the empty embedded value.
+    assert_eq!(
+        files(&root.path().join("config"))["sagascript/glossary.txt"],
+        outcome.config["sagascript/glossary.txt"]
+    );
+    assert_eq!(loaded.profile_models["norsk"], FileModelPreference::Auto);
+    for (key, value) in edited.as_object().unwrap() {
+        if !matches!(key.as_str(), "initial_prompt" | "profile_models") {
+            assert_eq!(&migrated[key], value, "{key} changed");
+        }
+    }
+    let mut models = migrated["profile_models"].as_object().unwrap().clone();
+    models.remove("norsk");
+    assert_eq!(Value::Object(models), edited["profile_models"]);
 }

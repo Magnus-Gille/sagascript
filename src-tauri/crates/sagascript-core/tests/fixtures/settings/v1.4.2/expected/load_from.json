@@ -35,6 +35,7 @@
     "default": "kb-whisper-small",
     "english": "auto"
   },
+  "schema_version": 6,
   "show_overlay": true,
   "temperature_fallback": true,
   "vad_enabled": false,

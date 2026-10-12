@@ -990,6 +990,13 @@ pub struct Settings {
     /// New installs start at the current version.
     #[serde(default)]
     pub engine_defaults_version: u32,
+    /// Schema version of the settings file (see `settings::migrations`). A
+    /// missing key means 0: the file predates it, and the migrations derive
+    /// its version from the markers above, which they keep writing so older
+    /// releases can still read the file. New installs start at
+    /// [`SCHEMA_VERSION`](super::SCHEMA_VERSION).
+    #[serde(default)]
+    pub schema_version: u32,
 }
 
 /// Current version of the Swedish model-lineup migration.
@@ -1030,6 +1037,7 @@ impl Default for Settings {
             has_completed_onboarding: false,
             model_lineup_version: MODEL_LINEUP_VERSION,
             engine_defaults_version: ENGINE_DEFAULTS_VERSION,
+            schema_version: super::SCHEMA_VERSION,
         }
     }
 }
@@ -1060,7 +1068,7 @@ impl Settings {
     /// defaults move: an explicit `off`, `on_app_start` or any other idle
     /// timeout is kept. (A user who explicitly picked the old default values
     /// is indistinguishable from one who never touched them and moves too.)
-    /// Returns true when it ran (the caller must persist).
+    /// Returns true when it ran. Applied by settings migration step 6.
     pub fn migrate_engine_defaults(&mut self) -> bool {
         if self.engine_defaults_version >= ENGINE_DEFAULTS_VERSION {
             return false;
@@ -1077,7 +1085,8 @@ impl Settings {
 
     /// One-time move of Swedish dictation off the retired KB-Whisper
     /// Tiny/Base/Small choices, recorded by `model_lineup_version` so a second
-    /// run is a no-op. Returns true when it ran (the caller must persist).
+    /// run is a no-op. Returns true when it ran. Applied by settings
+    /// migration step 5.
     ///
     /// Safety rule: dictation must keep working. When a profile's model is not
     /// downloaded, the hotkey flow fails the utterance ("model not
@@ -1160,6 +1169,7 @@ impl Settings {
 
     /// Preserve the effective live model of every existing profile before
     /// global model preferences stop being consulted for live dictation.
+    /// Applied by settings migration step 3; never replaces a profile's model.
     pub fn materialize_profile_models(&mut self) {
         if self.hotkey_profiles.is_empty() {
             self.hotkey_profiles.push(HotkeyProfile::legacy_default(
@@ -1183,6 +1193,9 @@ impl Settings {
         }
     }
 
+    /// Copy the global dictionary's entries into every profile dictionary as
+    /// hints, once (`profile_glossary_migrated`). Applied by settings
+    /// migration step 4.
     pub fn migrate_global_glossary_to_profiles(&mut self) {
         if self.profile_glossary_migrated {
             return;

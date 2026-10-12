@@ -36,6 +36,7 @@
     "default": "pianissimo-sv",
     "english": "base.en"
   },
+  "schema_version": 6,
   "show_overlay": true,
   "temperature_fallback": true,
   "vad_enabled": false,

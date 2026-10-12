@@ -28,6 +28,7 @@
   "profile_models": {
     "default": "kb-whisper-small"
   },
+  "schema_version": 4,
   "show_overlay": true,
   "temperature_fallback": false,
   "vad_enabled": true,

@@ -28,6 +28,7 @@
   "profile_models": {
     "default": "auto"
   },
+  "schema_version": 4,
   "show_overlay": false,
   "temperature_fallback": true,
   "vad_enabled": false,
