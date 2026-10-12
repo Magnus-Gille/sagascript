@@ -59,6 +59,11 @@ pub struct Timeouts {
     pub transcribe_min: Duration,
     pub transcribe_factor: f64,
     pub shutdown_grace: Duration,
+    /// Upper bound for writing one request to the host's stdin.
+    pub write: Duration,
+    /// After a window times out and is cancelled, how long the host gets to
+    /// finish it before it is considered wedged.
+    pub wedge_grace: Duration,
 }
 
 impl Default for Timeouts {
@@ -72,6 +77,8 @@ impl Default for Timeouts {
             transcribe_min: Duration::from_secs(15),
             transcribe_factor: 3.0,
             shutdown_grace: Duration::from_secs(2),
+            write: Duration::from_secs(5),
+            wedge_grace: Duration::from_secs(5),
         }
     }
 }
@@ -140,6 +147,8 @@ pub struct EngineHostConfig {
     pub restart_backoff: Vec<Duration>,
     pub max_restarts: usize,
     pub restart_window: Duration,
+    /// How long a host marked failed stays failed before one fresh attempt.
+    pub failed_cooldown: Duration,
     /// How often a window that was in flight during a crash is resubmitted.
     pub max_crash_retries: u32,
     pub busy_retries: u32,
@@ -172,6 +181,7 @@ impl EngineHostConfig {
             ],
             max_restarts: 3,
             restart_window: Duration::from_secs(300),
+            failed_cooldown: Duration::from_secs(60),
             max_crash_retries: 1,
             busy_retries: 3,
             busy_retry_delay: Duration::from_millis(50),

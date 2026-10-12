@@ -11,9 +11,15 @@
 //!   FAKE_MAX_IN_FLIGHT (actual slots), FAKE_ADVERTISE_IN_FLIGHT
 //!   FAKE_PROTOCOL=<n>, FAKE_NO_SHA=1, FAKE_GARBAGE=1   handshake / stdout faults
 //!   FAKE_CRASH_ON_START=1                               exit(3) immediately
+//!   FAKE_CRASH_ON_START_FILE=<path>                     exit(3) immediately while the file exists
 //!   FAKE_CRASH_ON_WINDOW=1                              exit(4) on first window
 //!   FAKE_CRASH_ONCE_FILE=<path>                         like above, only if the file is absent (creates it)
 //!   FAKE_HANG=1                                         never answer transcribe_window
+//!   FAKE_WEDGE_ONCE_FILE=<path>                         if the file is absent (creates it): the window takes its
+//!                                                       slot and never finishes, ignoring cancel, while ping and
+//!                                                       status are still answered (a stuck Core ML prediction)
+//!   FAKE_STOP_READING_ONCE_FILE=<path>                  if the file is absent (creates it): on a window, stop
+//!                                                       reading stdin (30 s, then exit) without answering
 //!   FAKE_UNLOAD_DELAY_MS                               delay before an unload completes/acks
 //!   FAKE_WINDOW_DELAY_MS, FAKE_BATCH_DELAY_MS           per-window delay (batch adds to base)
 //!   FAKE_FIRST_SLOW_MS                                  extra delay for the first window received
@@ -94,6 +100,18 @@ impl Host {
     }
 }
 
+/// True when `var` names a marker file that does not exist yet; creates it.
+fn first_time(var: &str) -> bool {
+    let Some(marker) = std::env::var_os(var) else {
+        return false;
+    };
+    if std::path::Path::new(&marker).exists() {
+        return false;
+    }
+    let _ = std::fs::write(&marker, b"done");
+    true
+}
+
 fn log(op: &str, id: u64) {
     if let Ok(path) = std::env::var("FAKE_LOG") {
         if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -112,7 +130,9 @@ fn main() {
         eprintln!("fake host: expected --protocol 1, got {args:?}");
         std::process::exit(2);
     }
-    if env_flag("FAKE_CRASH_ON_START") {
+    let crash_file = std::env::var_os("FAKE_CRASH_ON_START_FILE")
+        .is_some_and(|marker| std::path::Path::new(&marker).exists());
+    if env_flag("FAKE_CRASH_ON_START") || crash_file {
         eprintln!("fake host: fatal: crash on start");
         std::process::exit(3);
     }
@@ -258,6 +278,13 @@ fn handle(host: &Arc<Host>, id: u64, op: RequestOp) {
             if env_flag("FAKE_HANG") {
                 return;
             }
+            if first_time("FAKE_STOP_READING_ONCE_FILE") {
+                // Blocks the stdin loop: the client's writes fill the pipe and then block.
+                eprintln!("fake host: no longer reading stdin");
+                std::thread::sleep(Duration::from_secs(30));
+                std::process::exit(0);
+            }
+            let wedge = first_time("FAKE_WEDGE_ONCE_FILE");
             if env_flag("FAKE_BUSY") {
                 let s = host.sched.lock().unwrap();
                 if s.running + s.queue.len() >= host.max_in_flight {
@@ -286,6 +313,7 @@ fn handle(host: &Arc<Host>, id: u64, op: RequestOp) {
                     num_samples,
                     priority,
                     &cancel,
+                    wedge,
                 );
             });
         }
@@ -350,6 +378,7 @@ fn run_window(
     num: u64,
     priority: Priority,
     cancel: &AtomicBool,
+    wedge: bool,
 ) {
     // Wait for a slot: best (rank, seq) first, at most max_in_flight running.
     {
@@ -372,6 +401,13 @@ fn run_window(
                 .wait_timeout(s, Duration::from_millis(10))
                 .unwrap()
                 .0;
+        }
+    }
+    if wedge {
+        // Holds the slot until the process exits; cancel is not observed.
+        eprintln!("fake host: window {id} wedged");
+        loop {
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
     let mut delay = env_u64("FAKE_WINDOW_DELAY_MS", 0);

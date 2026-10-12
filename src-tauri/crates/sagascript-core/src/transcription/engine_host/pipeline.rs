@@ -120,6 +120,24 @@ impl PcmFile {
     }
 }
 
+/// Outcome of [`sweep_stale_pcm_dirs`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PcmSweep {
+    /// Dirs of dead owners that were removed.
+    pub removed: usize,
+    /// Dirs whose owner is alive.
+    pub kept: usize,
+}
+
+/// Remove PCM temp dirs in `parent` whose owning process is gone (#366; not
+/// implemented yet).
+pub fn sweep_stale_pcm_dirs(_parent: &Path) -> std::io::Result<PcmSweep> {
+    Ok(PcmSweep::default())
+}
+
+/// [`sweep_stale_pcm_dirs`] on a background thread (not implemented yet).
+pub fn sweep_stale_pcm_dirs_in_background(_parent: PathBuf) {}
+
 /// Progress callback: `(merged_windows, total_windows)`.
 pub type ProgressFn<'a> = &'a mut dyn FnMut(usize, usize);
 
