@@ -1,43 +1,32 @@
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use sagascript_cli::latency::summarize_reader;
+use sagascript_testsupport::TempDir;
 use serde_json::{json, Value};
 
-static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
-
-struct InputFile(PathBuf);
+/// A JSONL input file in its own temporary directory, removed on drop.
+struct InputFile {
+    path: PathBuf,
+    _directory: TempDir,
+}
 
 impl InputFile {
     fn new(rows: &[Value]) -> Self {
-        let id = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "sagascript-latency-owner-{}-{stamp}-{id}.jsonl",
-            std::process::id()
-        ));
+        let directory = TempDir::new();
+        let path = directory.join("events.jsonl");
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
             .expect("create exclusive fixture");
-        let owned = Self(path);
         for row in rows {
             writeln!(file, "{row}").expect("write fixture");
         }
-        owned
-    }
-}
-
-impl Drop for InputFile {
-    fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_file(&self.0) {
-            eprintln!("fixture cleanup failed: {:?}", error.kind());
+        Self {
+            path,
+            _directory: directory,
         }
     }
 }
@@ -73,7 +62,7 @@ fn budget_rejects_incomplete_group_even_with_enough_numeric_samples() {
     let file = InputFile::new(&rows);
     let output = Command::new(env!("CARGO_BIN_EXE_sagascript"))
         .args(["latency-report", "--input"])
-        .arg(&file.0)
+        .arg(&file.path)
         .args([
             "--budget-length",
             "short",
@@ -94,7 +83,7 @@ fn unknown_duration_is_not_a_selectable_successful_budget() {
     let file = InputFile::new(&(0..20).map(phase).collect::<Vec<_>>());
     let output = Command::new(env!("CARGO_BIN_EXE_sagascript"))
         .args(["latency-report", "--input"])
-        .arg(&file.0)
+        .arg(&file.path)
         .args(["--budget-length", "unknown", "--max-warm-p95-ms", "100"])
         .output()
         .expect("run report");

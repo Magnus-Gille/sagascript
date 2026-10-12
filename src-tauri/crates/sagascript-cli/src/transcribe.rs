@@ -3112,6 +3112,7 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), DictationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sagascript_testsupport::TempDir;
 
     #[cfg(feature = "diarization")]
     #[test]
@@ -3209,11 +3210,7 @@ mod tests {
     #[cfg(feature = "diarization")]
     #[test]
     fn cache_path_cannot_alias_the_input_recording() {
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-cache-alias-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir(&root).unwrap();
+        let root = TempDir::new();
         let input = root.join("recording.m4a");
         let other = root.join("cache.json");
         std::fs::write(&input, b"audio").unwrap();
@@ -3227,14 +3224,12 @@ mod tests {
             std::fs::hard_link(&input, &hard_link).unwrap();
             assert!(paths_refer_to_same_file(&input, &hard_link));
         }
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn directory_expansion_filters_sorts_recurses_and_deduplicates() {
-        let root =
-            std::env::temp_dir().join(format!("sagascript-batch-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&root).unwrap();
+        let temp = TempDir::new();
+        let root = temp.path().to_path_buf();
         let nested = root.join("nested");
         std::fs::create_dir(&nested).unwrap();
         let a = root.join("a.WAV");
@@ -3253,7 +3248,6 @@ mod tests {
             expand_inputs(&[root.clone(), a.clone()], true).unwrap(),
             vec![a, b, c]
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -3536,11 +3530,7 @@ mod tests {
         use sagascript_core::diarization::DiarizationAnalysis;
         use sagascript_core::transcription::diagnostics::CoverageProfile;
 
-        let root = std::env::temp_dir().join(format!(
-            "sagascript-coarse-coverage-cache-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
+        let root = TempDir::new();
         let input = root.join("synthetic.wav");
         let cache = root.join("synthetic-cache.json");
         std::fs::write(&input, b"synthetic source bytes").unwrap();
@@ -3661,8 +3651,6 @@ mod tests {
             assert_eq!(json["warnings"], strict["warnings"]);
             assert_eq!(json["warnings"][0]["code"], "uncovered_speech");
         }
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(feature = "diarization")]
@@ -3758,17 +3746,14 @@ mod tests {
     #[cfg(feature = "diarization")]
     #[test]
     fn meeting_source_hash_is_bounded_and_detects_mutation() {
-        let path = std::env::temp_dir().join(format!(
-            "sagascript-meeting-hash-{}.wav",
-            uuid::Uuid::new_v4()
-        ));
+        let directory = TempDir::new();
+        let path = directory.join("meeting-hash.wav");
         std::fs::write(&path, b"first bytes").expect("fixture write");
         let before = stable_file_sha256(&path, None).expect("hash fixture");
         assert_eq!(before.len(), 64);
         assert!(before.bytes().all(|byte| byte.is_ascii_hexdigit()));
         std::fs::write(&path, b"other bytes").expect("mutate fixture");
         assert!(verify_meeting_source_unchanged(&path, &before, None).is_err());
-        let _ = std::fs::remove_file(path);
     }
 
     #[cfg(feature = "diarization")]
@@ -3839,11 +3824,10 @@ mod tests {
     #[cfg(feature = "diarization")]
     #[test]
     fn meeting_json_scope_requires_one_explicit_regular_file() {
-        let root =
-            std::env::temp_dir().join(format!("sagascript-meeting-scope-{}", uuid::Uuid::new_v4()));
+        let temp = TempDir::new();
+        let root = temp.path().to_path_buf();
         let file = root.join("input.wav");
         let second = root.join("second.wav");
-        std::fs::create_dir_all(&root).expect("fixture directory");
         std::fs::write(&file, b"audio fixture").expect("fixture file");
         std::fs::write(&second, b"second fixture").expect("second fixture");
 
@@ -3866,8 +3850,6 @@ mod tests {
             std::slice::from_ref(&file)
         )
         .is_err());
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -3976,35 +3958,23 @@ mod tests {
 
     #[test]
     fn one_run_prompt_file_wins_and_is_trimmed() {
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!(
-            "sagascript_hint_test_{}_{}.txt",
-            std::process::id(),
-            line!()
-        ));
+        let dir = TempDir::new();
+        let path = dir.join("hint.txt");
         std::fs::write(&path, "  Estrid, Grimnir\n").unwrap();
 
         // File beats the inline flag; saved settings are composed by the core helper.
         let got = resolve_one_run_prompt(Some("inline"), Some(&path)).unwrap();
         assert_eq!(got.as_deref(), Some("Estrid, Grimnir"));
-
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn one_run_prompt_empty_file_is_deferred_to_saved_settings() {
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!(
-            "sagascript_hint_test_{}_{}.txt",
-            std::process::id(),
-            line!()
-        ));
+        let dir = TempDir::new();
+        let path = dir.join("hint.txt");
         std::fs::write(&path, "   \n\t").unwrap();
 
         let got = resolve_one_run_prompt(None, Some(&path)).unwrap();
         assert!(got.is_none());
-
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]
