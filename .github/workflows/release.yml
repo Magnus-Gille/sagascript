@@ -232,7 +232,8 @@ jobs:
     needs: [build-macos]
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Sole writer: publishes the draft release. All other jobs run read-only.
+    # Writer on the fallback path: publishes the draft release (promote-release
+    # is the writer on the prebuild path). All other jobs run read-only.
     permissions:
       contents: write # softprops/action-gh-release creates the draft
 

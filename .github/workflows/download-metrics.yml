@@ -17,7 +17,7 @@ concurrency:
 jobs:
   snapshot:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     permissions:
       contents: write # git push of the snapshot to metrics/downloads
 

@@ -25,10 +25,6 @@ const WRITERS = new Map([
   ["sbom.yml:attach:contents", "uploads the SBOMs to a published release"],
 ]);
 
-// Actions that publish no release tags, so no `# vX` comment can name one.
-// They must still be SHA-pinned and carry an explanatory comment.
-const UNVERSIONED_ACTIONS = new Set(["dtolnay/rust-toolchain"]);
-
 const DEFAULT_TIMEOUT_MINUTES = 360;
 
 // Parses a `permissions:` value: an inline value (`read-all`, `write-all`,
@@ -118,11 +114,7 @@ for (const [name, text] of Object.entries(workflows)) {
       actions += 1;
       const pinned = /^([^@\s]+)@([0-9a-f]{40})$/.exec(ref);
       assert.ok(pinned, `${name}: ${line.trim()} must be pinned to a full commit SHA`);
-      if (UNVERSIONED_ACTIONS.has(pinned[1])) {
-        assert.match(comment, /^\s+#\s*\S/, `${name}: ${pinned[1]} must explain its pin in a comment`);
-      } else {
-        assert.match(comment, /^\s+# v\d+(?:\.\d+)*\b/, `${name}: ${line.trim()} must name the release it resolves to (# vX.Y.Z)`);
-      }
+      assert.match(comment, /^\s+# v\d+(?:\.\d+)*\b/, `${name}: ${line.trim()} must name the release it resolves to (# vX.Y.Z)`);
     }
     assert.ok(actions > 0, `${name} uses no actions; the pin check would be vacuous`);
   });
