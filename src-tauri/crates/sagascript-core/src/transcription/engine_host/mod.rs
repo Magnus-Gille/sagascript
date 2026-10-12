@@ -52,7 +52,9 @@ pub enum EngineHostError {
     Timeout { op: &'static str, after: Duration },
     #[error("engine host exited unexpectedly ({status}); stderr tail:\n{stderr_tail}")]
     Crashed { status: String, stderr_tail: String },
-    #[error("engine host is marked failed after repeated crashes ({0}); reset required")]
+    /// The restart budget is spent; requests fail fast until the cooldown
+    /// in the message has passed (or `EngineHostClient::reset`).
+    #[error("engine host is marked failed after repeated crashes: {0}")]
     Failed(String),
     #[error("engine host is not running")]
     NotRunning,

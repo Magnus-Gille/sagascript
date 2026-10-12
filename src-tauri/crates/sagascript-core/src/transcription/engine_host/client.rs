@@ -53,6 +53,12 @@ pub struct LoadSpec {
 /// prediction cannot be cancelled) and keeps its slot until it is killed.
 pub const DEFAULT_WEDGE_GRACE: Duration = Duration::from_secs(5);
 
+/// Default [`EngineHostConfig::failed_cooldown`]. While failed, requests fail
+/// at once without spawning anything; the first request after the cooldown
+/// gets one fresh start (half-open). If that start fails the cooldown begins
+/// again; if it succeeds the crash history is cleared.
+pub const DEFAULT_FAILED_COOLDOWN: Duration = Duration::from_secs(60);
+
 /// Request timeouts; injectable so tests do not wait for real ones.
 #[derive(Debug, Clone)]
 pub struct Timeouts {
@@ -155,7 +161,8 @@ pub struct EngineHostConfig {
     pub restart_backoff: Vec<Duration>,
     pub max_restarts: usize,
     pub restart_window: Duration,
-    /// How long a host marked failed stays failed before one fresh attempt.
+    /// How long the client stays failed after the restart budget is spent
+    /// (see [`DEFAULT_FAILED_COOLDOWN`]).
     pub failed_cooldown: Duration,
     /// How often a window that was in flight during a crash is resubmitted.
     pub max_crash_retries: u32,
@@ -189,7 +196,7 @@ impl EngineHostConfig {
             ],
             max_restarts: 3,
             restart_window: Duration::from_secs(300),
-            failed_cooldown: Duration::from_secs(60),
+            failed_cooldown: DEFAULT_FAILED_COOLDOWN,
             max_crash_retries: 1,
             busy_retries: 3,
             busy_retry_delay: Duration::from_millis(50),
@@ -235,6 +242,12 @@ struct LoadPending {
     deadline: Instant,
 }
 
+/// The restart budget was spent at `since`.
+struct Failure {
+    reason: String,
+    since: Instant,
+}
+
 struct State {
     proc: Option<Arc<HostProcess>>,
     /// Effective capabilities: `hello` capabilities bounded by the loaded
@@ -247,7 +260,7 @@ struct State {
     last_load: Option<LoadResult>,
     loaded: bool,
     crashes: VecDeque<Instant>,
-    failed: Option<String>,
+    failed: Option<Failure>,
     last_activity: Instant,
     /// Slots held (batch + interactive), so idle logic never fires mid-request.
     active: usize,
@@ -392,7 +405,7 @@ impl EngineHostClient {
         HostSnapshot {
             running: st.proc.as_ref().is_some_and(|p| p.is_alive()),
             loaded: st.loaded && st.proc.as_ref().is_some_and(|p| p.is_alive()),
-            failed: st.failed.clone(),
+            failed: st.failed.as_ref().map(|f| f.reason.clone()),
             pid: st.proc.as_ref().filter(|p| p.is_alive()).map(|p| p.pid()),
             crashes_in_window: st.crashes.len(),
             capabilities: st.caps.clone(),
@@ -413,7 +426,8 @@ impl EngineHostClient {
         Ok(self.snapshot())
     }
 
-    /// Clear the `Failed` state and the crash history.
+    /// Clear the `Failed` state and the crash history now, without waiting
+    /// for [`EngineHostConfig::failed_cooldown`].
     pub fn reset(&self) {
         let mut st = self.inner.lock_state();
         st.failed = None;
@@ -1097,7 +1111,7 @@ impl Inner {
 
     fn ensure_started_locked(&self) -> Result<(Arc<HostProcess>, Capabilities)> {
         // Inspect the current process; account for an unexpected exit.
-        let (backoff, dead) = {
+        let (backoff, probing, dead) = {
             let mut st = self.lock_state();
             if let Some(p) = &st.proc {
                 if p.is_alive() {
@@ -1115,29 +1129,34 @@ impl Inner {
                     Self::record_crash(&mut st);
                 }
             }
-            if let Some(reason) = &st.failed {
-                return Err(EngineHostError::Failed(reason.clone()));
-            }
-            let window = self.cfg.restart_window;
-            st.crashes.retain(|t| t.elapsed() <= window);
-            let n = st.crashes.len();
-            if n > self.cfg.max_restarts {
-                let reason = format!(
-                    "{n} crashes within {:?}, limit is {} restarts",
-                    window, self.cfg.max_restarts
-                );
-                st.failed = Some(reason.clone());
-                return Err(EngineHostError::Failed(reason));
-            }
-            let backoff = if n == 0 {
-                Duration::ZERO
+            // Failed, but only for the cooldown: afterwards one fresh start
+            // (half-open), without a restart backoff (the cooldown was one).
+            if let Some(failure) = &st.failed {
+                let waited = failure.since.elapsed();
+                if waited < self.cfg.failed_cooldown {
+                    return Err(failed_error(failure, self.cfg.failed_cooldown - waited));
+                }
+                tracing::info!(reason = %failure.reason, "engine host failed earlier; trying a fresh start after the cooldown");
+                (Duration::ZERO, true, dead)
             } else {
-                let i = (n - 1).min(self.cfg.restart_backoff.len().saturating_sub(1));
-                let want = self.cfg.restart_backoff.get(i).copied().unwrap_or_default();
-                let since = st.crashes.back().map_or(Duration::MAX, |t| t.elapsed());
-                want.saturating_sub(since)
-            };
-            (backoff, dead)
+                let window = self.cfg.restart_window;
+                st.crashes.retain(|t| t.elapsed() <= window);
+                let n = st.crashes.len();
+                if n > self.cfg.max_restarts {
+                    let failure = Failure {
+                        reason: format!(
+                            "{n} crashes within {:?}, limit is {} restarts",
+                            window, self.cfg.max_restarts
+                        ),
+                        since: Instant::now(),
+                    };
+                    let error = failed_error(&failure, self.cfg.failed_cooldown);
+                    tracing::warn!(%error, "engine host marked failed");
+                    st.failed = Some(failure);
+                    return Err(error);
+                }
+                (self.restart_backoff(&st, n), false, dead)
+            }
         };
         drop(dead); // reap the old process outside the state lock
         if !backoff.is_zero() {
@@ -1147,6 +1166,11 @@ impl Inner {
         match self.start_and_handshake() {
             Ok((proc, caps, host_info)) => {
                 let mut st = self.lock_state();
+                if probing {
+                    tracing::info!("engine host recovered after the failed cooldown");
+                    st.failed = None;
+                    st.crashes.clear();
+                }
                 st.proc = Some(proc.clone());
                 st.caps = Some(caps.clone());
                 st.base_caps = Some(caps.clone());
@@ -1157,10 +1181,30 @@ impl Inner {
                 Ok((proc, caps))
             }
             Err(e) => {
-                Self::record_crash(&mut self.lock_state());
+                let mut st = self.lock_state();
+                Self::record_crash(&mut st);
+                if probing {
+                    // The fresh start failed too: fail fast for another cooldown.
+                    let first_line = e.to_string().lines().next().unwrap_or_default().to_string();
+                    st.failed = Some(Failure {
+                        reason: format!("start after the cooldown failed: {first_line}"),
+                        since: Instant::now(),
+                    });
+                }
                 Err(e)
             }
         }
+    }
+
+    /// Delay before the next start after `n` crashes in the restart window.
+    fn restart_backoff(&self, st: &State, n: usize) -> Duration {
+        if n == 0 {
+            return Duration::ZERO;
+        }
+        let i = (n - 1).min(self.cfg.restart_backoff.len().saturating_sub(1));
+        let want = self.cfg.restart_backoff.get(i).copied().unwrap_or_default();
+        let since = st.crashes.back().map_or(Duration::MAX, |t| t.elapsed());
+        want.saturating_sub(since)
     }
 
     fn start_and_handshake(&self) -> Result<(Arc<HostProcess>, Capabilities, HostInfo)> {
@@ -1330,6 +1374,14 @@ fn supervise_loop(weak: Weak<Inner>, tick: Duration) {
         let Some(inner) = weak.upgrade() else { return };
         inner.idle_check();
     }
+}
+
+fn failed_error(failure: &Failure, retry_in: Duration) -> EngineHostError {
+    EngineHostError::Failed(format!(
+        "{}; next attempt in {} s",
+        failure.reason,
+        retry_in.as_secs_f64().ceil() as u64
+    ))
 }
 
 /// Validate a `hello` result and return the usable capabilities.
