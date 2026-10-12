@@ -1,0 +1,37 @@
+# Prettier formats the frontend and Node tooling (#361): src/, scripts/,
+# tests/ and the root JS/TS config files. Everything else is formatted by
+# another tool (rustfmt), generated, vendored, byte-exact data or prose.
+# `npm run format` writes, `npm run format:check` checks (CI, npm run verify).
+/*
+!/src/
+!/scripts/
+!/tests/
+!/prettier.config.js
+!/svelte.config.js
+!/vite.config.ts
+!/vitest.config.ts
+
+# TODO(#361): format .svelte once the remaining source-text tests (the
+# scripts/test-*.mjs files that regex-read components) are gone; they would
+# otherwise break on pure reformatting. prettier-plugin-svelte is configured.
+*.svelte
+
+# Byte-exact inputs, as in .editorconfig.
+**/fixtures/**
+**/testdata/**
+**/test-vectors/**
+
+# The frozen code-health contract: tests/scripts/test-code-health-contract-
+# provenance.mjs checks these files against the sha256 recorded in
+# docs/code-health-contract-provenance.json.
+/scripts/lib/code-health-schema.mjs
+/scripts/lib/code-health-objective.mjs
+/scripts/lib/code-health-policy.mjs
+/tests/scripts/validate-code-health-objective.mjs
+/tests/scripts/test-code-health-policy.mjs
+
+# Prose and CI configuration are out of scope.
+*.md
+*.yml
+*.yaml
+*.html

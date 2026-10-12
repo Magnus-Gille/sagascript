@@ -668,6 +668,8 @@ attribution as well. No matching CoreML encoder is supplied for the fine-tune.
 | playwright | 1.63.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/playwright/v/1.63.0) |
 | playwright-core | 1.63.0 | Apache-2.0 | [upstream](https://www.npmjs.com/package/playwright-core/v/1.63.0) |
 | postcss | 8.5.26 | MIT | [upstream](https://www.npmjs.com/package/postcss/v/8.5.26) |
+| prettier | 3.9.9 | MIT | [upstream](https://www.npmjs.com/package/prettier/v/3.9.9) |
+| prettier-plugin-svelte | 4.1.1 | MIT | [upstream](https://www.npmjs.com/package/prettier-plugin-svelte/v/4.1.1) |
 | readdirp | 4.1.2 | MIT | [upstream](https://www.npmjs.com/package/readdirp/v/4.1.2) |
 | rollup | 4.62.2 | MIT | [upstream](https://www.npmjs.com/package/rollup/v/4.62.2) |
 | sade | 1.8.1 | MIT | [upstream](https://www.npmjs.com/package/sade/v/1.8.1) |
@@ -10805,6 +10807,36 @@ Permission is granted to anyone to use this software for any purpose, including 
 3. This notice may not be removed or altered from any source distribution.
 ~~~~
 
+### 82bdabcad28b
+
+Components: npm prettier-plugin-svelte@4.1.1
+
+Source filenames: LICENSE
+
+~~~~text
+MIT License
+
+Copyright (c) 2019 [Contributors](https://github.com/sveltejs/prettier-plugin-svelte/graphs/contributors)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+~~~~
+
 ### 8348c9fe2fb7
 
 Components: Rust pin-utils@0.1.0
@@ -17888,6 +17920,22 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+~~~~
+
+### b9528340f983
+
+Components: npm prettier@3.9.9
+
+Source filenames: LICENSE
+
+~~~~text
+Copyright © James Long and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
 ### b969ab4be2f6
