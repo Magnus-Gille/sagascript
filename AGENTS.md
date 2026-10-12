@@ -51,8 +51,17 @@ Decisions and their reasons: `docs/adr/`.
 
 ## Verification
 
-First `npm ci && npm run build`: it creates `dist/`, without which `tauri::generate_context!`
-fails in every cargo command that compiles the app crate. Then, from `src-tauri/`:
+In a fresh worktree first run `npm ci && npm run build`: `dist/` is needed by every cargo
+command that compiles the app crate (`tauri::generate_context!`).
+
+`npm run verify` runs every local check for this OS and stops at the first failure
+(`--keep-going` reports all); `npm run verify:fast` is the inner loop (rustfmt, app clippy,
+svelte-check, UI node tests); `--only <check|area>` focuses; `--list` prints the checks.
+`scripts/verify.mjs` defines them, CONTRIBUTING.md "Running tests" has the control matrix. Its
+preflight lists every missing prerequisite (including `dist/`) in one error and installs
+nothing.
+
+Reference commands, from `src-tauri/`:
 
 - `cargo fmt --all -- --check` and `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
@@ -60,6 +69,5 @@ fails in every cargo command that compiles the app crate. Then, from `src-tauri/
 - `cargo test --workspace` (a bare `cargo test` covers only the app crate)
 - `cargo test -p sagascript-cli --no-default-features`
 
-From the repo root: `npx svelte-check --tsconfig ./tsconfig.json` and `npm run test:frontend`.
-CONTRIBUTING.md "Running tests" is the canonical list, including area-specific checks
-(browser, Python, Swift, ORT host, core feature sets). Planned: `npm run verify` (#350).
+From the repo root: `npx svelte-check --tsconfig ./tsconfig.json` and `npm run test:frontend`
+(every Node test group; add new test files to `scripts/node-test-groups.mjs`).

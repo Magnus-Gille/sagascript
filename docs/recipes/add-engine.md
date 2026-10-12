@@ -66,7 +66,7 @@ every host.
 | Client behaviour (restarts, timeouts, ordering, cancel) | `crates/sagascript-core/tests/engine_host.rs` against `sagascript-fake-engine-host` (`tests/support/fake_engine_host.rs`; `FAKE_*` variables select faults). Add a fake mode for new behaviour. |
 | Protocol crate | `cargo test -p sagascript-engine-protocol` (CI: test-linux). |
 | Swift host | `scripts/build-engine-host.sh`, then `swift test` in `src-tauri/engine-host/coreml` (CI: test-macos). |
-| ORT host | In `src-tauri/engine-host/ort/`: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` (CI: test-linux runs all three). |
+| ORT host | In `src-tauri/engine-host/ort/`: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` (CI: test-linux runs all three; locally `npm run verify -- --only ort-host,fmt`). |
 | Conformance | `scripts/engine-host-conformance.py <host binary> --model-dir <dir>`; every host must pass it (needs a model; not in CI). |
 | End to end | `sagascript engine status --json`, `sagascript engine doctor`. |
 | macOS packaging | `scripts/stage-engine-host.sh`, `scripts/tauri-engine-host-bundle.json`, `scripts/check-engine-host-identity.sh`. |
@@ -85,4 +85,4 @@ model pickers. Plan it with an issue first. Planned:
 trait and one cancellation model; [#366](https://github.com/Magnus-Gille/sagascript/issues/366)
 makes host supervision recover from `Failed`.
 
-Finish with the full list in [CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests).
+Finish with `npm run verify` ([CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests)).

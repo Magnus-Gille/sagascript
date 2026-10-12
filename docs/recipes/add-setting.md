@@ -139,7 +139,7 @@ Parity: with the same `SAGASCRIPT_SETTINGS_PATH` exported, run `cargo tauri dev`
 setting in the UI and check the file holds what `config set` writes; then `config set` while
 the app runs and check the UI follows (watcher → `settings_reloaded`). Without a desktop
 session (a headless agent), say so in the PR and leave this step to a reviewer with a Mac.
-Finish with [CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests). Planned:
+Finish with `npm run verify` ([CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests)). Planned:
 [#373](https://github.com/Magnus-Gille/sagascript/issues/373) (automated CLI/app parity table,
 table-driven key registry), [#347](https://github.com/Magnus-Gille/sagascript/issues/347)
 (Rust/TypeScript `Settings` contract test).

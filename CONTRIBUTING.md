@@ -8,13 +8,19 @@ Thanks for your interest in contributing! This guide will help you get set up an
 
 **All platforms:**
 
-- Rust 1.88+ (the minimum supported version, `rust-version` in `src-tauri/Cargo.toml`). Use rustup: it installs the development toolchain pinned in `rust-toolchain.toml` (with clippy and rustfmt) on the first `cargo` call
-- Node.js 22+ (`.nvmrc`)
+- Rust 1.88+ (the minimum supported version, `rust-version` in `src-tauri/Cargo.toml`). Use rustup with the development toolchain pinned in `rust-toolchain.toml`, including clippy and rustfmt; if it is missing, `npm run verify` prints the exact `rustup toolchain install` command
+- Node.js 22+ (`.nvmrc`), then `npm ci`
+- Python 3 (CI uses 3.12) for the evaluation tooling tests
 - Tauri CLI: `cargo install tauri-cli`
 
 **macOS:**
 
 - macOS 13.0+ on Apple Silicon for the default diarization-enabled build
+- Xcode 16+ (Swift 6, for the Swift engine host tests)
+
+**Linux:**
+
+- `sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev build-essential pkg-config file` (Debian/Ubuntu; see [docs/linux-notes.md](docs/linux-notes.md))
 
 **Windows:**
 
@@ -26,66 +32,115 @@ Thanks for your interest in contributing! This guide will help you get set up an
 ```bash
 git clone https://github.com/Magnus-Gille/sagascript.git
 cd sagascript
-npm install
+npm ci && npm run build   # dependencies, then dist/ (needed before cargo, see below)
+npm run verify:fast       # checks the setup; its preflight names anything missing
 cargo tauri dev
 ```
 
-Two things a fresh clone needs before the checks below work:
+Two things a fresh clone or worktree needs before the checks below work:
 
 - `npm run build` creates `dist/`. Every cargo command that compiles the app crate (`cargo
   check`, `test`, `clippy` in `src-tauri/`, including `--workspace`) fails in
-  `tauri::generate_context!` until it exists.
+  `tauri::generate_context!` until it exists; `npm run verify` reports it as a missing
+  prerequisite of exactly those checks.
 - `swift test` in `src-tauri/engine-host/coreml` needs the gitignored `BuildInfo.swift`;
-  run `./scripts/build-engine-host.sh` once first (macOS).
+  run `./scripts/build-engine-host.sh` once first (macOS). The `swift` check of
+  `npm run verify` does both.
 
 For how the code fits together, read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); for
 common changes, follow the recipes in [docs/recipes/](docs/recipes/README.md).
 
 ### Running tests
 
-This is the canonical verification list; AGENTS.md and the PR template mirror it. All checks
-must pass on macOS, Linux and Windows (CI runs all three).
-
-Run before every PR (Rust commands from `src-tauri/`, after `npm run build`):
+`npm run verify` is the one entry point; [scripts/verify.mjs](scripts/verify.mjs) defines every
+check (command, working directory, platforms, prerequisites, time budget, CI lanes).
 
 ```bash
-# Formatting (CI gate): the main workspace and the standalone ORT engine host
-cargo fmt --all -- --check
-cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
-
-# Lints: the whole workspace, plus the lean batch CLI without default features
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings
-
-# Tests. NOTE: a bare `cargo test` covers only the app crate; use --workspace or -p.
-cargo test --workspace
-cargo test -p sagascript-cli --no-default-features
-
-# Frontend (from the repo root)
-npx svelte-check --tsconfig ./tsconfig.json
-npm run test:frontend
+npm run verify:fast                      # inner loop: rustfmt, app clippy, svelte-check, UI node tests
+npm run verify                           # before a PR: every default check for this OS
+npm run verify -- --keep-going           # report every failure instead of stopping at the first
+npm run verify -- --only clippy,node-ui  # checks or whole areas, including opt-in checks
+npm run verify -- --skip release-guard   # leave checks or areas out
+npm run verify -- --list                 # every check with its commands, budget and CI lanes
 ```
 
-Also run these when your change touches the area:
+- **Preflight.** Before anything runs, verify looks for what the selected checks need
+  (`node_modules`, a built `dist/` for the checks that compile the app crate, the pinned Rust
+  toolchain with clippy and rustfmt, the Linux system libraries, Python, Xcode on macOS, …)
+  and prints one error listing everything missing with the command that provides it. It never installs anything, and it runs cargo with
+  `RUSTUP_AUTO_INSTALL=0` so `rust-toolchain.toml` cannot pull a toolchain in either.
+- **Time budgets.** Every check has one. On timeout, Ctrl-C or SIGTERM the check's whole
+  process tree is stopped, and the summary says why.
+- **Summary.** A table of pass/fail/skip with the reason and duration; the exit status is
+  non-zero when a check failed. Checks for another OS (Swift on Linux, for example) are
+  listed as skipped.
 
-| Area | Command |
-|---|---|
-| UI flows (Transcribe tab, update recovery) | `npx playwright install chromium` once, then `npm run test:browser` |
-| Feature-gated core code (`record`, `diarization`) | `cargo test -p sagascript-core`, `cargo test -p sagascript-core --features record`, `cargo test -p sagascript-core --features diarization`, `cargo clippy -p sagascript-core --all-targets -- -D warnings` |
-| Swift Core ML engine host | `./scripts/build-engine-host.sh`, then `swift test` in `src-tauri/engine-host/coreml` |
-| ORT engine host | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `src-tauri/engine-host/ort/` (CI: test-linux) |
-| Dependency bumps or newer language features (MSRV, CI: msrv-linux) | `rustup toolchain install 1.88`, then from `src-tauri/`: `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` and `RUSTUP_TOOLCHAIN=1.88 cargo check -p sagascript-cli --no-default-features --locked`; in `src-tauri/engine-host/ort/`: `RUSTUP_TOOLCHAIN=1.88 cargo check --locked` |
-| Python evaluation tooling | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; for `scripts/diarization_sv`, see `.github/workflows/ci.yml` |
-| Code-health tooling | `npm run test:code-health` |
-| Release metadata, licenses | `npm run release:check`, `npm run licenses:check` |
+#### Control matrix
 
-CI (`.github/workflows/ci.yml`) runs the same cargo checks split per crate and per feature
-set, so that the no-feature builds of `sagascript-core` and `sagascript-cli` stay honest; the
-workspace commands above are the closest single-machine equivalent. Where every suite lives
-and which CI lane runs it is described in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#5-where-tests-live-and-how-ci-runs-them).
-Planned: `npm run verify` as one entry point for this list
-([#350](https://github.com/Magnus-Gille/sagascript/issues/350)).
+| Area (`--only`) | Checks | What runs (working directory) | Needs | CI lane |
+|---|---|---|---|---|
+| `fmt` | `fmt`, `fmt-ort` | `cargo fmt --all -- --check` and `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check` (`src-tauri`) | Rust | test-linux |
+| `clippy` | `clippy-workspace`, `clippy-cli-lean`; `clippy-app` (fast set) | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings` (`src-tauri`) | Rust; Linux libraries; `dist/` (workspace, app) | test-macos, test-linux, test-windows (per crate) |
+| `rust-deps` | `cli-lean-deps` | `cargo tree -p sagascript-cli --no-default-features -e normal` contains no cpal/ALSA | Rust | test-linux |
+| `rust-test` | `test-workspace`, `test-cli-lean` | `cargo test --workspace`; `cargo test -p sagascript-cli --no-default-features` | Rust; Linux libraries; `dist/` (workspace) | test-macos, test-windows; lean CLI also test-linux |
+| `core-features` | `core-clippy`, `core-clippy-diarization`, `core-test`, `core-test-record`, `core-test-diarization` | `cargo clippy`/`cargo test -p sagascript-core` without features, with `record`, with `diarization` | Rust | test-macos, test-linux, test-windows |
+| `engine-protocol` | `engine-protocol` | `cargo test -p sagascript-engine-protocol` | Rust | test-linux |
+| `ort-host` | `ort-host-clippy`, `ort-host-test` | `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked` (`src-tauri/engine-host/ort`) | Rust | test-linux |
+| `release-guard` | `release-guard` | `cargo test --release -p sagascript-core --lib dev_overrides` | Rust | test-linux |
+| `svelte-check` | `svelte-check` | `npx svelte-check --tsconfig ./tsconfig.json` | `npm ci` | test-macos |
+| `node` | `node-ui`, `node-ci`, `node-release` | `npm run test:ui`, `npm run test:ci`, `npm run test:release` | `npm ci` (ui) | test-macos, test-windows (`npm run test:frontend`) |
+| `code-health` | `code-health` | `npm run test:code-health` | Node | `code-health.yml`; also in `test:frontend` |
+| `python` | `python-dictation-eval`, `python-diarization-reference`; `python-diarization` (opt-in) | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'`; `scripts/diarization_sv` reference tests; opt-in: the full suite against a freshly built lean CLI | Python 3; opt-in: `pip install -r scripts/diarization_sv/requirements-evaluation.txt` | all three; diarization: test-macos, test-linux |
+| `swift` | `swift` (macOS) | `./scripts/build-engine-host.sh` (generates `BuildInfo.swift`), then `swift test` (`src-tauri/engine-host/coreml`) | Xcode 16+ | test-macos |
+| `msrv` | `msrv` (opt-in; run it for dependency bumps or newer language features) | `cargo check --workspace --locked`, the lean CLI and the ORT host on the `rust-version` toolchain | `rustup toolchain install 1.88 --profile minimal`; `dist/` | msrv-linux |
+| `browser` | `browser` (opt-in) | `npm run test:browser` (Playwright against the mocked IPC) | `npx playwright install chromium` | test-macos |
+
+CI splits the cargo commands per crate and feature set; `--list` shows which CI commands each
+check stands for, and `scripts/test-verify-ci-parity.mjs` fails when ci.yml's test lanes and
+this list drift apart. Not part of verify: release builds and CLI smoke tests (build-macos,
+build-windows), engine-host staging, the DER/JER cross-check against a downloaded scorer, and
+the release checks `npm run release:check` and `npm run licenses:check`. Where every suite
+lives is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#5-where-tests-live-and-how-ci-runs-them).
+
+**Node test groups.** `scripts/node-test-groups.mjs` puts every `scripts/test-*.mjs` and
+`scripts/**/test_*.mjs` file in one group: `ui`, `ci`, `release` or `codeHealth`.
+`npm run test:frontend` runs all of them (as CI does); a new test file that is not in the
+manifest makes the runner fail.
+
+#### Reference: the individual commands
+
+From `src-tauri/`, after `npm run build` (a bare `cargo test` covers only the app crate; use
+`--workspace` or `-p`):
+
+```bash
+cargo fmt --all -- --check
+cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings
+cargo test --workspace
+cargo test -p sagascript-cli --no-default-features
+```
+
+From the repo root: `npx svelte-check --tsconfig ./tsconfig.json` and `npm run test:frontend`.
+
+#### Example: a typical feature
+
+Say you add a user setting that changes how dictation pastes. It crosses the CLI/core/GUI
+contract in three places; [docs/recipes/add-setting.md](docs/recipes/add-setting.md) has the
+exact files and steps.
+
+1. **Core** (`src-tauri/crates/sagascript-core/src/settings/manager.rs`): the field, its
+   default and serde round trip. Focused, from `src-tauri/`: `cargo test -p sagascript-core settings`.
+2. **CLI first** (`src-tauri/crates/sagascript-cli/src/config.rs`): the `config get/set/reset`
+   key. Focused: `cargo test -p sagascript-cli config`, then
+   `npm run verify -- --only test-cli-lean,clippy-cli-lean` for the batch-only build.
+3. **GUI** (the setter in `src-tauri/src/commands.rs`, `src/lib/api.ts`, `Settings.svelte`, the
+   browser mock): focused: `npm run verify:fast`; if the Settings flow changed visibly, also
+   `npm run verify -- --only browser`. The recipe's CLI/GUI parity check is manual.
+
+Before the PR run `npm run verify`: the `core-features` checks catch a field used behind a
+feature gate, the lean-CLI checks code that compiles only with default features, and the
+`release` Node group the release-surface tests that read the Settings UI.
 
 ## Code style
 
@@ -157,7 +212,7 @@ should happen only for the identity transition, not on every update.
 
 1. Fork the repo and create a feature branch from `main`.
 2. Make your changes, following the code style guidelines above.
-3. Run the checks in [Running tests](#running-tests). A bug fix includes a regression test that fails before the fix ([ADR 0004](docs/adr/0004-test-strategy.md)).
+3. Run `npm run verify` (see [Running tests](#running-tests)). A bug fix includes a regression test that fails before the fix ([ADR 0004](docs/adr/0004-test-strategy.md)).
 4. Open a pull request with a clear description of what you changed and why.
 
 Keep PRs focused -- one feature or fix per PR. If you're planning a large change, open an issue first to discuss the approach.
