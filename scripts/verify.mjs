@@ -26,6 +26,7 @@ export const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ALL = ["darwin", "linux", "win32"];
 const MACOS = ["darwin"];
 const POSIX = ["darwin", "linux"];
+const LINUX = ["linux"];
 const MINUTE = 60_000;
 const PLATFORM_NAMES = { darwin: "macOS", linux: "Linux", win32: "Windows" };
 
@@ -209,6 +210,19 @@ export const CHECKS = [
       ci("cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings", "src-tauri"),
       ci("cargo check -p sagascript-cli --no-default-features", "src-tauri"),
     ],
+    lanes: ["test-linux"],
+  },
+  {
+    id: "clippy-policy",
+    area: "clippy",
+    title: "Clippy policy counts must not rise (src-tauri/clippy-policy-baseline.json, measured on Linux)",
+    steps: [step("node scripts/clippy-policy.mjs")],
+    sets: ["default"],
+    // The baseline counts Linux code; macOS- and Windows-only code would differ.
+    platforms: LINUX,
+    requires: ["rust", "linux-libs", "frontend-dist"],
+    timeoutMinutes: 45,
+    ci: [ci("node scripts/clippy-policy.mjs")],
     lanes: ["test-linux"],
   },
   {

@@ -297,6 +297,37 @@ test("CLI: usage errors and an empty measurement fail loudly", () => {
   }
 });
 
+test("CLI: a policy lint clippy renamed or removed fails instead of reading as zero", () => {
+  const { dir, baseline } = workspace(BASE_RUN);
+  const note = (code, text) =>
+    JSON.stringify({
+      reason: "compiler-message",
+      package_id: PACKAGES.core,
+      ...targetFields(PACKAGES.core, "lib"),
+      message: { level: "warning", code: { code }, message: text, rendered: `warning: ${text}\n`, spans: [] },
+    });
+  // A newer clippy reports the findings under the new name, which the policy does not count.
+  const renamedRun = BASE_RUN.replaceAll('"clippy::unwrap_used"', '"clippy::unwrap_used_v2"');
+  for (const [code, text] of [
+    ["renamed_and_removed_lints", "lint `clippy::unwrap_used` has been renamed to `clippy::unwrap_used_v2`"],
+    ["unknown_lints", "unknown lint: `clippy::unwrap_used`"],
+  ]) {
+    const input = join(dir, `${code}.jsonl`);
+    writeFileSync(input, renamedRun + note(code, text) + "\n");
+    for (const extra of [[], ["--update"]]) {
+      const result = runScript(["--input", input, "--baseline", baseline, ...extra]);
+      assert.equal(result.status, 2, result.stdout + result.stderr);
+      assert.ok(result.stderr.includes(text), result.stderr);
+    }
+  }
+  assert.equal(readBaseline(baseline).unwrap_used["sagascript-core"], 2, "the baseline is left untouched");
+
+  // The same notes about non-clippy lints are not the policy's business.
+  const unrelated = join(dir, "unrelated.jsonl");
+  writeFileSync(unrelated, BASE_RUN + note("unknown_lints", "unknown lint: `rustdoc::foo`") + "\n");
+  assert.equal(runScript(["--input", unrelated, "--baseline", baseline]).status, 0);
+});
+
 test("CLI: CI gets a per-lint, per-crate summary table", () => {
   const { dir, baseline, inputArgs } = workspace(BASE_RUN, BASE_RUN);
   const summary = join(dir, "summary.md");

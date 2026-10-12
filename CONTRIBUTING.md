@@ -80,7 +80,7 @@ npm run verify -- --list                 # every check with its commands, budget
 | Area (`--only`) | Checks | What runs (working directory) | Needs | CI lane |
 |---|---|---|---|---|
 | `fmt` | `fmt`, `fmt-ort` | `cargo fmt --all -- --check` and `cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check` (`src-tauri`) | Rust | test-linux |
-| `clippy` | `clippy-workspace`, `clippy-cli-lean`; `clippy-app` (fast set) | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings` (`src-tauri`) | Rust; Linux libraries; `dist/` (workspace, app) | test-macos, test-linux, test-windows (per crate) |
+| `clippy` | `clippy-workspace`, `clippy-cli-lean`, `clippy-policy` (Linux); `clippy-app` (fast set) | `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings` (`src-tauri`); `node scripts/clippy-policy.mjs` (policy counts, see below) | Rust; Linux libraries; `dist/` (workspace, app, policy) | test-macos, test-linux, test-windows (per crate); policy: test-linux |
 | `rust-deps` | `cli-lean-deps` | `cargo tree -p sagascript-cli --no-default-features -e normal` contains no cpal/ALSA | Rust | test-linux |
 | `rust-test` | `test-workspace`, `test-cli-lean` | `cargo test --workspace`; `cargo test -p sagascript-cli --no-default-features` | Rust; Linux libraries; `dist/` (workspace) | test-macos, test-windows; lean CLI also test-linux |
 | `core-features` | `core-clippy`, `core-clippy-diarization`, `core-test`, `core-test-record`, `core-test-diarization` | `cargo clippy`/`cargo test -p sagascript-core` without features, with `record`, with `diarization` | Rust | test-macos, test-linux, test-windows |
@@ -158,11 +158,13 @@ stricter set of policy lints in production code and fails when any count rises
 (over 30), `dbg_macro`, `print_stdout` and `print_stderr`. They are not in
 `[workspace.lints]`, because the existing findings would fail the `-D warnings` gate.
 
-- **Check:** `node scripts/clippy-policy.mjs` from the repo root (CI: test-linux). It runs
+- **Check:** `node scripts/clippy-policy.mjs` from the repo root, or
+  `npm run verify -- --only clippy-policy` (CI: test-linux; verify runs it on Linux only). It runs
   clippy with only these lints on the whole workspace and on the batch-only CLI
   (`-p sagascript-cli --no-default-features`), prints a lint by crate table (baseline, now,
   delta) and exits non-zero if a count is above `src-tauri/clippy-policy-baseline.json`,
-  listing where that lint currently fires in that crate.
+  listing where that lint currently fires in that crate. It also fails when clippy reports a
+  policy lint as renamed or unknown (a toolchain bump), instead of reading that as zero.
 - **What counts:** the lib and bin targets of the workspace crates; not tests, examples,
   benches or build scripts. Each source location counts once. Only the platform it runs on is
   measured, so code behind `cfg(target_os = "macos")` or `cfg(target_os = "windows")` is not

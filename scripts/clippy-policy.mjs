@@ -96,9 +96,15 @@ function isTestTooling(message) {
 
 // Parses `cargo --message-format=json` output into policy findings and the
 // names of the local (workspace) packages that were compiled.
+const LINT_NAME_CODES = new Set(["renamed_and_removed_lints", "unknown_lints"]);
+
 export function parseCargoMessages(text) {
   const findings = [];
   const crates = new Set();
+  // rustc's notes on the `-W clippy::<lint>` flags themselves. A policy lint
+  // that a newer clippy renamed or removed would otherwise fire under a code
+  // this script does not count and read as a drop to zero.
+  const lintNameProblems = new Set();
   for (const line of text.split("\n")) {
     if (!line.startsWith("{")) continue;
     let message;
@@ -109,6 +115,13 @@ export function parseCargoMessages(text) {
     }
     if (!message.package_id || !isLocalPackage(message.package_id)) continue;
     const crate = packageName(message.package_id);
+    if (
+      message.reason === "compiler-message" &&
+      LINT_NAME_CODES.has(message.message?.code?.code) &&
+      /clippy::/.test(message.message?.message ?? "")
+    ) {
+      lintNameProblems.add(message.message.message);
+    }
     const kinds = message.target?.kind ?? [];
     if (!kinds.some((kind) => PRODUCTION_KINDS.has(kind)) || isTestTooling(message)) continue;
     if (message.reason === "compiler-artifact") crates.add(crate);
@@ -129,7 +142,7 @@ export function parseCargoMessages(text) {
       key: [crate, lint, file, location].join("\u0000"),
     });
   }
-  return { findings, crates };
+  return { findings, crates, lintNameProblems: [...lintNameProblems] };
 }
 
 // One entry per distinct (crate, lint, span), in a stable order.
@@ -340,7 +353,15 @@ export function main(args = process.argv.slice(2), { log = console.log, error = 
     error(`clippy-policy: ${problem.message}`);
     return problem.exitCode ?? 2;
   }
-  const { findings, crates } = parseCargoMessages(text);
+  const { findings, crates, lintNameProblems } = parseCargoMessages(text);
+  if (lintNameProblems.length > 0) {
+    error(
+      "clippy-policy: clippy does not know a policy lint by this name; update POLICY_LINTS, the baseline " +
+        "and engine-protocol's deny list together instead of reading it as a drop to zero:\n" +
+        lintNameProblems.map((problem) => `  ${problem}`).join("\n"),
+    );
+    return 2;
+  }
   if (crates.size === 0) {
     error("clippy-policy: no workspace crate was compiled; refusing to report an empty measurement");
     return 2;
