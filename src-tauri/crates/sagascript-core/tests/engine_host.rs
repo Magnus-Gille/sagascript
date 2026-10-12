@@ -300,9 +300,12 @@ fn out_of_order_responses_are_routed_by_id() {
 
 #[test]
 fn window_timeout_is_reported_and_host_stays_usable() {
-    let f = fixture_with(&[("FAKE_HANG", "1")], |c| {
+    // Slow first window that honours cancel: a responsive host, not a wedged one.
+    let f = fixture_with(&[("FAKE_FIRST_SLOW_MS", "5000")], |c| {
         c.timeouts.transcribe_min = Duration::from_millis(300)
     });
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid;
     let t = Instant::now();
     match f
         .client
@@ -315,9 +318,48 @@ fn window_timeout_is_reported_and_host_stays_usable() {
         other => panic!("{other:?}"),
     }
     assert!(t.elapsed() < Duration::from_secs(3));
-    // The host still answers ping, so it is not killed.
-    assert!(f.client.snapshot().running);
+    // The host answered the cancelled window within the wedge grace, so it is
+    // kept: same process, no crash, and the next window runs on it.
+    let snap = f.client.snapshot();
+    assert!(snap.running);
+    assert_eq!(snap.pid, pid);
+    assert_eq!(snap.crashes_in_window, 0);
     f.client.ping().unwrap();
+    let out = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new())
+        .unwrap();
+    assert_eq!(out.tokens.len(), 2);
+    assert_eq!(f.client.snapshot().pid, pid);
+}
+
+/// A host that never answers a timed-out window, even after `cancel`, is
+/// killed after the wedge grace although it still answers `ping`.
+#[test]
+fn host_that_never_answers_a_timed_out_window_is_killed() {
+    let f = fixture_with(&[("FAKE_HANG", "1")], |c| {
+        c.timeouts.transcribe_min = Duration::from_millis(300);
+        c.timeouts.wedge_grace = Duration::from_millis(300);
+    });
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
+    let r = f
+        .client
+        .transcribe_dictation(&pcm(1.0), &CancelToken::new());
+    assert!(
+        matches!(
+            r,
+            Err(EngineHostError::Timeout {
+                op: "transcribe_window",
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    wait_until("hung host killed", Duration::from_secs(2), || {
+        !pid_alive(pid)
+    });
+    assert_eq!(f.client.snapshot().crashes_in_window, 1);
 }
 
 #[test]
@@ -621,10 +663,11 @@ fn no_orphan_host_when_dropped_with_hung_request() {
     let f = fixture_with(&[("FAKE_HANG", "1")], |c| {
         c.timeouts.transcribe_min = Duration::from_millis(200)
     });
+    f.client.warm().unwrap();
+    let pid = f.client.snapshot().pid.unwrap();
     let _ = f
         .client
         .transcribe_dictation(&pcm(1.0), &CancelToken::new());
-    let pid = f.client.snapshot().pid.unwrap();
     drop(f.client);
     assert!(!pid_alive(pid));
 }

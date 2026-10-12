@@ -47,6 +47,12 @@ pub struct LoadSpec {
     pub compute_units: String,
 }
 
+/// Default [`Timeouts::wedge_grace`]. A host honours `cancel` between
+/// inference stages, so a healthy one answers a cancelled window well within
+/// this; one that does not is stuck in an uninterruptible call (a Core ML
+/// prediction cannot be cancelled) and keeps its slot until it is killed.
+pub const DEFAULT_WEDGE_GRACE: Duration = Duration::from_secs(5);
+
 /// Request timeouts; injectable so tests do not wait for real ones.
 #[derive(Debug, Clone)]
 pub struct Timeouts {
@@ -63,7 +69,8 @@ pub struct Timeouts {
     /// stops reading it is killed and the request fails with a timeout.
     pub write: Duration,
     /// After a window times out and is cancelled, how long the host gets to
-    /// finish it before it is considered wedged.
+    /// send that request's terminal response before it counts as wedged and
+    /// is killed (see [`DEFAULT_WEDGE_GRACE`]).
     pub wedge_grace: Duration,
 }
 
@@ -79,7 +86,7 @@ impl Default for Timeouts {
             transcribe_factor: 3.0,
             shutdown_grace: Duration::from_secs(2),
             write: super::process::DEFAULT_WRITE_TIMEOUT,
-            wedge_grace: Duration::from_secs(5),
+            wedge_grace: DEFAULT_WEDGE_GRACE,
         }
     }
 }
@@ -681,8 +688,9 @@ impl WindowTicket {
             }
             let now = Instant::now();
             if now >= self.deadline {
-                self.abandon();
-                self.inner.after_timeout(&self.proc);
+                if let Some(pending) = self.pending.take() {
+                    self.inner.after_timeout(&self.proc, pending);
+                }
                 return Err(EngineHostError::Timeout {
                     op: "transcribe_window",
                     after: self.timeout,
@@ -1216,21 +1224,41 @@ impl Inner {
         }
     }
 
-    /// A window timed out: if the host no longer answers `ping`, it is hung, so
-    /// count a crash and kill it (the next request restarts it).
-    fn after_timeout(&self, proc: &Arc<HostProcess>) {
-        if !proc.is_alive() {
-            return;
+    /// A window timed out: cancel it and give the host `wedge_grace` to send
+    /// the request's terminal response (`cancelled` or a late result). Without
+    /// one the host is wedged on that request, which keeps its slot forever
+    /// although `ping` is still answered inline, so count a crash and kill it;
+    /// the next request restarts it.
+    fn after_timeout(&self, proc: &Arc<HostProcess>, pending: Pending) {
+        if proc.is_alive() {
+            // The answer to the cancel itself is not needed.
+            let _ = proc.send(&RequestOp::Cancel { target: pending.id });
         }
-        if proc
-            .request(&RequestOp::Ping, self.cfg.timeouts.ping)
-            .is_ok()
-        {
-            return;
+        let deadline = Instant::now() + self.cfg.timeouts.wedge_grace;
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            match pending.recv_timeout(deadline - now) {
+                Ok(Delivery::Event { .. }) => {}
+                // Answered: the host is responsive and has freed the slot.
+                Ok(Delivery::Response(_)) => return,
+                Ok(Delivery::Closed(info)) => {
+                    if !info.expected && proc.claim_crash() {
+                        Self::record_crash(&mut self.lock_state());
+                    }
+                    return;
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
         }
+        proc.forget(pending.id);
         tracing::warn!(
             pid = proc.pid(),
-            "engine host unresponsive after timeout; killing"
+            grace_ms = self.cfg.timeouts.wedge_grace.as_millis() as u64,
+            "engine host did not finish a timed-out window after cancel; killing it"
         );
         if proc.claim_crash() {
             Self::record_crash(&mut self.lock_state());
