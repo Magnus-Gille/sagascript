@@ -1,0 +1,43 @@
+{
+  "auto_paste": false,
+  "auto_select_model": true,
+  "beam_size": 0,
+  "engine_defaults_version": 0,
+  "engine_idle_unload_minutes": 60,
+  "engine_prewarm": "on_app_start",
+  "file_transcription_model": "auto",
+  "has_completed_onboarding": true,
+  "hotkey": "Option+Space",
+  "hotkey_mode": "toggle",
+  "hotkey_profiles": [
+    {
+      "id": "default",
+      "language": "sv",
+      "name": "Svenska",
+      "shortcut": "Option+Space"
+    },
+    {
+      "id": "english",
+      "language": "en",
+      "name": "English",
+      "shortcut": "Option+E"
+    }
+  ],
+  "initial_prompt": "Sagascript\nOpenRouter",
+  "language": "sv",
+  "model_lineup_version": 0,
+  "pianissimo_dictation": false,
+  "profile_glossaries": {
+    "default": "Sagascript\nOpenRouter",
+    "english": "Sagascript\nOpenRouter"
+  },
+  "profile_glossary_migrated": true,
+  "profile_models": {
+    "default": "auto",
+    "english": "auto"
+  },
+  "show_overlay": true,
+  "temperature_fallback": true,
+  "vad_enabled": false,
+  "whisper_model": "kb-whisper-base"
+}

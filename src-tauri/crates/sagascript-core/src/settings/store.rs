@@ -7,8 +7,7 @@ use std::{
 use fs2::FileExt;
 
 use crate::settings::{
-    FileModelPreference, LineupEnv, Settings, WhisperModel, ENGINE_DEFAULTS_VERSION,
-    MODEL_LINEUP_VERSION,
+    FileModelPreference, LineupEnv, Settings, ENGINE_DEFAULTS_VERSION, MODEL_LINEUP_VERSION,
 };
 
 const APP_IDENTIFIER: &str = "ai.gille.sagascript";
@@ -213,36 +212,79 @@ fn migrate_legacy_identifier_settings_locked(
     }
 }
 
+/// Machine state the startup migrations consult, probed only when needed.
+trait MachineProbe {
+    /// `pianissimo_backend::runtime_supported_on_this_os()`.
+    fn pianissimo_supported(&self) -> bool;
+    /// Machine state for the Swedish model-lineup migration. Its filesystem
+    /// probes only run while that one-time migration is still pending.
+    fn lineup_env(&self) -> LineupEnv<'_>;
+}
+
+/// The machine this process runs on. Probing it from the settings store is
+/// the `settings` → `transcription` module cycle that #372 removes.
+struct ThisMachine;
+
+impl MachineProbe for ThisMachine {
+    fn pianissimo_supported(&self) -> bool {
+        crate::transcription::pianissimo_backend::runtime_supported_on_this_os()
+    }
+
+    fn lineup_env(&self) -> LineupEnv<'_> {
+        LineupEnv {
+            pianissimo_supported: self.pianissimo_supported(),
+            pianissimo_downloaded: crate::transcription::pianissimo_model::is_downloaded(),
+            whisper_downloaded: &crate::transcription::model::is_model_downloaded,
+        }
+    }
+}
+
+/// Fixed machine state, for tests.
+impl MachineProbe for LineupEnv<'_> {
+    fn pianissimo_supported(&self) -> bool {
+        self.pianissimo_supported
+    }
+
+    fn lineup_env(&self) -> LineupEnv<'_> {
+        LineupEnv {
+            pianissimo_supported: self.pianissimo_supported,
+            pianissimo_downloaded: self.pianissimo_downloaded,
+            whisper_downloaded: self.whisper_downloaded,
+        }
+    }
+}
+
 /// Load settings from disk. Returns defaults if the file is missing or unreadable.
 /// Partial JSON files are handled by `#[serde(default)]` on Settings.
 pub fn load() -> Settings {
-    let path = settings_path();
-    let settings = load_at_with_legacy_sources(&path, legacy_settings_paths());
-    let mut settings = settings;
+    load_at_with_machine(&settings_path(), legacy_settings_paths(), &ThisMachine)
+}
+
+/// Test seam for `tests/settings_fixtures.rs`: [`load`] for an explicit
+/// settings file and legacy locations, with fixed machine state instead of
+/// probing this machine.
+#[doc(hidden)]
+pub fn load_at(path: &Path, legacy_sources: &[PathBuf], machine: &LineupEnv<'_>) -> Settings {
+    load_at_with_machine(path, legacy_sources.iter().cloned(), machine)
+}
+
+fn load_at_with_machine(
+    path: &Path,
+    legacy_sources: impl IntoIterator<Item = PathBuf>,
+    machine: &dyn MachineProbe,
+) -> Settings {
+    let mut settings = load_at_with_legacy_sources(path, legacy_sources);
     // Hot path: filesystem/OS probes only run while the one-time lineup
     // migration is still pending.
     if settings.model_lineup_version < MODEL_LINEUP_VERSION {
-        let whisper_downloaded =
-            |model: WhisperModel| crate::transcription::model::is_model_downloaded(model);
-        settings = migrate_lineup_at(
-            &path,
-            settings,
-            &LineupEnv {
-                pianissimo_supported:
-                    crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
-                pianissimo_downloaded: crate::transcription::pianissimo_model::is_downloaded(),
-                whisper_downloaded: &whisper_downloaded,
-            },
-        );
+        settings = migrate_lineup_at(path, settings, &machine.lineup_env());
     }
     if settings.engine_defaults_version < ENGINE_DEFAULTS_VERSION {
-        settings = migrate_engine_defaults_at(&path, settings);
+        settings = migrate_engine_defaults_at(path, settings);
     }
     // A settings file copied from a supported machine must not select an engine
     // this system cannot run. In memory only: the file keeps the user's choice.
-    settings.demote_unsupported_pianissimo(
-        crate::transcription::pianissimo_backend::runtime_supported_on_this_os(),
-    );
+    settings.demote_unsupported_pianissimo(machine.pianissimo_supported());
     settings
 }
 
