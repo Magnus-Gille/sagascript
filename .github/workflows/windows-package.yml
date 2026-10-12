@@ -241,6 +241,11 @@ jobs:
       - name: Test frontend release surface
         run: npm run test:frontend
 
+      # The frontend module tests (update recovery, transcription queue, …)
+      # run under Vitest since #361, outside test:frontend.
+      - name: Test frontend modules
+        run: npm run test:unit
+
       - name: Build and check frontend
         run: |
           npm run build

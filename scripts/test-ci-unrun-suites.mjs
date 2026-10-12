@@ -102,3 +102,17 @@ test("test-windows runs the full frontend suite after npm ci", () => {
   const identity = names.indexOf("Test Windows build identity gates");
   assert.ok(identity >= 0 && identity < names.indexOf("Install npm dependencies"), "the early build identity gates stay ahead of npm ci");
 });
+
+test("test-macos and test-windows run the Vitest unit tests and the Prettier check after npm ci", () => {
+  for (const job of ["test-macos", "test-windows"]) {
+    const names = steps(job).map((step) => step.name);
+    const install = names.indexOf("Install npm dependencies");
+    assert.ok(install >= 0, `${job} must install npm dependencies`);
+    for (const command of ["npm run test:unit", "npm run format:check"]) {
+      const step = stepRunning(job, command, undefined);
+      const index = names.indexOf(step.name);
+      assert.ok(index > install, `${job}: \`${command}\` needs node_modules`);
+      assert.ok(index < names.indexOf("Cargo check"), `${job}: \`${command}\` must fail before Cargo work`);
+    }
+  }
+});

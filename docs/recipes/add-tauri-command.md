@@ -97,9 +97,10 @@ depends on it. Calls are recorded in `window.qa.calls` for assertions.
 | User flow | A `scripts/qa-*.mjs` Playwright check against the mock, run by `npm run test:browser`. |
 
 Do not test by reading `.svelte` source with regexes ([ADR 0004](../adr/0004-test-strategy.md)).
-Planned: [#361](https://github.com/Magnus-Gille/sagascript/issues/361) moves frontend tests to
-Vitest with a typed `mockIPC`; [#347](https://github.com/Magnus-Gille/sagascript/issues/347)
-adds a contract test across `generate_handler!`, `invoke` names and the mock.
+`src/lib/api.test.ts` pins each wrapper's command name and arguments against the typed mock
+([docs/testing/frontend.md](../testing/frontend.md)); planned:
+[#347](https://github.com/Magnus-Gille/sagascript/issues/347) extends that contract to
+`generate_handler!` and the Rust command signatures.
 
 ## 6. CLI equivalent
 
@@ -113,7 +114,7 @@ both the command and a subcommand ([add-cli-subcommand.md](add-cli-subcommand.md
 npm run build && cd src-tauri
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:frontend
+cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:unit && npm run test:frontend
 npm run test:browser        # if a view or qa flow uses the command
 ```
 

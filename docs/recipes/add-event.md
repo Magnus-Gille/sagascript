@@ -89,7 +89,7 @@ No regex tests over `.svelte` source ([ADR 0004](../adr/0004-test-strategy.md)).
 npm run build && cd src-tauri
 cargo test events                 # app crate: events.rs tests
 cargo clippy --workspace --all-targets -- -D warnings
-cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:frontend
+cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:unit && npm run test:frontend
 npm run test:browser              # if a qa flow covers the event
 ```
 

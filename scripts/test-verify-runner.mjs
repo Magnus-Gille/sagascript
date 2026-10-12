@@ -119,7 +119,15 @@ test("selection: default, fast, --only by check or area, --skip and platform ski
   assert.equal(skipped(linuxDefault).swift, "macOS only");
   assert.equal(skipped(selectChecks(CHECKS, parseArgs([]), "darwin")).swift, undefined);
 
-  assert.deepEqual(ids(selectChecks(CHECKS, parseArgs(["--fast"]), "linux")), ["fmt", "fmt-ort", "svelte-check", "node-ui", "clippy-app"]);
+  assert.deepEqual(ids(selectChecks(CHECKS, parseArgs(["--fast"]), "linux")), [
+    "fmt",
+    "fmt-ort",
+    "svelte-check",
+    "format",
+    "unit",
+    "node-ui",
+    "clippy-app",
+  ]);
   assert.deepEqual(ids(selectChecks(CHECKS, parseArgs(["--only", "ort-host,fmt"]), "linux")), [
     "fmt",
     "fmt-ort",

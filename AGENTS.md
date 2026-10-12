@@ -56,7 +56,7 @@ command that compiles the app crate (`tauri::generate_context!`).
 
 `npm run verify` runs every default check for this OS (opt-in ones, such as browser and
 MSRV, only with `--only`) and stops at the first failure (`--keep-going` reports all); `npm run verify:fast` is the inner loop (rustfmt, app clippy,
-svelte-check, UI node tests); `--only <check|area>` focuses; `--list` prints the checks.
+svelte-check, Prettier, unit and UI node tests); `--only <check|area>` focuses; `--list` prints the checks.
 `scripts/verify.mjs` defines them, CONTRIBUTING.md "Running tests" has the control matrix. Its
 preflight lists every missing prerequisite (including `dist/`) in one error and installs
 nothing.
@@ -71,3 +71,4 @@ Reference commands, from `src-tauri/`:
 
 From the repo root: `npx svelte-check --tsconfig ./tsconfig.json` and `npm run test:frontend`
 (every Node test group; add new test files to `scripts/node-test-groups.mjs`).
+Frontend tests are Vitest files next to the code (`npm run test:unit`; `npm run format` before committing); follow docs/testing/frontend.md and never assert on `.svelte` source text.

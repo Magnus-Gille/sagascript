@@ -132,6 +132,14 @@ jobs:
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
 
+      # Prettier over src/, scripts/ and tests/, and the Vitest unit tests
+      # (src/**/*.test.ts, #361). verify runs both as `format` and `unit`.
+      - name: Check frontend formatting
+        run: npm run format:check
+
+      - name: Unit-test frontend modules
+        run: npm run test:unit
+
       - name: Test frontend lifecycle helpers
         run: |
           npm run test:frontend
@@ -716,6 +724,14 @@ jobs:
       # npm or Cargo work). Platform-only cases skip themselves.
       - name: Test frontend suite
         run: npm run test:frontend
+
+      - name: Unit-test frontend modules
+        run: npm run test:unit
+
+      # The checkout has CRLF line endings (core.autocrlf); prettier.config.js
+      # accepts them on Windows, test-macos holds the repository to LF.
+      - name: Check frontend formatting
+        run: npm run format:check
 
       - name: Build frontend
         run: npm run build

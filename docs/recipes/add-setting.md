@@ -128,7 +128,7 @@ cli config set --help | grep example_flag       # the help text
 cli config reset example_flag && grep example_flag "$SAGASCRIPT_SETTINGS_PATH"  # key stays, now false
 cd ..
 grep -n set_example_flag src-tauri/src/commands.rs src-tauri/src/main.rs src/lib/api.ts  # all three
-npx svelte-check --tsconfig ./tsconfig.json && npm run test:frontend
+npx svelte-check --tsconfig ./tsconfig.json && npm run test:unit && npm run test:frontend
 npx playwright install chromium && npm run test:browser   # you touched Settings.svelte and the mock
 ```
 
