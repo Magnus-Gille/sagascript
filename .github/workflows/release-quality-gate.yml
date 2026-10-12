@@ -26,7 +26,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, pinned
         with:
           toolchain: stable
-          components: clippy
+          components: clippy, rustfmt
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -97,6 +97,12 @@ jobs:
 
       - name: Check Svelte and TypeScript
         run: npm run check
+
+      - name: Check Rust formatting
+        working-directory: src-tauri
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
 
       - name: Test Rust workspace
         working-directory: src-tauri

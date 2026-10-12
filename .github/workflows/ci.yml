@@ -373,7 +373,16 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
+
+      # Formatting gate (#352). Both Cargo workspaces must be rustfmt-clean:
+      # the main one and the standalone ORT engine host. Runs before any
+      # compilation so an unformatted PR fails in seconds.
+      - name: Check Rust formatting
+        working-directory: src-tauri
+        run: |
+          cargo fmt --all -- --check
+          cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
 
       - name: Install Node.js
         uses: actions/setup-node@v6

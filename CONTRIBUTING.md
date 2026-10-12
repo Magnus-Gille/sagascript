@@ -42,6 +42,10 @@ cd src-tauri && cargo test --workspace
 # Svelte/TypeScript type checking
 npx svelte-check --tsconfig ./tsconfig.json
 
+# Rust formatting (CI gate): the main workspace and the standalone ORT host
+cd src-tauri && cargo fmt --all -- --check
+cd src-tauri && cargo fmt --manifest-path engine-host/ort/Cargo.toml --all -- --check
+
 # Rust lints (per crate; the member crates gate optional features)
 cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings
 cd src-tauri && cargo clippy -p sagascript-cli --all-targets --no-default-features -- -D warnings
@@ -49,7 +53,7 @@ cd src-tauri && cargo clippy -p sagascript-cli --all-targets --no-default-featur
 
 ## Code style
 
-- **Rust:** Prefer clarity over cleverness. Keep modules small and testable. Follow standard `rustfmt` formatting.
+- **Rust:** Prefer clarity over cleverness. Keep modules small and testable. Run `cargo fmt --all` before committing; CI rejects unformatted code (`src-tauri/rustfmt.toml`).
 - **Svelte 5:** Use runes (`$state`, `$effect`), not legacy stores.
 - **No hardcoded secrets** -- ever.
 
