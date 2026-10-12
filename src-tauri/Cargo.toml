@@ -134,7 +134,8 @@ codegen-units = 1
 # pins a `dev` commit that contains it. Drop the patch once a release containing
 # #216 is published and `tauri-plugin-global-shortcut` depends on it.
 # Rechecked 2026-10-12 (#355): 0.8.0 is still the latest release and no
-# release tag contains #216.
+# release tag contains #216. The patch is deny.toml's only allowed git source;
+# remove that entry with it.
 #
 # Note: the same line of development (keyboard-types 0.8) reports the Command/
 # Win modifier as `meta` instead of `super` in shortcut events; the settings

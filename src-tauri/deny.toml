@@ -1,0 +1,88 @@
+# cargo-deny policy (#355) for both Cargo workspaces: this one and the
+# standalone ORT engine host (engine-host/ort), which CI checks with the same
+# file through --manifest-path. Run from src-tauri/:
+#
+#   cargo deny --workspace check
+#   cargo deny --manifest-path engine-host/ort/Cargo.toml --workspace check
+#
+# The advisory database is fetched from GitHub on each run.
+
+[graph]
+# The platforms Sagascript is built for: the official Apple Silicon app, the
+# Windows x64 and ARM64 packages, and the Linux build CI compiles. Leaving this
+# empty would also judge mobile-only dependencies (tauri's iOS/Android stack)
+# that never reach a binary.
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+]
+# Every optional dependency (`record`, `diarization`, ...) is judged too.
+all-features = true
+
+[advisories]
+# RustSec vulnerabilities fail the check for every crate in the graph.
+# Unsound and unmaintained advisories fail it for crates the workspace depends
+# on directly; deeper ones (today in tauri's GTK3, HTML-parsing and codegen
+# stacks, and below notify 7 and indicatif 0.17) are for those crates to
+# replace. `unsound = "workspace"` is cargo-deny's default; `unmaintained`
+# defaults to "all".
+unsound = "workspace"
+unmaintained = "workspace"
+# An ignore needs the advisory id and a reason, and should be rare.
+ignore = []
+
+[licenses]
+# The license families scripts/generate-third-party-notices.mjs already
+# reviews (its reviewedRustLicenses list). That list accepts exact SPDX
+# expressions; this one accepts the identifiers those expressions need, so an
+# expression is allowed only if it can be satisfied from this set. A license
+# outside it fails the check: review it and add it in both places, or add a
+# per-crate exception below. 0BSD, BSD-2-Clause, BSL-1.0, MIT-0 and the LLVM
+# exception appear in that list only as alternatives to MIT or Apache-2.0, so
+# they are not allowed on their own here.
+allow = [
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.8
+# Crates outside the macOS inventory in THIRD_PARTY_NOTICES.md whose only
+# license is a family the reviewed list accepts only as an alternative.
+exceptions = [
+  # Windows clipboard (direct dependency, and arboard's on Windows).
+  { crate = "clipboard-win", allow = ["BSL-1.0"] },
+  { crate = "error-code", allow = ["BSL-1.0"] },
+  # Linux GTK build-time dependency (system-deps -> cfg-expr).
+  { crate = "target-lexicon", allow = ["Apache-2.0 WITH LLVM-exception"] },
+]
+
+[bans]
+# Transitive duplicates are tolerated for now (#355); they are reported as
+# warnings so the list stays visible.
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+deny = [
+  # One HTTP client stack in the binary (#355): the app and sagascript-core
+  # use the reqwest that tauri-plugin-updater uses.
+  { crate = "reqwest", deny-multiple-versions = true, reason = "one reqwest/hyper HTTP client stack in the binary (#355)" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# Git dependencies must name an exact commit.
+required-git-spec = "rev"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# The only git source: the [patch.crates-io] global-hotkey pin in Cargo.toml.
+# Remove it together with that patch.
+allow-git = ["https://github.com/tauri-apps/global-hotkey"]
