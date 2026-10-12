@@ -1,6 +1,7 @@
 //! One spawned host process: JSON-Lines transport and response routing.
 
 use super::{EngineHostError, Result};
+use crate::sync::{lock_or_recover, recover_poisoned};
 use sagascript_engine_protocol::{
     decode_incoming, encode_request, ErrorBody, Incoming, RequestOp, MAX_LINE_BYTES,
 };
@@ -17,6 +18,18 @@ use std::time::{Duration, Instant};
 
 /// Size of the stderr ring buffer used for error messages.
 pub const STDERR_TAIL_BYTES: usize = 8 * 1024;
+
+// Poisoned transport locks are recovered as-is (ADR 0005): every critical
+// section is a single map insert/remove, `Option` take/clone, byte-ring update
+// or child `try_wait`/`kill`, so the data stays valid whatever a panic
+// interrupted. Panicking instead would kill the stdout reader thread (leaving
+// waiters to time out against a host that never reports closing) or turn the
+// `Drop` reap into an abort while unwinding.
+const ROUTING_LOCK: &str = "engine_host.routing";
+const STDERR_TAIL_LOCK: &str = "engine_host.stderr_tail";
+const STDIN_LOCK: &str = "engine_host.stdin";
+const CHILD_LOCK: &str = "engine_host.child";
+const READER_LOCK: &str = "engine_host.reader";
 
 /// Why and how the process ended, with the stderr tail.
 #[derive(Debug, Clone)]
@@ -107,7 +120,7 @@ pub(crate) fn read_bounded_line<R: BufRead>(
 
 impl Shared {
     fn tail_string(&self) -> String {
-        let t = self.stderr_tail.lock().unwrap();
+        let t = lock_or_recover(&self.stderr_tail, STDERR_TAIL_LOCK);
         let bytes: Vec<u8> = t.iter().copied().collect();
         String::from_utf8_lossy(&bytes).trim().to_string()
     }
@@ -213,7 +226,9 @@ impl HostProcess {
 
     /// `Some` once the stdout stream has closed (process gone or closing).
     pub fn closed(&self) -> Option<CrashInfo> {
-        self.shared.routing.lock().unwrap().closed.clone()
+        lock_or_recover(&self.shared.routing, ROUTING_LOCK)
+            .closed
+            .clone()
     }
 
     /// True exactly once per process: lets the client count a crash a single time.
@@ -230,7 +245,7 @@ impl HostProcess {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::channel();
         {
-            let mut r = self.shared.routing.lock().unwrap();
+            let mut r = lock_or_recover(&self.shared.routing, ROUTING_LOCK);
             if let Some(info) = &r.closed {
                 return Err(crashed(info));
             }
@@ -238,7 +253,7 @@ impl HostProcess {
         }
         let line = encode_request(id, op);
         let write = {
-            let mut guard = self.stdin.lock().unwrap();
+            let mut guard = lock_or_recover(&self.stdin, STDIN_LOCK);
             match guard.as_mut() {
                 Some(w) => w.write_all(line.as_bytes()).and_then(|()| w.flush()),
                 None => Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
@@ -257,12 +272,14 @@ impl HostProcess {
 
     /// Drop the waiter for `id` (late responses are discarded).
     pub fn forget(&self, id: u64) {
-        self.shared.routing.lock().unwrap().waiters.remove(&id);
+        lock_or_recover(&self.shared.routing, ROUTING_LOCK)
+            .waiters
+            .remove(&id);
     }
 
     fn wait_closed(&self, timeout: Duration) -> Option<CrashInfo> {
         let deadline = Instant::now() + timeout;
-        let mut r = self.shared.routing.lock().unwrap();
+        let mut r = lock_or_recover(&self.shared.routing, ROUTING_LOCK);
         while r.closed.is_none() {
             let now = Instant::now();
             if now >= deadline {
@@ -272,7 +289,9 @@ impl HostProcess {
                 .shared
                 .closed_cv
                 .wait_timeout(r, deadline - now)
-                .unwrap()
+                .unwrap_or_else(|poisoned| {
+                    recover_poisoned(&self.shared.routing, ROUTING_LOCK, poisoned)
+                })
                 .0;
         }
         r.closed.clone()
@@ -313,22 +332,22 @@ impl HostProcess {
             let _ = self.request(&RequestOp::Shutdown, grace);
         }
         // EOF on stdin makes a well-behaved host exit on its own.
-        self.stdin.lock().unwrap().take();
+        lock_or_recover(&self.stdin, STDIN_LOCK).take();
         let deadline = Instant::now() + grace;
         loop {
-            if let Ok(Some(_)) = self.child.lock().unwrap().try_wait() {
+            if let Ok(Some(_)) = lock_or_recover(&self.child, CHILD_LOCK).try_wait() {
                 break;
             }
             if Instant::now() >= deadline {
                 tracing::warn!(pid = self.pid, "engine host ignored shutdown; killing");
-                let mut c = self.child.lock().unwrap();
+                let mut c = lock_or_recover(&self.child, CHILD_LOCK);
                 let _ = c.kill();
                 let _ = c.wait();
                 break;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        if let Some(h) = self.reader.lock().unwrap().take() {
+        if let Some(h) = lock_or_recover(&self.reader, READER_LOCK).take() {
             let _ = h.join();
         }
     }
@@ -374,7 +393,7 @@ fn drain_stderr(stderr: impl Read, shared: &Shared) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
                 {
-                    let mut tail = shared.stderr_tail.lock().unwrap();
+                    let mut tail = lock_or_recover(&shared.stderr_tail, STDERR_TAIL_LOCK);
                     tail.extend(buf.iter().copied());
                     while tail.len() > STDERR_TAIL_BYTES {
                         tail.pop_front();
@@ -412,7 +431,7 @@ fn read_stdout(
                 violation = Some("engine host line exceeds 16 MiB without a newline".into());
                 // Ending the process closes stdout, which then completes the
                 // shutdown path below and fails every in-flight request.
-                let _ = child.lock().unwrap().kill();
+                let _ = lock_or_recover(child, CHILD_LOCK).kill();
                 break;
             }
         }
@@ -422,13 +441,15 @@ fn read_stdout(
         }
         match decode_incoming(&line) {
             Ok(Incoming::Event { id, name, fields }) => {
-                let r = shared.routing.lock().unwrap();
+                let r = lock_or_recover(&shared.routing, ROUTING_LOCK);
                 if let Some(w) = r.waiters.get(&id) {
                     let _ = w.send(Delivery::Event { name, fields });
                 }
             }
             Ok(Incoming::Response { id, result }) => {
-                let w = shared.routing.lock().unwrap().waiters.remove(&id);
+                let w = lock_or_recover(&shared.routing, ROUTING_LOCK)
+                    .waiters
+                    .remove(&id);
                 match w {
                     Some(w) => {
                         let _ = w.send(Delivery::Response(result));
@@ -446,7 +467,7 @@ fn read_stdout(
     }
     if io_error.is_some() {
         // The stream is unusable: end the host now and reap it so nothing is orphaned.
-        let mut c = child.lock().unwrap();
+        let mut c = lock_or_recover(child, CHILD_LOCK);
         let _ = c.kill();
         let _ = c.wait();
     }
@@ -454,7 +475,7 @@ fn read_stdout(
     let _ = stderr_thread.join();
     let deadline = Instant::now() + Duration::from_millis(500);
     let status = loop {
-        match child.lock().unwrap().try_wait() {
+        match lock_or_recover(child, CHILD_LOCK).try_wait() {
             Ok(Some(st)) => break st.to_string(),
             Ok(None) if Instant::now() < deadline => {}
             Ok(None) => break "stdout closed, process still running".to_string(),
@@ -469,7 +490,7 @@ fn read_stdout(
         violation,
         io_error,
     };
-    let mut r = shared.routing.lock().unwrap();
+    let mut r = lock_or_recover(&shared.routing, ROUTING_LOCK);
     let waiters: Vec<_> = r.waiters.drain().collect();
     r.closed = Some(info.clone());
     drop(r);
@@ -578,5 +599,36 @@ mod tests {
             Err(EngineHostError::Io(e)) => assert!(e.to_string().contains("injected")),
             other => panic!("{:?}", other.err()),
         }
+    }
+
+    fn poison<T: Send>(mutex: &Mutex<T>) {
+        std::thread::scope(|scope| {
+            let panicked = scope
+                .spawn(|| {
+                    let _guard = mutex.lock().unwrap();
+                    panic!("injected panic while holding the lock (#359)");
+                })
+                .join();
+            assert!(panicked.is_err());
+        });
+        assert!(mutex.is_poisoned());
+    }
+
+    /// Every transport lock is recovered after a panic, and the Drop path
+    /// (`terminate`, which also runs while unwinding) must not double-panic.
+    #[cfg(unix)]
+    #[test]
+    fn host_process_recovers_poisoned_locks_and_drops_cleanly() {
+        let proc = HostProcess::spawn(Path::new("/bin/cat"), &[], &[]).unwrap();
+        poison(&proc.shared.routing);
+        poison(&proc.shared.stderr_tail);
+        poison(&proc.stdin);
+        poison(&*proc.child);
+        poison(&proc.reader);
+
+        assert!(proc.is_alive());
+        assert_eq!(proc.stderr_tail(), "");
+        let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(proc)));
+        assert!(dropped.is_ok(), "HostProcess::drop must not panic");
     }
 }

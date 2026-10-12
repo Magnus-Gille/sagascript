@@ -24,8 +24,9 @@ Rust, Svelte 5, and local Whisper inference.
 - Use Svelte 5 runes such as `$state` and `$effect`, not legacy stores.
 - `enigo` and TIS/HIToolbox APIs must run on the macOS main thread; from async code use
   `app_handle.run_on_main_thread()` ([ADR 0003](docs/adr/0003-main-thread-native-apis.md)).
-- Lock order and today's mutex-poison handling are in `docs/ARCHITECTURE.md` §3; the poison
-  policy is undecided until #359 (ADR 0005). Never hold `SharedController` across `.await`.
+- Lock order is in `docs/ARCHITECTURE.md` §3. Never hold `SharedController` across `.await`.
+- Locks recover from poison via `lock_or_recover`/`lock_controller`; never `lock().unwrap()`
+  in non-test code ([ADR 0005](docs/adr/0005-mutex-poison-policy.md)).
 - Tests: regression test for every bug, no regex tests over `.svelte` source, fixtures never
   touch real user settings (`SAGASCRIPT_SETTINGS_PATH`) — [ADR 0004](docs/adr/0004-test-strategy.md).
 - Signed builds need the audio-input entitlement. Set the signing identity through

@@ -1,6 +1,14 @@
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
+use sagascript_core::sync::lock_or_recover;
 use serde::Serialize;
+
+// Recovered as-is after a panic (ADR 0005): `record` assigns the three fields
+// with no panic point between them, and `transition` guards no data. The
+// settings watcher holds both while re-registering shortcuts.
+const STATE_LOCK: &str = "hotkey_health.state";
+const TRANSITION_LOCK: &str = "hotkey_health.transition";
 
 /// Snapshot of hotkey registration health, exposed to the frontend via the
 /// `hotkey_status` command and the `hotkey-registration-changed` event.
@@ -10,6 +18,45 @@ pub struct HotkeyStatus {
     pub error: Option<String>,
     pub shortcut: String,
     pub shortcuts: Vec<String>,
+    /// The settings watcher re-registers shortcuts after external changes;
+    /// its health is reported here (#359). Not part of `ok`.
+    pub settings_watcher: SettingsWatcherStatus,
+}
+
+/// Health of the settings hot-reload watcher thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SettingsWatcherStatus {
+    /// The watcher's event loop is running.
+    pub running: bool,
+    /// Panics caught while hot-reloading a change; the watcher kept running.
+    pub recovered_panics: u32,
+}
+
+/// Lock-free health counters written by the settings watcher thread.
+#[derive(Default)]
+pub struct SettingsWatcherHealth {
+    running: AtomicBool,
+    recovered_panics: AtomicU32,
+}
+
+impl SettingsWatcherHealth {
+    pub fn set_running(&self, running: bool) {
+        self.running.store(running, Ordering::SeqCst);
+    }
+
+    /// Count a caught panic; returns the new total.
+    pub fn record_recovered_panic(&self) -> u32 {
+        self.recovered_panics
+            .fetch_add(1, Ordering::SeqCst)
+            .saturating_add(1)
+    }
+
+    pub fn status(&self) -> SettingsWatcherStatus {
+        SettingsWatcherStatus {
+            running: self.running.load(Ordering::SeqCst),
+            recovered_panics: self.recovered_panics.load(Ordering::SeqCst),
+        }
+    }
 }
 
 /// Result of recording a registration attempt: the resulting status, plus
@@ -59,6 +106,7 @@ impl OperationalHotkey {
 pub struct HotkeyHealth {
     state: Mutex<HotkeyState>,
     transition: Mutex<()>,
+    settings_watcher: SettingsWatcherHealth,
 }
 
 struct HotkeyState {
@@ -76,35 +124,43 @@ impl HotkeyHealth {
                 operational_hotkey: OperationalHotkey::Inactive,
             }),
             transition: Mutex::new(()),
+            settings_watcher: SettingsWatcherHealth::default(),
         }
+    }
+
+    pub fn settings_watcher(&self) -> &SettingsWatcherHealth {
+        &self.settings_watcher
     }
 
     /// Serialize process-global unregister/register transactions from the GUI
     /// command and the external-settings watcher.
     pub fn transition_guard(&self) -> MutexGuard<'_, ()> {
-        self.transition.lock().unwrap()
+        lock_or_recover(&self.transition, TRANSITION_LOCK)
     }
 
     /// The shortcut currently registered with the OS, if any. This can differ
     /// from the saved/requested shortcut after a failed hot-reload falls back
     /// to the previous binding.
     pub fn operational_hotkey(&self) -> OperationalHotkey {
-        self.state.lock().unwrap().operational_hotkey.clone()
+        lock_or_recover(&self.state, STATE_LOCK)
+            .operational_hotkey
+            .clone()
     }
 
     /// True if the most recent registration attempt failed. Sticky until the
     /// next successful registration clears it.
     pub fn is_failed(&self) -> bool {
-        self.state.lock().unwrap().error.is_some()
+        lock_or_recover(&self.state, STATE_LOCK).error.is_some()
     }
 
     pub fn status(&self) -> HotkeyStatus {
-        let state = self.state.lock().unwrap();
+        let state = lock_or_recover(&self.state, STATE_LOCK);
         HotkeyStatus {
             ok: state.error.is_none(),
             error: state.error.clone(),
             shortcut: state.shortcut.clone(),
             shortcuts: requested_shortcuts(&state.shortcut, &state.operational_hotkey),
+            settings_watcher: self.settings_watcher.status(),
         }
     }
 
@@ -119,12 +175,16 @@ impl HotkeyHealth {
         error: Option<String>,
         operational_hotkey: OperationalHotkey,
     ) -> HotkeyStatusChange {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock_or_recover(&self.state, STATE_LOCK);
+        // One snapshot for both sides: watcher health never counts as a
+        // registration change.
+        let settings_watcher = self.settings_watcher.status();
         let prev = HotkeyStatus {
             ok: state.error.is_none(),
             error: state.error.clone(),
             shortcut: state.shortcut.clone(),
             shortcuts: requested_shortcuts(&state.shortcut, &state.operational_hotkey),
+            settings_watcher,
         };
         state.error = error.clone();
         state.shortcut = shortcut.to_string();
@@ -134,6 +194,7 @@ impl HotkeyHealth {
             error,
             shortcut: shortcut.to_string(),
             shortcuts: requested_shortcuts(shortcut, &operational_hotkey),
+            settings_watcher,
         };
         HotkeyStatusChange {
             changed: status != prev,
@@ -317,5 +378,53 @@ mod tests {
         assert_eq!(h.operational_hotkey(), OperationalHotkey::Unknown);
         assert_ne!(h.operational_hotkey(), OperationalHotkey::Inactive);
         assert!(h.is_failed());
+    }
+
+    #[test]
+    fn status_reports_settings_watcher_health_without_flagging_a_change() {
+        let h = HotkeyHealth::new("Control+Shift+Space");
+        let first = h.record("Control+Shift+Space", None, OperationalHotkey::Inactive);
+        assert_eq!(
+            first.status.settings_watcher,
+            SettingsWatcherStatus {
+                running: false,
+                recovered_panics: 0
+            }
+        );
+
+        h.settings_watcher().set_running(true);
+        assert_eq!(h.settings_watcher().record_recovered_panic(), 1);
+        let watcher = h.status().settings_watcher;
+        assert!(watcher.running);
+        assert_eq!(watcher.recovered_panics, 1);
+        let again = h.record("Control+Shift+Space", None, OperationalHotkey::Inactive);
+        assert!(
+            !again.changed,
+            "watcher health is not a registration change"
+        );
+        assert_eq!(again.status.settings_watcher, watcher);
+    }
+
+    /// The settings watcher holds `transition_guard()` while it re-registers
+    /// shortcuts; a panic there must not break every later hotkey change.
+    #[test]
+    fn health_keeps_working_after_a_panic_poisoned_its_locks() {
+        let h = HotkeyHealth::new("Control+Shift+Space");
+        std::thread::scope(|scope| {
+            let panicked = scope
+                .spawn(|| {
+                    let _transition = h.transition_guard();
+                    let _state = h.state.lock().unwrap();
+                    panic!("injected panic during a hotkey transition (#359)");
+                })
+                .join();
+            assert!(panicked.is_err());
+        });
+        assert!(h.transition.is_poisoned() && h.state.is_poisoned());
+
+        drop(h.transition_guard());
+        let change = h.record("Alt+D", None, OperationalHotkey::registered("Alt+D"));
+        assert!(change.status.ok);
+        assert_eq!(h.status().shortcut, "Alt+D");
     }
 }

@@ -24,13 +24,14 @@ pub async fn get_example_info(
     profile_id: String,
 ) -> Result<ExampleInfo, String> {
     let ready = {
-        let ctrl = controller.lock().unwrap();
+        let ctrl = lock_controller(&controller);
         example_ready(ctrl.settings(), &profile_id)
     };
     Ok(ExampleInfo { profile_id, ready })
 }
 ```
 
+- Lock the controller with `lock_controller` (never `lock().unwrap()`, [ADR 0005](../adr/0005-mutex-poison-policy.md)).
 - `async fn` runs on the Tokio runtime. A command without `async` runs on the main thread,
   so only use a sync command for trivial work (`complete_update_preparation`).
   `#[tauri::command(async)]` on a plain `fn` moves it off the main thread, but into a task on

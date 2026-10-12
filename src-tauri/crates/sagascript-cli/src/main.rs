@@ -6,6 +6,8 @@ use clap::CommandFactory;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
+    // Lets a lock recovered after a panic name the cause (ADR 0005).
+    sagascript_core::sync::install_panic_recorder();
     // Warn-level logging to stderr keeps stdout clean for piped output.
     let configured_filter = std::env::var("RUST_LOG").ok();
     tracing_subscriber::fmt()

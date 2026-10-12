@@ -307,15 +307,17 @@ Observed acquisition order (outer → inner). Nothing enforces it; keep new code
    `WhisperBackend::load_model_inner`). Both outer locks are try-locks with a grace period, so
    an inversion surfaces as `ModelBusy`, not as a deadlock.
 
-**Poison handling today (as-is, not a policy):** the app crate locks with `.lock().unwrap()`
-almost everywhere; `meeting_jobs.rs` and `meeting_media.rs` map poison to an error message;
-parts of core (`native_log.rs`, `dev_overrides.rs`, `pianissimo_backend.rs`,
-`engine_host/client.rs` for `boost`) recover with `into_inner()`, `live_dictation.rs` and
-`shared_client` return a `DictationError`. `[profile.release]` deliberately does not set
-`panic = "abort"`, so a panic while `SharedController` is held poisons it and every later
-`unwrap()` panics until restart; the `Drop` impls of `HotkeyConfigurationLease`, `WorkLease`,
-`ExclusiveLease` and `plain_file_jobs::Lease` also `unwrap()`. The policy is open:
-ADR 0005, decided in [#359](https://github.com/Magnus-Gille/sagascript/issues/359).
+**Poison policy ([ADR 0005](adr/0005-mutex-poison-policy.md)):** `[profile.release]` deliberately
+does not set `panic = "abort"`, so a panic while a lock is held poisons it. Locks recover instead
+of propagating: `sagascript_core::sync::lock_or_recover` (and `commands::lock_controller` for
+`SharedController`) take the data, clear the poison flag and log `error!` with the lock name and
+the last panic message (`install_panic_recorder`). Where a panic can leave state stale, recovery
+restores a safe state first (`lock_or_recover_with`): the engine-host client forgets `loaded` so
+the next request re-validates the host, and the whisper warm state is discarded. The whisper
+`load_lock` deliberately still fails closed with its restart message. `Drop` impls always use
+the tolerant helpers. The settings watcher runs each event under `catch_unwind`; its health is
+`HotkeyStatus.settings_watcher`. Meeting paths (`meeting_jobs.rs`, `meeting_media.rs`) still map
+poison to an error message.
 
 ## 4. Feature flags
 

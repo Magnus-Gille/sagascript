@@ -6,6 +6,7 @@
 //! also shuts the engine host down (no orphan). A second signal exits
 //! immediately with the same status as an interrupt.
 use sagascript_core::error::DictationError;
+use sagascript_core::sync::lock_or_recover;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -70,11 +71,11 @@ impl Canceller {
     /// happened it fires immediately, so there is no registration race.
     pub fn register<'a>(&'a self, abort: impl Fn() + Send + 'static) -> AborterGuard<'a> {
         let id = {
-            let mut next = self.next_id.lock().unwrap();
+            let mut next = lock_or_recover(&self.next_id, "cancel.next_id");
             *next += 1;
             *next
         };
-        self.aborters.lock().unwrap().push((id, Box::new(abort)));
+        lock_or_recover(&self.aborters, "cancel.aborters").push((id, Box::new(abort)));
         if self.is_cancelled() {
             self.fire();
         }
