@@ -147,10 +147,14 @@ impl LoggingService {
 
     /// Unit tests (including `AppController::new()`, which builds a real
     /// `LoggingService`) must never write into the user's real app log, so
-    /// under `cfg(test)` the directory is a per-process temp directory.
+    /// under `cfg(test)` the directory is a per-process temp directory. It
+    /// lives in a static for the whole test process, so it is never removed.
     #[cfg(test)]
     fn log_directory() -> PathBuf {
-        std::env::temp_dir().join(format!("sagascript-test-logs-{}", std::process::id()))
+        static DIRECTORY: OnceLock<sagascript_testsupport::TempDir> = OnceLock::new();
+        DIRECTORY
+            .get_or_init(sagascript_testsupport::TempDir::new)
+            .to_path_buf()
     }
 
     #[cfg(not(test))]
@@ -432,7 +436,7 @@ mod tests {
     /// not the renamed .1.log, and the fresh file must have 0o600 perms.
     #[test]
     fn rotate_reopens_file_so_writes_continue_in_fresh_log() {
-        let dir = std::env::temp_dir().join(format!("sagascript-log-test-{}", Uuid::new_v4()));
+        let dir = sagascript_testsupport::TempDir::new();
         let log_path = dir.join("sagascript.log");
         let svc = LoggingService::new_with_path(log_path.clone());
 
@@ -491,7 +495,5 @@ mod tests {
             size_after_second_write > size_before_second_write,
             "second write after rotation should grow the fresh log file"
         );
-
-        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -2995,6 +2995,7 @@ async fn restore_target_before_paste(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sagascript_testsupport::TempDir;
 
     /// #359: a panic while hot-reloading one settings change used to kill the
     /// watcher thread silently. The loop must log it, record it in the health
@@ -3360,11 +3361,7 @@ mod tests {
     fn macos_settings_watcher_survives_repeated_atomic_replacements() {
         use notify::{Config, PollWatcher, RecursiveMode, Watcher};
 
-        let dir = std::env::temp_dir().join(format!(
-            "sagascript-settings-watcher-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let settings_path = dir.join("sagascript-settings.json");
         std::fs::write(&settings_path, b"{}\n").unwrap();
 
@@ -3389,7 +3386,6 @@ mod tests {
         }
 
         drop(watcher);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -3821,14 +3817,9 @@ mod tests {
         assert!(std::str::from_utf8(display.as_bytes()).is_ok());
     }
 
-    fn migrate_test_dir() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("sagascript-migrate-test-{}", uuid::Uuid::new_v4()))
-    }
-
     #[test]
     fn migrate_legacy_settings_renames_when_new_absent() {
-        let dir = migrate_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let legacy = dir.join("flowdictate-settings.json");
         let new_path = dir.join("sagascript-settings.json");
         std::fs::write(&legacy, r#"{"language":"sv"}"#).unwrap();
@@ -3844,14 +3835,11 @@ mod tests {
             std::fs::read_to_string(&new_path).unwrap(),
             r#"{"language":"sv"}"#
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn overridden_settings_path_disables_flowdictate_migration() {
-        let dir = migrate_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let legacy = dir.join("flowdictate-settings.json");
         let new_path = dir.join("sagascript-settings.json");
         std::fs::write(&legacy, r#"{"language":"sv"}"#).unwrap();
@@ -3863,13 +3851,11 @@ mod tests {
             "override mode must not inspect or move legacy settings"
         );
         assert!(!new_path.exists());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn migrate_legacy_settings_noop_when_new_already_exists() {
-        let dir = migrate_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let legacy = dir.join("flowdictate-settings.json");
         let new_path = dir.join("sagascript-settings.json");
         std::fs::write(&legacy, "legacy-content").unwrap();
@@ -3884,14 +3870,11 @@ mod tests {
             std::fs::read_to_string(&new_path).unwrap(),
             "already-migrated-content"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn migrate_legacy_settings_noop_when_legacy_absent() {
-        let dir = migrate_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let legacy = dir.join("flowdictate-settings.json");
         let new_path = dir.join("sagascript-settings.json");
 
@@ -3899,8 +3882,6 @@ mod tests {
         migrate_legacy_settings(&legacy, &new_path);
 
         assert!(!new_path.exists());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Regression test for the swallowed-rename bug: a failed rename (here,
@@ -3911,8 +3892,7 @@ mod tests {
     /// destroy data.
     #[test]
     fn migrate_legacy_settings_does_not_panic_on_rename_failure() {
-        let dir = migrate_test_dir();
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new();
         let legacy = dir.join("flowdictate-settings.json");
         std::fs::write(&legacy, "legacy-content").unwrap();
         // Destination's parent directory doesn't exist -> rename fails.
@@ -3924,7 +3904,5 @@ mod tests {
 
         assert!(legacy.exists(), "legacy file must survive a failed rename");
         assert!(!new_path.exists());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

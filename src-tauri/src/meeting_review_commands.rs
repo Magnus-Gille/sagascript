@@ -154,30 +154,20 @@ pub async fn save_meeting_review(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sagascript_core::meeting::{MeetingExportFormat, MeetingSegmentInput, MeetingSpeaker};
+    use sagascript_core::meeting::MeetingExportFormat;
+    use sagascript_core::test_support::meeting_transcript;
+    use sagascript_testsupport::TempDir;
 
     #[test]
     fn review_file_roundtrip_and_failed_overwrite_preserve_bytes() {
-        let directory =
-            std::env::temp_dir().join(format!("sagascript-review-io-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
-        let original = MeetingTranscript::new(
-            "a".repeat(64),
-            "sv",
-            "base",
-            2.0,
-            vec![MeetingSegmentInput {
-                start: 0.0,
-                end: 1.0,
-                text: "Hej åäö!".into(),
-                speaker: "s1".into(),
-            }],
-            vec![MeetingSpeaker {
-                id: "s1".into(),
-                label: "Talare".into(),
-            }],
-        )
-        .unwrap();
+        let directory = TempDir::new();
+        let original = meeting_transcript()
+            .language("sv")
+            .model("base")
+            .duration(2.0)
+            .segment(0.0, 1.0, "Hej åäö!", "s1")
+            .speaker("s1", "Talare")
+            .build();
         let review = MeetingReview::new(original).unwrap();
         let output = review.export(MeetingExportFormat::Json).unwrap();
         let path = directory.join("review.json");
@@ -190,9 +180,5 @@ mod tests {
         write_new_export(&invalid, b"{}").unwrap();
         assert!(read_review(&invalid).is_err());
         assert_eq!(std::fs::read(&invalid).unwrap(), b"{}");
-        // Only this test's exact, uniquely created synthetic files are removed.
-        std::fs::remove_file(path).unwrap();
-        std::fs::remove_file(invalid).unwrap();
-        std::fs::remove_dir(directory).unwrap();
     }
 }

@@ -218,26 +218,32 @@ pub fn protocol(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sagascript_testsupport::TempDir;
     use std::{fs::File, io::Write, path::PathBuf};
 
+    /// A file holding `bytes` in its own temporary directory, open for writing.
+    /// Fields drop in order: the file is closed before its directory goes.
     struct TestFile {
-        path: PathBuf,
         file: File,
+        path: PathBuf,
+        _directory: TempDir,
     }
 
     impl TestFile {
         fn new(bytes: &[u8]) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "sagascript-media-protocol-{}",
-                uuid::Uuid::new_v4()
-            ));
+            let directory = TempDir::new();
+            let path = directory.join("media");
             let mut file = std::fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
                 .open(&path)
                 .unwrap();
             file.write_all(bytes).unwrap();
-            Self { path, file }
+            Self {
+                file,
+                path,
+                _directory: directory,
+            }
         }
 
         fn path(&self) -> &std::path::Path {
@@ -256,12 +262,6 @@ mod tests {
     impl std::ops::DerefMut for TestFile {
         fn deref_mut(&mut self) -> &mut File {
             &mut self.file
-        }
-    }
-
-    impl Drop for TestFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.path);
         }
     }
 
