@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Cooperative cancellation flag shared between the caller and a running job.
 #[derive(Debug, Clone, Default)]
@@ -80,6 +80,13 @@ const PCM_DIR_RAND_LEN: usize = 12;
 /// A sweep renames a dead owner's dir to this prefix (same random part)
 /// before removing it, so an interrupted removal is finished by a later sweep.
 const PCM_DEAD_PREFIX: &str = "sagascript-pcm-dead-";
+/// PCM dirs from before #366: [`PCM_DIR_PREFIX`] and `tempfile`'s default 6
+/// random letters and digits, without an owner file. Nothing can prove their
+/// owner dead, so the sweep removes them only once they are clearly abandoned.
+const LEGACY_PCM_RAND_LEN: usize = 6;
+/// A legacy dir whose contents are older than this is abandoned: a dictation
+/// or file job keeps its PCM dir for seconds to minutes.
+const LEGACY_PCM_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const PCM_AUDIO_FILE: &str = "audio.f32le";
 /// Locked by the owning process for the dir's whole lifetime.
 const PCM_OWNER_FILE: &str = "owner.lock";
@@ -212,7 +219,8 @@ fn owner_lock_is_held(error: &std::io::Error) -> bool {
 /// Outcome of [`sweep_stale_pcm_dirs`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PcmSweep {
-    /// Dirs of dead owners that were removed.
+    /// Dirs that were removed: those of dead owners, and dirs from before
+    /// #366 that were left untouched for a day.
     pub removed: usize,
     /// Dirs whose owner is alive (its lock is held).
     pub kept: usize,
@@ -220,6 +228,30 @@ pub struct PcmSweep {
 
 fn is_pcm_rand(rand: &str) -> bool {
     rand.len() == PCM_DIR_RAND_LEN && rand.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+fn is_legacy_pcm_rand(rand: &str) -> bool {
+    rand.len() == LEGACY_PCM_RAND_LEN && rand.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// A dir from before #366 (named like one, see [`LEGACY_PCM_RAND_LEN`]) that
+/// is abandoned: it has no owner file, and neither it nor anything directly
+/// in it was modified within [`LEGACY_PCM_MAX_AGE`] before `now`. Any doubt
+/// (an unreadable entry, a timestamp in the future) keeps it.
+fn legacy_pcm_dir_is_abandoned(dir: &Path, now: SystemTime) -> bool {
+    let old = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .and_then(|m| m.modified())
+            .is_ok_and(|modified| {
+                now.duration_since(modified)
+                    .is_ok_and(|age| age > LEGACY_PCM_MAX_AGE)
+            })
+    };
+    if std::fs::symlink_metadata(dir.join(PCM_OWNER_FILE)).is_ok() || !old(dir) {
+        return false;
+    }
+    std::fs::read_dir(dir)
+        .is_ok_and(|mut entries| entries.all(|entry| entry.is_ok_and(|entry| old(&entry.path()))))
 }
 
 /// `Some(true)` when the dir's owner is provably gone: its owner file is a
@@ -257,13 +289,35 @@ fn remove_dead_pcm_dir(dir: &Path) -> bool {
     }
 }
 
+/// Rename a PCM dir to the dead prefix, then remove it. The rename is atomic
+/// and never follows a symlink: a concurrent sweep then skips the dir, and a
+/// later one finishes an interrupted removal.
+fn retire_pcm_dir(parent: &Path, dir: &Path, rand: &str) -> bool {
+    let dead = parent.join(format!("{PCM_DEAD_PREFIX}{rand}"));
+    match std::fs::rename(dir, &dead) {
+        Ok(()) => remove_dead_pcm_dir(&dead),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            tracing::warn!(error_kind = ?e.kind(), "could not remove a stale PCM temp dir");
+            false
+        }
+    }
+}
+
 /// Remove PCM temp dirs in `parent` (not below it) that belong to no live
 /// process, typically audio left behind by an app or CLI that was killed.
 ///
 /// Only real directories (never symlinks) named exactly like a PCM dir are
 /// considered, and only those whose owner lock can be taken, so a dir of a
-/// running app or CLI (or of this process) is never touched. Logs counts only.
+/// running app or CLI (or of this process) is never touched. Dirs from before
+/// #366, which have no owner lock, are removed once untouched for a day.
+/// Logs counts only.
 pub fn sweep_stale_pcm_dirs(parent: &Path) -> std::io::Result<PcmSweep> {
+    sweep_stale_pcm_dirs_at(parent, SystemTime::now())
+}
+
+/// [`sweep_stale_pcm_dirs`] with the clock injectable (tests age legacy dirs).
+fn sweep_stale_pcm_dirs_at(parent: &Path, now: SystemTime) -> std::io::Result<PcmSweep> {
     let mut sweep = PcmSweep::default();
     for entry in std::fs::read_dir(parent)? {
         let Ok(entry) = entry else { continue };
@@ -275,34 +329,28 @@ pub fn sweep_stale_pcm_dirs(parent: &Path) -> std::io::Result<PcmSweep> {
             continue;
         }
         if let Some(rand) = name.strip_prefix(PCM_DEAD_PREFIX) {
-            // An earlier sweep proved the owner dead but did not finish.
-            if is_pcm_rand(rand) && remove_dead_pcm_dir(&path) {
+            // An earlier sweep proved the dir stale but did not finish.
+            if (is_pcm_rand(rand) || is_legacy_pcm_rand(rand)) && remove_dead_pcm_dir(&path) {
                 sweep.removed += 1;
             }
             continue;
         }
-        let Some(rand) = name.strip_prefix(PCM_DIR_PREFIX).filter(|r| is_pcm_rand(r)) else {
+        let Some(rand) = name.strip_prefix(PCM_DIR_PREFIX) else {
             continue;
         };
+        if is_legacy_pcm_rand(rand) {
+            if legacy_pcm_dir_is_abandoned(&path, now) && retire_pcm_dir(parent, &path, rand) {
+                sweep.removed += 1;
+            }
+            continue;
+        }
+        if !is_pcm_rand(rand) {
+            continue;
+        }
         match pcm_owner_is_dead(&path) {
             Some(false) => sweep.kept += 1,
-            None => {}
-            Some(true) => {
-                // Rename first (atomic, never follows a symlink): a concurrent
-                // sweep then skips it, and an interrupted removal is retried.
-                let dead = parent.join(format!("{PCM_DEAD_PREFIX}{rand}"));
-                match std::fs::rename(&path, &dead) {
-                    Ok(()) => {
-                        if remove_dead_pcm_dir(&dead) {
-                            sweep.removed += 1;
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => {
-                        tracing::warn!(error_kind = ?e.kind(), "could not remove a stale PCM temp dir")
-                    }
-                }
-            }
+            Some(true) if retire_pcm_dir(parent, &path, rand) => sweep.removed += 1,
+            Some(true) | None => {}
         }
     }
     if sweep.removed > 0 {
@@ -637,6 +685,73 @@ mod sweep_tests {
         let dir = file.dir().to_path_buf();
         drop(file);
         assert!(!dir.exists(), "still removed on drop");
+    }
+
+    /// Dirs from before #366 (6 random characters, no owner file) are removed
+    /// once they were left untouched for a day; recent ones, ones with an owner
+    /// file, near-miss names and symlinks stay.
+    #[test]
+    fn sweep_removes_abandoned_legacy_dirs_only() {
+        let parent = tempfile::tempdir().unwrap();
+        let legacy = pcm_dir(parent.path(), "AbC123");
+        let with_owner = pcm_dir(parent.path(), "XyZ789");
+        std::fs::write(with_owner.join(PCM_OWNER_FILE), PCM_OWNER_MARKER).unwrap();
+        let near_miss = pcm_dir(parent.path(), "AbC12_");
+        // An interrupted removal of a legacy dir.
+        let leftover = parent.path().join(format!("{PCM_DEAD_PREFIX}Old123"));
+        std::fs::create_dir(&leftover).unwrap();
+        std::fs::write(leftover.join(PCM_AUDIO_FILE), b"pcm").unwrap();
+        #[cfg(unix)]
+        let outside = {
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join(PCM_AUDIO_FILE), b"pcm").unwrap();
+            std::os::unix::fs::symlink(
+                outside.path(),
+                parent.path().join(format!("{PCM_DIR_PREFIX}Link12")),
+            )
+            .unwrap();
+            outside
+        };
+
+        // Recent: possibly still in use by a running older version.
+        let now = SystemTime::now();
+        let sweep = sweep_stale_pcm_dirs_at(parent.path(), now).unwrap();
+        assert_eq!(
+            sweep,
+            PcmSweep {
+                removed: 1,
+                kept: 0
+            }
+        );
+        assert!(!leftover.exists());
+        assert!(legacy.join(PCM_AUDIO_FILE).is_file());
+
+        // A day later it is abandoned.
+        let later = now + LEGACY_PCM_MAX_AGE + Duration::from_secs(60);
+        let sweep = sweep_stale_pcm_dirs_at(parent.path(), later).unwrap();
+        assert_eq!(
+            sweep,
+            PcmSweep {
+                removed: 1,
+                kept: 0
+            }
+        );
+        assert!(!legacy.exists());
+        assert!(with_owner.join(PCM_AUDIO_FILE).is_file());
+        assert!(near_miss.join(PCM_AUDIO_FILE).is_file());
+        #[cfg(unix)]
+        assert!(
+            outside.path().join(PCM_AUDIO_FILE).is_file(),
+            "symlink followed"
+        );
+        let names: Vec<_> = std::fs::read_dir(parent.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n.starts_with(PCM_DEAD_PREFIX)),
+            "{names:?}"
+        );
     }
 
     #[test]
