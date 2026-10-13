@@ -401,7 +401,7 @@ export const CHECKS = [
     requires: ["rust"],
     timeoutMinutes: 30,
     ci: [ci("cargo test --locked", "src-tauri/engine-host/ort")],
-    lanes: ["test-linux"],
+    lanes: ["test-linux", "test-windows"],
   },
   {
     id: "release-guard",

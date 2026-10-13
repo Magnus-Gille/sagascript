@@ -90,7 +90,7 @@ it too. New shared behaviour gets a new vector file used by every host.
 | Client behaviour (restarts, timeouts, ordering, cancel) | `crates/sagascript-core/tests/engine_host.rs` against `sagascript-fake-engine-host` (`tests/support/fake_engine_host.rs`; `FAKE_*` variables select faults). Add a fake mode for new behaviour. |
 | Protocol crate | `cargo test -p sagascript-engine-protocol`, including the golden transcripts (CI: test-linux). |
 | Swift host | `scripts/build-engine-host.sh`, then `swift test` in `src-tauri/engine-host/coreml`, including the golden-transcript replay (CI: test-macos). |
-| ORT host | In `src-tauri/engine-host/ort/`: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` (CI: test-linux runs all three; locally `npm run verify -- --only ort-host,fmt`). |
+| ORT host | In `src-tauri/engine-host/ort/`: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check` (CI: test-linux runs all three, test-windows the tests; locally `npm run verify -- --only ort-host,fmt`). |
 | Conformance | `scripts/engine-host-conformance.py <host binary> --model-dir <dir>`; every host must pass it. `--no-model` runs the model-free subset: CI test-macos runs it against the staged Core ML host (`npm run verify -- --only engine-host-conformance`). The full run needs a downloaded model and is in the release gate (`scripts/verify-release-draft.sh`); run it by hand for a new host. |
 | End to end | `sagascript engine status --json`, `sagascript engine doctor`. |
 | macOS packaging | `scripts/stage-engine-host.sh`, `scripts/tauri-engine-host-bundle.json`, `scripts/check-engine-host-identity.sh`. |

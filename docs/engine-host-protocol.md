@@ -307,7 +307,7 @@ Who checks what:
 - The Core ML host replays every transcript through `EngineHostServer` in
   `ProtocolServerTests.swift` (`swift test`, CI test-macos).
 - The ONNX host replays them through its `Server` in `src/server/golden_tests.rs`
-  (`cargo test --locked` in `engine-host/ort`, CI test-linux).
+  (`cargo test --locked` in `engine-host/ort`, CI test-linux and test-windows).
 
 ## Conformance
 

@@ -351,8 +351,8 @@ contains no cpal/ALSA.
 | Rust unit, app | inline `#[cfg(test)]` in `src-tauri/src/**`; sibling files via `#[path]` (`meeting_jobs_tests.rs`, `paste/windows_clipboard_tests.rs`) | `cargo test` (app only) | macOS, Windows |
 | Rust unit, core/CLI/protocol | inline; `sagascript-cli/src/meeting_reprocessing_tests.rs`; `sagascript-engine-protocol/src/tests.rs` | `cargo test -p <crate>`; release-only guard: `cargo test --release -p sagascript-core --lib dev_overrides` | per-crate steps; protocol and the release guard in test-linux |
 | Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
-| ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy) |
-| Engine-host protocol | golden transcripts `src-tauri/engine-host/test-vectors/protocol/*.jsonl` with the scripted `fake-engine.json` ([contract](engine-host-protocol.md#golden-transcripts)); replayed by `sagascript-engine-protocol/src/vector_tests.rs`, `engine-host/ort/src/server/golden_tests.rs` and `ProtocolServerTests.swift` | `cargo test -p sagascript-engine-protocol`; `cargo test --locked` in `engine-host/ort/`; `swift test` | test-linux (Rust, ORT host); test-macos (Swift) |
+| ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy); test-windows (test) |
+| Engine-host protocol | golden transcripts `src-tauri/engine-host/test-vectors/protocol/*.jsonl` with the scripted `fake-engine.json` ([contract](engine-host-protocol.md#golden-transcripts)); replayed by `sagascript-engine-protocol/src/vector_tests.rs`, `engine-host/ort/src/server/golden_tests.rs` and `ProtocolServerTests.swift` | `cargo test -p sagascript-engine-protocol`; `cargo test --locked` in `engine-host/ort/`; `swift test` | test-linux (Rust, ORT host); test-windows (ORT host); test-macos (Swift) |
 | MSRV | whole workspace, lean CLI, ORT host | `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` (see CONTRIBUTING.md) | msrv-linux |
 | Swift | `src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/` | `scripts/build-engine-host.sh`, then `swift test` (`npm run verify -- --only swift`) | test-macos |
 | Node | `test-*.mjs` and `test_*.mjs` anywhere under `scripts/` except `fixtures/` (`node:test`), each in one group of `scripts/node-test-groups.mjs`: `ui` (frontend logic), `ci` (workflows, tooling), `release`, `codeHealth` | `npm run test:frontend` (all), `npm run test:ui` / `test:ci` / `test:release` | test-macos, test-windows |
@@ -372,8 +372,8 @@ counts (`scripts/clippy-policy.mjs`, which must not rise); msrv-linux runs `carg
 check --workspace --locked`, the lean CLI and the ORT host on the `rust-version` toolchain
 (1.88), and check-linux requires it; test-macos runs `npm audit --audit-level=high`, app
 `check`/`test`/`clippy`, core with no features and with `diarization`, the CLI both ways, Swift
-tests and the frontend suites; test-windows runs the Node suite and app, core and CLI tests and
-clippy. `cargo test --workspace` runs in `windows-package.yml` (on PRs touching `src/`,
+tests and the frontend suites; test-windows runs the Node suite, app, core and CLI tests and
+clippy, and the ORT host tests. `cargo test --workspace` runs in `windows-package.yml` (on PRs touching `src/`,
 `src-tauri/`, `scripts/`, package files, `.gitattributes` or the workflow itself) and
 `release-quality-gate.yml`. A PR that only touches
 `README.md`, `docs/release-readiness.md` or `docs/research/**/*.md` skips the native lanes
