@@ -165,7 +165,6 @@ impl WhisperModel {
         }
     }
 
-    #[allow(dead_code)]
     pub fn is_english_only(&self) -> bool {
         matches!(
             self,
@@ -176,7 +175,6 @@ impl WhisperModel {
         )
     }
 
-    #[allow(dead_code)]
     pub fn is_swedish_optimized(&self) -> bool {
         matches!(
             self,
@@ -188,7 +186,6 @@ impl WhisperModel {
         )
     }
 
-    #[allow(dead_code)]
     pub fn is_finnish_optimized(&self) -> bool {
         matches!(self, WhisperModel::FinnishWhisperTiny)
     }
@@ -240,7 +237,6 @@ impl WhisperModel {
         }
     }
 
-    #[allow(dead_code)]
     pub fn is_norwegian_optimized(&self) -> bool {
         matches!(
             self,
@@ -255,7 +251,6 @@ impl WhisperModel {
     /// Fine-tuned language-specific models are intentionally biased toward
     /// their target language, so they must not be used to independently check
     /// whether the configured language matches an input file.
-    #[allow(dead_code)]
     pub fn is_language_optimized(&self) -> bool {
         self.is_swedish_optimized() || self.is_norwegian_optimized() || self.is_finnish_optimized()
     }
@@ -835,16 +830,6 @@ pub enum HotkeyMode {
     PushToTalk,
     #[serde(rename = "toggle")]
     Toggle,
-}
-
-impl HotkeyMode {
-    #[allow(dead_code)]
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            HotkeyMode::PushToTalk => "Push-to-talk",
-            HotkeyMode::Toggle => "Toggle",
-        }
-    }
 }
 
 /// When the Pianissimo engine host loads its model ahead of the first utterance.
@@ -2398,12 +2383,6 @@ mod tests {
     #[test]
     fn hotkey_mode_default_is_push_to_talk() {
         assert_eq!(HotkeyMode::default(), HotkeyMode::PushToTalk);
-    }
-
-    #[test]
-    fn hotkey_mode_display_names() {
-        assert_eq!(HotkeyMode::PushToTalk.display_name(), "Push-to-talk");
-        assert_eq!(HotkeyMode::Toggle.display_name(), "Toggle");
     }
 
     #[test]

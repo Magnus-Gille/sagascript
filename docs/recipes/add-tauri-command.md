@@ -117,6 +117,6 @@ cd .. && npx svelte-check --tsconfig ./tsconfig.json && npm run test:frontend
 npm run test:browser        # if a view or qa flow uses the command
 ```
 
-Then the full list in [CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests).
+Then `npm run verify` ([CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests)).
 Planned: [#370](https://github.com/Magnus-Gille/sagascript/issues/370) splits `commands.rs` by
 domain; put new commands in the matching module once it exists.

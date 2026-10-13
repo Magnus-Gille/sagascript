@@ -97,11 +97,12 @@ cargo run -q -p sagascript-cli -- example --json
 If the command is cheap and needs no model, add it to the "Tier 1: CLI smoke tests" steps
 of `build-macos` (bash) and the matching steps of `build-windows` (PowerShell) in
 `.github/workflows/ci.yml`. Some `scripts/test-ci-*.mjs` files assert on `ci.yml` text, so
-run `npm run test:frontend` after editing it.
+run `npm run test:frontend` after editing it (tests in both the `ci` and `release` groups read
+workflow files).
 
 ## 7. Docs
 
 `sagascript --help` is the inventory; do not list commands in AGENTS.md. Add a README "CLI
 usage" example if users need it, and a GUI path if the feature is user-facing
-([ADR 0001](../adr/0001-cli-first.md)). Then run the full list in
-[CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests).
+([ADR 0001](../adr/0001-cli-first.md)). Then run `npm run verify`
+([CONTRIBUTING.md](../../CONTRIBUTING.md#running-tests)).

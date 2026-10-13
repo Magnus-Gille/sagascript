@@ -64,5 +64,5 @@ Known problems on this branch:
 - Refactors in waves 2 and 3 start with characterization tests; reviewers ask for them.
 - Some frontend behaviour stays thinly tested until #361 lands; Playwright covers the main
   Transcribe and update-recovery flows meanwhile.
-- The local verification list stays in CONTRIBUTING.md; #350 will provide `npm run verify`
-  as one entry point.
+- The local verification list is `scripts/verify.mjs` (`npm run verify`, #350), documented in
+  CONTRIBUTING.md.

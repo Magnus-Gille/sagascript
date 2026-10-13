@@ -1043,7 +1043,7 @@ fn apply_hotkey_change(
     {
         let mut ctrl = lock_controller(&controller);
         ctrl.update_settings(persisted.clone());
-        ctrl.hotkey_service_mut().set_shortcut(&persisted.hotkey);
+        info!("Hotkey set to: {}", persisted.hotkey);
     }
 
     let change = health.record(

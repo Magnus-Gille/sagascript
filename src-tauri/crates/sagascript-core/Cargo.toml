@@ -21,7 +21,10 @@ tokio = { version = "1", features = ["full"] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+# Same reqwest and TLS as the app (#355): 0.13 over the platform TLS stack
+# (native-tls without ALPN, so HTTP/1.1), as reqwest 0.12's defaults gave
+# model downloads. See the comment in src-tauri/Cargo.toml.
+reqwest = { version = "0.13", default-features = false, features = ["native-tls-no-alpn", "system-proxy", "json", "stream"] }
 dirs = "6"
 fs2 = "0.4"
 futures-util = "0.3"

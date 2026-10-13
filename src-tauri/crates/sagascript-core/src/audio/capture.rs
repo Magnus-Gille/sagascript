@@ -58,8 +58,6 @@ pub struct AudioCaptureService {
     worker_error: Arc<Mutex<Option<DictationError>>>,
     capture_thread: Option<thread::JoinHandle<()>>,
     stop_timings: (Duration, Duration),
-    /// Retained audio from last capture for retry
-    last_captured: Option<Vec<f32>>,
 }
 
 // AudioCaptureService is Send+Sync because it doesn't hold cpal::Stream directly
@@ -83,7 +81,6 @@ impl AudioCaptureService {
             worker_error: Arc::new(Mutex::new(None)),
             capture_thread: None,
             stop_timings: (Duration::ZERO, Duration::ZERO),
-            last_captured: None,
         }
     }
 
@@ -206,8 +203,6 @@ impl AudioCaptureService {
             device_rate
         );
 
-        // Retain for retry
-        self.last_captured = Some(samples.clone());
         self.stop_timings.1 = conversion_started.elapsed();
 
         Ok(samples)
@@ -216,17 +211,6 @@ impl AudioCaptureService {
     /// Durations for the most recent successful capture stop and conversion.
     pub fn stop_timings(&self) -> (Duration, Duration) {
         self.stop_timings
-    }
-
-    /// Get the last captured audio for retry
-    #[allow(dead_code)]
-    pub fn last_captured_audio(&self) -> Option<&Vec<f32>> {
-        self.last_captured.as_ref()
-    }
-
-    /// Clear retained audio after successful transcription
-    pub fn clear_last_captured(&mut self) {
-        self.last_captured = None;
     }
 
     pub fn metrics(&self) -> AudioCaptureMetrics {

@@ -62,9 +62,11 @@ for tests.
 - Bare `cargo build/test/clippy` in `src-tauri/` covers only the app (`default-members = ["."]`);
   use `--workspace` or `-p`.
 - `tauri::generate_context!()` needs `../dist`. Run `npm run build` before any cargo command
-  that compiles the app crate (check, test, clippy), or it fails at compile time.
+  that compiles the app crate (check, test, clippy), or it fails at compile time;
+  `npm run verify` reports a missing `dist/` before running those checks.
 - `swift test` needs `Sources/EngineHostCore/BuildInfo.swift`, which is gitignored and written
-  by `scripts/build-engine-host.sh` (CI runs `scripts/stage-engine-host.sh` first).
+  by `scripts/build-engine-host.sh` (CI runs `scripts/stage-engine-host.sh` first;
+  `npm run verify -- --only swift` runs it before `swift test`).
 - `rust-toolchain.toml` pins the development compiler; `rust-version` in `src-tauri/Cargo.toml`
   is the minimum supported version (MSRV), checked by CI's `msrv-linux` job.
 - Build identity comes from `src-tauri/build.rs` (`GIT_HASH`, `BUILD_DATE`, overridable with
@@ -359,9 +361,9 @@ contains no cpal/ALSA.
 | Rust integration | `sagascript-core/tests/*.rs` (engine host against the fake host, chunk-merge golden, Pianissimo adapter); `sagascript-cli/tests/*.rs` (spawn `CARGO_BIN_EXE_sagascript`) | `cargo test -p sagascript-core`, `-p sagascript-cli` | macOS, Linux, Windows |
 | ORT host | `src-tauri/engine-host/ort/src/**` | `cargo test` and `cargo clippy --all-targets -- -D warnings` in `engine-host/ort/` | test-linux (fmt, test, clippy) |
 | MSRV | whole workspace, lean CLI, ORT host | `RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --locked` (see CONTRIBUTING.md) | msrv-linux |
-| Swift | `src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/` | `scripts/build-engine-host.sh`, then `swift test` | test-macos |
-| Node | `scripts/test-*.mjs` (`node:test`): frontend logic plus CI/release contract checks | `npm run test:frontend` | test-macos, test-windows |
-| Code health | `scripts/test-code-health-*.mjs`, `tests/scripts/*.mjs` | `npm run test:code-health` | `code-health.yml` |
+| Swift | `src-tauri/engine-host/coreml/Tests/EngineHostCoreTests/` | `scripts/build-engine-host.sh`, then `swift test` (`npm run verify -- --only swift`) | test-macos |
+| Node | `test-*.mjs` and `test_*.mjs` anywhere under `scripts/` except `fixtures/` (`node:test`), each in one group of `scripts/node-test-groups.mjs`: `ui` (frontend logic), `ci` (workflows, tooling), `release`, `codeHealth` | `npm run test:frontend` (all), `npm run test:ui` / `test:ci` / `test:release` | test-macos, test-windows |
+| Code health | `scripts/test-code-health-*.mjs`, `tests/scripts/*.mjs` | `npm run test:code-health` | `code-health.yml`; the `scripts/` part also in test-macos, test-windows |
 | Browser | `scripts/qa-*.mjs` with the mocked IPC in `scripts/fixtures/transcription-browser-mock.js` | `npx playwright install chromium && npm run test:browser` | test-macos |
 | Python | `scripts/dictation_eval/test_*.py`, `scripts/diarization_sv/test_*.py` | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'` | all OS (dictation_eval); Linux and macOS (diarization_sv) |
 | Types | Svelte/TS | `npx svelte-check --tsconfig ./tsconfig.json` | test-macos |
@@ -369,20 +371,24 @@ contains no cpal/ALSA.
 | Conformance | `scripts/engine-host-conformance.py <host> --model-dir <dir>` | manual, needs a model | not in CI |
 
 CI (`.github/workflows/ci.yml`) splits cargo per crate and feature set: test-linux runs both
-`cargo fmt --check` gates, app `check`/`clippy`, the CLI with and without default features,
-core with no features and with `record`, the protocol crate, ORT host test/clippy, the
-release-profile guard and the no-ALSA tree check; msrv-linux runs `cargo check --workspace
---locked`, the lean CLI and the ORT host on the `rust-version` toolchain (1.88), and
-check-linux requires it; test-macos runs app `check`/`test`/`clippy`, core with no features
-and with `diarization`, the CLI both ways, Swift tests and the frontend suites; test-windows
-runs the Node suite and app, core and CLI tests and clippy. `cargo test --workspace` runs in
-`windows-package.yml` (on PRs touching `src/`, `src-tauri/`, `scripts/`, package files,
-`.gitattributes` or the workflow itself) and `release-quality-gate.yml`. A PR that only touches
+`cargo fmt --check` gates, `cargo deny check` for both Cargo workspaces (`src-tauri/deny.toml`:
+advisories, licenses, a single `reqwest`, allowed sources), app `check`/`clippy`, the CLI with
+and without default features, core with no features and with `record`, the protocol crate, ORT
+host test/clippy, the release-profile guard, the no-ALSA tree check and the clippy policy
+counts (`scripts/clippy-policy.mjs`, which must not rise); msrv-linux runs `cargo
+check --workspace --locked`, the lean CLI and the ORT host on the `rust-version` toolchain
+(1.88), and check-linux requires it; test-macos runs `npm audit --audit-level=high`, app
+`check`/`test`/`clippy`, core with no features and with `diarization`, the CLI both ways, Swift
+tests and the frontend suites; test-windows runs the Node suite and app, core and CLI tests and
+clippy. `cargo test --workspace` runs in `windows-package.yml` (on PRs touching `src/`,
+`src-tauri/`, `scripts/`, package files, `.gitattributes` or the workflow itself) and
+`release-quality-gate.yml`. A PR that only touches
 `README.md`, `docs/release-readiness.md` or `docs/research/**/*.md` skips the native lanes
-(`scripts/ci-docs-scope.mjs`). The local command list is in
-[CONTRIBUTING.md](../CONTRIBUTING.md#running-tests). **Planned:**
-[#350](https://github.com/Magnus-Gille/sagascript/issues/350) adds `npm run verify` as the
-single entry point; [#361](https://github.com/Magnus-Gille/sagascript/issues/361) moves
+(`scripts/ci-docs-scope.mjs`). Locally, `npm run verify` runs the test and lint suites above
+(`scripts/verify.mjs`, documented in [CONTRIBUTING.md](../CONTRIBUTING.md#running-tests));
+`scripts/test-verify-ci-parity.mjs` keeps its check list in step with ci.yml's test lanes.
+**Planned:** [#358](https://github.com/Magnus-Gille/sagascript/issues/358) lets CI call the
+verify groups directly; [#361](https://github.com/Magnus-Gille/sagascript/issues/361) moves
 frontend tests to Vitest.
 
 ## 6. Known drift and planned changes

@@ -4,6 +4,21 @@
 //! objects on one `\n`-terminated line. Unknown fields are ignored everywhere
 //! and unknown error codes decode to [`ErrorCode::Unknown`].
 
+// This crate is at zero for every clippy policy lint (#356), so it denies
+// them outright instead of tracking a count in clippy-policy-baseline.json.
+// Tests may still unwrap, expect, panic and print (src-tauri/clippy.toml).
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::await_holding_lock,
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    clippy::dbg_macro,
+    clippy::print_stdout,
+    clippy::print_stderr
+)]
+
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -99,6 +114,11 @@ struct RequestEnvelope<'a> {
 
 /// Encode a request as one line including the trailing `\n`.
 pub fn encode_request(id: u64, op: &RequestOp) -> String {
+    #[expect(
+        clippy::expect_used,
+        reason = "the envelope holds only strings, integers, f32, enums and Vec<String>; \
+                  serde_json cannot fail on those (no non-string map keys, no fallible Serialize)"
+    )]
     let mut line = serde_json::to_string(&RequestEnvelope {
         v: PROTOCOL_VERSION,
         id,
