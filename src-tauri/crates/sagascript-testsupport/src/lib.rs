@@ -120,3 +120,96 @@ pub fn isolated_cli_env<'a>(command: &'a mut Command, settings: &Path) -> &'a mu
     }
     command.env("SAGASCRIPT_SETTINGS_PATH", settings)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::ffi::{OsStr, OsString};
+
+    /// The variables `command` sets explicitly (`None` for a removed one).
+    fn configured_env(command: &Command) -> HashMap<OsString, Option<OsString>> {
+        command
+            .get_envs()
+            .map(|(name, value)| (name.to_os_string(), value.map(OsStr::to_os_string)))
+            .collect()
+    }
+
+    #[test]
+    fn isolated_cli_env_drops_credentials_and_keeps_ordinary_paths() {
+        let settings = Path::new("isolated").join("settings.json");
+        let mut command = Command::new("sagascript");
+        command
+            .env("OPENAI_API_KEY", "sk-test-not-a-real-key")
+            .env("ANTHROPIC_API_KEY", "test-not-a-real-key")
+            .env("SAGASCRIPT_SETTINGS_PATH", "real-user-settings.json");
+
+        isolated_cli_env(&mut command, &settings);
+
+        let env = configured_env(&command);
+        for credential in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] {
+            assert!(
+                !env.contains_key(OsStr::new(credential)),
+                "{credential} reached the child"
+            );
+        }
+        assert_eq!(
+            env.get(OsStr::new("SAGASCRIPT_SETTINGS_PATH")),
+            Some(&Some(settings.into_os_string()))
+        );
+        let path = std::env::var_os("PATH").expect("the test process has a PATH");
+        assert_eq!(env.get(OsStr::new("PATH")), Some(&Some(path)));
+        for name in env.keys() {
+            assert!(
+                name.as_os_str() == OsStr::new("SAGASCRIPT_SETTINGS_PATH")
+                    || ORDINARY_OS_ENV
+                        .iter()
+                        .any(|ordinary| name.as_os_str() == OsStr::new(ordinary)),
+                "{name:?} is not an ordinary OS variable"
+            );
+        }
+    }
+
+    #[test]
+    fn sha256_hex_matches_the_standard_test_vectors() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn temp_dir_is_unique_and_removed_with_its_contents_on_drop() {
+        let dir = TempDir::new();
+        let other = TempDir::new();
+        assert_ne!(dir.path(), other.path());
+        let path = dir.to_path_buf();
+        assert!(path.is_dir());
+        std::fs::create_dir(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("nested").join("file.txt"), b"fixture").unwrap();
+
+        drop(dir);
+
+        assert!(!path.exists(), "{} survived the drop", path.display());
+        assert!(other.is_dir(), "dropping one TempDir removed another");
+    }
+
+    #[test]
+    fn temp_dir_is_removed_when_the_test_panics() {
+        let mut created = None;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let dir = TempDir::new();
+            std::fs::write(dir.join("file.txt"), b"fixture").unwrap();
+            created = Some(dir.to_path_buf());
+            panic!("simulated test failure while the TempDir is alive");
+        }));
+
+        assert!(outcome.is_err());
+        let path = created.expect("the closure created the directory");
+        assert!(!path.exists(), "{} survived the panic", path.display());
+    }
+}
