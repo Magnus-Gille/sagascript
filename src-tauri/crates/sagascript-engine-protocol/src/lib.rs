@@ -471,12 +471,17 @@ pub enum Incoming {
         name: String,
         fields: Map<String, Value>,
     },
+    /// A line for request `id` that is neither an event nor a well-formed response. `error` is
+    /// the `protocol` failure to fail that request with (the client also logs the line).
+    Malformed { id: u64, error: ErrorBody },
 }
 
 impl Incoming {
     pub fn id(&self) -> u64 {
         match self {
-            Incoming::Response { id, .. } | Incoming::Event { id, .. } => *id,
+            Incoming::Response { id, .. }
+            | Incoming::Event { id, .. }
+            | Incoming::Malformed { id, .. } => *id,
         }
     }
 }
@@ -486,9 +491,9 @@ impl Incoming {
 ///
 /// Only a line without a usable `id` is an error (no request can be failed with it). A line with
 /// a usable `id` that is neither an event nor a well-formed response (no boolean `ok`, or a
-/// failure without a valid `error` object) decodes as a `protocol` failure of that request, so
-/// the client fails the request at once instead of waiting for its timeout. A success whose
-/// fields do not match the op's result type is rejected later by [`parse_result`].
+/// failure without a valid `error` object) is [`Incoming::Malformed`]: a `protocol` failure of
+/// that request, so the client fails the request at once instead of waiting for its timeout. A
+/// success whose fields do not match the op's result type is rejected later by [`parse_result`].
 pub fn decode_incoming(line: &str) -> Result<Incoming, DecodeError> {
     let value: Value =
         serde_json::from_str(line.trim()).map_err(|e| DecodeError(format!("invalid JSON: {e}")))?;
@@ -509,13 +514,13 @@ pub fn decode_incoming(line: &str) -> Result<Incoming, DecodeError> {
             fields: obj,
         });
     }
-    let violation = |message: String| Incoming::Response {
+    let violation = |message: String| Incoming::Malformed {
         id,
-        result: Err(ErrorBody {
+        error: ErrorBody {
             code: ErrorCode::Protocol,
             message,
             retryable: false,
-        }),
+        },
     };
     match obj.get("ok").and_then(Value::as_bool) {
         Some(true) => {
@@ -528,13 +533,27 @@ pub fn decode_incoming(line: &str) -> Result<Incoming, DecodeError> {
         }
         Some(false) => Ok(match obj.remove("error") {
             None => violation("engine host sent a failure response without an error object".into()),
-            Some(error) => match serde_json::from_value::<ErrorBody>(error) {
-                Ok(error) => Incoming::Response {
-                    id,
-                    result: Err(error),
-                },
-                Err(e) => violation(format!("engine host sent a malformed error object: {e}")),
-            },
+            Some(error) => {
+                // The host's own code, when it has a readable one, says what went wrong.
+                let code = error
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .map(|code| code.chars().take(64).collect::<String>());
+                match serde_json::from_value::<ErrorBody>(error) {
+                    Ok(error) => Incoming::Response {
+                        id,
+                        result: Err(error),
+                    },
+                    Err(e) => {
+                        violation(match code {
+                            Some(code) => {
+                                format!("engine host sent a malformed error object (code `{code}`): {e}")
+                            }
+                            None => format!("engine host sent a malformed error object: {e}"),
+                        })
+                    }
+                }
+            }
         }),
         None => Ok(violation(
             "engine host sent a line that is neither a response (boolean ok) nor an event".into(),

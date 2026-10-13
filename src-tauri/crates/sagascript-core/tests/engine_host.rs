@@ -268,7 +268,13 @@ fn malformed_load_response_fails_the_load_promptly() {
                 code: ErrorCode::Protocol,
                 message,
                 retryable: false,
-            }) => assert!(message.contains("engine host sent"), "{kind}: {message}"),
+            }) => {
+                assert!(message.contains("engine host sent"), "{kind}: {message}");
+                if kind == "error" {
+                    // The host's own code is kept in the text.
+                    assert!(message.contains("(code `model_missing`)"), "{message}");
+                }
+            }
             other => panic!("{kind}: {other:?}"),
         }
         assert!(
@@ -280,6 +286,28 @@ fn malformed_load_response_fails_the_load_promptly() {
         assert!(f.client.snapshot().running, "{kind}");
         f.client.ping().unwrap();
     }
+}
+
+/// A success whose result does not decode (a `load` result without `blank_id`, which must never
+/// read as 0) fails the load at once with a protocol error, not after the `load` timeout.
+#[test]
+fn malformed_load_result_fails_the_load_promptly() {
+    let f = fixture_with(&[("FAKE_MALFORMED_LOAD", "result")], |c| {
+        c.timeouts.load = Duration::from_secs(60)
+    });
+    let started = Instant::now();
+    match f.client.warm() {
+        Err(EngineHostError::Protocol(message)) => {
+            assert!(message.contains("blank_id"), "{message}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the load must fail at once, not after its timeout ({:?})",
+        started.elapsed()
+    );
+    assert!(!f.client.snapshot().loaded);
 }
 
 // ----------------------------------------------------- routing / timeouts

@@ -459,6 +459,16 @@ fn read_stdout(
                     }
                 }
             }
+            Ok(Incoming::Malformed { id, error }) => {
+                let preview: String = line.trim().chars().take(200).collect();
+                tracing::warn!(pid, id, error = %error.message, line = %preview, "malformed engine host line; failing its request");
+                let w = lock_or_recover(&shared.routing, ROUTING_LOCK)
+                    .waiters
+                    .remove(&id);
+                if let Some(w) = w {
+                    let _ = w.send(Delivery::Response(Err(error)));
+                }
+            }
             Err(e) => {
                 let preview: String = line.trim().chars().take(200).collect();
                 tracing::warn!(pid, error = %e, line = %preview, "ignoring malformed engine host line");

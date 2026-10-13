@@ -92,6 +92,7 @@ fn decode_line(line: &Value) -> Result<Result<Value, ErrorBody>, String> {
     match decode_incoming(&line.to_string()).map_err(|e| e.0)? {
         Incoming::Response { result, .. } => Ok(result),
         Incoming::Event { .. } => Err("transcripts contain no events".into()),
+        Incoming::Malformed { error, .. } => Err(error.message),
     }
 }
 
@@ -246,10 +247,9 @@ fn required_error_fields_are_required() {
                 let mut broken = line.clone();
                 broken["error"] = Value::Object(without);
                 match decode_incoming(&broken.to_string()) {
-                    Ok(Incoming::Response {
-                        result: Err(failure),
-                        ..
-                    }) => assert_eq!(failure.code, ErrorCode::Protocol, "{} step {index}", t.name),
+                    Ok(Incoming::Malformed { error: failure, .. }) => {
+                        assert_eq!(failure.code, ErrorCode::Protocol, "{} step {index}", t.name)
+                    }
                     other => panic!("{} step {index}: {other:?}", t.name),
                 }
             }

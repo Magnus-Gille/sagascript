@@ -213,7 +213,7 @@ fn malformed_response_for_a_usable_id_fails_that_request() {
     for (line, needle) in [
         (
             r#"{"id":3,"ok":false,"error":{"code":"busy","message":"full"}}"#,
-            "malformed error object",
+            "malformed error object (code `busy`): missing field `retryable`",
         ),
         (
             r#"{"id":3,"ok":false,"error":{"code":"engine","retryable":false}}"#,
@@ -236,11 +236,7 @@ fn malformed_response_for_a_usable_id_fails_that_request() {
         (r#"{"id":3,"ok":"true"}"#, "neither a response"),
         (r#"{"id":3,"event":7}"#, "neither a response"),
     ] {
-        let Ok(Incoming::Response {
-            id: 3,
-            result: Err(error),
-        }) = decode_incoming(line)
-        else {
+        let Ok(Incoming::Malformed { id: 3, error }) = decode_incoming(line) else {
             panic!(
                 "{line} must fail request 3, got {:?}",
                 decode_incoming(line)
