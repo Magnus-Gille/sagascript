@@ -155,8 +155,8 @@ export const CHECKS = [
     steps: [nodeTests("ci")],
     sets: ["default"],
     platforms: ALL,
-    // The npm license policy test runs a vite build of the app.
-    requires: ["npm:vite", "npm:@sveltejs/vite-plugin-svelte", "npm:svelte"],
+    // The npm license policy test parses src/ with TypeScript and runs a vite build of the app.
+    requires: ["npm:vite", "npm:@sveltejs/vite-plugin-svelte", "npm:svelte", "npm:typescript"],
     timeoutMinutes: 15,
     ci: [ci("npm run test:frontend")],
     lanes: ["test-macos", "test-windows"],

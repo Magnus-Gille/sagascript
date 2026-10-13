@@ -8,10 +8,12 @@ replaces the rest. happy-dom and ESLint bring BSD-2-Clause and BlueOak-1.0.0 pac
 the owner accepted for dev tooling only
 ([decision](https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272)):
 `scripts/lib/npm-license-policy.mjs` accepts them only for `"dev": true` packages outside the
-closure of what the app bundle can contain (runtime dependencies, every package `src/` imports,
-their dependencies, and Vite's injected helpers). `"dev"` alone is not enough: Vite bundles
-whatever `src/` imports, and svelte is a dev dependency. Importing such a package from app code
-fails `scripts/test-npm-license-policy.mjs` (every PR) and `npm run licenses:check` (release).
+closure of what the app bundle can contain: runtime dependencies, every package `src/` imports
+or references as an asset (`new URL(…, import.meta.url)`, CSS `url()` and `@import`), their
+dependencies, and Vite's injected helpers. `"dev"` alone is not enough: Vite bundles whatever
+`src/` references, and svelte is a dev dependency. Reaching such a package from app code fails
+`scripts/test-npm-license-policy.mjs` (every PR; it also checks the closure against everything
+a real `vite build` bundles, emits or reads) and `npm run licenses:check` (release).
 
 | Layer | Where | Command |
 |---|---|---|

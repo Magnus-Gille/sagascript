@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appImportedPackages, npmLicenseError, shippedNpmClosure } from "./lib/npm-license-policy.mjs";
+import { appPackageReferences, npmLicenseError, shippedNpmClosure } from "./lib/npm-license-policy.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = join(root, "THIRD_PARTY_NOTICES.md");
@@ -154,12 +154,12 @@ if (mode === "--test-dev-only-licenses") {
   }
   let unresolved = null;
   try {
-    shippedNpmClosure(packages, ["not-installed"]);
+    shippedNpmClosure(packages, [{ file: "src/main.ts", package: "not-installed", specifier: "not-installed/x.css" }]);
   } catch (error) {
     unresolved = error.message;
   }
-  if (unresolved !== "src/ needs npm package not-installed, which package-lock.json does not contain") {
-    throw new Error(`An app import missing from the lockfile must fail: ${unresolved}`);
+  if (!unresolved?.startsWith('src/main.ts references npm package not-installed ("not-installed/x.css"), which package-lock.json')) {
+    throw new Error(`An app reference missing from the lockfile must fail and name its file: ${unresolved}`);
   }
   console.log("dev-only npm license policy passed");
   process.exit(0);
@@ -280,7 +280,15 @@ const rustPackages = [...rustById.values()]
   .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.version, b.version));
 
 const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
-const shippedNpm = shippedNpmClosure(lock.packages, appImportedPackages(root));
+const errors = [];
+let shippedNpm;
+try {
+  shippedNpm = shippedNpmClosure(lock.packages, appPackageReferences(root));
+} catch (error) {
+  // Reported with the other errors; until fixed, nothing counts as shipped.
+  errors.push(error.message);
+  shippedNpm = new Set();
+}
 const lockedNpmPackages = Object.entries(lock.packages)
   .filter(([path]) => path.includes("node_modules/"))
   .map(([path, entry]) => npmPackageFromLock(path, entry, shippedNpm))
@@ -291,7 +299,6 @@ const lockedNpmPackages = Object.entries(lock.packages)
 // their local license file is deliberately excluded from the text appendix.
 const npmPackages = lockedNpmPackages;
 
-const errors = [];
 for (const pkg of rustPackages) {
   if (!pkg.license) errors.push(`Rust ${pkg.name}@${pkg.version} has no SPDX license`);
   else if (!reviewedRustLicenses.has(pkg.license)) {
