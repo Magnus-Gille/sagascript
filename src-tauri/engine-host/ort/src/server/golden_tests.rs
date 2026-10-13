@@ -282,10 +282,13 @@ fn golden_transcripts_replay() {
         .map(|t| paths.transcript(t))
         .collect();
     for name in [
-        "handshake.jsonl",
-        "transcribe.jsonl",
         "cancel.jsonl",
+        "context-biasing.jsonl",
         "eof.jsonl",
+        "handshake.jsonl",
+        "load.jsonl",
+        "shutdown.jsonl",
+        "transcribe.jsonl",
     ] {
         assert!(transcripts.iter().any(|t| t.name == name), "missing {name}");
     }

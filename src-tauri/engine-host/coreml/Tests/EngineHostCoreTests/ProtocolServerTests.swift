@@ -291,6 +291,12 @@ private enum Golden {
         return url.appendingPathComponent("test-vectors/protocol", isDirectory: true)
     }
 
+    /// Every transcript the contract defines; the replay fails when one is missing.
+    static let transcriptNames = [
+        "cancel.jsonl", "context-biasing.jsonl", "eof.jsonl", "handshake.jsonl", "load.jsonl",
+        "shutdown.jsonl", "transcribe.jsonl",
+    ]
+
     static func json(_ data: Data) throws -> Any {
         try JSONSerialization.jsonObject(with: data)
     }
@@ -540,7 +546,8 @@ private func replay(_ name: String, _ steps: [[String: Any]], spec: [String: Any
             }
         } else if step["eof"] != nil {
             server.receiveEOF()
-        } else if step["exit"] != nil {
+        } else if let status = step["exit"] {
+            guard (status as? NSNumber)?.intValue == 0 else { return "\(at): hosts exit 0, the transcript expects \(status)" }
             guard exited.wait() else { return "\(at): the host did not shut down" }
         } else if step["note"] == nil {
             return "\(at): unknown step \(step)"
@@ -555,7 +562,7 @@ private func replay(_ name: String, _ steps: [[String: Any]], spec: [String: Any
 @Test func goldenTranscriptsReplayThroughTheServer() throws {
     let spec = try Golden.json(Data(contentsOf: Golden.directory.appendingPathComponent("fake-engine.json"))) as! [String: Any]
     let transcripts = try Golden.transcripts()
-    for required in ["handshake.jsonl", "transcribe.jsonl", "context-biasing.jsonl", "cancel.jsonl", "eof.jsonl"] {
+    for required in Golden.transcriptNames {
         #expect(transcripts.contains { $0.name == required }, "missing \(required)")
     }
     for transcript in transcripts {

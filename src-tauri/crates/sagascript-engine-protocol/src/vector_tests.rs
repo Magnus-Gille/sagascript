@@ -1,6 +1,6 @@
 //! The golden transcripts (`src-tauri/engine-host/test-vectors/protocol/`) decoded strictly with
 //! this crate's types. The hosts replay the same transcripts (Swift `ProtocolServerTests`, the ONNX
-//! host's `server/tests.rs`), so a field renamed on either side fails a test.
+//! host's `server/golden_tests.rs`), so a field renamed on either side fails a test.
 
 use super::golden::{concrete, load_transcripts, matches, FakeEngine, Step, Transcript};
 use super::*;

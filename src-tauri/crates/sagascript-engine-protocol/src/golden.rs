@@ -2,10 +2,11 @@
 //!
 //! `src-tauri/engine-host/test-vectors/protocol/*.jsonl` are request/response transcripts that
 //! every host replays in its unit tests against the scripted engine in `fake-engine.json`
-//! (Swift: `ProtocolServerTests.swift`; ONNX host: `server/tests.rs`), and that this crate decodes
-//! strictly (`vector_tests.rs`). The format is specified in docs/engine-host-protocol.md
-//! ("Golden transcripts"). This module is test tooling: it is compiled for this crate's tests
-//! and, through the `golden` feature, for the tests of other crates.
+//! (Swift: `ProtocolServerTests.swift`; ONNX host: `server/golden_tests.rs`), and that this
+//! crate decodes strictly (`vector_tests.rs`). The format is specified in
+//! docs/engine-host-protocol.md ("Golden transcripts"). This module is test tooling: it is
+//! compiled for this crate's tests and, through the `golden` feature, for the tests of other
+//! crates.
 
 use crate::{Capabilities, ErrorBody, ErrorCode, LoadResult, TranscribeWindowResult};
 use serde::Deserialize;

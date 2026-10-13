@@ -55,7 +55,8 @@ unless this document marks it optional; a missing or mistyped required field is 
 on the receiving side (`bad_request` for a request, a protocol error in the client for a
 result), never a silent zero or empty value. The optional result fields are `hello.host.git_sha`
 (decoded leniently so that its absence fails the handshake with an explicit build-identity
-error), `hello.host.build_dirty`, `hello.capabilities.min_macos`,
+error), `hello.host.build_dirty` (optional for the client only, see `hello`),
+`hello.capabilities.min_macos`,
 `hello.capabilities.context_biasing`, `tokens[].confidence`, `timings.boost_us`, `boost_active`,
 `boost_reason`, and `status.model_id` (`null` when no model is loaded). The optional request
 fields are `boost_terms` and `boost_weight`.
@@ -86,7 +87,9 @@ Result:
                  "compute_units":["ane","gpu","cpu","all"],"min_macos":"14.0",
                  "context_biasing":true}}
 ```
-`host.build_dirty` (optional) tells whether the host was built from a modified tree. The client
+`host.build_dirty` tells whether the host was built from a modified tree. Every host must send
+it (the golden transcripts require it); the client only tolerates its absence, so that a host
+from before the field still handshakes, and release checks reject a dirty host. The client
 rejects a host whose `protocol` differs or whose `git_sha` is missing, and logs a warning when
 the host build differs from its own (build-identity invariant).
 

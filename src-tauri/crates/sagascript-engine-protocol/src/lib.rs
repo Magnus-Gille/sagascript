@@ -322,7 +322,8 @@ pub struct HostInfo {
     /// explicit build-identity error rather than a generic decode error.
     #[serde(default)]
     pub git_sha: Option<String>,
-    /// Whether the host was built from a dirty tree (informational; both hosts send it).
+    /// Whether the host was built from a dirty tree. Every host must send it (the golden
+    /// transcripts require it); the client decodes it leniently so that older hosts handshake.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_dirty: Option<bool>,
     pub engine: String,
