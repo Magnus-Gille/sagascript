@@ -115,8 +115,8 @@ fn skips_magic_check_when_none_e_g_onnx() {
 
 #[test]
 fn rejects_exact_size_mismatch_even_when_server_length_matches() {
-    let err = validate_download(b"model", 512, Some(512), TEST_SHA, integrity(1024), None)
-        .unwrap_err();
+    let err =
+        validate_download(b"model", 512, Some(512), TEST_SHA, integrity(1024), None).unwrap_err();
     assert!(err.contains("exactly 1024"), "error: {err}");
 }
 
@@ -594,9 +594,7 @@ fn serve_scripts(
 /// Joins a server thread without blocking the async runtime (a blocked
 /// current-thread runtime cannot close the client socket, which can
 /// deadlock a server mid-write). The thread also self-terminates.
-async fn join_server(
-    server: std::thread::JoinHandle<Vec<std::io::Error>>,
-) -> Vec<std::io::Error> {
+async fn join_server(server: std::thread::JoinHandle<Vec<std::io::Error>>) -> Vec<std::io::Error> {
     tokio::time::timeout(
         Duration::from_secs(15),
         tokio::task::spawn_blocking(move || server.join().unwrap()),
@@ -855,8 +853,7 @@ async fn valid_pinned_download_succeeds_with_limits() {
 async fn chunked_download_without_content_length_succeeds() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let head = Step::Write(
-            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-                .to_vec(),
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec(),
         );
         let (r, _, dir, errors) = run_scripts(
             vec![vec![

@@ -25,8 +25,7 @@ fn resolved_decoder_evidence_can_be_attached_to_progress() {
         };
         let evidence = effective_diarization_decoder_evidence(&options).unwrap();
         let expected = serde_json::to_value(&evidence).unwrap();
-        let event =
-            progress_event_with_decoder("analyzing", None, None, None, 42, Some(&expected));
+        let event = progress_event_with_decoder("analyzing", None, None, None, 42, Some(&expected));
 
         assert_eq!(event["decoder"], expected);
         assert_eq!(event["decoder"]["beam_size"], beam_size);
@@ -284,8 +283,7 @@ fn explicit_language_keeps_region_redetection_fast_path_disabled() {
 fn auto_language_region_detection_is_bounded_and_skips_silence() {
     let nine_hours = 9 * 60 * 60 * 16_000;
     assert!(
-        language_window_plan(nine_hours, Language::Auto).len()
-            <= LANGUAGE_REDETECTION_MAX_WINDOWS
+        language_window_plan(nine_hours, Language::Auto).len() <= LANGUAGE_REDETECTION_MAX_WINDOWS
     );
 
     let mut audio = vec![0.05; 100 * 16_000];
@@ -391,8 +389,7 @@ fn diarized_plain_filter_precedes_consolidation_without_mutating_diagnostics() {
     let diagnostic_text = consolidated[0].text.clone();
 
     let glossary = Glossary::parse("Greeting = hello");
-    let plain_segments =
-        prepare_diarized_plain_segments(&segments, Language::English, &glossary);
+    let plain_segments = prepare_diarized_plain_segments(&segments, Language::English, &glossary);
 
     assert_eq!(consolidated.len(), 1);
     assert_eq!(consolidated[0].text, diagnostic_text);
@@ -770,8 +767,7 @@ fn explicit_phrase_aliases_cross_whisper_segment_boundaries() {
 #[test]
 fn correction_vocabulary_accepts_only_single_word_hint_items() {
     assert_eq!(
-        Glossary::parse("Grimnir, grimnir, Erik Fredlund\nHugin, M5, AI-agent")
-            .single_word_terms(),
+        Glossary::parse("Grimnir, grimnir, Erik Fredlund\nHugin, M5, AI-agent").single_word_terms(),
         vec!["Grimnir", "Hugin"]
     );
 }
@@ -1161,8 +1157,7 @@ fn resolve_effective_model_explicit_arg_wins_over_auto_select() {
 #[test]
 fn resolve_effective_model_invalid_arg_errors() {
     assert!(
-        resolve_effective_model(Some("bogus"), Language::Auto, true, WhisperModel::Base)
-            .is_err()
+        resolve_effective_model(Some("bogus"), Language::Auto, true, WhisperModel::Base).is_err()
     );
 }
 
@@ -1240,8 +1235,7 @@ fn neutral_language_detector_prefers_downloaded_base() {
 
 #[test]
 fn neutral_language_detector_falls_back_and_can_be_unavailable() {
-    let selected =
-        neutral_language_detection_model(|model| model == WhisperModel::LargeV3Turbo);
+    let selected = neutral_language_detection_model(|model| model == WhisperModel::LargeV3Turbo);
     assert_eq!(selected, Some(WhisperModel::LargeV3Turbo));
     assert_eq!(neutral_language_detection_model(|_| false), None);
 }

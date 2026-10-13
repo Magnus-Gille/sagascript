@@ -640,8 +640,7 @@ fn one_run_prompt_replaces_global_hints_but_keeps_selected_profile_aliases() {
         .insert("swedish".to_string(), "Profile = misheard".to_string());
 
     assert_eq!(
-        settings
-            .effective_glossary_source_with_prompt(Some("swedish"), Some("OneRun = spelling")),
+        settings.effective_glossary_source_with_prompt(Some("swedish"), Some("OneRun = spelling")),
         "OneRun\nProfile = misheard"
     );
     assert_eq!(
@@ -1117,10 +1116,8 @@ fn one_run_prompt_is_hint_only_while_profile_aliases_still_apply() {
     settings
         .profile_glossaries
         .insert("default".into(), "merge = merch".into());
-    let source = settings.effective_glossary_source_with_prompt(
-        Some("default"),
-        Some("Cloudflare = cloud flare"),
-    );
+    let source = settings
+        .effective_glossary_source_with_prompt(Some("default"), Some("Cloudflare = cloud flare"));
     let glossary = Glossary::parse(&source);
     assert_eq!(
         glossary.correct_text("cloud flare merch").0,
@@ -1312,12 +1309,10 @@ fn profile_validation_rejects_invalid_and_duplicate_values() {
         Language::English
     )])
     .is_err());
-    assert!(Settings::validate_hotkey_profiles(&[profile(
-        "default",
-        "Space",
-        Language::English
-    )])
-    .is_err());
+    assert!(
+        Settings::validate_hotkey_profiles(&[profile("default", "Space", Language::English)])
+            .is_err()
+    );
 
     let mut blank = profile("default", "Option+A", Language::English);
     blank.name = "  ".to_string();
@@ -1401,8 +1396,7 @@ fn compatible_manual_multilingual_model_is_shared_across_profiles() {
 #[test]
 fn legacy_settings_migrate_file_model_preference_to_auto() {
     let settings: Settings =
-        serde_json::from_str(r#"{"language":"sv","whisper_model":"kb-whisper-small"}"#)
-            .unwrap();
+        serde_json::from_str(r#"{"language":"sv","whisper_model":"kb-whisper-small"}"#).unwrap();
 
     assert_eq!(settings.file_transcription_model, FileModelPreference::Auto);
 }
@@ -1674,8 +1668,7 @@ fn settings_serde_roundtrip() {
 
 #[test]
 fn settings_accepts_legacy_camel_case_onboarding_key() {
-    let settings: Settings =
-        serde_json::from_str(r#"{"hasCompletedOnboarding":true}"#).unwrap();
+    let settings: Settings = serde_json::from_str(r#"{"hasCompletedOnboarding":true}"#).unwrap();
     assert!(settings.has_completed_onboarding);
 }
 
@@ -2101,20 +2094,12 @@ fn auto_file_model_falls_back_to_downloaded_models() {
     );
     // Unsupported Mac, Medium + Base downloaded: Medium.
     assert_eq!(
-        auto.effective_file_model_for_gated(
-            Language::Swedish,
-            false,
-            &ready_set(&[base, medium])
-        ),
+        auto.effective_file_model_for_gated(Language::Swedish, false, &ready_set(&[base, medium])),
         Ok(medium)
     );
     // Supported, Medium + Base downloaded (no Pianissimo): lineup order gives Large, then Medium.
     assert_eq!(
-        auto.effective_file_model_for_gated(
-            Language::Swedish,
-            true,
-            &ready_set(&[base, medium])
-        ),
+        auto.effective_file_model_for_gated(Language::Swedish, true, &ready_set(&[base, medium])),
         Ok(medium)
     );
     // Nothing downloaded: the recommended model, so the error names its download.
@@ -2270,8 +2255,7 @@ fn lineup_migration_matrix() {
 
 #[test]
 fn lineup_migration_keeps_working_old_model_until_recommended_is_downloaded() {
-    let mut settings =
-        swedish_settings(FileModelPreference::Whisper(WhisperModel::KbWhisperSmall));
+    let mut settings = swedish_settings(FileModelPreference::Whisper(WhisperModel::KbWhisperSmall));
     migrate(&mut settings, true, false, &[WhisperModel::KbWhisperSmall]);
     assert_eq!(
         settings.profile_models["default"],
@@ -2360,8 +2344,7 @@ fn lineup_migration_moves_legacy_global_model_only_to_a_downloaded_medium() {
 
 #[test]
 fn lineup_migration_is_idempotent_and_new_installs_skip_it() {
-    let mut settings =
-        swedish_settings(FileModelPreference::Whisper(WhisperModel::KbWhisperBase));
+    let mut settings = swedish_settings(FileModelPreference::Whisper(WhisperModel::KbWhisperBase));
     assert!(migrate(&mut settings, true, true, &[]));
     let after_first = settings.profile_models.clone();
     // A later manual choice of a retired model (via CLI) is not undone.

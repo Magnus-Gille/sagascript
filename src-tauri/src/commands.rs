@@ -2503,7 +2503,10 @@ mod macos_mic {
         unsafe { msg_send![ns_string_class, stringWithUTF8String: c"soun".as_ptr()] }
     }
 
-    pub(super) fn authorization_status_label(status: isize, denied_recheck_granted: bool) -> &'static str {
+    pub(super) fn authorization_status_label(
+        status: isize,
+        denied_recheck_granted: bool,
+    ) -> &'static str {
         match status {
             0 => "not_determined",
             1 => "restricted",

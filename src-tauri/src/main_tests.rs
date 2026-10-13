@@ -1,7 +1,7 @@
 use super::*;
-use sagascript_testsupport::TempDir;
 #[cfg(test)]
 use sagascript_core::settings::{validate_hotkey, Language};
+use sagascript_testsupport::TempDir;
 
 /// Select the shortcut that is safe to register at startup. Invalid persisted
 /// values remain visible in Settings, but never become active; the default
@@ -17,7 +17,6 @@ fn startup_hotkey_candidate(requested: &str) -> (String, Option<String>) {
         }
     }
 }
-
 
 /// #359: a panic while hot-reloading one settings change used to kill the
 /// watcher thread silently. The loop must log it, record it in the health
@@ -288,8 +287,7 @@ fn version_and_help_flags_request_console_output() {
 fn private_gui_markers_are_accepted_only_as_the_sole_argument() {
     use std::ffi::OsString;
 
-    let mode =
-        |args: &[&str]| gui_launch_mode(args.iter().map(OsString::from).collect::<Vec<_>>());
+    let mode = |args: &[&str]| gui_launch_mode(args.iter().map(OsString::from).collect::<Vec<_>>());
 
     assert_eq!(mode(&["sagascript"]), GuiLaunchMode::Standard);
     assert_eq!(
