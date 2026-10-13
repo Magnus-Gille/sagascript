@@ -486,7 +486,10 @@ function copy<T>(value: T): T {
 // The replacer of Tauri's injected IPC serializer (tauri 2.10.2,
 // scripts/process-ipc-message-fn.js): a Map becomes an object, a Uint8Array or
 // ArrayBuffer an array of numbers, and an object with a SERIALIZE_TO_IPC_FN
-// method (a Channel, a Resource) serializes itself.
+// method (a Channel, a Resource) serializes itself. Not modelled: Tauri sends
+// a top-level ArrayBuffer, ArrayBuffer view or Array payload as raw
+// application/octet-stream (scripts/ipc-protocol.js), which the typed wrappers
+// never do.
 function ipcReplacer(_key: string, value: unknown): unknown {
   if (value instanceof Map) return Object.fromEntries(value.entries());
   if (value instanceof Uint8Array) return Array.from(value);
