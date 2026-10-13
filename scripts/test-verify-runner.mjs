@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { isProcessAlive } from "./lib/process-tree.mjs";
@@ -51,10 +52,11 @@ function writeConfig(directory, body) {
   return path;
 }
 
-function runVerify(args, { config, env = {}, onSpawn } = {}) {
+function runVerify(args, { config, env = {}, onSpawn, script = verifyScript } = {}) {
   return new Promise((resolveRun, reject) => {
     const started = Date.now();
-    const child = spawn(process.execPath, [verifyScript, ...args], {
+    let exitedMs;
+    const child = spawn(process.execPath, [script, ...args], {
       env: { ...process.env, ...env, ...(config ? { SAGASCRIPT_VERIFY_CONFIG: config } : {}) },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -63,8 +65,9 @@ function runVerify(args, { config, env = {}, onSpawn } = {}) {
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.stderr.on("data", (chunk) => (stderr += chunk));
     child.once("error", reject);
+    child.once("exit", () => (exitedMs = Date.now() - started));
     child.once("close", (code, signal) =>
-      resolveRun({ code, signal, stdout, stderr, elapsedMs: Date.now() - started }),
+      resolveRun({ code, signal, stdout, stderr, elapsedMs: Date.now() - started, exitedMs }),
     );
     onSpawn?.(child);
   });
@@ -262,6 +265,7 @@ export const checks = [
 
   const failFast = await runVerify([], { config });
   assert.equal(failFast.code, 1, failFast.stdout + failFast.stderr);
+  assert.match(failFast.stderr, /SAGASCRIPT_VERIFY_CONFIG is set: running the test checks in .*verify\.config\.mjs/);
   assert.match(summaryRow(failFast.stdout, "passes"), /^passes +pass +\d/);
   assert.match(summaryRow(failFast.stdout, "fails"), /^fails +FAIL +\S+ +exit code 3$/);
   assert.match(summaryRow(failFast.stdout, "after"), /not run +- +not run: stopped after fails failed \(--keep-going runs the rest\)/);
@@ -380,4 +384,200 @@ export const checks = [{ id: "leaky", steps: [{ run: "node leave.mjs", argv: ["n
   assert.equal(result.code, 0, result.stdout + result.stderr);
   assert.match(summaryRow(result.stdout, "leaky"), /pass .*stopped processes it left running/);
   await assertAllGone(JSON.parse(readFileSync(pidFile, "utf8")));
+});
+
+// --- Review follow-ups (#350) -------------------------------------------------
+
+test("a failing step's captured output is shown, also on timeout", async (t) => {
+  const directory = fixture(t);
+  const config = writeConfig(
+    directory,
+    `
+export const root = ${JSON.stringify(directory)};
+export const killGraceMs = 500;
+const script = (body) => ["node", "-e", body];
+const proof = { pattern: /guard \.\.\. ok/, message: "guard did not run" };
+export const checks = [
+  { id: "require-exit", steps: [{ run: "x", argv: script("console.log('diagnostic: compile error E0308'); process.exit(1)"), requireOutput: proof }] },
+  { id: "forbid-exit", steps: [{ run: "x", argv: script("console.log('tree line before the crash'); process.exit(2)"), forbidOutput: { pattern: /alsa/, message: "alsa" } }] },
+  { id: "forbid-match", steps: [{ run: "x", argv: script("console.log('context line'); console.log('alsa-sys v0.3')"), forbidOutput: { pattern: /alsa/, message: "alsa leaked" } }] },
+  { id: "require-timeout", timeoutMs: 1500, steps: [{ run: "x", argv: script("console.log('progress before the hang'); setInterval(() => {}, 1000)"), requireOutput: proof }] },
+];
+`,
+  );
+  const result = await runVerify(["--keep-going"], { config });
+  assert.equal(result.code, 1, result.stdout + result.stderr);
+  assert.match(summaryRow(result.stdout, "require-exit"), /FAIL .*exit code 1$/);
+  assert.match(result.stdout, /^diagnostic: compile error E0308$/m);
+  assert.match(result.stdout, /^tree line before the crash$/m);
+  assert.match(result.stdout, /^context line$/m);
+  assert.match(summaryRow(result.stdout, "require-timeout"), /FAIL .*timed out after 1\.5s/);
+  assert.match(result.stdout, /^progress before the hang$/m);
+});
+
+test("a detached grandchild holding the captured pipe does not keep a finished check running", { skip: isWindows && "POSIX sessions" }, async (t) => {
+  const directory = fixture(t);
+  const pidFile = join(directory, "grandchild.pid");
+  const root = `
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+// setsid: outside the check's process group, and it inherits stdout (the pipe).
+const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, 6000)"], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
+grandchild.unref();
+writeFileSync(${JSON.stringify(pidFile)}, String(grandchild.pid));
+console.log("guard ... ok");
+`;
+  t.after(() => {
+    try {
+      process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
+    } catch {}
+  });
+  const config = writeConfig(
+    directory,
+    `
+export const root = ${JSON.stringify(directory)};
+export const checks = [{ id: "quick", timeoutMs: 3000, steps: [{ run: "x", argv: ["node", "-e", ${JSON.stringify(root)}], requireOutput: { pattern: /guard \.\.\. ok/, message: "guard did not run" } }] }];
+`,
+  );
+  const result = await runVerify([], { config });
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(summaryRow(result.stdout, "quick"), /^quick +pass /);
+  assert.ok(result.exitedMs < 3000, `verify finished without waiting for the pipe (${result.exitedMs} ms)`);
+});
+
+test("running the scripts through a symlink still runs them", { skip: isWindows && "symlinks need privileges" }, async (t) => {
+  const directory = fixture(t);
+  const verifyLink = join(directory, "verify-link.mjs");
+  const runnerLink = join(directory, "runner-link.mjs");
+  symlinkSync(verifyScript, verifyLink);
+  symlinkSync(join(dirname(verifyScript), "run-frontend-tests.mjs"), runnerLink);
+
+  const verify = await runVerify(["--list"], { script: verifyLink });
+  assert.equal(verify.code, 0, verify.stderr);
+  assert.match(verify.stdout, /^Checks defined in scripts\/verify\.mjs/m);
+
+  const runner = await runVerify(["--list"], { script: runnerLink });
+  assert.equal(runner.code, 0, runner.stderr);
+  assert.match(runner.stdout, /^ui \(\d+ files\)/m);
+});
+
+test("{freshTempDir} gives a step a new temporary directory; the browser check uses it like CI", async (t) => {
+  const directory = fixture(t);
+  const config = writeConfig(
+    directory,
+    `
+export const root = ${JSON.stringify(directory)};
+export const checks = [{ id: "qa", steps: [{ run: "x", env: { QA_OUTPUT_DIR: "{freshTempDir}" }, argv: ["node", "-e", "const fs = require('fs'); fs.writeFileSync(process.env.QA_OUTPUT_DIR + '/report.txt', 'ok'); console.log('QA dir ' + process.env.QA_OUTPUT_DIR)"] }] }];
+`,
+  );
+  const result = await runVerify([], { config });
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  const qaDir = /QA dir (.+)$/m.exec(result.stdout)?.[1];
+  assert.ok(qaDir && existsSync(join(qaDir, "report.txt")), result.stdout);
+  t.after(() => rmSync(qaDir, { recursive: true, force: true }));
+  assert.ok(qaDir.startsWith(tmpdir()), `${qaDir} is under the system temp directory`);
+
+  const [browser] = CHECKS.find((check) => check.id === "browser").steps;
+  assert.equal(browser.env?.QA_OUTPUT_DIR, "{freshTempDir}");
+});
+
+test("a step's last output line can feed a later step (swift: built host path, then its identity)", async (t) => {
+  const directory = fixture(t);
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: dirname(verifyScript), encoding: "utf8" }).stdout.trim();
+  const config = writeConfig(
+    directory,
+    `
+export const root = ${JSON.stringify(dirname(dirname(verifyScript)))};
+export const checks = [{ id: "chain", steps: [
+  { run: "build", argv: ["node", "-e", "console.log('compiling…'); console.log('/tmp/fake-build/sagascript-engine-host')"], outputValue: "engineHostBinary" },
+  { run: "identity", argv: ["node", "-e", ${JSON.stringify(`if (process.argv[1] !== "/tmp/fake-build/sagascript-engine-host" || process.argv[2] !== ${JSON.stringify(head)}) process.exit(7)`)}, "{engineHostBinary}", "{gitHead}"] },
+] }];
+`,
+  );
+  const result = await runVerify([], { config });
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /^compiling…$/m, "the build output is still shown");
+
+  const swift = CHECKS.find((check) => check.id === "swift");
+  assert.deepEqual(
+    swift.steps.map((step) => step.run),
+    ["./scripts/build-engine-host.sh", "./scripts/check-engine-host-identity.sh {engineHostBinary} {gitHead}", "swift test"],
+  );
+  assert.equal(swift.steps[0].outputValue, "engineHostBinary");
+  assert.match(swift.title, /DEVELOPER_DIR/);
+});
+
+test("the Linux library probe asks pkg-config for openssl too", { skip: process.platform !== "linux" && "Linux probe" }, async (t) => {
+  const directory = fixture(t);
+  const shims = join(directory, "bin");
+  mkdirSync(shims);
+  // A pkg-config that knows every library except openssl.
+  writeFileSync(join(shims, "pkg-config"), '#!/bin/sh\nfor a in "$@"; do [ "$a" = openssl ] && exit 1; done\nexit 0\n');
+  chmodSync(join(shims, "pkg-config"), 0o755);
+  const config = writeConfig(
+    directory,
+    `
+export const root = ${JSON.stringify(directory)};
+export const checks = [{ id: "needs-libs", requires: ["linux-libs"], steps: [{ run: "x", argv: ["node", "-e", ""] }] }];
+`,
+  );
+  const result = await runVerify([], { config, env: { PATH: `${shims}${delimiter}${process.env.PATH}` } });
+  assert.equal(result.code, 2, result.stdout + result.stderr);
+  assert.match(result.stderr, /pkg-config cannot find openssl/);
+  assert.match(result.stderr, /fix: +sudo apt-get install .*libssl-dev/);
+  assert.doesNotMatch(result.stderr, /other distributions/);
+});
+
+test("the Python probe asks for the version the default checks need", { skip: isWindows && "POSIX shims" }, async (t) => {
+  const run = async (version) => {
+    const directory = fixture(t);
+    const shims = join(directory, "bin");
+    mkdirSync(shims);
+    for (const name of ["python3", "python"]) {
+      writeFileSync(join(shims, name), `#!/bin/sh\necho "${version.replace(".", " ")}"\n`);
+      chmodSync(join(shims, name), 0o755);
+    }
+    const config = writeConfig(
+      directory,
+      `
+export const root = ${JSON.stringify(directory)};
+export const checks = [{ id: "py", requires: ["python"], steps: [{ run: "x", argv: ["node", "-e", ""] }] }];
+`,
+    );
+    return runVerify([], { config, env: { PATH: `${shims}${delimiter}${process.env.PATH}` } });
+  };
+  const old = await run("3.9");
+  assert.equal(old.code, 2, old.stdout + old.stderr);
+  assert.match(old.stderr, /Python 3\.10 or newer \(found 3\.9; CI uses 3\.12\)/);
+  assert.match(old.stderr, /fix: +install Python 3\.10 or newer/);
+  const ok = await run("3.10");
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+});
+
+test("a check whose working directory is missing says so", async (t) => {
+  const directory = fixture(t);
+  const config = writeConfig(
+    directory,
+    `
+export const root = ${JSON.stringify(directory)};
+export const checks = [{ id: "nowhere", steps: [{ run: "cargo test", cwd: "src-tauri/missing", argv: ["node", "-e", ""] }] }];
+`,
+  );
+  const result = await runVerify([], { config });
+  assert.equal(result.code, 1);
+  assert.match(summaryRow(result.stdout, "nowhere"), /FAIL .*working directory src-tauri\/missing does not exist$/);
+});
+
+test("when every selected check is skipped, the summary says nothing ran", async (t) => {
+  const directory = fixture(t);
+  const config = writeConfig(
+    directory,
+    `
+export const root = ${JSON.stringify(directory)};
+export const checks = [{ id: "elsewhere", platforms: [${JSON.stringify(process.platform === "darwin" ? "linux" : "darwin")}], steps: [{ run: "x", argv: ["node", "-e", ""] }] }];
+`,
+  );
+  const result = await runVerify([], { config });
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /^1 skip; nothing ran on this OS$/m);
 });

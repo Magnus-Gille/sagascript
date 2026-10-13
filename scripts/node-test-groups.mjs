@@ -1,8 +1,9 @@
 // Every Node test file belongs to exactly one group (#350). The files stay
 // where they are (#361 moves the UI tests to Vitest); this manifest gives
 // them names. scripts/run-frontend-tests.mjs fails when a `test-*.mjs` or
-// `test_*.mjs` file under scripts/ is missing here, or an entry points to a
-// file that does not exist. (This file is not named test-*.mjs so that the
+// `test_*.mjs` file anywhere under scripts/ (except fixtures/ and
+// node_modules/) is missing here, or an entry points to a file that does not
+// exist. (This file is not named test-*.mjs so that the
 // discovery does not take it for a test.)
 //
 //   npm run test:frontend      all groups (what CI runs)

@@ -9,7 +9,7 @@
 // npm packages a group needs are checked first (one error, nothing is
 // installed). The run has a time budget; on timeout or interruption the whole
 // `node --test` process tree is stopped.
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -36,7 +36,7 @@ Groups are defined in ${MANIFEST}. Without --group every group runs.
 
 class UsageError extends Error {}
 
-/** `test-*.mjs` / `test_*.mjs` files under scripts/, as sorted repo-relative paths. */
+/** `test-*.mjs` / `test_*.mjs` files anywhere under scripts/ (not fixtures/), as sorted repo-relative paths. */
 export function discoverTestFiles(root) {
   const found = [];
   const walk = (directory) => {
@@ -246,7 +246,18 @@ export async function main(argv) {
   return result.code;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// Node reports the real path in import.meta.url, so compare against the real
+// path of argv[1]: a symlinked invocation must still run.
+function invokedDirectly() {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+  }
+}
+
+if (invokedDirectly()) {
   // No top-level await: a config or manifest module may import this module.
   main(process.argv.slice(2)).then((code) => {
     process.exitCode = code;
