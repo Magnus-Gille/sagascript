@@ -187,8 +187,9 @@ terminates with error `cancelled`. Cancellation is best effort; a window may sti
   stderr tail; it is not silently retried more than once. The backoff (0, 1, 5 s) is slept without
   holding the lifecycle lock and ends early when the caller cancels.
 - Failed: more than 3 crashes (or failed starts) within 300 s mark the client failed for a 60 s
-  cooldown, in which requests fail at once. The first request after it gets one fresh start: if it
-  succeeds the crash history is cleared, otherwise the cooldown starts again.
+  cooldown, in which requests fail at once. The first request after it gets one fresh start: once
+  that host has loaded the model the crash history is cleared; if its start or its model load
+  fails the cooldown starts again.
 - PCM temp dirs (`sagascript-pcm-<12 letters/digits>`) contain `owner.lock`, exclusively locked by
   the owning process for the dir's lifetime. The app at startup and each process when it creates
   its shared engine client remove, in the background, dirs whose lock can be taken (the owner was

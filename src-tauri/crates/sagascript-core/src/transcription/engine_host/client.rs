@@ -66,8 +66,9 @@ pub const DEFAULT_WEDGE_GRACE: Duration = Duration::from_secs(30);
 
 /// Default [`EngineHostConfig::failed_cooldown`]. While failed, requests fail
 /// at once without spawning anything; the first request after the cooldown
-/// gets one fresh start (half-open). If that start fails the cooldown begins
-/// again; if it succeeds the crash history is cleared.
+/// gets one fresh start (half-open). If that start or its model load fails
+/// the cooldown begins again; once the model has loaded the crash history is
+/// cleared.
 pub const DEFAULT_FAILED_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// Request timeouts; injectable so tests do not wait for real ones.
@@ -298,6 +299,9 @@ struct State {
     loaded: bool,
     crashes: VecDeque<Instant>,
     failed: Option<Failure>,
+    /// `proc` is the one fresh start after a failed cooldown (half-open):
+    /// the failure is cleared once it has loaded the model, not at `hello`.
+    probing: bool,
     last_activity: Instant,
     /// Slots held (batch + interactive), so idle logic never fires mid-request.
     active: usize,
@@ -360,6 +364,7 @@ impl EngineHostClient {
                 loaded: false,
                 crashes: VecDeque::new(),
                 failed: None,
+                probing: false,
                 last_activity: Instant::now(),
                 active: 0,
                 batch_in_flight: 0,
@@ -453,7 +458,9 @@ impl EngineHostClient {
     /// model (diagnostics). The returned snapshot carries the host identity.
     pub fn connect(&self) -> Result<HostSnapshot> {
         {
-            let _g = self.inner.lock_lifecycle_blocking();
+            let guard = self.inner.lock_lifecycle_blocking();
+            // A pending restart backoff is slept with the lock released.
+            let _guard = self.inner.wait_restart_backoff(guard, None)?;
             self.inner.ensure_started_locked(None)?;
         }
         Ok(self.snapshot())
@@ -464,6 +471,7 @@ impl EngineHostClient {
     pub fn reset(&self) {
         let mut st = self.inner.lock_state();
         st.failed = None;
+        st.probing = false;
         st.crashes.clear();
     }
 
@@ -1225,18 +1233,63 @@ impl Inner {
         let (proc, _) = self.ensure_started_locked(cancel)?;
         let loaded = self.lock_state().loaded;
         if !loaded {
-            let r = self.load_locked(&proc, cancel)?;
-            tracing::info!(model_id = %r.model_id, load_ms = r.load_ms, window_s = r.window_s, compiled = r.compiled, "engine host model loaded");
-            let mut st = self.lock_state();
-            let base = st.base_caps.clone().expect("base caps set with proc");
-            st.caps = Some(effective_capabilities(&base, r.window_s)?);
-            st.loaded = true;
-            st.last_load = Some(r);
+            let outcome = self.load_and_apply_locked(&proc, cancel);
+            self.settle_probe(outcome.as_ref().err());
+            outcome?;
         }
         Ok((
             proc,
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         ))
+    }
+
+    /// `load` the model on `proc` and adopt its window limits (lifecycle lock held).
+    fn load_and_apply_locked(
+        &self,
+        proc: &Arc<HostProcess>,
+        cancel: Option<&CancelToken>,
+    ) -> Result<()> {
+        let r = self.load_locked(proc, cancel)?;
+        tracing::info!(model_id = %r.model_id, load_ms = r.load_ms, window_s = r.window_s, compiled = r.compiled, "engine host model loaded");
+        let mut st = self.lock_state();
+        let base = st.base_caps.clone().expect("base caps set with proc");
+        st.caps = Some(effective_capabilities(&base, r.window_s)?);
+        st.loaded = true;
+        st.last_load = Some(r);
+        Ok(())
+    }
+
+    /// After a model load on a half-open start (see [`State::probing`]):
+    /// success closes the breaker and clears the crash history; a failure
+    /// starts another cooldown, so a host that starts but cannot load is
+    /// tried once per cooldown instead of earning a new restart budget. A
+    /// cancelled wait settles nothing: the load goes on for the next caller.
+    fn settle_probe(&self, load_error: Option<&EngineHostError>) {
+        let mut st = self.lock_state();
+        if !st.probing {
+            return;
+        }
+        match load_error {
+            None => {
+                tracing::info!("engine host recovered after the failed cooldown");
+                st.probing = false;
+                st.failed = None;
+                st.crashes.clear();
+            }
+            Some(EngineHostError::Cancelled) => {}
+            Some(error) => {
+                // `probing` stays set: if this host is still alive (the load
+                // was refused, not crashed), a later successful load on it
+                // still closes the breaker.
+                st.failed = Some(Failure {
+                    reason: format!(
+                        "model load after the cooldown failed: {}",
+                        first_line(error)
+                    ),
+                    since: Instant::now(),
+                });
+            }
+        }
     }
 
     fn record_crash(st: &mut State) {
@@ -1260,50 +1313,54 @@ impl Inner {
             st.base_caps = None;
             st.load_pending = None;
             st.loaded = false;
+            st.probing = false;
             if let Some((info, p)) = dead.as_ref().and_then(|p| p.closed().map(|i| (i, p))) {
                 if !info.expected && p.claim_crash() {
                     tracing::warn!(status = %info.status, "engine host exited unexpectedly");
                     Self::record_crash(&mut st);
                 }
             }
-            // Failed, but only for the cooldown: afterwards one fresh start
-            // (half-open), without a restart backoff (the cooldown was one).
-            if let Some(failure) = &st.failed {
-                let waited = failure.since.elapsed();
-                if waited < self.cfg.failed_cooldown {
-                    return Err(failed_error(failure, self.cfg.failed_cooldown - waited));
-                }
-                let plan = StartPlan::Spawn {
-                    backoff: Duration::ZERO,
-                    probing: true,
-                };
-                (plan, dead)
-            } else {
-                let window = self.cfg.restart_window;
-                st.crashes.retain(|t| t.elapsed() <= window);
-                let n = st.crashes.len();
-                if n > self.cfg.max_restarts {
-                    let failure = Failure {
-                        reason: format!(
-                            "{n} crashes within {:?}, limit is {} restarts",
-                            window, self.cfg.max_restarts
-                        ),
-                        since: Instant::now(),
-                    };
-                    let error = failed_error(&failure, self.cfg.failed_cooldown);
-                    tracing::warn!(%error, "engine host marked failed");
-                    st.failed = Some(failure);
-                    return Err(error);
-                }
-                let plan = StartPlan::Spawn {
-                    backoff: self.restart_backoff(&st, n),
-                    probing: false,
-                };
-                (plan, dead)
-            }
+            (self.plan_spawn(&mut st), dead)
         };
-        drop(dead); // reap the old process outside the state lock
-        Ok(plan)
+        // Reap the old process outside the state lock, also when failing.
+        drop(dead);
+        plan
+    }
+
+    /// Whether and when to spawn, with no live process (state lock held).
+    fn plan_spawn(&self, st: &mut State) -> Result<StartPlan> {
+        // Failed, but only for the cooldown: afterwards one fresh start
+        // (half-open), without a restart backoff (the cooldown was one).
+        if let Some(failure) = &st.failed {
+            let waited = failure.since.elapsed();
+            if waited < self.cfg.failed_cooldown {
+                return Err(failed_error(failure, self.cfg.failed_cooldown - waited));
+            }
+            return Ok(StartPlan::Spawn {
+                backoff: Duration::ZERO,
+                probing: true,
+            });
+        }
+        let window = self.cfg.restart_window;
+        st.crashes.retain(|t| t.elapsed() <= window);
+        let n = st.crashes.len();
+        if n > self.cfg.max_restarts {
+            let failure = Failure {
+                reason: format!(
+                    "{n} crashes within {:?}, limit is {} restarts",
+                    window, self.cfg.max_restarts
+                ),
+                since: Instant::now(),
+            };
+            let error = failed_error(&failure, self.cfg.failed_cooldown);
+            tracing::warn!(%error, "engine host marked failed");
+            st.failed = Some(failure);
+            return Err(error);
+        }
+        Ok(StartPlan::Spawn {
+            backoff: self.restart_backoff(st, n),
+            probing: false,
+        })
     }
 
     /// Start the host if it is not running (lifecycle lock held). Callers
@@ -1329,11 +1386,9 @@ impl Inner {
         match self.start_and_handshake() {
             Ok((proc, caps, host_info)) => {
                 let mut st = self.lock_state();
-                if probing {
-                    tracing::info!("engine host recovered after the failed cooldown");
-                    st.failed = None;
-                    st.crashes.clear();
-                }
+                // The failure is cleared once this host has loaded the model
+                // (`settle_probe`), not at the handshake.
+                st.probing = probing;
                 st.proc = Some(proc.clone());
                 st.caps = Some(caps.clone());
                 st.base_caps = Some(caps.clone());
@@ -1348,9 +1403,8 @@ impl Inner {
                 Self::record_crash(&mut st);
                 if probing {
                     // The fresh start failed too: fail fast for another cooldown.
-                    let first_line = e.to_string().lines().next().unwrap_or_default().to_string();
                     st.failed = Some(Failure {
-                        reason: format!("start after the cooldown failed: {first_line}"),
+                        reason: format!("start after the cooldown failed: {}", first_line(&e)),
                         since: Instant::now(),
                     });
                 }
@@ -1424,6 +1478,7 @@ impl Inner {
             st.caps = None;
             st.base_caps = None;
             st.load_pending = None;
+            st.probing = false;
             st.proc.take()
         };
         if let Some(p) = proc {
@@ -1537,6 +1592,16 @@ fn supervise_loop(weak: Weak<Inner>, tick: Duration) {
         let Some(inner) = weak.upgrade() else { return };
         inner.idle_check();
     }
+}
+
+/// First line of an error, for a one-line failure reason.
+fn first_line(error: &EngineHostError) -> String {
+    error
+        .to_string()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn failed_error(failure: &Failure, retry_in: Duration) -> EngineHostError {

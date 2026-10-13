@@ -12,6 +12,7 @@
 //!   FAKE_PROTOCOL=<n>, FAKE_NO_SHA=1, FAKE_GARBAGE=1   handshake / stdout faults
 //!   FAKE_CRASH_ON_START=1                               exit(3) immediately
 //!   FAKE_CRASH_ON_START_FILE=<path>                     exit(3) immediately while the file exists
+//!   FAKE_CRASH_ON_LOAD_FILE=<path>                      exit(5) on `load` while the file exists
 //!   FAKE_CRASH_ON_WINDOW=1                              exit(4) on first window
 //!   FAKE_CRASH_ONCE_FILE=<path>                         like above, only if the file is absent (creates it)
 //!   FAKE_HANG=1                                         never answer transcribe_window
@@ -209,6 +210,12 @@ fn handle(host: &Arc<Host>, id: u64, op: RequestOp) {
             model_id,
             ..
         } => {
+            if std::env::var_os("FAKE_CRASH_ON_LOAD_FILE")
+                .is_some_and(|marker| std::path::Path::new(&marker).exists())
+            {
+                eprintln!("fake host: fatal: crash on load");
+                std::process::exit(5);
+            }
             let host = host.clone();
             std::thread::spawn(move || {
                 host.write(&encode_event(

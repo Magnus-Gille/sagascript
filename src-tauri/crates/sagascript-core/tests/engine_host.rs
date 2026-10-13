@@ -658,18 +658,39 @@ fn no_orphan_host_after_drop() {
     );
 }
 
+/// Dropping the client while the host still hangs on a timed-out request
+/// (its wedge grace still running) ends the host at once: the watcher that
+/// waits for the late answer does not keep the client or its host alive.
 #[test]
 fn no_orphan_host_when_dropped_with_hung_request() {
     let f = fixture_with(&[("FAKE_HANG", "1")], |c| {
-        c.timeouts.transcribe_min = Duration::from_millis(200)
+        c.timeouts.transcribe_min = Duration::from_millis(200);
+        // Far away: the watchdog must not be what ends the host here.
+        c.timeouts.wedge_grace = Duration::from_secs(60);
     });
     f.client.warm().unwrap();
     let pid = f.client.snapshot().pid.unwrap();
-    let _ = f
+    let r = f
         .client
         .transcribe_dictation(&pcm(1.0), &CancelToken::new());
-    drop(f.client);
-    assert!(!pid_alive(pid));
+    assert!(
+        matches!(
+            r,
+            Err(EngineHostError::Timeout {
+                op: "transcribe_window",
+                ..
+            })
+        ),
+        "{r:?}"
+    );
+    assert!(pid_alive(pid), "the hung request is still within its grace");
+    let client = f.client;
+    let ((), elapsed) = run_bounded(Duration::from_secs(10), move || drop(client));
+    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    assert!(
+        !pid_alive(pid),
+        "host {pid} still running after client drop"
+    );
 }
 
 // --------------------------------------------------- long-audio pipeline
@@ -1348,6 +1369,54 @@ fn failed_host_gets_a_fresh_attempt_after_the_cooldown() {
     assert_eq!(out.tokens.len(), 2);
 }
 
+/// The fresh start after the cooldown counts as a recovery only once the
+/// model has loaded: a host that starts but crashes on `load` re-opens the
+/// cooldown instead of earning a new crash budget (4 more spawn/crash rounds).
+#[test]
+fn failed_cooldown_recovers_only_after_a_successful_load() {
+    let marker = tempfile::tempdir().unwrap();
+    let crash = marker.path().join("crash");
+    std::fs::write(&crash, b"crash").unwrap();
+    let cooldown = Duration::from_secs(1);
+    let f = fixture_with(
+        &[("FAKE_CRASH_ON_LOAD_FILE", crash.to_str().unwrap())],
+        |c| c.failed_cooldown = cooldown,
+    );
+    for _ in 0..4 {
+        let r = f.client.warm();
+        assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    }
+    assert!(matches!(f.client.warm(), Err(EngineHostError::Failed(_))));
+    let opened = Instant::now();
+    assert_eq!(f.client.snapshot().spawns, 4);
+
+    // After the cooldown: one start whose handshake succeeds but whose load crashes.
+    std::thread::sleep(cooldown.saturating_sub(opened.elapsed()) + Duration::from_millis(50));
+    let r = f.client.warm();
+    assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    assert_eq!(f.client.snapshot().spawns, 5);
+    // That re-opened the cooldown: failed again, without another spawn.
+    match f.client.warm() {
+        Err(EngineHostError::Failed(m)) => {
+            assert!(m.contains("load after the cooldown failed"), "{m}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(f.client.snapshot().spawns, 5);
+
+    // Healthy again: the next attempt after the cooldown loads and recovers.
+    std::fs::remove_file(&crash).unwrap();
+    wait_until(
+        "recovery after the cooldown",
+        Duration::from_secs(5),
+        || f.client.warm().is_ok(),
+    );
+    let snap = f.client.snapshot();
+    assert!(snap.failed.is_none(), "{:?}", snap.failed);
+    assert_eq!(snap.crashes_in_window, 0);
+    assert_eq!(snap.spawns, 6);
+}
+
 /// (b) A window that ignores cancel keeps its host slot while the host still
 /// answers `ping` (a Core ML prediction cannot be interrupted). Within the
 /// request timeout plus the wedge grace the client kills that host, and the
@@ -1638,6 +1707,31 @@ fn restart_backoff_is_cancellable_and_does_not_block_shutdown() {
     assert!(matches!(r, Err(EngineHostError::Cancelled)), "{r:?}");
     assert!(waited < Duration::from_secs(2), "{waited:?}");
     assert_eq!(f.client.snapshot().spawns, 1, "no restart after the cancel");
+}
+
+/// `connect` (`engine status` / `engine doctor`) sleeps a pending restart
+/// backoff with the lifecycle lock released as well.
+#[test]
+fn connect_sleeps_the_restart_backoff_without_blocking_shutdown() {
+    let backoff = Duration::from_millis(2500);
+    let f = fixture_with(&[("FAKE_CRASH_ON_START", "1")], |c| {
+        c.restart_backoff = vec![backoff]
+    });
+    let r = f.client.warm();
+    assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
+    let connecting = {
+        let client = f.client.clone();
+        std::thread::spawn(move || client.connect().map(|_| ()))
+    };
+    std::thread::sleep(Duration::from_millis(200)); // connect is in the backoff
+    let client = f.client.clone();
+    let ((), elapsed) = run_bounded(Duration::from_secs(10), move || client.shutdown());
+    assert!(
+        elapsed < Duration::from_millis(1200),
+        "shutdown waited for connect's restart backoff: {elapsed:?}"
+    );
+    let r = connecting.join().unwrap();
+    assert!(matches!(r, Err(EngineHostError::Crashed { .. })), "{r:?}");
 }
 
 const PCM_OWNER_PARENT: &str = "SAGASCRIPT_TEST_PCM_OWNER_PARENT";
