@@ -201,9 +201,18 @@ impl HostProcess {
             source,
         })?;
         let pid = child.id();
-        let stdin = child.stdin.take().expect("piped stdin");
-        let stdout = wrap_stdout(child.stdout.take().expect("piped stdout"));
-        let stderr = child.stderr.take().expect("piped stderr");
+        let (Some(stdin), Some(stdout), Some(stderr)) =
+            (child.stdin.take(), child.stdout.take(), child.stderr.take())
+        else {
+            // Unreachable with `Stdio::piped()`, but never leave the child running.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(EngineHostError::Spawn {
+                path: path.display().to_string(),
+                source: std::io::Error::other("engine host started without piped stdio"),
+            });
+        };
+        let stdout = wrap_stdout(stdout);
         let shared = Arc::new(Shared {
             routing: Mutex::new(Routing::default()),
             closed_cv: Condvar::new(),
