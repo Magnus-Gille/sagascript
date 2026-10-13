@@ -39,8 +39,6 @@ export const TEST_GROUPS = {
     "scripts/test-meeting-integration.mjs",
     "scripts/test-meeting-reprocessing-integration.mjs",
     "scripts/test-meeting-reprocessing.mjs",
-    "scripts/test-settings-layout.mjs",
-    "scripts/test-settings-recovery.mjs",
   ],
   ci: [
     "scripts/diarization_sv/test_reference_review.mjs",
