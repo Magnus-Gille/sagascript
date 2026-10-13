@@ -473,10 +473,14 @@ interface ActiveMock {
 
 let active: ActiveMock | null = null;
 
-// Arguments and results cross a serialization boundary in the real app;
-// copying them keeps a test's fixtures and recorded calls independent.
+// Arguments, results and event payloads cross a JSON boundary in the real app:
+// @tauri-apps/api serializes invoke arguments with JSON.stringify and Rust
+// answers in JSON. Copy them the same way, so a test's fixtures and recorded
+// calls stay independent, an `undefined` field disappears as it does over IPC,
+// and Svelte `$state` proxies (which components pass as arguments, and which
+// structuredClone rejects) are serialized like plain objects.
 function copy<T>(value: T): T {
-  return value === undefined ? value : structuredClone(value);
+  return value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T);
 }
 
 function record(state: ActiveMock, command: CommandName, args: unknown): void {

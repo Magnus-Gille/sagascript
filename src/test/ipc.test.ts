@@ -1,6 +1,6 @@
 import { emit, listen, once } from "@tauri-apps/api/event";
 import { describe, expect, test } from "vitest";
-import { getPlatform, getSettings, setLanguage, setProfileGlossary, type Settings } from "../lib/api";
+import { getPlatform, getSettings, setHotkeyProfiles, setLanguage, setProfileGlossary, type Settings } from "../lib/api";
 import { COMMAND_NAMES, isCommandName, mockIpc, resetIpcMock, type EventMap } from "./ipc";
 
 const settings: Settings = {
@@ -53,13 +53,24 @@ describe("commands", () => {
     expect((await getSettings()).language).toBe("sv");
   });
 
-  test("an optional wrapper argument is recorded as sent", async () => {
+  test("an omitted optional argument is dropped, as JSON over the IPC boundary drops it", async () => {
     const ipc = mockIpc({ set_profile_glossary: () => undefined });
     await setProfileGlossary("default", "words");
     await setProfileGlossary("default", "more words", "words");
     expect(ipc.callsTo("set_profile_glossary")).toStrictEqual([
-      { profileId: "default", source: "words", expectedSource: undefined },
+      { profileId: "default", source: "words" },
       { profileId: "default", source: "more words", expectedSource: "words" },
+    ]);
+  });
+
+  test("reactive Svelte state is sent as its plain JSON value", async () => {
+    // Components pass $state proxies, which structuredClone rejects.
+    const profiles = new Proxy([{ id: "default", name: "Svenska", shortcut: "Super+S", language: "sv" as const }], {});
+    expect(() => structuredClone(profiles)).toThrow();
+    const ipc = mockIpc({ set_hotkey_profiles: () => [] });
+    await setHotkeyProfiles(profiles);
+    expect(ipc.callsTo("set_hotkey_profiles")).toStrictEqual([
+      { profiles: [{ id: "default", name: "Svenska", shortcut: "Super+S", language: "sv" }] },
     ]);
   });
 
