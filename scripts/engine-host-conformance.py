@@ -10,7 +10,10 @@ wire behavior rather than importing or special-casing the CoreML implementation.
                                                      windows, cancel and unload
 
 CI runs the model-free subset against the staged Core ML host (ci.yml,
-test-macos). The full run needs a downloaded Pianissimo model.
+test-macos). The full run needs a downloaded Pianissimo model. The release
+gate runs the subset against the signed host (release-build-macos.yml) and the
+full run against the host bundled in the release, with the model its Pianissimo
+smoke downloads (verify-release-draft.sh).
 """
 
 import argparse

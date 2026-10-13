@@ -361,7 +361,7 @@ contains no cpal/ALSA.
 | Python | `scripts/dictation_eval/test_*.py`, `scripts/diarization_sv/test_*.py` | `python -m unittest discover -s scripts/dictation_eval -p 'test_*.py'` | all OS (dictation_eval); Linux and macOS (diarization_sv) |
 | Types | Svelte/TS | `npx svelte-check --tsconfig ./tsconfig.json` | test-macos |
 | CLI smoke | release binary in `ci.yml` build jobs: help, `config`, `list-models`, `formats`, completions, download + transcribe, `--json` streams (`scripts/verify-json-cli-streams.py`) | — | build-macos, build-windows |
-| Conformance | `scripts/engine-host-conformance.py <host> --no-model` against a real host process; with `--model-dir <dir>` the full run | model-free: `npm run verify -- --only engine-host-conformance` (macOS); full run by hand, needs a downloaded model | model-free subset against the staged Core ML host in test-macos; full run manual before a release that changes a host or the protocol ([release gate](release-readiness.md#6-release-gate)) |
+| Conformance | `scripts/engine-host-conformance.py <host> --no-model` against a real host process; with `--model-dir <dir>` the full run | model-free: `npm run verify -- --only engine-host-conformance` (macOS); full run by hand with a downloaded model | model-free subset: the staged Core ML host in test-macos and the signed host in `release-build-macos.yml`; full run: release gate, `scripts/verify-release-draft.sh` against the bundled host after its Pianissimo smoke ([RELEASING.md](../RELEASING.md#automated-draft-verification)) |
 
 CI (`.github/workflows/ci.yml`) splits cargo per crate and feature set: test-linux runs both
 `cargo fmt --check` gates, `cargo deny check` for both Cargo workspaces (`src-tauri/deny.toml`:

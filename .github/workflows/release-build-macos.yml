@@ -115,6 +115,12 @@ jobs:
           codesign --verify --strict --verbose=2 build/engine-host/sagascript-engine-host
           ./scripts/check-engine-host-identity.sh --release build/engine-host/sagascript-engine-host "$GITHUB_SHA"
 
+      # Engine-host protocol conformance (#367), model-free subset, against the
+      # signed hardened-runtime host that is bundled next. The full run with the
+      # Pianissimo model is in verify-release-draft.sh, next to its smoke.
+      - name: Engine-host conformance, model-free subset (signed Core ML host)
+        run: python3 scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model
+
       - name: Prepare notarization credentials and build metadata
         env:
           APPLE_API_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_BASE64 }}

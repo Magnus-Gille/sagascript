@@ -308,20 +308,17 @@ Who checks what:
 `scripts/engine-host-conformance.py <host binary> --no-model` runs against a real host process
 and needs no model: `hello`, `ping`, `status`, a request before `hello`, an unknown op, `load` of
 a missing model (`model_missing`), a window before `load` (`not_loaded`), `cancel` of a finished
-request, `shutdown` and EOF exit. CI runs it against the staged Core ML host (test-macos; `npm run
-verify` check `engine-host-conformance`).
+request, `shutdown` and EOF exit. PR CI runs it against the staged Core ML host (test-macos;
+`npm run verify` check `engine-host-conformance`), and the release build runs it against the
+signed hardened-runtime host before bundling it (`release-build-macos.yml`).
 
 `scripts/engine-host-conformance.py <host binary> --model-dir <dir>` runs those checks and then
 exercises `load`, `transcribe_window` (including out-of-order concurrent responses and an
 over-long window), `cancel`, `status`, `unload`, EOF exit and `shutdown` with a real model. Every
-engine host must pass it. It needs a downloaded Pianissimo model, so it is run by hand (for
-example with `--model-dir` from `sagascript engine status --json`). The script is engine-agnostic
-(it sends `compute_units:"ane"`, which non-Core ML hosts map to their only device); set
-`ORT_DYLIB_PATH` when running it against the ONNX host.
-
-The full run is deliberately not part of CI or the release workflow: it needs a ~640 MB model
-download and a Swift build on the release runner, while the wire contract it would guard is
-already checked on every PR by the golden transcripts (all three implementations) and the
-model-free subset (the real Core ML host process). It is a manual release step instead, required
-when a release changes an engine host or this protocol
-([release readiness, release gate](release-readiness.md#6-release-gate)).
+engine host must pass it. It is part of the release gate: `scripts/verify-release-draft.sh` runs
+it against the host bundled in the release's app, with the Pianissimo model its smoke has just
+downloaded (`--model-dir` from `sagascript engine status --json`), on the promote path in CI and
+by hand on the fallback path ([RELEASING.md](../RELEASING.md#automated-draft-verification)). It
+is not in PR CI because it needs that ~640 MB model. By hand, run it the same way against any
+host. The script is engine-agnostic (it sends `compute_units:"ane"`, which non-Core ML hosts map
+to their only device); set `ORT_DYLIB_PATH` when running it against the ONNX host.

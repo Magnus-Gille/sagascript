@@ -245,3 +245,24 @@ test("draft verification script covers the release checklist", () => {
     "GITHUB_STEP_SUMMARY",
   ]) assert.ok(s.includes(needle), `verify-release-draft.sh covers ${needle}`);
 });
+
+test("the release gate runs engine-host conformance: model-free on the signed host, full run after the draft smoke (#367)", () => {
+  const signing = workflows["release-build-macos"];
+  const signed = signing.indexOf("name: Sign Core ML engine host (hardened runtime)");
+  const conformance = signing.indexOf(
+    "run: python3 scripts/engine-host-conformance.py build/engine-host/sagascript-engine-host --no-model",
+  );
+  const bundled = signing.indexOf("npx tauri build");
+  assert.ok(signed >= 0 && bundled > signed, "release-build-macos.yml signs the host, then bundles it");
+  assert.ok(conformance > signed && conformance < bundled, "the signed host passes the model-free conformance before it is bundled");
+
+  const s = read("scripts/verify-release-draft.sh");
+  assert.match(s, /engine-host-conformance\.py" "\$host" --model-dir "\$model_dir"/);
+  assert.match(s, /engine status --json \| python3 -c [^\n]*\["model"\]\["dir"\]/);
+  assert.match(s, /engine-host-conformance\.py" "\$host" --no-model/);
+  const run = s.slice(s.indexOf("# --- run"));
+  // The full run needs the model the smoke downloads, so it follows the smoke; --skip-smoke
+  // (no model) still runs the model-free subset against the shipped host.
+  assert.match(run, /run_check "Pianissimo smoke[^\n]*" check_pianissimo_smoke\n\s+run_check "Engine-host conformance, full run[^\n]*" check_engine_host_conformance\n/);
+  assert.match(run, /skip_check "Pianissimo smoke[^\n]*"\n\s+run_check "Engine-host conformance, model-free subset[^\n]*" check_engine_host_conformance_no_model\n/);
+});
