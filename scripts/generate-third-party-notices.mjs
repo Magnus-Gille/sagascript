@@ -30,6 +30,45 @@ function npmInstallationError(pkg, installedVersion, directoryExists) {
   return null;
 }
 
+// Reviewed npm license expressions, as exact SPDX strings (see the Rust list
+// below for why this is an allowlist). Every npm package must use one of these.
+const reviewedNpmLicenses = new Set(["0BSD", "Apache-2.0", "Apache-2.0 OR MIT", "BSD-3-Clause", "ISC", "MIT", "MIT OR Apache-2.0"]);
+
+// Reviewed only for dev-only npm packages: lockfile entries marked
+// `"dev": true`, which the production dependency tree never contains (test,
+// lint and build tooling). `"devOptional": true` does not count: such a
+// package is optional in the production tree. A runtime dependency with one
+// of these licenses still fails and needs a new owner decision. Decision:
+// https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272
+const reviewedDevOnlyNpmLicenses = new Set(["BSD-2-Clause", "BlueOak-1.0.0"]);
+
+/** The inventory record for one `packages` entry of package-lock.json (v3). */
+function npmPackageFromLock(path, entry) {
+  const name = path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
+  return {
+    ecosystem: "npm",
+    name,
+    version: entry.version,
+    license: entry.license,
+    source: componentSource({ ...entry, name }, "npm"),
+    directory: join(root, path),
+    optional: entry.optional === true,
+    devOnly: entry.dev === true,
+  };
+}
+
+function npmLicenseError(pkg) {
+  const id = `npm ${pkg.name}@${pkg.version}`;
+  if (!pkg.license) return `${id} has no SPDX license`;
+  if (reviewedNpmLicenses.has(pkg.license)) return null;
+  if (reviewedDevOnlyNpmLicenses.has(pkg.license)) {
+    return pkg.devOnly
+      ? null
+      : `${id} has license ${pkg.license}, which is reviewed for dev-only packages only, not for runtime dependencies`;
+  }
+  return `${id} has unreviewed license: ${pkg.license}`;
+}
+
 if (mode === "--test-sort") {
   const fixture = ["z", "ä", "a", "å", "A"].sort(compareCodeUnits);
   const expected = ["A", "a", "z", "ä", "å"];
@@ -77,9 +116,40 @@ if (mode === "--test-newline-normalization") {
   process.exit(0);
 }
 
+if (mode === "--test-dev-only-licenses") {
+  // Lockfile v3 entries: "dev" marks a package only dev dependencies reach;
+  // "devOptional" one that is also optional in the production tree.
+  const entry = (license, flags = {}) => npmPackageFromLock("node_modules/example", { version: "1.0.0", license, ...flags });
+  const runtimeOnly = (license) =>
+    `npm example@1.0.0 has license ${license}, which is reviewed for dev-only packages only, not for runtime dependencies`;
+  const cases = [
+    [entry("MIT"), null],
+    [entry("MIT", { dev: true }), null],
+    [entry("BSD-2-Clause", { dev: true }), null],
+    [entry("BlueOak-1.0.0", { dev: true }), null],
+    [entry("BSD-2-Clause"), runtimeOnly("BSD-2-Clause")],
+    [entry("BlueOak-1.0.0"), runtimeOnly("BlueOak-1.0.0")],
+    [entry("BSD-2-Clause", { optional: true }), runtimeOnly("BSD-2-Clause")],
+    [entry("BSD-2-Clause", { devOptional: true }), runtimeOnly("BSD-2-Clause")],
+    [entry("BlueOak-1.0.0", { devOptional: true, optional: true }), runtimeOnly("BlueOak-1.0.0")],
+    [entry("BSD-2-Clause", { dev: "true" }), runtimeOnly("BSD-2-Clause")],
+    [entry("GPL-3.0-only", { dev: true }), "npm example@1.0.0 has unreviewed license: GPL-3.0-only"],
+    [entry("BSD-2-Clause OR MIT", { dev: true }), "npm example@1.0.0 has unreviewed license: BSD-2-Clause OR MIT"],
+    [entry(undefined, { dev: true }), "npm example@1.0.0 has no SPDX license"],
+  ];
+  for (const [pkg, expected] of cases) {
+    const actual = npmLicenseError(pkg);
+    if (actual !== expected) {
+      throw new Error(`Unexpected npm license result for ${JSON.stringify(pkg)}: ${actual}`);
+    }
+  }
+  console.log("dev-only npm license policy passed");
+  process.exit(0);
+}
+
 if (!new Set(["--check", "--write"]).has(mode)) {
   console.error(
-    "Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort|--test-npm-installation|--test-newline-normalization",
+    "Usage: node scripts/generate-third-party-notices.mjs --check|--write|--test-sort|--test-npm-installation|--test-newline-normalization|--test-dev-only-licenses",
   );
   process.exit(2);
 }
@@ -124,8 +194,6 @@ const reviewedRustLicenses = new Set([
   "Zlib",
   "Zlib OR Apache-2.0 OR MIT",
 ]);
-
-const reviewedNpmLicenses = new Set(["0BSD", "Apache-2.0", "Apache-2.0 OR MIT", "BSD-3-Clause", "ISC", "MIT", "MIT OR Apache-2.0"]);
 
 function cargoMetadata(target, manifestPath = "src-tauri/Cargo.toml") {
   return JSON.parse(
@@ -196,18 +264,7 @@ const rustPackages = [...rustById.values()]
 const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
 const lockedNpmPackages = Object.entries(lock.packages)
   .filter(([path]) => path.includes("node_modules/"))
-  .map(([path, pkg]) => {
-    const name = path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
-    return {
-      ecosystem: "npm",
-      name,
-      version: pkg.version,
-      license: pkg.license,
-      source: componentSource({ ...pkg, name }, "npm"),
-      directory: join(root, path),
-      optional: pkg.optional === true,
-    };
-  })
+  .map(([path, entry]) => npmPackageFromLock(path, entry))
   .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.version, b.version));
 // Keep every locked npm package in the inventory so output is identical on
 // Apple Silicon and Intel CI. Platform-specific optional packages are not
@@ -223,10 +280,8 @@ for (const pkg of rustPackages) {
   }
 }
 for (const pkg of lockedNpmPackages) {
-  if (!pkg.license) errors.push(`npm ${pkg.name}@${pkg.version} has no SPDX license`);
-  else if (!reviewedNpmLicenses.has(pkg.license)) {
-    errors.push(`npm ${pkg.name}@${pkg.version} has unreviewed license: ${pkg.license}`);
-  }
+  const licenseError = npmLicenseError(pkg);
+  if (licenseError) errors.push(licenseError);
   const directoryExists = existsSync(pkg.directory);
   let installedVersion;
   if (directoryExists) {

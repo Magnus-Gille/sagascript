@@ -3,8 +3,10 @@
 // families scripts/generate-third-party-notices.mjs reviews and the git
 // sources the Cargo manifests actually use.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const read = async (path) => (await readFile(new URL(`../${path}`, import.meta.url), "utf8")).replace(/\r\n?/g, "\n");
@@ -166,6 +168,24 @@ test("deny.toml allows exactly the license families the notices generator needs"
     for (const term of license.split(" WITH ")) {
       assert.ok(identifiers.has(term), `deny.toml excepts ${license}, which no reviewed expression contains`);
     }
+  }
+});
+
+// BSD-2-Clause and BlueOak-1.0.0 are accepted for dev-only npm packages and
+// nowhere else (owner decision on #361, 2026-10-13):
+// https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272
+test("npm licenses reviewed for dev-only packages fail a runtime or devOptional dependency", () => {
+  const output = execFileSync(
+    process.execPath,
+    [fileURLToPath(new URL("./generate-third-party-notices.mjs", import.meta.url)), "--test-dev-only-licenses"],
+    { encoding: "utf8" },
+  );
+  assert.match(output, /dev-only npm license policy passed/);
+  const start = notices.indexOf("const reviewedNpmLicenses = new Set([");
+  assert.notEqual(start, -1, "generate-third-party-notices.mjs must keep its reviewed npm license list");
+  const runtime = [...notices.slice(start, notices.indexOf("]);", start)).matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  for (const license of ["BSD-2-Clause", "BlueOak-1.0.0"]) {
+    assert.ok(!runtime.includes(license), `${license} is reviewed for dev-only npm packages only, not for runtime dependencies`);
   }
 });
 
