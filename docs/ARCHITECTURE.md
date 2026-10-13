@@ -144,7 +144,7 @@ sequenceDiagram
     participant W as Settings watcher thread
     UI->>Cmd: api.ts wrapper invokes set_x
     Cmd->>Store: store::update or store::try_update
-    Store->>Disk: lock json.lock, load_from, mutate, atomic save_to
+    Store->>Disk: lock json.lock, load and migrate, mutate, atomic save_to
     Store-->>Cmd: persisted Settings
     Cmd->>Ctrl: lock, settings_mut().x = persisted.x
     Cmd-->>UI: Ok, then applySetting calls get_settings

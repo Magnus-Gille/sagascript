@@ -12,8 +12,8 @@ One fixture per historical shape of the settings file, used by
 - `expected/config/`: the configuration directory after the startup load.
 - `expected/loaded.json`: the settings that startup load returns.
 - `expected/load_from.json`: the settings `store::load_from` returns for the
-  input settings file placed at the current location. This is the plain load
-  that field updates use, without machine state.
+  input settings file placed at the current location: the plain load,
+  without machine state.
 
 The test runs the startup load with fixed machine state: Pianissimo supported
 and downloaded; Whisper `base`, `base.en`, `kb-whisper-base` and

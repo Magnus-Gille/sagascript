@@ -26,8 +26,10 @@ the original bytes first.
 1. **`schema_version` and ordered steps.** The file records `schema_version`.
    `settings/migrations.rs` lists the migration steps in order, each a function on the
    settings object that can be tested alone and is idempotent. New steps are appended. Steps
-   that need machine state (what is downloaded, whether Pianissimo runs) get it injected and
-   run on the startup load only. Plain loads stop before them, as before.
+   that need machine state (what is downloaded, whether Pianissimo runs) get it injected on
+   every load whose result may be written back: the startup load and field updates. A write
+   therefore never records a version with such a step still pending, which would later run
+   over a value the user chose in that write. Plain loads stop before them.
 2. **Where a file starts.** A file starts at its `schema_version`, lowered to just below the
    first step whose legacy record (marker or shape) it lacks. A file without `schema_version`
    starts where its markers put it. A file an older release rewrote is migrated again only

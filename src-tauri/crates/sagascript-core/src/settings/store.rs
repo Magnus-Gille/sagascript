@@ -451,8 +451,9 @@ fn invalid_fields(fields: &[String]) -> String {
 
 /// The settings a settings file's object holds: its personal dictionaries
 /// read in from their files and its pending migrations run. `machine`
-/// enables the steps that need machine state (the startup load). A field
-/// that does not decode takes its default (see [`lenient`]) and is reported.
+/// enables the steps that need machine state (the startup load and field
+/// updates). A field that does not decode takes its default (see
+/// [`lenient`]) and is reported.
 fn settings_from_file_object(
     path: &Path,
     mut object: Object,
@@ -522,11 +523,6 @@ fn load_checked(
     })
 }
 
-/// [`load_checked`] without machine state: the load field updates use.
-fn load_from_checked(path: &Path) -> Result<Settings, SettingsLoadError> {
-    load_checked(path, None).map(|loaded| loaded.settings)
-}
-
 /// Defaults as a load would return them: the personal dictionary files read
 /// in and the migrations without machine state run.
 fn defaults_for(path: &Path) -> Settings {
@@ -539,18 +535,27 @@ fn defaults_for(path: &Path) -> Settings {
     }
 }
 
-/// Load settings from a specific path. A value that cannot be read takes its
-/// default; a file that is missing or cannot be read or parsed at all loads
-/// as defaults. Saving over an invalid file preserves its bytes first (see
-/// [`save_to`]).
+/// Load settings from a specific path, without machine state: the steps
+/// that need it wait for a load that has it (see [`migrations`]). A value
+/// that cannot be read takes its default; a file that is missing or cannot
+/// be read or parsed at all loads as defaults. Saving over an invalid file
+/// preserves its bytes first (see [`save_to`]).
 pub fn load_from(path: &Path) -> Settings {
-    load_from_checked(path).unwrap_or_else(|error| {
-        tracing::warn!(
-            "Failed to load settings file at {} ({error}) — falling back to defaults",
-            path.display()
-        );
-        defaults_for(path)
-    })
+    load_or_defaults(path, None)
+}
+
+/// [`load_checked`], or defaults for a file that cannot be loaded.
+fn load_or_defaults(path: &Path, machine: Option<&dyn MachineProbe>) -> Settings {
+    load_checked(path, machine).map_or_else(
+        |error| {
+            tracing::warn!(
+                "Failed to load settings file at {} ({error}) — falling back to defaults",
+                path.display()
+            );
+            defaults_for(path)
+        },
+        |loaded| loaded.settings,
+    )
 }
 
 /// Persist settings to disk using read-merge-write to preserve unknown or
@@ -573,8 +578,10 @@ pub fn update<F>(mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings),
 {
-    let path = settings_path();
-    update_at_with_legacy_sources(&path, legacy_settings_paths(), mutate)
+    try_update(|settings| {
+        mutate(settings);
+        Ok(())
+    })
 }
 
 /// Like [`update`], but lets validation fail while the cross-process lock is
@@ -584,20 +591,40 @@ where
     F: FnOnce(&mut Settings) -> Result<(), String>,
 {
     let path = settings_path();
-    try_update_at_with_legacy_sources(&path, legacy_settings_paths(), mutate)
+    update_locked(&path, legacy_settings_paths(), &ThisMachine, mutate)
 }
 
+/// [`try_update`] of `path` (no legacy locations) on a machine with
+/// Pianissimo supported and every model downloaded.
 #[cfg(test)]
 fn try_update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
 where
     F: FnOnce(&mut Settings) -> Result<(), String>,
 {
-    try_update_at_with_legacy_sources(path, std::iter::empty(), mutate)
+    update_locked(path, std::iter::empty(), &tests::ready_machine(), mutate)
 }
 
-fn try_update_at_with_legacy_sources<F>(
+/// [`update`] as [`try_update_at`] runs it.
+#[cfg(test)]
+fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
+where
+    F: FnOnce(&mut Settings),
+{
+    try_update_at(path, |settings| {
+        mutate(settings);
+        Ok(())
+    })
+}
+
+/// A field update under the settings lock. The latest file is loaded as the
+/// startup load does, with every pending migration step, machine state
+/// included: the save records `schema_version` and the steps' markers, so a
+/// step left pending here would run at the next start over the value the
+/// user has just chosen.
+fn update_locked<F>(
     path: &Path,
     sources: impl IntoIterator<Item = PathBuf>,
+    machine: &dyn MachineProbe,
     mutate: F,
 ) -> Result<Settings, String>
 where
@@ -605,33 +632,8 @@ where
 {
     with_settings_lock(path, || {
         migrate_legacy_identifier_settings_locked(path, sources);
-        let mut settings = load_from(path);
+        let mut settings = load_or_defaults(path, Some(machine));
         mutate(&mut settings)?;
-        save_to(path, &settings)?;
-        Ok(settings)
-    })
-}
-
-#[cfg(test)]
-fn update_at<F>(path: &Path, mutate: F) -> Result<Settings, String>
-where
-    F: FnOnce(&mut Settings),
-{
-    update_at_with_legacy_sources(path, std::iter::empty(), mutate)
-}
-
-fn update_at_with_legacy_sources<F>(
-    path: &Path,
-    sources: impl IntoIterator<Item = PathBuf>,
-    mutate: F,
-) -> Result<Settings, String>
-where
-    F: FnOnce(&mut Settings),
-{
-    with_settings_lock(path, || {
-        migrate_legacy_identifier_settings_locked(path, sources);
-        let mut settings = load_from(path);
-        mutate(&mut settings);
         save_to(path, &settings)?;
         Ok(settings)
     })
@@ -1305,7 +1307,7 @@ mod tests {
     }
 
     /// Pianissimo supported and every model downloaded.
-    fn ready_machine() -> LineupEnv<'static> {
+    pub(super) fn ready_machine() -> LineupEnv<'static> {
         LineupEnv {
             pianissimo_supported: true,
             pianissimo_downloaded: true,
@@ -1497,27 +1499,78 @@ mod tests {
     }
 
     #[test]
-    fn field_update_before_startup_records_only_the_steps_it_ran() {
+    fn field_update_before_startup_runs_every_pending_step() {
         with_temp_settings(|path| {
-            // A 1.3 file: the lineup and engine steps need the startup load.
+            // A 1.3 file, updated (say by the CLI) before the app starts:
+            // the update records the whole migration, machine steps included.
             fs::write(&path, r#"{"language":"sv","auto_select_model":false,"whisper_model":"kb-whisper-small","engine_prewarm":"on_key_down","hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}]}"#).unwrap();
-            update_at(&path, |settings| settings.beam_size = 5).unwrap();
-            let raw: serde_json::Value =
-                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-            assert_eq!(raw["schema_version"], 4);
-            assert_eq!(raw["profile_models"]["default"], "kb-whisper-small");
-            assert_eq!(raw["model_lineup_version"], 0);
-            assert_eq!(raw["engine_prewarm"], "on_key_down");
-
-            let loaded = startup_load(&path);
-            assert_eq!(loaded.schema_version, SCHEMA_VERSION);
-            assert_eq!(loaded.beam_size, 5);
+            let updated = update_at(&path, |settings| settings.beam_size = 5).unwrap();
+            assert_eq!(updated.schema_version, SCHEMA_VERSION);
             let raw: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
             assert_eq!(raw["schema_version"], SCHEMA_VERSION);
+            assert_eq!(raw["beam_size"], 5);
             assert_eq!(raw["profile_models"]["default"], "pianissimo-sv");
             assert_eq!(raw["model_lineup_version"], MODEL_LINEUP_VERSION);
             assert_eq!(raw["engine_prewarm"], "on_app_start");
+            assert_eq!(raw["engine_defaults_version"], ENGINE_DEFAULTS_VERSION);
+
+            // Nothing is left for the startup load to migrate or write.
+            let written = fs::read(&path).unwrap();
+            let loaded = startup_load(&path);
+            assert_eq!(loaded.beam_size, 5);
+            assert_file_bytes(&path, &written);
+        });
+    }
+
+    #[test]
+    fn a_choice_made_between_repair_and_restart_survives_the_restart() {
+        with_temp_settings(|path| {
+            // A 1.4.0 file with one invalid value: the startup load repairs it
+            // and runs the pending lineup and engine steps in memory only.
+            let original: &[u8] = br#"{"language":"sv","auto_select_model":false,"whisper_model":"kb-whisper-small","engine_prewarm":"on_key_down","engine_idle_unload_minutes":10,"profile_glossary_migrated":true,"hotkey_profiles":[{"id":"default","name":"Swedish","shortcut":"Super+S","language":"sv"}],"profile_models":{"default":"kb-whisper-small"},"auto_paste":"invalid-bool"}"#;
+            fs::write(&path, original).unwrap();
+            let repaired = startup_load(&path);
+            assert_eq!(repaired.engine_prewarm, EnginePrewarm::OnAppStart);
+            assert_eq!(
+                repaired.profile_models["default"],
+                FileModelPreference::PianissimoOriginal
+            );
+            assert_file_bytes(&path, original);
+
+            // Before the next start, the user picks the values those steps
+            // move away from: one through `update`, one through `try_update`.
+            let updated = update_at(&path, |settings| {
+                settings.engine_prewarm = EnginePrewarm::OnKeyDown;
+            })
+            .unwrap();
+            // The update starts from what the startup load showed.
+            assert_eq!(
+                updated.profile_models["default"],
+                FileModelPreference::PianissimoOriginal
+            );
+            try_update_at(&path, |settings| {
+                settings.profile_models.insert(
+                    "default".into(),
+                    FileModelPreference::Whisper(WhisperModel::KbWhisperSmall),
+                );
+                Ok(())
+            })
+            .unwrap();
+            assert_file_bytes(recovery_copy_path(&path, 0), original);
+
+            // The next start (or the settings watcher's reload) keeps both.
+            let restarted = startup_load(&path);
+            assert_eq!(restarted.engine_prewarm, EnginePrewarm::OnKeyDown);
+            assert_eq!(
+                restarted.profile_models["default"],
+                FileModelPreference::Whisper(WhisperModel::KbWhisperSmall)
+            );
+            let raw: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert_eq!(raw["schema_version"], SCHEMA_VERSION);
+            assert_eq!(raw["engine_prewarm"], "on_key_down");
+            assert_eq!(raw["profile_models"]["default"], "kb-whisper-small");
         });
     }
 
@@ -1930,9 +1983,15 @@ mod tests {
                 "migration must still hold the settings lock"
             );
             update_blocked_tx.send(()).unwrap();
-            update_at_with_legacy_sources(&update_destination, [update_legacy], |settings| {
-                settings.language = Language::Norwegian;
-            })
+            update_locked(
+                &update_destination,
+                [update_legacy],
+                &ready_machine(),
+                |settings| {
+                    settings.language = Language::Norwegian;
+                    Ok(())
+                },
+            )
         });
         update_blocked_rx.recv().unwrap();
         release_migration_tx.send(()).unwrap();

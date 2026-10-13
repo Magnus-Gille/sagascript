@@ -31,10 +31,12 @@
 //!
 //! **Machine state.** The Swedish lineup step needs to know what is
 //! downloaded and whether Pianissimo runs. The store injects it through
-//! [`MachineProbe`] on the startup load only, and the probe runs only while
-//! that step is pending. A load without machine state (field updates,
-//! `store::load_from`) applies the steps before it, as before this module
-//! existed; the later ones wait for the next startup load.
+//! [`MachineProbe`] into every load whose result it may write back: the
+//! startup load and the load of a field update. A write records the version
+//! reached and the markers, so a step it left pending would later run over a
+//! value the user chose in that write. The probe runs only while that step
+//! is pending. A plain load without machine state (`store::load_from`)
+//! applies the steps before it; the later ones wait for a load with it.
 
 use serde_json::{Map, Value};
 
