@@ -5,9 +5,13 @@ How the Svelte/TypeScript frontend is tested ([ADR 0004](../adr/0004-test-strate
 component tests (happy-dom, `@testing-library/svelte`), the typed IPC mock, Prettier and
 ESLint are in place; the Settings pilot replaced two source-text tests (mapping below). Phase B
 replaces the rest. happy-dom and ESLint bring BSD-2-Clause and BlueOak-1.0.0 packages, which
-the owner accepted for dev-only packages only
-([decision](https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272),
-`reviewedDevOnlyNpmLicenses` in `scripts/generate-third-party-notices.mjs`).
+the owner accepted for dev tooling only
+([decision](https://github.com/Magnus-Gille/sagascript/issues/361#issuecomment-6153321272)):
+`scripts/lib/npm-license-policy.mjs` accepts them only for `"dev": true` packages outside the
+closure of what the app bundle can contain (runtime dependencies, every package `src/` imports,
+their dependencies, and Vite's injected helpers). `"dev"` alone is not enough: Vite bundles
+whatever `src/` imports, and svelte is a dev dependency. Importing such a package from app code
+fails `scripts/test-npm-license-policy.mjs` (every PR) and `npm run licenses:check` (release).
 
 | Layer | Where | Command |
 |---|---|---|
@@ -54,8 +58,9 @@ ipc.handle("get_platform", () => "windows"); // change an answer mid-test
 ```
 
 - Every call is recorded in order with a copy of its arguments; results and event payloads
-  are copies too. Copies go through JSON, as across the real IPC boundary: an `undefined`
-  field disappears, and Svelte `$state` proxies arrive as plain values.
+  are copies too. Copies go through JSON with the replacer of Tauri's IPC serializer, as across
+  the real boundary: an `undefined` field disappears, Svelte `$state` proxies arrive as plain
+  values, a `Map` as an object and a `Uint8Array` as an array of numbers.
 - A command without a handler rejects, and `setup.ts` fails the test afterwards even if the
   code under test swallowed the rejection. Never touch real settings or recordings.
 - A new command: add it to `CommandMap` and `COMMANDS` in `ipc.ts` and a row to
@@ -179,8 +184,10 @@ can drop `.svelte` from `.prettierignore` once no source-text test reads its com
 ## Settings pilot: old assertion → new test
 
 `scripts/test-settings-layout.mjs` (6 tests, 48 assert calls) and
-`scripts/test-settings-recovery.mjs` (14 tests, 97) were removed; their claims are tested in `src/lib/Settings.test.ts`
-(layout), `src/lib/Settings.recovery.test.ts` (recovery) and `src/lib/Onboarding.test.ts`.
+`scripts/test-settings-recovery.mjs` (14 tests, 97) were removed. Their claims are tested by 49
+component tests: `src/lib/Settings.test.ts` (12, layout), `src/lib/Settings.recovery.test.ts`
+(33, recovery) and `src/lib/Onboarding.test.ts` (4). With them and two new IPC mock tests,
+phase A2 took the Vitest suite from 215 to 266 tests.
 Assertions that only pinned an identifier, a declaration or a function signature map to the
 test of the behaviour that code exists for (`void recoveryRestore.catch(…)`, for example, to
 the failed-read test: Vitest fails a run with an unhandled rejection).
